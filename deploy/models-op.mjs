@@ -64,7 +64,10 @@
 // Bare `node` — no build step, no `tsx`, no compiled `dist/` — which is why
 // every import below is a `.mjs`.
 
-import { readFileSync, writeFileSync, renameSync, mkdirSync, unlinkSync } from 'node:fs';
+import {
+  accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, writeFileSync, renameSync, mkdirSync,
+  statSync, unlinkSync,
+} from 'node:fs';
 import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
@@ -78,8 +81,8 @@ import {
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
-  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, resolveEffort, unmeasuredMoveNotice, unmeasuredMoves,
+  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, heldBackOf, parseAdvance,
+  reconcilePending, recordFailure, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -1290,6 +1293,9 @@ const OPS = {
   // Auto-advance plan W2 Task 9: one class's move, or one failed canary's
   // record. It writes, and ONLY under the lane-files lock its bash caller holds.
   'advance-commit': { keys: ['file', 'id', 'class', 'from', 'to', 'canary', 'reason'], required: ['file', 'id', 'class', 'from', 'to', 'canary'], writes: true },
+  // Auto-advance plan W3 Task 14: doctor's one read of every lane's advance state. Box-wide and READ-ONLY; its two
+  // paths come from ccd/ccrc ($_SVC_REG and `_models_lock_path '{id}'`) so neither is spelled twice.
+  'advance-health': { keys: ['file', 'reg', 'lock-template'], required: ['file', 'reg', 'lock-template'], writes: false },
   // auto-advance spec §2.7 (D12): the hold the automatic advance honours, and the one-act revert.
   hold: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
   release: { keys: ['file', 'id', 'class'], required: ['file', 'id', 'class'], writes: true },
@@ -1957,6 +1963,274 @@ function advanceCommitOp(a, account, registry, catalogue, win) {
     ...(w === null ? {} : { reason: historyReason(`moved, but its history could not be written (${w[0]})`) }) });
 }
 
+// ── `advance-health` (auto-advance spec §2.8; plan W3 Task 14) ───────────────────────────────────────────────────
+// The one read behind `ccrc doctor`'s four model-advance checks. BOX-WIDE and READ-ONLY: it reads every lane's
+// model files, the session registry and each lane's lock path, and it writes nothing, takes no lock and never opens
+// a lock path. Its answer's shape is the plan's §3.9, plus `canary` on each held-back class, `reason` on each
+// held-behind class, the session registry's own word, and the sessions it could not measure, at the top level (a
+// `.wrapper` it cannot read) and on each lane (D-5220).
+
+/** The largest `<sid>.wrapper` read (a lane id, at most 32 characters, and no newline). */
+const WRAPPER_FILE_MAX_BYTES = 256;
+/** The largest turn marker or usage sidecar read: the marker's own writer-side cap (`server/src/turnmark.ts`), and
+ *  far above a sidecar's one line. */
+const SESSION_FILE_MAX_BYTES = 4096;
+/** A ccd session id as a file name: the status line's own charset (`ccd/statusline-command.sh`), led by a letter or
+ *  digit so no dotted temporary file is ever read as a session. */
+const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+
+/** A session registry file, type-tested and SIZE-tested before it is read (`readRegular` reads a file whole): a FIFO
+ *  or a directory throws `ENOTREG`, an oversized file `ETOOBIG`, so no session file can block or flood this op. */
+function readSessionFile(p, maxBytes) {
+  const st = statSync(p);
+  if (!st.isFile()) throw Object.assign(new Error('not a regular file'), { code: 'ENOTREG' });
+  if (st.size > maxBytes) throw Object.assign(new Error(`over ${maxBytes} bytes`), { code: 'ETOOBIG' });
+  return readRegular(p);
+}
+
+/** Whether a writer could take the lane-files lock at `p`, measured READ-ONLY with `lstat` and `access(W_OK)` only:
+ *  never an open (a FIFO would block it), never a create, never the lock itself (D-5193). The
+ *  answer is the sentence `model-advance-blocked` prints, or null when nothing stands in the way. It names every
+ *  case `_models_lock` (W1, `ccd/ccrc`) refuses `lock-unwritable`, and, by ruling RC7's letter ("whose lock
+ *  directory it cannot write"), one case that writer repairs instead of refusing:
+ *   - the directory: absent is not a finding (the first lock makes it); a symlink is, anything but a directory is,
+ *     one another account owns is (lstat's `uid`: its `chmod 700` would fail, even where `access` says writable;
+ *     root can chmod any), and so is one this account cannot write. That last one, on a directory this account
+ *     owns, is the RC7 case: the next writer's `chmod 700` makes it writable, and the remedy says so;
+ *   - the file: absent is not a finding; a symlink (live or dangling) is, anything but a regular file (a FIFO, a
+ *     directory, a socket) is, and so is one this account cannot write (its `>>` open would fail). */
+function lockUnwritable(p) {
+  const d = path.dirname(p);
+  const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+  let ds;
+  try {
+    ds = lstatSync(d);
+  } catch (e) {
+    return e.code === 'ENOENT' ? null : `${d} could not be examined (${e.code ?? e.message})`;
+  }
+  if (ds.isSymbolicLink()) return `${d} is a symlink, which the lane-files lock never follows`;
+  if (!ds.isDirectory()) return `${d} is not a directory`;
+  if (uid !== null && uid !== 0 && ds.uid !== uid) {
+    return `${d} belongs to another account (uid ${ds.uid}), so the lane-files lock cannot make it 0700`;
+  }
+  try {
+    accessSync(d, fsConstants.W_OK);
+  } catch (e) {
+    return `${d} is not writable by this account (${e.code ?? e.message})`;
+  }
+  let fst;
+  try {
+    fst = lstatSync(p);
+  } catch (e) {
+    return e.code === 'ENOENT' ? null : `${p} could not be examined (${e.code ?? e.message})`;
+  }
+  if (fst.isSymbolicLink()) return `${p} is a symlink, which the lane-files lock never opens`;
+  if (!fst.isFile()) {
+    return `${p} is not a regular file (a FIFO, a directory or a socket), which the lane-files lock never opens`;
+  }
+  try {
+    accessSync(p, fsConstants.W_OK);
+  } catch (e) {
+    return `${p} is not writable by this account (${e.code ?? e.message})`;
+  }
+  return null;
+}
+
+/** The session registry, listed ONCE per op: each session's lane, read from its `<sid>.wrapper` (ccd's field, a
+ *  lane id with no newline). `state` keeps three answers apart: `read`, `absent` (no directory: no session to
+ *  measure) and `unreadable` (it cannot be listed: no session was measured, which doctor must never read as none).
+ *  A `.wrapper` that cannot be read is a session of NO KNOWN LANE, which may be on any lane: it is never skipped, and
+ *  goes in `unlaned` as `wrapper-unreadable` (D-4052's rule for the `codex` check, ccrc-doctor-checks'
+ *  `_dr_cx_sessions`). A name that is not a session id (a dotted temporary file, say) is no session at all. */
+function sessionIndex(reg) {
+  let names;
+  try {
+    names = readdirSync(reg);
+  } catch (e) {
+    return { state: e.code === 'ENOENT' ? 'absent' : 'unreadable', byLane: new Map(), unlaned: [] };
+  }
+  const byLane = new Map();
+  const unlaned = [];
+  for (const n of [...names].sort()) {
+    if (!n.endsWith('.wrapper')) continue;
+    const sid = n.slice(0, -'.wrapper'.length);
+    if (!SESSION_ID_RE.test(sid)) continue;
+    let lane;
+    try {
+      lane = readSessionFile(path.join(reg, n), WRAPPER_FILE_MAX_BYTES).split('\n')[0];
+    } catch {
+      unlaned.push({ session: sid, why: 'wrapper-unreadable' });
+      continue;
+    }
+    if (!byLane.has(lane)) byLane.set(lane, []);
+    byLane.get(lane).push(sid);
+  }
+  return { state: 'read', byLane, unlaned };
+}
+
+/** One session file as one JSON object, or the word for why not: `absent` (ENOENT, the file or its directory) or
+ *  `unreadable` (every other read failure: not a regular file, over its cap, a permission; or text that is not one
+ *  JSON object). Two words, never folded: a session with no sidecar is a home whose status line writes none, a
+ *  broken sidecar is a fault. */
+function readSessionJson(p) {
+  let raw;
+  try {
+    raw = readSessionFile(p, SESSION_FILE_MAX_BYTES);
+  } catch (e) {
+    return { why: e.code === 'ENOENT' ? 'absent' : 'unreadable' };
+  }
+  try {
+    const v = JSON.parse(raw);
+    return isObj(v) ? { value: v } : { why: 'unreadable' };
+  } catch {
+    return { why: 'unreadable' };
+  }
+}
+
+/** The lane's sessions behind a move (`sessionBehind`, the pure rule), from each session's turn marker
+ *  (`<sid>.turn.json`) and its main-loop usage sidecar (`usage/<sid>.json`, never a subagent's `usage/<sid>.agents/`),
+ *  and the sessions it could not judge. A session whose marker or sidecar is absent, or cannot be read as one JSON
+ *  object, is never listed as behind and never silently passed: it goes in `unmeasured` with the first file that
+ *  failed and why (D-5220). A session the rule reads and finds not behind is measured. */
+function sessionsBehindOf(id, ctx, advance, registry) {
+  const behind = [];
+  const unmeasured = [];
+  for (const session of ctx.sessions.byLane.get(id) ?? []) {
+    const turn = readSessionJson(path.join(ctx.reg, `${session}.turn.json`));
+    if (turn.why !== undefined) {
+      unmeasured.push({ session, why: turn.why === 'absent' ? 'marker-absent' : 'marker-unreadable' });
+      continue;
+    }
+    const usage = readSessionJson(path.join(ctx.reg, 'usage', `${session}.json`));
+    if (usage.why !== undefined) {
+      unmeasured.push({ session, why: usage.why === 'absent' ? 'sidecar-absent' : 'sidecar-unreadable' });
+      continue;
+    }
+    const b = sessionBehind({ advance, registry, nowMs: ctx.nowMs, turn: turn.value, usage: usage.value });
+    if (b !== null) behind.push({ session, ...b });
+  }
+  return { behind, unmeasured };
+}
+
+/** One lane's findings, or null for a lane with no registry FILE (not in the population). The order of `blocked`
+ *  is fixed: the lock, the advance file, then the registry, the lane's kind or the catalogue, then each class in
+ *  `CLASSES` order, then the windows file.
+ *   - Every lane in the population: its lock path, and its advance file when that is present and unreadable.
+ *   - A registry that cannot be read or parsed is reported whatever the lane's probe, and ends the lane.
+ *   - Everything else is for probe `codex` alone. `sessionsBehind` is judged against the advance file as the next
+ *     locked writer will settle it (`reconcilePending`, in memory: a move a crash cut short counts as the move it
+ *     was, D-5188, and nothing is written); `sessionsUnmeasured` names each session it could
+ *     not judge: every one of the lane's, as `advance-file-unreadable`, when the advance file cannot be read (its
+ *     moves are unknown), else those `sessionsBehindOf` could not read. With no advance file nothing has moved, so
+ *     no session is read. A row that is not `exec.kind: "codex"` is `lane-not-codex-kind` and nothing more
+ *     (D-5198): it never advances.
+ *   - Per class: `chooseCandidate`'s `pin-grammar` and `shared-family`; a HELD class with a candidate is
+ *     `heldBehind`, with `reason`, one of `CANDIDATE_REASONS` (the words a successful advance records as its
+ *     `cause`, D-8384; `retired` names a fallback that may be older than the pin),
+ *     never `heldBack`, because the hold stopped its retries (D-5221); an unheld class whose
+ *     newest entry `heldBackOf` names is `heldBack`, with the step that failed; and the windows file blocks the lane
+ *     once when some unheld class has a candidate and that file cannot be read. */
+function laneHealth(acc, ctx) {
+  const id = acc.id;
+  const cat = readCatalogue(id);
+  const reg = readRegistry(id, cat.err !== undefined ? null : cat.catalogue);
+  if (reg.err === undefined && reg.invalid === undefined && reg.registry === null) return null;
+  const lane = { id, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const block = (cls, cause, detail) => { lane.blocked.push({ class: cls, cause, detail }); };
+  const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
+  if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
+  const rd = readAdvance(id);
+  if (rd.err !== undefined) block(null, rd.err[0], rd.err[1]);
+  if (reg.err !== undefined) {
+    block(null, reg.err[0], reg.err[1]);
+    return lane;
+  }
+  if (reg.invalid !== undefined) {
+    block(null, 'registry-invalid', reg.invalid.message);
+    return lane;
+  }
+  const registry = reg.registry;
+  if (registry.probe !== 'codex') return lane;
+  const adv = rd.err !== undefined || rd.advance === null ? null : reconcilePending(rd.advance, registry).advance;
+  if (rd.err !== undefined) {
+    lane.sessionsUnmeasured = (ctx.sessions.byLane.get(id) ?? [])
+      .map((session) => ({ session, why: 'advance-file-unreadable' }));
+  } else if (adv !== null) {
+    const s = sessionsBehindOf(id, ctx, adv, registry);
+    lane.sessionsBehind = s.behind;
+    lane.sessionsUnmeasured = s.unmeasured;
+  }
+  if (!(isObj(acc.exec) && acc.exec.kind === 'codex')) {
+    const kind = isObj(acc.exec) && typeof acc.exec.kind === 'string' ? acc.exec.kind : 'none';
+    block(null, 'lane-not-codex-kind', `its roster row is exec.kind "${kind}", and only an exec.kind "codex" lane advances`);
+    return lane;
+  }
+  if (cat.err !== undefined) {
+    block(null, cat.err[0], cat.err[1]);
+    return lane;
+  }
+  const win = readWindowsFile(id);
+  let waiting = false;
+  for (const cls of CLASSES) {
+    const c = adv === null ? null : adv.classes[cls];
+    const pin = registry.classes[cls] ?? null;
+    const choice = chooseCandidate({ registry, catalogue: cat.catalogue, cls, family: c === null ? null : c.family });
+    if (choice.blocked === 'pin-grammar') block(cls, 'pin-grammar', `${pin} is not <vendor>-<version>-<family>`);
+    if (choice.blocked === 'shared-family') {
+      const fam = (c === null ? null : c.family) ?? familyOf(pin);
+      const others = CLASSES.filter((o) => o !== cls && familyOf(registry.classes[o] ?? null) === fam);
+      block(cls, 'shared-family',
+        `family ${fam} is followed by ${[cls, ...others].join(' and ')}, and its newest model is already another class's pin`);
+    }
+    if (c !== null && c.hold !== null) {
+      if (choice.candidate !== null) {
+        lane.heldBehind.push({ class: cls, pin, newer: choice.candidate, reason: choice.reason, hold: c.hold });
+      }
+      continue;
+    }
+    if (choice.candidate !== null && choice.blocked === null) waiting = true;
+    if (c === null) continue;
+    const back = heldBackOf(c, choice.candidate);
+    if (back !== null) {
+      lane.heldBack.push({ class: cls, from: back.from, to: back.to, reason: back.reason ?? null,
+        tries: back.tries ?? 1, since: back.at, canary: back.canary });
+    }
+  }
+  if (waiting && win.state === 'unreadable') block(null, 'windows-unreadable', win.reason);
+  return lane;
+}
+
+/** `advance-health` (auto-advance spec §2.8; plan W3 Task 14): box-wide and READ-ONLY. Every roster row a registry
+ *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, in roster order; a row with none is
+ *  not in the population. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
+ *  in place of the lane, both from `ccd/ccrc` (`$_SVC_REG`, `_models_lock_path '{id}'`), so this file spells neither
+ *  (D-5219). Each is checked after the roster read (`main` reads the roster before it
+ *  dispatches any op, so with no roster the answer is the roster's own word) and before any lane file or session
+ *  file is read: an absolute `--reg`, and an absolute template holding `{id}` exactly once. */
+function advanceHealthOp(a, json) {
+  if (!path.isAbsolute(a.reg)) {
+    return refuse(2, 'bad-argv', `--reg must be the session registry's absolute path (got ${JSON.stringify(a.reg)}).`);
+  }
+  const tpl = a['lock-template'];
+  if (!path.isAbsolute(tpl) || tpl.split('{id}').length !== 2) {
+    return refuse(2, 'bad-argv',
+      `--lock-template must be an absolute path holding {id} exactly once (got ${JSON.stringify(tpl)}).`);
+  }
+  const at = now();
+  const nowMs = Date.parse(at);
+  if (!Number.isFinite(nowMs)) return refuse(2, 'bad-argv', `the clock answered ${JSON.stringify(at)}, which is not a time.`);
+  const sessions = sessionIndex(a.reg);
+  const ctx = { nowMs, reg: a.reg, sessions, lockTemplate: tpl };
+  const lanes = [];
+  for (const acc of (json.accounts ?? [])) {
+    if (!isObj(acc) || !canCarryRegistry(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
+    const lane = laneHealth(acc, ctx);
+    if (lane !== null) lanes.push(lane);
+  }
+  out({ ok: true, op: 'advance-health', now: at, sessions: sessions.state, sessionsUnmeasured: sessions.unlaned, lanes });
+  return 0;
+}
+
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
  *  would consume the NEXT token as a key and shift every following pair by one
@@ -2059,6 +2333,9 @@ function main(argv) {
     return 0;
   }
 
+  // Auto-advance plan W3 Task 14: doctor's one read of every lane's advance state. Box-wide like `lanes` above: it
+  // takes no --id, so it is answered before any one account is looked up.
+  if (opName === 'advance-health') return advanceHealthOp(a, json);
   const account = findAccount(json, a.id);
 
   if (opName === 'rm') {

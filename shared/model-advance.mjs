@@ -15,13 +15,14 @@
 import { CLASSES, MODEL_ID_RE, resolveDiscovery } from './models.mjs';
 
 /** Every reason a lane or a class cannot advance, the words `model-advance-blocked` names. `chooseCandidate`
- *  answers the two that are a fact about one class; the others are facts about a lane's files or its kind.
- *  `windows-unreadable`, `shared-family` and `lane-not-codex-kind` are this plan's additions to the spec's list
- *  (D-5193), so none of them goes quiet. */
+ *  answers the two that are a fact about one class; the others are facts about a lane's files, its kind or its
+ *  lock. `windows-unreadable`, `shared-family`, `lane-not-codex-kind` and `lock-unwritable` are this plan's
+ *  additions to the spec's list (D-5193), so none of them goes quiet. `lock-unwritable` is
+ *  measured by `advance-health` alone, read-only, and says what every writer on that lane is already refused. */
 export const BLOCKED_CAUSES = Object.freeze([
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
-  'lane-not-codex-kind',
+  'lane-not-codex-kind', 'lock-unwritable',
 ]);
 
 /** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
@@ -491,4 +492,78 @@ export function unmeasuredMoveNotice(lane, m, tokens) {
   return `${lane}'s ${m.class} class moved from ${m.from} to ${m.to} (${what}), and ${m.to} has no measured window `
     + `while ${m.from} had ${m.fromTokens} tokens, so every session on the lane now runs at ${now}; measure ${m.to}, `
     + `then: ccrc models ${lane} set-window ${m.to} <tokens>`;
+}
+
+// ── SESSIONS BEHIND A MOVE (§2.8; plan W3 Task 14) ──────────────────────────────────────────────────────────────
+// `model-sessions-behind` is the backstop for a running session that kept a model a move replaced: the plan's
+// Task 1 measured that a running session does not reliably pick up a re-pin by itself. This half decides, from the
+// evidence its caller read (the session's main-thread turn marker and its status line's usage sidecar), whether one
+// session is behind. Still pure: it reads no file and no clock. `isoSeconds` formats a time it is handed.
+
+/** How long after a move a session still on the model it replaced counts as behind: one day (§2.8). Defined once,
+ *  here, for the op and for any later reader of its answer. */
+export const BEHIND_AFTER_MS = 86_400_000;
+/** The largest epoch, in ms, a JS `Date` holds. */
+const EPOCH_MS_MAX = 8.64e15;
+/** A usage sidecar's `ts` is whole SECONDS (the status line writes `date +%s`). A value past this is not seconds
+ *  (thirteen digits of milliseconds, say) and is never compared, so a writer that slipped into milliseconds can never
+ *  make a render look newer than every turn. 99999999999 s is in the year 5138. */
+const SIDECAR_TS_MAX_S = 99_999_999_999;
+const isEpochMs = (v) => Number.isInteger(v) && v >= 0 && v <= EPOCH_MS_MAX;
+
+/** `(ms) => 'YYYY-MM-DDTHH:MM:SSZ' | null`: an epoch in ms in the advance file's own time form, cut to whole
+ *  seconds; null for anything that is not an epoch a `Date` holds. It formats the time it is handed and never reads
+ *  the clock. */
+export function isoSeconds(ms) {
+  if (!isEpochMs(ms)) return null;
+  return new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/**
+ * `({advance, registry, nowMs, turn, usage}) => {class, from, to, movedAt, turnAt, renderAt} | null`: whether ONE
+ * session of a lane is behind a move (§2.8). It names the evidence, the render and the turn, not a ccd reason
+ * (D-5194). The caller has matched the session to the lane (its registry `.wrapper`)
+ * and parsed its two files; `turn` and `usage` are whatever JSON they held, and are checked here. Behind means ALL of:
+ *  1. the marker names a main-thread turn: `sessionId` a non-empty string, `turnAt` an epoch in ms;
+ *  2. the sidecar is the session's own main-loop render of that same Claude Code session: `ts` whole seconds;
+ *     `agent` null or absent (a subagent's render goes to a file of its own, and one that names an agent here is not
+ *     the main loop's); `uuid` equal to the marker's `sessionId` (a `/clear` between them rotates it); `model` an id;
+ *  3. the render came after that turn began: `ts`, read as ms, strictly later than `turnAt`. A render in the same
+ *     second may predate the turn, so it is not evidence;
+ *  4. no class of the lane pins that model now: a session on another class's model is not behind;
+ *  5. some class's history holds a SUCCESSFUL move away from that model, at least `BEHIND_AFTER_MS` before `nowMs`,
+ *     and the turn began after it. A move after `nowMs` (a clock set back) never counts. The NEWEST such entry of each
+ *     class is judged, not only the class's newest move, so a session two moves behind is still behind
+ *     (D-5222). Classes are tried in `CLASSES` order; the first that holds answers.
+ * Anything else is null: an input it cannot read is never a finding (§2.8, "failures fail shut"). Every time test is
+ * written as a comparison that HOLDS for evidence, negated, so a NaN fails it: a clock that is not a number, a move
+ * time that does not parse and a render dated before 1970 (never later than a turn, which is never negative) are
+ * each "not behind" with no guard of their own. The caller (`advance-health`) names, apart, a session whose files it
+ * could not read as JSON objects; this rule only judges what it is handed.
+ */
+export function sessionBehind({ advance, registry, nowMs, turn, usage }) {
+  if (!isObj(turn) || !isObj(usage)) return null;
+  const sid = turn.sessionId;
+  const turnAt = turn.turnAt;
+  if (typeof sid !== 'string' || sid === '' || !isEpochMs(turnAt)) return null;
+  const { ts, uuid, model, agent } = usage;
+  if (!Number.isInteger(ts) || ts > SIDECAR_TS_MAX_S) return null;
+  if (agent !== undefined && agent !== null) return null;
+  if (uuid !== sid || typeof model !== 'string' || model === '') return null;
+  const renderMs = ts * 1000;
+  if (!(renderMs > turnAt)) return null;
+  if (CLASSES.some((c) => registry.classes[c] === model)) return null;
+  for (const cls of CLASSES) {
+    const history = advance.classes[cls].history;
+    let move = null;
+    for (let i = history.length - 1; i >= 0; i -= 1) {
+      if (history[i].ok === true && history[i].from === model) { move = history[i]; break; }
+    }
+    if (move === null) continue;
+    const movedMs = Date.parse(move.at);
+    if (!(movedMs <= nowMs - BEHIND_AFTER_MS) || !(turnAt > movedMs)) continue;
+    return { class: cls, from: move.from, to: move.to, movedAt: move.at, turnAt: isoSeconds(turnAt),
+      renderAt: isoSeconds(renderMs) };
+  }
+  return null;
 }

@@ -27,7 +27,9 @@ import type { ModelClass, Registry } from '../../shared/models.js';
 import { parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
-import { BLOCKED_CAUSES, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../../shared/model-advance.mjs';
+import { BLOCKED_CAUSES, CANDIDATE_REASONS, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../../shared/model-advance.mjs';
+// Auto-advance plan W3 Task 14: advance-health's bounded runs, in a process group of their own.
+import { spawnSyncGroup } from './spawnGroup.js';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { parseCatalogue, parseWindows } from '../../shared/models.js';
@@ -4865,5 +4867,449 @@ describe('lower-windows: a refusal lowers the window (codex-bridge D25, Stage 2 
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect((r.body['windows'] as { byModel: Record<string, unknown> }).byModel[OPUS])
       .toEqual({ tokens: 450000, setAt: written['setAt'] });
+  });
+});
+
+// ── auto-advance plan W3 Task 14: `advance-health`, doctor's one read ──────────────────────────────────────────
+// Box-wide and READ-ONLY. Its two paths come from its caller (`--reg`, `--lock-template`), so these cases put the
+// session registry at the fixture's own `~/.cc-sessions` and the lock directory under a neutral `<home>/lk`: the op
+// assumes neither. Every run is BOUNDED, because a reader that opened a FIFO would block inside the open. Neutral
+// ids only; the one path outside the fixture HOME, `/var/tmp`, is only lstat-ed and access-ed, never written.
+describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
+  const H_NOW = '2026-10-23T09:00:00Z';
+  const H_MOVED = '2026-10-21T14:05:11Z';
+  const H_TURN = '2026-10-22T09:11:40Z';
+  const H_RENDER = '2026-10-22T09:12:03Z';
+  const H_SID = 'lane-a-demo';
+  const isRootH = typeof process.getuid === 'function' && process.getuid() === 0;
+  const sessDir = (): string => path.join(home, '.cc-sessions');
+  const lockDir = (): string => path.join(home, 'lk');
+  const lockTpl = (): string => path.join(lockDir(), 'models-{id}.lock');
+  const lockOf = (id = 'lane-a'): string => path.join(lockDir(), `models-${id}.lock`);
+
+  /** `advance-health`, ended at 20 s: a hang reds the case, never the suite. `args` replaces the whole argument
+   *  list after the op's name. In its own process group (`spawnSyncGroup`, `spawn-group-pin.test.ts`), so a bound
+   *  that fires takes the whole tree with it; a timeout comes back as `error` (ETIMEDOUT), never as a lone signal. */
+  function health(o: { now?: string; args?: string[] } = {}): Result {
+    const args = o.args ?? ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', lockTpl()];
+    const r = spawnSyncGroup(process.execPath, [OP, 'advance-health', ...args],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: o.now ?? H_NOW }, encoding: 'utf8', timeout: 20_000 });
+    expect(r.error, `advance-health was ended at the bound: ${r.stderr}`).toBeUndefined();
+    const stdout = r.stdout ?? '';
+    const lines = stdout.split('\n');
+    expect(lines.length, `stdout carried ${lines.length - 1} lines, not one`).toBe(2);
+    return { code: r.status ?? -1, body: JSON.parse(lines[0]!), stderr: r.stderr ?? '', stdout };
+  }
+  const laneH = (r: Result, id = 'lane-a'): Record<string, unknown> =>
+    (r.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === id)!;
+
+  /** A lane's files as their writers leave them, with NO materialise: this op reads no settings, and a pin that
+   *  breaks the grammar is one no materialise should be asked to render. `null` leaves that file absent. */
+  function plantH(o: { id?: string; registry?: unknown; catalogue?: unknown; advance?: unknown } = {}): void {
+    const id = o.id ?? 'lane-a';
+    fs.mkdirSync(path.join(home, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(regPath(id), `${JSON.stringify(o.registry ?? STEP_REGISTRY, null, 2)}\n`, { mode: 0o600 });
+    if (o.catalogue !== null) writeCatalogue(id, o.catalogue ?? STEP_CATALOGUE);
+    if (o.advance !== null) {
+      fs.writeFileSync(advPath(id), `${JSON.stringify(o.advance ?? stepAdvance(), null, 2)}\n`, { mode: 0o600 });
+    }
+  }
+  /** lane-a after one advance: opus moved from model-5.6-gamma to model-6.1-gamma at H_MOVED. */
+  const MOVED_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } };
+  const MOVE = { at: H_MOVED, how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: true,
+    canary: 'passed', effort: { from: 'max', to: 'xhigh' } };
+  const MOVED_ADV = stepAdvance({ opus: { previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [MOVE] } });
+  /** opus's advance refused three times: the newest entry, a failed advance to the class's standing candidate. */
+  const failedH = (o: Record<string, unknown> = {}): Record<string, unknown> => ({
+    at: '2026-10-22T10:05:12Z', how: 'advance', from: 'model-5.6-gamma', to: 'model-6.1-gamma', ok: false,
+    canary: 'failed', reason: 'http 500: upstream error', tries: 3, lastAt: '2026-10-22T12:05:09Z', ...o });
+  const HOLD = { at: '2026-10-22T08:00:00Z', by: 'hand' };
+
+  /** One session's three registry files, as ccd, the session hook and the status line write them. `sidecar: null`
+   *  writes no usage sidecar; a string is written as the sidecar verbatim. */
+  function plantSessionH(o: { sid?: string; lane?: string; model?: string; sidecar?: string | null } = {}): void {
+    const sid = o.sid ?? H_SID;
+    fs.mkdirSync(path.join(sessDir(), 'usage'), { recursive: true });
+    fs.writeFileSync(path.join(sessDir(), `${sid}.wrapper`), o.lane ?? 'lane-a');
+    const turnAt = Date.parse(H_TURN);
+    fs.writeFileSync(path.join(sessDir(), `${sid}.turn.json`), `${JSON.stringify({ v: 1, sessionId: `uuid-${sid}`,
+      state: 'done', event: 'Stop', at: turnAt + 30_000, turnAt, stopAt: turnAt + 30_000, bg: -1, bgKinds: '',
+      bgIds: '', err: null, restartAt: null, lostBg: 0, lostKinds: '', lostIds: '' })}\n`);
+    if (o.sidecar === null) return;
+    fs.writeFileSync(path.join(sessDir(), 'usage', `${sid}.json`), o.sidecar ?? `${JSON.stringify({
+      ts: Date.parse(H_RENDER) / 1000, uuid: `uuid-${sid}`, account: o.lane ?? 'lane-a',
+      model: o.model ?? 'model-5.6-gamma', effort: 'low', ctxPct: 12, cost: 0.1, agent: null })}\n`);
+  }
+  const BEHIND_ROW = { session: H_SID, class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+    movedAt: H_MOVED, turnAt: H_TURN, renderAt: H_RENDER };
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('answers one object: the time, the session registry\'s word, and one entry per lane with a registry, in roster order', () => {
+    plantH();
+    const r = health();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'advance-health', now: H_NOW, sessions: 'absent', sessionsUnmeasured: [],
+      lanes: [{ id: 'lane-a', heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] }] });
+    plantH({ id: 'lane-b' });
+    expect((health().body['lanes'] as Record<string, unknown>[]).map((l) => l['id'])).toEqual(['lane-a', 'lane-b']);
+  });
+
+  it('heldBack: a failed newest advance to the candidate that still stands, with the step that failed', () => {
+    plantH({ advance: stepAdvance({ opus: { history: [failedH()] } }) });
+    expect(laneH(health())['heldBack']).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+      reason: 'http 500: upstream error', tries: 3, since: '2026-10-22T10:05:12Z', canary: 'failed' }]);
+  });
+
+  it('heldBack names a move that failed after its canary passed', () => {
+    plantH({ advance: stepAdvance({ opus: { history: [failedH({ canary: 'passed', tries: 1, reason: 'materialise: EISDIR' })] } }) });
+    expect(laneH(health())['heldBack']).toEqual([{ class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+      reason: 'materialise: EISDIR', tries: 1, since: '2026-10-22T10:05:12Z', canary: 'passed' }]);
+  });
+
+  it('heldBack clears once an advance succeeds', () => {
+    plantH({ registry: MOVED_REG, advance: stepAdvance({ opus: {
+      previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [failedH(), { ...MOVE, at: '2026-10-22T13:05:10Z' }] } }) });
+    expect(laneH(health())['heldBack']).toEqual([]);
+  });
+
+  it('heldBack clears when its candidate has left the catalogue (D-5191)', () => {
+    plantH({ catalogue: { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') },
+      advance: stepAdvance({ opus: { history: [failedH()] } }) });
+    expect(laneH(health())['heldBack']).toEqual([]);
+  });
+
+  it('a held class is never held back: the hold stopped its retries, and heldBehind names it (D-5221)', () => {
+    plantH({ advance: stepAdvance({ opus: { hold: HOLD, history: [failedH()] } }) });
+    const lane = laneH(health());
+    expect(lane['heldBack']).toEqual([]);
+    expect(lane['heldBehind']).toEqual([{ class: 'opus', pin: 'model-5.6-gamma', newer: 'model-6.1-gamma', reason: 'newer',
+      hold: HOLD }]);
+  });
+
+  it('heldBehind: a held class with a newer model of its family; nothing when released, or when nothing is newer', () => {
+    plantH({ advance: stepAdvance({ opus: { hold: HOLD }, haiku: { hold: HOLD } }) });
+    const rows = laneH(health())['heldBehind'] as Record<string, unknown>[];
+    // D-8689: `reason` is #2701's vocabulary, the words a successful advance records as its `cause`; no new list.
+    // Asserted first, so a row that loses its `reason` reds here (mutation A23), not only at the exact row below.
+    for (const row of rows) expect(CANDIDATE_REASONS).toContain(row['reason']);
+    expect(rows).toEqual([{ class: 'opus', pin: 'model-5.6-gamma', newer: 'model-6.1-gamma',
+      reason: 'newer', hold: HOLD }]);
+    plantH({ advance: stepAdvance({ haiku: { hold: HOLD } }) });
+    expect(laneH(health())['heldBehind']).toEqual([]);
+  });
+
+  it('a move to a model with no measured window is the models row\'s finding, not advance-health\'s (D-8689)', () => {
+    plantH({ registry: MOVED_REG, advance: MOVED_ADV });
+    plantWindows('lane-a', windowsFor({ 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 }));
+    const s = op('show', '--file', rosterPath(), '--id', 'lane-a');
+    expect(s.code, s.stdout + s.stderr).toBe(0);
+    expect(s.body['windowNotices'] as unknown[]).toHaveLength(1);
+    expect(laneH(health())).toEqual({ id: 'lane-a', heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [],
+      sessionsUnmeasured: [] });
+  });
+
+  it('an empty class held by a revert is behind the newest model of its stored family', () => {
+    const hold = { at: '2026-10-22T08:00:00Z', by: 'revert' };
+    plantH({ advance: stepAdvance({ fable: { family: 'delta', hold } }) });
+    expect(laneH(health())['heldBehind']).toEqual([{ class: 'fable', pin: null, newer: 'model-6-delta', reason: 'empty',
+      hold }]);
+  });
+
+  it('a held class whose pin has left the catalogue is named with reason retired: its fallback may be OLDER than the pin', () => {
+    // model-7-gamma is listed nowhere; the newest gamma the fresh catalogue lists is model-6.1-gamma, an older version.
+    plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
+      advance: stepAdvance({ opus: { hold: HOLD } }) });
+    expect(laneH(health())['heldBehind']).toEqual([{ class: 'opus', pin: 'model-7-gamma', newer: 'model-6.1-gamma',
+      reason: 'retired', hold: HOLD }]);
+  });
+
+  it.each([
+    ['an advance file of another version', 'advance-file-invalid', null, (): void => {
+      fs.writeFileSync(advPath('lane-a'), `${JSON.stringify({ ...stepAdvance(), v: 2 }, null, 2)}\n`);
+    }],
+    ['an advance file that is a directory', 'advance-file-unreadable', null, (): void => {
+      fs.rmSync(advPath('lane-a')); fs.mkdirSync(advPath('lane-a'));
+    }],
+    ['a registry that is not JSON', 'registry-invalid', null, (): void => { fs.writeFileSync(regPath('lane-a'), '{ not json'); }],
+    // JSON that `parseRegistry` refuses (an unknown field): `readRegistry`'s `{invalid}` arm, not its `{err}` arm.
+    ['a registry with a field it does not know', 'registry-invalid', null, (): void => {
+      fs.writeFileSync(regPath('lane-a'), `${JSON.stringify({ ...STEP_REGISTRY, extra: 1 }, null, 2)}\n`);
+    }],
+    ['a registry that is a directory', 'registry-unreadable', null, (): void => {
+      fs.rmSync(regPath('lane-a')); fs.mkdirSync(regPath('lane-a'));
+    }],
+    ['a catalogue that is not a catalogue', 'catalogue-invalid', null, (): void => { writeCatalogue('lane-a', { probe: 'codex' }); }],
+    ['a catalogue that is a directory', 'catalogue-unreadable', null, (): void => {
+      const p = path.join(home, '.ccrc', 'models', 'lane-a.json');
+      fs.rmSync(p); fs.mkdirSync(p);
+    }],
+    ['a windows file that cannot be read while a class has a candidate', 'windows-unreadable', null, (): void => {
+      plantWindows('lane-a', '{ not json');
+    }],
+    ['a pin that breaks the id grammar', 'pin-grammar', 'opus', (): void => {
+      plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-x-gamma' } } });
+    }],
+    ['two classes on one family whose newest model one of them pins', 'shared-family', 'opus', (): void => {
+      plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-5.6-alpha' } },
+        advance: stepAdvance({ opus: { family: 'alpha' } }) });
+    }],
+  ] as [string, string, string | null, () => void][])('%s is blocked %s, a BLOCKED_CAUSES word, with its detail', (_w, cause, cls, spoil) => {
+    plantH();
+    spoil();
+    const r = health();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const blocked = laneH(r)['blocked'] as Record<string, unknown>[];
+    expect(blocked.map((b) => [b['class'], b['cause']])).toEqual([[cls, cause]]);
+    expect(String(blocked[0]!['detail']).length).toBeGreaterThan(0);
+    expect(BLOCKED_CAUSES).toContain(cause);
+  });
+
+  it('a pin that breaks the grammar names itself in the detail', () => {
+    plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-x-gamma' } } });
+    expect(laneH(health())['blocked']).toEqual([{ class: 'opus', cause: 'pin-grammar',
+      detail: 'model-x-gamma is not <vendor>-<version>-<family>' }]);
+  });
+
+  it('an external-kind lane with a codex registry is blocked lane-not-codex-kind and gets no other codex finding (Review Focus 14)', () => {
+    plantH({ id: 'lane-b', advance: stepAdvance({ opus: { hold: HOLD, history: [failedH()] } }) });
+    const lane = laneH(health(), 'lane-b');
+    expect(lane['blocked']).toEqual([{ class: null, cause: 'lane-not-codex-kind',
+      detail: 'its roster row is exec.kind "external", and only an exec.kind "codex" lane advances' }]);
+    expect(lane['heldBack']).toEqual([]);
+    expect(lane['heldBehind']).toEqual([]);
+  });
+
+  describe('a lane-files lock path a writer could not use is lock-unwritable, measured with lstat and access only (D-5193)', () => {
+    const lockFindings = (r: Result): Record<string, unknown>[] =>
+      (laneH(r)['blocked'] as Record<string, unknown>[]).filter((b) => b['cause'] === 'lock-unwritable');
+    /** A directory that exists, this account can write, and another account owns — the case `chmod 700` refuses.
+     *  `/var/tmp` where it is one; read-only here. */
+    const SHARED_TMP = '/var/tmp';
+    const foreignUsable = ((): boolean => {
+      try {
+        if (isRootH || typeof process.getuid !== 'function') return false;
+        const st = fs.lstatSync(SHARED_TMP);
+        fs.accessSync(SHARED_TMP, fs.constants.W_OK);
+        return st.isDirectory() && st.uid !== process.getuid();
+      } catch {
+        return false;
+      }
+    })();
+
+    beforeEach(() => { plantH(); });
+
+    it('no lock directory yet is not a finding, and advance-health makes none', () => {
+      expect(lockFindings(health())).toEqual([]);
+      expect(fs.existsSync(lockDir())).toBe(false);
+    });
+
+    it('a lock file this account can write, in a directory it owns, is not a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      fs.writeFileSync(lockOf(), '', { mode: 0o600 });
+      expect(lockFindings(health())).toEqual([]);
+    });
+
+    it.each([
+      ['a FIFO at the lock path', (): void => { expect(spawnSync('mkfifo', [lockOf()]).status).toBe(0); },
+        /models-lane-a\.lock is not a regular file \(a FIFO, a directory or a socket\), which the lane-files lock never opens$/],
+      ['a directory at the lock path', (): void => { fs.mkdirSync(lockOf()); },
+        /models-lane-a\.lock is not a regular file \(a FIFO, a directory or a socket\), which the lane-files lock never opens$/],
+      ['a symlink to a regular file at the lock path', (): void => {
+        fs.writeFileSync(path.join(lockDir(), 'target'), ''); fs.symlinkSync(path.join(lockDir(), 'target'), lockOf());
+      }, /models-lane-a\.lock is a symlink, which the lane-files lock never opens$/],
+      ['a dangling symlink at the lock path', (): void => { fs.symlinkSync(path.join(lockDir(), 'nowhere'), lockOf()); },
+        /models-lane-a\.lock is a symlink, which the lane-files lock never opens$/],
+    ] as [string, () => void, RegExp][])('%s is a finding, and is never opened', (_w, plant, detail) => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      plant();
+      const before = fs.lstatSync(lockOf());
+      const found = lockFindings(health());
+      expect(found.map((b) => b['class'])).toEqual([null]);
+      expect(String(found[0]!['detail'])).toMatch(detail);
+      const after = fs.lstatSync(lockOf());
+      expect([after.mode, after.ino, after.mtimeMs]).toEqual([before.mode, before.ino, before.mtimeMs]);
+    });
+
+    it('a lock directory that is a symlink is a finding', () => {
+      fs.mkdirSync(path.join(home, 'real-lk'), { mode: 0o700 });
+      fs.symlinkSync(path.join(home, 'real-lk'), lockDir());
+      const found = lockFindings(health());
+      expect(found).toHaveLength(1);
+      expect(String(found[0]!['detail'])).toMatch(/\/lk is a symlink, which the lane-files lock never follows$/);
+    });
+
+    it('a lock directory that is a file is a finding', () => {
+      fs.writeFileSync(lockDir(), '');
+      const found = lockFindings(health());
+      expect(found).toHaveLength(1);
+      expect(String(found[0]!['detail'])).toMatch(/\/lk is not a directory$/);
+    });
+
+    it.skipIf(isRootH)('a lock file this account cannot write is a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o700 });
+      fs.writeFileSync(lockOf(), '', { mode: 0o400 });
+      expect(String(lockFindings(health())[0]?.['detail'])).toMatch(/models-lane-a\.lock is not writable by this account \(EACCES\)$/);
+    });
+
+    // Ruling RC7's letter ("whose lock directory it cannot write"): reported although W1's `_models_lock` would
+    // `chmod 700` a directory this account owns and go on; the remedy says the next writer repairs it.
+    it.skipIf(isRootH)('a lock directory this account owns but cannot write is a finding', () => {
+      fs.mkdirSync(lockDir(), { mode: 0o500 });
+      expect(String(lockFindings(health())[0]?.['detail'])).toMatch(/\/lk is not writable by this account \(EACCES\)$/);
+    });
+
+    it.skipIf(!foreignUsable)('a writable lock directory another account owns is a finding: its chmod 700 would fail', () => {
+      const r = health({ args: ['--file', rosterPath(), '--reg', sessDir(), '--lock-template',
+        path.join(SHARED_TMP, 'models-{id}.lock')] });
+      expect(String(lockFindings(r)[0]?.['detail']))
+        .toMatch(/belongs to another account \(uid \d+\), so the lane-files lock cannot make it 0700$/);
+    });
+  });
+
+  describe('sessionsBehind, read from the session registry its caller names (D-5194)', () => {
+    beforeEach(() => { plantH({ registry: MOVED_REG, advance: MOVED_ADV }); });
+
+    it('lists a session still rendering the replaced model, from its files alone: whether it runs is the doctor\'s question', () => {
+      plantSessionH();
+      const r = health();
+      expect(r.body['sessions']).toBe('read');
+      expect(laneH(r)['sessionsBehind']).toEqual([BEHIND_ROW]);
+    });
+
+    /** The turn marker's path, emptied of the file `plantSessionH` wrote there. */
+    const markerAt = (): string => {
+      const p = path.join(sessDir(), `${H_SID}.turn.json`);
+      fs.rmSync(p);
+      return p;
+    };
+    const un = (why: string): Record<string, unknown>[] => [{ session: H_SID, why }];
+
+    // Never behind; and named in the lane's `sessionsUnmeasured` exactly when a file it needed could not be read as
+    // one JSON object, so a lane nobody could measure is never a PASS that measured nothing.
+    it.each([
+      ['a session whose registry row names another lane', [], (): void => { plantSessionH({ lane: 'lane-b' }); }],
+      ['a session whose main render is the new model, though a subagent\'s own sidecar shows the old one', [], (): void => {
+        plantSessionH({ model: 'model-6.1-gamma' });
+        const agents = path.join(sessDir(), 'usage', `${H_SID}.agents`);
+        fs.mkdirSync(agents, { recursive: true });
+        fs.writeFileSync(path.join(agents, 'helper.json'), `${JSON.stringify({ ts: Date.parse(H_RENDER) / 1000,
+          uuid: `uuid-${H_SID}`, model: 'model-5.6-gamma', agent: 'helper' })}\n`);
+      }],
+      ['a session with no turn marker', un('marker-absent'), (): void => { plantSessionH(); markerAt(); }],
+      ['a turn marker that is not JSON', un('marker-unreadable'), (): void => {
+        plantSessionH(); fs.writeFileSync(markerAt(), '{ not json\n');
+      }],
+      ['a turn marker holding null', un('marker-unreadable'), (): void => {
+        plantSessionH(); fs.writeFileSync(markerAt(), 'null\n');
+      }],
+      ['a FIFO at the turn marker', un('marker-unreadable'), (): void => {
+        plantSessionH();
+        expect(spawnSync('mkfifo', [markerAt()]).status).toBe(0);
+      }],
+      ['a session whose home writes no usage sidecar (its own status line)', un('sidecar-absent'), (): void => {
+        plantSessionH({ sidecar: null });
+      }],
+      ['a usage sidecar over its 4096-byte cap', un('sidecar-unreadable'), (): void => {
+        plantSessionH({ sidecar: `${JSON.stringify({ ts: Date.parse(H_RENDER) / 1000, uuid: `uuid-${H_SID}`,
+          model: 'model-5.6-gamma', agent: null })}${' '.repeat(5000)}\n` });
+      }],
+      ['a usage sidecar holding a JSON list', un('sidecar-unreadable'), (): void => { plantSessionH({ sidecar: '[]\n' }); }],
+      ['a FIFO at the usage sidecar', un('sidecar-unreadable'), (): void => {
+        plantSessionH({ sidecar: null });
+        expect(spawnSync('mkfifo', [path.join(sessDir(), 'usage', `${H_SID}.json`)]).status).toBe(0);
+      }],
+    ] as [string, Record<string, unknown>[], () => void][])('%s is not listed as behind, and nothing blocks', (_w, unmeasured, plant) => {
+      plant();
+      const r = health();
+      expect(laneH(r)['sessionsBehind']).toEqual([]);
+      expect(laneH(r)['sessionsUnmeasured']).toEqual(unmeasured);
+      expect(laneH(r)['blocked']).toEqual([]);
+      expect(r.body['sessionsUnmeasured']).toEqual([]);
+    });
+
+    it('a .wrapper it cannot read is a session of no known lane: named at the top level, never skipped, never opened', () => {
+      plantSessionH();
+      const fifo = path.join(sessDir(), 'lane-a-x.wrapper');
+      expect(spawnSync('mkfifo', [fifo]).status).toBe(0);
+      const r = health();
+      expect(r.body['sessionsUnmeasured']).toEqual([{ session: 'lane-a-x', why: 'wrapper-unreadable' }]);
+      expect(laneH(r)['sessionsBehind']).toEqual([BEHIND_ROW]);
+      expect(fs.lstatSync(fifo).isFIFO()).toBe(true);
+    });
+
+    it('a lane whose advance file cannot be read names every session of it unmeasured: its moves were not read', () => {
+      plantSessionH();
+      fs.rmSync(advPath('lane-a'));
+      fs.mkdirSync(advPath('lane-a'));
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([{ session: H_SID, why: 'advance-file-unreadable' }]);
+    });
+
+    it('a hand set-class a crash cut short is judged as the next locked writer will record it, and the file is not written', () => {
+      const adv = `${JSON.stringify(stepAdvance({}, { how: 'hand', class: 'opus', from: 'model-5.6-gamma',
+        to: 'model-6.1-gamma', emptied: [], at: H_MOVED }), null, 2)}\n`;
+      fs.writeFileSync(advPath('lane-a'), adv, { mode: 0o600 });
+      plantSessionH();
+      expect(laneH(health())['sessionsBehind']).toEqual([BEHIND_ROW]);
+      expect(fs.readFileSync(advPath('lane-a'), 'utf8')).toBe(adv);
+    });
+
+    it('with no advance file nothing has moved, so no session is behind and none is unmeasured', () => {
+      fs.rmSync(advPath('lane-a'));
+      plantSessionH();
+      const lane = laneH(health());
+      expect(lane['sessionsBehind']).toEqual([]);
+      expect(lane['sessionsUnmeasured']).toEqual([]);
+    });
+
+    it.each([
+      ['absent', (): void => {}],
+      ['read', (): void => { fs.mkdirSync(sessDir(), { recursive: true }); }],
+      ['unreadable', (): void => { fs.writeFileSync(sessDir(), 'not a directory\n'); }],
+    ] as [string, () => void][])('the session registry has its own word: %s', (word, plant) => {
+      plant();
+      expect(health().body['sessions']).toBe(word);
+    });
+  });
+
+  it('writes nothing: ~/.ccrc and the session registry keep their bytes and mtimes, and no lock path is made', () => {
+    plantH({ registry: MOVED_REG, advance: stepAdvance({}, { how: 'hand', class: 'opus', from: 'model-5.6-gamma',
+      to: 'model-6.1-gamma', emptied: [], at: H_MOVED }) });
+    plantSessionH();
+    const sessions = (): string[] => fs.readdirSync(sessDir(), { recursive: true }).map(String).sort()
+      .map((f) => `${f} ${fs.statSync(path.join(sessDir(), f)).mtimeMs}`);
+    const before = [...snapshot(), ...sessions()];
+    expect(health().code).toBe(0);
+    expect(health().code).toBe(0);
+    expect([...snapshot(), ...sessions()]).toEqual(before);
+    expect(fs.existsSync(lockDir())).toBe(false);
+  });
+
+  it.each([
+    ['a relative --reg', (): string[] => ['--file', rosterPath(), '--reg', '.cc-sessions', '--lock-template', lockTpl()]],
+    ['a lock template with no {id}', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', path.join(lockDir(), 'models.lock')]],
+    ['a lock template with {id} twice', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', path.join(lockDir(), '{id}', 'models-{id}.lock')]],
+    ['a relative lock template', (): string[] => ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', 'lk/models-{id}.lock']],
+    ['no --lock-template', (): string[] => ['--file', rosterPath(), '--reg', sessDir()]],
+    ['no --reg', (): string[] => ['--file', rosterPath(), '--lock-template', lockTpl()]],
+    ['an --id, which a box-wide op does not take', (): string[] =>
+      ['--file', rosterPath(), '--reg', sessDir(), '--lock-template', lockTpl(), '--id', 'lane-a']],
+  ] as [string, () => string[]][])('%s is bad-argv at exit 2', (_w, args) => {
+    plantH();
+    const r = health({ args: args() });
+    expect(r.code).toBe(2);
+    expect(r.body).toMatchObject({ ok: false, error: 'bad-argv' });
+  });
+
+  it('a clock that is not a time is refused at exit 2, never a run judged against no time', () => {
+    plantH();
+    const r = health({ now: 'not-a-time' });
+    expect(r.code).toBe(2);
+    expect(r.body).toMatchObject({ ok: false, error: 'bad-argv' });
   });
 });
