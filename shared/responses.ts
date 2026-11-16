@@ -55,6 +55,9 @@ export interface ReceiptIn { readonly ref: ResponseRef; readonly receipt: Receip
 export const RECEIPTS_MAX_PER_BODY = 50;                    // the digest page names one per decision line
 export const RECEIPT_WORKER_VERSION = 1;                    // the receipt protocol's version, posted by push-sw.js
 export const RECEIPTS_PER_PUSH_MAX = 8;                     // worker receipts of each kind kept per push row (question 19)
+/** A push's window: 24 hours from its first acceptance (§4.3 Table 4.3a). Set on the row as `windowCapAt` when the
+ *  verdict lands (PR A); the seal reads it (PR B). */
+export const PUSH_WINDOW_MS = 24 * 3_600_000;
 
 /** The digest row kinds, spelled as a map typed by `DigestRowKind`, so a new kind is a compile error here; a test pins
  *  the list equal to `DIGEST_ROW_KINDS` (a value import of `api.ts` would make this file carry its weight). */
