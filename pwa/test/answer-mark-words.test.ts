@@ -1,10 +1,11 @@
-// Overlord W1, answer marks (plan w1-delegation-marks.md Task 4): the field's one reader, the settle rule (F14) and what one
-// box shows. Pure: no React.
+// Overlord W1, answer marks (plan w1-delegation-marks.md Tasks 4 and 6): the field's one reader, the settle rule (F14), what
+// one box shows, and the join of a question row to its ask. Pure: no React.
 import { describe, expect, it } from 'vitest';
-import type { AnswerMarkView } from '../../shared/answerMarks';
+import type { AnswerMarkView, AskMarkRow } from '../../shared/answerMarks';
 import {
-  ANSWER_MARK_LABEL, ANSWER_MARK_UNMEASURED_NOTE, answerMarksOf, markOf, settledMark, shownMark,
+  ANSWER_MARK_LABEL, ANSWER_MARK_UNMEASURED_NOTE, answerMarksOf, askMarksFor, askRowsOf, markOf, settledMark, shownMark,
 } from '../src/ledgers/answerMarkWords';
+import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { NOW, MIN } from './ledgersFixture';
 
 const NEVER: AnswerMarkView = { state: 'never' };
@@ -81,5 +82,45 @@ describe('shownMark', () => {
   it('a page that is not current (the saved copy) disables the box, keeping its value', () => {
     expect(shownMark(marked(5), null, false)).toEqual({ checked: true, disabled: true, note: null });
     expect(shownMark(NEVER, null, false)).toEqual({ checked: false, disabled: true, note: null });
+  });
+});
+
+// Answer marks B (plan Task 6): the join of a question row to its live ask, and the one reader of the ask lists.
+describe('askMarksFor and askRowsOf', () => {
+  const row = (o: Partial<AskMarkRow> = {}): AskMarkRow => ({
+    id: 5, childId: 'lane-a-child', program: 'prog-a', question: 'Which base?', how: 'lapsed', reason: null, at: NOW - MIN,
+    live: true, answerMarks: { couldAnswer: NEVER, unsure: NEVER }, ...o,
+  });
+
+  it('finds the session\'s live ask', () => {
+    expect(askMarksFor('lane-a-child', [row({ childId: 'lane-a-other', id: 4 }), row()])?.id).toBe(5);
+  });
+
+  it('answers nothing for a session with no listed ask (a root session\'s own ask, an ask still held)', () => {
+    expect(askMarksFor('lane-a-root', [row()])).toBeNull();
+    expect(askMarksFor('lane-a-child', [])).toBeNull();
+  });
+
+  it('answers nothing for an ask that is not live: its dialog has gone, or the session now shows a permission prompt', () => {
+    expect(askMarksFor('lane-a-child', [row({ live: false })])).toBeNull();
+    expect(askMarksFor('lane-a-child', [row({ live: 'unmeasured' })])).toBeNull();
+  });
+
+  it('answers nothing when the view has no ask list (an older server)', () => {
+    expect(askMarksFor('lane-a-child', undefined)).toBeNull();
+    expect(askRowsOf(undefined)).toEqual([]);
+  });
+
+  it('askRowsOf leaves out a row that is not an ask row, and keeps the rest', () => {
+    const good = row();
+    const bad: unknown[] = [null, 3, { ...good, how: 'invented' }, { ...good, live: 'yes' }, { ...good, answerMarks: undefined },
+      { ...good, program: 4 }, { ...good, id: '5' }];
+    expect(askRowsOf([...bad, good])).toEqual([good]);
+    expect(askRowsOf({ length: 1 })).toEqual([]);
+  });
+
+  it('the door\'s ask refusals have their sentences', () => {
+    expect(LEDGER_REFUSAL_TEXT['unknown-ask']).toBe('This question is no longer on record, so it cannot be marked.');
+    expect(LEDGER_REFUSAL_TEXT['ask-unreadable']).toMatch(/could not read that question/);
   });
 });

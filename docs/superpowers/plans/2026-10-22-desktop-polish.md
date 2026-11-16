@@ -687,7 +687,7 @@ The worker explicitly says the current key-injection boundary has no atomic comp
 
 **As accepted (review 1284, 2026-10-30, at fbe8d91c9; this text corrects the pre-amendment wording above, which it does not rewrite).** The Acceptance line's "every option … at 1280×600 and up" is superseded by change 3 as amended: below 700px tall the first option is in view and the rest are reachable in the surface's own scroll. Change 1's "a short question has no scrollbar" is measured for the question region at 700px tall and up; the whole-card "no scrollbar anywhere" check runs at 900px tall and up (corrected on review 1291 F3). Step 1's cell "the surface does not scroll" and Step 3's mutant "the surface allowed to shrink" describe the design before ask 212; the built cells check each view's measured `scrolls`, and the shrink order is pinned by M1 and M12 (Task T1e lists what review 1284 left open). Rulings on review 1284: an arrow on the question region keeps T1c's key model and moves the highlight to the start row, while Space, PageUp/PageDown and Home/End scroll the region (F1); the by-construction argument from css-flexbox-1 is accepted, and Firefox and WebKit stay unmeasured as a known limit (F6); at Refined 1920×1080 the hint line cut at the surface's edge is accepted as the scroll cue, since every answer row is in view (F7).
 
-- **D-7565** - `inline-ask-options-stay-in-view`: Task T1d, the operator's report of 2026-10-30, approved the same day. At the desk the inline ask card keeps its header and its answer rows in view: the question text scrolls in its own region, and the answer surface scrolls on its own only past the floors; the question reads at prose size, not as a large heading; the room is shared by the priority order of change 3 as amended (the 60% cap and the fifth, in the first text, were withdrawn on ask 212). It amends D-6326's one-scroller card at the desk only. As built (wave-done 12888 and fix round 1, wave-done 13023 at fbe8d91c9; departures recorded here, no new number): `.ask-inline-body` holds two non-scrolling slots, each with one region (the question, then the surface), because the surface must be one box to scroll on its own. Only the question slot has a floor, min(content, two lines); the surface slot is `flex: 0 1 content; min-height: 0`, and the order comes from the shrink weights (the question slot `flex: 0 1000000 content` against the surface's 1), not from a percentage, so it holds in any conforming engine (measured in Chrome only). `.ask-inline-body` is `overflow: clip` with a `-sp-1` margin and an `sp-1` padding, so focus rings keep their room; the clip is pinned at 1280x425, where the card overflows. The question region is a named Tab stop (`role="group"`, "Question"), so a long question scrolls by its keys, and T1c's R102 and R115 Tab cells step section, region, row. And `InlineCard` measures the chat pane with a ResizeObserver into `--ask-pane` (default `100dvh`, which `css-vars` requires), because a percentage in the card's own rules would be of the card. Rulings on asks 212, 216 and 217 set the priority order, the card-first reading and the short-window rule (below 700px tall: one question line, no transcript floor). The twelve "no scrollbar anywhere" cells at 600, 699 and 700 tall (four skin and theme pairs each) are skipped: a five-row surface cannot fit a card that short, so below 900px tall only fixture 1's question-region check runs, and fixture 2's whole-card check is not pinned between 700 and 899 (corrected on review 1291 F3).
+- **D-7565** — `inline-ask-options-stay-in-view`: Task T1d, the operator's report of 2026-10-30, approved the same day. At the desk the inline ask card keeps its header and its answer rows in view: the question text scrolls in its own region, and the answer surface scrolls on its own only past the floors; the question reads at prose size, not as a large heading; the room is shared by the priority order of change 3 as amended (the 60% cap and the fifth, in the first text, were withdrawn on ask 212). It amends D-6326's one-scroller card at the desk only. As built (wave-done 12888 and fix round 1, wave-done 13023 at fbe8d91c9; departures recorded here, no new number): `.ask-inline-body` holds two non-scrolling slots, each with one region (the question, then the surface), because the surface must be one box to scroll on its own. Only the question slot has a floor, min(content, two lines); the surface slot is `flex: 0 1 content; min-height: 0`, and the order comes from the shrink weights (the question slot `flex: 0 1000000 content` against the surface's 1), not from a percentage, so it holds in any conforming engine (measured in Chrome only). `.ask-inline-body` is `overflow: clip` with a `-sp-1` margin and an `sp-1` padding, so focus rings keep their room; the clip is pinned at 1280x425, where the card overflows. The question region is a named Tab stop (`role="group"`, "Question"), so a long question scrolls by its keys, and T1c's R102 and R115 Tab cells step section, region, row. And `InlineCard` measures the chat pane with a ResizeObserver into `--ask-pane` (default `100dvh`, which `css-vars` requires), because a percentage in the card's own rules would be of the card. Rulings on asks 212, 216 and 217 set the priority order, the card-first reading and the short-window rule (below 700px tall: one question line, no transcript floor). The twelve "no scrollbar anywhere" cells at 600, 699 and 700 tall (four skin and theme pairs each) are skipped: a five-row surface cannot fit a card that short, so below 900px tall only fixture 1's question-region check runs, and fixture 2's whole-card check is not pinned between 700 and 899 (corrected on review 1291 F3).
 
 ### Task T1c-F: call-bound answer-channel feasibility (R118; research, no PR)
 
@@ -1025,11 +1025,11 @@ The worker explicitly says the current key-injection boundary has no atomic comp
 **Carried (R51), each intended change in its own commit.** T2f's Files also include `pwa/browser/instrument-desk.browser.test.ts`, `pwa/test/instrument-shell.test.tsx` and the comment-only passages of `pwa/src/fleet/FleetHead.tsx`. Serve a waiting update view in `WITH_RUNS` and assert the indicator is drawn at the 900 boundary, alongside the whole count. Add the missing column-presence assertions to both no-head loops. Correct the mutation footer: rows 1 and 4 also run in the browser, row 7 only there. Name the frame's status bar and the rail's doors in FleetHead/FleetScreen comments. List all seven measured reds for row 6 rather than only five. Run the instrument-desk browser file as well as Step 5's suites; preserve the status-bar count, pool lag and phone line. These are T2g's accepted follow-ups, not a second implementation of its flags.
 
 **Departures, numbered on review 1117 (2026-10-28).**
-- **D-7257** - `t2f-chooser-takes-a-row-height`: `ClassChooser` takes one optional `className`, merged by `cn`, which the desk toggle row uses for `min-h-row`. It is the component's only prop.
-- **D-7258** - `t2f-mutation-table-in-chooser-suite`: T2f's mutation table lives in the header of `fleet-class-chooser.test.tsx`, so T3b's `instrument-list.test.tsx` carries one appended hunk.
-- **D-7259** - `t2f-fleet-css-edit-in-feat-commit`: two re-points of `fleet-css.test.ts`'s runs-line read ride inside feature commits (`b2f43b4c6` and `350ddb122`), because each feature commit would otherwise be red.
-- **D-7260** - `t2f-instrument-list-cases-after-feat`: the three `instrument-list.test.tsx` cases were committed after the feature commit, while T3b's consent (11646) was pending, so no red-first run is recorded for them. The mutation table's rows prove they guard. The case "below 900 the runs row is as today" is a characterization case, green on the base by design.
-- **D-7261** - `t2f-fleetscreen-comments-in-feat-commit`: R51 F4's FleetScreen half (the `headChrome` and `headCount` docs) is comment text inside the feature commit `b2f43b4c6`, whose message discloses it; its FleetHead half has its own commit.
+- **D-7257** — `t2f-chooser-takes-a-row-height`: `ClassChooser` takes one optional `className`, merged by `cn`, which the desk toggle row uses for `min-h-row`. It is the component's only prop.
+- **D-7258** — `t2f-mutation-table-in-chooser-suite`: T2f's mutation table lives in the header of `fleet-class-chooser.test.tsx`, so T3b's `instrument-list.test.tsx` carries one appended hunk.
+- **D-7259** — `t2f-fleet-css-edit-in-feat-commit`: two re-points of `fleet-css.test.ts`'s runs-line read ride inside feature commits (`b2f43b4c6` and `350ddb122`), because each feature commit would otherwise be red.
+- **D-7260** — `t2f-instrument-list-cases-after-feat`: the three `instrument-list.test.tsx` cases were committed after the feature commit, while T3b's consent (11646) was pending, so no red-first run is recorded for them. The mutation table's rows prove they guard. The case "below 900 the runs row is as today" is a characterization case, green on the base by design.
+- **D-7261** — `t2f-fleetscreen-comments-in-feat-commit`: R51 F4's FleetScreen half (the `headChrome` and `headCount` docs) is comment text inside the feature commit `b2f43b4c6`, whose message discloses it; its FleetHead half has its own commit.
 
 **Acceptance.** No runs row and no inert chooser in Instrument's desk column; R51's carried fixture, guard and comment fixes complete. **Rollback.** A plain revert.
 
@@ -1537,8 +1537,8 @@ Fences:
       cd pwa && ./node_modules/.bin/vitest run --maxWorkers=3 && ./node_modules/.bin/tsc --noEmit
 
 **Departures, numbered on review 1120 (2026-10-28).**
-- **D-7262** - `t3e-extra-files`: two files beyond the task's list. `pwa/src/session/chat.css` gets one selector, so the Inspector door lays out its word beside its glyph like Terminal and More; review 1120 measured that without it the word stacks under the glyph. `pwa/test/w7-storage-keys.test.ts` gets the `ccrc-inspector` row.
-- **D-7263** - `t3e-storage-owner`: `pwa/src/inspector/inspectorShown.ts` (the `ccrc-inspector` key) is the twelfth `localStorage` owner, and the W7 census reads 12. The plan asks for a per-device choice, and C7l's storage port has not landed, so the owner is written directly, as `stripExpanded.ts` and `foldState.ts` are.
+- **D-7262** — `t3e-extra-files`: two files beyond the task's list. `pwa/src/session/chat.css` gets one selector, so the Inspector door lays out its word beside its glyph like Terminal and More; review 1120 measured that without it the word stacks under the glyph. `pwa/test/w7-storage-keys.test.ts` gets the `ccrc-inspector` row.
+- **D-7263** — `t3e-storage-owner`: `pwa/src/inspector/inspectorShown.ts` (the `ccrc-inspector` key) is the twelfth `localStorage` owner, and the W7 census reads 12. The plan asks for a per-device choice, and C7l's storage port has not landed, so the owner is written directly, as `stripExpanded.ts` and `foldState.ts` are.
 
 **Acceptance.** The panel hides and shows by a header button or `i`, the choice survives a reload, and its tasks and mail are never lost. **Rollback.** A plain revert; the orphaned `ccrc-inspector` key is read by nothing.
 
@@ -1920,7 +1920,7 @@ Verify runs T2c's `lane-order` and `fleet-pieces` suites as well, because `strip
 **R120 amendment (the operator, 2026-10-27, while S5b runs).** The operator asked that the top lanes panel be one line
 by default, with the lanes as a sorted list, and that hovering that line show every lane, still sorted. S5b's fold
 already makes the desk strip one line by default; R120 adds two things to this task, and changes nothing else above.
-- **D-7153** - `strip-hover-flyout`: at the desk (900 px and up, both skins), while the strip is folded, hovering the
+- **D-7153** — `strip-hover-flyout`: at the desk (900 px and up, both skins), while the strip is folded, hovering the
   strip's line, or moving keyboard focus into it, opens a flyout: a panel below the line, drawn over the content and not
   pushing it down, that holds EVERY lane card in `lanesByFree`'s order, the same cards and doors as the expanded strip.
   It closes when the pointer has left both the line and the flyout, on Escape (focus returns to the card it came from),
@@ -1930,7 +1930,7 @@ already makes the desk strip one line by default; R120 adds two things to this t
   nothing changes. Tests: open on hover and on focus, close on leave, on Escape and on blur, every lane present and in
   order, no flyout while expanded or below 900 px, and a browser render at 1280 and 1920 in both skins. Each guard
   gets a mutant that reds it.
-- **D-7154** - `lanes-tie-break-soonest-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`, T2c's, outside S5b's
+- **D-7154** — `lanes-tie-break-soonest-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`, T2c's, outside S5b's
   original Files) keeps its first key, the binding use (`bindingPct`) lowest first. Lanes that tie on it now sort by
   the binding window's reset, soonest first (a lane with no reset time after one with a reset time), then by the other
   window's use, lowest first, and only then in roster order. A never-read lane and an expired sign-in still go last.
@@ -1938,7 +1938,7 @@ already makes the desk strip one line by default; R120 adds two things to this t
   latest to reset are at the bottom. `bindingWindow` is the one decider of which reset binds, so `lanesByFree` reads
   it, not a second copy. `pwa/test/lane-order.test.ts` gains the tie cases, each red first, with a mutant that drops
   the reset key.
-- **D-7233** - `instrument-first-row-is-its-chrome`: Task S5b, coordinator ruling on review 1102's F2. The Acceptance's
+- **D-7233** — `instrument-first-row-is-its-chrome`: Task S5b, coordinator ruling on review 1102's F2. The Acceptance's
   "in both skins ... at most 440 px" holds for Refined (418.8 px at 390x844, folded). Instrument measures 533.8 px. The
   fold saves the same 386.2 px in both skins, and the strip is the same height in both. The 115 px difference is
   Instrument's own chrome, which S5b does not touch: 28 px in its taller `fleet-head` above the strip, and 87 px in
@@ -1968,21 +1968,21 @@ already makes the desk strip one line by default; R120 adds two things to this t
 **Why** (the programme ledger's R121, the operator's answers of 2026-10-28). Q8: "534 is ok, but implement same logic as desktop re open full panel but on tap instead of hover, otherwise show e.g. two lines." So Instrument's phone figure of 534 px (D-7233) stands, and the phone gets the desk's full panel, opened by a tap. Folded, the phone shows about two lines of cards. Q3 ("probably", taken as yes): lanes at 95% binding use or more sort as one band, soonest reset first, instead of only exact ties (amends D-7154). Review 1108's F1 is fixed here too, because it is in the same files: keyboard focus that reaches a card from the end cell opens nothing at the desk.
 
 **The shape (the operator's rule; the details are the coordinator's defaults, which the operator may still change).**
-- **D-7254** - `phone-strip-tap-panel`: below 900 px, in both skins, a folded strip with lanes folded away opens the SAME panel as the desk's flyout (D-7153): every lane card in `lanesByFree`'s order, drawn over the content under the strip, not pushing it down, each card its lane's door.
+- **D-7254** — `phone-strip-tap-panel`: below 900 px, in both skins, a folded strip with lanes folded away opens the SAME panel as the desk's flyout (D-7153): every lane card in `lanesByFree`'s order, drawn over the content under the strip, not pushing it down, each card its lane's door.
   - A tap opens it, and nothing on the phone opens it on hover or focus alone. The tap target is the strip's control, `foldWords`' "+n more", which on a phone opens the panel instead of expanding the strip inline. The line's cards stay doors to their lanes, so tapping a card never opens the panel.
   - It closes on a second tap of the control, a tap outside the strip and the panel, Escape, or a tap on one of its cards (which then opens that lane). A close returns focus to the control when focus was in the panel.
   - The control names its state (`aria-expanded`, `aria-controls` naming the panel) and keeps its 44 px target under a coarse pointer.
   - The panel has a bounded height, at most the viewport below the strip, and scrolls inside itself, so 17 lanes never push the page.
   - Below 900 px the per-device expanded choice (`stripExpanded.ts`, `ccrc-accounts-strip`) is neither read nor written: a phone is always folded, with the panel one tap away. At the desk nothing changes: the control pins the strip open, and the hover and keyboard flyout runs as D-7153 says. A device that crosses 900 px closes an open panel.
-- **D-7255** - `phone-fold-two-lines`: below 900 px a folded strip shows as many lanes as fill two measured lines of the cards' group, instead of `FOLD_SHOWN`'s fixed four. The width is `useRowWidth` on the group, as the desk measures it. The lanes per line come from `rowFit` with the phone grid's own card floor and gap, as `shell.css` and `fleet.css` lay the phone strip out today. The count is `2 × tracks`, at least one, and the phone's end cell stays a row of its own under the cards. An unmeasured phone row shows `FOLD_SHOWN` (4), never "fold nothing", so a phone's first paint is never the full strip. `foldShown` stays the one decider. Step 0 measures what four shows today at 360, 390, 438, 699, 700 and 899 (the number of lines) and reports it. Where four already fills two lines, the visible change at that width is nil, and the rule keeps it two lines at every phone width. The first session row's top at 390×844, folded: Refined at most 440 px, Instrument at most 540 px (D-7233), unchanged.
-- **D-7256** - `near-full-lanes-band-by-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`) reads one new constant, `NEAR_FULL_PCT = 95`, written once beside it.
+- **D-7255** — `phone-fold-two-lines`: below 900 px a folded strip shows as many lanes as fill two measured lines of the cards' group, instead of `FOLD_SHOWN`'s fixed four. The width is `useRowWidth` on the group, as the desk measures it. The lanes per line come from `rowFit` with the phone grid's own card floor and gap, as `shell.css` and `fleet.css` lay the phone strip out today. The count is `2 × tracks`, at least one, and the phone's end cell stays a row of its own under the cards. An unmeasured phone row shows `FOLD_SHOWN` (4), never "fold nothing", so a phone's first paint is never the full strip. `foldShown` stays the one decider. Step 0 measures what four shows today at 360, 390, 438, 699, 700 and 899 (the number of lines) and reports it. Where four already fills two lines, the visible change at that width is nil, and the rule keeps it two lines at every phone width. The first session row's top at 390×844, folded: Refined at most 440 px, Instrument at most 540 px (D-7233), unchanged.
+- **D-7256** — `near-full-lanes-band-by-reset`: `lanesByFree` (`pwa/src/fleet/laneOrder.ts`) reads one new constant, `NEAR_FULL_PCT = 95`, written once beside it.
   - Its first key is the binding use, with every lane at or above `NEAR_FULL_PCT` reading as the same value: one band, sorted after every lane below 95.
   - Within the band, and among exact ties below it, the order is D-7154's: the binding window's reset, soonest first (no reset time after a known one), then the other window's use, then the roster.
   - A rate-limited lane (100%, `WINDOW_LIMITED_PCT`) is in the band, and a never-read lane and an expired sign-in still go last.
   - Below 95 nothing changes.
   - The "+n more" words (`foldWords`) are unchanged.
   - `bindingWindow` stays the one decider of which reset binds.
-- **D-7253** is the task's own number. Under it, review 1108's F1 is fixed: at the desk, keyboard focus that arrives at a card of the line or the flyout from the strip's end cell opens the flyout, by Shift+Tab back from "+n more", "Show fewer" or All accounts. This is the same as focus arriving from outside the strip. The end cell still never HOLDS the flyout open (D-7153's clarification); only arriving at a card counts. A click's focus still opens nothing.
+- **D-7253** — the task's own number. Under it, review 1108's F1 is fixed: at the desk, keyboard focus that arrives at a card of the line or the flyout from the strip's end cell opens the flyout, by Shift+Tab back from "+n more", "Show fewer" or All accounts. This is the same as focus arriving from outside the strip. The end cell still never HOLDS the flyout open (D-7153's clarification); only arriving at a card counts. A click's focus still opens nothing.
 
 **Files:**
 - Modify `pwa/src/fleet/stripFold.ts`: `foldShown` takes the phone's measured tracks, and its doc comment says two lines. `FOLD_SHOWN` stays as the unmeasured phone's count. If the phone grid's card floor is not `LANE_CARD_MIN`, add one constant for it here, never a second copy of a figure CSS also writes; the CSS reads it as a custom property, as `--lane-card-min` does.
@@ -2028,8 +2028,8 @@ already makes the desk strip one line by default; R120 adds two things to this t
 **Acceptance.** On a phone, in both skins, the folded strip shows two measured lines of the freest lanes, and one tap on "+n more" opens every lane in a panel over the page, in order, each card a door. A tap outside, Escape, or the control again closes it. Lanes at 95% or more sit together at the bottom of the live lanes, soonest reset first. At the desk nothing changes, except that Shift+Tab back onto a card opens the flyout. Every case is green, every mutant red, and the renders are taken before and after.
 
 **Departures, numbered on review 1126 (2026-10-28).**
-- **D-7266** - `phone-tracks-read-drawn`: under the coordinator's answer to ask 174, the phone reads the cards' group's DRAWN tracks (its computed `grid-template-columns`) through `useRowWidth.ts`, which is outside the task's Files. `useRowWidth` drops its `enabled` parameter and measures at every width. The phone grid has no card floor, since its tracks come from a viewport breakpoint, so no floor is written anywhere.
-- **D-7267** - `app-test-phone-control-names-panel`: `pwa/test/app.test.tsx` (outside Files, claim 2876). Its assertion that the control's `aria-controls` names the strip's group becomes desk-only, because on a phone the control names the panel.
+- **D-7266** — `phone-tracks-read-drawn`: under the coordinator's answer to ask 174, the phone reads the cards' group's DRAWN tracks (its computed `grid-template-columns`) through `useRowWidth.ts`, which is outside the task's Files. `useRowWidth` drops its `enabled` parameter and measures at every width. The phone grid has no card floor, since its tracks come from a viewport breakpoint, so no floor is written anywhere.
+- **D-7267** — `app-test-phone-control-names-panel`: `pwa/test/app.test.tsx` (outside Files, claim 2876). Its assertion that the control's `aria-controls` names the strip's group becomes desk-only, because on a phone the control names the panel.
 - Review 1126 F7: "Show fewer" exists only while the strip is expanded, and then there is no flyout. So D-7253's list of origins is in effect "+n more" and All accounts.
 
 **Rollback.** A plain revert. The per-device key keeps its desk meaning throughout.
@@ -2810,11 +2810,11 @@ that keeps every assertion, the `wheel-chain*` browser files.
 - [ ] **Step 4: Verify.** The real-tmux file, run in a loop on a busy box and on CI. The full suite on the PR, which
   the `.github/` change forces. The browser job's time at the head.
 
-- **D-7248** - `tmux-test-waits-for-its-server`: Task C11, the coordinator's reading on R121's Q7 and Q10, on
+- **D-7248** — `tmux-test-waits-for-its-server`: Task C11, the coordinator's reading on R121's Q7 and Q10, on
   2026-10-28. The drawer test's reset no longer races a server that is exiting, and the browser leg's cap rises from
   15 to 20 minutes with a measured comment. No product code changes.
-- **D-7250** - `browser-cap-pin-moves-in-ci-pipeline-test`: Task C11, ruled on review 1113 on 2026-10-28. `server/test/ci-pipeline.test.ts` pins the browser leg's cap, so its title and its expect move from 15 to 20 with the cap, red first. The pin is outside C11's Files and was taken under claim 2862.
-- **D-7251** - `d-ref-spelled-as-task-in-tracked-text`: Task C11, ruled on review 1113 on 2026-10-28. A number defined only in an unpublished plan amendment sits above main's in-tree high-water, and deviation-refs reds on it in tracked text. So a feature PR's tracked text names the task ("desktop polish Task C11"), and the number goes only in its commit messages and PR body until the ledger PR publishes the amendment.
+- **D-7250** — `browser-cap-pin-moves-in-ci-pipeline-test`: Task C11, ruled on review 1113 on 2026-10-28. `server/test/ci-pipeline.test.ts` pins the browser leg's cap, so its title and its expect move from 15 to 20 with the cap, red first. The pin is outside C11's Files and was taken under claim 2862.
+- **D-7251** — `d-ref-spelled-as-task-in-tracked-text`: Task C11, ruled on review 1113 on 2026-10-28. A number defined only in an unpublished plan amendment sits above main's in-tree high-water, and deviation-refs reds on it in tracked text. So a feature PR's tracked text names the task ("desktop polish Task C11"), and the number goes only in its commit messages and PR body until the ledger PR publishes the amendment.
 
 **Acceptance.** The real-tmux file passes the reproducing loop; the browser job's cap and comment match the measured
 time. **Rollback.** A plain revert.
@@ -2857,15 +2857,15 @@ time. **Rollback.** A plain revert.
 - [ ] **Step 2: Item 11's CI savings.** Measure the browser leg before and after from CI's own logs, at the PR's run and at one re-run. Take a saving only if every wheel-chain case still fails on its own mutant.
 - [ ] **Step 3: Verify.** Run each touched suite once, the pwa and server typechecks, `deviation-refs`, and the citation and anchor tests that README edits can break.
 
-- **D-7264** - `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
-- **D-7281** - `top-bar-sits-clear-of-the-lanes-row`: Task C12 item 19, issued on 2026-10-28 from the operator's report that the search field does not sit nicely above the accounts bar. At the desk, Instrument's bar line is `--tap-min` tall and its command field and New session fill it top to bottom, and the frame header leaves about 4 px (`.shell-accounts`' padding) before the lanes row's first cards, against the cards' own `--sp-2` gap, so the field and `+` read as resting on the cards. Fix: the bar's controls keep their size and floors, and the space between their bottom edge and the first line of cards is at least the gap between cards (`--sp-2`), with the bar's top gutter matched so the controls sit centred in their line. The header grows by that much, and nothing else in it moves. Refined (its 56 px line) is measured too and changes only if it shows the same fault. A real-Chrome case in lanes-row.browser, red on main's tree, measures the gap from the command field's and New session's bottom edges to the top of the first card, at 900, 1280 and 1920, both skins, fine and coarse pointer, and the controls' heights stay at their floors. The files are T3b's and S5c's until #1703 and #1765 merge.
-- **D-7282** - `c12-note-corrections-in-c12-note`: Task C12, issued on 2026-10-28. The corrections that items 4, 5, 15 and 21 make to earlier task notes (t2d.md, t2b.md, t3b.md and c7.md) go in C12's own new note, c12.md, and no existing note is edited, because the ledger guard refuses an edit to an existing plan note without a ledger-edit trailer. The coordinator folds them on the ledger PR.
-- **D-7283** - `c12-desk-head-case-added`: Task C12 item 4, issued on 2026-10-28. The old desk-width case ran an empty fleet, whose sidebar head draws nothing, so it could not see a stray mail door; a new case with a row covers it.
-- **D-7284** - `c12-slow-first-sequencer-files`: Task C12 item 11, issued on 2026-10-28. Running the browser leg's slowest files first needs a sequencer (`pwa/browser/slowFirst.ts`, wired in `vitest.browser.config.ts` and pinned in `test/browser-leg.test.ts`), which lies outside the item's named files.
-- **D-7285** - `c12-lanes-row-page-clock`: Task C12 item 16, issued on 2026-10-28. Reading the leave time before the pointer moves was measured first and still under-read under load (a close read at 22 ms), because the All accounts route moves the strip out from under the resting pointer before the move. The case now times the close on the page's own clock.
-- **D-7286** - `c12-refined-bar-clear-6px`: Task C12 item 19, under D-7281, issued on 2026-10-28. Refined's bar controls sit centred, 6 px clear of the lanes row's cards, which is not the fault D-7281 fixes (controls resting on the cards), so Refined is unchanged (ask 179), and the case holds Refined to its 6 px.
-- **D-7287** - `c12-day-comments-not-call`: Task C12 item 21 (review 1132 A1), issued on 2026-10-28. The day still reaches every bubble, and the comments in SessionScreen and MessageBubble now say so, rather than the call handing it only to the rows that read the clock. Behaviour is unchanged.
-- **D-7288** - `c12-session-hook-reset-copy-left`: Task C12 item 11, issued on 2026-10-28. `server/test/session-hook.test.ts` keeps its local reset copy, because the file is under another programme's claim, and the request to its holder was withdrawn (11789). It is a residual for a later change once that claim releases.
+- **D-7264** — `programme-follow-up-sweep`: Task C12, issued on 2026-10-28. The advisory findings this programme's reviews sent to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-7281** — `top-bar-sits-clear-of-the-lanes-row`: Task C12 item 19, issued on 2026-10-28 from the operator's report that the search field does not sit nicely above the accounts bar. At the desk, Instrument's bar line is `--tap-min` tall and its command field and New session fill it top to bottom, and the frame header leaves about 4 px (`.shell-accounts`' padding) before the lanes row's first cards, against the cards' own `--sp-2` gap, so the field and `+` read as resting on the cards. Fix: the bar's controls keep their size and floors, and the space between their bottom edge and the first line of cards is at least the gap between cards (`--sp-2`), with the bar's top gutter matched so the controls sit centred in their line. The header grows by that much, and nothing else in it moves. Refined (its 56 px line) is measured too and changes only if it shows the same fault. A real-Chrome case in lanes-row.browser, red on main's tree, measures the gap from the command field's and New session's bottom edges to the top of the first card, at 900, 1280 and 1920, both skins, fine and coarse pointer, and the controls' heights stay at their floors. The files are T3b's and S5c's until #1703 and #1765 merge.
+- **D-7282** — `c12-note-corrections-in-c12-note`: Task C12, issued on 2026-10-28. The corrections that items 4, 5, 15 and 21 make to earlier task notes (t2d.md, t2b.md, t3b.md and c7.md) go in C12's own new note, c12.md, and no existing note is edited, because the ledger guard refuses an edit to an existing plan note without a ledger-edit trailer. The coordinator folds them on the ledger PR.
+- **D-7283** — `c12-desk-head-case-added`: Task C12 item 4, issued on 2026-10-28. The old desk-width case ran an empty fleet, whose sidebar head draws nothing, so it could not see a stray mail door; a new case with a row covers it.
+- **D-7284** — `c12-slow-first-sequencer-files`: Task C12 item 11, issued on 2026-10-28. Running the browser leg's slowest files first needs a sequencer (`pwa/browser/slowFirst.ts`, wired in `vitest.browser.config.ts` and pinned in `test/browser-leg.test.ts`), which lies outside the item's named files.
+- **D-7285** — `c12-lanes-row-page-clock`: Task C12 item 16, issued on 2026-10-28. Reading the leave time before the pointer moves was measured first and still under-read under load (a close read at 22 ms), because the All accounts route moves the strip out from under the resting pointer before the move. The case now times the close on the page's own clock.
+- **D-7286** — `c12-refined-bar-clear-6px`: Task C12 item 19, under D-7281, issued on 2026-10-28. Refined's bar controls sit centred, 6 px clear of the lanes row's cards, which is not the fault D-7281 fixes (controls resting on the cards), so Refined is unchanged (ask 179), and the case holds Refined to its 6 px.
+- **D-7287** — `c12-day-comments-not-call`: Task C12 item 21 (review 1132 A1), issued on 2026-10-28. The day still reaches every bubble, and the comments in SessionScreen and MessageBubble now say so, rather than the call handing it only to the rows that read the clock. Behaviour is unchanged.
+- **D-7288** — `c12-session-hook-reset-copy-left`: Task C12 item 11, issued on 2026-10-28. `server/test/session-hook.test.ts` keeps its local reset copy, because the file is under another programme's claim, and the request to its holder was withdrawn (11789). It is a residual for a later change once that claim releases.
 
 **Acceptance.** Every item is fixed or named as already fixed, with its commit. Every new guard is red under its mutant, and nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -2885,8 +2885,8 @@ time. **Rollback.** A plain revert.
 
 **Acceptance.** The open flyout and the phone's panel hold only the folded-away lanes, each once, in order, aligned under the line at the desk. Every guard is red under its mutant, and no other strip behaviour changes. **Rollback.** A plain revert.
 
-- **D-7290** - `lanes-panel-holds-only-the-folded-lanes`: Task C13, issued on 2026-10-28 from the operator's report that the open flyout repeats the line's first row.
-- **D-7291** - `panel-never-repeats-the-line`: the operator, 2026-10-28. This supersedes D-7153's "holds EVERY lane card ... the same cards and doors as the expanded strip" and D-7254's "every lane card". The panel holds only the lanes the folded line does not show, in `lanesByFree`'s order, so every lane is drawn exactly once across the line and the panel. The expanded strip, a stored per-device choice, still draws every lane on its own lines.
+- **D-7290** — `lanes-panel-holds-only-the-folded-lanes`: Task C13, issued on 2026-10-28 from the operator's report that the open flyout repeats the line's first row.
+- **D-7291** — `panel-never-repeats-the-line`: the operator, 2026-10-28. This supersedes D-7153's "holds EVERY lane card ... the same cards and doors as the expanded strip" and D-7254's "every lane card". The panel holds only the lanes the folded line does not show, in `lanesByFree`'s order, so every lane is drawn exactly once across the line and the panel. The expanded strip, a stored per-device choice, still draws every lane on its own lines.
 
 ### Task G2: a programme is a box in its project card, in both skins (D-7331, D-7332)
 
@@ -2988,14 +2988,14 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Rollback.** A plain revert. The `--prog-*` aliases go with it, and nothing else reads them.
 
-- **D-7331** - `programme-is-a-box`: Task G2, issued on 2026-10-29 from the operator's approval of prototype v6. A coordinator's open work is one box in its project card (one box per coordinator session, led by its busiest programme): a kicker, the coordinator's row, a tray folded to the workers `operatorAsk` holds for, and the existing children toggle. The box's state is one pure decider: needs, paused, stalled, then moving. Supersedes the coordinator's "n workers · …" summary line as a separate row. `foldChildren`'s rule and `openChildren` are unchanged.
-- **D-7332** - `programme-hue-borrows-the-cool-lane-hues`: the operator approved v6 with the overlap named. A programme's identity hue is one of cyan, violet, magenta and blue, through the `--prog-*` aliases of the `--acct-*` pairs, assigned by `assignHues` (FNV-1a of the slug, collisions to the next free hue). It amends the two-skins spec §3's "same hue per lane" row: the lanes keep their hues, and a programme borrows the four cool ones, always beside its title in words, never glowing, never on a lane's card.
+- **D-7331** — `programme-is-a-box`: Task G2, issued on 2026-10-29 from the operator's approval of prototype v6. A coordinator's open work is one box in its project card (one box per coordinator session, led by its busiest programme): a kicker, the coordinator's row, a tray folded to the workers `operatorAsk` holds for, and the existing children toggle. The box's state is one pure decider: needs, paused, stalled, then moving. Supersedes the coordinator's "n workers · …" summary line as a separate row. `foldChildren`'s rule and `openChildren` are unchanged.
+- **D-7332** — `programme-hue-borrows-the-cool-lane-hues`: the operator approved v6 with the overlap named. A programme's identity hue is one of cyan, violet, magenta and blue, through the `--prog-*` aliases of the `--acct-*` pairs, assigned by `assignHues` (FNV-1a of the slug, collisions to the next free hue). It amends the two-skins spec §3's "same hue per lane" row: the lanes keep their hues, and a programme borrows the four cool ones, always beside its title in words, never glowing, never on a lane's card.
 
-- **D-7337** - `programme-title-rides-the-kicker`: G2's Step 0 departure, ruled 2026-10-29. The programme's title is printed in the box's kicker ("Programme · <title>", in its hue). The coordinator's row keeps the session's own label, so a box names both the programme and the session that runs it, and `SessionLine` takes no new prop. This amends the spec's §2.2, which put the title on the coordinator's row.
-- **D-7338** - `last-move-fallback-belongs-to-the-reader`: G2's Step 0 departure, ruled 2026-10-29. `programmeBoxes`' `lastMoveAt` is the maximum of `lastMoveOf` over the open runs, and null when every value is null. The `dispatchedAt ?? openedAt` fallback belongs to G1's reader at the call site: a server that sent `lastMoveAt: null` falls back, an absent field reads null. So an older server shows no movement, as the spec's §5 says.
-- **D-7340** - `coordinator-band-stays-on-surface`: G2's departure, ruled 2026-10-29. Only the kicker sits on the programme's tint. The coordinator's row stays on the box's own ground, because the session row's inks measure below 4.5:1 on the hue tints in several palettes (for example `--ink-tertiary` on the cyan tint in tokyo-night, 3.70:1). The contrast census pins the kicker's pairs. This amends the spec's §2.8, which also tinted the coordinator band, under its own rule that a red pair changes the ground, never the hue.
-- **D-7341** - `decider-file-named-for-its-export`: G2's departure, ruled 2026-10-29. The pure decider is `pwa/src/fleet/programmeBoxes.ts`, named for its main export, because `programmeBox.ts` beside `ProgrammeBox.tsx` is one file on a case-insensitive disk and `drawer-keybar.test.tsx`'s case census refuses it. Every exported name and type is unchanged. G1 and G3 import from `./programmeBoxes`. On the same CI run, `census-w7/pwa.test.ts`'s `runMatchers()` row (reporting, not ratcheting) moves from 19 to 22, with the three new match sites named in the PR body: fleetTree's `claimed` index, programmeBoxes' claimant lookup, and its call of `runForSession`.
-- **D-7369** - `one-programme-one-hue-across-the-fleet`: ruled on review 1152, 2026-10-29. `assignHues` runs once over every open programme in the fleet (every open run's programme, review runs included, so a review-only box has a hue; ruled on review 1163), not once per card. So a programme keeps one hue on every card, in a far worker's line and in G3's Status view, and it changes only when the set of open programmes does. Collisions still move to the next free hue in sorted-slug order. Past four open programmes, hues repeat. That is acceptable, because the title in words is always printed. The map is computed once per runs frame (`fleetHues`, in `fleetTree`), and each card receives only its own programmes' entries (`cardHues`). Those entries ride the per-frame group, so they add no re-render. Measured on review 1163's probe, main's merge base and the tip are identical: 0, 3 and 3 card renders for the same runs array, an equal new array, and a change to another card's run. That every card re-renders on every runs frame is main's behaviour (FleetCards rebuilds the tree, and fleetTree returns a fresh group per card). It is recorded as a residual for C9's line of work, not G2's. This amends the spec's §2.8, which resolved collisions per card.
+- **D-7337** — `programme-title-rides-the-kicker`: G2's Step 0 departure, ruled 2026-10-29. The programme's title is printed in the box's kicker ("Programme · <title>", in its hue). The coordinator's row keeps the session's own label, so a box names both the programme and the session that runs it, and `SessionLine` takes no new prop. This amends the spec's §2.2, which put the title on the coordinator's row.
+- **D-7338** — `last-move-fallback-belongs-to-the-reader`: G2's Step 0 departure, ruled 2026-10-29. `programmeBoxes`' `lastMoveAt` is the maximum of `lastMoveOf` over the open runs, and null when every value is null. The `dispatchedAt ?? openedAt` fallback belongs to G1's reader at the call site: a server that sent `lastMoveAt: null` falls back, an absent field reads null. So an older server shows no movement, as the spec's §5 says.
+- **D-7340** — `coordinator-band-stays-on-surface`: G2's departure, ruled 2026-10-29. Only the kicker sits on the programme's tint. The coordinator's row stays on the box's own ground, because the session row's inks measure below 4.5:1 on the hue tints in several palettes (for example `--ink-tertiary` on the cyan tint in tokyo-night, 3.70:1). The contrast census pins the kicker's pairs. This amends the spec's §2.8, which also tinted the coordinator band, under its own rule that a red pair changes the ground, never the hue.
+- **D-7341** — `decider-file-named-for-its-export`: G2's departure, ruled 2026-10-29. The pure decider is `pwa/src/fleet/programmeBoxes.ts`, named for its main export, because `programmeBox.ts` beside `ProgrammeBox.tsx` is one file on a case-insensitive disk and `drawer-keybar.test.tsx`'s case census refuses it. Every exported name and type is unchanged. G1 and G3 import from `./programmeBoxes`. On the same CI run, `census-w7/pwa.test.ts`'s `runMatchers()` row (reporting, not ratcheting) moves from 19 to 22, with the three new match sites named in the PR body: fleetTree's `claimed` index, programmeBoxes' claimant lookup, and its call of `runForSession`.
+- **D-7369** — `one-programme-one-hue-across-the-fleet`: ruled on review 1152, 2026-10-29. `assignHues` runs once over every open programme in the fleet (every open run's programme, review runs included, so a review-only box has a hue; ruled on review 1163), not once per card. So a programme keeps one hue on every card, in a far worker's line and in G3's Status view, and it changes only when the set of open programmes does. Collisions still move to the next free hue in sorted-slug order. Past four open programmes, hues repeat. That is acceptable, because the title in words is always printed. The map is computed once per runs frame (`fleetHues`, in `fleetTree`), and each card receives only its own programmes' entries (`cardHues`). Those entries ride the per-frame group, so they add no re-render. Measured on review 1163's probe, main's merge base and the tip are identical: 0, 3 and 3 card renders for the same runs array, an equal new array, and a change to another card's run. That every card re-renders on every runs frame is main's behaviour (FleetCards rebuilds the tree, and fleetTree returns a fresh group per card). It is recorded as a residual for C9's line of work, not G2's. This amends the spec's §2.8, which resolved collisions per card.
 ### Task G3: Instrument's Status view shows programmes, not children (D-7333) — after G2
 
 **Spec:** §2.7. **Routing:** band 2. **Needs:** G2 merged (`programmeBoxes.ts`, `ProgrammeBox.tsx`). **Files:**
@@ -3025,9 +3025,9 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** In Instrument's Status view the operator sees the boxes that need them first, then the other programmes, then the sessions in no programme. No child appears outside its box, and every count matches what it shows. **Rollback.** A plain revert.
 
-- **D-7333** - `status-view-shows-programmes-not-children`: Task G3, the operator's words of 2026-10-28 ("just the coordinators, and only those children that need my action"). In Instrument's Status view a child draws only inside its programme's box, and only while `operatorAsk` holds. The groups are Needs you (boxes, then lone sessions), Programmes, then today's groups for the lone sessions. Every group counts what it draws.
+- **D-7333** — `status-view-shows-programmes-not-children`: Task G3, the operator's words of 2026-10-28 ("just the coordinators, and only those children that need my action"). In Instrument's Status view a child draws only inside its programme's box, and only while `operatorAsk` holds. The groups are Needs you (boxes, then lone sessions), Programmes, then today's groups for the lone sessions. Every group counts what it draws.
 
-- **D-7377** - `orphan-worker-stays-lone`: G3's Step 0 departure, ruled 2026-10-29. A worker whose claimant is a box nowhere (its coordinator gone, archived or folded away) stays a lone row in the Status view, with its orphan marker, because hiding it would lose it. Gone includes a claimant measured dead (its presence `dead`, the word `orphanNote` reads), archived or not: its workers are lone rows with the marker and the reclaim guidance, never hidden members of the dead coordinator's box, which still draws while its runs are open (review 1177 N1, ruled 2026-10-29). A hibernated claimant, or one whose presence is unmeasured, still heads its workers, and a worker drawn inside a hibernated claimant's box, selected or not, carries no extra `coordinator-hibernated` marker in the Status view: the box already says hibernated (review 1183 F1, the operator's ruling R122, 2026-10-30). A box's tray in the Status view shows the children `operatorAsk` holds for, plus the selected session, by `foldChildren`'s own rule: the row the operator has open never vanishes from the list. Instrument's dead `.ins-coord-crumb` rule (instrument.css) joins G3's Files, to be deleted once nothing reads it.
+- **D-7377** — `orphan-worker-stays-lone`: G3's Step 0 departure, ruled 2026-10-29. A worker whose claimant is a box nowhere (its coordinator gone, archived or folded away) stays a lone row in the Status view, with its orphan marker, because hiding it would lose it. Gone includes a claimant measured dead (its presence `dead`, the word `orphanNote` reads), archived or not: its workers are lone rows with the marker and the reclaim guidance, never hidden members of the dead coordinator's box, which still draws while its runs are open (review 1177 N1, ruled 2026-10-29). A hibernated claimant, or one whose presence is unmeasured, still heads its workers, and a worker drawn inside a hibernated claimant's box, selected or not, carries no extra `coordinator-hibernated` marker in the Status view: the box already says hibernated (review 1183 F1, the operator's ruling R122, 2026-10-30). A box's tray in the Status view shows the children `operatorAsk` holds for, plus the selected session, by `foldChildren`'s own rule: the row the operator has open never vanishes from the list. Instrument's dead `.ins-coord-crumb` rule (instrument.css) joins G3's Files, to be deleted once nothing reads it.
 ### Task G1: a run says when it last moved (D-7334) — when claim 2921 on `shared/api.ts` and `server/src/server.ts` is released
 
 **Spec:** §2.5. **Routing:** band 2. **Needs:** the other programme's live claim on `shared/api.ts` and `server/src/server.ts` released. The coordinator dispatches G1 then, never earlier. G2 merged, for the one call site to wire. **Files:**
@@ -3058,13 +3058,13 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 
 **Acceptance.** A box says when its programme last moved, and reads stalled at the stall watch's own threshold or paused under the operator's pause. An older server or an older app sees no change. **Rollback.** A plain revert. The fields are optional, so nothing else reads them.
 
-- **D-7334** - `a-run-says-when-it-last-moved`: Task G1. `RunSummary.lastMoveAt` is the newest act on the run: a non-stall, non-operator `run_events` row, or a mail naming the run from its worker, its reviewer or its coordinator session (spec §2.5; review 1176 F3 ruled 2026-10-29 that an unrelated session's mail moves nothing). The runs frame carries the stall watch's `stallQuietMs` and the operator's pause, so the app's stalled word and the stall watch mean one thing by quiet. Additive, absence-permits.
+- **D-7334** — `a-run-says-when-it-last-moved`: Task G1. `RunSummary.lastMoveAt` is the newest act on the run: a non-stall, non-operator `run_events` row, or a mail naming the run from its worker, its reviewer or its coordinator session (spec §2.5; review 1176 F3 ruled 2026-10-29 that an unrelated session's mail moves nothing). The runs frame carries the stall watch's `stallQuietMs` and the operator's pause, so the app's stalled word and the stall watch mean one thing by quiet. Additive, absence-permits.
 
-- **D-7373** - `pause-rides-the-coord-frame`: G1's Step 0 departure, ruled 2026-10-29. The operator's pause is already on the wire: the coord frame's `CoordStatus.pause` (`set`, `clear` or `unmeasurable`), from the tick's own registry listing. The runs frame is composed without that listing, so `coordPaused` is not added to the runs frame. The app reads `coord.pause === 'set'` from the fleet store's existing coord field: one fact, one carrier. `stallQuietMs` rides the runs frame, set in `onRuns` from a watcher getter, and `emitRuns`' byte guard is keyed on it too. `server/src/watch.ts` and `server/src/coord/runWire.ts` join G1's Files, and so does `server/test/reconstruction-drill.test.ts` (its `RUN_SUMMARY_KEYS` count moves from 27 to 28 with `lastMoveAt`, which is derived per frame and is not unrecoverable). The reader follows D-7338: an absent field reads null, a null falls back to `dispatchedAt ?? openedAt`, and a number is the move.
-- **D-7374** - `runs-frame-composed-in-watch`: G1's departure, ruled 2026-10-29. The live runs frame is composed in `server/src/watch.ts`'s `emitRuns` (byte-guarded, every tick). `server.ts` holds only the cold start and the frame wrapper, `onRuns`. `watch.ts`, `server/src/coord/runWire.ts` and `server/src/coord/stallsettings.ts` join G1's Files.
-- **D-7375** - `quiet-read-per-frame-by-the-resolvers-quiet-half`: G1's departure, ruled 2026-10-29. The frame's `stallQuietMs` is read every tick through `stallQuietOf`, the quiet half of `resolveStallWatch`, extracted so both call it, never the stall lane's cached resolution. The lane resolves only on its 60 s beat, so the frame would re-emit once on the second tick, which reds fleetws' "a second tick must NOT re-emit" (measured). A Settings change reaches the next frame.
-- **D-7376** - `no-shared-quiet-default`: G1's departure, ruled 2026-10-29. The app holds no copy of `STALL_QUIET_MS`. A server old enough to omit `stallQuietMs` also omits `lastMoveAt`, which reads null and never stalls. A new server omits it only before its first runs frame.
-- **D-7380** - `g1-lands-the-frame-g1b-wires-the-card`: a coordinator ruling, 2026-10-29. G1 ships as one PR from its branch at base 555b6916b, carrying the server and store half: the held-bytes commit under the other programme's consent, `lastMoveAt` and `stallQuietMs` on the live frame (D-7374, D-7375), `stallQuietOf`, the reconstruction-drill pin, and the store reading the frame once (D-7376). G2 merged after G1 was based, and absorbing `origin/main` to reach its code is none of clause 16's three triggers, so the card wiring leaves G1 rather than wait on that absorb. That wiring is `nextStallBoundary` in `programmeBoxes.ts`, the stall boundary in `useRollupClock`, `FleetCards` reading `stallQuietMs` and the coord frame's pause (D-7373) and handing each card `boxNow`, `ProjectCard` dropping `NO_MOVE`, `QUIET_MS` and the test-only `nowMs` path, the programme-box and programme-box-card cases, their mutants, `runWords.ts`'s `LastMoveCarrier` becoming `RunSummary`, and the Status view's movement and pause inputs (`statusView`'s `() => null` and `null` in `FleetTable`, the spec's interim until then; review 1175 asked, ruled 2026-10-29). It becomes Task G1b, dispatched only after G1 merges, as a fresh run whose workspace starts from `origin/main`. G1's scratch-clone work is pinned as its starting patch, to be re-verified red first there. G1's acceptance is the frame and store half; the box reads stalled or paused only once G1b lands, and until then the cards keep G2's placeholders. Amended 2026-10-30 (the operator approved starting G1b): G3's live claim holds `statusGroups.ts` and instrument `FleetTable.tsx` while #1853 is in review, so the Status view's movement and pause inputs leave G1b for Task G1c, a fresh run from `origin/main` after #1853 merges. G1b is the cards half.
+- **D-7373** — `pause-rides-the-coord-frame`: G1's Step 0 departure, ruled 2026-10-29. The operator's pause is already on the wire: the coord frame's `CoordStatus.pause` (`set`, `clear` or `unmeasurable`), from the tick's own registry listing. The runs frame is composed without that listing, so `coordPaused` is not added to the runs frame. The app reads `coord.pause === 'set'` from the fleet store's existing coord field: one fact, one carrier. `stallQuietMs` rides the runs frame, set in `onRuns` from a watcher getter, and `emitRuns`' byte guard is keyed on it too. `server/src/watch.ts` and `server/src/coord/runWire.ts` join G1's Files, and so does `server/test/reconstruction-drill.test.ts` (its `RUN_SUMMARY_KEYS` count moves from 27 to 28 with `lastMoveAt`, which is derived per frame and is not unrecoverable). The reader follows D-7338: an absent field reads null, a null falls back to `dispatchedAt ?? openedAt`, and a number is the move.
+- **D-7374** — `runs-frame-composed-in-watch`: G1's departure, ruled 2026-10-29. The live runs frame is composed in `server/src/watch.ts`'s `emitRuns` (byte-guarded, every tick). `server.ts` holds only the cold start and the frame wrapper, `onRuns`. `watch.ts`, `server/src/coord/runWire.ts` and `server/src/coord/stallsettings.ts` join G1's Files.
+- **D-7375** — `quiet-read-per-frame-by-the-resolvers-quiet-half`: G1's departure, ruled 2026-10-29. The frame's `stallQuietMs` is read every tick through `stallQuietOf`, the quiet half of `resolveStallWatch`, extracted so both call it, never the stall lane's cached resolution. The lane resolves only on its 60 s beat, so the frame would re-emit once on the second tick, which reds fleetws' "a second tick must NOT re-emit" (measured). A Settings change reaches the next frame.
+- **D-7376** — `no-shared-quiet-default`: G1's departure, ruled 2026-10-29. The app holds no copy of `STALL_QUIET_MS`. A server old enough to omit `stallQuietMs` also omits `lastMoveAt`, which reads null and never stalls. A new server omits it only before its first runs frame.
+- **D-7380** — `g1-lands-the-frame-g1b-wires-the-card`: a coordinator ruling, 2026-10-29. G1 ships as one PR from its branch at base 555b6916b, carrying the server and store half: the held-bytes commit under the other programme's consent, `lastMoveAt` and `stallQuietMs` on the live frame (D-7374, D-7375), `stallQuietOf`, the reconstruction-drill pin, and the store reading the frame once (D-7376). G2 merged after G1 was based, and absorbing `origin/main` to reach its code is none of clause 16's three triggers, so the card wiring leaves G1 rather than wait on that absorb. That wiring is `nextStallBoundary` in `programmeBoxes.ts`, the stall boundary in `useRollupClock`, `FleetCards` reading `stallQuietMs` and the coord frame's pause (D-7373) and handing each card `boxNow`, `ProjectCard` dropping `NO_MOVE`, `QUIET_MS` and the test-only `nowMs` path, the programme-box and programme-box-card cases, their mutants, `runWords.ts`'s `LastMoveCarrier` becoming `RunSummary`, and the Status view's movement and pause inputs (`statusView`'s `() => null` and `null` in `FleetTable`, the spec's interim until then; review 1175 asked, ruled 2026-10-29). It becomes Task G1b, dispatched only after G1 merges, as a fresh run whose workspace starts from `origin/main`. G1's scratch-clone work is pinned as its starting patch, to be re-verified red first there. G1's acceptance is the frame and store half; the box reads stalled or paused only once G1b lands, and until then the cards keep G2's placeholders. Amended 2026-10-30 (the operator approved starting G1b): G3's live claim holds `statusGroups.ts` and instrument `FleetTable.tsx` while #1853 is in review, so the Status view's movement and pause inputs leave G1b for Task G1c, a fresh run from `origin/main` after #1853 merges. G1b is the cards half.
 
 ### Task G1b: a programme's box reads stalled or paused on its card (D-7380) — after G1 (#1858) merges
 
@@ -3131,7 +3131,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
 - [ ] **Step 2: Verify.** Run each touched suite once, the pwa typecheck, contrast-check, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`.
 
-- **D-8110** - `chat-and-desk-nav-follow-up-sweep`: Task C14, issued on 2026-11-07. The findings that the final reviews of chat reading (1586, 1589, 1592, 1601, 1603, 1606) and desk-nav Task A (1643, 1646) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8110** — `chat-and-desk-nav-follow-up-sweep`: Task C14, issued on 2026-11-07. The findings that the final reviews of chat reading (1586, 1589, 1592, 1601, 1603, 1606) and desk-nav Task A (1643, 1646) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -3156,7 +3156,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item**, red first, mutants run.
 - [ ] **Step 2: Verify.** The touched server suites, `rings`, `single-definition`, the ccd suites for `forget`, the pwa held-by tests, both typechecks and `deviation-refs`, through `ccrc test`, one at a time.
 
-- **D-8111** - `held-by-follow-up-sweep`: Task C15, issued on 2026-11-07. The findings that cleanup R2's reviews (1580, 1585, 1590) carried to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8111** — `held-by-follow-up-sweep`: Task C15, issued on 2026-11-07. The findings that cleanup R2's reviews (1580, 1585, 1590) carried to a later sweep land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3188,7 +3188,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each guard is red first and its mutant is run. Each comment or wording item is checked against the code it describes.
 - [ ] **Step 2: Verify.** Each touched suite once, the pwa typecheck, contrast-check, `css-vars`, the whole pwa unit suite and the whole browser suite once, and `deviation-refs`. Screenshots of the desk Docs head at 600, 900 and 1280 px, both skins, fine and coarse, before and after, in the PR body.
 
-- **D-8139** - `desk-docs-head-and-desk-nav-follow-up-sweep`: Task C16, issued on 2026-11-09. The findings that the final reviews of desk-nav Task B (1697, 1704), C14 (1689, 1694) and C15 (1668) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8139** — `desk-docs-head-and-desk-nav-follow-up-sweep`: Task C16, issued on 2026-11-09. The findings that the final reviews of desk-nav Task B (1697, 1704), C14 (1689, 1694) and C15 (1668) carried to a later sweep land in one task, one commit per item, with the coordinator's rulings above. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit. Every new guard is red under its mutant. Nothing else changes behaviour. **Rollback.** A plain revert, item by item.
 
@@ -3213,7 +3213,7 @@ Until G1 lands, `ProjectCard` passes `lastMoveOf = () => null` and `quietMs = nu
 - [ ] **Step 1: One commit per item.** Each fix names the cause it removes. A flake fix is proved by repeated runs of the file (at least 20, and under load where load is the trigger), before and after, with the counts in `c17.md`.
 - [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`, `rings`, `single-definition`, the ccd suites for `forget`, both typechecks, the agent suite, the connect-sheet browser file and `deviation-refs`. A full CI run (`full-ci`) on the PR.
 
-- **D-8140** - `ci-flake-sweep`: Task C17, issued on 2026-11-09. The five flakes that dequeued #2480 on 2026-11-09, and C15's deferred Forget registry read, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8140** — `ci-flake-sweep`: Task C17, issued on 2026-11-09. The five flakes that dequeued #2480 on 2026-11-09, and C15's deferred Forget registry read, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item's cause is named and removed, or named as fixed already, with its commit; each flake's before and after counts are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3239,7 +3239,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 - [ ] **Step 1: One commit per item.** Each guard is red first, under its mutant, restored from a saved copy with its sha checked.
 - [ ] **Step 2: Verify.** Each touched suite once through `ccrc test`; item 1's file at least 10 times; the pwa and server type checks; `deviation-refs`. A full CI run (`full-ci`) on the PR.
 
-- **D-8150** - `w24-r12-and-follow-up-sweep`: Task C18, issued on 2026-11-10. The slow W24-R12 case's cause, and the findings that reviews 1722 to 1733 carried to a later sweep outside the Docs head, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
+- **D-8150** — `w24-r12-and-follow-up-sweep`: Task C18, issued on 2026-11-10. The slow W24-R12 case's cause, and the findings that reviews 1722 to 1733 carried to a later sweep outside the Docs head, land in one task, one commit per item. Any departure the sweep finds is named by slug and numbered as it is found.
 
 **Acceptance.** Every item is fixed, or named as fixed already, with its commit; item 1's before and after times are recorded. Every new guard is red under its mutant. **Rollback.** A plain revert, item by item.
 
@@ -3251,7 +3251,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **The change.** The job's matrix goes from two shards to three; `timeout-minutes` stays 20, since a longer limit is not the fix. The comment records the measured per-file times, the expected time per shard and the margin. Every reader of the matrix follows (`server/test/ci-pipeline.test.ts`, the merge-queue census, any shard helper), red first where it is a guard. If one file alone keeps a shard over about 12 minutes, the worker mails the numbers before going further; no test file is split in this task.
 
-- **D-8167** - `browser-shards-at-job-limit`: Task C19, issued on 2026-11-10. The browser suite's two queue shards ran at 14 to 19 minutes against a 20-minute job limit and were cancelled under load; it runs in three shards under the same limit. Any departure is named by slug in `c19.md` as it is found.
+- **D-8167** — `browser-shards-at-job-limit`: Task C19, issued on 2026-11-10. The browser suite's two queue shards ran at 14 to 19 minutes against a 20-minute job limit and were cancelled under load; it runs in three shards under the same limit. Any departure is named by slug in `c19.md` as it is found.
 
 **Acceptance.** Three browser shards run and pass on the PR or in the queue, each one's time recorded in the PR body and in `c19.md` with the before times. **Rollback.** A plain revert.
 
@@ -3261,7 +3261,7 @@ Carried elsewhere, not in this task: `unfolded-refusal-name-cut` (review 1723 F1
 
 **The change.** The rule, first that applies wins: `owner/repo#n` is a PR name that carries its repository and opens it in any session when the chat can tell it; a bare `#n` or commit opens the one repository its own message (its whole text) names for it, and is text where it names two or one it cannot tell; otherwise it opens the home repository only when the message names no other repository and the session claims no open run whose project's repository is not the home one; otherwise it is text. The spec carries it as R15. The receipts are in `c21.md`.
 
-- **D-8172** - `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
+- **D-8172** — `chat-ref-repository-from-the-message`: Task C21, issued on 2026-11-10. A PR or commit name in chat opens the repository its message means, or stays text, instead of always the session's home repository; the message's evidence is read at render time (`chatRepoEvidence.ts`), and the session's runs elsewhere are one boolean on the chat's context (`claimsRunElsewhere`).
 
 **Acceptance.** The cases in `chat-repo-refs.test.ts`, `chat-links.test.tsx`, `message-bubble.test.tsx` and `chat-repo-session.test.tsx` pass, and every mutant of the chosen set is killed (`c21.md` records the set and the count); a single-repository session's plain `#123` links as before. **Rollback.** A plain revert.
 
@@ -3291,7 +3291,7 @@ re-anchored on `main` at `45015062b`, after C21 landed. The receipts are in `c20
 Not in this task: the Docs head items (review 1723 N5, review 1725 F4), whose files another programme holds, and the
 browser-suite growth watch, which is the coordinator's.
 
-- **D-8187** - `carried-sweep-1740-1747-1762`: Task C20, issued on 2026-11-10. The carried findings of reviews 1740, 1747 and 1762 land in one task: the chat evidence reader's `gh` flags, quotes, escapes, reserved pages and commit index, two census rows, comment fixes, and corrected receipts. Departures are named by slug in `c20.md`.
+- **D-8187** — `carried-sweep-1740-1747-1762`: Task C20, issued on 2026-11-10. The carried findings of reviews 1740, 1747 and 1762 land in one task: the chat evidence reader's `gh` flags, quotes, escapes, reserved pages and commit index, two census rows, comment fixes, and corrected receipts. Departures are named by slug in `c20.md`.
 
 **Fix round 1 (review 1766, ruled by the coordinator).** Three wrong or home links where `main` was right came from the
 round's rules as written, and are fixed as ruled: an open quote voids a command only inside its own words (F1); every flag
@@ -3335,7 +3335,7 @@ or stay text. Every change here fails toward text. The receipts are in `c22.md`.
 
 R15 gains one sentence for each changed rule, and nothing else in the spec changes.
 
-- **D-8196** - `gh-net-linear-and-last-gaps`: Task C22, issued on 2026-11-11. Review 1769's carried findings: the net's flag values end at the next flag (F1), glued short flag values and `repos/o/r` path words (F2), unclaimed repository flags as candidates for every number (F3), the `gh` word gate (F4) and `GH_REPO: o/r` (F8), each failing toward text; `c20.md`'s record corrected (F2, F9). Departures are named by slug in `c22.md`.
+- **D-8196** — `gh-net-linear-and-last-gaps`: Task C22, issued on 2026-11-11. Review 1769's carried findings: the net's flag values end at the next flag (F1), glued short flag values and `repos/o/r` path words (F2), unclaimed repository flags as candidates for every number (F3), the `gh` word gate (F4) and `GH_REPO: o/r` (F8), each failing toward text; `c20.md`'s record corrected (F2, F9). Departures are named by slug in `c22.md`.
 
 **Acceptance.** Every review 1769 shape the brief names is a row; the budget pins hold with recorded margins; the mutation
 count is recorded in `c22.md`. **Rollback.** A plain revert.
@@ -3379,7 +3379,7 @@ spelling split by a continuation is read in every context (A). An `api.github.co
 budget and bound pins (F5-gap, F6), the record fixes, and the fuzz's two-repository check. R15 gains one sentence for the
 net's join and one for the API commits address.
 
-- **D-8279** - `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Fix round 2 (review 1800): the net reads the joined text (A), and an API commits address and a commits sub-path name their commit (B). Departures are named by slug in `c23.md`.
+- **D-8279** — `gh-claims-need-a-number`: Task C23, issued on 2026-11-11. Review 1778's carried findings: a command with no number claims no repository flag (A1, P2, the spaced `-s -R`), a line continuation is whitespace (P1), a command cut by a `gh` word in a value slot gives its number to no repository (A2), no spread into call arguments (L2-1), the quoted-value pin restored (L3-1), unclaimed flags as candidates for commits (L3-5) and a cut value unknown (L2-2), each failing toward text except P1's correct links; `c20.md` and `c22.md` corrected. Fix round 1 (review 1795): a continuation joins a word it is glued inside and needs an odd backslash run (F1, C2, C3), and a `gh api` commits path names its commit (F2). Fix round 2 (review 1800): the net reads the joined text (A), and an API commits address and a commits sub-path name their commit (B). Departures are named by slug in `c23.md`.
 
 **Acceptance.** Every review 1778 shape the brief names is a row; the budget pins hold with recorded margins; the
 differential fuzz and the mutation count are recorded in `c23.md`. **Rollback.** A plain revert.
@@ -3403,7 +3403,7 @@ on both platforms that the reader still says "never" while a writer holds the FI
 iterations. The shim, the window, `macos.yml` and the gate are unchanged. The sign-in helper's pump reads with the same
 `read -t` and is booked as Task C28 (ask 356). Evidence, runs and the C28 hand-off are in `c27.md`.
 
-- **D-8344** - `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
+- **D-8344** — `darwin-fifo-eof-is-one-shot`: Task C27, issued on 2026-11-12. The brief expected a shim fix (a descendant holding the output) or a probe fix; it is the probe. D-2661's candidate (b) is refuted for the shim: no writer survived in any inspected red, and the probe's `read -t` lost a Darwin FIFO's one-shot EOF. The probe now reads with one select-free reader; the same reader shape in the sign-in pump is Task C28, not changed here. Departures are named by slug in `c27.md`.
 
 **Acceptance.** The darwin case is green in a `macos.yml` dispatch at the PR's tip, and its repeat runs are recorded in
 `c27.md`. The control reds when the reader is made to answer "eof" whatever happens. **Rollback.** A plain revert.
@@ -3429,7 +3429,7 @@ hang is inferred from its matching symptoms. The probe now hands the run its inp
 pins that. The hook, the bounds, `spawnGroup.ts`, `macos.yml` and the gate are unchanged. Evidence and runs are in
 `c29.md`.
 
-- **D-8354** - `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
+- **D-8354** — `macos-daily-reds-were-the-measures`: Task C29, issued on 2026-11-12. The brief asked whether each file's code or its measure is wrong on macOS. Both are the measure: compact-carry read its rows' clock at collection, on every platform, and prune-deny's CPU probe fed a detached `spawnSync` an `input` that Darwin now and then never ends. The probe's fix stays in its own file: the two other `spawnSyncGroup` callers that pass payloads are named in `c29.md`, not changed. Departures are named by slug in `c29.md`.
 
 **Acceptance.** Both files are green in a `macos.yml` dispatch at the PR's tip, with the repeat runs recorded in `c29.md`.
 A lease or grammar mutation of the hook reds a grammar row. The cost cases red on a super-linear program, and the new
@@ -3453,7 +3453,7 @@ directory and `tar` extracts that file; the tarball's contents are unchanged. A 
 without the fix. Every fixture step in `release-main.test.ts` now reports its pid, status, signal, stdout and stderr,
 where it used to report stderr alone. Evidence and runs are in `c31.md`.
 
-- **D-8391** - `release-stage-git-archive-sigpipe`: Task C31, issued on 2026-11-12. The brief asked why the fixture's steps fail on macOS with no output. The builder's staging pipe, `git archive | tar -x`, loses a race on macOS: tar can leave before git has written its last bytes, git dies of SIGPIPE, and `pipefail` with `set -e` ends the build at 141 without a word. The builder now stages through a file. Departures are named by slug in `c31.md`.
+- **D-8391** — `release-stage-git-archive-sigpipe`: Task C31, issued on 2026-11-12. The brief asked why the fixture's steps fail on macOS with no output. The builder's staging pipe, `git archive | tar -x`, loses a race on macOS: tar can leave before git has written its last bytes, git dies of SIGPIPE, and `pipefail` with `set -e` ends the build at 141 without a word. The builder now stages through a file. Departures are named by slug in `c31.md`.
 
 **Acceptance.** `release-main.test.ts` and `build-release.test.ts` are green in a `macos.yml` dispatch at the PR's tip,
 with the probe's repeat runs recorded in `c31.md`. The new case reds when the stage goes back to a pipe. **Rollback.**
@@ -3481,7 +3481,7 @@ repository the message means, or stay text. The receipts are in `c24.md`.
 R15 gains one sentence for the union, one for single quotes and one for the glued tail, and its "Not read" list names
 `owner/repo@sha` (M6, the coordinator's answer to this task's ask), and nothing else in the spec changes.
 
-- **D-8291** - `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
+- **D-8291** — `gh-net-reads-raw-and-joined`: Task C24, issued on 2026-11-11. Review 1808's carried findings: the net reads the raw text and the joined text and names what either finds (F1, F2), a continuation inside single quotes is not joined (F3), a word glued after a closing quote belongs to the value (F4), the address, `GH_REPO`, qualified-name and `gh`-word readers read the joined text too and what only it finds may only add (M5), the commit-candidate pins read 3 MiB (M1), and R15's "Not read" names `owner/repo@sha` (M6); each change fails toward text except F4's and F3's few, which follow the shell's reading. Departures are named by slug in `c24.md`.
 
 ### Task C30: spawnSyncGroup hands an input to its child as a regular file (D-8381) — now
 
@@ -3500,7 +3500,7 @@ descriptor as the child's stdin. The group, the timeout, the group kill, the str
 The fixed helper had 0 hangs in 30,000 runs on macOS. Three cases in `proc-leak.test.ts` pin the route. The nine
 callers' inputs measured 1,989 bytes at the largest. Evidence and runs are in `c30.md`.
 
-- **D-8381** - `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
+- **D-8381** — `spawnsyncgroup-input-from-a-file`: Task C30, issued on 2026-11-12. `spawnSyncGroup` gives an `input` to its child as a regular file under the run's temp root, removed before the child starts, never through `spawnSync`'s `input`, which on macOS now and then loses the end of input. Whether a small or empty input can hang stays unproven either way (none in 21,000 runs each), and the fix covers every size. C29's local workaround in `session-hook-prune-deny.test.ts` could now go and is left in place. Departures are named by slug in `c30.md`.
 
 **Acceptance.** The PR's required checks and a `macos.yml` dispatch at its tip are green. The new cases red when the
 input goes back through `spawnSync`'s `input`, when the directory outlives the child's start, and when the caller's
@@ -3538,7 +3538,7 @@ operator chose to fix macOS, not to make the gate ignore it. Each cause, fix and
 No test is skipped on Darwin, no Linux assertion is loosened, no timeout is raised, and the gate, `full-suite` and
 `macos.yml` are unchanged.
 
-- **D-8343** - `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
+- **D-8343** — `macos-legs-green`: Task C26, issued on 2026-11-11. The three red macOS files of run 42992355563: the siwc
   fakes and the trial's sign-in listener bind without `HTTPServer`'s `getfqdn` (about 35 s on macOS), `rig.sh`'s
   `sessions_snap` lists transcripts without GNU find's `-printf`, and the test bound `BOUNDED` decides from the child's
   process group rather than from a `setpgid` errno, and names every 125 and 127 on stderr. Each fix ships with a case that
@@ -3584,7 +3584,7 @@ coreutils takes that arm, inferred). Each spawn now hands its stdin over on fd 5
 puts it back before the mint runs; `_auth_timeout` and its two pinned copies are unchanged. Three cases pin it, red
 without the fix. Departures by slug in `c28.md`.
 
-- **D-8345** - `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
+- **D-8345** — `pump-darwin-eof`: Task C28, issued on 2026-11-12. The sign-in pump's tick read is `read -t` on a FIFO
   whose end of file is one-shot on macOS, so a finished mint ran to the backstop and ended `expired` (51 of 140 runs
   measured). After a timed-out tick with the child gone, the pump confirms the end of the stream with one bounded drain
   read that does not use `select()`. Fix round 1 (review 1849): the backstop TERMs the pump's own child, so `login`'s
@@ -3618,7 +3618,7 @@ holds the run in such options and also asserts that the detail pane has no sidew
 clips and the page's own scroll cannot show it (F2). The pane assertion runs in the 12 desktop cases; the test is red on `main` in all 16 cases, and red in 10 without the new rule (review 1944 F1). The
 note corrects the run's length to 340 characters (F3) and says which checked rows hold no long run (F4).
 
-- **D-8585** - `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
+- **D-8585** — `item-card-auto-track`: Task C32, issued on 2026-11-13. An item card's one implicit `auto` grid column took the
   min-content width of a How step that could not wrap, so a long run with no spaces pushed all of the card's text past its
   edge, under the side panel. The card's column is now `minmax(0, 1fr)` and the How steps wrap anywhere; fix round 1 (review
   1938) makes a decision's options wrap too. Departures are named by slug in `c32.md`.
@@ -3644,12 +3644,94 @@ file's other long lines are left alone. Red first, measured with a mutant that t
 four ring cases are green on `main`'s test and red on the fix (`expected 'demo' to be 'Docs'`). The runs, the line lengths
 before and after and the brief's one misquoted line ending are in `c25.md`.
 
-- **D-8647** - `ring-cases-class-only`: Task C25, issued on 2026-11-15. The desk head's four focus-ring cases checked only
+- **D-8647** — `ring-cases-class-only`: Task C25, issued on 2026-11-15. The desk head's four focus-ring cases checked only
   that Tab from back reached a crumb, not the first one, so a first crumb out of the Tab order passed them. They now check
   its words. Departures are named by slug in `c25.md`.
 
 **Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
 red on the fix with the mutant in place. **Rollback.** A plain revert.
+
+### Task C34: the three tests on the flake watch list, each cured or shown cured (D-8657) — now
+
+Placed after C25's section, before the acceptance matrix. Test code only; no product behaviour changes, and the shipped locale
+pins of D-3833 and D-3979 are unchanged.
+
+**Why.** Three tests on the programme's flake watch list: the linearity case in `pwa/test/chat-marks-negation.test.ts`
+(dequeued #2692 once, a ratio of 8.25 against 8), the `/digest` row of "every route says where you are" in
+`pwa/test/instrument-shell.test.tsx` (dequeued #2762 once), and R14(i)'s Linux case in `server/test/platform-hazards.test.ts`
+(red in every run on the fleet box's bash 5.3.9, green on CI's 5.2.21). Root cause first, measured, for each.
+
+**What was found and done.**
+
+- **The linearity case.** Reproduced: under six busy loops in the fleet's 4-CPU test slice, the shipped wall-clock form was red
+  in 12 of 40 and then 5 of 40 runs, ratios up to 15.8. The 200k run waits off the CPU far longer than the 50k run on a loaded
+  box (its fastest wall time rose to 88 to 112 ms while its CPU time stayed near 17 to 29 ms), and equal-work wall-clock
+  batches did not help. The case now compares CPU time (`process.cpuUsage()`), after an untimed warm-up of each size, over five
+  alternating turns, the least of each kept, bound still `< 8`; every run keeps its 400 ms wall bound. Under the same load it
+  was green in 100 of 100 runs (ratio at most 6.10), and 40 of 40 beside a looping pwa suite. The quadratic mutants still
+  fail: the two that rebuild per label hit the wall bound, and two with a small constant, which pass the wall bound, are
+  caught by the ratio 3 of 3 each, where the shipped form caught the milder one 2 of 3.
+- **The `/digest` row.** Already cured by #2780 (`166aa21ee`); no code change. The failing queue run's test file is
+  byte-identical to the one before #2780, it had no part of the fix, and its message is the one #2780's mutant "without the
+  wait" records. #2780's mutant on today's file reds with that message, and the file is green as it is.
+- **R14(i) on Linux.** Bash 5.3 reads bytes correctly under a UTF-8 locale. Measured on 5.1.16, 5.2.15 and 5.2.37 (misread)
+  and 5.3.9 and 5.3.20 (no misread), on glibc and musl alike. The case now asserts the misread on a bash below 5.3 and records
+  the answer on a later one, failing only if a probe does not run or the version cannot be read. On bash 5.2.15 it still reds
+  when the probe reads bytes, and dropping a locale pin still reds U4n (T4-M32) and U4u (T1-1); on 5.3.9 both mutants survive,
+  which the case now prints.
+
+The runs, the tables and the mutants are in `c34.md`. Departures by slug: `plugin-bound-under-load` (another case in the
+same file went over its 400 ms wall bound once in 100 loaded runs; not changed) and `locale-pins-hollow-on-bash-5-3` (on bash
+5.3 the locale pins guard nothing these probes show, so T4-M32, T4-M31 and T1-1 cannot red there).
+
+- **D-8657** — `flake-watch-three`: Task C34, issued on 2026-11-16. The linearity guard's wall-clock ratio inflated on a
+  loaded runner because the 200k run waits off the CPU, so it now compares CPU time after a warm-up over five alternating
+  turns; the `/digest` row was already cured by #2780; R14(i)'s Linux case asserts the UTF-8 misread on a bash below 5.3 and
+  records it on 5.3 and later, where bash no longer misreads. Departures are named by slug in `c34.md`.
+
+**Acceptance.** Each changed test file passes alone, repeated, at the PR's tip; pwa's whole suite passes once; the
+whole-tree guards (deviation-refs, dtbd, topology-clean, single-definition, the test tsc) pass. **Rollback.** A plain revert.
+
+### Task C33: this plan's hyphen entries are written so the ledger reads them, and a guard keeps that form out (D-8656) — now
+
+Placed after C25's section, before the acceptance matrix. Found by review 1938 F7; the operator made it a goal of this
+programme. No product behaviour changes.
+
+**Why.** `DEFINITION` (`server/src/coord/ledger.ts`) reads a `- **D-N**` entry only when an em dash, a parenthesis or a
+colon follows the bold number. This plan wrote 112 of its entries as `- **D-N** - `, with a hyphen, and no other plan
+did. The deviation-refs cross-tree scan and the server's reconcile sweep could not see those numbers, so none of them
+could land and a second definition of one would not have been caught.
+
+**What was done.** Before the conversion every number was measured: the allocator issued all 112, and no other
+programme's plan defines any of them. 108 of the entries now use the em dash, `- **D-N** — `, and nothing else on those
+lines changed. `DEFINITION`'s grammar is unchanged. The other four, D-8344, D-8345, D-8354 and D-8381, were also defined
+in this programme's own task notes (`c27.md` to `c30.md`). On the coordinator's ruling, each note's line was reworded
+into a citation, with only its opening changed. The four plan lines keep the hyphen form for now. On `origin/main` the
+notes still define those numbers, so converting the plan lines in this PR would put one definition on each side of the
+cross-tree scan, red until the merge and in the merge queue too. Task C33b, which the coordinator opens after this PR
+merges, converts the four under D-8656. Until then the sweep reads none of those four numbers.
+
+A new describe in `deviation-refs.test.ts` fails on any `- **D-N**` line at column 0 that `DEFINITION` does not read,
+outside fenced blocks. `UNREAD_BASELINE` lists the lines plans hold today, and it may only shrink: 175 lines in 14
+plans, plus the four that C33b converts. It was red first on this plan's 112 entries. With one converted entry put back
+in the hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in
+`c33.md`.
+
+**Follow-up C33b.** The four entries C33 left in the hyphen form, D-8344, D-8345, D-8354 and D-8381, now open with
+the em dash, because the task notes `c27.md` to `c30.md` hold citations on `main` and each number has one definition.
+D-7253's line in Task S5c now opens `- **D-7253** — the task's own number.`, which the ledger reads. The guard's shape
+also reads the dot form, `- **D-N.** subject`, which `DEFINITION` does not read either, and `UNREAD_BASELINE` holds
+today's 161 such lines in 17 plans: 335 lines in 30 plans in all. Records, corrections to C33's notes and the
+measurements are in `c33.md`. Under D-8656, with no number of its own.
+
+- **D-8656** — `hyphen-entries-unread`: Task C33, issued on 2026-11-16. This plan's 112 hyphen entries were invisible to
+  the ledger. 108 now use the em dash, and C33b converts the last four after this PR merges. A guard reds on any new
+  definition-shaped line the ledger cannot read. Four task-note lines that defined the same numbers became citations.
+  Departures are named by slug in `c33.md`.
+
+**Acceptance.** `deviation-refs.test.ts` passes at the PR's tip. Each of the 108 converted numbers is defined once
+across the two trees. The guard reds with one converted entry put back. **Rollback.** A plain revert. The guard and the
+conversion revert together, because the guard is red on the hyphen form.
 
 ## Acceptance (the matrix, per PR)
 
@@ -3802,20 +3884,20 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
 
 `POST /api/ledger/deviations` issued eight numbers on 2026-10-24, D-6845 to 6852. All eight are defined in this same allocation act; none is guessed from the floor.
 
-- **D-6845** - `t5a-census-row`: Task T5a, R61/R67/R71: server/test/hibernate-census.test.ts, outside the original Files, gains the derived exited-tier reader row for sessionEntries.ts. The initial CI census red and its one-row fix remain disclosed, not rewritten as first-run green.
-- **D-6846** - `t5a-words-arrows`: Task T5a, R61/R67: groupWords and labelWords are top-level arrow functions so the existing plain-words scan reads their operator-visible words. The existing one-home guard pins their identifier use and each importer's module and binding; no second scanner or word owner.
-- **D-6847** - `t5a-r41-browser-cases`: Task T5a, R67/R71: the extra real-width R41 focus cases landed with the search red-first commit, rather than in R41's own three commits. They were green on their parent and red against the old restore; the current Chrome cases fail on named focus assertions. R41's restore with its jsdom case, preventScroll pin and docstring remain three items in three commits.
-- **D-6848** - `t5a-routing`: Task T5a: the original main loop implemented instead of the specified native implementer/task-review chain, as its handoff disclosed. Record a process departure, not retroactive compliance. Fix rounds were instructed to use native Sonnet/high implementation, Opus/high task review and workflow off; this does not prove the original route followed them.
-- **D-6849** - `inline-engagement-continues-within-one-ask`: Task T1c, operator R64 and application R69: deliberately engaged keyboard control may continue across question/review/back within the SAME logical ask, amending the original raise/Tab/click-only focus rule. One engagement owner releases on different ask, replacement or clear, including byte-identical clear/re-ask in one batch. No arrival auto-focus or external focus theft; aged transcript copies are included. This authorizes scope, not acceptance of the current implementation.
-- **D-6850** - `transcript-goes-to-the-inline-question`: Task T1c, operator R64: the transcript's non-form Go to question action calls the EXISTING raise path, revealing and focusing the first option within both the inner scrollport and viewport (R69). No duplicate answer form, new modal or answer sender; phone Answer is unchanged.
-- **D-6851** - `inline-card-uses-the-existing-shortcut-guard`: Task T1c, operator R64: pwa/src/command/useShortcuts.ts and new pwa/test/ask-shortcuts.test.tsx, outside the original Files, extend only the existing focused-control guard. Suppress page navigation/help/chords while focus is INSIDE the mounted card, not globally while an ask exists. T5a's command-layer test has no edit consent.
-- **D-6852** - `whole-pixel-mono-line`: Task C5, operator R68: investigate .msg-assist pre, WELL and .tool-ask-a separately and permit a local whole-pixel line-height fix only where fractional scroll range/dead-first-wheel behaviour reproduces. Each changed box needs its own red-first reproduction, independent guard mutant, measurements/renders and outside-transcript Well regressions. Non-reproducing boxes are measured no-fix-needed; no blanket 20px, global font change or JS wheel interception. Scope authorization is not acceptance of the unfinished R68 work.
+- **D-6845** — `t5a-census-row`: Task T5a, R61/R67/R71: server/test/hibernate-census.test.ts, outside the original Files, gains the derived exited-tier reader row for sessionEntries.ts. The initial CI census red and its one-row fix remain disclosed, not rewritten as first-run green.
+- **D-6846** — `t5a-words-arrows`: Task T5a, R61/R67: groupWords and labelWords are top-level arrow functions so the existing plain-words scan reads their operator-visible words. The existing one-home guard pins their identifier use and each importer's module and binding; no second scanner or word owner.
+- **D-6847** — `t5a-r41-browser-cases`: Task T5a, R67/R71: the extra real-width R41 focus cases landed with the search red-first commit, rather than in R41's own three commits. They were green on their parent and red against the old restore; the current Chrome cases fail on named focus assertions. R41's restore with its jsdom case, preventScroll pin and docstring remain three items in three commits.
+- **D-6848** — `t5a-routing`: Task T5a: the original main loop implemented instead of the specified native implementer/task-review chain, as its handoff disclosed. Record a process departure, not retroactive compliance. Fix rounds were instructed to use native Sonnet/high implementation, Opus/high task review and workflow off; this does not prove the original route followed them.
+- **D-6849** — `inline-engagement-continues-within-one-ask`: Task T1c, operator R64 and application R69: deliberately engaged keyboard control may continue across question/review/back within the SAME logical ask, amending the original raise/Tab/click-only focus rule. One engagement owner releases on different ask, replacement or clear, including byte-identical clear/re-ask in one batch. No arrival auto-focus or external focus theft; aged transcript copies are included. This authorizes scope, not acceptance of the current implementation.
+- **D-6850** — `transcript-goes-to-the-inline-question`: Task T1c, operator R64: the transcript's non-form Go to question action calls the EXISTING raise path, revealing and focusing the first option within both the inner scrollport and viewport (R69). No duplicate answer form, new modal or answer sender; phone Answer is unchanged.
+- **D-6851** — `inline-card-uses-the-existing-shortcut-guard`: Task T1c, operator R64: pwa/src/command/useShortcuts.ts and new pwa/test/ask-shortcuts.test.tsx, outside the original Files, extend only the existing focused-control guard. Suppress page navigation/help/chords while focus is INSIDE the mounted card, not globally while an ask exists. T5a's command-layer test has no edit consent.
+- **D-6852** — `whole-pixel-mono-line`: Task C5, operator R68: investigate .msg-assist pre, WELL and .tool-ask-a separately and permit a local whole-pixel line-height fix only where fractional scroll range/dead-first-wheel behaviour reproduces. Each changed box needs its own red-first reproduction, independent guard mutant, measurements/renders and outside-transcript Well regressions. Non-reproducing boxes are measured no-fix-needed; no blanket 20px, global font change or JS wheel interception. Scope authorization is not acceptance of the unfinished R68 work.
 
 ### R119 departure issued 2026-10-27
 
 `POST /api/ledger/deviations` issued D-7117, D-7118, D-7121, D-7122 to D-7124, D-7139 to D-7142, D-7145, D-7146 to D-7152, D-7153 to D-7154, D-7155 to D-7157, D-7158 to D-7159, D-7160 to D-7163, D-7164, D-7197, D-7201, D-7210, D-7215 to D-7217, D-7218, D-7219, D-7222 to D-7223, D-7233 and D-7234 on 2026-10-27, and D-7248, D-7250 to D-7252, D-7253 to D-7256, D-7257 to D-7261, D-7262 to D-7263, D-7264, D-7266 to D-7267, D-7281, D-7282 to D-7288 and D-7290 to D-7291 on 2026-10-28, and D-7331 to D-7334, D-7337 to D-7338, D-7340, D-7341, D-7369, D-7373, D-7374 to D-7376, D-7377 and D-7380 on 2026-10-29, and D-7565 on 2026-10-30, in forty-two allocations, and each is defined here in the act that issued it.
 
-- **D-7117** - `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
+- **D-7117** — `c1-secret-mask-wall-clock-to-perf-job`: Task C1, under R119. The required secret-mask case "2 MB TUI pane
   history ... slices" asserts a wall-clock maximum gap (`< BOUND/5`) over about 40 gaps, so one scheduler pre-emption
   on a loaded shard fails it. Following D-6929's ruled shape (#1534), the required row keeps a load-independent pin:
   every slice is at most `SLICE_UNITS`, there is a pause between every two slices, the answer equals the one-string
@@ -3832,30 +3914,30 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   bounds only warmed gaps at `BOUND/5`. The old row bounded every gap, the cold first slice included. No row now asserts
   a cold-first-slice bound. That is a narrowing of what is measured, disclosed in the row title, ci.yml and the PR body.
   A cold-slice bound with its own measured budget is a follow-up.
-- **D-7118** - `literal-walker-parses-ts-as-ts`: Task B5, under R119, coordinator ruling on ask 156. `pwa/test/literalWalker.ts`'s
+- **D-7118** — `literal-walker-parses-ts-as-ts`: Task B5, under R119, coordinator ruling on ask 156. `pwa/test/literalWalker.ts`'s
   `parseTs` parses every file as TSX, so `pwa/src/lib/api.ts` misparses from its generic arrow `async <T>(path`, with 534
   parse diagnostics. This is pre-existing on main, and it leaves the literal census partly blind to that file: a
   duplicate appended there survived. The owner picks `ScriptKind.TS` for `.ts` files and `TSX` for `.tsx`. B5 removes its own
   separate `ScriptKind.TS` parse of `api.ts`, so the walker stays the one parser (consolidate, don't duplicate). The
   surviving duplicate mutant must go red, and all four walker readers stay green. `literalWalker.ts` sits outside B5's
   original Files.
-- **D-7121** - `literal-census-parses-once`: Task B5, under R119. `pwa/test/literal-census.test.ts`, outside B5's original
+- **D-7121** — `literal-census-parses-once`: Task B5, under R119. `pwa/test/literal-census.test.ts`, outside B5's original
   Files, parses its roughly 400 pwa, ui and shared sources once at module load, not inside each of three cases. Before
   the fix each case parsed every file inside a 5 s deadline: about 1.5 s idle, and 4.6 to 4.8 s pinned to one core.
   After it, 2 to 13 ms under the same contention. The census's assertions and scope are unchanged, and six census mutants
   are killed. The original red was not reproduced in this run (it measured 4.8 s against the 5 s bound), and that is
   disclosed.
-- **D-7122** - `t1c-r119-second-push`: Task T1c, under R119, ask 160. A second push (`afeb44f78`) went beyond the
+- **D-7122** — `t1c-r119-second-push`: Task T1c, under R119, ask 160. A second push (`afeb44f78`) went beyond the
   brief's "push once". It carries only the jsdom 30 test repair (D-7123). The coordinator relaxed its own brief rule; this
   is a process record, not a scope change.
-- **D-7123** - `t1c-jsdom30-test-premises`: Task T1c, under R119. Main's #1609 moved the PWA to jsdom 30 and vitest 5. On
+- **D-7123** — `t1c-jsdom30-test-premises`: Task T1c, under R119. Main's #1609 moved the PWA to jsdom 30 and vitest 5. On
   jsdom 30, `blur()` leaves a disabled row focused, and `focus()` cannot land on one. Four `ask-inline.test.tsx` cases
   whose premise was "focus falls to the body" therefore failed on the merge ref. A test-only repair: `focusToBody()` lifts
   `disabled` for the blur alone and asserts the premise, at all 11 sites, and the gap case reads the roving tab stop. It
   is green on both stacks, and product code is unchanged. Row 56 reds 3 cases on jsdom 30, not 4, and the row stays
   killed. Review 1059 measured the cause: under the mutant the 16 ms inline timer calls `focus()` on the in-flight
   disabled row, which jsdom 28 honours and jsdom 30 and Chrome refuse, so the lost kill was a jsdom 28 artefact.
-- **D-7124** - `t1c-render-matrix-fixture1-only`: Task T1c, under R119. The exact-runtime render matrix was captured at
+- **D-7124** — `t1c-render-matrix-fixture1-only`: Task T1c, under R119. The exact-runtime render matrix was captured at
   `4b5598dca` for fixture 1 only (18 captures: desk 1280/1920 and phone 360/390, both skins, both palettes). The plan's
   112-cell four-fixture set was not refreshed, and the missing older captures stay missing. `afeb44f78` changes no
   product code, so these are the head's runtime renders.
@@ -3866,22 +3948,22 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `ui/` or class change, so the older cells still describe the geometry. The cells missing as images (899/900, and
   fixtures 3, 6 and 7) are covered as measurements by the R93 Chrome matrix (232 cases), which the reviewer ran green
   at the tip. The 112-cell refresh is not required for T1c.
-- **D-7139** - `model-list-names-its-provider`: Task T3d. `pwa/src/lib/models.ts`, outside T3d's Files, gains two exported
+- **D-7139** — `model-list-names-its-provider`: Task T3d. `pwa/src/lib/models.ts`, outside T3d's Files, gains two exported
   functions: `modelListProvider` names whose list `modelOptions` picks, and `classReadbackMeasurable` is the one
   measurability rule. `modelOptions` and `effortOptions` both go through `modelListProvider`, and `routingLine`'s rule
   reuses that one branch instead of a second `=== 'gpt'` test, so the rule is consolidated, not duplicated. (Text
   corrected after review 1082's F3: the entry first named a `pwa/src/session/models.ts` that does not exist and one
   function.)
-- **D-7140** - `routing-line-takes-the-view`: Task T3d. The signature is `routingLine(row, view, laneLabel)`, with
+- **D-7140** — `routing-line-takes-the-view`: Task T3d. The signature is `routingLine(row, view, laneLabel)`, with
   `view = routeView(row, wrapper, provider)`, instead of the plan's `routingLine(row, routeInfo, provider)`. The provider
   reaches the line through `routeView`, so the rail and the header share one decision.
-- **D-7141** - `route-view-splits-pending`: Task T3d. `routeView` also exposes `classPending` and `effortPending`;
+- **D-7141** — `route-view-splits-pending`: Task T3d. `routeView` also exposes `classPending` and `effortPending`;
   `wireQueuedField` keeps today's effort-first answer. Without the split, a pending class behind a pending effort could
   never read "asked".
-- **D-7142** - `routing-line-says-pending-effort`: Task T3d. The line adds "· asked effort <x>" while an effort is pending,
+- **D-7142** — `routing-line-says-pending-effort`: Task T3d. The line adds "· asked effort <x>" while an effort is pending,
   so the rail agrees with the header's badge. It keeps today's "routing could not be read" when a field's read failed.
   The model and effort words stay the chooser doors, with the same accessible names.
-- **D-7145** - `desk-rule-not-container-threshold`: Task T3b. On main the row's `.sess-body` track measures 185 to 303 px
+- **D-7145** — `desk-rule-not-container-threshold`: Task T3b. On main the row's `.sess-body` track measures 185 to 303 px
   at the desk and 226 to 274 px on a phone, so the plan's 320 px container threshold never fires at any desk width, and a
   container query cannot tell the desk from a phone. Instead, from 900 px (a media query) the card draws the full name
   and branch, wrapping at token breaks and clamped at two lines; a longer name is cut where the second line fills.
@@ -3889,27 +3971,27 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   the 320 px container rule is kept for wide tablet tracks. Step 3's mutant "the threshold back at 320 px" becomes "the
   desk rule removed". T3b takes R21 F2 / R32 F2's "wrapping name" arm, does not edit `instrument.css`, and reports
   Instrument's 1280 row heights.
-- **D-7252** - `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's. Clarified on T3b's fix round 2 (the coordinator, 2026-10-28): "taller than on main" bounds the arm. A row that D-7145's full forms already make taller than main (a two-line long name, a whole branch, a long programme slug) is bounded by its own height without the arm, which the arm never exceeds; the committed case picks rows whose text main draws the same, so it bounds by main exactly.
-- **D-7146** - `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
+- **D-7252** — `t3b-state-word-arm-never-cuts-a-context`: Task T3b, under R121 Q2 option 1 (the operator, 2026-10-28) and R21 F2. This supersedes D-7145's clause "does not edit `instrument.css`". In Instrument's fine-pointer desk block, a status row whose context sits whole beside its state word puts the state word at the end of the context line, so a long name has the first line or lines to itself. Ruled on review 1115 (F1 and F2): the arm never narrows a context below the width it needs to sit whole. A programme slug and its wave tail, a child marker and a branch keep D-7145's "never cut", and D-5528 and D-5545's "no fact dropped" still holds. Where the context will not fit whole beside the state word, that row lays out as on main, with the state word on a line of its own. No row at the desk widths is taller than on main; a row that would be is laid out as on main. A committed real-Chrome case pins this on needs-you and working rows whose contexts are a programme with its wave tail, a child marker and a long branch. It measures clipping (scroll width against client width) and overlap with the state word, not `textContent`, and compares each row's height with main's. Clarified on T3b's fix round 2 (the coordinator, 2026-10-28): "taller than on main" bounds the arm. A row that D-7145's full forms already make taller than main (a two-line long name, a whole branch, a long programme slug) is bounded by its own height without the arm, which the arm never exceeds; the committed case picks rows whose text main draws the same, so it bounds by main exactly.
+- **D-7146** — `identical-frame-ratio-gate`: Task C6, under R119. The browser frame-cost test carries a second gated row
   beyond the plan's one: the identical frames' cost as a ratio of the changing frames' cost, per skin. The plan's row
   is a ceiling only, which a store that re-renders on every identical frame can still pass. The ratio row reds with
   C6's `pwa/src` reverted (the pair at `b1225668a`, declared at 11:53:30Z, AFTER FINAL-A's red at the same head and
   seven diagnostic repeats; review 1068 F1). It can also red with no window overrun under host CPU
   pressure (FINAL-A, 1.78, cause not established), so CI's quiet runner is the arbiter.
-- **D-7147** - `snapshot-refusal-predicate`: Task C6. `pwa/src/lib/offline.ts` exports `snapshotRefused`, the one decision
+- **D-7147** — `snapshot-refusal-predicate`: Task C6. `pwa/src/lib/offline.ts` exports `snapshotRefused`, the one decision
   behind `saveFleetSnapshot`'s refusals. The throttled snapshot scheduler reads it too, so a frame the snapshot would
   refuse never opens a window (consolidate, don't duplicate).
-- **D-7148** - `program-attempt-comment`: Task C6. One comment in `useProgramAttempt.ts`, outside C6's Files, now says
+- **D-7148** — `program-attempt-comment`: Task C6. One comment in `useProgramAttempt.ts`, outside C6's Files, now says
   that `sessions` changes only on a frame that changes, adds, removes or reorders a row. No code changes there.
-- **D-7149** - `render-fanout-stand-in`: Task C6. Render fan-out case 1 counts `SessionScreen`'s renders through a
+- **D-7149** — `render-fanout-stand-in`: Task C6. Render fan-out case 1 counts `SessionScreen`'s renders through a
   stand-in child rather than by instrumenting the screen itself.
-- **D-7150** - `render-fanout-late-row`: Task C6. An extra render fan-out case: a row that arrives late must still be
+- **D-7150** — `render-fanout-late-row`: Task C6. An extra render fan-out case: a row that arrives late must still be
   reached by the memoised doors. The plan's "openActions opens the newest row" is green on the base too, so it cannot
   catch frozen doors.
-- **D-7151** - `reporter-flag-wording`: Task C6. `runs-finished-fold.test.tsx`'s reporter comment credits the measurement
+- **D-7151** — `reporter-flag-wording`: Task C6. `runs-finished-fold.test.tsx`'s reporter comment credits the measurement
   that was made: on vitest 4.1.10 in an agent session, no flag and `--silent=false` print no measurement line, while
   `--reporter=verbose` and `--reporter=default` do; with the agent variables unset, all four print it.
-- **D-7152** - `frame-cost-window-overrun`: Task C6, under R119, the operator's answer to ask 157 ("Overrun refusal"). A
+- **D-7152** — `frame-cost-window-overrun`: Task C6, under R119, the operator's answer to ask 157 ("Overrun refusal"). A
   frame-cost window whose measured span passes `gapMs + SPAN_SLACK_MS` (1000 ms) fails the attempt as a named harness
   failure, `window-overrun`, never as a cost figure. The check covers every window, the idle one (`during(-1)`) and the
   self-tests' included, and the overrun window is kept in the record, which a gate case keeps through vitest's
@@ -3918,51 +4000,51 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   Review 1068 F3: several pressure figures quoted for ask 157 did not recompute from the retained 1 s samples. #1697's
   body restates them with the method named. The restated figures still show severe memory pressure in the A2 interval.
 - **D-7153** and **D-7154** are defined under Task S5b's R120 amendment, where they apply.
-- **D-7155** - `unread-count-retired`: Task T2d, coordinator ruling on ask 169. Once every Inbox door counts
+- **D-7155** — `unread-count-retired`: Task T2d, coordinator ruling on ask 169. Once every Inbox door counts
   `waitingOnYou` (AppBar, PhoneHeader, the rail, and the fleet head's MailBadge), `unreadMailCount` in `navBadges.ts`
   has no production reader, so it is deleted rather than kept as a second count. `raisesUnread` and `isUnseenAt` stay
   the Inbox rows' one unread mark (D-5431). `instrument-shell`'s R32 F5 cases, which pinned `isUnseenAt` through the
   rail's unread count, move to the Inbox rows (`mail-screen.test.tsx`), keeping each assertion and its mutant. The
   plan's F8 sentence ("the fleet head calls `unreadMailCount` directly") described main before T2d. The corrected
   Rail comment names `useNavBadges`' readers instead.
-- **D-7156** - `fleethead-prop-name`: Task T2d. FleetHead's `unreadMail` prop would carry the waiting count, so it is
+- **D-7156** — `fleethead-prop-name`: Task T2d. FleetHead's `unreadMail` prop would carry the waiting count, so it is
   renamed with its doc. `FleetHead.tsx` is outside T2d's original Files: one prop and its comment.
-- **D-7157** - `browser-tests-unnamed`: Task T2d. Three browser files assert the old door names and are not in T2d's
+- **D-7157** — `browser-tests-unnamed`: Task T2d. Three browser files assert the old door names and are not in T2d's
   Files: `refined-bar.browser` and `refined-phone.browser` (with the exact consent of S5b, which holds them) and
   `instrument-desk.browser`. They change only the asserted names and counts.
-- **D-7158** - `c3-task-sweep-handoff-already-on-main`: Task C3. The task-sweep half of C3 landed before it, through
+- **D-7158** — `c3-task-sweep-handoff-already-on-main`: Task C3. The task-sweep half of C3 landed before it, through
   #1240 (D-5864): `tick()` already passes its registry read to `sweepTasks`, whose own read is tagged
   `[registry-refused:tests-only]`, and the census already pins both. So C3 makes no edit to
   `registry-refused-census.test.ts` (the plan's row rewrite and new pin would duplicate it), and "a due task sweep adds
   no uuid read" is a regression pin, green on the base, whose mutant still reds it. C3's change is the bounded capture
   pass in `detectDialogs` and the carried text.
-- **D-7159** - `c3-capture-bound-beside-module-constants`: Task C3. `TASK_SWEEP_MS` moved into `laneSchedule.ts`'s lane
+- **D-7159** — `c3-capture-bound-beside-module-constants`: Task C3. `TASK_SWEEP_MS` moved into `laneSchedule.ts`'s lane
   table, so `DIALOG_CAPTURE_CONCURRENCY` goes beside `watch.ts`'s other exported module constants, not into the cadence
   table: it is a bound, not a cadence.
-- **D-7160** - `t3c-more-sheet-lists-the-doors`: Task T3c. `sessionMenu` (`SessionFlows.tsx`) gains Terminal and, for a
+- **D-7160** — `t3c-more-sheet-lists-the-doors`: Task T3c. `sessionMenu` (`SessionFlows.tsx`) gains Terminal and, for a
   workspace, the PR door with its word, after Docs (`session-docs-link.test.tsx` pins the first four). They run through
   SessionFlows' one `run`; no new plumbing.
-- **D-7161** - `t3c-typed-label-test-edited`: Task T3c. `pwa/test/typed-label.test.tsx`, outside T3c's Files, pinned
+- **D-7161** — `t3c-typed-label-test-edited`: Task T3c. `pwa/test/typed-label.test.tsx`, outside T3c's Files, pinned
   `.chat-crumb` in its rename case; the crumb is now the project, so it pins `.chat-title-text`. The edit landed before
   T3c took its claim (2764); no one else held the file. A process record.
-- **D-7162** - `t3c-d5390-reversed`: Task T3c. `header.test.tsx`'s D-5390 assertions (an ellipsis on
+- **D-7162** — `t3c-d5390-reversed`: Task T3c. `header.test.tsx`'s D-5390 assertions (an ellipsis on
   `.status-line-name`) are rewritten to pin the reverse, as R8's "never cut" requires.
-- **D-7163** - `t3c-refined-rail-max-width`: Task T3c. Refined's phone rail sets `max-width: none` on `.metachip`,
+- **D-7163** — `t3c-refined-rail-max-width`: Task T3c. Refined's phone rail sets `max-width: none` on `.metachip`,
   `.status-line--coordinator` and `.status-line-name`, because a capped box let its nowrap text paint under the next
   chip (measured).
   Ruled 2026-10-27 on T3c's wave-done residual 1: Instrument's interim header grows 48 px at exactly 900 (139.63 to
   187.63, both palettes), because the worded doors make the chip rail wrap. The plan's never-cut rule prefers a wrap to
   an ellipsis, and its height bound is measured at 1280, where the header is unchanged. So this is within the plan,
   and disclosed in the PR body.
-- **D-7164** - `routing-line-names-inert-class`: Task T3d. When the session's class is inert on its lane, the one
+- **D-7164** — `routing-line-names-inert-class`: Task T3d. When the session's class is inert on its lane, the one
   routing line reads " · model set by the lane", so the old rail's "not applied on this lane" fact survives in that one
   line (T3d's final review, M-7), and no second line is added.
-- **D-7197** - `t2b-carries-r13-in-refined-phone-browser`: Task T2b, coordinator ruling on ask 168. R13's two
+- **D-7197** — `t2b-carries-r13-in-refined-phone-browser`: Task T2b, coordinator ruling on ask 168. R13's two
   browser-leg items live in `pwa/browser/refined-phone.browser.test.ts`, outside T2b's Files and under S5b's claim. T2b
   edits that file for those two cases only, with S5b's exact consent. The toast case measures the real ToastHost, and
   the home-indicator case runs at a non-zero inset (34 px, CDP-emulated). Both are test fixes with no behaviour change,
   each red on its mutant against the new file and green against the old one.
-- **D-7201** - `c8-false-comments-corrected`: Task C8, coordinator ruling on ask 172. Once the fleet store is the one
+- **D-7201** — `c8-false-comments-corrected`: Task C8, coordinator ruling on ask 172. Once the fleet store is the one
   `/api/accounts` caller, comments outside C8's listed hunks become false. C8 corrects them, comment-only: `lib/accounts.ts`
   :16-20 and :41-48 and `AccountsScreen.tsx` :236-238 and :273-276 (with S5b's exact consent, which holds both), and
   `AccountPoolSheet.tsx` :15, `StartProgramSheet.tsx` :146-149 and `lib/api.ts` :424 (under a claim C8 takes). Source
@@ -3973,46 +4055,46 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   `fleet-screen` (its timer list) and `session-lifecycle`. Extended again on review 1099's F1 and F4, for fix round 2:
   `fleet-screen`'s two mount-fetch notes and its timer list (made complete, each interval credited to its real owner), and
   `auth-door`'s mount-fetch note, outside C8's Files and unclaimed, comment-only.
-- **D-7210** - `t3d-inspector-css-joins-the-task`: Task T3d, coordinator ruling on review 1082's F2.
+- **D-7210** — `t3d-inspector-css-joins-the-task`: Task T3d, coordinator ruling on review 1082's F2.
   `pwa/src/inspector/inspector.css`, outside T3d's Files, is part of the task: the one routing line needs inline-flow
   rules (`.insp-routing-row`, `.route-queued`, `.insp-routing-tail`) in place of the old row's dt/dd rules, and the empty
   state's `.insp-empty` goes with the "Not read yet" text it styled. No other inspector rule changes. The F4 ruling
   holds D-7142 as written: when nothing is read, the model and effort doors keep their old accessible names ("Model:
   not read yet, change", "Effort: set effort, change"), which still match the header chip; only the inert effort's
   "Effort: set by the lane, change" is new, as the task asks.
-- **D-7215** - `t3a-mixed-chip-says-pinned`: Task T3a, the operator's answer to ask 165, confirmed by the coordinator.
+- **D-7215** — `t3a-mixed-chip-says-pinned`: Task T3a, the operator's answer to ask 165, confirmed by the coordinator.
   When a project's sessions sit on several accounts, the pool chip's title says "pinned to", not the plan's "run on",
   because the chip measures each session's pinned account, not where it runs.
-- **D-7216** - `t3a-route-note-says-routing-default`: Task T3a. The New session sheet's route note reads "Unset fields
+- **D-7216** — `t3a-route-note-says-routing-default`: Task T3a. The New session sheet's route note reads "Unset fields
   take the routing matrix's default (Opus · high, Sonnet subagents, workflows on).", so it no longer names the old chooser
   word "Coordinator row" that this task retires.
-- **D-7217** - `t3a-badged-head-keeps-row-height`: Task T3a. `.ins-group-seen` joins the desk group-head rule in
+- **D-7217** — `t3a-badged-head-keeps-row-height`: Task T3a. `.ins-group-seen` joins the desk group-head rule in
   `pwa/src/skins/instrument/instrument.css`, outside T3a's Files and under T2b's claim with its consent (one selector,
   disjoint from T2b's hunk), so a badged Instrument head keeps the fold row's height. Found by T3a's own browser
   pin, together with the unplanned `size="fit"` fix: `@ccrc/ui`'s Button defaults to full width, and a badged head
   stood 156 px against 32.
-- **D-7218** - `t2b-fab-layout-browser-pin`: Task T2b, coordinator ruling on review 1083's A2. The plan says a task's
+- **D-7218** — `t2b-fab-layout-browser-pin`: Task T2b, coordinator ruling on review 1083's A2. The plan says a task's
   layout claim is pinned by a committed browser case. The two existing files that could carry T2b's are held by T2d and S5b,
   so T2b creates `pwa/browser/instrument-fab.browser.test.ts`, outside its Files and under its own claim: at 899 the
   round + is the one New session door, and at 900 and 1280 there is none, in both palettes. After review 1090's F1, a door
   counts as visible only when the browser's own visibility check says so, not merely on a non-zero client rect.
-- **D-7219** - `c8-red-list-differs`: Task C8. The plan's "known so far" list of cases that assumed a component's
+- **D-7219** — `c8-red-list-differs`: Task C8. The plan's "known so far" list of cases that assumed a component's
   own poll is not the measured one. `fleet-pieces`, `project-card` and `add-workspace-sheet` stayed green and are
   untouched. Seven other test files went red and are migrated, one commit per file: `lifecycle-ui`, `fleet-screen`,
   `account-pool-chip`, `meter`, `runs-screen`, `tap-targets` (T2d's claim, with the coordinator's consent on its three
   hunks) and `auth-passkey`, all under C8's own claim except tap-targets. Step 0's measured list is the authority, as the
   plan says.
-- **D-7222** - `t3a-phone-tabs-keep-their-counts`: Task T3a, coordinator ruling on review 1092's F2. In Instrument's
+- **D-7222** — `t3a-phone-tabs-keep-their-counts`: Task T3a, coordinator ruling on review 1092's F2. In Instrument's
   status mode on a phone, each tab keeps its group's count beside the open panel's head. The tabs are the navigation to
   panels that are not on screen, and a tab without its count would lose the only count of a hidden bucket. So "one count
   per bucket per screen" counts a bucket's count once among the things that describe the open panel: the chips are gone,
   and the head carries the count. The repeat on the selected tab is legitimately different, not a second count.
-- **D-7223** - `t3a-files-outside-the-list`: Task T3a, coordinator ruling on review 1092's F6. Three files outside T3a's
+- **D-7223** — `t3a-files-outside-the-list`: Task T3a, coordinator ruling on review 1092's F6. Three files outside T3a's
   Files are part of the task: `pwa/src/fleet/classWords.ts` (new; the one home of the Automatic word and its title, from the
   CI fix round, so literal-census holds), `pwa/test/session-line.test.tsx` (a two-line word swap that the rename forces),
   and `pwa/browser/instrument-group-seen.browser.test.ts` (new; the committed browser pin the plan requires for T3a's
   layout claim, beside D-7217).
-- **D-7234** - `t4a-any-escape-is-ansi`: Task T4a, coordinator ruling on review 1105's F5. The plan routes a tool
+- **D-7234** — `t4a-any-escape-is-ansi`: Task T4a, coordinator ruling on review 1105's F5. The plan routes a tool
   result with SGR codes to `ansi`, one headed by a unified diff to `diff`, and anything else to plain. T4a routes a
   result holding ANY escape byte to the ANSI reader (`lib/ansi.ts`'s any-ESC predicate), so an erase-only, OSC-only or
   stray escape is removed rather than shown raw. That is the safer direction, and it is accepted: no control byte

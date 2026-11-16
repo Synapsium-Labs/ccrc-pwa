@@ -312,7 +312,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
-  'continuity_start_loads', 'answer_marks'] as const;
+  'continuity_start_loads', 'answer_marks', 'overlord_authority_head'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
  *  and the private store's for its own describe (Overlord W1 private store A). */
@@ -400,6 +400,9 @@ describe(TABLES_PIN, () => {
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
       answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
+      // The Overlord authority journal's head row (Overlord W1, H27): one writer, the apply step of the journal's append, inside
+      // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
+      overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
     });
   });
 
@@ -494,7 +497,9 @@ describe(TABLES_PIN, () => {
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
   const markReadSites = callSitesOf('answerMarksOf');
+  // Answer marks B adds `asksViewOf`, the waiting view's ask lists, which only `waitingViewOf` calls.
   const MARK_READS = [
+    'server/src/coord/ledgersRoutes.ts#asksViewOf',
     'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes.operatorView', 'server/src/coord/ledgersRoutes.ts#waitingViewOf',
     `${S}answerMarksOf`,
   ];
@@ -505,10 +510,10 @@ describe(TABLES_PIN, () => {
     await plant('ledgersRoutes.ts', routes.replace(anchor, "deps.presenceOf, deps.secretOf, coord.answerMarksOf('item', []))) });"), (f) => {
       const sites = markReadSites([f]).map((x) => x.replace(/^.*#/, ''));
       expect(sites).toContain('registerLedgerCoordinatorRoutes @ GET /api/programmes/:slug/items');
-      expect(sites).not.toEqual(MARK_READS.slice(0, 2).map((x) => x.replace(/^.*#/, '')));
+      expect(sites).not.toEqual(MARK_READS.slice(0, 3).map((x) => x.replace(/^.*#/, '')));
     });
   });
-  it('answerMarksOf is called only by the two operator views (the item view and the waiting view)', () => {
+  it('answerMarksOf is called only by the operator views (the item view, the waiting view and its ask lists)', () => {
     expect(markReadSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_READS);
   });
   const tableReaders = (files: readonly string[]): string[] => files.filter((f) => /\bFROM\s+answer_marks\b/.test(

@@ -15,7 +15,8 @@ import { programmeTitle, programWave, waveOfWords } from '../fleet/runWords';
 import {
   CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
-  openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ItemList, type ProgrammeGroup, type QuestionRow, type Row,
+  openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ClearedEntry, type ItemList, type ProgrammeGroup,
+  type QuestionRow, type Row,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
@@ -24,6 +25,8 @@ import { ItemControls, LiftCapControl, carriesControls, useItemActs, type ItemAc
 import { itemRefIds, programmeSpecHref } from './ledgerLinks';
 import { inAppClick } from '../fleet/settingsText';
 import { AnswerMarkBoxes } from './AnswerMarkBox';
+import { ASK_HOW_WORD, ASK_NO_TEXT_WORD, askMarksFor, askRowsOf } from './answerMarkWords';
+import type { AskMarkRow } from '../../../shared/answerMarks';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -142,24 +145,31 @@ function CapRow({ run, rowActs }: { run: RunSummary; rowActs: RowActs | null }):
   );
 }
 
-function QuestionButton({ q, now, onOpen }: { q: QuestionRow; now: number; onOpen: (id: string) => void }): ReactNode {
+function QuestionButton({ q, now, onOpen, ask, current }: {
+  q: QuestionRow; now: number; onOpen: (id: string) => void; ask: AskMarkRow | null; current: boolean;
+}): ReactNode {
   return (
-    <li>
+    <li className="wl-li">
       <BareRow className="wl-item wl-question" data-session={q.sessionId} data-state="question" data-needed="soon"
                onClick={() => onOpen(q.sessionId)}>
         <span className="wl-kind">{QUESTION_WORD}</span>
         <RowMain what={q.title} why="A session is waiting for your answer. Open it to answer." />
         <RowMeta pills={[{ tone: 'ask', word: QUESTION_PILL_WORD }]} when={q.at > 0 ? ageWords(q.at, now) : ''} />
       </BareRow>
+      {/* Answer marks B: the boxes of the ask the session's dialog waits on, read live by the server; none for any other. Keyed
+          by the ask, so a new ask on this row starts with its own boxes (review 2217 F2). */}
+      {ask !== null && <AnswerMarkBoxes key={ask.id} item={ask} kind="ask" current={current} />}
     </li>
   );
 }
 
 /** One programme's rows: its items, its sessions' questions and its sessions stopped on a usage limit, as the list draws them, and as the list beside an open item
  *  draws them, with that item marked current (plan PL9). */
-export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null, rowActs = null, itemHref = null }: {
+export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = null, rowActs = null, itemHref = null, asks }: {
   rows: readonly Row[]; now: number; onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null;
   rowActs?: RowActs | null; itemHref?: ItemHref | null;
+  /** The view's live asks (answer marks B); absent, no question row draws a box. */
+  asks?: readonly AskMarkRow[];
 }): ReactNode {
   return (
     <ul className="wl-items">
@@ -168,7 +178,8 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
         // A usage-limit row carries its own two controls (D-8123); tapping the row itself opens nothing.
         if (row.kind === 'limit') return <LimitWaitRow key={`l${row.limit.sessionId}`} limit={row.limit} now={now} />;
         if (row.kind === 'cap') return <CapRow key={`c${row.run.id}`} run={row.run} rowActs={rowActs} />;
-        return <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession} />;
+        return <QuestionButton key={`q${row.question.sessionId}`} q={row.question} now={now} onOpen={onOpenSession}
+                               ask={askMarksFor(row.question.sessionId, asks)} current={rowActs !== null && rowActs.enabled} />;
       })}
     </ul>
   );
@@ -177,10 +188,10 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
-  rowActs?: RowActs | null; itemHref?: ItemHref | null;
+  rowActs?: RowActs | null; itemHref?: ItemHref | null; asks?: readonly AskMarkRow[];
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -197,17 +208,41 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
         {ended && <span className="wl-gwave" data-ended="true">{WAITS_ON_WORDS.ended}</span>}
         <SpecLink href={specHref} programme={title} className="wl-gspec" />
       </div>
-      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref} />
+      <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref}
+                {...(asks === undefined ? {} : { asks })} />
     </section>
   );
 }
 
-/** One struck-through row of the Recently cleared trail: its title, its number, where (beside a row of the list that holds several
- *  programmes, and not under a programme's own heading), and when. */
-function ClearedRow({ item, where, now, current }: {
-  item: ItemView; where?: ((item: ItemView) => string) | undefined; now: number; current: boolean;
+/** Where a cleared row's programme is named: beside a row of the list that holds several programmes, and not under a
+ *  programme's own heading. `null` is the asks in no programme. */
+type Where = (program: string | null) => string;
+
+/** One row of the Recently cleared trail: an item, or (answer marks B) an ask the operator has that is not live. */
+function ClearedRow({ entry, where, now, current }: { entry: ClearedEntry; where?: Where | undefined; now: number; current: boolean }): ReactNode {
+  return entry.kind === 'item'
+    ? <ClearedItemRow item={entry.item} where={where} now={now} current={current} />
+    : <ClearedAskRow ask={entry.ask} where={where} now={now} current={current} />;
+}
+
+/** A cleared ask: the question (not struck through, for a lapsed or handed-over ask may still wait in its session), how it
+ *  reached the operator and when, and its two boxes. */
+function ClearedAskRow({ ask, where, now, current }: { ask: AskMarkRow; where?: Where | undefined; now: number; current: boolean }): ReactNode {
+  const tail = [QUESTION_WORD, where?.(ask.program), `${ASK_HOW_WORD[ask.how]} ${ageWords(ask.at, now)}`].filter((t) => t !== undefined);
+  return (
+    <li className="wl-cleared-row" data-ask={ask.id}>
+      <span aria-hidden="true">{ask.how === 'answered' ? '✓ ' : '? '}</span>{ask.question === '' ? ASK_NO_TEXT_WORD : ask.question}
+      {` · ${tail.join(' · ')}`}
+      <AnswerMarkBoxes item={ask} kind="ask" current={current} />
+    </li>
+  );
+}
+
+/** One struck-through cleared item: its title, its number, where, and when. */
+function ClearedItemRow({ item, where, now, current }: {
+  item: ItemView; where?: Where | undefined; now: number; current: boolean;
 }): ReactNode {
-  const tail = [itemNumber(item), where?.(item), item.closedAt === null ? undefined : `confirmed ${ageWords(item.closedAt, now)}`]
+  const tail = [itemNumber(item), where?.(item.program), item.closedAt === null ? undefined : `confirmed ${ageWords(item.closedAt, now)}`]
     .filter((t) => t !== undefined);
   return (
     <li className="wl-cleared-row">
@@ -219,8 +254,11 @@ function ClearedRow({ item, where, now, current }: {
   );
 }
 
+/** A cleared row's React key: an item and an ask may share an id. */
+const entryKey = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
+
 /** How the whole trail is grouped by programme (D-8194): each programme's name and hue, as the list's groups draw them. */
-interface ClearedGrouping { readonly title: (program: string) => string; readonly hue: (program: string) => string | null }
+interface ClearedGrouping { readonly title: (program: string | null) => string; readonly hue: (program: string | null) => string | null }
 
 /** "Recently cleared": what the coordinator confirmed in the last 48 hours (`CLEARED_WINDOW_MS`, D-8194), newest first, each struck
  *  through with its number and when. The newest `CLEARED_SHOWN` show; Show all reveals the whole window and Show fewer folds it
@@ -231,20 +269,22 @@ interface ClearedGrouping { readonly title: (program: string) => string; readonl
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail({ items, where, now, grouping, current = false }: {
-  items: readonly ItemView[]; where?: (item: ItemView) => string; now: number; grouping?: ClearedGrouping;
+export function ClearedTrail({ items, asks = [], where, now, grouping, current = false }: {
+  items: readonly ItemView[]; where?: Where; now: number; grouping?: ClearedGrouping;
+  /** The asks the operator has that are not live (answer marks B), joined to the trail by their time. */
+  asks?: readonly AskMarkRow[];
   /** True only on a current page; false on the device's saved copy, and unset fails closed: the rows' answer marks are off, as
    *  every act on a saved copy is. */
   current?: boolean;
 }): ReactNode {
   const [all, setAll] = useState(false);
-  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
-  const trail = clearedTrail(items, now);
+  const [open, setOpen] = useState<ReadonlySet<string | null>>(() => new Set());
+  const trail = clearedTrail(items, now, asks);
   if (trail.length === 0) return null;
   const more = trail.length > CLEARED_SHOWN;
   const whole = all || !more;
   const grouped = all && more && grouping !== undefined;
-  const flip = (program: string): void => setOpen((was) => {
+  const flip = (program: string | null): void => setOpen((was) => {
     const next = new Set(was);
     if (!next.delete(program)) next.add(program);
     return next;
@@ -257,23 +297,23 @@ export function ClearedTrail({ items, where, now, grouping, current = false }: {
           <div className="wl-cgroups">
             {clearedGroups(trail).map((g) => {
               const shown = open.has(g.program);
-              const listId = `wl-cg-${g.program}`;
+              const listId = `wl-cg-${g.program ?? 'none'}`;
               return (
-                <div key={g.program} className="wl-cgroup" data-hue={grouping.hue(g.program) ?? 'none'}>
-                  <BareRow className="wl-cg-head" data-program={g.program} aria-expanded={shown} aria-controls={listId}
+                <div key={g.program ?? ''} className="wl-cgroup" data-hue={grouping.hue(g.program) ?? 'none'}>
+                  <BareRow className="wl-cg-head" data-program={g.program ?? ''} aria-expanded={shown} aria-controls={listId}
                            onClick={() => flip(g.program)}>
                     <span className="wl-swatch" aria-hidden="true" />
                     <span className="wl-cg-name">{grouping.title(g.program)}</span>{' '}
-                    <span className="wl-cg-n">{clearedCountWord(g.items.length)}</span>
+                    <span className="wl-cg-n">{clearedCountWord(g.entries.length)}</span>
                     <span className="wl-cg-chev" aria-hidden="true" />
                   </BareRow>
-                  {shown && <ul id={listId}>{g.items.map((c) => <ClearedRow key={c.id} item={c} now={now} current={current} />)}</ul>}
+                  {shown && <ul id={listId}>{g.entries.map((c) => <ClearedRow key={entryKey(c)} entry={c} now={now} current={current} />)}</ul>}
                 </div>
               );
             })}
           </div>
         )
-        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={c.id} item={c} where={where} now={now} current={current} />)}</ul>}
+        : <ul>{(whole ? trail : trail.slice(0, CLEARED_SHOWN)).map((c) => <ClearedRow key={entryKey(c)} entry={c} where={where} now={now} current={current} />)}</ul>}
       {more && (
         <Button variant="ghost" size="fit" className="wl-cleared-more" aria-expanded={all}
                 onClick={() => { setAll((v) => !v); setOpen(new Set()); }}>
@@ -306,6 +346,10 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   }
   const heardRuns = runs ?? NO_RUNS;
   const questions = questionRows(sessions, heardRuns);
+  // The asks the operator has (answer marks B): the live ones carry boxes on their child's question row, the rest are cleared rows.
+  const liveAsks = askRowsOf(view.asks);
+  const clearedAsks = askRowsOf(view.asksCleared);
+  const titleOf = (p: string | null): string => (p === null ? NO_PROGRAMME_WORD : programmeTitle(p, heardRuns));
   // The runs whose review cap waits join the list with their Lift cap control (runs rebuild §8.7, F21).
   const groups = groupByProgramme(view.items, questions, limitRows(sessions, heardRuns), heardRuns.filter((r) => capWaiting(r) === 'waiting'));
   // A list drawn from the device's saved copy acts on nothing, like every other act on a saved copy.
@@ -358,7 +402,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                 {shown.map((g) => (
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
-                             hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null}
+                             hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null} asks={liveAsks}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
               </div>
@@ -366,11 +410,14 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           </>
         )}
       {/* The trail follows the filter (PL11, D-7986): the programme's page lost its own trail, so the list filtered to one
-          programme holds that programme's, without naming it on every row, and the sessions in no programme have none. */}
+          programme holds that programme's, without naming it on every row, and the sessions in no programme hold only their
+          cleared asks (answer marks B). */}
       {list.programme !== null
-        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} now={now} current={rowActs.enabled} />
-        : <ClearedTrail items={noProgramme ? [] : view.cleared} now={now} where={(c) => programmeTitle(c.program, heardRuns)} current={rowActs.enabled}
-                        grouping={{ title: (p) => programmeTitle(p, heardRuns), hue: (p) => hues.get(p) ?? null }} />}
+        ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} asks={clearedAsks.filter((a) => a.program === list.programme)}
+                        now={now} current={rowActs.enabled} />
+        : <ClearedTrail items={noProgramme ? [] : view.cleared} asks={noProgramme ? clearedAsks.filter((a) => a.program === null) : clearedAsks}
+                        now={now} where={titleOf} current={rowActs.enabled}
+                        grouping={{ title: titleOf, hue: (p) => (p === null ? null : hues.get(p) ?? null) }} />}
       {sheets}
     </div>
   );

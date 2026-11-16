@@ -153,15 +153,20 @@ _pool_set_start_warn() {   # id wrapper prc side state project pps -> `cmd_start
 # 0 the line; 1 no such session (no uuid field); 2 usage (any other argv, or an id `_reg_id_ok` refuses); 3 the session's
 # uuid, wrapper or project field could not be read (a missing wrapper names no account), a reason on stderr, no line.
 # A project field that is absent reads as the empty project, as `_swap_target` reads it. It writes nothing.
+# `--account <a>` (Overlord W1 sandbox A2, fix round 1 F6) asks the same of account `a` in place of the session's own
+# `wrapper`, which is still read: whether `a` could serve the session. Doctor's overlord-mods check asks it of each
+# rostered account, so the projection keeps its one reader. An id off the account shape is usage (rc 2).
 cmd_pool_answer() {
   local LC_ALL=C IFS=' ' id w p rc side verdict ps st x
-  [[ $# -eq 2 && "$1" == --session ]] && _reg_id_ok "$2" || { echo "usage: ccd pool-answer --session <id>" >&2; return 2; }
+  [[ ( $# -eq 2 || ( $# -eq 4 && "$3" == --account && "$4" =~ ^[A-Za-z0-9._-]{1,64}$ ) ) && "$1" == --session ]] && _reg_id_ok "$2" \
+    || { echo "usage: ccd pool-answer --session <id> [--account <account>]" >&2; return 2; }
   id="$2"
   _reg_read_to w "$id" uuid; rc=$?
   (( rc == 1 )) && { echo "ccd: pool-answer: no such session: $id" >&2; return 1; }
   (( rc == 0 )) || { echo "ccd: pool-answer: $id: its registry fields cannot be read ($REG)" >&2; return 3; }
   _reg_read_to w "$id" wrapper; rc=$?
   (( rc == 0 )) && [[ -n "$w" ]] || { echo "ccd: pool-answer: $id: its wrapper field could not be read" >&2; return 3; }
+  [[ $# -eq 2 ]] || w="$4"
   _reg_read_to p "$id" project; rc=$?
   (( rc != 2 )) || { echo "ccd: pool-answer: $id: its project field could not be read" >&2; return 3; }
   side=$(_session_pool_side "$id" "$p")

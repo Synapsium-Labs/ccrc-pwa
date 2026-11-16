@@ -52,8 +52,9 @@ import { portfolioFor } from './portfolio.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
-import { ASK_MARKS_NOT_YET, DARK_MARK_ACTOR, itemMarkable, itemMarksView, markViewOf } from './answerMarks.js';
+import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
+import { askForMark, markableAsks } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
   OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
@@ -122,6 +123,8 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
  *  `itemMarksView` (L1) decides whether the item carries the field. */
 export type MarksOf = 'none' | AnswerMarksRead;
 const NO_RECORDS = { couldAnswer: null, unsure: null } as const;
+/** One row's marks from a read of many: its newest records (none: both `never`), or the read's failure. */
+const marksOfRow = (marks: AnswerMarksRead, id: number): ItemMarkRead => (marks.ok ? { ok: true, ...(marks.newest.get(id) ?? NO_RECORDS) } : marks);
 
 /** THE ONE BUILDER of an `ItemView` (plan PL4, review 1331 A3): the coordinator's list, the operator's routes and the
  *  `/ws/fleet` frame all come through here, so a label cannot differ between them. It MEASURES the inputs of `itemIsStale`
@@ -145,7 +148,7 @@ export function viewOfItem(
   const secret = row.kind === 'secret' && row.secretSlot !== null ? secretOf(row.program, row.secretSlot) : null;
   const view = itemViewOf(row, coord.itemHistory(row.id), stale, secret);
   if (marks === 'none') return view;
-  const answerMarks = itemMarksView(row, now, marks.ok ? { ok: true, ...(marks.newest.get(row.id) ?? NO_RECORDS) } : marks);
+  const answerMarks = itemMarksView(row, now, marksOfRow(marks, row.id));
   return answerMarks === undefined ? view : { ...view, answerMarks };
 }
 
@@ -158,7 +161,8 @@ const GOALS_BIG_CALLS_MAX = 20;
 const RUN_ALREADY_CLOSED_NOTE = 'The run had already closed.';
 
 export function waitingViewOf(
-  coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, secretOf: SecretMetaOf = NO_SECRETS,
+  coord: CoordStore, now: number, presenceOf: (sessionId: string) => CoordinatorPresence, liveAsk: LiveAskRead,
+  secretOf: SecretMetaOf = NO_SECRETS,
 ): WaitingView {
   // A death between the operator's act and its item leaves an open end request on a closed run: the next read closes it.
   coord.settleEndRequestsOfClosedRuns(RUN_ALREADY_CLOSED_NOTE, now);
@@ -173,7 +177,18 @@ export function waitingViewOf(
     goals: programmes.map((p) => coord.goalsFor(p)),
     calls: groups.open.map(callViewOf),
     callsCleared: groups.cleared.map(callViewOf),
+    ...asksViewOf(coord, now, liveAsk),
   };
+}
+
+/** The asks the operator has, with their marks (answer marks B, plan Task 5): one read of the asks and one of their marks. A
+ *  failed read of the asks leaves both lists absent, "this server cannot mark an ask now", never an empty list that reads as
+ *  "none"; a failed mark read gives each row both marks `unmeasured`. Neither blocks the list. */
+function asksViewOf(coord: CoordStore, now: number, liveAsk: LiveAskRead): Pick<WaitingView, 'asks' | 'asksCleared'> {
+  const targets = markableAsks(coord, now, liveAsk);
+  if (!targets.ok) return {};
+  const marks = coord.answerMarksOf('ask', targets.rows.map((a) => a.id));
+  return askListsView(targets.rows, (id) => marksOfRow(marks, id));
 }
 
 /** One programme's goals read, once for every door (`GET /api/programmes/:slug/goals`): the pin and the programme's open items
@@ -727,7 +742,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.get('/api/waiting', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, secretOf) });
+    return reply.code(200).send({ ok: true, waiting: waitingViewOf(coord, deps.now(), deps.presenceOf, deps.liveAsk, secretOf) });
   });
 
   // D-8194: one item by its id, whatever its state and however long ago it closed, so an item opened by its number (a link in
@@ -775,7 +790,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return reply.code(200).send({ ok: true, revision: res.revision, portfolio: portfolioView(coord, now) });
   });
 
-  // The answer marks (Overlord W1, spec §9.2.1 C70, plan w1-delegation-marks.md Task 3): the operator's two boxes on a row of
+  // The answer marks (Overlord W1, spec §9.2.1 C70, plan w1-delegation-marks.md Tasks 3 and 5): the operator's two boxes on a row of
   // Waiting on you, "the Overlord could answer this" and "I'm not sure of my answer". Session-gated only, no box token
   // (`LEDGER_OPERATOR_DOORS`), and no `ccrc-api` row: no session has a path to it while sign-in is armed. A MARK GRANTS
   // NOTHING AND IS NEVER AN ANSWER, so the door calls no account gate and takes no step-up, and it works while sign-in is dark
@@ -784,8 +799,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // basis (§9.2.1). The read side is the same: dark, the waiting view, the item view and the waiting frame are open to any
   // local process, marks included, so a coordinator is kept from the marks only while sign-in is armed, when all three are
   // session-gated. An item the operator was never shown is `unknown-item`, as `GET /api/items/:id` answers it (D-8194's
-  // no-oracle rule). Whether the row is markable is `itemMarkable`'s, and the view is `markViewOf`'s; the door decides
-  // nothing. It awaits nothing between its read and its write, so the writer's transaction is the whole guard.
+  // no-oracle rule), and an ask never shown is `unknown-ask`. Whether the row is markable is `itemMarkable`'s or
+  // `askMarkable`'s, and the view is `markViewOf`'s; the door decides nothing. It awaits nothing between its read and its write, so the writer's transaction is the whole guard.
   app.post('/api/answer-marks', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
@@ -793,12 +808,24 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const parsed = parseAnswerMarkWrite(req.body);
     if (!parsed.ok) return bad(reply, parsed.detail);
     const { write } = parsed;
-    // An ask's marks are PR B's (plan Task 5).
-    if (write.kind !== 'item') return bad(reply, ASK_MARKS_NOT_YET);
     const now = deps.now();
-    const item = coord.itemById(write.id);
-    if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
-    const may = itemMarkable(item, now);
+    let may: Markable;
+    if (write.kind === 'ask') {
+      // The ask arm (plan Task 5): an unreadable row is `ask-unreadable`, never absent. The read and `askMarkable` decide,
+      // with the view's own statement (review 2217 F4). An ask that never reached the operator (held, or moved on with no reach
+      // stamp) is `unknown-ask`, as an item never shown is `unknown-item` (slugs never-shown-ask-is-unknown,
+      // reached-is-the-reach-stamp).
+      const read = askForMark(coord, write.id, now, deps.liveAsk);
+      if (!read.ok) return refuseRoute(reply, 'ask-unreadable', { detail: read.detail });
+      if (read.found === null || (!read.found.may.markable && read.found.may.reason === 'not-shown')) {
+        return refuseRoute(reply, 'unknown-ask', { detail: `no ask ${write.id}` });
+      }
+      may = read.found.may;
+    } else {
+      const item = coord.itemById(write.id);
+      if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
+      may = itemMarkable(item, now);
+    }
     if (!may.markable) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notMarkable, { detail: may.reason });
     const res = coord.recordAnswerMark(write, actor, now);
     if (res.changed) deps.bus.emit('waiting');
