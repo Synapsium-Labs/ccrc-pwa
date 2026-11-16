@@ -2192,6 +2192,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
     operatorActor: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
+    notice,
     masker: deps.masker,
   });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which

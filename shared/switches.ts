@@ -382,7 +382,7 @@ export const SWITCHES = {
     writer: 'POST /api/coord/plain-auto-memory',
   },
   // Overlord W1a, the renewal hand-offs (spec §3.3.11 R19, Table 11.1d): read by the generations lane, which hands it to
-  // `softRenewalMay`; it moves no session while the `continuity` row is shadow.
+  // `softRenewalMay`; it moves no session while the `continuity` row is shadow. Its door registers in `continuity/routes.ts`.
   'renewal-mode': {
     storage: { setting: 'renewal_mode_settings.mode' }, default: 'when-away', owner: 'C3',
     meaning: 'When a long-lived session\'s soft renewal happens: when the operator is away (when-away), or on schedule (on-schedule), which waits at most 30 minutes for a break.',

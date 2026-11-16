@@ -35,6 +35,7 @@ import {
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
@@ -593,6 +594,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
      *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
     limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
+    /** Overlord W1a hand-offs: the operator's "Renew now" for a long-lived session. `POST /api/sessions/:id/renew`, body
+     *  `{}`; `409 renew-not-long-lived` / `409 renew-pending` raise `ApiError` with the word. Session-gated. */
+    renewNow: (id: string) => post(`${sid(id)}/renew`, {}),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -1018,6 +1022,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
     setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
       postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET /api/coord/renewal-mode` (Overlord W1a hand-offs): Settings › Automation › When soft renewals happen, `when-away`
+     *  or `on-schedule` (`mode` null when the stored word could not be read). Session-gated when armed; no box token. */
+    renewalMode: () => getJson<RenewalModeView & { readonly ok: true }>('/api/coord/renewal-mode'),
+    /** `POST /api/coord/renewal-mode`: `{mode}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setRenewalMode: (mode: RenewalMode) =>
+      postJsonOr<(RenewalModeView & { readonly ok: true }) | 'unreadable'>('/api/coord/renewal-mode', 'unreadable', { mode }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */
