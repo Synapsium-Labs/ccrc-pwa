@@ -490,6 +490,35 @@ describe(TABLES_PIN, () => {
   it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
     expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
   });
+  // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
+  // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
+  const markReadSites = callSitesOf('answerMarksOf');
+  const MARK_READS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes.operatorView', 'server/src/coord/ledgersRoutes.ts#waitingViewOf',
+    `${S}answerMarksOf`,
+  ];
+  it('CONTROL: an answerMarksOf call in the coordinator\'s box-token items read is a further entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "deps.presenceOf, deps.secretOf, 'none')) });";
+    expect(routes.split(anchor)).toHaveLength(2);
+    await plant('ledgersRoutes.ts', routes.replace(anchor, "deps.presenceOf, deps.secretOf, coord.answerMarksOf('item', []))) });"), (f) => {
+      const sites = markReadSites([f]).map((x) => x.replace(/^.*#/, ''));
+      expect(sites).toContain('registerLedgerCoordinatorRoutes @ GET /api/programmes/:slug/items');
+      expect(sites).not.toEqual(MARK_READS.slice(0, 2).map((x) => x.replace(/^.*#/, '')));
+    });
+  });
+  it('answerMarksOf is called only by the two operator views (the item view and the waiting view)', () => {
+    expect(markReadSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_READS);
+  });
+  const tableReaders = (files: readonly string[]): string[] => files.filter((f) => /\bFROM\s+answer_marks\b/.test(
+    readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, ''))).map(rel).sort();
+  it('CONTROL: a FROM answer_marks outside a comment is found, and one in a comment is not', async () => {
+    await plant('a.ts', "// SELECT x FROM answer_marks\nexport const q = 'SELECT value FROM answer_marks';\n", (f) => expect(tableReaders([f])).toHaveLength(1));
+    await plant('b.ts', '// SELECT x FROM answer_marks\nexport const q = 1;\n', (f) => expect(tableReaders([f])).toEqual([]));
+  });
+  it('FROM answer_marks is spelled in answerMarkStore.ts alone', () => {
+    expect(tableReaders(ALL.filter((f) => !rel(f).startsWith('pwa/')))).toEqual(['server/src/coord/answerMarkStore.ts']);
+  });
 });
 
 // THE WORKSPACE TOMBSTONE. §2.2 C4 records `.reaped/<id>.json`, the record that outlives a workspace. It is written by

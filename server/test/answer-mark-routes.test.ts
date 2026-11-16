@@ -85,6 +85,8 @@ describe('POST /api/answer-marks, armed', () => {
     expect(res.statusCode, res.body).toBe(200);
     const body = res.json() as { ok: true; mark: string; answerMark: AnswerMarkView };
     expect(body).toMatchObject({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', signedIn: true } });
+    // The view carries the record's id, the order the console settles by (review 2196 F4).
+    expect(body.answerMark).toMatchObject(r.coord.db.prepare('SELECT id FROM answer_marks').get() as { id: number });
     // The login's user agent (`inject`'s own) through `ccdargv.ts#deviceActor`, as the rank door records it.
     expect(actors(r)).toEqual([{ actor: 'device:lightMyRequest' }]);
     expect(r.waiting()).toBe(1);
@@ -134,13 +136,18 @@ describe('POST /api/answer-marks, dark', () => {
 });
 
 describe('POST /api/answer-marks: refusals write nothing and emit nothing', () => {
-  it('an absent item is 404 unknown-item', async () => {
+  it('an absent item, and a held one the operator was never shown, are each 404 unknown-item (D-8194\'s no-oracle rule)', async () => {
     const r = await rig({ armed: false });
-    const res = await mark(r, { kind: 'item', id: 999, mark: 'unsure', value: true });
-    expect([res.statusCode, (res.json() as { error: string }).error]).toEqual([404, 'unknown-item']);
+    const now = Date.now();
+    for (const id of [999, item(r, 'decide', { heldUntil: now + HOUR }), item(r, 'do', { heldUntil: now + HOUR })]) {
+      const res = await mark(r, { kind: 'item', id, mark: 'unsure', value: true });
+      expect([res.statusCode, res.json()], `item ${id}`).toEqual([404, { ok: false, error: 'unknown-item', detail: `no item ${id}` }]);
+    }
+    expect(actors(r)).toEqual([]);
+    expect(r.waiting()).toBe(0);
   });
 
-  it('a do item, a withdrawn item, a held item and a cleared item past the window are each 409 not-markable, with the reason', async () => {
+  it('a do item, a withdrawn item and a cleared item past the window are each 409 not-markable, with the reason', async () => {
     const r = await rig({ armed: false });
     const now = Date.now();
     const cases: [number, string][] = [
@@ -148,7 +155,6 @@ describe('POST /api/answer-marks: refusals write nothing and emit nothing', () =
       [item(r, 'secret'), 'no-box'],
       [item(r, 'decide', { state: 'withdrawn', closedAt: now - HOUR }), 'not-listed'],
       [item(r, 'decide', { state: 'dismissed', closedAt: now - HOUR }), 'not-listed'],
-      [item(r, 'decide', { heldUntil: now + HOUR }), 'not-shown'],
       [item(r, 'value', { state: 'done', closedAt: now - WINDOW - HOUR }), 'past-window'],
     ];
     for (const [id, reason] of cases) {

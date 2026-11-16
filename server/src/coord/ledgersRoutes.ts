@@ -781,8 +781,11 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // NOTHING AND IS NEVER AN ANSWER, so the door calls no account gate and takes no step-up, and it works while sign-in is dark
   // (slug answer-mark-door-works-dark), as the rank door does. Dark, any local process that reaches the server can call it,
   // exactly as for the tick door (plan question 12): every such mark records `flag-off`, so it is told apart and is the weaker
-  // basis (§9.2.1). Whether the row is markable is `itemMarkable`'s, and the view is `markViewOf`'s; the door decides nothing.
-  // It awaits nothing between its read and its write, so the writer's transaction is the whole guard.
+  // basis (§9.2.1). The read side is the same: dark, the waiting view, the item view and the waiting frame are open to any
+  // local process, marks included, so a coordinator is kept from the marks only while sign-in is armed, when all three are
+  // session-gated. An item the operator was never shown is `unknown-item`, as `GET /api/items/:id` answers it (D-8194's
+  // no-oracle rule). Whether the row is markable is `itemMarkable`'s, and the view is `markViewOf`'s; the door decides
+  // nothing. It awaits nothing between its read and its write, so the writer's transaction is the whole guard.
   app.post('/api/answer-marks', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
@@ -794,7 +797,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (write.kind !== 'item') return bad(reply, ASK_MARKS_NOT_YET);
     const now = deps.now();
     const item = coord.itemById(write.id);
-    if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
+    if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
     const may = itemMarkable(item, now);
     if (!may.markable) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notMarkable, { detail: may.reason });
     const res = coord.recordAnswerMark(write, actor, now);

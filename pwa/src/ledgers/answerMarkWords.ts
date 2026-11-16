@@ -32,7 +32,9 @@ const isMarkView = (v: unknown): v is AnswerMarkView => {
   if (typeof v !== 'object' || v === null) return false;
   const o = v as Record<string, unknown>;
   if (typeof o['state'] !== 'string' || !Object.hasOwn(ANSWER_MARK_STATE_MAP, o['state'])) return false;
-  if (o['state'] === 'marked' || o['state'] === 'withdrawn') return typeof o['at'] === 'number' && typeof o['signedIn'] === 'boolean';
+  if (o['state'] === 'marked' || o['state'] === 'withdrawn') {
+    return typeof o['id'] === 'number' && typeof o['at'] === 'number' && typeof o['signedIn'] === 'boolean';
+  }
   if (o['state'] === 'unmeasured') return typeof o['detail'] === 'string';
   return true;
 };
@@ -51,15 +53,16 @@ export function answerMarksOf(item: Pick<ItemView, 'answerMarks'>): AnswerMarksV
 export const markOf = (marks: AnswerMarksView, mark: AnswerMarkName): AnswerMarkView =>
   mark === 'could-answer' ? marks.couldAnswer : marks.unsure;
 
-const atOf = (v: AnswerMarkView): number | null => (v.state === 'marked' || v.state === 'withdrawn' ? v.at : null);
+const idOf = (v: AnswerMarkView): number | null => (v.state === 'marked' || v.state === 'withdrawn' ? v.id : null);
 
 /** THE SETTLE RULE (F14), once. When the door answers, the box keeps that answer as `settled`; it shows the newer of `settled`
- *  and the view's mark, by `at`, and `settled` may be dropped once the view's mark is at least as new. A view mark with no
- *  record (`never`, or `unmeasured`) loses to a settled record, so a view frame older than the door's answer never unticks it. */
+ *  and the view's mark, by record id (the store's own order of a row's records, never the wall clock's `at`), and `settled`
+ *  may be dropped once the view's mark is at least as new. A view mark with no record (`never`, or `unmeasured`) loses to a
+ *  settled record, so a view frame older than the door's answer never unticks it. */
 export function settledMark(view: AnswerMarkView, settled: AnswerMarkView | null): { shown: AnswerMarkView; drop: boolean } {
-  const s = settled === null ? null : atOf(settled);
+  const s = settled === null ? null : idOf(settled);
   if (settled === null || s === null) return { shown: view, drop: settled !== null };
-  const v = atOf(view);
+  const v = idOf(view);
   return v !== null && v >= s ? { shown: view, drop: true } : { shown: settled, drop: false };
 }
 

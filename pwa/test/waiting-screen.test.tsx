@@ -6,7 +6,7 @@ import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { fleetHues } from '../src/fleet/programmeBoxes';
-import { WaitingScreen } from '../src/ledgers/WaitingScreen';
+import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
@@ -849,7 +849,7 @@ describe('the grouped Recently cleared list and item references on a card (D-819
 });
 
 describe('the answer marks on the list (Overlord W1)', () => {
-  const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, at: NOW - MIN, signedIn: true } };
+  const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true } };
   const view = (withMarks: boolean) => waitingView({
     items: [itemView({ id: 1, kind: 'decide', title: 'Pick a branch', ...(withMarks ? { answerMarks: MARKS } : {}) })],
     cleared: [itemView({ id: 2, kind: 'value', state: 'done', title: 'Name the flag', closedAt: NOW - 60 * MIN, ...(withMarks ? { answerMarks: MARKS } : {}) })],
@@ -881,5 +881,21 @@ describe('the answer marks on the list (Overlord W1)', () => {
   it('on the device\'s saved copy every box is disabled', () => {
     open({ view: view(true), notCurrent: 'Saved on this device' });
     for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+
+  // Review 2196 F5: an unset `rowActs` or `current` fails closed.
+  it('item rows drawn with no rowActs disable their boxes', () => {
+    const item = view(true).items[0]!;
+    render(<ItemRows rows={[{ kind: 'item', item }]} now={NOW} onOpenItem={() => undefined} onOpenSession={() => undefined} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+
+  it('a cleared trail drawn with no current disables its boxes', () => {
+    render(<ClearedTrail items={view(true).cleared} now={NOW} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
   });
 });

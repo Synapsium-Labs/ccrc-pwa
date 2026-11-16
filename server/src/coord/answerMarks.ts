@@ -49,17 +49,17 @@ export function itemMarkable(row: MarkableItem, now: number): Markable {
 }
 
 /** The fields of a stored mark record the view reads (`answerMarkStore.ts#AnswerMarkRecord`, passed as a plain row). */
-export interface MarkRecordLike { readonly value: number; readonly at: number; readonly actor: string }
+export interface MarkRecordLike { readonly id: number; readonly value: number; readonly at: number; readonly actor: string }
 
 /** The actor a mark written while sign-in was dark carries (the rank door's word): no session said who made it. */
 export const DARK_MARK_ACTOR = 'flag-off';
 
-/** One mark's view: `null` is `never`; a record is `marked` (value 1) or `withdrawn` (value 0) with its time, and
+/** One mark's view: `null` is `never`; a record is `marked` (value 1) or `withdrawn` (value 0) with its id and time, and
  *  `signedIn` is false for a dark mark; `'unmeasured'` is a failed read, with its detail. */
 export function markViewOf(newest: MarkRecordLike | null | 'unmeasured', detail = 'the mark could not be read'): AnswerMarkView {
   if (newest === 'unmeasured') return { state: 'unmeasured', detail };
   if (newest === null) return { state: 'never' };
-  return { state: newest.value === 1 ? 'marked' : 'withdrawn', at: newest.at, signedIn: newest.actor !== DARK_MARK_ACTOR };
+  return { state: newest.value === 1 ? 'marked' : 'withdrawn', id: newest.id, at: newest.at, signedIn: newest.actor !== DARK_MARK_ACTOR };
 }
 
 /** What an item's view is given of its marks: the read of its newest records, or the read's failure. */

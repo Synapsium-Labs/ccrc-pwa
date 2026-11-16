@@ -27,11 +27,12 @@ export const ANSWER_MARK_NAMES = Object.keys(ANSWER_MARK_NAME_MAP) as readonly A
 export const isAnswerMarkName = (v: unknown): v is AnswerMarkName =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(ANSWER_MARK_NAME_MAP, v);
 
-/** One mark on the wire. `signedIn` is false for a mark written while sign-in was dark (actor `flag-off`): kept and shown,
- *  and the weaker basis in the operator model (§9.2.1), because no cookie says who made it. */
+/** One mark on the wire. `id` is the record's id, the store's order of a row's records (the console settles by it, never by
+ *  `at`). `signedIn` is false for a mark written while sign-in was dark (actor `flag-off`): kept and shown, and the weaker
+ *  basis in the operator model (§9.2.1), because no cookie says who made it. */
 export type AnswerMarkView =
   | { state: 'never' }
-  | { state: 'marked' | 'withdrawn'; at: number; signedIn: boolean }
+  | { state: 'marked' | 'withdrawn'; id: number; at: number; signedIn: boolean }
   | { state: 'unmeasured'; detail: string };
 export type AnswerMarkState = AnswerMarkView['state'];
 export const ANSWER_MARK_STATE_MAP: Record<AnswerMarkState, true> = { never: true, marked: true, withdrawn: true, unmeasured: true };

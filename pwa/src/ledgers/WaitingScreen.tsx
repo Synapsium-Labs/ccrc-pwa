@@ -118,7 +118,8 @@ function ItemRow({ item, now, onOpen, current, rowActs, itemHref }: {
       </BareRow>
       {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
       {/* The operator's two answer marks (Overlord W1), beside the row's button, never inside it; off on a saved copy. */}
-      <AnswerMarkBoxes item={item} current={rowActs === null || rowActs.enabled} />
+      {/* Fail closed: a row drawn with no acts says nothing about the page being current, so its boxes are off. */}
+      <AnswerMarkBoxes item={item} current={rowActs !== null && rowActs.enabled} />
       <Mentions item={item} note={back ? note : null} itemHref={itemHref} />
     </li>
   );
@@ -230,9 +231,10 @@ interface ClearedGrouping { readonly title: (program: string) => string; readonl
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail({ items, where, now, grouping, current = true }: {
+export function ClearedTrail({ items, where, now, grouping, current = false }: {
   items: readonly ItemView[]; where?: (item: ItemView) => string; now: number; grouping?: ClearedGrouping;
-  /** False on the device's saved copy: the rows' answer marks are off, as every act on a saved copy is. */
+  /** True only on a current page; false on the device's saved copy, and unset fails closed: the rows' answer marks are off, as
+   *  every act on a saved copy is. */
   current?: boolean;
 }): ReactNode {
   const [all, setAll] = useState(false);

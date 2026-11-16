@@ -46,30 +46,30 @@ describe('the answer-mark boxes', () => {
     expect(spy).toHaveBeenCalledWith('item', 7, 'could-answer', true);
     expect(box('could-answer').checked).toBe(true);
     expect(box('could-answer').disabled).toBe(true);
-    await act(async () => { call.resolve({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', at: NOW, signedIn: true } }); });
+    await act(async () => { call.resolve({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } }); });
   });
 
   it('a resolved call leaves it checked, and a later view carrying marked keeps it checked and enabled', async () => {
-    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', at: NOW, signedIn: true } });
+    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } });
     const d = draw(marks());
     await act(async () => { fireEvent.click(box('could-answer')); });
     expect(box('could-answer').checked).toBe(true);
     expect(box('could-answer').disabled).toBe(false);
-    d.rerender(marks({ couldAnswer: { state: 'marked', at: NOW, signedIn: true } }));
+    d.rerender(marks({ couldAnswer: { state: 'marked', id: 5, at: NOW, signedIn: true } }));
     expect(box('could-answer').checked).toBe(true);
     expect(box('could-answer').disabled).toBe(false);
   });
 
   it('a view frame older than the resolved answer does not uncheck the box (F14)', async () => {
-    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', at: NOW, signedIn: true } });
-    const d = draw(marks({ unsure: { state: 'withdrawn', at: NOW - 2 * MIN, signedIn: true } }));
+    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } });
+    const d = draw(marks({ unsure: { state: 'withdrawn', id: 3, at: NOW - 2 * MIN, signedIn: true } }));
     await act(async () => { fireEvent.click(box('unsure')); });
-    d.rerender(marks({ unsure: { state: 'withdrawn', at: NOW - 2 * MIN, signedIn: true } }));
+    d.rerender(marks({ unsure: { state: 'withdrawn', id: 3, at: NOW - 2 * MIN, signedIn: true } }));
     expect(box('unsure').checked).toBe(true);
     d.rerender(marks());
     expect(box('unsure').checked).toBe(true);
     // A newer view wins: the mark was withdrawn elsewhere after this tap.
-    d.rerender(marks({ unsure: { state: 'withdrawn', at: NOW + MIN, signedIn: true } }));
+    d.rerender(marks({ unsure: { state: 'withdrawn', id: 6, at: NOW + MIN, signedIn: true } }));
     expect(box('unsure').checked).toBe(false);
   });
 
@@ -84,15 +84,15 @@ describe('the answer-mark boxes', () => {
 
   it('a rejected network call unchecks it again', async () => {
     vi.spyOn(api, 'setAnswerMark').mockRejectedValue(new TypeError('Failed to fetch'));
-    draw(marks({ couldAnswer: { state: 'marked', at: NOW, signedIn: true } }));
+    draw(marks({ couldAnswer: { state: 'marked', id: 5, at: NOW, signedIn: true } }));
     await act(async () => { fireEvent.click(box('could-answer')); });
     expect(box('could-answer').checked).toBe(true);
     expect(screen.getByRole('alert')).toBeTruthy();
   });
 
   it('ticking unsure sends mark unsure and leaves the could-answer box as it was', async () => {
-    const spy = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', at: NOW, signedIn: true } });
-    draw(marks({ couldAnswer: { state: 'marked', at: NOW - MIN, signedIn: true } }));
+    const spy = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } });
+    draw(marks({ couldAnswer: { state: 'marked', id: 4, at: NOW - MIN, signedIn: true } }));
     await act(async () => { fireEvent.click(box('unsure')); });
     expect(spy).toHaveBeenCalledWith('item', 7, 'unsure', true);
     expect(box('could-answer').checked).toBe(true);
@@ -113,7 +113,7 @@ describe('the answer-mark boxes', () => {
   });
 
   it('the explainer shows on the first use on this device and not on the second', async () => {
-    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', at: NOW, signedIn: true } });
+    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } });
     const storage = store();
     draw(marks(), { storage });
     expect(screen.queryByText(ANSWER_MARK_EXPLAINER)).toBeNull();
@@ -126,7 +126,7 @@ describe('the answer-mark boxes', () => {
   });
 
   it('a storage that throws changes nothing else: the tap still goes through', async () => {
-    const spy = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', at: NOW, signedIn: true } });
+    const spy = vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'unsure', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } });
     const throwing: StoragePort = {
       getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); }, removeItem: () => { throw new Error('denied'); },
     } as unknown as StoragePort;

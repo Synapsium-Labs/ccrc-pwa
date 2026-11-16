@@ -96,26 +96,26 @@ export function itemMarkableCases(m: Pick<AnswerMarkDeciders, 'itemMarkable'>): 
 export function markViewCases(m: Pick<AnswerMarkDeciders, 'markViewOf' | 'itemMarksView'>): Record<string, SuiteCase> {
   return {
     'no record is never': () => { expect(m.markViewOf(null)).toEqual({ state: 'never' }); },
-    'a record of value 1 is marked, with its time, and a signed-in actor reads signedIn': () => {
-      expect(m.markViewOf({ value: 1, at: NOW - MIN, actor: 'op-a' })).toEqual({ state: 'marked', at: NOW - MIN, signedIn: true });
+    'a record of value 1 is marked, with its id and time, and a signed-in actor reads signedIn': () => {
+      expect(m.markViewOf({ id: 4, value: 1, at: NOW - MIN, actor: 'op-a' })).toEqual({ state: 'marked', id: 4, at: NOW - MIN, signedIn: true });
     },
     'a record of value 0 is withdrawn, never never': () => {
-      expect(m.markViewOf({ value: 0, at: NOW - 2 * MIN, actor: 'op-a' })).toEqual({ state: 'withdrawn', at: NOW - 2 * MIN, signedIn: true });
+      expect(m.markViewOf({ id: 5, value: 0, at: NOW - 2 * MIN, actor: 'op-a' })).toEqual({ state: 'withdrawn', id: 5, at: NOW - 2 * MIN, signedIn: true });
     },
     'a flag-off actor reads signedIn false, ticked or not': () => {
-      expect(m.markViewOf({ value: 1, at: NOW, actor: 'flag-off' })).toEqual({ state: 'marked', at: NOW, signedIn: false });
-      expect(m.markViewOf({ value: 0, at: NOW, actor: 'flag-off' })).toEqual({ state: 'withdrawn', at: NOW, signedIn: false });
+      expect(m.markViewOf({ id: 6, value: 1, at: NOW, actor: 'flag-off' })).toEqual({ state: 'marked', id: 6, at: NOW, signedIn: false });
+      expect(m.markViewOf({ id: 7, value: 0, at: NOW, actor: 'flag-off' })).toEqual({ state: 'withdrawn', id: 7, at: NOW, signedIn: false });
     },
     'a failed read is unmeasured, with its detail or the default one': () => {
       expect(m.markViewOf('unmeasured', 'disk I/O error')).toEqual({ state: 'unmeasured', detail: 'disk I/O error' });
       expect(m.markViewOf('unmeasured')).toEqual({ state: 'unmeasured', detail: 'the mark could not be read' });
     },
     'itemMarksView: a markable item carries both marks, each from its own record': () => {
-      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: { value: 1, at: NOW - MIN, actor: 'op-a' }, unsure: null })).toEqual({
-        couldAnswer: { state: 'marked', at: NOW - MIN, signedIn: true }, unsure: { state: 'never' },
+      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: { id: 8, value: 1, at: NOW - MIN, actor: 'op-a' }, unsure: null })).toEqual({
+        couldAnswer: { state: 'marked', id: 8, at: NOW - MIN, signedIn: true }, unsure: { state: 'never' },
       });
-      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: null, unsure: { value: 1, at: NOW, actor: 'flag-off' } })).toEqual({
-        couldAnswer: { state: 'never' }, unsure: { state: 'marked', at: NOW, signedIn: false },
+      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: null, unsure: { id: 9, value: 1, at: NOW, actor: 'flag-off' } })).toEqual({
+        couldAnswer: { state: 'never' }, unsure: { state: 'marked', id: 9, at: NOW, signedIn: false },
       });
     },
     'itemMarksView: an item that carries no box carries no field, even when its read failed': () => {
@@ -212,6 +212,7 @@ export const MARK_VIEW_SET: MutantSet<AnswerMarkDeciders> = {
     { id: 'AM-VIEW-8', old: "if (!read.ok) return { couldAnswer: markViewOf('unmeasured', read.detail), unsure: markViewOf('unmeasured', read.detail) };", new: "if (!read.ok) return undefined;" },
     { id: 'AM-VIEW-9', old: 'unsure: markViewOf(read.unsure) }', new: 'unsure: markViewOf(read.couldAnswer) }' },
     { id: 'AM-VIEW-10', old: "markViewOf('unmeasured', read.detail) };", new: "markViewOf('unmeasured') };" },
+    { id: 'AM-VIEW-11', old: 'id: newest.id,', new: 'id: 0,' },
   ],
 };
 

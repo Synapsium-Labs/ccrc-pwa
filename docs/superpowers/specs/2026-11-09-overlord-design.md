@@ -6752,7 +6752,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `timer-not-yours` | The timer cancel doors | The timer belongs to another identity: at the setter's cancel, another identity's; at the operator's, another session's than the path names. At the setter's cancel an id that names no row answers the same word, so the door is no oracle for which ids exist | C61 |
 | `timer-not-found` | The operator's timer cancel door | The id names no timer, answered 404. The signed-in operator may know which ids exist, so only the operator's cancel answers it | C61 |
 | `timer-not-pending` | The timer cancel doors | The timer has already fired or been cancelled | C61 |
-| `not-markable` | The answer-mark door | The row carries no box, or is not on the operator's list: never shown, past the Recently cleared window, or in no list's state. The detail names which | C70 |
+| `not-markable` | The answer-mark door | The row carries no box, or is not on the operator's list: past the Recently cleared window, or in no list's state. The detail names which. A row the operator was never shown is `unknown-item`, as at the item read | C70 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |
 | `server-gap` | A hold's release reason | The deadline passed while the server was down | H18, H32 |
 | `released:<cause>` | A hold's release reason | A cause of Table 6.7c other than a readiness word let a standing hold go: `rung`, `disarmed`, `engagement`, `class-raised`, `grant-ended`, `bypassed` or `deaf` | H18, H39 |
