@@ -11,10 +11,12 @@ import { parseSource, type ParsedFile } from './scan/parse.js';
 
 /** The files that bind the byte-level port: the landing journal's binding and the chained-journal file adapter. */
 const PORT_BINDERS = ['server/src/chainedJournalFile.ts', 'server/src/coord/landingJournal.ts'];
-/** The files that bind the chained-journal file adapter. None yet: authority journal A and private store A add theirs. */
-const CHAINED_BINDERS: string[] = [];
-/** Every `.cutAside(` call: the adapter's own call of the port's cut. */
-const CUT_CALLS = ['server/src/chainedJournalFile.ts: file.cutAside'];
+/** The files that bind the chained-journal file adapter: the private store's open binds the privacy journal (private store
+ *  A); authority journal A adds its file. */
+const CHAINED_BINDERS: string[] = ['server/src/operatorModel/store.ts'];
+/** Every `.cutAside(` call: the adapter's own call of the port's cut, and the privacy journal's torn-tail heal at the store's
+ *  open (private store A). */
+const CUT_CALLS = ['server/src/chainedJournalFile.ts: file.cutAside', 'server/src/operatorModel/store.ts: file.cutAside'];
 /** The landing journal's file, by its constant and by its name. */
 const LANDING_FILE = /\bLANDING_JOURNAL_BASENAME\b|landing\.log/;
 

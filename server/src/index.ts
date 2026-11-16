@@ -28,6 +28,7 @@ import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { openOperatorModelStore } from './operatorModel/store.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -125,6 +126,20 @@ if (!landingReplay.ok) {
   console.error(`ccrc-server: landing journal recovery refused ${landingReplay.error}`);
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
+}
+// The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
+// its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
+// the open cannot trust leaves every message record refused (`journal-unreadable`), and one boot line says what to do.
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+if (operatorModel.healed !== null) console.warn(`ccrc-server: the privacy journal's torn tail was cut aside, kept as ${operatorModel.healed}`);
+if (operatorModel.privacy.verdict === 're-anchor') {
+  const r = operatorModel.privacy;
+  console.warn(`ccrc-server: the privacy journal was ${r.reason === 'missing' ? 'missing' : 'behind the private store'}; `
+    + `re-anchored at message ${r.highestId} (${r.detail}), so no id at or below it is issued again`);
+} else if (operatorModel.privacy.verdict === 'refuse') {
+  console.warn(`ccrc-server: ${operatorModel.journalPath} cannot be trusted (${operatorModel.privacy.code}): no operator message is `
+    + 'recorded until it is moved aside and the server restarted, which re-anchors it. Keep the moved file until the boot after '
+    + 'that reads clean: a journal that was ahead of the store loses its lead when it is moved.');
 }
 // The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
@@ -396,6 +411,7 @@ const masker = new SecretMasker({
 });
 deps.masker = masker;
 push?.setMasker(masker);
+deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
 // ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
 // lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).

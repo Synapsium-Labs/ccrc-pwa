@@ -109,9 +109,22 @@ written. That is the whole DDD argument, measured rather than asserted.
    behind the one `SessionHost` interface (the session-host report's §8 A4), its home `ccd/lib/sessionhost.sh` once
    the ccd file-split plan's Task 7 lands. The server declares its `SessionHost` port at its consumer, context 3, so no file
    under `server/src` or `pwa/src` maps here, and the table below has no C10 row (`CCD_ONLY_CONTEXTS`).
+11. **Operator Model** (Overlord W1, the W1 index's question 4) — `server/src/operatorModel/` and its vocabulary,
+   `shared/operatorMessages.ts`: the operator's private store, `operator-model.db`, which holds the operator's messages to
+   the designated session and the read ledger of every read an Overlord door serves, and the privacy journal that keeps a
+   message id from being issued twice. Language: **message** (one row the operator's console sent), **move** (a change of
+   a message's state, by the message moves table), **settlement** (cited, acknowledged, or marked), **read line** (one
+   read a door served), **privacy record** (one line of the privacy journal). Allowed dependencies: L0
+   (`shared/operatorMessages.ts`, `refusal.ts`, `utf8.ts`, `api.ts`'s types); K's `sqliteFile.ts`, `chainedJournal.ts`,
+   `canonical.ts`, `appendOnlyFile.ts` and `chainedJournalFile.ts`, and the `Clock`; context 5's `coord/tx.ts`, a type
+   from `coord/stall.ts` (the turn marker's words) and, in its L4 files, `queueSystemMail` (`coord/rundefsTx.ts`), the
+   operator mark writer and `CoordStore`'s `hasMailWithSubject`; context 1's account gate (`accounts/gate.ts`,
+   `accounts/audit.ts`) and the egress mask (`SecretMasker`), at the route's act; the designation's reader. Nothing
+   outside it reads a message's text but through the store's own readers, and the note-key reader (context 3) is handed a
+   text-free port. Its reason to be a context is privacy: one store, one reader, one deny path.
 
 Every non-test file under `server/src` and `pwa/src` maps to exactly one of the first nine
-contexts, or to **K**, the shared kernels and platform files (the composition root,
+contexts or C11 Operator Model, or to **K**, the shared kernels and platform files (the composition root,
 `server.ts`, `watch.ts`, the generic adapters, the PWA shell), which hold no aggregate.
 The map is the table in "Deciding a file's ring and context" below.
 
@@ -252,6 +265,7 @@ never name one file. Paths are relative to the package's `src/`.
 | C7 Update control plane | `update/**`, `buildinfo.ts`, `coord/updateintentlog.ts` | `fleet/Update*.tsx`, `fleet/WhatsNewSheet.tsx`, `fleet/ReleaseNotes.tsx`, `fleet/HaltBanner.tsx`, `fleet/FleetHostBanner.tsx`, `fleet/movePlan.ts`, `fleet/updateAck.ts`, `fleet/updateHalt.ts`, `fleet/useUpdatesView.ts`, `fleet/BoxSettingsCard.tsx`, `fleet/boxSettingsWords.ts`, `screens/updates.tsx`, `screens/settings/UpdatesSection.tsx`, `screens/settings/updatesWords.ts` |
 | C8 Auth & box token | `auth/**`, `token/**` | `accounts/**`, `components/LoginScreen.tsx`, `fleet/PasskeyNotice.tsx`, `lib/auth.ts`, `lib/passkey.ts`, `screens/settings/SecuritySection.tsx`, `screens/settings/boxTokenWords.ts`, `screens/settings/SignInGateCard.tsx`, `screens/settings/YourSignInCard.tsx`, `screens/settings/ThisSessionCard.tsx`, `screens/settings/signInGate.ts` |
 | C9 Docs | `docs/**`, `readerLab/**` | `docs/**`, `screens/DocsScreen.tsx`, `screens/HighlightMeasure.tsx`, `screens/highlightMeasureRun.tsx`, `readerLab/**`, `screens/ReaderLab.tsx` |
+| C11 Operator Model | `operatorModel/**` | (none) |
 | K Kernels and platform | `index.ts`, `server.ts`, `overridesRead.ts`, `deps.ts`, `watch.ts`, `io.ts`, `refuse.ts`, `pwaStatic.ts`, `shutdownseal.ts`, `bounded.ts`, `remote/client.ts`, `remote/io.ts`, `remote/errors.ts`, `changeLatch.ts`, `laneRunner.ts`, `laneSchedule.ts`, `disk.ts`, `diskAlarmLane.ts`, `diskepisode.ts`, `pressure.ts`, `pressureLane.ts`, `backupLane.ts`, `tmpSweep.ts`, `tmpSweepLane.ts`, `unmeasured.ts`, `journalKernel.ts`, `canonical.ts`, `chainedJournal.ts`, `appendOnlyFile.ts`, `chainedJournalFile.ts`, `sqliteFile.ts`, `perf/**`, `time/**` | `main.tsx`, `app.tsx`, `command/**`, `components/**`, `styles/**`, `lib/**`, `screens/AppearanceRow.tsx`, `screens/SkinFieldset.tsx`, `skins/**`, `screens/settings/**`, `fleet/DiskBanner.tsx`, `fleet/diskWords.ts`, `fleet/PressureBanner.tsx`, `fleet/pressureWords.ts`, `fleet/BackupBanner.tsx`, `fleet/backupWords.ts`, `fleet/BackupSection.tsx`, `fleet/OverridesSection.tsx`, `fleet/overridesWords.ts`, `fleet/useOverridesView.ts` |
 <!-- ring-context-map:end -->
 
