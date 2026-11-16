@@ -52,7 +52,7 @@ import { portfolioFor } from './portfolio.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
-import { DARK_MARK_ACTOR, askListsView, askLiveOf, askMarkable, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
+import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
 import { askForMark, markableAsks } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
@@ -811,16 +811,16 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const now = deps.now();
     let may: Markable;
     if (write.kind === 'ask') {
-      // The ask arm (plan Task 5): an unreadable row is `ask-unreadable`, never absent; the live port speaks only for a
-      // released or declined ask that is its child's newest row. An ask the operator was never shown (held, or answered by
-      // its parent) is `unknown-ask`, as an item never shown is `unknown-item` (slug never-shown-ask-is-unknown).
-      const read = askForMark(coord, write.id);
+      // The ask arm (plan Task 5): an unreadable row is `ask-unreadable`, never absent. The read and `askMarkable` decide,
+      // with the view's own statement (review 2217 F4). An ask that never reached the operator (held, or moved on with no reach
+      // stamp) is `unknown-ask`, as an item never shown is `unknown-item` (slugs never-shown-ask-is-unknown,
+      // reached-is-the-reach-stamp).
+      const read = askForMark(coord, write.id, now, deps.liveAsk);
       if (!read.ok) return refuseRoute(reply, 'ask-unreadable', { detail: read.detail });
-      const ask = read.ask;
-      if (ask === null) return refuseRoute(reply, 'unknown-ask', { detail: `no ask ${write.id}` });
-      const open = read.newest && (ask.state === 'released' || ask.state === 'declined');
-      may = askMarkable(ask, open ? askLiveOf(deps.liveAsk(ask.childId), ask.askKey) : false, now);
-      if (!may.markable && may.reason === 'not-shown') return refuseRoute(reply, 'unknown-ask', { detail: `no ask ${write.id}` });
+      if (read.found === null || (!read.found.may.markable && read.found.may.reason === 'not-shown')) {
+        return refuseRoute(reply, 'unknown-ask', { detail: `no ask ${write.id}` });
+      }
+      may = read.found.may;
     } else {
       const item = coord.itemById(write.id);
       if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });

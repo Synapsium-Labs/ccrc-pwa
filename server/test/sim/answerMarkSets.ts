@@ -178,19 +178,24 @@ export function parseWriteCases(m: Pick<AnswerMarkVocab, 'parseAnswerMarkWrite'>
 
 // ---------- askMarkable, askLiveOf and askListsView (PR B, plan Task 5) ----------
 
-type AskRow = { state: string; answeredBy: string | null; answeredAt: number | null; releasedAt: number | null };
+type AskRow = { state: string; answeredBy: string | null; answeredAt: number | null; releasedAt: number | null; reachedOperatorAt: number | null };
 const askRow = (o: Partial<AskRow>): AskRow => ({
   state: o.state ?? 'released', answeredBy: o.answeredBy === undefined ? null : o.answeredBy,
   answeredAt: o.answeredAt === undefined ? null : o.answeredAt, releasedAt: o.releasedAt === undefined ? NOW - HOUR : o.releasedAt,
+  reachedOperatorAt: o.reachedOperatorAt === undefined ? null : o.reachedOperatorAt,
 });
 type Live = boolean | 'unmeasured';
 const LIVES: readonly Live[] = [true, false, 'unmeasured'];
+const REACHED = { reachedOperatorAt: NOW - 3 * WINDOW };
 
 export function askMarkableCases(m: Pick<AnswerMarkDeciders, 'askMarkable' | 'askLiveOf' | 'askListsView'>): Record<string, SuiteCase> {
   const at = (o: Partial<AskRow>, live: Live = false, now = NOW): string => word(m.askMarkable(askRow(o), live, now));
   return {
-    'a released or declined ask inside the window is markable, live or not': () => {
-      for (const state of ['released', 'declined']) for (const live of LIVES) expect(at({ state }, live)).toBe('markable');
+    'a released or declined ask inside the window is markable, live or not, stamped or not': () => {
+      for (const state of ['released', 'declined']) for (const live of LIVES) {
+        expect(at({ state }, live)).toBe('markable');
+        expect(at({ state, ...REACHED }, live)).toBe('markable');
+      }
     },
     'a released or declined ask past the window is markable only while live; unmeasured counts as not live': () => {
       for (const state of ['released', 'declined']) {
@@ -208,26 +213,48 @@ export function askMarkableCases(m: Pick<AnswerMarkDeciders, 'askMarkable' | 'as
       expect(at({ releasedAt: null }, false)).toBe('past-window');
       expect(at({ releasedAt: null }, true)).toBe('markable');
     },
-    'an ask the operator answered is markable inside the window of its answer, live or not, and past it is not': () => {
-      for (const live of LIVES) {
-        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - HOUR, releasedAt: NOW - 3 * WINDOW }, live)).toBe('markable');
-        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - HOUR, releasedAt: NOW - HOUR }, live)).toBe('past-window');
+    'an ask the operator answered is markable inside the window of its answer, live or not, stamped or not, and past it is not': () => {
+      for (const live of LIVES) for (const reach of [{}, REACHED]) {
+        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - HOUR, releasedAt: NOW - 3 * WINDOW, ...reach }, live)).toBe('markable');
+        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - HOUR, releasedAt: NOW - HOUR, ...reach }, live)).toBe('past-window');
       }
       expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW })).toBe('markable');
       expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - 1 })).toBe('past-window');
       expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: null })).toBe('past-window');
     },
-    'an ask its parent answered was never the operator\'s, inside the window or not': () => {
+    'an ask its parent answered is the operator\'s only when it reached them, then inside the window of the answer, live or not': () => {
       for (const live of LIVES) {
         expect(at({ state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR }, live)).toBe('not-shown');
         expect(at({ state: 'answered', answeredBy: null, answeredAt: NOW - HOUR }, live)).toBe('not-shown');
+        expect(at({ state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR, releasedAt: NOW - 3 * WINDOW, ...REACHED }, live)).toBe('markable');
+        expect(at({ state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - WINDOW - HOUR, releasedAt: NOW - HOUR, ...REACHED }, live)).toBe('past-window');
       }
     },
     'a held ask is not shown, live or not': () => {
       for (const live of LIVES) expect(at({ state: 'held', releasedAt: null }, live)).toBe('not-shown');
     },
-    'answering, stale, unknown and a state this build does not know are not listed, live or not': () => {
-      for (const state of ['answering', 'stale', 'unknown', 'archived', '']) for (const live of LIVES) expect(at({ state }, live)).toBe('not-listed');
+    'an answering ask that reached the operator is a released one: inside the window, or past it while live; one that never reached them is not shown': () => {
+      for (const live of LIVES) {
+        expect(at({ state: 'answering', ...REACHED }, live)).toBe('markable');
+        expect(at({ state: 'answering', releasedAt: null }, live)).toBe('not-shown');
+        expect(at({ state: 'answering' }, live)).toBe('not-shown');
+      }
+      expect(at({ state: 'answering', releasedAt: NOW - WINDOW - HOUR, ...REACHED }, true)).toBe('markable');
+      expect(at({ state: 'answering', releasedAt: NOW - WINDOW - HOUR, ...REACHED }, false)).toBe('past-window');
+      expect(at({ state: 'answering', releasedAt: NOW - WINDOW - HOUR, ...REACHED }, 'unmeasured')).toBe('past-window');
+    },
+    'a stale ask that reached the operator is markable inside the window of the time it went stale, never by live; one that never reached them is not shown': () => {
+      for (const live of LIVES) {
+        expect(at({ state: 'stale', releasedAt: NOW - HOUR, ...REACHED }, live)).toBe('markable');
+        expect(at({ state: 'stale', releasedAt: NOW - WINDOW - HOUR, ...REACHED }, live)).toBe('past-window');
+        expect(at({ state: 'stale', releasedAt: NOW - HOUR }, live)).toBe('not-shown');
+      }
+    },
+    'unknown and a state this build does not know are not listed, live or not, stamped or not': () => {
+      for (const state of ['unknown', 'archived', '']) for (const live of LIVES) {
+        expect(at({ state }, live)).toBe('not-listed');
+        expect(at({ state, ...REACHED }, live)).toBe('not-listed');
+      }
     },
     'askLiveOf: the ask\'s own key is live, another key or none is not, and unmeasured stays unmeasured': () => {
       expect(m.askLiveOf({ kind: 'read', key: 'k1' }, 'k1')).toBe(true);
@@ -312,21 +339,28 @@ export const ASK_MARKABLE_SET: MutantSet<AnswerMarkDeciders> = {
   suite: askMarkableCases,
   mutants: [
     // The plan's red checks: read live by child alone, without the ask's key; drop the window for an ask that is not live;
-    // accept the parent's answer as the operator's.
+    // accept the parent's answer as the operator's. Review 2217 F1's: ignore the reach stamp, either way.
     { id: 'AM-ASK-1', old: "read.kind === 'unmeasured' ? 'unmeasured' : read.key === askKey", new: "read.kind === 'unmeasured' ? 'unmeasured' : read.key !== null" },
-    { id: 'AM-ASK-2', old: 'live === true || inWindow(row.releasedAt)', new: 'true' },
-    { id: 'AM-ASK-3', old: 'if (row.answeredBy !== ASK_OPERATOR_PRINCIPAL) return askRefused(\'not-shown\');', new: '' },
-    { id: 'AM-ASK-4', old: 'live === true || inWindow(row.releasedAt)', new: 'live !== false || inWindow(row.releasedAt)' },
-    { id: 'AM-ASK-5', old: 'live === true || inWindow(row.releasedAt)', new: 'inWindow(row.releasedAt)' },
+    { id: 'AM-ASK-2', old: '(liveCounts && live === true) || inWindow(at)', new: 'true' },
+    { id: 'AM-ASK-3', old: 'reached || row.answeredBy === ASK_OPERATOR_PRINCIPAL', new: 'true' },
+    { id: 'AM-ASK-4', old: '(liveCounts && live === true)', new: '(liveCounts && live !== false)' },
+    { id: 'AM-ASK-5', old: '(liveCounts && live === true) || inWindow(at)', new: 'inWindow(at)' },
     { id: 'AM-ASK-6', old: 'at !== null && at >= now - CLEARED_WINDOW_MS', new: 'at !== null && at > now - CLEARED_WINDOW_MS' },
     { id: 'AM-ASK-7', old: "case 'released': case 'declined':", new: "case 'released':" },
-    { id: 'AM-ASK-8', old: "return inWindow(row.answeredAt) ? ASK_MARKABLE : askRefused('past-window');", new: "return inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('past-window');" },
+    { id: 'AM-ASK-8', old: 'shown(row.answeredAt, false)', new: 'shown(row.releasedAt, false)' },
     { id: 'AM-ASK-9', old: "case 'held': return askRefused('not-shown');", new: '' },
     { id: 'AM-ASK-10', old: "default: return askRefused('not-listed');", new: 'default: return ASK_MARKABLE;' },
-    { id: 'AM-ASK-11', old: "inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('past-window');", new: "inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('not-listed');" },
+    { id: 'AM-ASK-11', old: "ASK_MARKABLE : askRefused('past-window')", new: "ASK_MARKABLE : askRefused('not-listed')" },
     { id: 'AM-ASK-12', old: "read.kind === 'unmeasured' ? 'unmeasured' :", new: "read.kind === 'unmeasured' ? false :" },
     { id: 'AM-ASK-13', old: 'asks: marked.filter((r) => r.live === true)', new: 'asks: marked.filter((r) => r.live !== false)' },
     { id: 'AM-ASK-14', old: 'asksCleared: marked.filter((r) => r.live !== true)', new: 'asksCleared: marked.filter((r) => r.live === false)' },
+    { id: 'AM-ASK-15', old: 'const reached = row.reachedOperatorAt !== null;', new: 'const reached = true;' },
+    { id: 'AM-ASK-16', old: 'const reached = row.reachedOperatorAt !== null;', new: 'const reached = false;' },
+    { id: 'AM-ASK-17', old: "case 'answering': return reached ? shown(row.releasedAt, true)", new: "case 'answering': return reached ? shown(row.releasedAt, false)" },
+    { id: 'AM-ASK-18', old: "case 'stale': return reached ? shown(row.releasedAt, false)", new: "case 'stale': return reached ? shown(row.releasedAt, true)" },
+    { id: 'AM-ASK-19', old: "case 'answering': return reached ?", new: "case 'answering': return true ?" },
+    { id: 'AM-ASK-20', old: "case 'stale': return reached ?", new: "case 'stale': return true ?" },
+    { id: 'AM-ASK-21', old: 'reached || row.answeredBy === ASK_OPERATOR_PRINCIPAL', new: 'reached' },
   ],
 };
 

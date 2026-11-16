@@ -73,12 +73,12 @@ describe('the agreement: askMarkTargets lists exactly the asks askMarkable calls
   let coord: CoordStore;
   beforeEach(() => { coord = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-answer-marks-asks-'), '.ccrc', 'coord.db'))); });
 
-  it('over every state, live or not, newest or not, answered by the operator or its parent, inside and outside the window', () => {
+  it('over every state, live or not, newest or not, reached or not, answered by the operator or its parent, inside and outside the window', () => {
     const runId = (coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
     const times = [NOW - HOUR, NOW - CLEARED_WINDOW_MS, NOW - CLEARED_WINDOW_MS - 1, NOW - CLEARED_WINDOW_MS - 3 * HOUR];
     const insert = coord.db.prepare(
-      'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt) ' +
-      "VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', 'q?', '[]', ?, ?, ?, ?)",
+      'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt, ' +
+      "reachedOperatorAt) VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', 'q?', '[]', ?, ?, ?, ?, ?)",
     );
     const keys = new Map<string, string>();
     let n = 0;
@@ -86,13 +86,17 @@ describe('the agreement: askMarkTargets lists exactly the asks askMarkable calls
     for (const state of states) {
       for (const t of times) {
         for (const by of state === 'answered' ? ['operator', 'lane-a-parent'] : [null]) {
-          // Two asks a child: an older one, then the newest, whose key the port reads for half the children.
-          const child = `lane-a-child-${n++}`;
-          for (const which of ['old', 'new']) {
-            insert.run(NOW - 5 * CLEARED_WINDOW_MS, child, runId, `${child}-${which}`, state, by, state === 'answered' ? t : null, state === 'held' ? null : t);
+          // The reach stamp (review 2217 F1): none, or the release's, older than every window.
+          for (const reached of [null, NOW - 5 * CLEARED_WINDOW_MS]) {
+            // Two asks a child: an older one, then the newest, whose key the port reads for half the children.
+            const child = `lane-a-child-${n++}`;
+            for (const which of ['old', 'new']) {
+              insert.run(NOW - 5 * CLEARED_WINDOW_MS, child, runId, `${child}-${which}`, state, by, state === 'answered' ? t : null,
+                state === 'held' ? null : t, reached);
+            }
+            if (n % 2 === 0) keys.set(child, `${child}-new`);
+            else if (n % 3 === 0) keys.set(child, `${child}-old`);
           }
-          if (n % 2 === 0) keys.set(child, `${child}-new`);
-          else if (n % 3 === 0) keys.set(child, `${child}-old`);
         }
       }
     }
@@ -107,12 +111,20 @@ describe('the agreement: askMarkTargets lists exactly the asks askMarkable calls
       const ask = got.ask;
       const newest = coord.currentAskFor(ask.childId);
       const isNewest = newest.ok && newest.ask?.id === ask.id;
-      const open = ask.state === 'released' || ask.state === 'declined';
+      const open = ask.state === 'released' || ask.state === 'declined' || ask.state === 'answering';
       const live = open && isNewest ? deciders.askLiveOf(port(ask.childId), ask.askKey) : false;
-      return deciders.askMarkable(ask, live, NOW).markable;
+      const { reachedOperatorAt } = coord.db.prepare('SELECT reachedOperatorAt FROM asks WHERE id = ?').get(id) as { reachedOperatorAt: number | null };
+      return deciders.askMarkable({ ...ask, reachedOperatorAt }, live, NOW).markable;
     });
     expect(listed.length).toBeGreaterThan(10);
     expect(markable).toEqual(listed);
+    // The moves past released are among them (review 2217 F1): answering, stale and answered by the parent, each reached.
+    const stateOf = coord.db.prepare('SELECT state, answeredBy, reachedOperatorAt FROM asks WHERE id = ?');
+    const moved = new Set(listed.map((id) => {
+      const r = stateOf.get(id) as { state: string; answeredBy: string | null; reachedOperatorAt: number | null };
+      return r.reachedOperatorAt === null ? '' : `${r.state}:${r.answeredBy ?? ''}`;
+    }));
+    for (const s of ['answering:', 'stale:', 'answered:lane-a-parent']) expect(moved.has(s), s).toBe(true);
     // A live ask past the window is among them, and an older ask of a live child is not live.
     expect(read.rows.some((r) => r.live === true && r.at < NOW - CLEARED_WINDOW_MS)).toBe(true);
     expect(read.rows.filter((r) => r.live === true).every((r) => keys.get(r.childId) === `${r.childId}-new`)).toBe(true);

@@ -961,6 +961,18 @@ describe('the answer marks on asks (Overlord W1, answer marks B)', () => {
     await waitFor(() => expect(set).toHaveBeenCalledWith('ask', 31, 'unsure', true));
   });
 
+  it('a new ask on the same session row remounts its boxes: A\'s tick never shows on B (review 2217 F2)', async () => {
+    const UNMARKED = { couldAnswer: NEVER, unsure: NEVER };
+    vi.spyOn(api, 'setAnswerMark').mockResolvedValue({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', id: 8, at: NOW, signedIn: true } });
+    const props = (a: AskMarkRow) => ({ view: waitingView({ asks: [a] }), sessions: [asking], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() });
+    const { rerender } = render(<WaitingScreen {...props(askRow({ id: 31, answerMarks: UNMARKED }))} />);
+    fireEvent.click(within(groupsOf()[0]!).getAllByRole('checkbox')[0]!);
+    await waitFor(() => expect((within(groupsOf()[0]!).getAllByRole('checkbox')[0] as HTMLInputElement).checked).toBe(true));
+    rerender(<WaitingScreen {...props(askRow({ id: 41, answerMarks: UNMARKED }))} />);
+    expect(groupsOf()[0]!.getAttribute('data-ask')).toBe('41');
+    expect((within(groupsOf()[0]!).getAllByRole('checkbox') as HTMLInputElement[]).map((b) => b.checked)).toEqual([false, false]);
+  });
+
   it('on the device\'s saved copy the ask boxes are disabled', () => {
     open({ view: waitingView({ asks: [askRow()], asksCleared: [askRow({ id: 35, live: false })] }), sessions: [asking], notCurrent: 'Saved on this device' });
     const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];

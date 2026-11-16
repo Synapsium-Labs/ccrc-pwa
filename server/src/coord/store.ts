@@ -4202,6 +4202,7 @@ export class CoordStore {
   recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
+  askMarkRead(id: number, now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkRead { return answerMarks.askMarkRead(this.db, id, now, liveAsk); }
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
   runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
     return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },

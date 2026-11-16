@@ -80,24 +80,32 @@ export function rowMarksView(read: ItemMarkRead): AnswerMarksView {
   return { couldAnswer: markViewOf(read.couldAnswer), unsure: markViewOf(read.unsure) };
 }
 
-/** The fields of an ask row the rule reads (`store.ts#AskRow`, or the store's narrower read). `state` is a string: a state
- *  this build does not know is `not-listed`. */
+/** The fields of an ask row the rule reads (`answerMarkStore.ts#askMarkRead`'s row). `state` is a string: a state this build
+ *  does not know is `not-listed`. `reachedOperatorAt` is the push outbox's reach stamp (`pushOutboxStore.ts#stampReach`). */
 export interface MarkableAsk {
   readonly state: string; readonly answeredBy: string | null; readonly answeredAt: number | null; readonly releasedAt: number | null;
+  readonly reachedOperatorAt: number | null;
 }
 
-/** Whether the operator may mark this ask now (plan Task 5, slug ask-marks-follow-todays-ask-states). A `released` or
- *  `declined` ask never leaves that state, so it is markable while it is `live` (its child's dialog waits on it), or inside the
- *  Recently cleared window of its `releasedAt`; an `unmeasured` live read counts as not live, so only the window applies. An
- *  ask the operator answered is markable inside the window of its `answeredAt`; one its parent answered was never the
- *  operator's (`not-shown`), and so is a `held` one. Any other state is `not-listed`. */
+/** Whether the operator may mark this ask now (plan Task 5; review 2217 F1, slug reached-is-the-reach-stamp). An ask that
+ *  reached the operator stays one they were shown, whoever answers it later. `released` and `declined` say so by their state,
+ *  but a released ask does not stay released: a principal may take it into `answering`, its parent may answer it late, and its
+ *  dialog may vanish (`stale`, which overwrites `releasedAt`). Past those moves the reach stamp says it: the instant the ask
+ *  reached the operator, written once by the release and never cleared. A `released` or `declined` ask, and a reached
+ *  `answering` one, is markable while `live` (its child's dialog waits on it) or inside the Recently cleared window of its
+ *  `releasedAt`; an `unmeasured` live read counts as not live. An answered ask the operator answered, or one that reached them,
+ *  is markable inside the window of its `answeredAt`, and a reached `stale` ask inside the window of the time it went stale. An
+ *  ask that never reached the operator (`held`, or moved on with no stamp) is `not-shown`; any other state is `not-listed`. */
 export function askMarkable(row: MarkableAsk, live: boolean | 'unmeasured', now: number): Markable {
   const inWindow = (at: number | null): boolean => at !== null && at >= now - CLEARED_WINDOW_MS;
+  const shown = (at: number | null, liveCounts: boolean): Markable =>
+    (liveCounts && live === true) || inWindow(at) ? ASK_MARKABLE : askRefused('past-window');
+  const reached = row.reachedOperatorAt !== null;
   switch (row.state) {
-    case 'released': case 'declined': return live === true || inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('past-window');
-    case 'answered':
-      if (row.answeredBy !== ASK_OPERATOR_PRINCIPAL) return askRefused('not-shown');
-      return inWindow(row.answeredAt) ? ASK_MARKABLE : askRefused('past-window');
+    case 'released': case 'declined': return shown(row.releasedAt, true);
+    case 'answering': return reached ? shown(row.releasedAt, true) : askRefused('not-shown');
+    case 'answered': return reached || row.answeredBy === ASK_OPERATOR_PRINCIPAL ? shown(row.answeredAt, false) : askRefused('not-shown');
+    case 'stale': return reached ? shown(row.releasedAt, false) : askRefused('not-shown');
     case 'held': return askRefused('not-shown');
     default: return askRefused('not-listed');
   }
@@ -107,7 +115,7 @@ const askRefused = (reason: NotMarkableReason): Markable => ({ markable: false, 
 
 /** Whether an ask is live, from the live-ask port's answer for its child (`ports.ts#LiveAskAnswer`, read structurally so this
  *  file imports no port): the ask's own key is live, another key or none is not, and `unmeasured` stays `'unmeasured'`. Ask it
- *  only for a `released` or `declined` ask that is its child's newest row: the port speaks for no other. */
+ *  only for a `released`, `declined` or `answering` ask that is its child's newest row: the port speaks for no other. */
 export const askLiveOf = (read: { kind: 'unmeasured' } | { kind: 'read'; key: string | null }, askKey: string): boolean | 'unmeasured' =>
   read.kind === 'unmeasured' ? 'unmeasured' : read.key === askKey;
 

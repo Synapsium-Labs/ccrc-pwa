@@ -44,11 +44,11 @@ function rig(): Rig {
 }
 
 const ask = (r: Rig, o: { child?: string; state?: string; key?: string; releasedAt?: number | null; answeredAt?: number | null;
-  answeredBy?: string | null; runId?: number }): number => Number(r.coord.db.prepare(
-  'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt) ' +
-  "VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', 'Which base?', '[]', ?, ?, ?, ?)",
+  answeredBy?: string | null; runId?: number; reached?: number }): number => Number(r.coord.db.prepare(
+  'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt, ' +
+  "reachedOperatorAt) VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', 'Which base?', '[]', ?, ?, ?, ?, ?)",
 ).run(NOW - 3 * WINDOW, o.child ?? 'lane-a-child', o.runId ?? r.runA, o.key ?? 'k1', o.state ?? 'released', o.answeredBy ?? null,
-  o.answeredAt ?? null, o.releasedAt === undefined ? NOW - HOUR : o.releasedAt).lastInsertRowid);
+  o.answeredAt ?? null, o.releasedAt === undefined ? NOW - HOUR : o.releasedAt, o.reached ?? null).lastInsertRowid);
 const mark = (r: Rig, id: number, m: 'could-answer' | 'unsure' = 'could-answer', value = true) =>
   r.app.inject({ method: 'POST', url: '/api/answer-marks', payload: { kind: 'ask', id, mark: m, value } });
 const records = (r: Rig) => r.coord.db.prepare('SELECT kind, rowId, mark, value, actor FROM answer_marks ORDER BY id').all();
@@ -99,24 +99,50 @@ describe('POST /api/answer-marks: the ask arm', () => {
     expect((await mark(r, id)).json()).toEqual({ ok: false, error: 'not-markable', detail: 'past-window' });
   });
 
-  it('an absent ask, a held one and one its parent answered are each 404 unknown-ask: the operator was never shown them', async () => {
+  it('an absent ask, and a held, answering, stale or parent-answered one that never reached the operator, is 404 unknown-ask', async () => {
     const r = rig();
     const held = ask(r, { child: 'lane-a-a', state: 'held', releasedAt: null });
     const parent = ask(r, { child: 'lane-a-b', state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR });
-    for (const id of [999, held, parent]) {
+    // Review 2217 F3: a held ask taken into answering, or gone stale, never reached the operator either.
+    const answering = ask(r, { child: 'lane-a-c', state: 'answering', releasedAt: null });
+    const stale = ask(r, { child: 'lane-a-d', state: 'stale' });
+    r.live.set('lane-a-c', { kind: 'read', key: 'k1' });
+    for (const id of [999, held, parent, answering, stale]) {
       const res = await mark(r, id);
       expect([res.statusCode, res.json()], `ask ${id}`).toEqual([404, { ok: false, error: 'unknown-ask', detail: `no ask ${id}` }]);
     }
   });
 
-  it('an answering or a stale ask is not-markable not-listed, and an ask the operator answered inside the window is markable', async () => {
+  it('an answering, stale or parent-answered ask that reached the operator is markable; past the window it is past-window', async () => {
     const r = rig();
-    for (const state of ['answering', 'stale']) {
-      const res = await mark(r, ask(r, { child: `lane-a-${state}`, state }));
-      expect([res.statusCode, res.json()]).toEqual([409, { ok: false, error: 'not-markable', detail: 'not-listed' }]);
+    const reached = NOW - 3 * WINDOW;
+    const answering = ask(r, { child: 'lane-a-a', state: 'answering', releasedAt: NOW - WINDOW - HOUR, reached });
+    r.live.set('lane-a-a', { kind: 'read', key: 'k1' });
+    const stale = ask(r, { child: 'lane-a-b', state: 'stale', releasedAt: NOW - HOUR, reached });
+    const parent = ask(r, { child: 'lane-a-c', state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR, reached });
+    for (const id of [answering, stale, parent]) expect((await mark(r, id)).json(), `ask ${id}`).toMatchObject({ ok: true, answerMark: { state: 'marked' } });
+    const old = ask(r, { child: 'lane-a-d', state: 'stale', releasedAt: NOW - WINDOW - 1, reached });
+    const res = await mark(r, old);
+    expect([res.statusCode, res.json()]).toEqual([409, { ok: false, error: 'not-markable', detail: 'past-window' }]);
+    for (const state of ['unknown', 'archived']) {
+      const odd = await mark(r, ask(r, { child: `lane-a-${state}`, state, reached }));
+      expect([odd.statusCode, odd.json()]).toEqual([409, { ok: false, error: 'not-markable', detail: 'not-listed' }]);
     }
+  });
+
+  it('an ask the operator answered inside the window is markable', async () => {
+    const r = rig();
     const mine = ask(r, { child: 'lane-a-mine', state: 'answered', answeredBy: 'operator', answeredAt: NOW - HOUR });
     expect((await mark(r, mine)).json()).toMatchObject({ ok: true, answerMark: { state: 'marked' } });
+  });
+
+  it('an unreadable newest row of the same child does not refuse a readable older ask (review 2217 F4)', async () => {
+    const r = rig();
+    const older = ask(r, { key: 'k-old', releasedAt: NOW - HOUR });
+    const newer = ask(r, { key: 'k-new', releasedAt: NOW - HOUR });
+    r.coord.db.prepare("UPDATE asks SET runId = CAST('1152921504606846976' AS INTEGER) WHERE id = ?").run(newer);
+    expect((await mark(r, older)).json()).toMatchObject({ ok: true, answerMark: { state: 'marked' } });
+    expect((await mark(r, newer)).statusCode).toBe(503);
   });
 
   it('an ask row this box cannot read is 503 ask-unreadable, never absent, and writes nothing', async () => {

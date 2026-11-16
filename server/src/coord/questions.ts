@@ -171,16 +171,10 @@ export function markableAsks(store: Pick<CoordStore, 'askMarkTargets'>, now: num
   return store.askMarkTargets(now, liveAsk);
 }
 
-/** The answer-mark door's read (answer marks B): one asks row by id, and whether it is its child's newest row, the only one the
- *  live-ask port speaks for. A refusal of either read is that refusal, never an absent row. */
-export function askForMark(store: Pick<CoordStore, 'askById' | 'currentAskFor'>, id: number):
-  | { ok: true; ask: AskRow | null; newest: boolean } | Extract<AskReadResult, { ok: false }> {
-  const read = store.askById(id);
-  if (!read.ok) return read;
-  if (read.ask === null) return { ok: true, ask: null, newest: false };
-  const current = store.currentAskFor(read.ask.childId);
-  if (!current.ok) return current;
-  return { ok: true, ask: read.ask, newest: current.ask?.id === read.ask.id };
+/** The answer-mark door's read (answer marks B; review 2217 F4): one ask by id, through the same statement and rule as
+ *  `markableAsks`, so the door and the view never disagree. A row this box cannot read is that refusal, never an absent row. */
+export function askForMark(store: Pick<CoordStore, 'askMarkRead'>, id: number, now: number, liveAsk: LiveAskRead): ReturnType<CoordStore['askMarkRead']> {
+  return store.askMarkRead(id, now, liveAsk);
 }
 
 // ── the owner of question state ──────────────────────────────────────────────────────────────────────────────────

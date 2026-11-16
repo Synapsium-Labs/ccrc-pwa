@@ -144,12 +144,12 @@ describe('askMarkTargets: the asks the operator has, as today\'s ask states leav
     runA = (coord.openRun({ program: 'prog-a', title: 'PROG-A', project: 'project-a', wave: 1, waveOf: null, claimedBy: 'lane-a' }) as { id: number }).id;
   });
   const ask = (o: { child?: string; state?: string; key?: string; releasedAt?: number | null; answeredAt?: number | null;
-    answeredBy?: string | null; runId?: number | null; reason?: string | null; question?: string }): number => Number(coord.db.prepare(
-    'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt, releaseReason) ' +
-    "VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', ?, '[]', ?, ?, ?, ?, ?)",
+    answeredBy?: string | null; runId?: number | null; reason?: string | null; question?: string; reached?: number | null }): number => Number(coord.db.prepare(
+    'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state, answeredBy, answeredAt, releasedAt, releaseReason, ' +
+    "reachedOperatorAt) VALUES (?, ?, 'lane-a-parent', ?, ?, 1, 'd', ?, '[]', ?, ?, ?, ?, ?, ?)",
   ).run(NOW - 3 * WINDOW, o.child ?? 'lane-a-child', o.runId === undefined ? runA : o.runId, o.key ?? 'k1', o.question ?? 'Which base?',
     o.state ?? 'released', o.answeredBy ?? null, o.answeredAt ?? null, o.releasedAt === undefined ? NOW - HOUR : o.releasedAt,
-    o.reason ?? null).lastInsertRowid);
+    o.reason ?? null, o.reached ?? null).lastInsertRowid);
   const keyed = (keys: Record<string, string | null>): LiveAskRead => (c) => ({ kind: 'read', key: keys[c] ?? null });
   const none: LiveAskRead = () => ({ kind: 'read', key: null });
   const targets = (port: LiveAskRead = none, now = NOW) => {
@@ -192,18 +192,77 @@ describe('askMarkTargets: the asks the operator has, as today\'s ask states leav
     expect(targets(() => ({ kind: 'unmeasured' }))).toMatchObject([{ id: inside, live: 'unmeasured' }]);
   });
 
-  it('an ask the operator answered is listed inside the window of its answer and never live; one its parent answered is not', () => {
+  it('an ask the operator answered is listed inside the window of its answer and never live; one its parent answered unreached is not', () => {
     const mine = ask({ child: 'lane-a-a', state: 'answered', answeredBy: 'operator', answeredAt: NOW - HOUR, releasedAt: NOW - 3 * WINDOW });
     ask({ child: 'lane-a-b', state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR, releasedAt: null });
     ask({ child: 'lane-a-c', state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - 1, releasedAt: NOW - WINDOW - 2 });
     expect(targets(keyed({ 'lane-a-a': 'k1' }))).toMatchObject([{ id: mine, how: 'answered', at: NOW - HOUR, live: false }]);
   });
 
-  it('a held, answering or stale ask is not listed', () => {
+  it('a held ask, and an answering or stale one that never reached the operator, is not listed', () => {
     ask({ child: 'lane-a-a', state: 'held', releasedAt: null });
-    ask({ child: 'lane-a-b', state: 'answering' });
+    ask({ child: 'lane-a-b', state: 'answering', releasedAt: null });
     ask({ child: 'lane-a-c', state: 'stale' });
     expect(ids(keyed({ 'lane-a-a': 'k1', 'lane-a-b': 'k1', 'lane-a-c': 'k1' }))).toEqual([]);
+  });
+
+  // Review 2217 F1 (the coordinator's ruling): an ask that reached the operator stays theirs, whoever answers it later, read from
+  // the reach stamp the release writes once (slug reached-is-the-reach-stamp). Driven through the real moves: the release with
+  // its bound write, the take, the settle and the stale.
+  const bound = (n: number) => ({
+    prepared: { payload: { title: 'Needs an answer', body: 'Which base?', sessionId: `lane-a-${n}`, tag: `ask-lane-a-${n}` }, pushId: String(n).repeat(32), service: true },
+    due: { due: 'silent' as const, why: 'viewing' as const }, viewing: true,
+  });
+  const minted = (n: number): number => coord.insertAsk({ childId: `lane-a-${n}`, parentId: 'lane-a-parent', runId: runA, askKey: `k${n}`,
+    askAt: NOW - 4 * HOUR, dialogId: `d${n}`, question: 'Which base?', options: [], now: NOW - 4 * HOUR });
+  const released = (n: number): number => {
+    const id = minted(n);
+    expect(coord.releaseAsk(id, NOW - 3 * HOUR, bound(n))).not.toBe(false);
+    return id;
+  };
+  const taken = (id: number) => expect(coord.takeAskForAnswer(id, NOW - 4 * HOUR)).toMatchObject({ ok: true });
+
+  it('released, taken into answering, then answered late by its parent: listed while answering, then 48 hours from the answer', () => {
+    const id = released(1);
+    expect(targets(keyed({ 'lane-a-1': 'k1' }))).toMatchObject([{ id, how: 'lapsed', live: true }]);
+    taken(id);
+    expect(targets(keyed({ 'lane-a-1': 'k1' }))).toMatchObject([{ id, how: 'lapsed', at: NOW - 3 * HOUR, live: true }]);
+    expect(targets(none)).toMatchObject([{ id, live: false }]);
+    coord.settleAsk(id, 'lane-a-parent', 'main', NOW - HOUR);
+    expect(targets(keyed({ 'lane-a-1': 'k1' }))).toMatchObject([{ id, how: 'lapsed', at: NOW - HOUR, live: false }]);
+    expect(ids(none, NOW - HOUR + WINDOW)).toEqual([id]);
+    expect(ids(none, NOW - HOUR + WINDOW + 1)).toEqual([]);
+  });
+
+  it('released, taken into answering, then stale with its dialog: listed 48 hours from the time it went stale', () => {
+    const id = released(2);
+    taken(id);
+    expect(coord.staleAsk('d2', 'lane-a-2', NOW - HOUR)).toBe(true);
+    expect(targets(keyed({ 'lane-a-2': 'k2' }))).toMatchObject([{ id, how: 'lapsed', at: NOW - HOUR, live: false }]);
+    expect(ids(none, NOW - HOUR + WINDOW)).toEqual([id]);
+    expect(ids(none, NOW - HOUR + WINDOW + 1)).toEqual([]);
+  });
+
+  it('held, taken, then answered by its parent or gone stale, never reached the operator and is never listed', () => {
+    const answered = minted(3);
+    taken(answered);
+    expect(ids(keyed({ 'lane-a-3': 'k3' }))).toEqual([]);
+    coord.settleAsk(answered, 'lane-a-parent', 'main', NOW - HOUR);
+    const stale = minted(4);
+    taken(stale);
+    expect(coord.staleAsk('d4', 'lane-a-4', NOW - HOUR)).toBe(true);
+    expect(ids(keyed({ 'lane-a-3': 'k3', 'lane-a-4': 'k4' }))).toEqual([]);
+  });
+
+  it('a row this box cannot read is not listed, and refuses no other row, its own child\'s older ask included (F4)', () => {
+    const older = ask({ child: 'lane-a-b', key: 'k0', releasedAt: NOW - 2 * HOUR });
+    const bad = ask({ child: 'lane-a-b', releasedAt: NOW - HOUR });
+    const other = ask({ child: 'lane-a-a', releasedAt: NOW - HOUR });
+    coord.db.prepare("UPDATE asks SET runId = CAST('1152921504606846976' AS INTEGER) WHERE id = ?").run(bad);
+    expect(ids()).toEqual([other, older]);
+    expect(coord.askMarkRead(bad, NOW, none)).toEqual({ ok: false, detail: 'ask runId is not a positive safe integer' });
+    expect(coord.askMarkRead(older, NOW, none)).toEqual({ ok: true, found: { may: { markable: true } } });
+    expect(coord.askMarkRead(9999, NOW, none)).toEqual({ ok: true, found: null });
   });
 
   it('how each reached the operator, its first line, its programme (null with no run row) and newest change first', () => {

@@ -7,14 +7,17 @@ is invented.
 
 ## What shipped
 
-- `askMarkable` (L1, `server/src/coord/answerMarks.ts`): a `released` or `declined` ask is markable while it is live or inside
-  48 hours of its `releasedAt`; an ask the operator answered inside 48 hours of its `answeredAt`. A `held` ask and one its parent
-  answered were never the operator's (`not-shown`); any other state is `not-listed`. It follows today's ask states and assumes
-  no state move the code does not make (`ask-marks-follow-todays-ask-states`).
-- `askMarkTargets` (L3, `answerMarkStore.ts`): the asks the operator has, newest change first. One statement over `asks`, with
-  the portfolio's newest-ask rule (`portfolioStore.ts#NEWEST_ASK`, now exported, its one change) and the portfolio's live-ask
-  port, keeps exactly the rows `askMarkable` calls markable, so a newest row past the window that is not live is read and not
-  listed. `answer-marks.test.ts` pins that agreement over every state, live or not, newest or not, in a real `coord.db`.
+- `askMarkable` (L1, `server/src/coord/answerMarks.ts`): an ask that reached the operator stays theirs whoever answers it later
+  (`reached-is-the-reach-stamp`). A `released` or `declined` ask, or a reached `answering` one, is markable while it is live or
+  inside 48 hours of its `releasedAt`; an ask the operator answered, or a reached one its parent answered late, inside 48 hours
+  of its `answeredAt`; a reached `stale` ask inside 48 hours of the time it went stale. An ask that never reached the operator
+  is `not-shown`; any other state is `not-listed`.
+- `askMarkTargets` and `askMarkRead` (L3, `answerMarkStore.ts`): the asks the operator has, newest change first, and one ask by
+  id for the door, through one statement and one row rule (`door-and-list-one-read`). Each child's newest row is read once
+  (`MAX(id) … GROUP BY childId`, review 2217 F5), the question's first line is taken in SQL (F6), and the portfolio's live-ask
+  port answers for the newest row. The list keeps exactly the rows `askMarkable` calls markable, so a newest row past the window
+  that is not live is read and not listed. `answer-marks.test.ts` pins that agreement over every state, live or not, newest or
+  not, reached or not, in a real `coord.db`.
 - `WaitingView` gains two optional lists, `asks` (live) and `asksCleared` (the rest), each row an `AskMarkRow` with both marks,
   through `answerMarksOf('ask', ids)` with the items' `unmeasured` arm. The `waiting` frame carries them too.
 - The door's ask arm replaces `ask-marks-not-yet`: `POST /api/answer-marks` with `kind: 'ask'` records the same marks, frame and
@@ -53,23 +56,25 @@ the waiting view and its frame, ask lists included, are open to any local proces
   the brief name two optional lists. The view carries both, `asks` (live) and `asksCleared` (every other listed ask), as it carries
   `calls` and `callsCleared`, and every row still carries `live` (`true`, `false` or `'unmeasured'`). The split is decided in L1
   (`askListsView`).
-- **`never-shown-ask-is-unknown`**: an ask the operator was never shown, held or answered by its parent, answers 404
-  `unknown-ask` at the door, where the plan had 409 `not-markable` with `not-shown`, as PR A's door answers `unknown-item` for an
+- **`never-shown-ask-is-unknown`**: an ask the operator was never shown answers 404 `unknown-ask` at the door: one `held`, or one
+  that moved on with no reach stamp (taken into `answering`, gone `stale`, or answered by its parent; review 2217 F3), where the plan had 409 `not-markable` with `not-shown`, as PR A's door answers `unknown-item` for an
   item never shown (D-8194's no-oracle rule; review 2196 F6). `askMarkable` keeps its `not-shown` reason for the agreement test.
-  Table 11.6's `not-markable` row now names `unknown-ask` beside `unknown-item`. No new refusal word: `unknown-ask` and
+  Table 11.6's `not-markable` row now names `unknown-ask`, for an ask that never reached the operator, beside `unknown-item`. No new refusal word: `unknown-ask` and
   `ask-unreadable` are the question lane's, and `codeOnly` stays empty.
 - **`ask-reads-through-the-question-lane`**: the W3 Q3f census (`ask-digest.test.ts`) holds every question-store call outside
   `coord/questions.ts` at its one excluded row. So the door and the view read asks through two new readers there, `askForMark`
-  (the row by id and whether it is its child's newest) and `markableAsks`, and `askMarkTargets`, an ask-shaped `CoordStore`
-  method, joins `QUESTION_STORE_METHODS` (32 to 33, `census-w3/questions.ts`).
+  and `markableAsks`, and their two ask-shaped `CoordStore` delegates, `askMarkRead` and `askMarkTargets`, join
+  `QUESTION_STORE_METHODS` (32 to 34, `census-w3/questions.ts`). The coordinator ruled this the right home under D-7026 (mail
+  21159).
 - **`ask-live-in-l1`**: `askLiveOf` (the live rule from the port's answer and the ask's key) and `askListsView` join the L1
   file, so the store's read and the door ask one rule; `rowMarksView` is the one composition of a markable row's two marks, for
-  items and asks. Their cases join the `askMarkable` mutant set (`AM-ASK-*`, 14 mutants, floor 1).
+  items and asks. Their cases join the `askMarkable` mutant set (`AM-ASK-*`, 21 mutants since review 2217, floor 1).
 - **`ask-read-failure-omits-the-lists`**: a read of the asks that throws answers `{ ok: false }`, and the view then carries
   neither list ("this server cannot mark an ask now"), never an empty one that would read as "none". Items still list; a failed
   mark read gives each ask row both marks `unmeasured`, as for items.
-- **`ask-unreadable-at-the-door`**: an asks row the box cannot read, or its child's newest row, is 503 `ask-unreadable` with its
-  detail, as `GET /api/asks` answers it, never an absent row.
+- **`ask-unreadable-at-the-door`**: an asks row the box cannot read (its id or run not a positive safe integer, as `askById`
+  measures it) is 503 `ask-unreadable` with its detail, as `GET /api/asks` answers it, never an absent row. The list leaves such
+  a row out (review 2217 F4). Whether a row is its child's newest is read by id alone, so no other row's value refuses it.
 - **`one-live-ask-for-routes-and-frame`**: `waitingViewOf` takes the live-ask port, and `server.ts` builds it once for the
   ledger routes and the `waiting` frame, so the route and the frame list the same asks.
 - **`ask-marks-not-yet-retired`**: the door's `ask-marks-not-yet` detail is gone; `isAnswerMarkKebab` admits the four `how`
@@ -82,6 +87,22 @@ the waiting view and its frame, ask lists included, are open to any local proces
   programme"; filtered to the sessions in no programme, the trail holds those asks alone.
 - **`sentence-table-names-ask-words`**: `item-view.test.tsx`'s sentence-table pin lists `unknown-ask` and `ask-unreadable` as
   the two words the ledger door sends that are not ledger words.
+- **`reached-is-the-reach-stamp`** (review 2217 F1, the coordinator's ruling): "a `released` or `declined` ask never leaves
+  that state" was false for `released`. `takeAskForAnswer` takes `released` into `answering`, a lapsed ask's parent may answer it
+  late (D-5289), and `staleAsk` moves `answering` to `stale` and overwrites `releasedAt`. The ruling: an ask that reached the
+  operator stays one they were shown. The measured fact is `asks.reachedOperatorAt`, the push outbox's reach stamp
+  (`pushOutboxStore.ts#stampReach`, its one writer, in the release's, the decline's and the released mint's own transaction,
+  and never cleared): the cheapest source, a column already on the row the read selects, where the outbox row would be a join.
+  `released` and `declined` still say it by their state, so an ask released by an instance with no outbox (a test's), or
+  before migration 75 (no backfill), is listed as before while it stays released; once such an ask moves on it reads as never
+  reached. A reached `answering` ask stays listed and live; a reached ask its parent answered is listed for 48 hours from the
+  answer, with how it reached the operator (`lapsed`), not `answered`, which says the operator answered it; a reached `stale` ask
+  for 48 hours from the time it went stale. The false sentence is corrected in `askMarkable`'s comment, in spec §9.2.1 (C70)
+  and in `w1-delegation-marks.md`.
+- **`door-and-list-one-read`** (review 2217 F4 to F6): the door reads one ask with the list's own statement and row rule
+  (`answerMarkStore.ts#askMarkRead`, through `questions.ts#askForMark`), where it read `askById` and `currentAskFor`. So the door
+  and the view never disagree, an unreadable row is left out of the list and answered 503 at the door, and an unreadable newest
+  row never refuses its child's older ask. `portfolioStore.ts` is unchanged again (`NEWEST_ASK` is no longer exported).
 - **`path-guard-w3-releases-pwa`** (the coordinator's ruling on this PR's first fast run): `consolidation-path-guard.test.ts`'s
   W3 guard drops its `pwa/` arm. That arm stood because W3 was the server halves only and the PWA halves were W7's, and
   consolidation W7 has landed (C7a to C7p, the last of them #1948 and #1952). This PR edits `coord/questions.ts` (its two
@@ -106,3 +127,7 @@ Each was measured red, then restored from a saved copy:
 - Task 6: `askMarksFor` ignoring `live` (the permission-prompt case, in the words and the screen suites); the trail keeping a
   live ask; the box sending `kind: 'item'` for an ask.
 - `path-guard-w3-releases-pwa`: the W3 guard with its signing-path check removed reds its CONTROL.
+- Review 2217: the mutant set's seven new mutants (the reach stamp ignored either way, the live read dropped for an answering
+  ask or added for a stale one, the reach check dropped for an answering or a stale ask, the operator's answer read only by its
+  stamp), every one killed; by hand, the store without `answering` among the open states, the list and the door without their
+  readability check, the door answering a never-reached ask `not-markable`, and the live ask's boxes without their key (the PWA case where A's tick showed on B).

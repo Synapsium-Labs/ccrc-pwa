@@ -156,8 +156,9 @@ function QuestionButton({ q, now, onOpen, ask, current }: {
         <RowMain what={q.title} why="A session is waiting for your answer. Open it to answer." />
         <RowMeta pills={[{ tone: 'ask', word: QUESTION_PILL_WORD }]} when={q.at > 0 ? ageWords(q.at, now) : ''} />
       </BareRow>
-      {/* Answer marks B: the boxes of the ask the session's dialog waits on, read live by the server; none for any other. */}
-      {ask !== null && <AnswerMarkBoxes item={ask} kind="ask" current={current} />}
+      {/* Answer marks B: the boxes of the ask the session's dialog waits on, read live by the server; none for any other. Keyed
+          by the ask, so a new ask on this row starts with its own boxes (review 2217 F2). */}
+      {ask !== null && <AnswerMarkBoxes key={ask.id} item={ask} kind="ask" current={current} />}
     </li>
   );
 }
