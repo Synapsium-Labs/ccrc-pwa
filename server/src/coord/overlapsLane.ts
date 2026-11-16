@@ -156,7 +156,7 @@ export async function overlapsPass(deps: OverlapsPassDeps): Promise<OverlapsPass
   const moves = pairMoves(standing.rows, [...overlaps.sightings, ...goals], newest.episodes, {
     now,
     live: (slug) => measured(() => coord.programmeLive(slug)),
-    openRun: (slug) => measured(() => coord.programmeHasOpenRun(slug)),
+    hasOpenRun: (slug) => measured(() => coord.programmeHasOpenRun(slug)),
     goalsStamp: (slug) => measured(() => coord.goalsStamp(slug)),
     overlapSourcesRead,
     goalHistoryRead: history.ok,

@@ -40,12 +40,21 @@ the numbers. The plan as merged governs; where the shipped code differed, the co
   there), so it is 84, and `coord-db.test.ts` and `run-close-switch.test.ts` pin 84. Other open PRs hold 84 too; the second
   to land renumbers at landing, on the coordinator's word.
 
+- **`open-run-fact-is-hasOpenRun`**: the plan's `MoveFacts.openRun` is `hasOpenRun` here. `run-binding.test.ts`'s one-writer
+  scan names any `.openRun(` call outside the run lifecycle as a writer of the binding, and a fact of that name is a read.
+- **`overlaps-words-through-one-guard`**: the context's kebab literals (pair kinds, sources and closes, `goal-conflict-open`
+  and the relay's reasons) are admitted to `mail-routes.test.ts`'s coord scan through `overlaps.ts#isOverlapsKebab`,
+  derived from L0's pair tables and `RELAY_CONFLICT_WHY_MAP`, which now types `RelayConflictVerdict.why`.
+
 ## Hidden pins met (not in the plan's file list)
 
 - `server/test/lane-schedule.test.ts`: the monotonic row count (46 to 47) and a row case for `overlaps`.
 - `server/test/single-definition/core-vocab.test.ts`: `HANDLE_HOLDERS` gains `claimCollisions.ts` and
   `programmePairsStore.ts`.
 - `server/test/rings/watcher-store-port.test.ts`: `WatcherCoordMember` stays sorted.
+- `server/test/run-binding.test.ts`: no `.openRun(` call outside the run lifecycle (found by the first full CI run).
+- `server/test/mail-routes.test.ts`: every quoted kebab token in `server/src/coord` is declared (found by the same run;
+  co-edited with designation A, who holds it).
 
 ## Shared files, agreed with their holders
 

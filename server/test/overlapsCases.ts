@@ -427,7 +427,7 @@ const sight = (key: string, newestAt: number, o: Partial<PairEvidence> = {}): Pa
     evidence: E({ sources: ['claim-history'], paths: [X], triples: p.kind === 'goal-conflict' ? 2 : 0, ...o }) };
 };
 const mfacts = (o: Partial<MoveFacts> = {}): MoveFacts => ({
-  now: NOW, live: () => true, openRun: () => false, goalsStamp: () => 'S0', overlapSourcesRead: true, goalHistoryRead: true, ...o,
+  now: NOW, live: () => true, hasOpenRun: () => false, goalsStamp: () => 'S0', overlapSourcesRead: true, goalHistoryRead: true, ...o,
 });
 
 interface Pass { sightings?: PairSighting[]; facts?: Partial<MoveFacts>; before?: (state: StandingPairRow[]) => void }
@@ -523,7 +523,7 @@ export const MOVE_CASES: OverlapsCase[] = [
   { name: 'an overlap never reads a programme\'s liveness or goals', run: (m) => {
     const boom = (): never => { throw new Error('read'); };
     const row0 = prow({ key: OV, lastSeenAt: NOW });
-    const mv = m.pairMoves([row0], [sight(OV, NOW)], new Map(), mfacts({ live: boom, openRun: boom, goalsStamp: boom }));
+    const mv = m.pairMoves([row0], [sight(OV, NOW)], new Map(), mfacts({ live: boom, hasOpenRun: boom, goalsStamp: boom }));
     expect(mv.refresh).toHaveLength(1);
   } },
   { name: 'F1: a goal-conflict sighting that stays while one programme reads not live closes the episode on pass 1 and opens nothing on passes 2 to 4', run: (m) => {
@@ -660,10 +660,10 @@ export const MOVE_CASES: OverlapsCase[] = [
   { name: 'F6: it stays with an open run on either side, an open-run read unmeasured, or a history that was not read', run: (m) => {
     const old = NOW + 20 * DAY;
     for (const f of [
-      { openRun: (s: string): Fact<boolean> => s === 'prog-a' },
-      { openRun: (s: string): Fact<boolean> => s === 'prog-b' },
-      { openRun: (): Fact<boolean> => 'unmeasured' },
-      { openRun: (s: string): Fact<boolean> => (s === 'prog-a' ? 'unmeasured' : false) },
+      { hasOpenRun: (s: string): Fact<boolean> => s === 'prog-a' },
+      { hasOpenRun: (s: string): Fact<boolean> => s === 'prog-b' },
+      { hasOpenRun: (): Fact<boolean> => 'unmeasured' },
+      { hasOpenRun: (s: string): Fact<boolean> => (s === 'prog-a' ? 'unmeasured' : false) },
       { goalHistoryRead: false },
     ]) {
       const row0 = prow({ key: GC, lastSeenAt: NOW });
@@ -722,8 +722,8 @@ export const MOVE_CASES: OverlapsCase[] = [
         ruled: k.startsWith('goal') && rnd() < 0.4 ? { choice: 'a-first', at: NOW - Math.floor(rnd() * 5 * DAY), by: 'op-a' } : null,
       }));
       const dead = rnd() < 0.3 ? 'prog-c' : '';
-      const f = mfacts({ now: NOW + Math.floor(rnd() * 3 * DAY), live: (s) => s !== dead, openRun: () => rnd() < 0.5 });
-      const f2 = { ...f, openRun: () => false };
+      const f = mfacts({ now: NOW + Math.floor(rnd() * 3 * DAY), live: (s) => s !== dead, hasOpenRun: () => rnd() < 0.5 });
+      const f2 = { ...f, hasOpenRun: () => false };
       const extra = sight(keys[Math.floor(rnd() * keys.length)]!, NOW - Math.floor(rnd() * 2 * DAY));
       const base = m.pairMoves(standing, [], new Map(), { ...f2 });
       const more = m.pairMoves(standing, [extra], new Map(), { ...f2 });

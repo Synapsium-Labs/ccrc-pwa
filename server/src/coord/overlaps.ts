@@ -17,7 +17,7 @@
 import { pathsOverlap } from './claims.js';
 import {
   GOAL_CONFLICT_CHOICES, GOAL_CONFLICT_STEPS_MAX, GOAL_CONFLICT_TRIPLES_MIN, GOAL_CONFLICT_WINDOW_DAYS,
-  HOT_PATH_PROGRAMMES, OVERLAP_LAPSE_HOURS, PAIR_PATHS_MAX, pairKeyOf, parsePairKey,
+  HOT_PATH_PROGRAMMES, isPairClosedWhy, isPairKind, isPairSource, OVERLAP_LAPSE_HOURS, PAIR_PATHS_MAX, pairKeyOf, parsePairKey,
   type GoalConflictChoice, type PairClosedWhy, type PairEvidence, type PairKind, type PairSource,
 } from '../../../shared/programmeFacts.js';
 
@@ -322,7 +322,7 @@ export type Fact<T> = T | 'unmeasured';
 export interface MoveFacts {
   now: number;
   live: (slug: string) => Fact<boolean>;         // CoordStore#programmeLive
-  openRun: (slug: string) => Fact<boolean>;      // CoordStore#programmeHasOpenRun
+  hasOpenRun: (slug: string) => Fact<boolean>;      // CoordStore#programmeHasOpenRun
   goalsStamp: (slug: string) => Fact<string>;    // programmePairsStore.ts#goalsStamp: a digest of what is ruled on
   /** False when a source of overlap sightings (collisions, a radar project, radar sides) failed: no overlap lapses then. */
   overlapSourcesRead: boolean;
@@ -400,7 +400,7 @@ export function pairMoves(
     if (sight === undefined) {
       if (row.ruled === null && facts.goalHistoryRead
         && facts.now - row.lastSeenAt >= GOAL_CONFLICT_WINDOW_DAYS * DAY_MS
-        && facts.openRun(parsed.a) === false && facts.openRun(parsed.b) === false) {
+        && facts.hasOpenRun(parsed.a) === false && facts.hasOpenRun(parsed.b) === false) {
         close.push({ id: row.id, why: 'lapsed' });                                                            // rule 12
       }
       continue;                                                                                               // rule 13
@@ -454,9 +454,18 @@ export function blockingPairs(standing: readonly StandingPairRow[], relay: Relay
   return standing.filter((p) => pairBlocks(p, relay)).sort((x, y) => cmpStr(x.key, y.key) || x.episode - y.episode);
 }
 
+/** Why the relay's verdict refuses (Table 3): one table, so the type and the guard below derive from it. */
+export const RELAY_CONFLICT_WHY_MAP = {
+  unruled: true, 'ruling-unreadable': true, 'waits-for-landing': true, 'landing-unmeasured': true,
+} as const satisfies Record<string, true>;
+export type RelayConflictWhy = keyof typeof RELAY_CONFLICT_WHY_MAP;
 export type RelayConflictVerdict = { ok: true }
-  | { ok: false; word: 'goal-conflict-open'; key: string; episode: number;
-      why: 'unruled' | 'ruling-unreadable' | 'waits-for-landing' | 'landing-unmeasured' };
+  | { ok: false; word: 'goal-conflict-open'; key: string; episode: number; why: RelayConflictWhy };
+
+/** Every kebab word this context spells: a pair's kind, source and close, the relay's refusal word and its reasons. For
+ *  `mail-routes.test.ts`'s scan, which admits it through this guard; none is a mail rejection or a run refusal. */
+export const isOverlapsKebab = (tok: string): boolean => isPairKind(tok) || isPairSource(tok) || isPairClosedWhy(tok)
+  || tok === 'goal-conflict-open' || Object.hasOwn(RELAY_CONFLICT_WHY_MAP, tok);
 
 /** The relay's verdict (Table 3, question 1), over `blockingPairs`, first refusal wins. A pair the relay does not deepen is
  *  never consulted. Only the `waits` column of the choice table is read; a choice word outside the table fails closed as
@@ -465,7 +474,7 @@ export function relayConflictVerdict(
   standing: readonly StandingPairRow[], relay: RelayFacts, landedSince: (program: string, at: number) => Fact<boolean>,
 ): RelayConflictVerdict {
   for (const pair of blockingPairs(standing, relay)) {
-    const refuse = (why: 'unruled' | 'ruling-unreadable' | 'waits-for-landing' | 'landing-unmeasured'): RelayConflictVerdict =>
+    const refuse = (why: RelayConflictWhy): RelayConflictVerdict =>
       ({ ok: false, word: 'goal-conflict-open', key: pair.key, episode: pair.episode, why });
     const ruled = pair.ruled;
     if (ruled === null) return refuse('unruled');
