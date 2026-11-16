@@ -320,6 +320,9 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
     const CLAUDE_CODE_GLYPHS = '⏺⎿●○◯·•✻✶✳✢✽✓✔✗✘☐☒❯›※▪▫↓↑→←⧉▐▛▜▌▝▘⏵⏸';
     expect(CLAUDE_CODE_GLYPHS).not.toContain(DRAWER_SECRET_MASK);
     // xterm's width table, the PWA's terminal: the mark advances the cursor one column, between two ASCII characters.
+    // That table (Unicode 6, xterm 6.0.0's only one) cannot tell Neutral from Ambiguous: it gives U+2022, U+2592 and
+    // U+26BF (East Asian Width A) one column too. So "never Ambiguous" is held by the literal pin above: U+2327's East
+    // Asian Width class is N (Neutral) in the UCD's EastAsianWidth.txt, which no terminal widens.
     const t = new Terminal({ cols: 20, rows: 2, scrollback: 0, allowProposedApi: true });
     try {
       await new Promise<void>((r) => t.write(`a${DRAWER_SECRET_MASK}b`, r));
@@ -328,6 +331,41 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
       expect(t.buffer.active.getLine(0)!.getCell(1)!.getWidth()).toBe(1);
     } finally {
       t.dispose();
+    }
+  });
+
+  it('a masked key is one mark per row it touches whatever its length, and no SGR sits around a mark', () => {
+    // The ruled property (option C): the mark reveals nothing about a key's length, so the number of marks follows the
+    // rows a key touches and nothing else. Shape keys (any length the shape takes), on one row from 11 characters to
+    // 200, and hard-wrapped by a program at 120 columns (every row as full as the first, the last shorter) from 116
+    // characters to the run ceiling, `RUN_MAX_BYTES`. Mutant o1c of review 2307 (a second mark for a segment of 110 or
+    // more characters) reds at the whole key of 110 characters.
+    const alnum = 'Q7m2Xv9LpT4cR8nW1zK6bY3hJ5dF0gA2sE7uN4oPqZ8iVt';
+    const keyOf = (n: number): string => {
+      let k = 'sk-';
+      for (let i = 0; k.length < n; i++) k += alnum[(i * 7 + Math.floor(i / alnum.length)) % alnum.length];
+      return k;
+    };
+    const park = `\x1b[?25h${at(PINNED_WINDOW_ROWS, 3)}`;
+    const cases: { name: string; key: string; frame: string; rows: number }[] = [];
+    for (const n of [11, 12, 14, 15, 16, 20, 44, 50, 100, 108, 109, 110, 111, 150, 200]) {
+      const key = keyOf(n);
+      cases.push({ name: `a whole key of ${n} characters on one row`, key, rows: 1,
+        frame: `${at(10, 1)}\x1b[m\x1b[2Kkey: ${key} done.\x1b[K${park}` });
+    }
+    const W = 120;
+    for (const n of [116, 200, 233, 234, 300, 500, 1_000, 2_000, 8_192]) {
+      const key = keyOf(n);
+      const lines = [`key: ${key.slice(0, W - 5)}`];
+      for (let at0 = W - 5; at0 < n; at0 += W - 2) lines.push(`  ${key.slice(at0, at0 + W - 2)}`);
+      cases.push({ name: `a key of ${n} characters wrapped at ${W} columns onto ${lines.length} rows`, key, rows: lines.length,
+        frame: `${at(2, 1)}\x1b[m\x1b[2K${lines.join('\x1b[K\r\n')} done.\x1b[K${park}` });
+    }
+    for (const c of cases) {
+      const drawn = throughDrawer(SHAPE_ONLY_MASKER, [{ text: c.frame, quietMs: 40 }]);
+      expect(drawn.split(DRAWER_SECRET_MASK).length - 1, `${c.name}: marks`).toBe(c.rows);
+      expect(drawn, `${c.name}: SGR beside a mark`).not.toMatch(new RegExp(`\x1b\\[[0-9;]*m${DRAWER_SECRET_MASK}|${DRAWER_SECRET_MASK}\x1b\\[[0-9;]*m`));
+      for (let i = 0; i + 8 <= c.key.length; i += 4) expect(drawn, `${c.name}: a slice of the key`).not.toContain(c.key.slice(i, i + 8));
     }
   });
 
@@ -342,6 +380,9 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
       '{"access_token":"abc.def"}\r\n',
       `\x1b[32m${SK.slice(0, 9)}\x1b[0m${SK.slice(9)} end\r\n`,
     ].join('');
+    // Past `SLICE_UNITS` (64 Ki), so `maskTextSliced` takes its sliced arm, not its one-slice shortcut.
+    const long = Array.from({ length: 100 }, () => input).join('');
+    expect(long.length).toBeGreaterThan(64 * 1024);
     const sha = (s: string): string => createHash('sha256').update(s).digest('hex');
     const m = fingerprinted();
     try {
@@ -350,6 +391,7 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
         maskText: m.maskText(input),
         maskWithCarryRows: m.maskWithCarry(input, { rows: true }).text,
         maskTextSliced: await m.maskTextSliced(input, { rows: true }),
+        maskTextSlicedLong: await m.maskTextSliced(long, { rows: true }),
         maskDeep: m.maskDeep({ s: input }).s,
         shapeMaskDeep: SHAPE_MASK.maskDeep({ s: input }).s,
         shapeOnlyRows: SHAPE_ONLY_MASKER.maskText(input, { rows: true }),
@@ -359,6 +401,7 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
         maskText: '90ef9169ab27a90fa16dc2d17487f6d712cba1a358a85ae47a260ae95e477620',
         maskWithCarryRows: 'b4fc57c6be4aa5874ebabb6af0c7aa7f020b04d67f654ec26f6b5bd16ac14972',
         maskTextSliced: 'b4fc57c6be4aa5874ebabb6af0c7aa7f020b04d67f654ec26f6b5bd16ac14972',
+        maskTextSlicedLong: '7ae2efd145733bd73d6eeabba1f9563578db76c019827e02e665a7db21555d36',
         maskDeep: '90ef9169ab27a90fa16dc2d17487f6d712cba1a358a85ae47a260ae95e477620',
         shapeMaskDeep: '3f7c28de895b93e277defc5daa3f1f1f14fa66725e431c705e3a199e5c3b102f',
         shapeOnlyRows: '3a538a9013bfca21072be39cff187a2c93d3987a574ee34de2c7c4dd82300f6c',

@@ -988,6 +988,19 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
   return j + (run === null ? 0 : run[0].length) < t.length;
 }
 
+/** What a masked run reads as in the drawer (D-8694, desktop polish Task C39): ONE COLUMN, whatever it replaces.
+ *  The drawer is a tmux client, and tmux places what follows a run where the run ended in its own picture, so a mark
+ *  wider than the text it replaces runs on past it. `SECRET_MASK` is 15 columns: drawn for a key's row segment narrower
+ *  than that in a row's last 14 columns (the head of a key a program broke across rows, or a whole short shape key), or
+ *  for a short tail that text follows to the row's end, it ran past the right edge, the terminal wrapped, and every later
+ *  relative move landed a row off, over the status row too (measured, `drawer-mask-screen.test.ts`). A mark as wide as
+ *  the text would show the key's length, and one never wider than 15 columns but narrower for short text would show a
+ *  bound on it, so the mark is one column for every run: never wider than any text, and the same whatever the key.
+ *  U+2327 X IN A RECTANGLE BOX, East Asian Width Neutral, so no terminal draws it in two columns, and no glyph Claude
+ *  Code's output uses. No SGR around it: a reset would clear the attributes of the text around it. Every other egress
+ *  keeps `SECRET_MASK`; a run split across rows is one mark per row it touches, as before. */
+export const DRAWER_SECRET_MASK = '\u2327';
+
 /** The drawer is a byte stream. A chunk whose tail could start a secret holds that tail back until the next chunk, or
  *  for `holdMs` from the FIRST hold, so a secret split across two chunks is masked whole; every other chunk goes at
  *  once. What was sent stays as context for the next chunk. An expired hold fails closed: a begun shape, an open Codex
@@ -1004,19 +1017,6 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
  *  the right edge leaves the terminal's wrap pending, and neither CUB nor a saved cursor gets it back, measured on
  *  xterm), so a withheld run shows nothing until it resolves, and what reaches the terminal is the stream's own bytes
  *  unless a secret was masked in it (`drawer-mask-screen.test.ts`). */
-/** What a masked run reads as in the drawer (D-8694, desktop polish Task C39): ONE COLUMN, whatever it replaces.
- *  The drawer is a tmux client, and tmux places what follows a run where the run ended in its own picture, so a mark
- *  wider than the text it replaces runs on past it. `SECRET_MASK` is 15 columns: drawn for a key's row segment narrower
- *  than that in a row's last 14 columns (the head of a key a program broke across rows, or a whole short shape key), or
- *  for a short tail that text follows to the row's end, it ran past the right edge, the terminal wrapped, and every later
- *  relative move landed a row off, over the status row too (measured, `drawer-mask-screen.test.ts`). A mark as wide as
- *  the text would show the key's length, and one never wider than 15 columns but narrower for short text would show a
- *  bound on it, so the mark is one column for every run: never wider than any text, and the same whatever the key.
- *  U+2327 X IN A RECTANGLE BOX, East Asian Width Neutral, so no terminal draws it in two columns, and no glyph Claude
- *  Code's output uses. No SGR around it: a reset would clear the attributes of the text around it. Every other egress
- *  keeps `SECRET_MASK`; a run split across rows is one mark per row it touches, as before. */
-export const DRAWER_SECRET_MASK = '\u2327';
-
 export class DrawerMask {
   private held = '';
   private carry = false;
