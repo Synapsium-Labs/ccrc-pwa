@@ -970,6 +970,15 @@ export const CCD_ARGV = {
   winSize: (id: string, mode: 'smallest' | 'canonical') =>
              argv(['win-size', '--session', id, '--mode', mode]),
 
+  /** The read-only pool answer for a session's current account (the pool-set plan's Task 6): `ccd pool-answer
+   *  --session <id>`, granted as `['pool-answer','--session']` and enrolled in the agent's `REQUIRED_VERB_FLAG`, so no
+   *  wider argv is grantable. The id is refused here unless `isRegistryId` admits it; ccd re-checks it. Asked only behind
+   *  `ccdCan(state, 'poolAnswer')`, and read through `server/src/poolrule.ts#parsePoolAnswer`, `ran` first. */
+  poolAnswer: (id: string) => {
+    if (!isRegistryId(id)) throw new Error('CCD_ARGV.poolAnswer: the session id is not a registry id');
+    return argv(['pool-answer', '--session', id]);
+  },
+
   /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
    *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
    *  the flag the agent grants second (`--all` here, `--project` for the other
@@ -1098,6 +1107,11 @@ export const ACCOUNT_POOLS_CAP = 'account-pools';
  *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo`s and
  *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings,
  *  held equal by that test's `toContain` lines. */
+/** The `ccd caps` word that says this box has all of the pool set (the pool-set plan's Task 7, Table 11.1d): the set
+ *  side read by `_session_pool_side`, the route fields `poolset` and `acctorder`, and `ccd pool-answer`. Added last
+ *  among them, so no build that lacks a part advertises it. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s
+ *  reason; ccd's `echo pool-set` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const POOL_SET_CAP = 'pool-set';
 export const POOL_SYNC_INSTALLED_CAP = 'pool-sync-installed';
 export const POOL_SYNC_ABSENT_CAP = 'pool-sync-absent';
 
@@ -1556,6 +1570,7 @@ export const CCD_CAN = {
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
+  poolAnswer: capRow(POOL_SET_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
