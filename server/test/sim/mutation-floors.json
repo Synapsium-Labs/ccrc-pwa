@@ -115,5 +115,8 @@
   "server/src/coord/overlordAuthority.ts#authorityDirection": 1,
   "server/src/coord/overlordAuthority.ts#authorityFold": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
-  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1
+  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
+  "server/src/coord/overlordDesignation.ts#designateVerdict": 1,
+  "server/src/coord/overlordDesignation.ts#overlordAccounts": 1,
+  "server/src/coord/overlordDesignation.ts#retireVerdict": 1
 }
