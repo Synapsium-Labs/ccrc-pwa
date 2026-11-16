@@ -14226,11 +14226,12 @@ export interface AccountSwitchAnswer {
  *  `auth-in-progress`   a sign-in for the lane is in flight (409, spec §3.9).
  *  `not-a-token-lane`   a stated account for a sign-in lane, whose account `check` measures (409).
  *  `duplicate-id`       the verb found the id taken although the server's roster did not hold it (409): a race the
- *                       reconcile settles. */
+ *                       reconcile settles.
+ *  `org-looks-like-an-id` an organization label shaped like an organization id (400, account organization A3). */
 export const ACCOUNT_WRITE_REFUSALS = [
   'key-charset', 'confirm-mismatch', 'not-discardable', 'lane-exists', 'bad-stated', 'token-unverified',
   'config-dir-exists', 'live-sessions', 'sleeping-sessions', 'upstream', 'last-home-able', 'auth-in-progress',
-  'not-a-token-lane', 'duplicate-id',
+  'not-a-token-lane', 'duplicate-id', 'org-looks-like-an-id',
 ] as const;
 export type AccountWriteRefusal = (typeof ACCOUNT_WRITE_REFUSALS)[number];
 

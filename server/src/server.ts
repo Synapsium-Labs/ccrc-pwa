@@ -2294,7 +2294,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
     },
   });
-  registerResponseRoutes(app, { coord: deps.coord, time: deps.time });
+  registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off') });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

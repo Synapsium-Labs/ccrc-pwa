@@ -209,7 +209,7 @@ export function questionOutboxOf(
         ev.actions === undefined ? {} : { actions: ev.actions });
       const prepared = senderFor(deps).prepare(payload);
       const viewing = ev !== null && deps.viewers?.isVisible(ev.sessionId) === true;
-      return { prepared, viewing, due: pushDue({ event: 'reach', service: prepared.service, source: 'ask', blocking: true, viewing,
+      return { prepared, viewing, stamp: deps.responseStamp?.(), due: pushDue({ event: 'reach', service: prepared.service, source: 'ask', blocking: true, viewing,
         settled: false, superseded: false, payload: payload !== null }) };
     },
     sent: (ev, askId, row) => {

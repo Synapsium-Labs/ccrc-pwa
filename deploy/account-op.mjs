@@ -58,7 +58,7 @@ import { createHash, createHmac, randomBytes } from 'node:crypto';
 // derived" needs the import to be the easy path rather than the remembered one.
 import {
   API_KEY_PROVIDERS, CODEX_BRIDGE_MODES, HUES, LABEL_UNSAFE_RE, MODEL_ALIASES, MODEL_ID_RE,
-  RosterInvalid, rosterFromJson,
+  RosterInvalid, orgLabelVerdict, rosterFromJson,
 } from '../shared/roster-json.mjs';
 import { BASE_URL_OK } from '../shared/base-url.mjs';
 
@@ -778,7 +778,7 @@ const OPS = {
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
   // The two serviceability facts (plan 2026-11-14 Task 3, F11): `opSetFacts` below states it.
-  'set-facts': { keys: ['file', 'id', 'fable-billing', 'continuity', 'recorded-at'], repeat: [] },
+  'set-facts': { keys: ['file', 'id', 'fable-billing', 'continuity', 'recorded-at', 'org'], repeat: [] },
   // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
   // shares with `pre-remove`, and the answers of the sign-in verbs.
   'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
@@ -2208,7 +2208,9 @@ function opSetPlacement(a) {
 
 /** `set-facts` (F11): `--fable-billing included|credits` writes the billing fact; `--continuity on` writes
  *  `{recordedAt}` (`--recorded-at now|<epoch seconds>`) only when no record stands, so a second `on` changes no byte,
- *  and `off` removes the key, never a null. A call that changes nothing writes no byte. Silent on success. */
+ *  and `off` removes the key, never a null. `--org <label>` writes the organization label and `--org none` removes it
+ *  (account organization A3); an id-shaped label is refused `org-looks-like-an-id` before any write. A call that
+ *  changes nothing writes no byte. Silent on success. */
 function opSetFacts(a) {
   const acct = rosterEntryOf(a, 'set-facts');
   if (acct === null) return 1;
@@ -2220,9 +2222,18 @@ function opSetFacts(a) {
     refuse('bad-argv', '--fable-billing is included or credits, --continuity on or off, --recorded-at now or whole seconds');
     return 2;
   }
+  const org = a['org'];
+  const orgWord = org === undefined || org === 'none' ? 'ok' : orgLabelVerdict(org);
+  if (orgWord !== 'ok') {
+    refuse(orgWord === 'looks-like-an-id' ? 'org-looks-like-an-id' : 'bad-argv', orgWord === 'looks-like-an-id'
+      ? "--org is a name you choose, never the organization's id" : '--org is a name matching ^[a-z][a-z0-9-]{0,31}$, or none');
+    return 2;
+  }
   const json = readRoster(a['file']);
   if (json === null) return 1;
   const next = { ...acct };
+  if (org === 'none') delete next['org'];
+  else if (org !== undefined) next['org'] = org;
   if (billing !== undefined) next['fableBilling'] = billing;
   if (on === 'off') delete next['continuity'];
   if (on === 'on' && !isPlainObject(acct['continuity'])) next['continuity'] = { recordedAt: at === 'now' ? Math.floor(Date.now() / 1000) : Number(at) };

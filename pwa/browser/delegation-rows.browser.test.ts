@@ -448,14 +448,28 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
             expect(c.underFab, `${c.name}: clear of the floating button at the end of the list`).toBeNull();
             expect(c.reached, `${c.name}: a tap at its centre reaches it at the end of the list`).toBe(true);
           }
-          // F8 (d): the box a script focuses after an act draws no ring, even after a keyboard action.
+          // Task C38 (D-8670, review 1624), reversing F8 (d): the box a script focuses after a keyboard action draws the page's
+          // ring, and no ancestor up to its card clips it (the ring reaches 4px outside the box: a 2px outline, 2px offset).
           await page.keyboard.press('Shift');
           const ring = await page.evaluate(() => {
             const box = document.querySelector<HTMLElement>('.proj-card .proj-work-controls')!;
             box.focus();
-            return { visible: box.matches(':focus-visible'), outline: getComputedStyle(box).outlineStyle };
+            const style = getComputedStyle(box);
+            const reach = (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0);
+            const r = box.getBoundingClientRect();
+            const clippedBy: string[] = [];
+            for (let el = box.parentElement; el !== null && !el.classList.contains('proj-card'); el = el.parentElement) {
+              const cs = getComputedStyle(el);
+              if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
+              const c = el.getBoundingClientRect();
+              if (r.left - reach < c.left - 0.5 || r.right + reach > c.right + 0.5 || r.top - reach < c.top - 0.5 || r.bottom + reach > c.bottom + 0.5) {
+                clippedBy.push(el.className);
+              }
+            }
+            return { visible: box.matches(':focus-visible'), outline: style.outlineStyle, drawn: reach > 0, clippedBy };
           });
-          expect(ring, 'the script-focused box: focus-visible, and no ring').toEqual({ visible: true, outline: 'none' });
+          expect(ring, 'the script-focused box after a keyboard action: focus-visible, with its ring drawn whole')
+            .toEqual({ visible: true, outline: 'solid', drawn: true, clippedBy: [] });
           const brackets = await page.evaluate(measureBrackets);
           expect(brackets.length, 'the bracketed work lines').toBeGreaterThan(0);
           for (const b of brackets) expect(b.onWords, `${b.text}: its bracket sits on the words' first line`).toBe(true);

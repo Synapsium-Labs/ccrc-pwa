@@ -30,6 +30,8 @@ export interface RosterJsonAccount {
   fableBilling: FableBilling | null;
   /** `AccountDef.continuity` one-for-one, as `{recordedAt}`, `null` for an absent key. Emitted into `_ccrc_continuity`. */
   continuity: ContinuityRecord | null;
+  /** `AccountDef.org` one-for-one, `null` for an absent key. Emitted into `_ccrc_org`. */
+  org: string | null;
   execKind: ExecSpec['kind'];
   /** Present only when the roster declared one; `undefined` otherwise. Legal on
    *  ALL FOUR exec kinds and gated identically on each — on `generated` and
@@ -97,3 +99,7 @@ export class RosterInvalid extends Error {
  * @throws {RosterInvalid}
  */
 export function rosterFromJson(json: unknown): RosterJson;
+
+/** The organization-label gate's mirror (`shared/roster.ts`'s `ORG_ID_SHAPES` and `orgLabelVerdict`). */
+export const ORG_ID_SHAPES: readonly RegExp[];
+export function orgLabelVerdict(v: string): 'ok' | 'looks-like-an-id' | 'off-shape';

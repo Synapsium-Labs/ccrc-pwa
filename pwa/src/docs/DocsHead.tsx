@@ -1176,6 +1176,13 @@ function PlainViewNote(): ReactNode {
   return <p className="docs-note" role="status" tabIndex={-1} data-plain-note="">{DOCS_HEAD_TEXT.exportPlainShown}</p>;
 }
 
+/** A press on one of the reader's tools takes no focus (#2903), as the key bar's caps keep the terminal's. The frame is
+ *  sandboxed, so Chrome runs it in a process of its own: had the press moved the focus to ccrc's button, the frame's
+ *  loss of it would travel apart from the command the tap posts, and could reach the frame after the command had
+ *  opened Quick jump, taking the focus back out of its field. With the focus left where it is, the frame never loses
+ *  it, and the command's own `iframe.focus()` brings it back from wherever on ccrc's page it was. */
+const keepFrameFocus = (e: { preventDefault(): void }): void => e.preventDefault();
+
 /** The one bar (the library 1.1 take-up plan, refinements (f) to (l)): a leaf whose reader frame is ready on ccrc's bar.
  *  Back; the title (the label's first line above the document's own title, the freshness dot before it), which opens the
  *  details panel, a disclosure as the row's Page details is; the reader's tools, each running its command in the tap
@@ -1214,7 +1221,10 @@ function OneBar(p: Omit<CompactProps, 'plainView'> & { readonly tree: DocsTreeOk
           <span className="sr-only">{moreName(dot)}</span>
         </button>
         {oneBarTools(page.section).map((t) => (
-          <button key={t} type="button" className="docs-tool" aria-label={DOCS_TOOL_TEXT[t]} onClick={() => bar.command(t)}>
+          <button
+            key={t} type="button" className="docs-tool" aria-label={DOCS_TOOL_TEXT[t]}
+            onPointerDown={keepFrameFocus} onClick={() => bar.command(t)}
+          >
             <Icon name={TOOL_ICON[t]} size={20} />
           </button>
         ))}
