@@ -148,7 +148,7 @@ lane to the default window by itself (`contextWindowFor(...).rule === 'default'`
 - **Deviation numbers are issued, never chosen.** The numbers in this plan were issued by the ledger allocator. A
   worker who finds a new departure reports it by a new slug (worker clause 11) and never writes a number.
 - **Nothing reaches the fleet early.** No wave reaches the fleet before R-O9, the GPT-lane soak's final sample.
-  Rollout is the operator's, by `ccrc rollout` (runbook).
+  Rollout is the owner's, by `ccrc rollout` (box-level; not delegated on 2026-11-16).
 
 ## Review Focus
 
@@ -10129,7 +10129,137 @@ executing beyond this plan's, and any departure by slug.
 
 ---
 
+## Re-plan of 2026-11-16: W3, W4 and the Anthropic arm
+
+W1 (#867) and W2 (#1099) shipped, and both Codex lanes have advanced live since, four moves, every canary passed.
+Three later PRs changed the ground W3 and W4 stand on: #2701 (D-8384), #2736 (D-8406) and #2761 (D-8564). On
+2026-11-16 the owner delegated this programme's operator role to its coordinator, which re-planned the rest. This
+section records that re-plan.
+
+**The tasks below are snapshots.** Tasks 14 to 21 were written at `a3cebde1b` and are kept as written, as history and
+as a source of tests and code. Where this section and a task's text differ, this section wins, and each such
+difference is a numbered entry in "Deviations found". Each wave's brief re-measures every anchor it names on
+`origin/main` before dispatch, and cites by quoted text or `#@anchor`, never by a line number from this plan.
+
+### Anchors that drifted
+
+Measured read-only on `origin/main` at `3499b905e`, 2026-11-16.
+
+| Anchor | This plan says | `main` says |
+|---|---|---|
+| Doctor's table line | Line 214, five entries; the four names go after `docs-sw` | `ccd/ccrc-doctor-checks:223`, ten entries. `docs-sw` is pinned LAST (`server/test/ccrc-doctor-codex-host.test.ts`), so the plan's line reds that test |
+| Doctor's last function | `_check_docs-sw` | `_check_overlord-mods`. New functions go after the last check function, whichever it is then |
+| Doctor's tests | `server/test/ccrc-doctor.test.ts` holds `HEALTHY_SKIPS` | Split into the `ccrc-doctor-*` files. `HEALTHY_SKIPS` is in `server/test/ccrc-doctorFixture.ts`. The install tests split the same way: there is no `server/test/ccrc-install.test.ts`, only the `ccrc-install-*` files, their shared helpers in `server/test/ccrc-installFixture.ts` |
+| `BASE_LIVE_SHAPE` | A golden in `server/test/ccrc-install.test.ts`, re-measured | Retired by #565 (Plan 4 Part C); it survives only in comments. Its successor is `FLEET_BOX_CLASSES`, in `server/test/ccrc-installFixture.ts` |
+| `ready.ops` | `['update','token-sync']`, then `models` third | Ten fixed entries, with `overlord-history` appended last when servable (`agent/src/server.ts`) |
+| Spawn classes | The `models` op is the third wire-triggered spawn | `agent/CLAUDE.md` counts five (update, token-sync, account, testbox, testbox-admin), so `models` is the sixth. Its template is the account op (`ACCOUNT_OP` in `shared/agent-protocol.ts`) |
+| Route count | `ROUTES.length` 99, `gate.ts`'s docstring 96 | 245 in `server/test/auth-gate.test.ts`. The `server/src/auth/gate.ts` docstring says 242 and is already behind |
+| The wrapper literal | Task 21 removes two branches | One remains: `modelListProvider` in `pwa/src/lib/models.ts` returns by `wrapper === 'gpt'`, with three callers |
+| The models GET | Task 19 adds `GET /api/models/:lane`, answering `{view, cachedAt}` | It exists (#2736, `server/src/server.ts`, built in `server/src/laneModels.ts`). It answers `{ok, lane, models: LaneModelsRead}` (`shared/models.ts`) through the agent's file read under `isLaneModelsReadName` (`agent/src/whitelist.ts`), and it works in local mode |
+| The roster's lane kind | Task 18 adds `RosterWire.laneKind` | `RosterWire` already carries `kind`, `managed` and `telemetry` (`rosterKindOf`, `shared/roster.ts`) |
+| `models-op.mjs` insertion points | Before `readPairs`, and a line in `main` | Both still exist, at new lines |
+| Smaller moves | `_SVC_REG`, `_svc_is_active`, `_plat_timeout` in `ccd/ccrc`; `_hook_epoch_ms` in `ccd/session-hook.sh`; `_dr_join`, `_dr_cx_sessions`; ccd's respawn `--model` rule | All present, all at new lines. Find them by name |
+
+### The route
+
+Every merge reaches the fleet within hours (the fleet box installed v0.0.1242 21 minutes after its release). So each
+wave is inert at merge, and safe in the mixed-version window, with one box on the new build and the other on the old.
+Rules for every wave: one PR, through the merge queue, with the required checks; a review run after each wave-done,
+and a merge only after an accepted ruling on the exact head; the private-name scan on every changed file and on any
+issue or comment text; and every `D-TBD-<slug>` replaced by an allocator-issued number before merge.
+
+| Wave | Scope | Waits on | Gates |
+|---|---|---|---|
+| **R0** | These docs: the rulings, this section, the spec's amendments and its "Where things stand" | none | `deviation-refs.test.ts` against `origin/main`; `dtbd.test.ts` green (D-8683 to D-8690, issued by the allocator, define the eight departures); the scan, the docs render |
+| **R1** | Picker labels keyed on the roster's lane kind (the rest of Task 21). The wrapper check stays as a fallback until the server box's roster is measured | R0 | The pwa suite, and the server's `single-definition` scans |
+| **R2** | W3, doctor: Tasks 14 and 15 as re-planned below | R0. Merges only after 2026-11-21 | The armed growth check; the selection lists `ccrc-doctor-*`, `ccrc-install-*`, `ccrc-account` and `ccrc-doctor-codex-host`; the four checks PASS on a healthy lane, measured read-only by running the branch's checks from the worker's worktree against the fleet box's lane files, with no install and no `--fix` |
+| **R3** | W4a: the `models` op (Tasks 16, 17, Task 18's read type and Task 19's link and GET), with the file-read grant kept as the fallback | R0 | The server selection lists `remote-connect`, `update-inventory`, `whitelist-subset`, `update-spawn-wrappers`, `spawn-kernel` and `account-op-twins`; the agent suite runs, `token-sync-op` and `update-op` included; both mixed pairs tested, so the wave is safe in either order (the server uses the op only when `ready.ops` lists `models`); fleet box first is the owner's rollout order |
+| **R3b** | The grant retired: `isLaneModelsReadName` and its `agent/CLAUDE.md` text go | R3 running on both boxes, measured | A test that reds if the grant comes back |
+| **R4** | W4b: the POST and the Models sheet (Task 19's POST, Task 20). Closes #1441 | R3 (it needs the op's hold, release and revert, not the grant's retirement) | The box-token census in both directions; the hold racing the hourly commit (skipped without `flock`, never passed); phone, laptop and wide widths; live, one Hold and Release on lane-a; no live Revert without a ruling |
+| **A0** | Anthropic measurement, read-only, no PR: what writes Claude Code's catalogue cache, and when; one organisation, one catalogue?; does the alias always resolve to the newest model?; is an effort pin lost when the alias's id changes? | R0 | Never prints a credential; existence by `ls`, keys only; evidence written with stand-ins (`home-a`, `home-b`) |
+| **A1** | The spec amendment for D18, and the Anthropic arm's own plan | A0 | Allocator numbers, the docs render, the scan |
+| **A2** | Anthropic shared code and writer: the labels file, holds in the advance file on an Anthropic lane, doctor's Anthropic causes | A1, R2 | As R2 |
+| **A3** | Anthropic ccd: "a model listing no effort levels", the routing record with the id, the readback by id, the held id at launch, effort carried to a new id. The highest risk | A2 | The armed growth check; fixture HOMEs only; claims on `ccd/ccd`; a judgement review of the whole branch |
+| **A4** | Anthropic PWA: labels from data, the sheet on Anthropic rows | A3, R4 | The pwa suite, the widths |
+| **OpenRouter** | Later, trigger unchanged: the first OpenRouter lane with a non-empty discovery list | Later | Later |
+
+R1, R2, R3 and A0 can run side by side after R0. R4 waits on R3 (R3b may land before or after it), A2 on R2 as well as A1, and A4 is last.
+
+### Task deltas
+
+**Task 14 (`advance-health`), in R2 (D-8689).** Kept; `advance-health` stays read-only as written. Task
+14 also gains one piece of writer work (ruling 11), the reaping below. `lock-unwritable` joins
+`BLOCKED_CAUSES` in `shared/model-advance.mjs`; it is still absent on `main`. The held-back reason reuses #2701's
+history `cause` (`causeOf`) rather than adding a word. `advance-health` does not report #2701's unmeasured-window
+finding a second time, because doctor's `models` row already carries it. The new functions go before `readPairs` and
+the dispatch line in `main`, wherever those now stand. The writer, under the lane lock and not `advance-health`, reaps
+a stale `<lane>.json.tmp.*` left by a write cut short (one has stood in the models directory since 2026-10-23), so
+nobody deletes it by hand.
+
+**Task 15 (the four doctor checks), in R2 (D-8689, D-8685).** The four names join
+today's table line before `docs-sw`, which stays last. Their functions go after the last check function. Their pins
+move to the split `ccrc-doctor-*` files and `ccrc-doctorFixture.ts`'s `HEALTHY_SKIPS`, and `FLEET_BOX_CLASSES`
+(`server/test/ccrc-installFixture.ts`) is re-measured. There is no fifth check: the residual of #2607 (a stale catalogue under a class model with no measured
+window drops it to the client default and lowers the lane's window) extends #2701's `windowNotices` and the `models`
+row's WARN. First measure whether that notice already names the case. The catalogue's window is never written as if
+measured. The README's doctor section names the four checks, and its sentence that calls `model-sessions-behind`
+"planned" goes.
+
+**Task 16 (the protocol), in R3.** Kept, re-based on the account op's template (`ACCOUNT_OP`,
+`accountOpRequestTimeoutMs`, `readAccountOpAnswer`, `ACCOUNT_OP_DRAIN_MS`) rather than the update op's. The bounds
+are re-derived against it. The "third spawn" wording becomes the sixth.
+
+**Task 17 (the agent op), in R3 (D-8688).** Kept. `models` joins the fixed array of `ready.ops`'s ten
+entries, before the `overlord-history` push, and `agent/CLAUDE.md`'s count goes from five to six. The pins in
+`update-op`, `token-sync-op`, `remote-connect`, `update-inventory`, `whitelist-subset`, `update-spawn-wrappers` and
+`spawn-kernel` are re-measured, and `account-op-twins`, which checks the account op's local and agent arms against
+each other, is re-measured for the template this op is built on. `isLaneModelsReadName` stays
+in this PR; R3b removes it.
+
+**Task 18 (view, labels, lane kind), in R3 (D-8686).** Mostly dropped. No `shared/models-view.ts`, no
+`ModelsLaneView`, no `readModelsLaneView` and no `RosterWire.laneKind`. `LaneModelsRead` is extended instead, with
+hold, pending, revertable and advance state, through its one reader. D-5228's `unreported` advance state carries into
+that type. The roster's existing `kind`, `managed` and `telemetry` decide the lane kind. Labels on `describe` are
+added only if `laneClassModels` (#2736) cannot supply them.
+
+**Task 19 (link and routes), split across R3 and R4 (D-8686, D-8687,
+D-8688).** The existing `GET /api/models/:lane` keeps its path and its answer's shape. Its read
+moves onto the op's `show` only when the agent's `ready.ops` lists `models`, and falls back to the grant otherwise.
+The server link has a local arm and a remote arm, as `server/src/accounts/ops.ts` does, so local mode keeps
+answering, and D-5203's 501 is dropped. R4 adds `POST` on the same path: session-gated, no box token, an audit line
+naming the device (D-5229), and its own door set in the box-token census. The route count is re-measured. Whether the
+GET takes the plan's 60 s cache is re-judged against #2736's `cache-control: no-store` in R3's brief.
+
+**Task 20 (the Models sheet), in R4 (D-8686, D-8690).** The sheet sits in
+`pwa/src/accounts/AccountSheet.tsx`, not behind a row button on the Accounts screen, which amends D-5202. It reads
+through #2736's `pwa/src/lib/useLaneModels.ts`, not a second hook. Hold stays non-optimistic, and Revert appears only
+when `revertable` and asks first. It closes #1441 as narrowed.
+
+**Task 21 (picker labels), mostly done by #2736.** Labels already come from the registry and the catalogue. R1 does
+what is left: `modelListProvider` keys on the roster's kind (`kind: 'codex'`, or `telemetry === 'anthropic'`), and
+`effortOptions` takes the catalogue's efforts on a Codex lane. The wrapper check stays as a fallback until the server
+box's roster is measured (an owner item), and then goes. Until then this is a temporary exception to D17 ("never by
+a wrapper name") set by the 2026-11-16 route, and it ends with the definition of done's item 4. The plan's `LabelSource` and `useLabelSource` are not built.
+The Anthropic half waits for A4.
+
+### Definition of done
+
+1. The four checks PASS, or WARN with a named cause, on the fleet box.
+2. A Hold and a Release on lane-a from the sheet are measured in the advance file, with an audit line.
+3. Local mode answers through the local arm.
+4. No `=== 'gpt'` wrapper check is left in `pwa/src`.
+5. #2607 and #1441 are closed, and the Fable-ceiling issue is filed.
+6. The spec's "Waiting on you" holds nothing but box-level asks.
+7. On one Anthropic home, a held id appears at launch only while held, labels come from data, effort follows an id
+   change, and a home with no source shows `model-advance-blocked`.
+8. The next real Codex release moves a class cleanly, with no `model-sessions-behind` WARN after 24 h.
+9. Every D-number is allocator-issued.
+
+---
+
 ## Wave W3: doctor
+
+Re-planned on 2026-11-16: read "Re-plan of 2026-11-16: W3, W4 and the Anthropic arm" above first. Where it and this wave differ, it wins.
 
 ### Wave contract
 
@@ -12609,6 +12739,8 @@ while executing.
 ---
 
 ## Wave W4: op, route, panel, labels
+
+Re-planned on 2026-11-16 as a delta on #2736, in waves R3, R3b and R4: read "Re-plan of 2026-11-16: W3, W4 and the Anthropic arm" above first. Where it and this wave differ, it wins.
 
 ### Wave contract
 
@@ -18075,10 +18207,12 @@ skipped on each runner.
   per-(lane, class) rate cap (ruling 7). The durable record is the advance file's `hold` and `history`, plus the
   server's audit line.
 - **Stale labels.**
-  - The PWA's labels can be up to 60 s stale after an advance (the route's cache).
+  - The PWA's labels can be up to 60 s stale after an advance (the route's cache). (2026-11-16: re-judged in R3's
+    brief against #2736's `no-store`.)
   - If W2 reaches the fleet before W4, a moved Codex class shows its old hard-coded label in the pickers until W4
     lands. `ccrc models <id> show` is authoritative.
-- **Local mode.** `CCRC_FLEET=local` has no Models sheet: the route answers 501 there.
+- **Local mode.** `CCRC_FLEET=local` has no Models sheet: the route answers 501 there. (2026-11-16: superseded by
+  D-8687.)
 
 **Later:**
 - the typed `/model` at an idle tick on a Codex lane, if runbook step 6 shows it works, with the ccd routing-record
@@ -18093,9 +18227,15 @@ skipped on each runner.
 
 ## Operator runbook: rollout and live acceptance (not tasks)
 
+Since 2026-11-16, "operator" in this runbook means the programme's coordinator, except rollout, rollback and the
+server box's roster, which stay the owner's.
+
 1. **Before W2 merges, the coordinator measures the update control plane.** It reads `GET /api/updates`. If any fleet
    node's desired tag would follow a new prerelease, W2 does not merge until R-O9 has run, or until the operator has
    pinned that node. **No wave reaches the fleet before R-O9.**
+   - **2026-11-16: R-O9 is met.** It was replaced by ruling on 2026-10-17, and its replacement criteria were
+     verified met on 2026-10-19, before W1 and W2 shipped. It was the gate of steps 1 and 2, and of the soak step 4
+     names.
 2. **Roll W1 out first,** after R-O9, with `ccrc rollout --to <tag>`. Then, for any Codex-lane class meant to stay
    empty, run `ccrc models <id> hold <class>`: W2's backfill seeds every empty class's family, and the next hour would
    fill it. Measured on 2026-10-15, no class is empty on either Codex lane, so no hold is expected.
@@ -18107,6 +18247,9 @@ skipped on each runner.
    - W2's README names `model-sessions-behind` before W3 ships it, so W2's PR body says so.
 4. **Before W3 reaches the fleet,** any running soak gate records its acceptance of the check names
    `model-advance-held-back`, `model-held-behind`, `model-sessions-behind` and `model-advance-blocked`, by name.
+   - **2026-11-16: R-O9 no longer gates (step 1's note).** The gate still running is the Codex bridge's check
+     week, which closes on 2026-11-21: W3 merges only after it, with the four checks measured PASS on a healthy lane
+     (D-8689).
 5. **Live acceptance (spec §5)** is the stopgap's procedure, run by the code, for the next new model:
    - the hourly refresh canaries the model and moves the class (check `ccrc models <id> show` and the push);
    - a throwaway session on that lane, started only with the operator's go and using `--model <class>`, replies on
@@ -18114,6 +18257,8 @@ skipped on each runner.
    - `ccrc doctor` shows `model-advance-held-back`, `model-held-behind` and `model-advance-blocked` PASS.
      `model-sessions-behind` may WARN a day after the move for sessions not yet relaunched, and it clears as they
      are relaunched.
+   - **2026-11-16: still to come.** This is the definition of done's last Codex item (the re-plan section). Step 6
+     runs inside it.
 6. **The typed-`/model` measurement (D11's fallback), only with the operator's explicit go.**
    - **The test.** Start a throwaway session on the lane before the move, then let the move happen while it is in a
      long turn. Read its transcript metadata at its next turn. If it is still on the old model, type `/model <class>`
@@ -18122,9 +18267,16 @@ skipped on each runner.
      choice; it moves that class twice for every session on that lane.
    - **Then.** If the typed step moves the session, it lands with the ccd routing-record change (Later). If it does
      not, sessions move only on relaunch, and that choice goes back to the operator.
+   - **2026-11-16: the go stands.** The operator's go of 2026-10-19 is kept. The test stays a Codex step and runs at
+     the natural moment, the next real model release on a Codex lane, with a watch armed for it. It is part of step
+     5's acceptance and blocks no wave. Reaping the throwaway workspace it leaves is the owner's.
 7. **Before W4 reaches the fleet,** every Codex lane is `exec.kind: codex` in the server box's roster too. Check it
    from `GET /api/accounts`' `laneKind` after rollout, as W4's whole-branch Step 3 says. A lane read as `other` gets
    no Models button and falls back to alias labels.
+   - **2026-11-16: an owner item.** The roster is the server box's account data, so setting it is the owner's. It is
+     measured read-only through the console from `GET /api/accounts`' roster row: `kind: 'codex'` with
+     `managed: true`, since `laneKind` is dropped (D-8686) and `kind: 'codex'` alone means only an
+     `openai` provider. It now gates R1's removal of the wrapper fallback as well as R4.
 
 ---
 
@@ -18433,3 +18585,35 @@ Where: Tasks 11 and 12. The Global Constraints and the W2 wave contract ask each
 ### D-6266 — the advance budget's off switch fails closed
 
 Where: Task 11, changed by the whole-wave fix (cbde66b64). `_models_advance_budget_secs` reads `CCRC_MODELS_ADVANCE_BUDGET_S` as follows. Unset or empty, it is 250. A whole number is itself, read base 10 after its leading zeros, and 3600 at most, capped by its digit count before `$(( ))` could overflow on it. Anything else (`off`, `false`, `-1`, `1.5`, a space) is 0, so the step is off for that run, and the refresh prints one line on standard error that names the variable and not its value. Task 11's code, as the plan wrote it, read anything that was not a whole number from 0 to 3600 as 250, so a value written to turn the step off left it on. Why: a mistyped off switch should leave classes still, not move them. Cost if wrong: a mistyped budget turns the step off for a run, which the run says.
+
+### D-8683 — the Anthropic arm builds only what the alias does not give
+
+Where: waves A0 to A4, and spec §2.5 and D21. Ruled by the programme's operator on 2026-11-16, provisional until A0. The arm stays in scope, per the owner's ruling of 2026-10-07. But Anthropic homes pin a class alias (`opus`), so Claude Code already resolves the newest model at launch. The arm builds only what the alias does not give: hold and revert, as a held id in the launch environment (D19); labels from data (D17's Anthropic half); effort carried across an id change, since a per-model effort pin is keyed by id today and an alias that resolves to a new id loses it; "a model listing no effort levels" in place of the haiku literal; readback by id; and doctor's causes. D9's canary by real use stays. There is no Anthropic registry and no hourly canary like the Codex arm's. A0 measures the premise, that the alias always resolves to the newest model the account may use; if A0 refutes it, the arm widens back to spec §2.5 as written. Cost if wrong: the narrowed arm is redone as a superset, and every piece above is still needed.
+
+### D-8684 — D18's source is a roster-declared one, adopted only after A0
+
+Where: waves A0 to A2, and spec D18. Ruled by the programme's operator on 2026-11-16. A home with no catalogue cache takes it from a source the roster declares: one home's fresh cache serves the homes the roster groups with it. It is adopted only after A0 measures what writes Claude Code's catalogue cache, when, and whether one organisation means one catalogue, Fable entitlement included. The other option D18 names, Claude Code's own account state, stays open until A1. Until A1, a home with no source gets no advance, and doctor names it (`model-advance-blocked`). D18 stays Open until A1. Cost if wrong: A1 re-opens the source choice.
+
+### D-8685 — #2607's options 1 and 2 are overtaken by D-8564
+
+Where: wave R2 (Task 15), and #2607. Ruled by the programme's operator on 2026-11-16. Since #2761 (D-8564) a lane's window is the smallest across its class models, a model with no measured window counting at its catalogue's advertised window, so an advance to an unmeasured model no longer halves the lane's window; measured on 2026-11-16, neither Codex lane's window is halved. That overtakes this plan's premise that such an advance "drops the lane to the default window", and #2607's options 1 and 2. The residual: if a lane's catalogue goes stale, a class model with no measured window falls to the client default and lowers the lane's window. It is covered by extending #2701's existing window notice on doctor's `models` row (D-8384), not by a fifth W3 check. The catalogue's window is never written as if measured. #2607 closes when that notice lands, or at once, with this residual accepted by ruling, if a measurement shows the notice already names it. Cost if wrong: a lane runs at the client default while its catalogue is stale, and the notice names it.
+
+### D-8686 — W4 is a delta on #2736
+
+Where: waves R1, R3 and R4 (Tasks 18 to 21), and runbook step 7. Ruled by the programme's operator on 2026-11-16. #2736 (D-8406) shipped `GET /api/models/:lane` and picker labels from data by its own route. W4 keeps that path and extends its `LaneModelsRead` type with hold, pending, revertable and advance state, through its one reader: no second reader, no `ModelsLaneView`, no `shared/models-view.ts`. Task 18's `laneKind` is dropped for the roster's existing `kind`, `managed` and `telemetry` (`RosterWire`). The POST goes on the same path. The Models sheet sits in the account sheet, not behind a row button, which amends D-5202. The PWA reads through #2736's `useLaneModels`, not a second hook. Cost if wrong: none in behaviour; the plan's task text no longer matches the code it would have built.
+
+### D-8687 — the `models` op has a local arm and a remote arm
+
+Where: wave R3 (Tasks 16 and 19). Ruled by the programme's operator on 2026-11-16. The server's link to the `models` op is built on the account op's template, with a local arm and a remote arm, as `server/src/accounts/ops.ts` has. D-5203's premise, that local mode has no spawn port and answers 501, is gone: the existing GET already answers in local mode, and moving it onto an agent-only op would make local mode worse. The plan's "Local mode" known limit goes with it. Cost if wrong: one more fixed-program spawn in local mode, outside the exec whitelist, pinned by the spawn source scans as the account op's local arm is.
+
+### D-8688 — #2736's file-read grant is retired in a later PR than the op's
+
+Where: waves R3 and R3b (Tasks 17 and 19), and D-8406. Ruled by the programme's operator on 2026-11-16. D-8406 promised that the agent's file-read grant (`isLaneModelsReadName`, `agent/src/whitelist.ts`) goes in the same change that lands the `models` op's `show`. A merge reaches the fleet within hours, and the two boxes update one at a time, so that change would break the GET in the mixed-version window, whichever box updates first. So R3 adds the op, and the server uses it only when the agent's `ready.ops` lists `models`, falling back to the grant otherwise. R3b retires the grant once both boxes run the op. Both mixed pairs are tested. Cost if wrong: the grant D14 rejected stands for one more PR.
+
+### D-8689 — W3's checks go before `docs-sw`, and W3 merges after the check week
+
+Where: wave R2 (Tasks 14 and 15), and runbook step 4. Ruled by the programme's operator on 2026-11-16. Doctor's table line now holds ten entries, and `docs-sw` is pinned last, so Task 15's line, which puts the four names after it, would red that pin. The four checks go into today's table line before `docs-sw`, and their functions after the last check function. `lock-unwritable` joins `BLOCKED_CAUSES`. There is no duplicate of #2701's window WARN. Their pins move to the split `ccrc-doctor-*` test files and `ccrc-doctorFixture.ts`. A merge reaches the fleet within hours, and the Codex bridge's check week runs until 2026-11-21, so W3 merges only after that week closes, and only once the four checks are measured PASS on a healthy lane, read-only, by running the branch's checks from the worker's worktree against the fleet box's lane files, with no install. Cost if wrong: W3 lands a few days later than it could have.
+
+### D-8690 — #1441 closes with W4's sheet, and its other asks move out
+
+Where: wave R4 (Task 20), and #1441. Ruled by the programme's operator on 2026-11-16. #1441 is narrowed to this programme's Models sheet and closes with it. Its acceptance line "values stored on the server, read by ccd" is dropped: it contradicts D4, under which holds live on the fleet box. The Fable share ceiling and per-lane effort move to a separate issue outside this programme. Cost if wrong: the Fable ceiling waits for its own programme.
