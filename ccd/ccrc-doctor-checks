@@ -12189,7 +12189,7 @@ _check_browser-mcp() {
 _check_cap-floor() {
   local reg="$HOME/.cc-sessions" row fact word say ids caps bad="" fix=""
   if [ -e "$reg" ] || [ -L "$reg" ]; then
-    [ -x "$reg" ] || { _dr_skip cap-floor "~/.cc-sessions cannot be searched, which the pools check reports"; return 3; }
+    [ -x "$reg" ] || { _dr_skip cap-floor "the registry ~/.cc-sessions cannot be searched, which the pools check reports"; return 3; }
   fi
   _cap_floor_standing || { _dr_fail cap-floor "unmeasured: ~/.cc-sessions can be searched but not listed, so nobody knows whether a fact stands that needs a capability" \
     "give ~/.cc-sessions its read bit back (chmod u+r ~/.cc-sessions), then re-run: ccrc doctor"; return 1; }

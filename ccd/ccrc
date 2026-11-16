@@ -3300,11 +3300,8 @@ _box_build_fields() {
          and (.dirty | type == "boolean")
          and ((has("version") | not)
               or ((.version | type == "string") and (.version | length > 0)))
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\n\(
-        if has("ccdCaps") | not then "<absent>"
-        elif (.ccdCaps | type == "array") and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*$")))
-        then .ccdCaps | join(" ")
-        else "<malformed>" end)\nEND"
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\n\(if has("ccdCaps") | not then "<absent>"
+        elif (.ccdCaps | type == "array") and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*$"))) then .ccdCaps | join(" ") else "<malformed>" end)\nEND"
       else empty
       end
     ) catch empty
@@ -24778,17 +24775,14 @@ _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whos
   [[ -e "$reg" || -L "$reg" ]] || return 0
   [[ -d "$reg" && -r "$reg" && -x "$reg" ]] || return 1
   for row in "${CAP_FLOOR_ROWS[@]}"; do
-    ids=""
-    for e in "$reg"/*."${row%%|*}"; do [[ -e "$e" || -L "$e" ]] && n="${e##*/}" && ids+=" ${n%."${row%%|*}"}"; done
+    ids=""; for e in "$reg"/*."${row%%|*}"; do [[ -e "$e" || -L "$e" ]] && n="${e##*/}" && ids+=" ${n%."${row%%|*}"}"; done
     [[ -z "$ids" ]] || CAP_FLOOR_STANDING+=("$row|$ids")
   done
 }
 _upd_cap_floor_check() {   # <target-stamp|-> <from> -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN for restore/watchdog
   local stamp="$1" from="$2" row fact word say ids why msg="" caps="" brc=-1
   local -a keep=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
-  if ! _cap_floor_standing; then
-    msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"
-  fi
+  _cap_floor_standing || msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"
   for row in "${CAP_FLOOR_STANDING[@]}"; do
     IFS='|' read -r fact word say ids <<<"$row"
     if [[ "$stamp" == - ]]; then why="the restored build's capabilities could not be read"
