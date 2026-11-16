@@ -177,7 +177,7 @@ function topLevelPositionals(words: readonly string[], root: string = REPO): str
 function tableTree(dir: string, words: readonly string[]): string {
   fs.mkdirSync(path.join(dir, 'ccd', 'lib'), { recursive: true });
   const pointers = words.map((w) => `# @ccd-lib:${w.replace(/-/g, '_')} — moved to ccd/lib/${w}.sh`).join('\n');
-  fs.writeFileSync(path.join(dir, 'ccd', 'ccd'), `#!/usr/bin/env bash\nfa() { :; }\n${pointers}\n__CCD_LIBS=(${words.join(' ')})   # load order\n`);
+  fs.writeFileSync(path.join(dir, 'ccd/ccd'), `#!/usr/bin/env bash\nfa() { :; }\n${pointers}\n__CCD_LIBS=(${words.join(' ')})   # load order\n`);
   for (const w of words) {
     fs.writeFileSync(path.join(dir, 'ccd', 'lib', `${w}.sh`), `# ccd/lib/${w}.sh — a fixture library\n# @ccd-lib:${w.replace(/-/g, '_')}\nf_${w.replace(/-/g, '_')}() {\n  echo ${w}\n}\n`);
   }
@@ -205,7 +205,7 @@ describe('one library table, and every list on it (D-8048)', () => {
     expect(ccdSourceLines(root).filter((l) => l.text === 'f_extra_word() {').map((l) => l.file)).toEqual(['ccd/lib/extra-word.sh']);
     expect(ccdProgramBodies(root).filter((b) => b.fn).map((b) => `${b.file}#${b.name}`))
       .toEqual(['ccd/ccd#fa', 'ccd/lib/one.sh#f_one', 'ccd/lib/two.sh#f_two', 'ccd/lib/extra-word.sh#f_extra_word']);
-    expect(readCcdProgram(path.join(root, 'ccd', 'ccd'))).toContain('f_extra_word() {\n  echo extra-word\n}');
+    expect(readCcdProgram(path.join(root, 'ccd/ccd'))).toContain('f_extra_word() {\n  echo extra-word\n}');
     // And the load itself: a copy of ccd whose table gains a word loads that library too, after the others.
     const tree = path.join(h.home, 'tree');
     const body = ccdTreeCopy(tree);
@@ -254,7 +254,7 @@ describe('one library table, and every list on it (D-8048)', () => {
 describe('the one-text guard (ccdReadGuard.ts, D-8048)', () => {
   const frame = (rel: string, fn = 'x'): string => `    at ${fn} (${path.join(REPO, rel)}:10:5)`;
   const stack = (...frames: string[]): string => ['Error', `    at check (${path.join(REPO, 'server', 'test', 'ccdReadGuard.ts')}:1:1)`, ...frames].join('\n');
-  const FILE = path.join(REPO, 'ccd', 'ccd');
+  const FILE = CCD;
   const DIR = path.join(REPO, 'ccd');
 
   it('FIXTURE: the guard throws on a raw read, a helper read, a body copy and a flat listing', () => {
@@ -324,8 +324,8 @@ describe('shared/hook-helpers.mjs reads the program (D-8048)', () => {
     // A tree whose function sits in a library: the generated region's source is still found.
     const root = tableTree(path.join(h.home, 'hh'), ['alpha', 'beta']);
     const libs = ['alpha', 'beta'].map((w) => fs.readFileSync(path.join(root, 'ccd', 'lib', `${w}.sh`), 'utf8'));
-    const main = fs.readFileSync(path.join(root, 'ccd', 'ccd'), 'utf8');
-    expect(readCcdProgram(path.join(root, 'ccd', 'ccd'))).toBe(spliceCcd(main, libs));
-    expect(readCcdProgram(path.join(root, 'ccd', 'ccd'))).toContain('f_beta() {');
+    const main = fs.readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    expect(readCcdProgram(path.join(root, 'ccd/ccd'))).toBe(spliceCcd(main, libs));
+    expect(readCcdProgram(path.join(root, 'ccd/ccd'))).toContain('f_beta() {');
   });
 });

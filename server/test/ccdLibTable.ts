@@ -27,7 +27,7 @@ let repoWords: string[] | null | undefined;
 /** The table's words under `root` (the repository by default), in load order, or null when its ccd/ccd has no table line
  *  (a fixture tree). The repository's is read once per process; a fixture's every time, since a test may rewrite it. */
 export function ccdLibWordsIn(root: string = REPO): string[] | null {
-  const read = (): string[] | null => ccdLibWordsOf(readFileSync(path.join(root, 'ccd', 'ccd'), 'utf8'));
+  const read = (): string[] | null => ccdLibWordsOf(readFileSync(path.join(root, 'ccd/ccd'), 'utf8'));
   if (path.resolve(root) !== REPO) return read();
   if (repoWords === undefined) repoWords = read();
   return repoWords;
@@ -36,6 +36,6 @@ export function ccdLibWordsIn(root: string = REPO): string[] | null {
 /** The libraries ccd/ccd loads, in load order: the words of its `__CCD_LIBS` line under `root` (the repository by default). */
 export function ccdLibNames(root: string = REPO): string[] {
   const words = ccdLibWordsIn(root);
-  if (words === null) throw new Error(`${path.join(root, 'ccd', 'ccd')} has no \`__CCD_LIBS=(\` line: ccd names its libraries there`);
+  if (words === null) throw new Error(`${path.join(root, 'ccd/ccd')} has no \`__CCD_LIBS=(\` line: ccd names its libraries there`);
   return [...words];
 }

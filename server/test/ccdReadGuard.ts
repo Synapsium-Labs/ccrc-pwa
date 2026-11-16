@@ -20,8 +20,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const REPO = path.resolve(__dirname, '..', '..');
-const CCD_FILE = path.join(REPO, 'ccd', 'ccd');
+// A setup file imports no test helper, so it names ccd's body from its directory, not through ccdWsHelpers.ts's `CCD`.
 const CCD_DIR = path.join(REPO, 'ccd');
+const CCD_FILE = path.join(CCD_DIR, 'ccd');
 const SELF = path.join(REPO, 'server', 'test', 'ccdReadGuard.ts');
 /** Wrappers that pass a listing through unchanged: a full run's tree-scan recorder (`tree-scans.setup.mjs`, loaded after this
  *  guard, so its wrapper sits outside it) records which roots a test lists and calls the lister it wrapped. A frame in one is
