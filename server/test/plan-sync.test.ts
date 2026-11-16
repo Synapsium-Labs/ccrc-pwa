@@ -790,6 +790,32 @@ describe('final-review fixes (D-8182)', () => {
     expect(mails(r).filter((m) => m.subject.includes('programme'))).toHaveLength(1);
   });
 
+  it('F4 measured (D-8699 stays a follow-up): an own object off the by-name first page fails the binding and mails once per binding and word, not once per requeue', async () => {
+    const r = await rig();
+    const rowid = r.plan.programmeRowId(SLUG)!;
+    const rid = requestIdOf('programme', rowid, WS.a.id);
+    // ten same-named initiatives made by this key, none at ccrc's id: its own fell off the first page of the listing
+    const page = Array.from({ length: 10 }, (_, i) => ({ id: U(950 + i), name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER }));
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativesByName') return ok({ nodes: page });
+      if (ask.op === 'initiativeCreate') return conflict;
+      if (ask.op === 'initiativeById') return ok({ initiative: { id: rid, name: 'Programme A' } });
+      return defaultRespond(ask, 0);
+    };
+    const programmeMails = () => mails(r).filter((m) => m.subject.includes('programme'));
+    await r.sync.tick(afterDebounce(r));
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid' });
+    expect(programmeMails()).toHaveLength(1);
+    r.t.now += LAST + 1_000; await r.sync.tick(r.t.now);              // the time requeue
+    r.dir.filledAt = r.t.now + 1; r.t.now += 2_000; await r.sync.tick(r.t.now);   // a directory refill
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme A renamed', SLUG);   // the inputs trigger
+    r.plan.markSyncDue(SLUG, r.t.now); r.t.now += PLAN_SYNC_DEBOUNCE_MS + 1; await r.sync.tick(r.t.now);
+    expect(r.asks.filter((a) => a.op === 'initiativeCreate').length).toBeGreaterThanOrEqual(3);    // it was retried each time
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid' });
+    expect(programmeMails()).toHaveLength(1);
+  });
+
   it("I-2 (C17): a bound project's refused update, requeued, sends one projectUpdate and no create", async () => {
     const r = await rig();
     await r.sync.tick(afterDebounce(r));
