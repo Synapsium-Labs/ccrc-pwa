@@ -222,6 +222,24 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
  *  not silently start disagreeing about where the window ends. */
 export const SCAN_LOOKBACK_LINES = 12;
 
+/** `DEFAULT_TEST_ROSTER` with the two H16 facts set on named lanes: `fableBilling` and a continuity record's `recordedAt`.
+ *  Pass the result to `seedAccountsSh` and `seedRoster` so both twins read one roster. */
+export function rosterWithFacts(
+  facts: Record<string, { fableBilling?: 'included' | 'credits'; continuity?: number }>,
+): typeof DEFAULT_TEST_ROSTER {
+  return {
+    ...DEFAULT_TEST_ROSTER,
+    accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => {
+      const f = facts[a.id];
+      return f === undefined ? a : {
+        ...a,
+        ...(f.fableBilling !== undefined ? { fableBilling: f.fableBilling } : {}),
+        ...(f.continuity !== undefined ? { continuity: { recordedAt: f.continuity } } : {}),
+      };
+    }),
+  };
+}
+
 /**
  * Writes `<home>/.ccrc/accounts.sh` — the generated roster `ccd` sources on the
  * line after it defines `die`, and the FIRST thing any fixture home needs,
