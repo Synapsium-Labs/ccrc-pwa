@@ -2230,7 +2230,7 @@ describe('8B: backup-coord.mjs stays the SQLite-only snapshot, and the helper ne
 // The rule is the server's, restated once on this side (it cannot import server TypeScript); the differential below holds the two together.
 import { statSync } from 'node:fs';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
-import { recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import { DelegationDurability, recoverDelegationFromFiles } from '../src/coord/delegation-durability.js';
 
 describe('8C: capture of a torn tail (D-4655): the complete prefix, the checkpoint, an additive manifest field, and a warning', () => {
