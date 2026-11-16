@@ -27,7 +27,9 @@ import type { ModelClass, Registry } from '../../shared/models.js';
 import { parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
-import { BLOCKED_CAUSES, CANDIDATE_REASONS, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../../shared/model-advance.mjs';
+import {
+  BLOCKED_CAUSES, CANDIDATE_REASONS, REASON_MAX, causeOf, clientWindowNotice, unmeasuredMoveNotice,
+} from '../../shared/model-advance.mjs';
 // Auto-advance plan W3 Task 14: advance-health's bounded runs, in a process group of their own.
 import { spawnSyncGroup } from './spawnGroup.js';
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
@@ -5420,5 +5422,105 @@ describe('advance-backfill reaps a stale catalogue staging file, and only that (
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body).not.toHaveProperty('reapedTmp');
     expect(r.body).toMatchObject({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false });
+  });
+});
+
+// ── D-8685 (public issue #2607): a stale catalogue under a class model with no measured window ───────────────
+// The other way a lane's window falls. `contextWindowFor` reads a model's advertised window only from a FRESH
+// catalogue (`providerWindow`), so once the catalogue goes stale a class model nobody measured has no window at all,
+// and the lane falls to the client's own default. The live lanes' shape is (b): the move left a model nobody
+// measured, from a model nobody measured either, so `unmeasuredMoves` has no measured old window to name. Each case
+// moves opus by a real `advance-commit`, then rewrites the catalogue `stale: true` with the same models.
+describe('a stale catalogue under a class model with no measured window (D-8685, public issue #2607)', () => {
+  const S_NOW = '2026-10-22T10:05:12Z';
+  const PROMISED = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) => (m.id === 'model-6.1-gamma'
+    ? { ...m, context: 500000 } : m)) };
+  const commit = (): Result => opEnv({ CCRC_MODELS_NOW: S_NOW }, 'advance-commit', '--file', rosterPath(),
+    '--id', 'lane-a', '--class', 'opus', '--from', 'model-5.6-gamma', '--to', 'model-6.1-gamma', '--canary', 'passed');
+  /** The lane after the move, its catalogue now stale (or `fresh` left as it is), and what each reader says. */
+  function moveThenStale(byModel: Record<string, number>, o: { fresh?: boolean; dropAdvance?: boolean } = {}): {
+    show: unknown; lanes: unknown; room: ReturnType<typeof contextWindowFor>;
+  } {
+    plantStep({ catalogue: PROMISED });
+    plantWindows('lane-a', windowsFor(byModel));
+    const c = commit();
+    expect(c.body['outcome'], c.stdout + c.stderr).toBe('moved');
+    const catalogue = o.fresh === true ? PROMISED : { ...PROMISED, stale: true };
+    writeCatalogue('lane-a', catalogue);
+    if (o.dropAdvance === true) fs.rmSync(advPath('lane-a'));
+    const shown = op('show', '--file', rosterPath(), '--id', 'lane-a');
+    expect(shown.code, shown.stdout + shown.stderr).toBe(0);
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const room = contextWindowFor(parseRegistry(registryOf('lane-a')), parseCatalogue(catalogue),
+      parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8'))));
+    return { show: shown.body['windowNotices'], lanes: lanes.find((l) => l['id'] === 'lane-a')!['windowNotices'], room };
+  }
+  const MEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000, 'model-5.6-gamma': 400000 };
+  const UNMEASURED_OLD = { 'model-6-alpha': 400000, 'model-6-beta': 400000 };
+  const CLIENT_ROOM = { tokens: 200000, rule: 'default', unmeasured: ['model-6.1-gamma'], model: 'model-6.1-gamma',
+    source: 'client' };
+  /** The move notice (D-8384) the lane already carries in case (a). */
+  const MOVE_NOTICE = unmeasuredMoveNotice('lane-a', { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma',
+    fromTokens: 400000, how: 'advance', cause: 'newer' }, 200000);
+  /** lane-a's registry after the move: opus on model-6.1-gamma. */
+  const MOVED_REGISTRY = parseRegistry({ ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
+    effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } });
+  /** What (b) and (c) are named by (D-8685), in its one spelling's literal text. */
+  const CLIENT_NOTICE = "lane-a's opus class model model-6.1-gamma has no measured window, and the lane's catalogue is "
+    + 'stale, so its advertised window is not read: every session on the lane now runs at the client\'s own default '
+    + 'window, 200000 tokens; refresh the catalogue (ccrc models refresh lane-a), or measure model-6.1-gamma, then: '
+    + 'ccrc models lane-a set-window model-6.1-gamma <tokens>';
+
+  beforeEach(() => { seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') })); });
+
+  it('(a) the move left a measured model: the window falls to the client default, and the move notice alone names it', () => {
+    const r = moveThenStale(MEASURED_OLD);
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([MOVE_NOTICE]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  it('(b) the move left an unmeasured model (the live lanes\' shape): the window falls to the client default, named once', () => {
+    const r = moveThenStale(UNMEASURED_OLD);
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([CLIENT_NOTICE]);
+    expect(r.show).toEqual([clientWindowNotice('lane-a', MOVED_REGISTRY, true, CLIENT_ROOM)]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  it('(c) as (b), with the advance file removed after the move: still named, for it needs no move', () => {
+    const r = moveThenStale(UNMEASURED_OLD, { dropAdvance: true });
+    expect(r.room).toEqual(CLIENT_ROOM);
+    expect(r.show).toEqual([CLIENT_NOTICE]);
+    expect(r.lanes).toEqual(r.show);
+  });
+
+  // Controls: nothing is named.
+  it('the same lane with a FRESH catalogue reads the advertised window, and names nothing', () => {
+    const r = moveThenStale(UNMEASURED_OLD, { fresh: true });
+    expect(r.room).toMatchObject({ tokens: 400000, rule: 'default', source: 'measured' });
+    expect(r.show).toEqual([]);
+    expect(r.lanes).toEqual([]);
+  });
+
+  it('a stale catalogue on which every class model is measured names nothing', () => {
+    const r = moveThenStale({ ...UNMEASURED_OLD, 'model-6.1-gamma': 300000 });
+    expect(r.room).toMatchObject({ tokens: 300000, rule: 'measured', source: 'measured' });
+    expect(r.show).toEqual([]);
+    expect(r.lanes).toEqual([]);
+  });
+
+  it('a FRESH catalogue that promises no window (context 0) also falls to the client default, and is not D-8685\'s case', () => {
+    // `providerWindow` reads only a positive integer, so `context: 0` promises nothing; `parseCatalogue` accepts it.
+    const silent = { ...PROMISED, models: PROMISED.models.map((m) => (m.id === 'model-6.1-gamma' ? { ...m, context: 0 } : m)) };
+    plantStep({ catalogue: silent });
+    plantWindows('lane-a', windowsFor(UNMEASURED_OLD));
+    expect(commit().body['outcome']).toBe('moved');
+    const room = contextWindowFor(parseRegistry(registryOf('lane-a')), parseCatalogue(silent),
+      parseWindows(JSON.parse(fs.readFileSync(winPath('lane-a'), 'utf8'))));
+    expect(room).toEqual(CLIENT_ROOM);
+    expect(op('show', '--file', rosterPath(), '--id', 'lane-a').body['windowNotices']).toEqual([]);
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual([]);
   });
 });

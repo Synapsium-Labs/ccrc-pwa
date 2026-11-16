@@ -17,6 +17,8 @@ import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, reg } from './
 import { SEEDED } from './fixtures/modelCases.js';
 // Auto-advance plan W3 Task 14: the session rule beside the family rule.
 import { BEHIND_AFTER_MS, BLOCKED_CAUSES, isoSeconds, sessionBehind } from '../../shared/model-advance.mjs';
+// D-8685 (public issue #2607): the stale catalogue's fall to the client window.
+import { clientWindowNotice } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -586,5 +588,30 @@ describe('sessionBehind: one session still on a model a move replaced (§2.8; pl
   it('the threshold is one day, defined once, and lock-unwritable is a blocked word', () => {
     expect(BEHIND_AFTER_MS).toBe(24 * 60 * 60 * 1000);
     expect(BLOCKED_CAUSES).toContain('lock-unwritable');
+  });
+});
+
+// ── D-8685 (public issue #2607): the other way a lane's window falls ────────────────────────────────────────
+describe('clientWindowNotice: a stale catalogue drops an unmeasured class model to the client window (D-8685)', () => {
+  const PINS = reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' });
+  const ROOM = { tokens: 200000, source: 'client' as const, model: 'model-6.1-gamma' };
+
+  it('names the class, the model, the client window and both remedies, and offers no advertised window as measured', () => {
+    expect(clientWindowNotice('lane-x', PINS, true, ROOM)).toBe("lane-x's opus class model model-6.1-gamma has no "
+      + "measured window, and the lane's catalogue is stale, so its advertised window is not read: every session on "
+      + "the lane now runs at the client's own default window, 200000 tokens; refresh the catalogue (ccrc models "
+      + 'refresh lane-x), or measure model-6.1-gamma, then: ccrc models lane-x set-window model-6.1-gamma <tokens>');
+  });
+
+  it.each([
+    ['a fresh catalogue', { stale: false }],
+    ['no window decision at all', { room: null }],
+    ['a window the catalogue advertised', { room: { ...ROOM, source: 'provider' as const } }],
+    ['a measured window', { room: { ...ROOM, source: 'measured' as const } }],
+    ['a model no class pins', { room: { ...ROOM, model: 'model-6-delta' } }],
+    ['no model named', { room: { ...ROOM, model: null } }],
+    ['no window in force', { room: { ...ROOM, tokens: null } }],
+  ] as [string, { stale?: boolean; room?: Parameters<typeof clientWindowNotice>[3] }][])('%s is null', (_w, o) => {
+    expect(clientWindowNotice('lane-x', PINS, o.stale ?? true, o.room === undefined ? ROOM : o.room)).toBeNull();
   });
 });

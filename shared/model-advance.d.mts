@@ -133,6 +133,7 @@ export declare function unmeasuredMoves(a: {
   tokens: number | null;
 }): UnmeasuredMove[];
 export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, tokens: number | null): string;
+export declare function clientWindowNotice(lane: string, registry: Registry, stale: boolean, room: { tokens: number | null; source: 'measured' | 'provider' | 'client' | null; model: string | null } | null): string | null;
 // ── sessions behind a move (plan W3 Task 14) ──
 export declare const BEHIND_AFTER_MS: 86400000;
 export declare function isoSeconds(ms: number): string | null;

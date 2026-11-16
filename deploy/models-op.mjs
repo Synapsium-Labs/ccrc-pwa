@@ -81,8 +81,9 @@ import {
 } from '../shared/modelenv.mjs';
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
-  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, familyOf, heldBackOf, parseAdvance,
-  reconcilePending, recordFailure, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
+  AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, clientWindowNotice, familyOf, heldBackOf,
+  parseAdvance, reconcilePending, recordFailure, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
+  unmeasuredMoves,
 } from '../shared/model-advance.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -1230,15 +1231,24 @@ function describe(account, registry, catalogue, reading) {
 /** `show`'s and `lanes`' `windowNotices` (D-8384, public issue #2607): one sentence per class whose last move
  *  lowered the lane's context window below the old model's measured one (`unmeasuredMoves`; D-8564: a move to a
  *  model whose provider promise is at least that lowered nothing and is quiet), each in `unmeasuredMoveNotice`'s one
- *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry, and
- *  with an advance file that is absent or cannot be read: `advance` already names that one. */
+ *  spelling, which `ccrc doctor`'s `models` row prints as a WARN (it asks `lanes`). Empty with no registry; with an
+ *  advance file that is absent or cannot be read there is no move to name (`advance` already names that file).
+ *  D-8685 adds the one notice that needs no move: a STALE catalogue under a class model with no measured window,
+ *  whose lane falls to the client's own default (`clientWindowNotice`), named once and never beside a move notice
+ *  for the same model. */
 function windowNotices(id, registry, catalogue, windows) {
   if (registry === null) return [];
-  const rd = readAdvance(id);
-  if (rd.err !== undefined || rd.advance === null) return [];
   const room = contextWindowFor(registry, catalogue, windows);
-  return unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens })
-    .map((m) => unmeasuredMoveNotice(id, m, room.tokens));
+  const rd = readAdvance(id);
+  const moves = rd.err !== undefined || rd.advance === null ? []
+    : unmeasuredMoves({ registry, advance: rd.advance, windows, rule: room.rule, tokens: room.tokens });
+  const notes = moves.map((m) => unmeasuredMoveNotice(id, m, room.tokens));
+  // D-8685: the stale-catalogue fall, named once, and never beside a move notice that already names its model.
+  if (!moves.some((m) => m.to === room.model)) {
+    const n = clientWindowNotice(id, registry, catalogue !== null && catalogue.stale === true, room);
+    if (n !== null) notes.push(n);
+  }
+  return notes;
 }
 
 /** §11's ORPHAN: a registry file whose id is in no roster row — typically

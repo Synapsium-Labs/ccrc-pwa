@@ -494,6 +494,24 @@ export function unmeasuredMoveNotice(lane, m, tokens) {
     + `then: ccrc models ${lane} set-window ${m.to} <tokens>`;
 }
 
+/** THE ONE SPELLING of the other way a lane's window falls (D-8685, public issue #2607): its catalogue is STALE, so
+ *  `contextWindowFor` cannot read a class model's advertised window (`providerWindow` never reads a stale one), that
+ *  model has no measured window, and the lane falls to the client's own default (`room.source === 'client'`, which
+ *  `contextWindowFor` chooses only when it is below every window it could read). `room` is `contextWindowFor`'s
+ *  answer and `stale` whether the lane's catalogue is marked stale. Null on every other lane, so a fresh catalogue
+ *  that simply lists no window for a model is not named here (D-8685 rules the stale case). The catalogue's
+ *  advertised window is never offered as a measurement: the remedies are a refresh, or a measurement. Pure. */
+export function clientWindowNotice(lane, registry, stale, room) {
+  if (stale !== true || room === null || typeof room !== 'object' || room.source !== 'client') return null;
+  if (typeof room.model !== 'string' || typeof room.tokens !== 'number') return null;
+  const cls = CLASSES.find((c) => registry.classes[c] === room.model);
+  if (cls === undefined) return null;
+  return `${lane}'s ${cls} class model ${room.model} has no measured window, and the lane's catalogue is stale, so `
+    + `its advertised window is not read: every session on the lane now runs at the client's own default window, `
+    + `${room.tokens} tokens; refresh the catalogue (ccrc models refresh ${lane}), or measure ${room.model}, then: `
+    + `ccrc models ${lane} set-window ${room.model} <tokens>`;
+}
+
 // ── SESSIONS BEHIND A MOVE (§2.8; plan W3 Task 14) ──────────────────────────────────────────────────────────────
 // `model-sessions-behind` is the backstop for a running session that kept a model a move replaced: the plan's
 // Task 1 measured that a running session does not reliably pick up a re-pin by itself. This half decides, from the

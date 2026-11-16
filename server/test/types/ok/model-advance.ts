@@ -4,7 +4,8 @@
 // `ok/**/*.ts`, so this file is checked there with no new project. It MUST compile clean, and it carries no cast.
 import {
   ADVANCE_VERSION, AdvanceInvalid, BEHIND_AFTER_MS, BLOCKED_CAUSES, CANARY_RESULTS, CANDIDATE_REASONS, HISTORY_CAP,
-  HOLD_BY, HOWS, REASON_MAX, backfillAdvance, canaryEffort, causeOf, chooseCandidate, compareVersions, eligibleIds,
+  HOLD_BY, HOWS, REASON_MAX, backfillAdvance, canaryEffort, causeOf, chooseCandidate, clientWindowNotice,
+  compareVersions, eligibleIds,
   familyOf, heldBackOf, isoSeconds, lastMoveOf, parseAdvance, parseModelId, reconcilePending, recordFailure,
   recordMove, resolveEffort, serializeAdvance, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../../../../shared/model-advance.mjs';
@@ -55,3 +56,4 @@ export const causedIntent: Pending = { class: cls, from: null, to: 'model-6.1-al
 export const day: 86400000 = BEHIND_AFTER_MS;
 export const iso: string | null = isoSeconds(0);
 export const behind: SessionBehind | null = sessionBehind({ advance: adv, registry: reg, nowMs: 0, turn: null, usage: null });
+export const clientNote: string | null = clientWindowNotice('lane-x', reg, true, null);
