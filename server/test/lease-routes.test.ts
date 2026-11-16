@@ -20,8 +20,8 @@ import { CoordStore } from '../src/coord/store.js';
 import {
   assertDelegationCheckpointProjectable,
   validateDelegationCheckpoint,
-  type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
 import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE, parseDelegationJournal, type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';

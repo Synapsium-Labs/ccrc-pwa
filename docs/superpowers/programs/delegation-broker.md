@@ -8,7 +8,7 @@ The first visibility release is designed in `docs/superpowers/specs/2026-11-02-d
 
 Separately, the operator authorized obtaining the exact previously refused test-launcher inspection request from retained evidence and preparing a precise safety-disposition request. That instruction does not authorize retrying the refused inspection, reading forbidden account/secret paths or weakening guards. The original nonzero test execution remains unresolved until causally explained and legitimately verified.
 
-Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed. Wave 5 landed in full by 2026-11-09. On 2026-11-10 the operator chose not to keep worktrees and dropped promotion (wave 5b), so the programme closes with wave 5.
+Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed. Wave 5 landed in full by 2026-11-09. On 2026-11-10 the operator chose not to keep worktrees and dropped promotion (wave 5b), so the programme closes with wave 5. On 2026-11-16 the operator settled the items carried to the Rider: run 2237 fixes two, the console's general items went to the desktop polish programme, and the rest were dropped.
 
 ## Current operator amendment — 2026-10-28
 
@@ -2314,6 +2314,30 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     operator to end it (an end request), and the programme closes with it. The two items carried from PR8d (above)
     stay with the Rider. Adoption stays in the product and only records while the switch is off; Retain and resolve
     and the switch's card are unchanged.
+- **2026-11-16 — The Rider settled; run 2237 takes two of its items.** The operator asked what work remained. The
+  coordinator answered that nothing was required, since the programme had closed, and that what was left were the
+  items carried to the Rider, which no run had taken. It sorted them into four groups and recommended fixing the first
+  two, handing the fourth to the desktop polish programme (`desktop-polish`) and dropping the third. The operator
+  agreed, and confirmed that the fourth group goes to that programme's coordinator.
+  - Run 2237 takes the two fixes, planned in `docs/superpowers/plans/2026-11-16-delegation-broker-rider.md` under
+    D-8666. First, the hole review 1665 N1 left open: a case-folded spelling of a verb no session may run reaches it
+    through an inherited `nocasematch` for every such verb the installed entry does not protect, `ws-rm`, `ws-reap`
+    and `roll` among them. Second, README's card sentence owed since PR8d. The run is dispatched once the entry and
+    its table (held by run 2216) and README (held by run 1850) are free to claim.
+  - To the desktop polish programme, by mail to its coordinator, because they belong to the console as a whole: an
+    open confirm leaves the page `aria-hidden` while it closes, so a refusal or a placed focus may not be announced,
+    and `Shift+Tab` pressed first inside it leaves it (every `QuickConfirm` caller, and the trap in `ui/`); no focus
+    ring and no `aria-busy` on a script-focused box; `apiErrorText`'s lookup on a plain object; Cancel, Escape or the
+    scrim leaving the focus on the page after a switch card's sheet (review 1703); a switch card relaying the server's
+    ccd failure text verbatim (review 1693 F9); and a failed poll re-rendering the Settings page once a minute (review
+    1709).
+  - Dropped, because keeping stays off and the lane only records: the adoption lane's behaviour under slow audits and
+    a degraded agent link (PR7b, PR7c), the keep card's focus and list edges (PR8b to PR8d, review 1727 F1 among
+    them), the rows not yet written, the wording of notes, comments and mutation tables, the same-user accident guards
+    on the lease files (review 1438), and delegation-recovery's crash-matrix timeouts on a loaded box. A change that
+    turns keeping on again reopens them from this ledger.
+  - Not this programme's, and recorded without a run: who acted on a switch door when its verb may have run is not
+    attributed (review 1669 A5). A fix belongs to every switch door at once.
 
 ## Carried constraints
 
@@ -2459,8 +2483,8 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**None (2026-11-10).** The programme closes with wave 5; wave 5b was dropped (decisions above). What follows is
-kept as history.
+**Run 2237, the Rider (2026-11-16).** Its plan is `docs/superpowers/plans/2026-11-16-delegation-broker-rider.md`; it is
+dispatched once its files are free to claim (decisions above). Wave 5b stays dropped. What follows is kept as history.
 
 **Wave 3's remaining follow-ups (2026-10-24).** Both runs of the operator's "Split: attempt fix first" have landed: run
 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762 (follow-up

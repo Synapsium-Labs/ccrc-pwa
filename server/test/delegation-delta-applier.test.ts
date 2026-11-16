@@ -52,10 +52,8 @@ import {
 } from '../src/coord/delegation-model.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_REPAIR_FULL_MS,
-  type DelegationProjectionPort,
-  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_REPAIR_FULL_MS, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
 import { DelegationDurability, type DelegationApplyOutcome, type DelegationDurabilityDeps, type DelegationDurabilityEdge } from '../src/coord/delegation-durability.js';
 import { type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';

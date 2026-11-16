@@ -1041,6 +1041,19 @@ on a summary.
   - **A rescue onto another class.** ccd's hard-block rescue may drop one class at the move and resume the
     conversation. For the Overlord that would carry a Fable conversation onto Opus. So that start makes a renewal due
     at once (hard, Table 3.3.11b).
+  - **Organizations and thinking.** The thinking of some models works only in the Claude organization that wrote it.
+    The preserved-thinking docs (<https://platform.claude.com/docs/en/build-with-claude/preserved-thinking>, "Accounts
+    and cloud platforms" and "What counts as your account on each platform", read 2026-11-16) name Claude Fable 5.2,
+    Claude Mythos 5.2, Claude Sonnet 5.5 and Claude Haiku 5.5. In another organization the API drops that thinking
+    with no error. It is read again on the return, because the conversation itself is unchanged. The API may also
+    leave out thinking from an account that is no longer in good standing, for more models than those four. So a
+    resume into another organization keeps the transcript but rereads it without that thinking. Each account carries
+    an organization label the operator sets, never the organization's id. An account with no label has an unknown
+    organization, and unknown is never read as the same organization. ccd's rescue breaks load ties toward the
+    session's current organization (C57), and the Overlord's step 3 does the same (C56). A start that resumed the
+    Overlord's conversation in another organization makes a renewal due at once (hard, Table 3.3.11b). Settings warns
+    when its account set spans organizations, and never refuses (C46). The plan is
+    `docs/superpowers/plans/2026-11-16-account-organization.md` (#2909).
 - **Rolls.** The roll lane hands every long-lived role to the renewal lane. Today it treats every session that is not
   a child as a coordinator, and would resume the Overlord's old conversation. A new ccrc install is a soft trigger,
   never a resume of an old conversation onto a new build. A typed `/model` is never adopted for a long-lived role
@@ -1367,6 +1380,7 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 | A probe failed mid-generation, and a re-read did not fix it | soft | overlord, coordinator | Probe rows |
 | Model drift: the running model is not the one the generation row records | hard | overlord | The model-switch journal, and the sidecar's model id. A fallback generation records the fallback class, so it does not drift |
 | A start that resumed the conversation on another model class | hard | overlord | The start report, against the previous generation's model |
+| A start that resumed the conversation in another organization | hard | overlord | The start report's `otherOrg`: the organization relation between the generation's account and the previous generation's account (`prevLane`, written by the mint alone). One account is one organization. Two accounts are the same organization only when both carry the same label. An unlabelled account makes the relation unknown, so the reading is unmeasured and the row blind, never "same". It is read apart from `otherClass`, so an unknown organization blinds no other row. It fires for any model, because a list of organization-bound models would copy the platform's (the organization plan, `resumed-other-org-hard-row`, `no-model-table-for-org`) |
 | An entry it was served was retired, edited, superseded or wiped | hard | overlord | The privacy journal |
 | The operator confirmed a restore, which raised the term | hard | overlord | The designation's term, against the term the generation carries |
 | The generation's account is outside its set: the operator changed the set, or the account's pool changed (C46) | hard | overlord | An account held out of the ordered list (§3.6) reads as outside the set (the readings plan, F7, `held-account-is-outside-the-set`). The renewal lane's sweep asks ccd for the generation's pool answer, `ccd pool-answer --session <id>`, behind the `pool-set` capability (C46): `_pool_ok`'s verdict for the account it runs on, and `_crosspool_valid`'s answer for that account. Due only on a mismatch with no valid crossing, and only when an account in the set can serve it. Not due where no account in the set can serve it: no renewal starts, and the word reads `stranded`, its item naming the cause that holds (C57). Not due for an account a valid crossing marker names: the operator's deliberate move stands until the next renewal, which clears the marker (C46). Not due on an undecidable verdict (a stale pool projection, or a bad set on the route record), on an unreadable crossing record, or when the read itself fails; the lane records the reason on the sweep. Otherwise a renewal lands inside the set, so it is not due again at once |
@@ -1722,7 +1736,8 @@ operator names the account pools it may draw from. Other sessions keep using eve
     decider on the server chooses the next generation's model.
   - **A change of model lands at a renewal, never inside a generation (C44).** Every planned move is a fresh start
     from the card. ccd's hard-block rescue may drop one class at the move and resume the conversation (C57). A start
-    that resumed the conversation on another model class is a hard renewal trigger (Table 3.3.11b). So no
+    that resumed the conversation on another model class, or in another organization (§3.3.8), is a hard renewal
+    trigger (Table 3.3.11b). So no
     conversation is carried from one model or provider to another for longer than it takes that renewal to land. The
     probes after it check the new generation like any other. The generation row records its model and lane.
   - **Its readers are never Fable.** The launch profile sets the subagent model to `sonnet` and turns forks off (§3.2).
@@ -1843,6 +1858,9 @@ operator names the account pools it may draw from. Other sessions keep using eve
     or its Fable share, before the Overlord does. What keeps it running is the set, the ordered list and the soft line
     (C56, C57): it moves to the next account in the set, then to Opus, then to a lane the operator listed for it.
     `poolRunway` warns ahead, and M11 counts the generations it spent off its designated class.
+  - **Organizations.** A set may span Claude organizations. Its accounts' organization labels are the operator's, set
+    on the Accounts screen, and they never admit, refuse or reorder an account here. They break ties only (C56, C57),
+    and Settings warns when the set spans more than one (§3.3.8).
   - **The set, and its one writer.** The set is a field of the designation row, `accountPools`. It holds a list of
     pool names, in the operator's order, and one yes or no, `untagged`, for accounts in no pool.
     - Only the operator's session-gated doors write it, as they write the class (C45): designate and rebind, which
@@ -2012,6 +2030,12 @@ operator names the account pools it may draw from. Other sessions keep using eve
     - The Settings row refuses a set under which fewer than two accounts can serve it while an Overlord is
       designated (`overlord-single-account`, with the count). The operator widens the set first, or retires the
       Overlord.
+    - **Organizations warn, and never refuse.** The set's door answers `orgSpread` over the accounts C56 counts, beside
+      `unknown-pool`. Settings says "Accounts in this set belong to `<n>` organizations" when the labels differ. It
+      says how many accounts have no organization set when some are labelled and others are not. It says nothing when
+      no account is labelled or when C56's count is unmeasured. A rule of one organization could leave fewer than two
+      accounts, which R14 forbids, so it is a warning only (§3.3.8; the organization plan,
+      `org-spread-warns-never-refuses`).
     - A drop by any other path is told, never refused (C56): an account moved out of the set's pools by the
       membership door, disabled, signed out or removed.
   - **A deliberate crossing holds until the next renewal** (the author's call under R17, from the coordinator's
@@ -2087,7 +2111,9 @@ editions of this spec.*
     `ROUTE_FIELDS`). At the renewal's fresh start ccd picks from the list in three steps. First, the first listed
     account under the soft line that can serve the designated class, once the hold-down allows that class. Next, the
     first listed account under the soft line, on the fallback class. Last, when every listed account is past the
-    soft line, the least loaded one that can serve it at all, the designated class first. The pick leaves readiness
+    soft line, the least loaded one that can serve it at all, the designated class first. Ties at that step go to an
+    account in the current account's organization, then to the earlier listed one. An account with no organization
+    label never wins that tie (§3.3.8; the organization plan, carry K1). The pick leaves readiness
     at `stranded` only when no account can serve it. A fresh start that cannot place refuses with exit 3 `unplaced`,
     last in the re-measure, and one with nothing measured stays on its current account unless its class reads
     unservable on both classes. The pick requires an Anthropic backend until a later piece records the operator's
@@ -2137,16 +2163,18 @@ editions of this spec.*
     nothing moves on a doubtful read (the ccd arms plan, question 2).
     Between renewals only the hard-block rescue moves the Overlord, and the renewal lane makes every planned move. When
     the generation's class is no longer servable on its account, that is a hard trigger (Table 3.3.11b). So is a start
-    that resumed the conversation on another model class, which the rescue can make. Coordinators keep today's arm,
-    and each landing mints a generation.
+    that resumed the conversation on another model class, which the rescue can make, and so is one that resumed it in
+    another organization (§3.3.8). The rescue's pick breaks load ties toward the current account's organization,
+    for every session. It never passes a gate, a bracket or a lower load for it. Coordinators keep today's arm, and
+    each landing mints a generation.
   - **A history of limits.** `limit_samples` records each account's five-hour and weekly percentages and their reset
     times. One L1 decider, `poolRunway`, answers when a pool runs out: a time, "not before reset", or unmeasured. Either
     line may also read "projected past the line before the next renewal". The two lines are also the first two load
     lines (§6.8).
   - **A swap mid-turn loses at most that turn, and never the operator's words.** If a limit still hits mid-turn, ccd
     swaps as it does for any session. The landing is a start, so it mints a new generation from the card (§3.3.1).
-    If the landing resumed the conversation on another model class, that is a hard trigger (Table 3.3.11b), so a
-    renewal follows it. The operator's messages are rows. Unsettled ones are band 1 of the inbox (§6.8), head the
+    If the landing resumed the conversation on another model class or in another organization, that is a hard trigger
+    (Table 3.3.11b), so a renewal follows it. The operator's messages are rows. Unsettled ones are band 1 of the inbox (§6.8), head the
     card, and are offered again after every renewal (§3.8). The new generation therefore answers them first.
   - **A restart keeps only the holds that can wait.** A swap landing or a crash restart reads `restarting`, and a
     renewal reads `renewing`, never `dead` (§6.4). `restarting` holds within the measured restart time, and only
@@ -2183,6 +2211,7 @@ editions of this spec.*
 | The account's load is past the harder line, 85%, the Overlord is idle, and another listed account is under the soft line | The renewal lane, on a hard trigger (Table 3.3.11b) | At once, between turns | As `renewing` |
 | A limit hits mid-turn | ccd's hard-block swap | At once. The landing mints a generation | As `restarting` |
 | The landing resumed the conversation on another model class | The start report, against the previous generation's model | At the next turn end, as a hard trigger (Table 3.3.11b) | As `renewing` |
+| The landing resumed the conversation in another organization | The start report's `otherOrg`, against the previous generation's account. Unknown is unmeasured, never "same" | At the next turn end, as a hard trigger (Table 3.3.11b) | As `renewing` |
 | No account can serve it | Readiness reads `stranded`, and its item names the cause that holds and its remedy: every account in the set limited (the earliest reset `poolRunway` measures), the pool projection stale or unreadable (the pool sync and the control-plane link, as `_pool_undecidable_why` and the `projection` word of `_undecidable_cause` name them), the set on the route record unreadable or malformed (the server writes the record again at its next sweep, or the operator saves the set again), or the set admitting no account that can serve it (widen the set, or bring an account back) | At the reset, when the pool sync recovers, when the route record is written again, or when the set or an account changes | All released in one grouped push |
 | The model changes inside a generation | The hook journals it: model drift | At the next turn end, as a hard trigger | As `renewing` |
 
@@ -7656,7 +7685,7 @@ the hardening calls that changed a call from its rev 8 form. §13.1 lists every 
 | C53 | Lossless history | mentioned in passing, the episodic layer | The episodic layer of every long-lived role. Its generations stay one family in history. One PreCompact print, owned by history W3, carries the role's instructions. Leaves are read before transcripts. The chat reads earlier generations through the history reader | Approved | H14 |
 | C54 | Code graphs | unused, its context, its routing | Routing through history's `touched` and a graph's blast radius, read by readers. The blast radius also fills the request's `expectedPaths`, which the `split-overlaps` check reads. The graphify card is withheld from the Overlord | Approved | H9, H23 |
 | C55 | Workflows and subagents | workflows, subagents that act, read-only subagents only | No workflows. Readers only: declared agent types passed at launch, a closed tool list, no shell, one read tool from the door process, and typed returns from untrusted text. At most three at once, never Fable. Every act goes through the main thread's doors | Approved | H9, H14 |
-| C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two that can serve it inside its set, or no designation (`overlord-single-account`). Accounts in its set first on its class, the same accounts next on Opus, and another provider's lane or a pay-per-use lane only if the operator lists it for the Overlord and its account is in the set. Fable on its accounts meets the same ceiling as every session's there. Neither ever counts towards the two. Fable billed to usage credits is unservable for it. The server writes the ordered list on the registry row; ccd picks at the renewal's fresh start, in three steps: under the soft line on the designated class, under it on the fallback class, then the least loaded | Approved; amended by R18 | H16, R18 |
+| C56 | How many accounts, and which | one, its pool only, its pool then shared | At least two that can serve it inside its set, or no designation (`overlord-single-account`). Accounts in its set first on its class, the same accounts next on Opus, and another provider's lane or a pay-per-use lane only if the operator lists it for the Overlord and its account is in the set. Fable on its accounts meets the same ceiling as every session's there. Neither ever counts towards the two. Fable billed to usage credits is unservable for it. The server writes the ordered list on the registry row; ccd picks at the renewal's fresh start, in three steps: under the soft line on the designated class, under it on the fallback class, then the least loaded, its ties going to the current account's organization (§3.3.8). Settings warns, and never refuses, when the set spans organizations | Approved; amended by R18 | H16, R18 |
 | C57 | Swaps and limits | ccd's hard-block swap only, planned moves | It moves at a renewal past the first load line, and renews pre-emptively at idle past the second when another account is under the first. A load reads the account's whole figure, as for any session. Between renewals only ccd's hard-block rescue moves it: this design stands ccd's affinity arm down for the `overlord` role. `limit_samples` lets a line read "projected past it before the next renewal". A mid-turn swap loses at most that turn, and unsettled messages are offered first. The retention table, not a fixed grace, decides what a restart does to holds | Approved; amended by R18 | H7, H16, H18, H20, R18 |
 | C58 | How the operator is asked to decide | a recommendation, a free-form note, a brief | A structured brief. It opens with where the question sits (R17). The default is the safe option. At most three options, each with downsides and the catalogue's reversibility, and at most three reasons, each marked measured or judged. Then the cell's track record, the best case against, tripwires, and what only the operator knows. The server picks the reveal mode and measures whether an answer was examined | Approved | H21, H30, H34, H36, H42, H45 |
 | C59 | Disagreement and the override | comply silently, argue freely, argue once | Argue once: an objection is a row with a sealed prediction, and a second one needs a new id (`no-new-evidence`). A command is the operator's tap on a server-rendered proposal, behind a step-up: single use, 15 minutes. Never past SAFETY, R7 or R12, and never an irreversible effect. "You decide" is no command: it is the operator's own answer on the row, picking the recommended option once it is on screen. It is never offered for O2, O4 or an irreversible effect, and it is logged `delegated`, never counted as agreement | Approved | H8 |
@@ -8145,7 +8174,7 @@ The body of the spec states only the result.
 
 This appendix keeps two trails. The first is the operator's rulings and answers since 2026-11-10 (Tables B to B4, B6 and
 B8); the second is the corrections the W1a builds measured and the W1 plans ruled, which are no rulings of the
-operator's (Tables B5 and B7). The body of the spec states only the result.
+operator's (Tables B5, B7 and B9). The body of the spec states only the result.
 
 The operator approved this edition on 2026-11-10, ruled on the review's fifteen questions, and gave R16 and R17. This
 table keeps the trail for the six calls those two rulings added.
@@ -8395,6 +8424,19 @@ table keeps the trail. The body states only the result.
 | 328 | "Does a coordinator's own goal count as ratified in the portfolio you rank?" "A coordinator's pin counts, shown as ratified by the coordinator." | A version the programme's own coordinator wrote counts as ratified, shown as "ratified by the coordinator", never as the operator's; a version any other session wrote still needs the operator's ratify door (§3.8). The portfolio plan builds it (its question 1) |
 
 *Table B8. What the operator's answers of 2026-11-16 changed.*
+
+**The account's organization, 2026-11-16 (#2909).** A fleet session lost its thinking after ccd resumed it on an
+account in another Claude organization. The organization plan (`docs/superpowers/plans/2026-11-16-account-organization.md`)
+added what follows. It records no ruling of the operator's.
+
+| Where | Before | Now |
+|---|---|---|
+| §3.3.8 | Nothing said what a move between organizations does to a conversation | "Organizations and thinking": which models' thinking is bound to its organization, and what ccrc does about it |
+| Table 3.3.11b, Table 3.4b | A same-class resume into another organization below the resumed-long threshold renewed nothing | A hard row for the Overlord, `resumed-other-org`, read from `otherOrg` apart from `otherClass`. Unknown is unmeasured |
+| C46 | The set's door warned only on an unknown pool | It also warns when the set spans organizations, and never refuses (R14) |
+| C56, C57 | Ties at step 3 and in the rescue went to listed or roster order | Ties go to the current account's organization first. An unlabelled account never wins one |
+
+*Table B9. What the account-organization plan changed.*
 
 ---
 
