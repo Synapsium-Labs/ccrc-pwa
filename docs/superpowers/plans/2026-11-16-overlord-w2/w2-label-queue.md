@@ -11,7 +11,8 @@
   `LabelledCases` port, which admission reads.
 - **A weekly pick, at most ten cards (question 16).** One lane picks the week's cards: a row due by the fourth-week rule
   first, then a gate row before an advice row, then the row nearest its line. A week never picks more than ten, and no
-  more than ten stand open at once.
+  more than ten stand open at once, so the operator is never handed more than ten; the fourth-week promise holds while
+  the operator answers.
 - **The cards sit behind the operator's own items.** In W2 the daily view is Waiting on you (the decision queue is W3's),
   so the cards are a section after the operator's items there. They are the operator's own cards, never rows of the
   Overlord's inbox, and nothing is pushed.
@@ -26,7 +27,8 @@
 - **What changes at merge.** Nothing a session sees. No row is asked until the operator switches it to shadow, so no
   card exists until then; every W2 row whose labels a card gathers is asked only through doors that `overlord-route-v1`
   opens.
-- **No question needs the operator.** Fourteen open questions (§2), each with a recommendation for the coordinator.
+- **No question needs the operator.** Fourteen open questions (§2), each with the coordinator's ruling of review 2289
+  folded in.
 
 ## 1. Goal, scope and the rulings this plan builds on
 
@@ -50,14 +52,14 @@ Coordination; the cards, their doors and the console's section are C6 Attention 
 | Ring | File | What it holds | PR |
 |---|---|---|---|
 | L0 | `shared/labelQueue.ts` (new) | `LABEL_CARDS_PER_WEEK` (10), `LABEL_ROW_MAX_GAP_WEEKS` (4), the card answers, the card and answer wire shapes | A |
-| K, L1 | `server/src/time/rules.ts` | `utcIsoWeek`, moved from `server/src/continuity/quiz.ts#quizWeek` | A |
-| L1 | `server/src/coord/labelQueue.ts` (new, C5) | `labelsNeeded`, `pickLabelCards`, `labelFor`, `cardRowsOf` | A |
+| K, L1 | `server/src/time/rules.ts` | `utcIsoWeek`, moved from `server/src/continuity/quiz.ts#quizWeek`, which is deleted | A |
+| L1 | `server/src/coord/labelQueue.ts` (new, C5) | `labelsNeeded`, `pickLabelCards`, `labelFor`, `cardRowsOf`, `cardShown` | A |
 | L1 | `server/src/coord/labelCards.ts` (new, C6) | `cardAnswerVerdict`, `cardView` | A |
-| L1 | `server/src/coord/decisionLines.ts` (decision model B's) | `lineCounts`, extracted from `admitLine` in a move commit | A |
-| L2 | `server/src/coord/labelQueuePorts.ts` (new, C5) | `MeasuredLabels`, `LabelLaneReads`, declared by this consumer | A |
-| L3 | `server/src/coord/labelQueueStore.ts` (new, C5) | `label_cards` and `decision_labels`: their writers and readers, and the `LabelledCases` adapter | A |
+| L1 | `server/src/coord/decisionLines.ts` (decision model B's) | `lineCounts`, which decision model B exports in its own build; this piece imports it | A |
+| L2 | `server/src/coord/labelQueuePorts.ts` (new, C5) | `MeasuredLabels`, `LabelLaneReads`, declared by this consumer, the lane | A |
+| L3 | `server/src/coord/labelQueueStore.ts` (new, C5) | `label_cards` and `decision_labels`: their writers and readers, the `LabelledCases` adapter, and the adapter of the doors' `LabelCardStore` | A |
 | L4 | `server/src/coord/labelQueueLane.ts` (new, C5) | The weekly lane's pass | A |
-| L4 | `server/src/coord/labelCardRoutes.ts` (new, C6) | `GET /api/labels` and `POST /api/labels/:id`, through the account gate | A |
+| L4 | `server/src/coord/labelCardRoutes.ts` (new, C6) | `GET /api/labels` and `POST /api/labels/:id`, through the account gate; `LabelCardStore`, the port it declares as its consumer | A |
 | L1, L4 | `pwa/src/labels/` (new, C6) | `labelWords.ts`, `LabelCards.tsx`, `labels.css` | A |
 | L3 | `server/src/coord/labelSources.ts` (new, C5) | The `MeasuredLabels` adapters: `operator-answer` from `programme_pairs`, `routed-to` from requests | B |
 
@@ -112,6 +114,10 @@ and questions 24 to 28 are settled. This plan builds on:
   9: the hosted screen runs on every hosted call, rebuilt labelled cases included.
 - **The overlaps plan:** the `goals.conflict` row's `operator-answer` label is the operator's ruling, read from
   `programme_pairs` through the choice table's `conflict` column ("The label queue piece reads it").
+- **Review 2289's rulings (fix round 1):** the open cap stays, and the no-starvation property holds while the operator
+  answers (F11); `quizWeek` is deleted, not wrapped, and its mutant set and floor follow the move without falling (F6);
+  decision model B exports `lineCounts` in its own build, with no move commit here (F14); the hidden-card filter has one
+  home (F12); the doors decide in C6 and declare their own port (F13); LQ10 notes what the order can leak (F16).
 
 ## 2. Open questions
 
@@ -123,14 +129,26 @@ operator.
   (`server/src/continuity/quiz.ts#quizWeek`, `server/src/laneSchedule.ts#QUIZ_LANE_PERIOD_MS`). **Recommendation:** the
   same. The lane runs daily (`LABEL_LANE_PERIOD_MS`, derived from `QUIZ_LANE_PERIOD_MS`, `startsDue` so a restart never
   skips a week) and picks within the week's budget. A case that appears mid-week can still be carded that week, and a
-  week never picks more than ten. `quizWeek` moves to the clock kernel as `utcIsoWeek` in a move commit, so two lanes
-  read one week, never two copies.
+  week never picks more than ten. `quizWeek` moves to the clock kernel as `utcIsoWeek` in a move commit and is deleted,
+  never wrapped, so two lanes read one week from one function. The move carries its importers and its mutation guard
+  (review 2289, F6):
+  - `server/src/continuity/quizLane.ts` and `server/test/continuity-quiz-lane.test.ts` import `utcIsoWeek`;
+  - `server/test/sim/quizSets.ts`' `QUIZ_WEEK_SET` retargets its `modulePath` to `server/src/time/rules.ts` and its
+    suite to `utcIsoWeek`. Its five mutants are lines of the body, which moves unchanged, so each still occurs once;
+  - the floor in `server/test/sim/mutation-floors.json` keeps its value, 1. It also keeps its key,
+    `server/src/continuity/quiz.ts#quizWeek` (`QUIZ_WEEK_KEY`), because `floorsFallen` reads a removed key as a fallen
+    floor (its CONTROL case: "a lowered floor and a removed one") and the guard has no rename path, so a renamed key
+    would red "no floor falls below its value at the merge-base". The key is the floor's name, and a comment on
+    `QUIZ_WEEK_KEY` says the decider now lives in `server/src/time/rules.ts`.
 - **LQ2. At most ten picked a week, and at most ten open** (slug `label-cards-top-up-to-ten`). "Up to ten one-tap cards a
-  week" and "until answered" together would let unanswered cards pile up ten a week. **Recommendation:** each pass picks
-  `min(10 − picked this week, 10 − open)`. An operator who answers none sees the same ten until they do, never forty.
+  week" and "until answered" together would let unanswered cards pile up ten a week. **Recommendation (review 2289,
+  F11: keep the open cap):** each pass picks `min(10 − picked this week, 10 − open)`. An operator who answers none sees
+  the same ten until they do, never forty, and the operator is never handed more than ten open cards. While ten stand
+  open the budget is 0, so a due row waits for an answer: the fourth-week promise (LQ4) holds while the operator
+  answers, and the property and its 52-week sweep say so.
 - **LQ3. Which rows get cards** (slug `cards-only-for-label-queue-rows`). Table 3.7b gives each row its label sources,
   and a card writes the `label-queue` source. **Recommendation:** a row gets cards only when its `labelSources` names
-  `label-queue`, its labels cannot all come from outcomes, and it is not `off`. In W2 that is `scope.widens`,
+  `label-queue` and it is not `off`. In W2 that is `scope.widens`,
   `relay.method`, `readback.omits` and `readback.adds`. `programme.pick` and `programme.any` gather `routed-to`, and
   `goals.conflict` gathers `operator-answer`: measured, never carded. A test derives the card rows from
   `DECISION_QUESTIONS`, so a W3 row joins by its own columns.
@@ -145,8 +163,9 @@ operator.
   Admission is fixed-sequence, so the next candidate is the first one that has not passed: the strictest when no line
   is admitted, else the one after the admitted line. **Recommendation:** `labelsNeeded(row, cases)` is the least `k`
   with `upperBound95(errors, n + k)` at or under the row's `target`, where `n` and `errors` are the next candidate's
-  counts by decision model B's per-kind rule. Those counts come from one function, `lineCounts`, which this piece
-  extracts from `admitLine` in a move commit, so the rule is written once. A row with no next candidate ranks last.
+  counts by decision model B's per-kind rule. Those counts come from one function, `lineCounts`, which decision model B
+  exports in its own build and `admitLine` calls (review 2289, F14), so the rule is written once and this piece only
+  imports it. A row with no next candidate ranks last.
   `k` is searched up to `LABELS_NEEDED_CAP` (1,000); a row that needs more ranks just before those with none.
 - **LQ6. Which case is carded** (slug `which-case-is-carded`). A label counts toward `n` only on a case the model marked
   at the candidate (question 17's table). **Recommendation:** a waiting case is a state (row, revision, state hash) with
@@ -181,6 +200,14 @@ operator.
   the verdict, `p`, the band or the line. A private-state row's card may show the operator's own cited words, to the
   operator alone, so the route is masked (`MASKED_GET_ROUTES`) and is listed in the inbox piece's
   `operator-message-readers.test.ts` operator list.
+  - **What the order can still tell (review 2289, F16).** No card shows the model's answer, but LQ6 cards a case the
+    model marked at the next candidate first. An operator who answers many cards of one row may come to read a card as
+    "the model probably said yes", which can lean their label toward it. A lean toward the model's answer makes the
+    model look better than it is, so the risk is a line admitted too early. W2 accepts it, for three reasons: the order
+    is what lets labels count at the candidate at all; arming still needs a full canary (decision model ruling F11),
+    which the lean does not touch; and on a row with an `outcome` source, a later outcome label on the same state
+    stands over the card's, the newest standing (LQ8). The card says nothing of why it was picked. W3 may mix unmarked cases into each row's share if
+    the canary disagrees with the labels.
 - **LQ11. Labels and the private-name screen** (slug `labels-pass-the-hosted-screen`). **Recommendation:** this piece
   sends nothing out. Its cases reach a model only when decision model B's lane re-asks them for admission and the
   canary, through `gatherDecisions`, whose hosted screen runs on every rebuilt case (decision model question 9). A case
@@ -193,28 +220,38 @@ operator.
   change, while a card waits. **Recommendation:** the read leaves out every card whose row is `off` or whose revision is
   not the row's current one, and the open count does not include them. Answering one refuses `row-changed` (409, from
   decision model B's group). A card already closed answers 200 `changed: false`. No new refusal word.
+  - **Where the filter lives (review 2289, F12).** One L1 function, `cardShown(card, rowNow)` in
+    `server/src/coord/labelQueue.ts`, answers `shown` or `hidden` from the card's row and revision and the row's current
+    mode and revision. The store answers every open card with its row and revision (`openLabelCards`) and never filters;
+    the lane's budget, its re-read inside the pick's transaction, and the `GET` door each count or serve only the cards
+    `cardShown` shows. So `labelCardCounts` answers `pickedThisWeek` and each row's last card week, and `open` is
+    counted by the caller through `cardShown`.
+  - **Hidden cards are kept, not purged.** A hidden card stays a row, so its state is never carded twice at that
+    revision. The pick budget bounds the table at ten rows a week, about 520 a year, so W2 adds no purge.
 - **LQ14. Act ceilings (index question 19)** (slug `label-queue-adds-no-act-kind`). **Recommendation:** none. A label is
   the operator's act, not the Overlord's, and the lane's own bound is the ten a week. The label doors read nothing from
   the Overlord's read ledger.
 
 ## 3. What exists today
 
-Measured on `main` at `dfb86c7d8` (2026-11-16). Decision model B is a plan on `main`, not built; each of its symbols is
-cited by that plan's contract.
+Measured on `main` at `b99bc6390` (2026-11-16). Decision model B is a plan on `main`
+(`docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model.md`), not built; each of its symbols is cited by that
+plan's contract.
 
 | What | Where | What this piece does with it |
 |---|---|---|
 | The account gate | `server/src/accounts/gate.ts#createAccountGate`: refuses `auth-off`, `insecure-origin`, `unauthenticated`, `unsupported` (skipped when `cap` is `null`) and `step-up-required`, in that order; `AccountGateAsk` `{ cap, stepUp? }` | Both doors call it with `{ cap: null }` |
 | Its words in the console | `shared/api.ts#ACCOUNT_GATE_REFUSALS`; `pwa/src/lib/refusalWords.ts` holds per-door texts for `auth-off` | `labelWords.ts` adds the card door's text |
-| The weekly key | `server/src/continuity/quiz.ts#quizWeek` (UTC ISO week, `YYYY-Www`, and its Monday) | Moved to `server/src/time/rules.ts` |
+| The weekly key | `server/src/continuity/quiz.ts#quizWeek` (UTC ISO week, `YYYY-Www`, and its Monday), imported by `server/src/continuity/quizLane.ts` and `server/test/continuity-quiz-lane.test.ts` | Moved to `server/src/time/rules.ts` as `utcIsoWeek`, and deleted |
+| Its mutation guard | `server/test/sim/quizSets.ts#QUIZ_WEEK_SET` (five mutants, lines of the body, `modulePath` `quiz.ts`), keyed `QUIZ_WEEK_KEY`; `server/test/sim/mutation-floors.json` holds `server/src/continuity/quiz.ts#quizWeek` at 1; `server/test/sim/mutate.ts#floorsFallen` reads a removed key as fallen | The set retargets; the floor and its key stay (LQ1) |
 | The lane table | `server/src/laneSchedule.ts#LANE_SCHEDULE`; `QUIZ_LANE_PERIOD_MS` is one day; `server/test/lane-schedule.test.ts` counts 46 `mono` rows | One row, `labelQueue` |
 | The daily view | `pwa/src/ledgers/WaitingScreen.tsx` (Waiting on you), the operator's own items; the decision queue is W3's (§4 Table 4a) | The cards are a section after the items |
 | The context map | The architecture spec's C6 row: `push*.ts`, `coord/pushOutbox*.ts`, `coord/question*.ts`, … | Two rows: `coord/labelCard*.ts` and `pwa/src/labels/**` |
 | The session-gated census | `server/test/box-token-census.test.ts` keeps a session-only routes file's doors in a hand-kept list (`LEDGER_OPERATOR_DOORS`, `CONTINUITY_SESSION_DOORS`), checked against the file both ways | `LABEL_DOORS` |
 | The masked reads | `server/src/server.ts#MASKED_GET_ROUTES` | Gains `/api/labels` |
-| Decision model B | `w2-decision-model.md`: `decision_rows` (`decisionRowOf`), `decision_records`, `decision_lines`, `admitLine`, `LabelledCases`, `DecisionStateReads`, the empty labels source wired in `index.ts` | Reads them; replaces the empty source |
+| Decision model B | `w2-decision-model.md`: `decision_rows` (`decisionRowOf`), `decision_records`, `decision_lines`, `admitLine` (which counts `n` and `errors` inline today; this plan asks B to export them as `lineCounts`), `LabelledCases`, `DecisionStateReads`, the empty labels source wired in `index.ts` | Reads them; imports `lineCounts`; replaces the empty source |
 | The migrations | `server/src/coord/schema.ts#MIGRATIONS`: 82 on `main` | One migration in PR A |
-| Growth | `schema.ts` 3,378 lines, `server.ts` 4,411, `watch.ts` 12,465, `pwa/src/lib/api.ts` 1,197 | Each within 40 net lines (§8) |
+| Growth | `server/src/coord/schema.ts` 3,378 lines, `server/src/server.ts` 4,411, `server/src/watch.ts` 12,465, `pwa/src/lib/api.ts` 1,203 | Each within 40 net lines (§8) |
 
 *Table 2. What exists today, and what this piece does with each.*
 
@@ -224,7 +261,7 @@ This section gives `pickLabelCards`, the one decider of which states are carded.
 
 | Step | What it does |
 |---|---|
-| 1 | The budget: `min(LABEL_CARDS_PER_WEEK − picked this week, LABEL_CARDS_PER_WEEK − open)`. Zero picks nothing |
+| 1 | The budget: `min(LABEL_CARDS_PER_WEEK − picked this week, LABEL_CARDS_PER_WEEK − open)`, `open` counting only the cards `cardShown` shows (LQ13). Zero picks nothing |
 | 2 | The card rows: `cardRowsOf(DECISION_QUESTIONS)`, less every row that is `off` (LQ3) |
 | 3 | Each row's waiting cases (LQ6), its `labelsNeeded` (LQ5), and whether it is due (LQ4) |
 | 4 | The order: due, then gate before advice, then `labelsNeeded`, then the row id |
@@ -237,8 +274,10 @@ states to card.*
 **The properties:**
 
 - **Never over budget.** The output is never longer than step 1's budget, for any input.
-- **No starvation within ten rows.** For any sequence of weeks with at most ten card rows, a row with a waiting case
-  every week is picked at least once in every `LABEL_ROW_MAX_GAP_WEEKS` weeks.
+- **No starvation within ten rows, while the operator answers.** For any sequence of weeks with at most ten card rows,
+  in which the operator answers each week's cards before the next week's pass, a row with a waiting case every week is
+  picked at least once in every `LABEL_ROW_MAX_GAP_WEEKS` weeks. An operator who answers nothing holds the ten open
+  cards they have, and no row is picked until they answer (LQ2).
 - **Never an off row,** and never a state already carded.
 
 ```mermaid
@@ -268,9 +307,15 @@ This section gives the two doors and what a card shows.
 
 *Table 4. The two doors. Both are session-gated and carry no box token.*
 
-**The answer's transaction.** `closeLabelCardInTx` re-reads the card and its row's state, asks `cardAnswerVerdict`, and
-in one transaction closes the card (`closedAt`, `closedBy`, `outcome`) and, for an answer that is a label, writes one
-`decision_labels` row with source `label-queue` and the gate's actor. "Not sure" closes the card and writes no label.
+**The answer's transaction (review 2289, F13: decide in C6).** The `POST` handler (C6, L4) reads the card and its row's
+current mode and revision through `LabelCardStore`, the port its own file declares, and asks `cardAnswerVerdict` (C6,
+L1). It passes the verdict into the store: `closeLabelCardInTx` (C5, L3) is told what to write and decides nothing. In
+one transaction it re-checks that the card is still open and that the row still reads the mode and revision the
+handler read (a compare-and-set, the TOCTOU re-check the consolidation spec names as legitimately different), then
+closes the card (`closedAt`, `closedBy`, `outcome`) and, for a `label` verdict, writes one `decision_labels` row with
+source `label-queue` and the gate's actor. "Not sure" closes the card and writes no label. A failed compare answers
+`moved`, and the handler re-reads and asks the verdict once more, so a row that went `off` meanwhile answers
+`row-changed`. So C5 imports nothing from C6, and C6 reaches C5 only through the port it declares.
 
 ```mermaid
 stateDiagram-v2
@@ -289,9 +334,10 @@ off or changed, and a revision change leaves it hidden for good.*
 
 This section lists the rules every task keeps, and what the reviewer reads first.
 
-- **Architecture (`CLAUDE.md`).** `labelsNeeded`, `pickLabelCards`, `labelFor`, `cardRowsOf`, `cardAnswerVerdict`,
-  `cardView` and `utcIsoWeek` are pure. The lane and the doors read facts through ports their own files declare, ask a
-  decider and act. The C6 doors reach the C5 store through a port.
+- **Architecture (`CLAUDE.md`).** `labelsNeeded`, `pickLabelCards`, `labelFor`, `cardRowsOf`, `cardShown`,
+  `cardAnswerVerdict`, `cardView` and `utcIsoWeek` are pure. The lane and the doors read facts through ports their own
+  files declare, ask a decider and act. The C6 doors reach the C5 store through `LabelCardStore`, declared in
+  `labelCardRoutes.ts`, and the C5 store asks no C6 decider (F13).
 - **One writer per fact.** A card's pick: `pickLabelCardsInTx`. A card's close and its label: `closeLabelCardInTx`. A
   measured label: its own owner, never this piece (LQ8).
 - **No text in the label store.** A label is a word of a closed set; a card holds ids and a state hash. The card's
@@ -314,7 +360,10 @@ This section lists the rules every task keeps, and what the reviewer reads first
 2. **Ten, and fair.** No week picks more than ten, no more than ten stand open, and a due row is picked first.
 3. **Hidden answer.** No card carries the verdict, `p`, the band or the line.
 4. **One writer per fact.** Measured labels are read, never stored; an outcome retires an answer or overturn label.
-5. **Admission is not touched.** `lineCounts` is a move; `admitLine`'s answers are unchanged.
+5. **Admission is not touched.** `lineCounts` is decision model B's; this piece imports it and changes no line of
+   `admitLine`.
+6. **The quiz's move.** `quizWeek` is gone, its mutant set reaches `utcIsoWeek`, and its floor neither falls nor
+   changes key.
 
 ## 7. The PR split
 
@@ -322,7 +371,7 @@ This section gives the two pull requests and their growth.
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
-| A | 1 to 6 | `utcIsoWeek` and `lineCounts` moved; the vocabulary and the deciders; one migration with its store and the `LabelledCases` adapter; the lane; the two doors with every census; the cards on Waiting on you | Decision model B | `schema.ts` +26 (one migration: two tables); `server.ts` +5 (one import, one registration, one masked route); `watch.ts` +6 (`sweepLabelQueue` and its line); `pwa/src/lib/api.ts` +14 (two calls); `shared/api.ts` 0 |
+| A | 1 to 6 | `utcIsoWeek` moved, with its mutant set; the vocabulary and the deciders; one migration with its store and the `LabelledCases` adapter; the lane; the two doors with every census; the cards on Waiting on you | Decision model B | `schema.ts` +26 (one migration: two tables); `server.ts` +5 (one import, one registration, one masked route); `watch.ts` +6 (`sweepLabelQueue` and its line); `pwa/src/lib/api.ts` +14 (two calls); `shared/api.ts` 0 |
 | B | 7 to 8 | The `operator-answer` and `routed-to` adapters of `MeasuredLabels`, wired in `index.ts` | PR A; overlaps B (`programme_pairs` and its ruling); request record A and the coordinator doors (the owner that accepted); act rows A (the open act's checks) | none |
 
 *Table 5. The pull requests.*
@@ -349,19 +398,28 @@ its two sources read.*
 
 This section gives the eight tasks.
 
-### Task 1: The week, the counts, and the vocabulary (K, L0, L1)
+### Task 1: The week, and the vocabulary (K, L0, L1)
 
 **Files:**
-- Modify: `server/src/time/rules.ts` (`utcIsoWeek`), `server/src/continuity/quiz.ts` (`quizWeek` reads it),
-  `server/test/continuity-quiz-lane.test.ts` (imports only)
-- Modify: `server/src/coord/decisionLines.ts` (`lineCounts`, exported; `admitLine` calls it),
-  `server/test/decision-model-lines.test.ts` (imports only)
+- Modify (the move): `server/src/time/rules.ts` (`utcIsoWeek`, the body of `quizWeek` unchanged),
+  `server/src/continuity/quiz.ts` (`quizWeek` deleted), `server/src/continuity/quizLane.ts` (imports `utcIsoWeek`),
+  `server/test/continuity-quiz-lane.test.ts` (imports `utcIsoWeek`), `server/test/sim/quizSets.ts` (`QUIZ_WEEK_SET`'s
+  `modulePath` and suite retarget; `QUIZ_WEEK_KEY` keeps its value, with a comment)
+- Read, never changed: `server/test/sim/mutation-floors.json` (the floor stays at 1 under its key, LQ1)
 - Create: `shared/labelQueue.ts`, `server/test/label-queue-vocab.test.ts`
 - Modify: `server/test/single-definition/core-vocab.test.ts` (the vocabulary is defined once)
 
-**Step 0, two moves** (`CLAUDE.md`: characterization first). Each is its own commit, green on `main`'s tests with only
-their imports changed: `refactor(time): the UTC ISO week moves to the clock kernel` and
-`refactor(overlord): admitLine's per-candidate counts are one function`.
+**Step 0, one move** (`CLAUDE.md`: characterization first). `server/test/continuity-quiz-lane.test.ts` already
+characterizes the week (its Monday, its Sunday, the ISO year's turn), green on `main` against `quizWeek`. The move is
+its own commit, `refactor(time): the UTC ISO week moves to the clock kernel`, which changes the function's home and
+name and every importer, and nothing else: the test's imports, the quiz lane's import, and the mutant set's module and
+suite. Its check, before the commit: `sim/mutation-floors` green with every mutant of `QUIZ_WEEK_SET` killed, and
+`mutate.ts`'s "old text occurs once" holding for each of the five in `server/src/time/rules.ts`; and
+`git grep -n quizWeek -- server shared pwa` answers nothing but `QUIZ_WEEK_KEY`'s value and its comment.
+
+`lineCounts` is not moved here (review 2289, F14): decision model B exports it in its own build, and `admitLine` calls
+it there. This piece imports it. If decision model B has merged without it, Task 1 stops and reports to the
+coordinator rather than extracting it.
 
 **Interfaces:**
 
@@ -369,9 +427,8 @@ their imports changed: `refactor(time): the UTC ISO week moves to the clock kern
 // server/src/time/rules.ts (K, L1). The ISO week a wall time falls in, in UTC: `YYYY-Www` and its Monday 00:00 UTC.
 export function utcIsoWeek(now: number): { readonly key: string; readonly start: number };
 
-// server/src/coord/decisionLines.ts (L1, decision model B's): the counts admitLine reads at one candidate.
-export function lineCounts(row: DecisionQuestionRow, cases: readonly LabelledAnswer[], t: number):
-  { n: number; errors: number };
+// Imported, decision model B's (server/src/coord/decisionLines.ts, L1): the counts admitLine reads at one candidate.
+//   lineCounts(row: DecisionQuestionRow, cases: readonly LabelledAnswer[], t: number): { n: number; errors: number }
 
 // shared/labelQueue.ts (L0, imports types only)
 export const LABEL_CARDS_PER_WEEK = 10;
@@ -390,7 +447,8 @@ export interface LabelCardsAnswer { readonly ok: true; readonly cards: readonly 
 - [ ] **Step 1: Failing tests** (`label-queue-vocab.test.ts`): the constants; `LABEL_ANSWER_WORDS` written out; no field
   of `CardView` is named `verdict`, `p`, `band`, `line` or `probability` (a key list the compiler makes exhaustive).
 - [ ] **Step 2: Run red**, then implement, then run green: the new suite, `continuity-quiz-lane`,
-  `decision-model-lines`, `single-definition/core-vocab`, `rings/shared-imports`, both `tsc` runs and pwa's `tsc`.
+  `sim/mutation-floors` (no floor falls, and `QUIZ_WEEK_SET` kills all five), `single-definition/core-vocab`,
+  `single-definition/time-ports`, `rings/shared-imports`, both `tsc` runs and pwa's `tsc`.
 - [ ] **Step 3: Commit.** `feat(overlord): the label queue's vocabulary`
 
 ### Task 2: The deciders (L1)
@@ -420,6 +478,9 @@ export type LabelSource = (typeof DECISION_LABEL_SOURCES)[number];
  *  otherwise the newest stands. */
 export function labelFor(labels: readonly { source: LabelSource; label: LabelledAnswer['label']; at: number }[]):
   { label: LabelledAnswer['label']; source: LabelSource; retired: readonly LabelSource[] } | 'none';
+/** LQ13 (F12): the one filter of open cards. Hidden while the row is off or its revision is not the card's. */
+export function cardShown(card: { row: DecisionRowId; revision: string },
+  rowNow: { mode: 'off' | 'shadow' | 'armed'; revision: string }): 'shown' | 'hidden';
 
 // server/src/coord/labelCards.ts (C6, L1)
 export function cardAnswerVerdict(card: { closedAt: number | null; row: DecisionRowId; revision: string },
@@ -439,23 +500,27 @@ export function cardView(card: LabelCardRow, row: DecisionQuestionRow,
     never picked; due rows first, one each; a gate before an advice row; fewer needed before more; marked cases before
     unmarked, then newest; at most `needed` from a row before the next.
   - The properties, as seeded sweeps: never over budget; never an off row or a carded state; a 52-week run with four
-    rows always waiting gives each row a card in every window of `LABEL_ROW_MAX_GAP_WEEKS` weeks, and so does one with
-    ten rows.
+    rows always waiting, in which a simulated operator answers each week's open cards before the next pass, gives each
+    row a card in every window of `LABEL_ROW_MAX_GAP_WEEKS` weeks, and so does one with ten rows; and a run in which the
+    operator answers nothing never holds more than ten open (F11).
+  - `cardShown`: an off row and a changed revision hide; shadow and armed at the card's revision show.
   - `labelFor`: an outcome with an operator answer retires the answer; an outcome with an overturn retires it; two
     label-queue labels, the newest stands; no labels answer `none`.
   - `cardAnswerVerdict`: a closed card is `already`; an off row and a changed revision are `row-changed`; `yes` on a
     choice row and an unknown option are `bad-request`; `not-sure` is `not-sure`.
   - `cardView`: no field carries the verdict, `p`, the band or the line; a `quoted` field is marked.
-- [ ] **Step 2: Run red**, then implement, then run green. Register the six deciders in `labelQueueSets.ts` with floors.
+- [ ] **Step 2: Run red**, then implement, then run green. Register the seven deciders in `labelQueueSets.ts` with
+  floors.
 - [ ] **Step 3: Mutation.** Read `>` for `>=` in the budget; drop the due step; order advice before gate; let `labelFor`
-  keep the answer beside an outcome. Each reds a case. Run `sim/mutation-floors`.
+  keep the answer beside an outcome; let `cardShown` show an off row. Each reds a case. Run `sim/mutation-floors`.
 - [ ] **Step 4: Commit.** `feat(overlord): the label queue's pick, its order and one state's label (H6, Q16)`
 
 ### Task 3: The tables, the store and `LabelledCases` (L2, L3)
 
 **Files:**
 - Modify: `server/src/coord/schema.ts` (one migration)
-- Create: `server/src/coord/labelQueuePorts.ts` (L2: `MeasuredLabels`, `LabelLaneReads`, `LabelCardStore`)
+- Create: `server/src/coord/labelQueuePorts.ts` (L2: `MeasuredLabels`, `LabelLaneReads`; `LabelCardStore` is the
+  doors' own, declared in Task 5's `labelCardRoutes.ts`)
 - Create: `server/src/coord/labelQueueStore.ts` (L3)
 - Modify: `server/test/single-definition/writers-map.test.ts` (`TABLES` gains both tables and their writers),
   `server/test/coord-db.test.ts` (the version pins), `server/test/run-close-switch.test.ts` (the undo step and count)
@@ -482,7 +547,7 @@ CREATE TABLE decision_labels (
   row       TEXT NOT NULL,
   revision  TEXT NOT NULL,
   stateHash TEXT NOT NULL,
-  label     TEXT NOT NULL,            -- 'yes' | 'no' | 'none' | 'option:<slug>'
+  label     TEXT NOT NULL,            -- 'yes' | 'no' | 'none' | 'option:<slug>', the slug the option itself
   source    TEXT NOT NULL,            -- 'label-queue'; measured sources are read, never stored (LQ8)
   cardId    INTEGER,
   actor     TEXT NOT NULL,
@@ -501,23 +566,32 @@ export interface MeasuredLabels { labelsFor(row: DecisionRowId, revision: string
 // server/src/coord/labelQueueStore.ts (C5, L3)
 export function pickLabelCardsInTx(db: DatabaseSync, week: string, picks: readonly { row: DecisionRowId;
   revision: string; stateHash: string; recordId: number }[], at: number, budget: () => number): { picked: number };
+/** Told what to write (F13): the handler's verdict, and the row's mode and revision it read. Re-checks those and the
+ *  card's open state in the transaction (compare-and-set), and decides nothing else. */
 export function closeLabelCardInTx(db: DatabaseSync, id: number, close: { outcome: 'labelled' | 'not-sure';
-  label: LabelledAnswer['label'] | null; actor: string; at: number }): 'closed' | 'already' | 'absent';
+  label: LabelledAnswer['label'] | null; actor: string; at: number;
+  expect: { mode: 'shadow' | 'armed'; revision: string } }): 'closed' | 'already' | 'moved' | 'absent';
+/** Every open card with its row and revision, unfiltered: `cardShown` is the one filter (F12). */
 export function openLabelCards(db: DatabaseSync): readonly LabelCardRow[];
-export function labelCardCounts(db: DatabaseSync, week: string): { open: number; pickedThisWeek: number;
+export function labelCardCounts(db: DatabaseSync, week: string): { pickedThisWeek: number;
   lastCardWeekStart: ReadonlyMap<DecisionRowId, number> };
 /** The decision model's LabelledCases: stored labels and measured ones, through labelFor, each with its newest
  *  record's refs and inline. */
 export function labelledCasesOf(db: DatabaseSync, measured: MeasuredLabels): LabelledCases;
 ```
 
-`pickLabelCardsInTx` reads the budget again inside its transaction, and `INSERT OR IGNORE` keeps a state to one card.
-`closeLabelCardInTx` writes the card's close and, for `labelled`, the label, in one transaction.
+`pickLabelCardsInTx` reads the budget again inside its transaction, through the lane's `budget` callback, which re-reads
+the open cards and their rows and counts what `cardShown` shows; `INSERT OR IGNORE` keeps a state to one card.
+`closeLabelCardInTx` writes the card's close and, for `labelled`, the label, in one transaction, or answers `moved`
+when its compare fails.
 
 - [ ] **Step 1: Measure the slot**, then write the failing tests:
   `git fetch origin main && git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`.
   - two picks of one state insert one card; a budget of 3 read inside the transaction inserts 3 of 5;
-  - a close writes the card and the label together, a second close answers `already`, `not-sure` writes no label;
+  - a close writes the card and the label together, a second close answers `already`, `not-sure` writes no label, and
+    a close whose `expect` no longer matches the row answers `moved` and writes nothing;
+  - `openLabelCards` answers a card whose row went `off` (the store never filters), and `labelCardCounts` answers no
+    `open`;
   - `labelledCasesOf`: a stored label and a measured one on two states both answer; an outcome on the same state
     retires a measured answer; a label of another revision is not answered; the case carries its newest record's refs
     and inline, never text from the card;
@@ -527,8 +601,8 @@ export function labelledCasesOf(db: DatabaseSync, measured: MeasuredLabels): Lab
   `single-definition/writers-map`.
 - [ ] **Step 3: Implement.** **Step 4: Run green**, the same files, `growth-check` armed for `schema.ts`, and
   `typecheck-tests`.
-- [ ] **Step 5: Mutation.** Drop the budget's re-read; write the label on `not-sure`; key the label by model id. Each
-  reds a case. Restore each.
+- [ ] **Step 5: Mutation.** Drop the budget's re-read; write the label on `not-sure`; key the label by model id; drop
+  the close's compare. Each reds a case. Restore each.
 - [ ] **Step 6: Commit.** `feat(overlord): label cards and labels, keyed by state, and LabelledCases`
 
 ### Task 4: The lane, and the wiring
@@ -547,8 +621,8 @@ export function labelledCasesOf(db: DatabaseSync, measured: MeasuredLabels): Lab
 
 **The pass:** read the week from `Clock.wall` once; read every card row's facts through `LabelLaneReads` (its mode
 through `decisionRowOf`, its records of the current revision, its labelled cases, `lineCounts` at the next candidate,
-its last card week), skipping and logging once a row whose read fails; ask `pickLabelCards`; call
-`pickLabelCardsInTx` with the budget re-read inside. It sends no mail and pushes nothing.
+its last card week, and the open cards counted through `cardShown`), skipping and logging once a row whose read fails;
+ask `pickLabelCards`; call `pickLabelCardsInTx` with the budget re-read inside. It sends no mail and pushes nothing.
 
 - [ ] **Step 1: Failing tests** (`label-queue-lane.test.ts`, fake time, a fixture `coord.db` with decision model B's
   tables):
@@ -556,6 +630,7 @@ its last card week), skipping and logging once a row whose read fails; ask `pick
   - a case recorded mid-week is picked that week while the budget lasts, and never past ten;
   - an operator who answers nothing sees the same ten the next week, and no eleventh;
   - an `off` row gets no card; a row back in shadow resumes;
+  - ten open cards, one of whose rows goes `off`: the next pass picks one, because the hidden card is not counted open;
   - a row whose read throws is skipped and logged once, and the others are still picked;
   - a restart within the week picks nothing twice; across a week boundary it picks the new week's budget.
   - `lane-schedule`: the row and its derivation.
@@ -577,6 +652,20 @@ its last card week), skipping and logging once a row whose read fails; ask `pick
   README's auth paragraph; `CLAUDE.md`'s paragraph of session-gated coordination writes ("the label doors … `LABEL_DOORS`")
 - Create: `server/test/label-card-routes.test.ts`
 
+**The port** (F13), declared by its consumer in `labelCardRoutes.ts`, and met by `labelQueueStore.ts`'s functions,
+wired in `server.ts`:
+
+```ts
+export interface LabelCardStore {
+  /** Every open card with its row and revision; the handler filters through cardShown. */
+  openCards(): readonly LabelCardRow[];
+  /** One card, with its row's current mode and revision, or 'absent'. */
+  cardFacts(id: number): { card: LabelCardRow; rowNow: { mode: 'off' | 'shadow' | 'armed'; revision: string } } | 'absent';
+  /** closeLabelCardInTx in its own transaction: told the verdict, it re-checks and writes. */
+  close(id: number, close: Parameters<typeof closeLabelCardInTx>[2]): 'closed' | 'already' | 'moved' | 'absent';
+}
+```
+
 - [ ] **Step 1: Failing tests** (`buildServer` with `testDeps`, the account gate's real deps with fake sessions):
   - **The gate:** dark (`authEnabled` false), both doors answer 501 `auth-off` and read nothing; a plain-HTTP origin off
     loopback answers `insecure-origin`; no session answers 401 `unauthenticated`; the box token alone is refused.
@@ -584,7 +673,10 @@ its last card week), skipping and logging once a row whose read fails; ask `pick
     marked, and the allowed answers; no verdict, `p`, band or line (a marker in the record's answer appears nowhere);
     a card whose row is off or changed is left out; a state that no longer resolves is left out.
   - **The answer:** `yes` writes one label with the gate's actor; a second answer is `changed: false`; `not-sure` writes
-    none; an off row answers 409 `row-changed`; an unknown id 404; an answer the row does not allow 400.
+    none; an off row answers 409 `row-changed`; a row that goes `off` between the handler's read and the close (the
+    store answers `moved`) answers 409 `row-changed` after the one re-read; an unknown id 404; an answer the row does not
+    allow 400.
+  - **The rings:** `labelQueueStore.ts` imports nothing from `labelCards.ts` or `labelCardRoutes.ts` (`rings/*`).
   - **Censuses:** `box-token-census` (red until `LABEL_DOORS` and `CLAUDE.md` agree), `auth-gate`, `secret-mask`,
     `rings/fastify-l4`, `operator-message-readers`, `coord-pause-route`.
 - [ ] **Step 2: Run red.** **Step 3: Implement.** **Step 4: Run green**, the suites above, `growth-check` armed for
@@ -681,22 +773,35 @@ Each entry is a departure from the spec's text, or from a sibling plan, by slug.
 - **`nearest-is-labels-needed`:** "nearest its line" is the clean labels the next fixed-sequence candidate needs
   (LQ5).
 - **`measured-labels-derived-on-read`:** measured labels are read from their rows, never copied (LQ8).
+- **`card-order-can-hint`:** carding marked cases first can hint the model's answer to a frequent labeller; accepted in
+  W2 (LQ10, review 2289 F16).
 - **`label-doors-through-the-account-gate`:** the read is behind the account gate too (LQ9).
 - **`cards-on-waiting-on-you`:** §4.1 puts the cards behind the decision queue, which is W3's. In W2 they sit behind the
   operator's items on Waiting on you.
 - **`not-sure-is-no-label`:** a card may be answered "Not sure", which is no label (LQ12).
+- **`label-cards-wait-while-ten-open`:** H6 promises each row with a waiting case a card at least every fourth week.
+  With the open cap, that holds while the operator answers (LQ2, review 2289 F11).
+- **`quiz-week-floor-keeps-its-key`:** the coordinator's F6 ruling retargets the floor key with the move. The guard reads
+  a removed key as a fallen floor and has no rename path, so the floor keeps its old key as its name and its value; the
+  mutant set retargets (LQ1).
 
 ## What the index should change
 
 - **The "Label queue" row:** two pull requests, eight tasks (A 6, B 2). A needs decision model B, unchanged. B needs PR
   A, overlaps B, request record A, the coordinator doors and act rows A. "What it ships" gains the move of `quizWeek`
-  to `server/src/time/rules.ts`, the `lineCounts` extraction, `label_cards` and `decision_labels`, and the two doors'
-  census list `LABEL_DOORS`. Figure W2 gains `OVB --> LQB`, `RQA --> LQB`, `CD --> LQB` and `ARA --> LQB`.
+  to `server/src/time/rules.ts` with its mutant set, `label_cards` and `decision_labels`, and the two doors' census list
+  `LABEL_DOORS`. Figure W2 gains `OVB --> LQB`, `RQA --> LQB`, `CD --> LQB` and `ARA --> LQB`.
+- **The decision model B row (review 2289, F14), for its build's brief:** B exports `lineCounts(row, cases, t)` from
+  `server/src/coord/decisionLines.ts`, the `n` and `errors` it counts at one candidate today, and `admitLine` calls it;
+  its `admitLine` mutant set (`decisionModelSets.ts`) still finds each mutant's text once. The label queue imports it and
+  makes no move commit for it.
 - **"Where lanes meet":**
   - The migrations: the label queue adds one (two tables).
   - `LANE_SCHEDULE`: the label lane's row is `labelQueue`, daily, `mono`, keyed on the week.
-  - `server/src/coord/decisionLines.ts`: the label queue extracts `lineCounts`, a move.
-  - `server/src/time/rules.ts`: `utcIsoWeek`, a move from the quiz.
+  - `server/src/coord/decisionLines.ts`: decision model B owns `lineCounts`; the label queue only imports it.
+  - `server/src/time/rules.ts`: `utcIsoWeek`, a move from the quiz; with it `server/src/continuity/quizLane.ts`,
+    `server/test/sim/quizSets.ts` (`QUIZ_WEEK_SET` retargets) and `server/test/sim/mutation-floors.json` (its floor
+    keeps its key and value, `quiz-week-floor-keeps-its-key`).
   - The door censuses: `coord/labelCardRoutes.ts` is a session-only routes file with `LABEL_DOORS`; `GET /api/labels`
     joins the operator-message readers' operator list.
   - The architecture spec's path table: `coord/labelCard*.ts` and `pwa/src/labels/**` in C6.
@@ -712,7 +817,8 @@ Each entry is a departure from the spec's text, or from a sibling plan, by slug.
   `MeasuredLabels`, and `labelFor` already ranks them.
 - **`pickLabelCards` and the ten:** W3's rows join through `cardRowsOf` and share the ten.
 - **The card's answers:** a W3 choice row (`precedent.same`, `answer.maps`) is carded with its options, which
-  `cardView` already answers.
+  `cardView` already answers. Its label stores `option:<slug>` with the option itself as the row's catalogue names it,
+  never the encoder's per-call opaque id, so a label still means the same option on the next call.
 
 ## Where things stand
 
@@ -721,10 +827,15 @@ Each entry is a departure from the spec's text, or from a sibling plan, by slug.
   Q19 and Q29, as built above.
 - Index F14: the label door uses the account gate and refuses `auth-off`.
 - Decision model rulings F10 (fixed-sequence admission) and its question 8 (this piece fills `LabelledCases`).
+- Review 2289's rulings, folded in: F6 (the quiz's move carries its importers and mutant set; `quizWeek` deleted), F11
+  (the open cap stays), F12 (`cardShown` is the one filter), F13 (decide in C6, its port its own), F14 (`lineCounts` is
+  decision model B's) and F16 (LQ10's note).
 
 **Waiting on the coordinator:**
-- LQ1 to LQ14, each with a recommendation. LQ4's split of the ten and LQ8's read-not-copied rule shape the most.
-- The index changes above, the second pull request among them.
+- `quiz-week-floor-keeps-its-key`: the floor's key cannot follow the move without the guard reading it as fallen, so
+  this plan keeps the key and retargets the set. If the coordinator wants the key renamed, the guard needs a rename
+  path first, a change of its own.
+- Carrying `lineCounts` (F14) into decision model B's brief.
 
 **Waiting on the operator:** nothing. Later, answering the cards is theirs, a few taps a week.
 
