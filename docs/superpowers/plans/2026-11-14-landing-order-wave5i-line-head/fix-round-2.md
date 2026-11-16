@@ -358,3 +358,28 @@ row, code unchanged) was not re-run. No test was added or changed in this item.
   killed a process during the run, "3 OOM kill(s) in ccrctests.slice", and exit 0; the slice is shared and no test of this run failed, so it is recorded, not read as a failure). `run-routes` and `ccd-land-probe` with
   `-t 'mark that throws|lander key and its mirror'`: 2 files, 13 passed (403 skipped), rc 0.
 - `git status` after every row and at the end shows no modified source file; every mutant was restored from its saved copy with `cmp` equal.
+
+## Gates at the fix tip (3398dc661)
+
+Every command ran from `server/`, in the foreground, through `ccrc test --`, one at a time, `--maxWorkers=2`. The test slice
+(6G) is shared with the rest of the box; the wrapper's OOM notes below are its own lines.
+
+| Group | Files | Result |
+|---|---|---|
+| landing and radar: landed-decide, landed-lane, landing-control, landing-line-order, landing-terminal-damage, coord-radar, radar-lane, fleetio-contract, coord-lineage | 9 | 562 passed, rc 0, 275 s (wrapper: 7 OOM kills in the slice, exit 0) |
+| landing store and routes, as one run of 10 | 10 | rc 124 at the 600 s bound, no output (wrapper: 6 OOM kills, exit 143, load about 9): not green |
+| the same 10, split: journal-store, entry-store, land-store, land-words, facts-scope | 5 | 223 passed, rc 0, 282 s |
+| the same 10, split: advance-route, next-mail, read-route, writes, writes-route | 5 | 205 passed, rc 0, 253 s |
+| notice callers: landing-checks-lane, mail-revive, delegation-wave3.integration, mail-hardening, mail-deliveries-writer, coordinator-landing-verdict | 6 | 928 passed, rc 0, 422 s |
+| censuses and ownership: consolidation-census, mail-routes, coord-policy-rings, landing-entry-census, coordinator-skill, rings/watcher-store-port, anchors, citations, deviation-refs | 9 | 509 passed, rc 0, 290 s |
+| tree guards: `test/single-definition`, `test/rings`, dtbd, topology-clean | 48 | 1603 passed, 1 failed: advance-switches "the pin scan parses only the test files that spell a W1a basename", `Test timed out in 20000ms` (wrapper: 2 OOM kills). Alone: 53 passed, rc 0, 24 s, at load 15 |
+| armed growth (`GROWTH_CHECK=1`, merge-base 2b082b91f, no fetch) | 1 | 95 passed, rc 0 |
+| production typecheck (the server project) | | rc 0, 759 files |
+| tests typecheck (`test/tsconfig.tests.json`) | | first rc 137 (an OOM kill); alone again rc 0, 2817 files, check 5.9 s |
+| `typecheck-tests.test.ts` alone | 1 | First run: pwa red on a stale local install (`@synapsium-labs/docserver` 1.0.0 installed, 1.1.0 locked by the absorbed main); a clean install in ui then pwa fixed it, with no tracked change. Second run: 11 passed, 1 failed, `programFiles` returned `[]` (wrapper: 1 OOM kill). Third run: 10 passed, 2 failed, a child exit `-1` and an empty listing (wrapper: 8 OOM kills). Both are killed-child shapes, as in fix round 1; no type error was printed, and the direct tests typecheck above is rc 0. Not green locally: the PR's fast run, which runs this guard, is the arbiter. |
+
+Not run, by ruling: the related selection for `src/coord/rundefsTx.ts` (rundefsTx.ts has no commit in this round; its measured
+OOM, rc 137, stands as a limitation, not a green), a full run, and any slice-limit change.
+
+Privacy: the added lines of all 22 files changed since 59d3223fa, and this round's commit messages, have zero hits against the
+private-name list, and no home path or private address.
