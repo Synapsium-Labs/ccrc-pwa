@@ -26,7 +26,7 @@ afterEach(cleanup);
 const SRC = '# T\n\n```ts\nconst a = 1;\n```\n';
 const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'demo', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'demo', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => undefined,
 } as Omit<DocLinkContextValue, 'urls'>;
 const under = (ctx: HighlighterContextValue, node: ReactNode): ReactNode => <HighlighterContext value={ctx}>{node}</HighlighterContext>;

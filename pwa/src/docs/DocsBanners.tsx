@@ -4,14 +4,16 @@
 // when the holder's HEAD is the served commit, and otherwise says what the drafts are based on; each drafts state that
 // shows none says why; a leaf's withheld, deleted, type-changed and conflicted drafts come from `entryView` (never a
 // read of the draft's own state, M4.T7); the pin's commit, when the branch no longer contains it, offers Re-list;
-// drafted images are counted; `view=committed` offers the way back. A pure renderer: it starts no request (Retry and Re-list call
+// drafted images are counted; `view=committed` offers the way back; a version page (`at`, refinement (q)) says so with a
+// banner and Back to the latest, and shows none of the banners about the latest's drafts (`version` gates them), because
+// it is one commit, while the drafts-snapshot banners stay. A pure renderer: it starts no request (Retry and Re-list call
 // `onRelist`), and every link is `docsPageUrl(docsLocation(page, to))` (refinement (q)).
 import type { ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
 import { docsPageUrl, parseDocsRef, type DocsPageLocation, type DocsTreeOk } from '../../../shared/docs';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_BANNER_TEXT, DOCS_VIEW_TEXT, WITHHELD_SENTENCE, fillSentence, pluralS, servedRefText, shortCommit, worktreeLabel,
+  DOCS_BANNER_TEXT, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, WITHHELD_SENTENCE, fillSentence, pluralS, servedRefText, shortCommit, worktreeLabel,
 } from './docsText';
 import { docsPathKind } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
@@ -51,6 +53,9 @@ export function DocsBanners(p: {
   const out: ReactNode[] = [];
   // `n` counts entries with a draft at all (spec 4.5), whatever the overlay would make of each.
   const n = tree.entries.filter((e) => e.draft !== null).length;
+  // Refinement (q): a version page is one commit, so no banner about the latest's drafts applies to it, and a hint's
+  // same-page link would keep its `at`. The drafts-snapshot banners below stay: a version page still reads that listing.
+  const version = page.kind === 'path' && page.at !== null;
 
   switch (d.state) {
     case 'holder': {
@@ -58,7 +63,7 @@ export function DocsBanners(p: {
       const localRef = parseDocsRef('refs/heads/' + d.branch);
       const localHref = localRef === null ? null
         : docsPageUrl(docsLocation(page, { kind: 'same-page', project: page.project, ref: localRef }));
-      if (mode === 'default' && n > 0) {
+      if (mode === 'default' && n > 0 && !version) {
         out.push(
           <Banner key="default-hint" id="default-hint" tone="info"
             text={fillSentence(DOCS_BANNER_TEXT.defaultHint, { n, s: pluralS(n), label, branch: d.branch })}>
@@ -66,7 +71,7 @@ export function DocsBanners(p: {
           </Banner>,
         );
       }
-      if (mode === 'ref' && !d.baseEqual && n > 0) {
+      if (mode === 'ref' && !d.baseEqual && n > 0 && !version) {
         const text = fillSentence(DOCS_BANNER_TEXT.baseHint, {
           n, s: pluralS(n), be: n === 1 ? 'is' : 'are', label, branch: d.branch, short: shortCommit(d.worktree.head), served: servedRefText(tree.ref),
         });
@@ -131,16 +136,16 @@ export function DocsBanners(p: {
       const label = d.state === 'holder' ? worktreeLabel(d.worktree) : d.branch;
       // "Showing the committed version." only when the page does show one (a withheld NEW file has none).
       const showing = (s: string): string => (v.opens === 'committed' ? s + ' ' + DOCS_BANNER_TEXT.showingCommitted : s);
-      if (v.badge === 'withheld' && v.withheld !== null) {
+      if (!version && v.badge === 'withheld' && v.withheld !== null) {
         out.push(<Banner key="withheld" id="withheld" tone="info" text={showing(WITHHELD_SENTENCE[v.withheld])} />);
       }
-      if (v.badge === 'deleted') {
+      if (!version && v.badge === 'deleted') {
         out.push(<Banner key="deleted" id="deleted" tone="info" text={showing(fillSentence(DOCS_BANNER_TEXT.deleted, { label }))} />);
       }
-      if (v.badge === 'typechange') {
+      if (!version && v.badge === 'typechange') {
         out.push(<Banner key="typechange" id="typechange" tone="info" text={showing(fillSentence(DOCS_BANNER_TEXT.typechange, { label }))} />);
       }
-      if (v.badge === 'conflicted') out.push(<Banner key="conflicted" id="conflicted" tone="warn" text={DOCS_BANNER_TEXT.conflicted} />);
+      if (!version && v.badge === 'conflicted') out.push(<Banner key="conflicted" id="conflicted" tone="warn" text={DOCS_BANNER_TEXT.conflicted} />);
       if (file.s === 'ok' && file.answer.show.onRef === 'not-contained') {
         // The banner describes the PIN: it shows only while the answer was read at the commit the leaf is pinned to.
         // A Re-list that moves the pin to a new commit keeps a same-blob body (spec 4.3 item 2), so that answer's
@@ -149,18 +154,32 @@ export function DocsBanners(p: {
         const pinned = file.pin.kind === 'committed' ? file.pin.commit : null;
         const read = file.answer.show.commit ?? pinned;
         if (read !== null && read === pinned) {
-          out.push(
-            <Banner key="not-contained" id="not-contained" tone="warn"
-              text={fillSentence(DOCS_BANNER_TEXT.notContained, { short: shortCommit(read), served: servedRefText(tree.ref) })}>
-              <RelistButton label={DOCS_BANNER_TEXT.relist} onRelist={onRelist} />
-            </Banner>,
-          );
+          // A version is not on the served ref because it comes from elsewhere; a re-list cannot change that.
+          out.push(page.at !== null
+            ? (
+              <Banner key="not-contained" id="not-contained" tone="warn"
+                text={fillSentence(DOCS_BANNER_TEXT.notContainedVersion, { short: shortCommit(read), served: servedRefText(tree.ref) })} />
+            )
+            : (
+              <Banner key="not-contained" id="not-contained" tone="warn"
+                text={fillSentence(DOCS_BANNER_TEXT.notContained, { short: shortCommit(read), served: servedRefText(tree.ref) })}>
+                <RelistButton label={DOCS_BANNER_TEXT.relist} onRelist={onRelist} />
+              </Banner>
+            ));
         }
       }
-      if (draftAssets > 0) {
+      if (!version && draftAssets > 0) {
         out.push(
           <Banner key="draft-assets" id="draft-assets" tone="info"
             text={fillSentence(DOCS_BANNER_TEXT.draftAssets, { k: draftAssets, s: pluralS(draftAssets) })} />,
+        );
+      }
+      if (page.at !== null) {
+        out.push(
+          <Banner key="version" id="version" tone="info"
+            text={fillSentence(DOCS_BANNER_TEXT.version, { short: shortCommit(page.at), served: servedRefText(tree.ref) })}>
+            <HintLink href={docsPageUrl(docsLocation(page, { kind: 'version', at: null }))} label={DOCS_HEAD_TEXT.backToLatest} />
+          </Banner>,
         );
       }
       if (page.view === 'committed') {

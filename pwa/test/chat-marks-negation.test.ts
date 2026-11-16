@@ -310,27 +310,39 @@ describe('the check is linear in the text (review 1592 F1)', () => {
   });
 
   it('the check scales linearly: four times the text costs well under eight times the time (review 1601 F4 i)', () => {
-    // Many labels with one "?" at the very end: every label asks where its sentence ends. A quadratic check costs about
-    // sixteen times as much at 200k as at 50k; a linear one about four. The fastest of three runs each, so a pause
-    // for garbage collection does not count, and the 50k run is bounded first so a quadratic one fails fast.
-    // Measured on this box (Task C16, review 1689 A9; three repeats of the two sizes, each the fastest of three):
-    // 3 to 6 ms at 50k, about 13 ms at 200k, a ratio of 2.1 to 4.1. The 50k run is dominated by fixed overhead (warm-up
-    // and the first allocations), which is why the ratio is a loose guard and sits under 8; the absolute bound is what
-    // catches a quadratic mutant (round 1 of the check took seconds, review 1592 F1).
-    const fastest = (length: number): number => {
-      const text = `${repeat('CI green ', length)}?`;
-      let best = Infinity;
-      for (let k = 0; k < 3; k += 1) {
-        const t0 = performance.now();
-        expect(statusesOf(text)).toEqual([]);
-        best = Math.min(best, performance.now() - t0);
-        expect(best).toBeLessThan(BOUND_MS);
-      }
-      return best;
+    // Many labels with one "?" at the very end: every label asks where its sentence ends. A quadratic check costs
+    // about sixteen times as much at 200k as at 50k; a linear one about four. The ratio is of CPU time, not wall time
+    // (desktop-polish Task C34, D-8657): on a loaded runner the 200k run waits off the CPU far more than the 50k run
+    // does, so its fastest wall time grew from about 16 ms to 90-110 ms while its CPU time stayed at 16-32 ms, and the
+    // wall-clock ratio reached 8.25 in a merge-queue run and up to 15.8 under load. Each size runs once untimed first,
+    // so neither pays for the JIT's warm-up; the two then take turns, and the least CPU time of each over the turns is
+    // kept. Every run is also bounded in wall time, so a quadratic check fails fast (round 1 took seconds, review 1592
+    // F1). The measurements are in the task note, `docs/superpowers/plans/2026-10-22-desktop-polish/c34.md`.
+    const TURNS = 5;
+    const small = `${repeat('CI green ', 50_000)}?`;
+    const large = `${repeat('CI green ', 200_000)}?`;
+    const cpuMs = (text: string): number => {
+      const t0 = performance.now();
+      const c0 = process.cpuUsage();
+      expect(statusesOf(text)).toEqual([]);
+      const c = process.cpuUsage(c0);
+      expect(performance.now() - t0).toBeLessThan(BOUND_MS);
+      return (c.user + c.system) / 1000;
     };
-    const small = fastest(50_000);
-    const large = fastest(200_000);
-    expect(large / Math.max(small, 1)).toBeLessThan(8);
+    cpuMs(small);
+    cpuMs(large);
+    let leastSmall = Infinity;
+    let leastLarge = Infinity;
+    const turns: string[] = [];
+    for (let k = 0; k < TURNS; k += 1) {
+      const s = cpuMs(small);
+      const l = cpuMs(large);
+      leastSmall = Math.min(leastSmall, s);
+      leastLarge = Math.min(leastLarge, l);
+      turns.push(`${s.toFixed(1)}/${l.toFixed(1)}`);
+    }
+    const ratio = leastLarge / Math.max(leastSmall, 1);
+    expect(ratio, `CPU ms at 50k/200k, turn by turn: ${turns.join(' ')}`).toBeLessThan(8);
   });
 
   // Review 1601 F4 (g): each reset in `restart()` has a row. Names are registered in order (as the plugin and
