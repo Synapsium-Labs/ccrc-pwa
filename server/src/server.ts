@@ -20,7 +20,8 @@ import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
-import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
+import { poolRostered, poolVerdict, resolvedAccountPool, sessionPoolSideOf } from './poolrule.js';
+import type { SessionPoolSide } from '../../shared/poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
@@ -136,7 +137,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
@@ -2928,7 +2929,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * cannot be read" from "this box's own database is broken".
    */
   const refusePool = (
-    reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
+    reply: FastifyReply, wrapper: string, pool: SessionPoolSide,
   ): FastifyReply | null => {
     let edges: ReadonlyMap<string, readonly string[]>;
     try {
@@ -2940,9 +2941,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
     if (v.ok) return null;
-    return v.reason === 'pool-mismatch'
-      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
-      : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
+    if (v.reason === 'pool-mismatch') {
+      // A set mismatch (C46) names the set's spelling where a project's names its tag; `accountPool` is null for an untagged account.
+      if (v.side === 'set') return refuseRoute(reply, 'pool-mismatch', { accountPool: 'pool' in v.account ? v.account.pool : null, set: v.set });
+      return reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool });
+    }
+    return reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
   };
 
   /** ccd failed in a way no route maps to a refusal word: its stderr, at 502. One send for every caller. */
@@ -3886,7 +3890,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
         PROJECT_POOLS_REQUEST_BUDGET_MS,
       ), read.record.project);
-      const refused = refusePool(reply, body.wrapper, pool);
+      // The session's own side: its set when its route record carries one, else the project's (C46, `sessionPoolSideOf`).
+      const refused = refusePool(reply, body.wrapper, sessionPoolSideOf(read.record.route, pool));
       if (refused) return refused;
     }
     // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):

@@ -1282,6 +1282,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // The linking standard's session read (D-8147): the caller's own project's row, a box-token machine lane. The project name
     // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
     // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
+    '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 

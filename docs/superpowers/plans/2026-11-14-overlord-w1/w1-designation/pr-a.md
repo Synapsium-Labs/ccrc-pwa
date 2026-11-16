@@ -63,3 +63,27 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   session ids in one namespace. No registry row can carry the bare id `overlord`: ccd composes every id as
   `<wrapper>-<project>` (`cmd_start`) or `<project>-<slug>` (`shared/slug.ts#workspaceId`), each with a dash, so a
   session's own id never meets the Overlord's generation rows.
+
+## Task 5 (the doors)
+
+- **`keep-awake-failure-fails-the-create`**: a failed `keepAwake('on')` at the create (ccd's rc 1 on an unreadable
+  marker, or a lost answer) is a failed create step: `failPending(…, 'create-failed')`, the stop owed and drained, 502.
+  This replaces the plan's `awake: false`, so a 200 always says `awake: true`. A foreign marker (`kept-foreign`, rc 0)
+  succeeds and raises one operator item naming it, on the `overlord` programme's ledger, as the renewal act raises its
+  items (`raisedBy` `ccrc`).
+- **`retire-none-still-drains-owed-stops`**: a retire on a row that binds nothing writes nothing, but drains any stop an
+  earlier attempt still owes, so a failed stop is not stranded until the next live or pending retire.
+- **`create-failed-answers-fleetFailed-502`**: a failed create step answers the existing `fleetFailed` 502 with `detail`
+  and `sessionId`; no new refusal word.
+- **`slug-from-uuid-prefix`**: the workspace slug is the first eight characters of `entropy.uuid()`. The authority
+  records' operation keys are the door's `entropy.hex(16)`, prefixed `designate-` or `retire-`.
+- **`failed-attempt-drains-the-id-regardless`**: a failed step drains its own id even when `failPending` finds the
+  attempt already gone (a retire between the steps, off the serialiser), so nothing runs with no row.
+- **`profile-digest-from-launchDigestOf`**: the create's route carries `profiledigest` from `launchDigestOf('overlord')`.
+  The decider refuses a create unless builds read `agreed`, so a skewed build never reaches a create.
+- **`read-door-asks-the-gate-without-step-up`**: the GET asks the gate `{ cap: null }` with no step-up, and answers
+  `auth-off` while sign-in is dark, as `FLAG_AWARE` lists it.
+- **`first-prompt-send-per-row`**: the renewal wiring's send closure takes the row's key and keeps one `sendPrompt` per
+  row, each naming `INJECTED_PROMPTS['<row>'].text` literally, because the injected-prompts census accepts only that form.
+- **`registration-waits-for-the-body`**: `server.ts` registers the doors in Task 4's commit, with the body adapter, so
+  `auth-gate`'s registration cases are red between the two commits.

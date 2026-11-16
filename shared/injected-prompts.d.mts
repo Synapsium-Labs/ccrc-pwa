@@ -4,6 +4,7 @@
 
 export declare const INJECTED_PROMPT_KEYS: readonly [
   'mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model', 'renewal-first-prompt',
+  'overlord-first-prompt',
 ];
 export type InjectedPromptKey = (typeof INJECTED_PROMPT_KEYS)[number];
 

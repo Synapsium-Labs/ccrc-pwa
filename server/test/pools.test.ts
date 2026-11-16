@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseRoster } from '../../shared/roster.js';
-import { poolEligible, poolRostered, poolUndecidable, poolVerdict } from '../src/poolrule.js';
+import { poolEligible, poolRostered, poolUndecidable, poolVerdict, sessionPoolSideOf } from '../src/poolrule.js';
 import {
   POOL_RULE_CASES, POOL_RULE_PROJECT_CASES, POOL_RULE_SET_CASES, POOLED_TEST_ROSTER, isSetCase, type PoolRuleCase,
 } from './fixtures/poolRule.js';
@@ -354,5 +354,45 @@ describe('poolEligible and poolUndecidable over a session side (C46)', () => {
     expect(poolUndecidable({ state: 'untagged' })).toBe(false);
     expect(poolUndecidable({ state: 'tagged', name: 'pool-a' })).toBe(false);
     expect(ids({ state: 'tagged', name: 'pool-b' })).toEqual(['claude-b', 'claude-d']);
+  });
+});
+
+// `sessionPoolSideOf` and `poolVerdict` over a session's side (Overlord W1 designation A, plan Task 5).
+describe('sessionPoolSideOf and poolVerdict over a set side', () => {
+  const r = parseRoster(POOLED_TEST_ROSTER);
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const project = { state: 'tagged', name: 'pool-a' } as const;
+  const route = (fields: Record<string, string>, unreadable: string[] = []) =>
+    ({ fields, unreadable }) as unknown as Parameters<typeof sessionPoolSideOf>[0];
+
+  it('answers the set when the route record carries one', () => {
+    expect(sessionPoolSideOf(route({ poolset: 'pool-b' }), project)).toEqual({ state: 'set', set: { pools: ['pool-b'], untagged: false } });
+    expect(sessionPoolSideOf(route({ poolset: 'pool-a,pool-b+untagged' }), project))
+      .toEqual({ state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: true } });
+  });
+  it('answers set-unreadable when the record names the set unreadable, set-malformed when it does not parse', () => {
+    expect(sessionPoolSideOf(route({}, ['poolset']), project)).toEqual({ state: 'set-unreadable' });
+    expect(sessionPoolSideOf(route({ poolset: 'pool-b' }, ['poolset']), project)).toEqual({ state: 'set-unreadable' });
+    expect(sessionPoolSideOf(route({ poolset: 'Not A Pool' }), project)).toEqual({ state: 'set-malformed' });
+  });
+  it('answers the project side when no set stands: no route, no field, or a cleared (empty) one', () => {
+    expect(sessionPoolSideOf(null, project)).toBe(project);
+    expect(sessionPoolSideOf(route({ class: 'opus' }), project)).toBe(project);
+    expect(sessionPoolSideOf(route({ poolset: '' }), project)).toBe(project);
+    expect(sessionPoolSideOf(route({ class: 'opus' }, ['acctorder']), project)).toBe(project);
+  });
+  it('poolVerdict over a set: in-set, outside it, an untagged account by its +untagged, and undecidable', () => {
+    const set = { state: 'set', set: { pools: ['pool-b'], untagged: false } } as const;
+    expect(poolVerdict(r, 'claude-b', set, NO_EDGES)).toMatchObject({ ok: true, why: 'in-set' });
+    expect(poolVerdict(r, 'claude-a', set, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-mismatch', side: 'set', set: 'pool-b' });
+    expect(poolVerdict(r, 'claude-d', set, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-mismatch', side: 'set', account: { untagged: true } });
+    expect(poolVerdict(r, 'claude-d', { state: 'set', set: { pools: ['pool-b'], untagged: true } }, NO_EDGES)).toMatchObject({ ok: true, why: 'untagged-in-set' });
+    expect(poolVerdict(r, 'claude-b', { state: 'set-malformed' }, NO_EDGES)).toMatchObject({ ok: false, reason: 'pool-undecidable', side: 'set', state: 'malformed' });
+    expect(poolVerdict(r, 'nobody', set, NO_EDGES)).toMatchObject({ ok: false, side: 'set' });
+  });
+  it('a central edge wins over the declared tag under a set, as under a project', () => {
+    const edges = new Map<string, readonly string[]>([['claude-b', ['pool-a']]]);
+    const set = { state: 'set', set: { pools: ['pool-b'], untagged: false } } as const;
+    expect(poolVerdict(r, 'claude-b', set, edges)).toMatchObject({ ok: false, side: 'set', account: { pool: 'pool-a' } });
   });
 });

@@ -18,6 +18,8 @@ import type { PlannedAct } from './generationsLane.js';
 import { runRenewalActs, type ActsResult } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
 
+const SEND_OPTS = { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true } as const;
+
 export interface RenewalWiring {
   readonly canRenew: boolean;
   readonly drainOf: (id: string) => Promise<DrainRead>;
@@ -37,9 +39,10 @@ export function renewalActsOf(
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
   const host = ccdSessionHost({
     runCcd: deps.runCcd, fleetState: deps.fleetState,
-    // One `sendPrompt` per row the port can name (`RenewalPrompt` has one), each typed by reference to the list.
-    send: (id) => sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text,
-      { onDraft: 'stash', holdIfAutoContinueArmed: true, refuseIfTurnRunning: true }),
+    // One `sendPrompt` per row the port can name (`RenewalPrompt` has two), each typed by reference to the list.
+    send: (id, key) => (key === 'overlord-first-prompt'
+      ? sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['overlord-first-prompt'].text, SEND_OPTS)
+      : sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text, SEND_OPTS)),
     usage: (id) => readUsageMeasured(deps.io, deps.cfg.registryDir, id, Math.floor(now() / 1000)),
     startsOf: (id, limit) => coord.startsOf(id, limit),
     log: (line) => console.warn(line),

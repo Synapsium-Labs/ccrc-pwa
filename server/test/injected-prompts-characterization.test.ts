@@ -75,8 +75,9 @@ const callersOf = (name: string): string[] => {
 };
 
 describe('the server\'s typers, by parsedFile', () => {
-  it('sendPrompt has five callers (the renewal act added renewalActsOf, which types renewal-first-prompt)', () => {
+  it('sendPrompt has six callers (renewalActsOf types renewal-first-prompt and overlord-first-prompt, one call each)', () => {
     expect(callersOf('sendPrompt')).toEqual([
+      'server/src/continuity/renewalWiring.ts#renewalActsOf',
       'server/src/continuity/renewalWiring.ts#renewalActsOf',
       'server/src/inject/send.ts#clearSender',
       'server/src/server.ts#buildServer',
