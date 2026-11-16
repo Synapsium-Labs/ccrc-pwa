@@ -121,8 +121,12 @@ function derive(ctx: MockupContext, basis: MockupPlanBasis, ref: MockupRef): Der
 }
 
 /** THE decision, shared by both entry points: `plan`'s rows stay as they are and in order, `refs` are decided in the
- *  given order against what it admitted (`plan.admitted`, its count, and `plan.reservedBytes`). Linear in `refs`: the
- *  admitted map is copied (at most `MOCKUP_MAX_ASSETS` entries), never rebuilt from the rows. */
+ *  given order against what it admitted (`plan.admitted`, its count, and `plan.reservedBytes`). Each reference is DERIVED
+ *  once, here, and never again; the admitted map is copied (at most `MOCKUP_MAX_ASSETS` entries), never rebuilt from the
+ *  rows. The bound, stated exactly (fix round 2, review run 2281 F6): each call also COPIES the prior rows, because a plan
+ *  is a value an earlier caller may still hold, so an attempt costs its references' derivations plus one row copy per
+ *  extension. The loader extends once per admitted stylesheet with references, so there are at most `MOCKUP_MAX_ASSETS`
+ *  extensions (a copy of every row, at most 64 times; about 12 M element copies for the review's 190 000-use page). */
 function decide(plan: MockupAssetPlan, refs: readonly MockupRef[]): MockupAssetPlan {
   const { context, basis } = plan;
   const admitted = new Map(plan.admitted);
