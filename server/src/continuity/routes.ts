@@ -28,7 +28,7 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { RENEW_REQUESTS_CURSOR, effectiveGeneration, type TimerRow } from './continuityStore.js';
+import { RENEW_REQUESTS_CURSOR, effectiveGeneration, sessionLiveGeneration, type TimerRow } from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
 import { noteKeyReader } from './noteKeys.js';
@@ -768,7 +768,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const gens = coord.liveGenerations();
-    const live: RenewDoorFacts['live'] = !gens.ok ? 'unmeasured' : (gens.rows.filter((g) => g.sessionId === id).at(-1) ?? null);
+    const live: RenewDoorFacts['live'] = !gens.ok ? 'unmeasured' : sessionLiveGeneration(gens.rows, id);
     const cursor = coord.generationsCursor(RENEW_REQUESTS_CURSOR);
     const after = cursor.ok ? coord.renewRequestsAfter(cursor.lastStartId, 1, id) : null;
     const verdict = renewDoorVerdict({ live, pending: after === null || !after.ok ? 'unmeasured' : after.rows.length > 0 });

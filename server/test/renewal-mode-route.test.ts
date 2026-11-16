@@ -1,8 +1,9 @@
 // Overlord W1a, the renewal hand-offs, Task 4 (plan `w1a-renewal-handoffs.md`; spec §3.3.11 R19, Table 11.1d): the Setting
 // "when soft renewals happen", `GET`/`POST /api/coord/renewal-mode`. The roll-idle door's shape, registered in
 // `continuity/routes.ts` (slug renewal-mode-door-in-continuity-routes): session-gated when sign-in is armed, open dark; one
-// writer, `CoordStore.setRenewalMode`; the seed is the spec's default, `when-away`; a word this build does not know reads as
-// unreadable and the generations lane takes the default. Fixture HOMEs only.
+// writer, `CoordStore.setRenewalMode`; no row stored reads the spec's default, `when-away` (the migration seeds none); a word
+// this build does not know reads as unreadable and the generations lane takes the default. The `SWITCHES` row follows in its
+// own PR (consolidation-path-guard: no `shared/switches.ts` beside a `pwa/` path). Fixture HOMEs only.
 import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -15,7 +16,6 @@ import { renewalModeOf } from '../src/continuity/renewNow.js';
 import { generationsPass } from '../src/continuity/generationsLane.js';
 import { softRenewalMay, type SoftInputs } from '../src/continuity/softRenewal.js';
 import { RENEWAL_MODES, RENEWAL_MODE_DEFAULT } from '../../shared/continuity.js';
-import { SWITCHES } from '../../shared/switches.js';
 import { testDeps } from './helpers.js';
 import { ID_GATE_TOKEN, recorder } from './idGateFixture.js';
 import { fakeTime, FAKE_T0 } from './fakeTime.js';
@@ -54,8 +54,9 @@ const post = (a: FastifyInstance, mode: unknown, headers: Record<string, string>
   a.inject({ method: 'POST', url: '/api/coord/renewal-mode', headers, payload: { mode } });
 
 describe('GET/POST /api/coord/renewal-mode', () => {
-  it('reads the seeded default, when-away, with the choices', async () => {
-    const { app: a } = await server(false);
+  it('with no row stored, reads the default, when-away, with the choices', async () => {
+    const { app: a, coord } = await server(false);
+    expect(coord.db.prepare('SELECT id FROM renewal_mode_settings').all()).toEqual([]);
     const res = await get(a);
     expect([res.statusCode, res.json()]).toEqual([200, { ok: true, mode: 'when-away', default: 'when-away', choices: ['when-away', 'on-schedule'] }]);
   });
@@ -87,18 +88,12 @@ describe('GET/POST /api/coord/renewal-mode', () => {
   });
 });
 
-describe('renewalModeOf and the switches row', () => {
+describe('renewalModeOf', () => {
   it('a stored word through the one narrowing; a lost row is the default; an unknown word or a failed read is null', () => {
     for (const m of RENEWAL_MODES) expect(renewalModeOf({ kind: 'row', mode: m })).toBe(m);
     expect(renewalModeOf({ kind: 'absent' })).toBe(RENEWAL_MODE_DEFAULT);
     expect(renewalModeOf({ kind: 'row', mode: 'sometimes' })).toBeNull();
     expect(renewalModeOf({ kind: 'unreadable' })).toBeNull();
-  });
-
-  it('the switches row names its storage, default and writer', () => {
-    expect(SWITCHES['renewal-mode']).toMatchObject({
-      storage: { setting: 'renewal_mode_settings.mode' }, default: RENEWAL_MODE_DEFAULT, owner: 'C3', writer: 'POST /api/coord/renewal-mode',
-    });
   });
 });
 

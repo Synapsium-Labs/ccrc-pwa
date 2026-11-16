@@ -381,13 +381,6 @@ export const SWITCHES = {
     meaning: 'Whether a session that is neither a coordinator nor a dispatched worker keeps Claude Code\'s auto memory at its next launch: off, or on.',
     writer: 'POST /api/coord/plain-auto-memory',
   },
-  // Overlord W1a, the renewal hand-offs (spec §3.3.11 R19, Table 11.1d): read by the generations lane, which hands it to
-  // `softRenewalMay`; it moves no session while the `continuity` row is shadow. Its door registers in `continuity/routes.ts`.
-  'renewal-mode': {
-    storage: { setting: 'renewal_mode_settings.mode' }, default: 'when-away', owner: 'C3',
-    meaning: 'When a long-lived session\'s soft renewal happens: when the operator is away (when-away), or on schedule (on-schedule), which waits at most 30 minutes for a break.',
-    writer: 'POST /api/coord/renewal-mode',
-  },
   [SCOPE_SWEEP_LIVE_MARKER]: {
     storage: { marker: SCOPE_SWEEP_LIVE_MARKER }, default: 'absent: shadow, the sweep records what it would stop',
     owner: 'C4', meaning: 'The pane-scope sweep acts: an inert scope of a dead pane is stopped, three a minute at most.',

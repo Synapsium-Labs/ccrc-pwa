@@ -5,6 +5,7 @@
 import type { CoordStore } from '../coord/store.js';
 import type { GenerationState } from '../../../shared/continuity.js';
 import { markProgrammesOf } from './operatorMark.js';
+import { sessionLiveGeneration } from './continuityStore.js';
 
 /** The store members the hand-offs read and write, declared by this consumer. */
 export type PromptHandoffsCoord = Pick<CoordStore, 'liveGenerations' | 'bindingsOf' | 'putOperatorMark'>;
@@ -15,7 +16,7 @@ export type PromptHandoffsCoord = Pick<CoordStore, 'liveGenerations' | 'bindings
 export function liveStateOf(coord: PromptHandoffsCoord, sessionId: string): GenerationState | null {
   const gens = coord.liveGenerations();
   if (!gens.ok) return null;
-  return gens.rows.filter((g) => g.sessionId === sessionId).at(-1)?.state ?? null;
+  return sessionLiveGeneration(gens.rows, sessionId)?.state ?? null;
 }
 
 /** After a prompt was typed: the mark of every programme the session coordinates or serves moves to `now` (the route owns

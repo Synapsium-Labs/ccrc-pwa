@@ -44,6 +44,23 @@ holder agreed to one inserted block and no import line. The door needs imports, 
 piece's own. Census consequence: the door is in `CONTINUITY_SESSION_DOORS` (`box-token-census.test.ts`), not in
 `coord-pause-route.test.ts`'s `SESSION_ONLY`, and `CLAUDE.md`'s continuity sentence names it, so the "seventeen" sentence is
 unchanged. It is still session-gated when sign-in is armed, with no box token.
+`coord-routes-single-file.test.ts` names both halves in `OWN_FILE_ROUTES`, and `secret-mask.test.ts` exempts the read (one
+setting word, its default and its choices), as it does the roll-idle and plain-auto-memory reads.
+
+### renewal-mode-switch-row-own-pr
+
+The plan's Task 4 modifies `shared/switches.ts` (the `renewal-mode` row). `consolidation-path-guard.test.ts` refuses a diff
+that touches `shared/switches.ts` beside any `pwa/` path, and Task 4's PWA row is in this PR. So the switchboard row follows
+in a PR of its own, as plain-auto-memory's did (#2799): the row (setting `renewal_mode_settings.mode`, default `when-away`,
+owner `C3`, writer `POST /api/coord/renewal-mode`), `switches.test.ts`'s three counts and maps (49 rows, 9 settings, the
+writer), and a case in `renewal-mode-route.test.ts` that reads the row. Nothing reads the row at run time: the store, the
+lane and the door read `renewal_mode_settings`.
+
+### renewal-mode-unseeded
+
+The migration creates `renewal_mode_settings` with no seed row. No row reads as the spec's default (`renewalModeOf`, the
+same narrowing a lost row takes), and the door's write inserts it. A seed would put the literal `'when-away'` in
+`server/src/coord/schema.ts`, which `mail-routes.test.ts`'s kebab-token census refuses as an undeclared code.
 
 ### operator-mark-quiet-own-row
 
@@ -64,6 +81,9 @@ The card's role read would leave a coordinator with no open run, whose intent is
 A Renew now request is read once (the cursor). But `renewNow` also stands while the generation still carries the
 `operator` due (`renewNowStands`). Otherwise a renewal that waits, for the box's `hibernate-fresh` or for the Overlord
 first, would lose the request after one pass. The due clears when the renewal starts or the generation ends.
+
+The prompt route and the door share one lookup, `sessionLiveGeneration` (`continuityStore.ts`), which
+`runSessionCensus.ts` names as no binding site: a generation row's own session, no run.
 
 ### roll-long-lived-reads-the-live-generation
 
@@ -91,7 +111,8 @@ The field is written by the renewal acts (`RenewalActsDeps.routePrecompact`, wir
 `CCD_ARGV.routeSet` behind the `route` verb's capability), not through a new `SessionHost` method. The port is held by
 another run (designation A), whose body adapter keeps it as it is. The lane plans the act (`precompact-field`), live only,
 and only when the value differs from what the registry read. It never writes over a field the registry could not read,
-or from a soft-renewal count it could not read.
+or from a soft-renewal count it could not read. The write refuses an id that is not a registry id before `routeSet` composes
+its argv (`id-argv-census.test.ts`'s `precompact-id` gate), as the renewal act's own `renew` does.
 
 ### restarted-from-the-coordinator-sweep
 
@@ -119,5 +140,5 @@ Designation B (Restart) and private store B read these:
 - `markProgrammesOf` and `operatorQuietOf` (`server/src/continuity/operatorMark.ts`).
 - `precompactField` (`server/src/continuity/precompact.ts`).
 - `longLivedOf` (`server/src/coord/rollTarget.ts`).
-- `RENEW_REQUESTS_CURSOR` (`continuityStore.ts`).
+- `RENEW_REQUESTS_CURSOR` and `sessionLiveGeneration` (`continuityStore.ts`).
 - The refusal words `HANDOFF_REFUSALS` (`renewing`, `renew-not-long-lived`, `renew-pending`).

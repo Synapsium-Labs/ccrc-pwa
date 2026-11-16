@@ -4,7 +4,7 @@
 // (`ccdSessionHost`) with its send, usage and receipt reads, so `watch.ts` hands the pass three values and the runner its
 // plan. It decides nothing: every decision is in `renewalFeed.ts`, `renewalDrain.ts` and the machine.
 import type { SessionRecord } from '../registry.js';
-import type { FleetSession } from '../../../shared/api.js';
+import { isRegistryId, type FleetSession } from '../../../shared/api.js';
 import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
@@ -63,6 +63,7 @@ export function renewalActsOf(
       coord, host, now, log: (line) => console.warn(line), memo,
       // The PreCompact arm's field (the renewal hand-offs, Task 6): one `route --set precompact=` behind the `route` verb's cap.
       routePrecompact: async (id, value): Promise<PrecompactWrite> => {
+        if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
         if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
         const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
         if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };

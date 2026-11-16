@@ -3378,11 +3378,11 @@ export const MIGRATIONS: readonly string[] = [
   // observed quiet, written only by the generations lane, keyed on the `at` it was kept for (the coordinator's ruling F5 on
   // review 1902: a row of the lane's own, so the route and the lane never write one row, and a `quiet` kept for an older `at`
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
-  // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; seeded with the spec's default.
-  // NEW TABLES AND ONE SEED ROW, nothing on an existing table: an older build opening a file at `user_version 83` takes rule 3,
-  // never names them, and boots. Sibling W1 pieces add migrations too (responses B and portfolio B each hold 83 on their
-  // branches), so the coordinator renumbers this entry at landing. RE-MEASURE the slot before the PR and before merge (it
-  // must print 82 before this entry is counted):
+  // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
+  // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
+  // opening a file at `user_version 83` takes rule 3, never names them, and boots. Sibling W1 pieces add migrations too
+  // (responses B and portfolio B each hold 83 on their branches), so the coordinator renumbers this entry at landing.
+  // RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
@@ -3395,7 +3395,6 @@ export const MIGRATIONS: readonly string[] = [
     mode      TEXT    NOT NULL,
     updatedAt INTEGER NOT NULL
   );
-  INSERT INTO renewal_mode_settings (id, mode, updatedAt) VALUES (1, 'when-away', 0);
   `,
 ];
 

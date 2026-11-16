@@ -6,6 +6,7 @@ import { substrateFaultText } from '../fleet/substrateWords';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/archivePutAway';
 import { hasPrCap, prDoorWord } from './prCap';
+import { coordinatorRole } from '../fleet/sessionFacts';
 
 /** One item of the ⋯ menu: its command, its words, and whether it is offered enabled. */
 export interface SessionMenuEntry {
@@ -55,7 +56,7 @@ export function sessionMenu(session: FleetSession | null): SessionMenuEntry[] {
   entries.push({ id: 'session-swap', label: 'Move to another account', enabled: fault === null, title: faultTitle });
   // Renew now (Overlord W1a hand-offs): a long-lived session's own act, offered for the one long-lived role the fleet frame
   // names today (a coordinator), gated like Move: under a substrate fault the console cannot see the pane it would renew.
-  if (session !== null && session.role === 'coordinator') {
+  if (session !== null && coordinatorRole(session)) {
     entries.push({ id: 'session-renew', label: 'Renew now', enabled: fault === null, title: faultTitle });
   }
   // Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both. Archive is

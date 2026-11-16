@@ -184,6 +184,11 @@ export type GenExpect = Pick<GenRow, 'term' | 'n' | 'state' | 'shadowState' | 'w
 export const genExpectOf = (r: GenRow): GenExpect =>
   ({ term: r.term, n: r.n, state: r.state, shadowState: r.shadowState, walk: r.walk });
 
+/** A session's live generation among the rows `liveGenerations` read (its newest), or null when it has none: the one lookup
+ *  the console's prompt route and the Renew now door share (the renewal hand-offs). A generation row's own session, no run. */
+export const sessionLiveGeneration = (rows: readonly GenRow[], sessionId: string): GenRow | null =>
+  rows.filter((g) => g.sessionId === sessionId).at(-1) ?? null;
+
 /** The column a walk moves. */
 export type GenColumn = 'state' | 'shadowState';
 

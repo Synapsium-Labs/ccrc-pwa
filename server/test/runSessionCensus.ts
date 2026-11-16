@@ -243,6 +243,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
   { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
+  { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
+    why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
