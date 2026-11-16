@@ -10,17 +10,23 @@
   pass. Two pull requests, eight tasks: PR A four, PR B four.
 - **PR A, the catalogue.** `OVERLORD_ACT_KINDS` in `shared/overlord.ts` (C25, H24). It takes over the ladder's
   `RUNG_CELLS` in a move commit (index question 25), then gains its other columns and every row of Table 7.1a, with
-  `set-timer` (question 18) and three rows completed from D-8126 §3 and the SAFETY list. Three tests hold it: one home,
+  three rows completed from D-8126 §3 and the SAFETY list. Timers stay no act kind: the index review overturned
+  question 18 (review 2253, F1), so the timer doors keep `act: null`. Three tests hold it: one home,
   the D-8126 class map that fails on a row set lower, and the compensator test. Each act kind gets its ceiling per
   programme and in all (question 19, proposed in §5 for the coordinator to approve). Gate step 10 gains `act-ceiling`
   after `rung-below`.
 - **PR B, the decider.** `overlordMayAct(act, effect, target, grants, facts, now)` (C5, L1), first match, exhaustive,
   with a monotonicity property and its nine answers. The grant and command branches are built and fed nothing (question
-  27). The `OverlordPolicy` port (L2) and its default adapter, which allows everything and can only ever refuse.
+  27), so in W2 the decider answers only `allow` (class none), `identity-too-weak` and `operator-only`. The
+  `OverlordPolicy` port (L2): its default adapter allows everything, and an outside authoriser can only refuse what the
+  decider allowed (review 2253, F12.7).
 - **What changes at merge.** Nothing a running session sees. No W2 door exists yet, every W1 door's kind keeps its
   cells, and every kind a W1 door performs has its ceiling held by an owner that already exists (question 2).
 - **What the reader must check.** The ceiling values in Table 5 (question 19 is the coordinator's to approve at this
   plan's review), and the eleven open questions in §2. None needs the operator: each is an implementation choice.
+- **The coordinator's mail on run 2258** (review 2253 of the index) is built here: F1 (no `set-timer`), F12.6 (W2's
+  answers), F12.7 (the default adapter allows) and F16 (the ceiling count is an input to a pure decider until act rows
+  A wires it). F2's operation-key lookup is act rows A's, not this plan's.
 
 ## 1. Goal, scope and the rulings this plan builds on
 
@@ -97,10 +103,10 @@ read from `origin/ws/overlord-plan-w2-index`):
 
 | Question | Ruling | What this plan builds |
 |---|---|---|
-| 18, `timers-are-own-record-acts` | Accepted | `set-timer`: class none, reversible, allowed at `chat` and above; the timer doors' rows name it |
+| 18, `timers-are-own-record-acts` | Overturned (review 2253, F1) | No `set-timer`. A timer is no act kind (§3.3.12, §11.2); the timer doors keep `act: null`, and step 10 skips them, both halves |
 | 19, the act ceilings | Proposed here | Table 5's values; the coordinator approves them at review |
 | 25, `rung-cells-seed-the-act-catalogue` | Settled | The move commit of Task A1, then the other columns in Task A2 |
-| 27, grants and commands dormant | Settled | Both branches built in Task B3; W2's fact builder passes `[]` and `null`, pinned |
+| 27, grants and commands dormant | Settled, read with review 2253's F12.6 | Both branches built in Task B3; W2's fact builder passes `[]` and `null`, pinned. In W2 only `allow` (class none), `identity-too-weak` and `operator-only` answer; `evidence-too-weak` is W3's, and `server-not-isolated` applies only on the grant and command paths |
 | 6, `w2-words-at-once` | Accepted | `act-ceiling`, `operator-only`, `identity-too-weak` and `server-not-isolated` are read from `OVERLORD_REFUSALS`, which the W2 vocabulary fills first |
 | 20, portfolio facts live | Accepted | Nothing here: no door, no lane |
 | 2, `route-moves-ride-the-relay` | Accepted | `relay` covers route, re-relay and route elsewhere; one row |
@@ -113,19 +119,22 @@ Each question carries a recommendation, which this plan builds unless the coordi
 implementation choices; none is the operator's.
 
 1. **Where step 10's ceiling half reads its counts before act rows land** (slug `ceiling-counter-is-an-act-rows-port`).
-   §7.5 counts ceilings "from act rows", and `overlord_acts` is act rows A's, which needs this piece's PR A first.
-   **Recommendation:** PR A declares the reader as a port in the gate runner's deps (gates B's own idiom, "a reader
-   whose producer has not landed is read as its stated default, and every default that can refuse does"):
+   §7.5 counts ceilings "from act rows", and `overlord_acts` is act rows A's, which needs this piece's PR A first. The
+   coordinator ruled (review 2253, F16) that the count is an input to a pure decider until act rows A wires it.
+   **Recommendation**, which builds that ruling: `actCeilingStep` is pure and takes the counts as input, and PR A
+   declares the reader as a port in the gate runner's deps (gates B's own idiom, "a reader whose producer has not
+   landed is read as its stated default, and every default that can refuse does"):
    `ActCountReader.count(group, programme, since)`. Its default answers `{ kind: 'unmeasured', why: 'not-wired' }`, so
    a counted kind refuses `unavailable` until act rows A wires its adapter. No W1 door performs a counted kind
    (question 2), and no W2 write door exists before act rows A, so the default refuses nothing that runs today. Act rows
    A replaces the default with its store's count, and `overlord-route-v1` refuses to ship while the default stands
    (index change).
 2. **Kinds whose ceiling an owner already holds** (slug `ceilings-held-by-their-owners`). §7.5 gives every kind a
-   ceiling, and four kinds that W1 doors perform already have one, held by their own store or lane: reads (the read
-   ceilings of Table 11.5b, the inbox piece's `read-ceiling`), `write-note` (`shared/continuity.ts#NOTES_CAP`),
-   `set-timer` (`shared/continuity-timers.ts#TIMER_SETS_PER_HOUR` and `FLEET_ROLES`' `timerCap`), and `acknowledge`,
-   whose targets are the operator's own messages, one acknowledgement each. **Recommendation:** their ceiling cell is
+   ceiling, and three kinds that W1 doors perform already have one, held by their own store or lane: reads (the read
+   ceilings of Table 11.5b, the inbox piece's `read-ceiling`), `write-note` (`shared/continuity.ts#NOTES_CAP`), and
+   `acknowledge`, whose targets are the operator's own messages, one acknowledgement each. (Timers are no act kind, and
+   their own rate and cap, `shared/continuity-timers.ts#TIMER_SETS_PER_HOUR` and `FLEET_ROLES`' `timerCap`, hold them
+   outside the catalogue.) **Recommendation:** their ceiling cell is
    `held-by`, naming the owner, and step 10 asks no count for them. A second counter beside each owner would be a
    parallel mechanism (`CLAUDE.md`, "Consolidate, don't duplicate"). `renew` is the server's own act, held by the
    renewal's hold-off and restart bounds, and is `held-by` too.
@@ -200,7 +209,7 @@ Measured on `main` at `9cf263d44` (2026-11-16) with `git grep` and by reading th
 | The ladder: `RUNG_CELLS`, `rungStep`, `LadderActKind`, `LADDER_CAUSE_MAP`, `raiseLatch` | **not built**; plan #2861 | `docs/superpowers/plans/2026-11-14-overlord-w1/w1-ladder.md`, Task 1 |
 | Gates: `OVERLORD_DOORS`, `OverlordDoorRow.act`, `overlordGate`, `overlordGateRun`, `CallerIdentity`, `shared/overlord-identity.ts` | **not built**; plan #2863 | `w1-gates.md`, Tasks 1, 2, 4, 5 |
 | The isolation word: `shared/isolation.ts#IsolationRead`, `IsolationReader` | **not built**; plan #2867 | `w1-isolation.md`, Task 1 |
-| The timer doors' rows (`act: null`, step 10 skipped) | **not built**; plan #2874 | `w1-overlord-timers.md`, question 1 |
+| The timer doors' rows (`act: null`, step 10 skipped), which this plan keeps | **not built**; plan #2874 | `w1-overlord-timers.md`, question 1 |
 | `shared/overlord.ts` | **absent** | none |
 | `rung-below`, `read-ceiling` | in the group | `shared/refusal.ts#OVERLORD_REFUSALS` |
 | `act-ceiling`, `operator-only`, `identity-too-weak`, `server-not-isolated` | on the wave map, `W2`; the W2 vocabulary moves them into the group | `server/test/single-definition/refusal-table.data.json` (`waveMap`) |
@@ -208,7 +217,7 @@ Measured on `main` at `9cf263d44` (2026-11-16) with `git grep` and by reading th
 | The SAFETY verbs forbidden to sessions | one `|`-joined list | `server/src/coord/approvalguard.ts#FORBIDDEN_CCD_VERBS` |
 | D-8126's O1 to O6 | **prose only**: no code names them. D-8126's code classes are the call record's `routine`, `big` and `block`, a different vocabulary | `shared/api.ts#CALL_CLASSES`; D-8126 spec §3 |
 | The notes' cap | 200 notes of 500 characters | `shared/continuity.ts#NOTES_CAP` |
-| The timers' rate and cap | 30 sets an hour; 50 pending for the Overlord | `shared/continuity-timers.ts#TIMER_SETS_PER_HOUR`, `server/src/continuity/timers.ts#timerSetVerdict`, `shared/fleetRoles.ts` (`timerCap`) |
+| The timers' rate and cap, which hold timers outside the catalogue | 30 sets an hour; 50 pending for the Overlord | `shared/continuity-timers.ts#TIMER_SETS_PER_HOUR`, `server/src/continuity/timers.ts#timerSetVerdict`, `shared/fleetRoles.ts` (`timerCap`) |
 | The correction door, the compensator for a relay and an answer | registered | `server/src/server.ts` (`POST /api/digest/correct`) |
 | The programme's end, the compensator for a start | the archive door's `{programme:'end'}` | `server/src/server.ts` (`POST /api/sessions/:id/archive`) |
 | Mutation floors | `MUTANT_SETS` spreads one `*_MUTANT_SETS` per area | `server/test/sim/mutation-floors.test.ts`, `server/test/sim/mutation-floors.json` |
@@ -241,14 +250,14 @@ This section gives the table PR A ships: its columns, its rows and its rung cell
 
 *Table 3. The columns of `OVERLORD_ACT_KINDS`.*
 
-**The rows.** Table 7.1a, one row per act kind, with `set-timer` (question 18) and the three completion rows
-(question 5). The carriers' class and reversibility are their effect's (§7.1), so their row holds the least they can be:
+**The rows.** Table 7.1a, one row per act kind, with the three completion rows (question 5). A timer is no act kind
+(§3.3.12), so the catalogue has no row for it. The carriers' class and reversibility are their effect's (§7.1), so their row holds the least they can be:
 none and compensable.
 
 | Act kind | Classes | Reversibility | Covers | Compensator | `chat` | `advise` | `full` |
 |---|---|---|---|---|---|---|---|
 | `read` | none | n/a | none | none | allow | allow | allow |
-| `write-note`, `acknowledge`, `open-request`, `model-write`, `seal-prediction`, `set-timer` | none | reversible | none | none | allow | allow | allow |
+| `write-note`, `acknowledge`, `open-request`, `model-write`, `seal-prediction` | none | reversible | none | none | allow | allow | allow |
 | `relay` | none | compensable | none | correction mail | refuse | allow | allow |
 | `drop-request` | none | compensable | none | new request naming the old | refuse | allow | allow |
 | `close-request`, `attach-brief`, `escalate`, `return-over-asked`, `object`, `propose-grant`, `propose-command`, `propose-retire`, `propose-practice`, `nudge-owner`, `raise-item` | none | reversible | none | none | refuse | allow | allow |
@@ -319,7 +328,6 @@ re-fits after the first week as W1's read ceilings are.*
 |---|---|---|
 | `read` | The read ceilings, per door (inbox 240, `messages` 120, board 120, history 60 and sequence 120 an hour) | Table 11.5b; the inbox piece's `read-ceiling` |
 | `write-note` | 200 notes of 500 characters for one identity | `shared/continuity.ts#NOTES_CAP` |
-| `set-timer` | 30 sets an hour, 50 pending for the Overlord | `shared/continuity-timers.ts#TIMER_SETS_PER_HOUR`, `timerCap` |
 | `acknowledge` | Its targets: one acknowledgement for each operator message | the inbox piece's acknowledge door |
 | `renew` | The renewal's hold-off and restart bounds | Table 11.5b, the W1a rows |
 
@@ -424,8 +432,9 @@ flowchart TD
   O3 -- "no" --> AG["allow-by-grant:id"]
 ```
 *Figure 2. `overlordMayAct`'s order. In W2 no grant and no command is passed, and no W2 door performs an answer, so the
-paths that answer are class none (`allow`), the operator request (a relay that carries a widening, `allow`), identity,
-and `operator-only`. The rest is built and tested with synthetic facts, and waits for W3 to feed it.*
+only answers are `allow` (class none, and an operator request for a relay that carries a widening), `identity-too-weak`
+and `operator-only` (review 2253, F12.6). `server-not-isolated` sits on the grant and command paths only, and
+`evidence-too-weak` is W3's. The rest is built and tested with synthetic facts, and waits for W3 to feed it.*
 
 **What W2 feeds it.** One fact builder, `mayActFactsW2(caller, isolation, request)`, used by every W2 door, fills
 `grants: []`, `command: null`, `statedEntry: { kind: 'none' }` and `answer: { kind: 'not-an-answer' }`. A test pins
@@ -447,14 +456,14 @@ What this plan takes and gives, by name. Each name not on `main` is marked with 
 | `RUNG_CELL_MAP`, `RUNG_CELLS`, `LadderActKind`, `LADDER_ACT_KINDS` | the ladder (#2861) | Moved into `shared/overlord.ts` in Task A1; the ladder keeps no copy |
 | `rungStep(effective, door, act)` | the ladder | Reads `OVERLORD_ACT_KINDS[act].rungs`; its pass gains `cell` (Task A2) |
 | `LADDER_CAUSE_MAP`, `raiseLatch` | the ladder | `act-ceiling-hit` row and its raise (Task A4, question 3) |
-| `OVERLORD_DOORS`, `OverlordDoorRow.act` | gates A (#2863) | `act` becomes `OverlordActKind`; the timer rows name `set-timer` (Task A2) |
+| `OVERLORD_DOORS`, `OverlordDoorRow.act` | gates A (#2863) | `act` becomes `OverlordActKind \| null`; the timer rows keep `null` (Task A1) |
 | `overlordGate`, `GateFacts`, `GateWord`, `GateStep` | gates B (#2863) | Step 10 gains the ceiling half; `GateFacts.ceiling` (Task A4) |
 | `overlordGateRun` and its deps | gates B | The `ActCountReader` port, its default, the latch raise (Task A4) |
 | `CallerStrength`, `VerbClass` | gates A (`shared/overlord-identity.ts`) | Row columns; `strengthAtLeast` added beside them (Task B1) |
 | `IsolationRead` | isolation word (#2867) | The decider's isolation fact (Task B2) |
 | `OVERLORD_REFUSALS` with the four W2 words | W2 vocabulary | Read, never re-spelled; PR B adds `policy-refused` |
 | `overlord_acts`, its writer, its count | act rows A | Writer takes `MayActAllow`; its count fills `ActCountReader` |
-| The timer doors' rows | the Overlord's timers (#2874) | Named `set-timer` here if they landed first, or built on `set-timer` if they land after |
+| The timer doors' rows | the Overlord's timers (#2874) | Kept at `act: null`; step 10 skips a row with no act kind, both halves |
 
 *Table 7. The seams.*
 
@@ -488,8 +497,9 @@ cannot widen.
 
 ## 9. The PR split
 
-Two pull requests, both in lane C. Each keeps every growth-checked file within its 40 lines with no waiver. The caps
-are measured again at build, since #2811's caps may have landed by then.
+Two pull requests, both in lane C. Each keeps every growth-checked file within its 40 lines with no waiver. #2811's
+caps merged on 2026-11-15; of the files this plan touches only `server/src/server.ts` is growth-checked, and it has no
+total-cap file under `server/test/growth-caps/` (measured on `main`). `shared/api.ts`, which does have one, is untouched.
 
 | PR | Tasks | Ships | Needs first | Growth-checked files |
 |---|---|---|---|---|
@@ -535,7 +545,7 @@ Every test runs from `server/`, in the foreground, one file at a time, through `
 - Create: `shared/overlord.ts` (K, L0)
 - Modify: `shared/overlord-ladder.ts` (the cell map leaves), `server/src/coord/overlordLadder.ts` (`rungStep` reads the
   catalogue), `server/src/coord/overlordDoors.ts` and `server/src/coord/overlordGate.ts` (`LadderActKind` becomes
-  `OverlordActKind`), the ladder's single-definition area file (the home moves)
+  `OverlordActKind`; a row's `act` stays `OverlordActKind | null`, the timers plan's `null` for no act kind), the ladder's single-definition area file (the home moves)
 
 **Interfaces** (the move commit's whole content):
 
@@ -569,7 +579,6 @@ export function isOverlordActKind(v: unknown): v is OverlordActKind;
 **Files:**
 - Modify: `shared/overlord.ts` (every column of Table 3 and every row of Table 4)
 - Modify: `server/src/coord/overlordLadder.ts` (`rungStep`'s five cells, its pass's `cell`, `needs: Rung | null`)
-- Modify: `server/src/coord/overlordDoors.ts` (the timer rows name `set-timer`; `act` loses `null` once no row uses it)
 - Create: `server/test/overlord-act-catalogue.test.ts`
 - Modify: the ladder's mutant set (`rungStep`'s new mutants), `server/test/sim/mutation-floors.json`
 
@@ -621,14 +630,15 @@ export function rungStep(effective: Rung, door: DoorClass, act: OverlordActKind)
   - `rungStep`: each cell word at each rung; `rung-below` names the lowest rung with a cell other than `refuse`, and
     `null` for a kind refused at every rung; `card-probe-note` at `off` is `skipped`; W1's three kinds answer as the
     characterization pinned;
-  - every `OVERLORD_DOORS` overlord row names a catalogue kind, and the timer rows name `set-timer`.
+  - every `OVERLORD_DOORS` overlord row names a catalogue kind or `null`, and only the three timer rows are `null`
+    (the timers plan's census, kept).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement** the rows, `rungStep`'s cells and the door rows.
 - [ ] **Step 4: Run** this suite, the characterization (W1's kinds unchanged), the ladder's and gates' suites,
   `mutation-floors`, `wire-totality`, `shared-imports`, `rings/*` and both `tsc` runs. Green.
 - [ ] **Step 5: Mutation, by hand.** Each reds a case, then restore: `relay`'s `advise` cell to `refuse`;
-  `rung-below`'s `needs` to `chat` for a never row; `set-timer`'s `chat` cell to `refuse`; a carrier reading its own
+  `rung-below`'s `needs` to `chat` for a never row; `write-note`'s `chat` cell to `refuse`; a carrier reading its own
   classes.
-- [ ] **Step 6: Commit.** `feat(overlord): the act catalogue whole, Table 7.1a with set-timer and the completion rows (C25)`
+- [ ] **Step 6: Commit.** `feat(overlord): the act catalogue whole, Table 7.1a with the completion rows (C25)`
 
 ### Task A3: The three tests, and the SAFETY scan (PR A)
 
@@ -710,7 +720,7 @@ export interface ActCountReader {
     written in the test from §5's rule; a `held-by` or `never` row passes and asks no count; a carrier refuses on its
     effect's count (question 10);
   - `overlordGate`'s `first-refusal` property gains the ceiling half: `rung-below` before `act-ceiling`; a start door
-    skips both; `unmeasured` refuses `unavailable` and never passes;
+    and a row with no act kind (the timer doors) skip both; `unmeasured` refuses `unavailable` and never passes;
   - the runner reads a count only for a door that is not a start door and whose act's cell is `counted`, and passes
     `not-asked` otherwise; the default reader's answer refuses `unavailable` with `not-wired`; an `act-ceiling`
     refusal, from step 10 or from a door's step-11 call, raises `act-ceiling-hit` once per refusal through
@@ -901,8 +911,8 @@ mints the numbers.
 
 - **`ceiling-counter-is-an-act-rows-port`**: §7.5 counts from act rows, which land after this piece. Step 10 reads the
   counts through a port whose default refuses (question 1).
-- **`ceilings-held-by-their-owners`**: §7.5 gives every kind a ceiling. Reads, notes, timers, acknowledgements and
-  `renew` keep the bound their owner already holds, and step 10 asks no count for them (question 2).
+- **`ceilings-held-by-their-owners`**: §7.5 gives every kind a ceiling. Reads, notes, acknowledgements and `renew`
+  keep the bound their owner already holds, and step 10 asks no count for them (question 2).
 - **`act-ceiling-latch-lands-with-the-ceiling`**: the ladder plan gives `act-ceiling-hit` to W3. It lands in W2 with
   the ceilings (question 3).
 - **`start-doors-skip-the-ceiling`**: §11.2 has the card, probe and note doors skip step 10's rung only at `off`. They
@@ -918,13 +928,11 @@ mints the numbers.
 - **`start-and-widening-covered-by-request`**: Table 7.1a writes `start-programme`'s class as "none when an operator
   request names it, O3 otherwise". The catalogue writes O3 with the cover `operator-request`, and `widen-scope` gets the
   same cover (C12), so the decider reads one rule.
-- **`timers-are-own-record-acts`** (the index's): the timer doors' rows name `set-timer`, and `OverlordDoorRow.act`
-  loses its `null` arm once no row uses it.
 
 ## What the index should change
 
 - **Table W2, act rows A:** "its writer takes the decider's `MayActAllow`" and "its count fills the gate runner's
-  `ActCountReader`". Act rows B: "the act rows of `write-note`, `acknowledge` and `set-timer`" (each W1 own-record door
+  `ActCountReader`". Act rows B: "the act rows of `write-note` and `acknowledge`" (each W1 own-record door
   then calls `overlordMayAct` through `mayActFactsW2`), and "I4's predicate, every arm" (question 11; it needs request
   record A, so add that to act rows B's Needs first).
 - **Table W2, relay A:** the ceilings are the catalogue's (`relay` group, step 10), not a counter of the relay's own;
@@ -936,15 +944,18 @@ mints the numbers.
 - **The ladder's Table 2:** `act-ceiling-hit` moves from "W3 pieces" to the act catalogue A (question 3).
 - **"States W3 may read":** the cell words, the cover kinds, the authority words and `MayActAllow`; W3 replaces
   `mayActFactsW2`.
-- **Spec fixes:** Table 7.1a's three completion rows and `set-timer`; `start-programme`'s and `widen-scope`'s request
-  cover; §7.5's ceilings per Table 5 into Table 11.5b; §11.2's start doors skipping step 10 whole; Table 11.6's
-  `policy-refused`; §3.3.12's "A timer is not an act kind" (question 18).
+- **Question 18 and Table W2's act catalogue row:** drop `set-timer` and the `timers-are-own-record-acts` slug, as
+  review 2253's F1 says; the timer doors keep `act: null`.
+- **Spec fixes:** Table 7.1a's three completion rows; `start-programme`'s and `widen-scope`'s request cover; §7.5's
+  ceilings per Table 5 into Table 11.5b; §11.2's start doors skipping step 10 whole; Table 11.6's `policy-refused`.
 
 ## Where things stand
 
 **Agreed:**
-- The index's rulings in Table 1: `set-timer`, the move of `RUNG_CELLS`, the dormant grant and command branches, the
-  W2 words read from the group.
+- The index's rulings in Table 1: the move of `RUNG_CELLS`, the dormant grant and command branches, the W2 words read
+  from the group.
+- Review 2253's rulings on this piece, from the coordinator's mail: F1 (no `set-timer`; the timer doors keep `act:
+  null`), F12.6 (W2's answers), F12.7 (the default adapter allows) and F16 (the count is an input to a pure decider).
 - No D-number. Plan decisions are slugs.
 
 **Waiting on the coordinator:**
