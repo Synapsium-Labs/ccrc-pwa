@@ -370,11 +370,13 @@ one beside it.
   - The door writes the replacement as `pending`, as designation does (C2). If its sandbox check fails, the
     replacement is stopped, the old binding stands and the door answers `overlord-sandbox-unmet`.
   - When the check passes, one transaction makes the row `live`, raises the term, releases standing holds by the
-    retention table (§6.7), re-targets queued mail and latches every grant (§7.2). The old body's powers end in the
+    retention table (§6.7), re-targets outstanding mail and latches every grant (§7.2). The old body's powers end in the
     same write that grants the new one's.
   - Rebind sets the two box-side accident guards on the new body and clears them on the old one (C4).
+  - **Rebind keeps the row's model class and account set.** It names neither. The Settings doors change them (the
+    designation plan, `rebind-keeps-the-class-and-set`).
 - **Mail to the role follows the rebind.** Mail to `toId:'overlord'` is resolved when it is sent, as a role address is
-  today (`server/src/coord/routes.ts`). The rebind transaction re-targets every queued delivery to the new session.
+  today (`server/src/coord/routes.ts`). The rebind transaction re-targets every outstanding delivery of mail to `overlord` that names the old body, through the one delivery writer, as `CoordStore.reclaimProgram` does. A parked delivery stays on the old id, visible, and its envelope is not re-rendered (the designation plan, its question 7).
 - **Its state is keyed by the identity, never by a session id.** Notes, requests, generations and deliveries hang off
   `overlord`. Term and generation are stamps on those rows, never part of a key. The row keeps the list of past session
   ids, so the chat and `ccrc history` read every body as one conversation. Session ids are opaque: nothing parses one.
@@ -424,7 +426,13 @@ is one call, by number, so the operator can approve or overturn it.
     pending. `POST /api/overlord/rebind` is the recovery in §3.1: it creates a replacement session and binds it.
     `DELETE /api/overlord/designate` retires the Overlord: the row stays, with no session bound, its term raised and
     its past session ids kept
-    (§3.1). No door designates a session that already runs.
+    (§3.1). Retire also stops the retired body and any pending one, and keeps their workspaces: it puts them on the
+    row's list of stops owed in its own transaction and drains it, a stop that fails stays owed (the answer says
+    `stopped: false`), and a stop that finds no such session reads as stopped. Retire on a row with no session bound, or
+    with no row, answers `ok` with `changed: false` and writes nothing. Retire on a pending-only row cancels the
+    attempt, raises no term and appends no authority record. Restart and rebind with no live binding, and the Settings
+    doors with no row, answer `not-found` (the designation plan, questions 4 and 8). No door designates a session that
+    already runs.
   - **These doors reuse the account gate** with its step-up (`server/src/accounts/gate.ts#createAccountGate`), and
     record the gate's own actor on the row. That gate refuses `auth-off` where sign-in is not armed. So a box with
     sign-in dark has no Overlord: there, a "session-gated" door would be open to any local process.
@@ -434,8 +442,10 @@ is one call, by number, so the operator can approve or overturn it.
     `live` only when the check passes. If it fails, the new session is stopped, the row goes back to binding no session
     (designate) or the
     old binding stands (rebind), and the door answers `overlord-sandbox-unmet`.
-  - **A start that never reports fails the check.** The door writes the `carded` deadline and its one re-nudge
-    (Table 3.3.11a) on the `pending` row. If no start report arrives by then, the renewal lane treats the sandbox
+  - **A start that never reports fails the check.** The door writes the first start's deadline on the
+    `pending` row, once, at the create: the `clearing`, `carded` and `probing` deadlines together
+    (`shared/continuity.ts#STATE_DEADLINE_S`), derived and never a new literal. A healthy first start settles inside it
+    (the designation plan, its question 5). If no start report arrives by then, the renewal lane treats the sandbox
     check as failed, as above, after a server restart too. A pending row never stands without a deadline, so
     `overlord-exists` cannot wedge the next "Start the Overlord".
   - **A session that failed its first check stays stopped.** The board shows it with the properties that failed
@@ -451,8 +461,10 @@ is one call, by number, so the operator can approve or overturn it.
     plan, its question 33 and review M1). A `ccd pool-answer` that did not run or could not be parsed refuses it too,
     naming `pool-set`, with the detail "the agent's pool answer could not be read". Both refusals run before the session is
     created, so a refused start leaves no session behind. It picks the first account from the set, through C32's
-    placement policy. It writes the session's route record once (§3.4): the route class, the account set and the
-    ordered account list. It sets the two box-side accident guards on the
+    placement policy. It writes the session's route record in two steps (§3.4): the route class rides the create, and the
+    account set and the ordered account list follow through `ccd route --session`, because ccd refuses them on a
+    `--route`. The first placement is the server's pick inside the set, and the set binds every later start (the
+    designation plan, `set-written-after-the-create`). It sets the two box-side accident guards on the
     session (C4). Rebind does the same.
   - **"Start the Overlord"** composes the existing session-create door and writes the pending designation in the same
     door. So the session never runs as `plain`, with a shell or a fork that could outlive the designation. It always
@@ -978,7 +990,7 @@ on a summary.
 - **Swaps.** Planned moves happen at a renewal. ccd picks the account at the fresh start, from the ordered list the
   server writes on the registry row (C56, C57, §3.4). A swap landing mid-work today resumes from Claude Code's lossy
   summary (`ccd/ccd`). For a long-lived role, the resumed-long-conversation trigger renews it from the server instead.
-  - **ccd's tick.** This design stands ccd's affinity arm down for the `overlord` role (C57, §3.4). Between renewals,
+  - **ccd's tick.** This design stands ccd's affinity arm down for a row whose route record has an entry at `acctorder`, which only the Overlord's row carries (C57, §3.4). An entry that cannot be read stands it down too. Between renewals,
     only the hard-block rescue moves the Overlord, and the renewal lane makes every planned move. Coordinators keep
     today's arm, and each landing mints a generation.
   - **A rescue onto another class.** ccd's hard-block rescue may drop one class at the move and resume the
@@ -1814,7 +1826,7 @@ operator names the account pools it may draw from. Other sessions keep using eve
 
 | User in ccd | What it does today | What the set changes |
 |---|---|---|
-| `_swap_target`, `_auto_swap_check`, `cmd_swap`, `cmd_start` | Ask `_pool_ok` with the project's side, for a swap target, a tick, a manual swap and a start | They read the session's side, so the Overlord's rescue, its manual swap and its start honour the set. For the Overlord the affinity arm of the tick stands down (C57) |
+| `_swap_target`, `_auto_swap_check`, `cmd_swap`, `cmd_start` | Ask `_pool_ok` with the project's side, for a swap target, a tick, a manual swap and a start | They read the session's side, so the Overlord's rescue, its manual swap and its start honour the set. For a row with an ordered account list, the Overlord's, the affinity arm of the tick stands down (C57) |
 | The home re-seed in `_auto_swap_check` (the step before the affinity arm) | When `_pool_ok` refuses the session's `home`, it asks `_ws_least_loaded <project>` for a new home and writes it, logging `rehome` | Stands down for a session whose side is a set, as the affinity arm does. `_ws_least_loaded` reads the project's side, which for the Overlord is the untagged `overlord` project, so it would pick from every account and could write a home outside the set, and flip it as loads change. The Overlord's home moves nothing: its renewals pick from the ordered list (C56). Passing the session's side into `_ws_least_loaded` was the other way, but it would make a project-keyed placer session-keyed for one caller |
 | `cmd_prefer` | Sets a session's home account, refusing a pool mismatch unless `--cross-pool`, which writes a crossing marker | Reads the session's side. For the Overlord a `prefer --cross-pool` is not a lasting crossing: the marker names its home, which moves nothing, and the next renewal clears it (C46) |
 | The three callers of `_crosspool_mark`: `cmd_start`, `cmd_swap`, `cmd_prefer` | Pass `${pps#named }`, the project's pool name, as the marker's pool field | Write the field with its kind: a plain pool name for a `named` side, as today, and `set:<spelling>` for a `set` side, stripping the side word `set ` first |
@@ -1965,7 +1977,10 @@ editions of this spec.*
     an account that cannot serve the session's class, or one at 98% of either window, and goes home when home has
     room, at the next clean turn boundary. Such a move may drop one class and carries the conversation with it, so it
     would carry a Fable conversation onto Opus, which C45 allows only until a renewal lands. This design adds a
-    stand-down: for the `overlord` role the affinity arm does nothing, beside the existing manual-swap pin check.
+    stand-down: for a row whose route record has an entry at `acctorder` the affinity arm does nothing, beside the
+    existing manual-swap pin check. That field is written for the Overlord's row only, and it names C57's reason: the
+    renewal's pick from the ordered list makes every planned move. An unreadable entry stands the arm down too, since
+    nothing moves on a doubtful read (the ccd arms plan, question 2).
     Between renewals only the hard-block rescue moves the Overlord, and the renewal lane makes every planned move. When
     the generation's class is no longer servable on its account, that is a hard trigger (Table 3.3.11b). So is a start
     that resumed the conversation on another model class, which the rescue can make. Coordinators keep today's arm,
@@ -2069,7 +2084,10 @@ The line is held five ways, from the softest to the hardest:
   - Every write lane that is not an Overlord door refuses the designated session with `overlord-uses-its-doors` (H10):
     peer mail, raising items, claims, the claimant's question door and coordinator intent.
 - **The role-skill deny.** `ccrc-overlord` joins the session hook's `ROLE_SKILLS`, so the existing role-skill deny keeps
-  a subagent from loading it.
+  a subagent from loading it. The deny gains a fourth name, because no subagent anywhere may load it. The skill ships in
+  the tree and is staged once, at `$HOME/.cc-sessions/overlord-skill`, on every box the install spine serves (every role
+  but server). That is outside every account home, and no home gets a copy. Doctor's skills check measures the staged
+  copy against the shipped tree (the Overlord skill plan, its question 1).
 - **An accident guard, kept for the fallback.** `OVERLORD_DENY_RULES` in `shared/api.ts`, beside `ACCOUNT_DENY_RULES`,
   denies the editing tools, the web tools, the workflow tool and the repository write verbs (`git commit`, `git push`,
   `gh pr create`, `gh pr merge`).
@@ -2545,9 +2563,14 @@ holds private data and can change state, so it must never take untrusted text ra
   - **Attachments are content, never words.**
   - **Text ccrc types is tagged.** One L0 list, `INJECTED_PROMPTS`, holds every fixed string the server or ccd types
     into a pane. That is the mail nudge, the idle nudge, `/clear`, the resume prompt, `/model` and `/effort`. Each is a
-    referenced constant in TypeScript. ccd is bash and spells its own (`/effort`, `/model`, in `ccd/ccd`), so a census
-    test pins every string ccd types against the list. History's `provenanceOf` tags an exact match `ccrc-injected`, a
-    change the history programme owns.
+    referenced constant. The list is a builtin-free `shared/*.mjs` file with a `.d.mts`, so history's `.mjs` code can
+    import it, and the idle nudge and the resume prefix moved into it from `shared/api.ts`, which re-exports them, so each
+    string has one definition (the vocabulary plan, questions 1 and 2). ccd is bash and spells its own (`/effort`, `/model`, in `ccd/ccd`), so a census
+    test pins every string ccd types against the list. The census also closes over what ccd types that is not a
+    prompt: a picker key, a clip path and the key names (question 3). History's `provenanceOf` tags an exact match
+    `ccrc-injected`, a change the history programme owns. Claude Code records a typed slash command as an envelope, so
+    the reader's input is the command name and its arguments joined by one space, with one trailing newline trimmed
+    (question 11). An operator who types `/clear` or `/model` themselves matches too, an accepted residual.
   - **Bodies are never typed.** Mail bodies, kickoffs, briefs and relays never enter a pane as typed text. Only the
     one-line nudge does, and every body arrives as tool output.
   - **Mail from or to `overlord` is served only to its recipient,** through the identity port (§7.4), or to the
@@ -4182,7 +4205,7 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
   whose deadline passed meanwhile are released in one grouped push, with the reason `server-gap`. A clean shutdown
   seals state locally and pushes nothing. After each boot the rung is capped at `advise` until one witness off the
   server's volume has answered (§7.6). The re-seed waits one sweep for that answer. A fleet box's agent gives it as
-  it reconnects, and the holds stand. On one box the witness is the first signed-in console, so with no console open
+  it reconnects, and the holds stand. On one box the witness is a signed-in console that holds a tuple from an earlier boot, so with no such console open
   the re-seeded holds are released, as `released:rung`.
 - **Retention.** What happens to holds is asked again on every event that can change a part of `mayHold`: readiness,
   the ladder, arming, a grant revoked, suspended or expired, a class raised, the breaker, engagement, a load line, a
@@ -4627,7 +4650,7 @@ a grant holds, how it lives, and how it tightens by itself.
 |---|---|---|
 | a generation is off the model class the grant names | condition | a generation on that class |
 | the caller's identity strength is below the grant's | condition | the condition ending |
-| since boot, no witness off the server's volume has answered (§7.6) | condition | the first such witness answering |
+| since boot, no witness off the server's volume has answered (§7.6) | condition | the first such witness answering with a tuple sent under an earlier boot |
 | an act under the grant is `overturned` | latch | the operator only |
 | a sequential test on its overturns crosses its line | latch | the operator only |
 | the audit drops | latch | the operator only |
@@ -4928,39 +4951,77 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
   from the delegation journal (`server/src/coord/delegation-journal.ts`). The extraction is a move-only pull request
   with characterization tests, before W1. W1 ships the kernel, the authority journal and the privacy journal's file
   (§14).
+  - **The kernel is a new file, `server/src/chainedJournal.ts`,** beside the tree's log-first `journalKernel.ts`, which
+    a pinned census keeps apart from the delegation journal. The dividing property is strict, hash-chained exact bytes,
+    against tolerant text framing. It also takes the canonical encodings (the writer, the text hash, the hash predicate
+    and the canonical instant) and the "next record from the head" (the journal kernel plan, questions 2 and 3; the
+    authority plan, question 4).
+  - **One synchronous file adapter, `chainedJournalFile.ts`,** over a byte-level port with one cut operation serves both
+    W1 chained journals. The authority journal's file is `overlord-authority.jsonl`, with `OverlordAuthority*` names,
+    named apart from `landing.log` (the authority plan, questions 2 and 3).
   - **Three record grammars sit on it:** the authority journal, the act journal and the privacy journal.
   - **Each is a new file that no snapshot carries.** The delegation journal's own file is captured in snapshots, so it
     cannot be reused.
   - **Each record is appended inside the store's transaction, before the row.** Records carry the operation key. No
     journal holds the operator's words.
+  - **A narrowing always lands.** While the journal is not coherent, an operator narrowing (a pause, a retire, a rung
+    down, a latch raise) writes its row only, with no append and the head row unmoved, so the operator keeps every
+    lever. A refused append does the same: the journal calls `writerFailed`, and the answer says `journalled: false`.
+    A widening is still refused. Confirm the restore folds the narrower row side in, as it takes the stricter value of
+    each field (the authority plan, question 9, X3 and X3b). A door answers a refusal from the writer as
+    `authority-rolled-back` (503), the guard's cause in the body, for `authority-rolled-back` and
+    `authority-unmeasured`, and every other writer error as `journal-unreadable` (503).
+  - **A failure after the append fences at once.** The guard then reads `rolled-back` with the cause `trailing`, and
+    the gates' step 3 refuses from that moment (the authority plan, question 1).
 - **The authority journal** records every change that widens or narrows authority:
   - grants created, revoked, suspended and expired;
-  - designate, rebind and retire;
+  - designate, rebind and retire, each appended when the body goes live (or, for a retire, when it takes a bound body
+    off), because only then are the term and the generation final. A pending attempt grants nothing and appends
+    nothing. The designate door also journals the account set and the model class, each as its own record in its
+    transaction. The generation is a string, the id ccd records, never a number (the authority plan, questions 12 and
+    X2; the designation plan, `designate-journals-at-go-live`);
   - changes of the ladder, engagement, ceilings and arming;
   - a decision-model refit that eases a gate, and an armed gate row switched off;
   - commands consumed, practice retirements, and each confirmed restore;
   - the operator's withdraw and take of a request. They take back what a request authorises, and a request's other
     moves are in no journal. After a restore a request takes the stricter of its row and the journal.
-- **Boot coherence.** At boot the server compares the authority journal with the Overlord's rows, following the
-  collector switch's table. It also compares the act journal with the act rows: a settle record whose act has no
+- **Boot coherence.** At boot the server compares the authority journal with a head row,
+  `overlord_authority_head`, which holds the sequence, journal id and digest of the last record whose row committed.
+  The writer's apply step is its only writer, inside the transaction of the authority row it records, so each verdict
+  below compares two positions. "Missing, beside any Overlord row" reads the head row and every Overlord authority
+  table in a list each later piece extends (`OVERLORD_AUTHORITY_TABLES`). The comparison follows the collector
+  switch's table (the authority plan, question 5). It also compares the act journal with the act rows: a settle record whose act has no
   row means the database went back, and the server refuses `authority-rolled-back`. An authority record is rare
   and an act is not, so most restores lose acts and no authority record.
 
-| Journal against the rows | Verdict |
+| Journal against the head row | Verdict |
 |---|---|
 | equal | coherent |
 | missing, beside any Overlord row | refuse `authority-rolled-back` |
 | behind | refuse `authority-rolled-back` |
 | ahead | refuse `authority-rolled-back` |
 | malformed | refuse `authority-rolled-back` |
+| diverged: the file holds a different record at the head row's sequence | refuse `authority-rolled-back` |
+| unmeasured: the file or the row cannot be read | refuse, answered `authority-rolled-back` with the cause in the body, and never folded into missing |
 | one trailing record with no row | refuse `authority-rolled-back`: a crash between a record and its row and a restore one record behind look the same. Confirm the restore applies the record if it narrows, and leaves it unapplied if it widens |
 
 *Table 7.6a. Boot coherence. Only narrowing records are ever replayed.*
 
 - **A witness outside the volume.** A volume snapshot restores the database and the journals together, so no journal
   alone can see it. The server's authority epoch rises with every authority record, every settle record of the act
-  journal and every record of the privacy journal. The server sends it, with the head hashes of the three journals
-  and the highest id issued of each kind, to every agent and every signed-in console. Each keeps the highest it has
+  journal and every record of the privacy journal. It is derived from the journals, which no snapshot carries: the last
+  Confirm record's `epochAtConfirm` (the base) plus the authority records and the privacy records after it (its terms),
+  with a base of 0 when no Confirm record exists. The act journal's settle records join as a third term in W2. It needs
+  no writer, rises by one with every record, and is read at boot from the files alone. A restore of `coord.db` alone
+  leaves it unchanged and boot coherence catches that restore. A restore of the whole volume makes it fall and a
+  witness catches that. Each term travels separately, because the epoch also falls when a build stops reading a term,
+  with no restore: the tuple carries each term's count beside the total, and a build compares only the bases and the
+  terms it reads. A term a build does not read is skipped, never compared as zero (the authority plan, question 7 and
+  review F9). The server sends it, with the head hashes of the three journals
+  and the highest id issued of each kind, to every agent and every signed-in console. The restore generation is one of those
+  counters: it lives in the journal and in every witness, never in `coord.db`. Each `authority-restore-confirmed` record
+  carries its value, the accessor reads the last one (0 when there is none), and the tuple carries it in
+  `highestIds.restoreGeneration` (question 13). Each keeps the highest it has
   seen. A server whose epoch is lower than a witness's, or whose journals do not hold the witness's heads, refuses
   `authority-rolled-back`. So records written after a restore cannot catch the epoch up.
   - **An agent on the server's own host is no witness:** the same snapshot restores its copy.
@@ -4968,7 +5029,16 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
     lower rung) is reported to the operator as done only once at least one witness off the volume holds its epoch.
     Until then the console shows it as taking effect.
   - **After each boot, grants read as suspended and the rung is capped at `advise`** until one witness off the
-    server's volume has answered (Table 7.2a, Table 7.5a). On one box that is the first signed-in console. What
+    server's volume has answered (Table 7.2a, Table 7.5a). On one box that is the first signed-in console.
+    Each tuple the server sends carries its boot nonce, the one `index.ts` already mints. The cap lifts on a witness off
+    the volume that presents a tuple sent under an earlier boot, when the verdict reads it consistent. A witness that
+    holds nothing, or only this boot's tuple, takes the current tuple and lifts nothing, because a console with cleared
+    storage proves nothing about a restore. So a fresh box's first boot, or a boot whose only witness is such a console,
+    stays capped at `advise` for that whole boot: this departs from "until one witness has answered", and counting any
+    answer while both the file and the head row are absent is not safe, since a restore to a snapshot from before the
+    journal reads as absent too. After a Confirm inside a boot, each witness's next answer reads `stale` and takes a
+    tuple stamped with this boot, so the cap lifts at the next boot: liveness waits a restart and safety does not (the
+    authority plan, question 8, F7a and F7b). What
     is left: after a restore of the whole volume, acts of the `advise` rung run, and may repeat, until that
     answer.
 - **A detected restore latches the ladder at `chat`** (Table 7.5a), and latches every grant suspended (Table 7.2a).
@@ -4986,7 +5056,16 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
   - the server's authority epoch is set above the highest any witness holds.
 
   It then lifts `authority-rolled-back`. The `chat` cap stays as an ordinary latch, which the operator clears as any
-  other (§7.5).
+  other (§7.5). Confirm appends its record before the tables write their stricter values, so the ladder stamps its rows
+  with that record's sequence, and it refuses while the epoch or the guard reads `unmeasured`.
+  - **Confirm over a journal that cannot be folded.** A `malformed` journal, or a trailing record behind a torn tail the
+    heal refuses, has no verified head to append after and no fold to read. Confirm keeps the whole file aside under
+    `~/.ccrc/overlord-authority-torn/` and starts a new chain, whose record 1 is the Confirm record. It reads the journal
+    side as the narrowest value of each field: no binding, the lowest rung, no latch of its own, the empty account set
+    and `opus`. It takes `epochAtConfirm` and the restore generation above a bound from the file kept aside, whose line
+    count bounds every sequence it held, and above every witness's value, plus one. Each witness then holds an epoch
+    below `epochAtConfirm`, so its next answer reads `stale`, never `witness-heads`, and it takes the new tuple (the
+    authority plan, question 17).
 - **No id is used twice across a restore.** After Confirm the restore, the ids of grants, acts, proposals, commands,
   requests and operator-model entries start above the highest that their journals or any witness hold, as message
   ids do (§5.1). The act journal holds each request's id on its open record, and the privacy journal keeps the
@@ -5992,7 +6071,7 @@ why.*
   sample, the replay, thresholds, measures and grants.
 - **Retirements join the authority journal** (§7.6).
 - **When it ships.** The case lane runs in shadow from W1a. The trigger table starts there with the stall arms, and
-  grows with refusal words from W1 and health words from W2. The playbook itself ships in W4b, with
+  grows with refusal words from W1 and health words from W2. The refusal kind's rows are exactly the words of the Overlord's refusal group (`OVERLORD_REFUSALS`), derived from it, so a later wave's words join by joining the group. No W1 code records a refusal as a case observation, so the kind has rows and no writer until W4b's `practiceFor` (the vocabulary plan, its question 8). The playbook itself ships in W4b, with
   `practice_entries`, the door, `practiceFor`, reviews, clause 24 and the capability word `practice-v1` (Table 11.1d,
   §14). M31 measures it (§12).
 
@@ -6356,7 +6435,7 @@ tested over its whole input domain (§11.7).*
 
 | Door | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| Designate, rebind, retire: `POST /api/overlord/designate`, `POST /api/overlord/rebind` (each creates its session and writes the row `pending` in the same door, so the session's first launch has the `overlord` profile; no door designates a session that already runs), `DELETE` (retire keeps the row, with no session bound) | C5, L4 | `overlord_designation` | it | n/a | W1 | n/a | No route |
+| Designate, rebind, retire: `POST /api/overlord/designate`, `POST /api/overlord/rebind` (each creates its session and writes the row `pending` in the same door, so the session's first launch has the `overlord` profile; no door designates a session that already runs), `DELETE` (retire keeps the row, with no session bound, and stops the retired body) | C5, L4 | `overlord_designation` | it | n/a | W1 | n/a | No route |
 | Confirm the restore | C5, L4 | in one transaction: the term, each authority field (the designation's binding among them), the reconciliation pass, the server's epoch set above the highest any witness holds; a record in the authority journal. Every grant stays latched. It then lifts `authority-rolled-back` | it, behind the step-up | n/a | W1 | n/a | No route |
 | The console's prompt route, one write for the designated session. From W2 a tap on a next-step control goes through this route to the session of the coordinator that owns the request, with the control's fixed text and the request id, as the operator's typing does today. It makes no row of `operator_messages`: the server stamps it on the request as news and writes the `operator-at-programme` mark (§5.4) | K, L4 | `operator_messages`; for a tap, the request's news | it | n/a | W1 (the tap W2) | n/a | Sends to the pane only |
 | The Overlord's reads: board, `messages`, inbox, history, model, feed. The inbox read's contract, its row shape and its order, is fixed in W1: later waves add bands and kinds of row, and change nothing a W1 caller reads | C5, L4 | the read ledger | each its own line | n/a | W1 (board, messages, history, and the inbox with band 1 and probes, §6.8), W2 (band 3 joins the inbox), W3 (band 2, packets, admission and background work join it; a drill joins every Overlord read that would show a real row of its kind, §7.5), W4 (model, feed) | n/a | No route |
@@ -6616,7 +6695,7 @@ what each older build does (H32).
   in one grouped push, `server-gap`. A follow-up that came due meanwhile is timed again (§5.4). A clean shutdown seals
   state locally and pushes nothing. The breaker's row survives, so a restart neither forgets it nor trips it. Until
   one witness off the server's volume has answered, grants read as suspended and the rung is capped at `advise`
-  (§7.6). On one box that is the first signed-in console. The re-seed waits one sweep for that answer, so with no
+  (§7.6). On one box that is a signed-in console holding a tuple from an earlier boot. The re-seed waits one sweep for that answer, so with no
   console open a hold re-seeded at boot is released, as `released:rung` (§6.7).
 - **An older server reads the newer database.** A higher `user_version` is readable, and unknown tables and columns
   are skipped. The danger is a new word in a column an older build already reads. Table 11.5 lists each one. The plan
@@ -6737,13 +6816,13 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `rung-below` | Every Overlord write door | The effective rung does not allow this act kind. The answer names the rung it needs | H25 |
 | `act-ceiling` | Every Overlord write door | The act kind's ceiling for the window is reached (Table 11.5b) | H25 |
 | `overlord-exists` | Designate | A session is bound to the designation, or is pending. A retired row is designated again | C2, R7 |
-| `overlord-body-alive` | Rebind | The old session does not measure dead or absent, and the operator did not force the rebind behind the step-up | C2, R7 |
+| `overlord-body-alive` | Rebind, Restart | The old session does not measure dead or absent, and the operator did not force the rebind behind the step-up. For Restart, a live or unmeasured body has nothing to restart | C2, R7 |
 | `overlord-single-account` | Designate, rebind, the account set's Settings row | Fewer than two accounts that its set admits can serve it. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind. At the Settings row it is checked only while an Overlord is designated | C46, C56 |
 | `auth-off` | Every operator door | Sign-in is dark, so the door would be open to any local process | H28 |
 | `server-not-isolated` | Grants, commands, learning; `overlordMayAct` | The server shares a user with fleet sessions | H28 |
 | `overlord-sandbox-unmet` | Designate, rebind | A property of the sandbox check failed at the pending start, and the door stops the session it created. Designate removes only the pending binding: a retired row stays retired, with its past ids, and the term never goes down. Rebind keeps the old binding. The stopped session stays stopped, and the board shows the properties that failed. At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
 | `launch-profile-unmet` | Every Overlord door but card, probe and note; designate and rebind | The launch profile is not engaged. That is computed on read, never stored, from the report of the session's newest `startup` or `resume` start and the server's own profile: no such start, no report, a conflicted report (a second, different body for one start), or any property `failed` or `unmeasured`, because `unmeasured` is never held. The `profile` property fails when the running session's digest, which covers `compactText` too, is not the server's profile's: after a release that changes the row, or while the fleet node and the server run different builds, a running Overlord reads it until its next start. A loaded file, hook, tool server, agent or skill the profile does not list fails its property, and a Claude Code build ccrc has no lists for reads `unmeasured`, naming the build. A resume carries `instructions` and `hooks` from the newest `startup` of the same transcript only when that report's digest and build equal this session's, and its tools and tool servers read `unmeasured`, so a resumed Overlord stays unmet until a fresh start. Settings sources are refused at the spawn rather than listed, and mods are doctor's `overlord-mods` check, not this word's. At designate and rebind: the server's and the fleet node's builds do not agree, the detail `skewed` naming both builds, or their agreement is `unmeasured` (the sandbox plan; the designation plan, its question 3) | H1, H4 |
-| `authority-rolled-back` | Every Overlord door but card, probe and note | Boot coherence failed (the authority journal against the rows, or the act journal against the act rows), or a witness holds a higher epoch or a journal head the server's journals lack | H27 |
+| `authority-rolled-back` | Every Overlord door but card, probe and note | Boot coherence failed (the authority journal against the rows, or the act journal against the act rows), or a witness holds a higher epoch or a journal head the server's journals lack, or the authority writer's guard is not coherent: an uncertain append, a trailing record, a diverged or unreadable file, answered with the guard's cause in the body (503) | H27 |
 | `stale-designation` | Every Overlord write door | The call carries an older term | H12 |
 | `stale-generation` | Every Overlord write door | The generation number or its act key is wrong | H12 |
 | `card-unread` | Every Overlord door but card, probe and note | This generation has not read the current card hash or rules version | H11, C40 |
@@ -7594,7 +7673,7 @@ source. A departure that only refines a plan changed nothing here.
 | A rollback below `timers-v1` (Table 11.5's `timer` row) | "That is the whole effect"; the plan was to decide whether the rollback waits for queued timer mail | It does not wait (`no-rollback-wait`): queued timer mail still delivers on the older build, whose stall watch counts a delivered run-bound one as an exchange and whose `mailSender` reads `timer` as a session id, measured at the `v0.0.1164` tag. The plan's measurement of the park notice that then parks is recorded as the plan's. The timers plan, PR C |
 | D-8126's state (Status, §1.1) | "Not yet merged" | Its spec and plan merged in #2487; its waves A2 (#2549) and A3 (#2606) have merged and shipped; A4 to A10 have not. The W1 plan index (#2814, `d8126-built-means-a2-a3`) |
 | The account load lines (Table 11.5b) | Stated in C57 only | 70% and 85% are rows of Table 11.5b, as starting values. The W1 plan index (#2814, `load-lines-are-starting-values`) |
-| The refusal list (Table 11.6) | "One word from one L0 list, generated from this table" | The words live in `shared/refusal.ts`, grouped by door; nothing generates or checks them against the table in W1a. Measured both ways: the W1a words the table lacked were `timer-not-found` and `lane-gated`, and five of its words wait for doors not built yet. The W1 plan index (#2814, `refusal-table-checked-both-ways`) |
+| The refusal list (Table 11.6) | "One word from one L0 list, generated from this table" | The words live in `shared/refusal.ts`, grouped by door; nothing generates them from the table, but a guard suite reads the table and checks it against them in both directions. Measured both ways: the W1a words the table lacked were `timer-not-found` and `lane-gated`, and five of its words wait for doors not built yet. The W1 plan index (#2814, `refusal-table-checked-both-ways`) |
 | The Operator Model's context id (§11.1) | C10 | C11: C10 is the session host, ccd's alone (`CCD_CONTEXTS`, `CCD_ONLY_CONTEXTS`). The W1 index review (2075) |
 | Where the account for a start is decided (C32) | In the browser, `startProgramPlacement`, to move to one L1 home | Already one home on the server, `projectPlacement` over `projectHome`, which the route's forecast comes from; the browser's `startProgramPlacement` only selects which forecast to show. The W1 index review (2075) |
 | The hook's reports (Table 11.1e) | Start, witness, reader start and stop, model switch | Also the pick-up report, the writer of an operator message's picked up (§3.8, Table 11.1b). The W1 index review (2075) |
@@ -7644,6 +7723,22 @@ coordinator ruled the matter, the row says so.
 | The readiness word (§6.4, Table 6.4a) | A third restart "reads `dead`"; deaf "within 2 minutes of `ready`"; proof newer than the last leaving of `ready` | A third restart reads `dead` while down and after its generation mints, until the hour clears, outside the renewing guard; the deaf clock runs from the later of the message's arrival and `readySince`; proof must be of the current generation, and a server restart counts as leaving `ready`. The readiness plan, F1, F18 and F13 |
 | A lost door process (Table 3.3.11b) | No trigger | A hard renewal trigger for a refused act-key claim or lost tools on the live generation. Proposed by the door process plan, question 7 (F12), adopted by the coordinator |
 | Who sees the answer marks (§9.2.1) | The privacy rule was stated for the write door only | A coordinator does not see the operator's marks only while sign-in is armed; while it is dark the waiting view, marks included, is open to any process on the box. The delegation marks plan, `coordinator-read-carries-no-marks` |
+| The affinity stand-down's body text (C57, §3.3.8, Table 11.1c) | "For the `overlord` role" in the C57 bullet and the §3.3.8 sentence | Keyed on a route record with an entry at `acctorder`, which only the Overlord's row carries, and an unreadable entry stands the arm down too. The ccd arms plan, question 2 |
+| The kernel and the journal's files (H27) | A generic kernel extracted, no file named | `server/src/chainedJournal.ts`, a new file beside the log-first `journalKernel.ts`, taking the canonical encodings and the next-record step; one synchronous adapter, `chainedJournalFile.ts`; the authority journal is `overlord-authority.jsonl`. The journal kernel plan, questions 2 and 3; the authority plan, questions 2 to 4 |
+| A narrowing over an incoherent journal (H27, Table 7.6a) | Each record appended inside the transaction, before the row, for every change | While the journal is not coherent, or after a refused append, an operator narrowing writes its row only, answers `journalled: false`, and a widening refuses. A failure after the append fences at once as `trailing`. Doors answer the guard's two words as `authority-rolled-back` and any other writer error as `journal-unreadable`. The authority plan, questions 1 and 9 (X2, X3, X3b) |
+| Which moves are authority records (H27) | "designate, rebind and retire" | Appended when the body goes live (a retire when it unbinds), a pending attempt appends nothing, the account set and the model class are records of their own, and a generation is a string. The authority plan, question 12 (X2); the designation plan, `designate-journals-at-go-live` |
+| Boot coherence (Table 7.6a, Table 11.6's `authority-rolled-back`) | The journal against "the rows", six verdicts | The journal against a head row, `overlord_authority_head`, with `diverged` and `unmeasured` as verdicts that refuse; the row's meaning covers the writer's guard. The authority plan, question 5 (`coherence-reads-a-head-row`, `coherence-diverged-verdict`) |
+| The first witness (§7.6, §11.5, Tables 7.2a and 7.5a) | Capped at `advise` "until one witness off the server's volume has answered" | The cap lifts on a witness presenting a tuple sent under an earlier boot, so a first boot, or one whose only witness holds nothing, stays capped for that boot; a Confirm's lifting waits the next boot. The authority plan, question 8 (F7a, F7b, an accepted residual) |
+| The witness epoch and the restore generation (§7.6) | An epoch that "rises with every record", no store for the generation | The epoch is derived from the journals (the last Confirm's `epochAtConfirm` plus the records after it), each term travels beside the total and a build compares only the terms it reads; the restore generation lives in the journal and every witness, never in `coord.db`. The authority plan, questions 7 and 13 |
+| Confirm over a journal that cannot be folded (§7.6) | Each field takes the stricter of the database and the journal | Over a malformed journal or a refused torn tail, Confirm keeps the file aside, starts a new chain and reads the journal side as the narrowest value; it appends before the tables write, and refuses while `unmeasured`. The authority plan, question 17 (F2, F5) |
+| The pending deadline (§3.2 C2) | "The `carded` deadline and its one re-nudge" | The first start's deadline, set once at the create from `STATE_DEADLINE_S` (`clearing`, `carded` and `probing`). The designation plan, question 5 |
+| Retire, Restart and rebind on a row without a binding (§3.2 C2, Tables 11.1e and 11.6) | Retire "keeps the row"; `overlord-body-alive` for Rebind only | Retire stops the retired and any pending body and keeps their workspaces; retire on an unbound row is a no-op, on a pending-only row cancels the attempt; Restart and rebind with no live binding answer `not-found`; `overlord-body-alive` covers Restart. The designation plan, questions 4 and 8 and the spec-fixes list (review M1) |
+| Rebind's mail, class and set (§3.1) | "Re-targets every queued delivery"; class and set unstated | Outstanding deliveries of mail to `overlord` that name the old body, and a parked one stays on the old id; the class and the set are the row's. The designation plan, question 7 and `rebind-keeps-the-class-and-set` |
+| The route record's writes (§3.2 C2) | Written once | Two steps: the class rides the create, the set and the ordered list follow through `ccd route --session`. The designation plan, `set-written-after-the-create` |
+| `INJECTED_PROMPTS` (§3.8 H7) | A referenced TypeScript constant, six strings | A builtin-free `.mjs` list with a `.d.mts`, the two prompt constants moved into it, a census that also closes over ccd's keys, paths and key names, and a reader that takes the command name and its arguments joined by one space. The vocabulary plan, questions 1, 2, 3 and 11 |
+| The trigger table's refusal rows (§9.7) | "A refusal word", no list | Exactly the words of the Overlord's refusal group, derived from it, with no writer until W4b. The vocabulary plan, question 8 |
+| The Overlord skill's install and deny (§3.6) | The deny joins `ROLE_SKILLS` | Also: the skill is staged once outside every account home, on every box but a server-role one, and the deny gains a fourth name. The Overlord skill plan, question 1 |
+| The refusal list's row in Appendix B (Table 11.6) | "Nothing generates or checks them against the table in W1a" | A guard suite checks the table against the code in both directions. The vocabulary plan, question 4 |
 
 *Table B7. The corrections from the W1 plans.*
 
