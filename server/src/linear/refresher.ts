@@ -347,25 +347,32 @@ export class LinearRefresher {
         after = p.next;
       }
     }
-    /** One page of a hierarchy document: its body, or null when the key moved, the floor refused or the call failed. */
-    const onePage = async (document: string): Promise<unknown> => {
+    /** One page of a hierarchy document: `moved` when the key changed (record nothing), `failed` when the floor refused or the
+     *  call failed (the four core collections are still whole and are kept), else the body. */
+    const onePage = async (document: string): Promise<{ kind: 'moved' | 'failed' } | { kind: 'body'; body: unknown }> => {
       const k = await readLinearSlotKey(ccrcDir, ref);
-      if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return null;
+      if (k.kind !== 'key' || valueDigestHex(k.key) !== digest) return { kind: 'moved' };
       const t = rate.take({ lane: 'floor', slot: ref, calls: 1 });
-      if (!t.ok) return null;
+      if (!t.ok) return { kind: 'failed' };
       const call = await callLinear(k.key, document, {}, { fetch: this.opts.fetch, timeoutMs: this.opts.timeoutMs, now: this.now });
       rate.settle(t.grant, oneCallOutcome(call));
-      return call.ok ? call.body : null;
+      return call.ok ? { kind: 'body', body: call.body } : { kind: 'failed' };
     };
     if (digest === null) return;
+    // The hierarchy's two reads never cost the session name lookups the four collections they rest on: a failed page keeps
+    // what the directory held for this key (or empty / `unknown`), and the whole is stored.
+    const held = this.names.get(ref, digest);
+    entries.projectStatuses.push(...(held?.projectStatuses ?? []));
+    entries.initiatives = held?.initiatives ?? 'unknown';
     const statuses = await onePage(LINEAR_HIERARCHY_DOCUMENTS.projectStatuses);
-    if (statuses === null) return;
-    const sp = readLinearProjectStatusesPage(statuses);
-    if (!sp.ok) return;
-    entries.projectStatuses.push(...sp.statuses);
+    if (statuses.kind === 'moved') return;
+    if (statuses.kind === 'body') {
+      const sp = readLinearProjectStatusesPage(statuses.body);
+      if (sp.ok) entries.projectStatuses.splice(0, entries.projectStatuses.length, ...sp.statuses);
+    }
     const probe = await onePage(LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe);
-    if (probe === null || linearErrorOf(probe)?.word === 'rate-limited') return;
-    entries.initiatives = readInitiativesProbe(probe);
+    if (probe.kind === 'moved') return;
+    if (probe.kind === 'body' && linearErrorOf(probe.body)?.word !== 'rate-limited') entries.initiatives = readInitiativesProbe(probe.body);
     this.names.put(ref, digest, entries, this.now());
   }
 }

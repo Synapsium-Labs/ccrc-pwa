@@ -52,6 +52,9 @@ export const PLAN_SYNC_CALL_TIMEOUT_MS = 15_000;
 const DIRECTORY_WAIT_MS = 10_000;
 /** A runaway guard: one pass never takes more steps than this. */
 const MAX_STEPS_PER_PASS = 500;
+/** The fingerprint of an adopted object (recovery, conflict): it was never sent the current inputs, so it matches no planned
+ *  one and the next re-read emits one absolute update (or link) that writes the real fingerprint. */
+const ADOPTED = 'adopted';
 const LAST_BACKOFF_MS = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]!;
 
 export interface PlanSyncDeps {
@@ -311,7 +314,7 @@ export class PlanSync {
       }
       if (out.word === 'linear-invalid' && out.detail !== undefined) {
         if (this.deps.now() >= deadlineAt) return 'defer';
-        return this.bindExisting(step, b, subject(b.id));
+        return this.bindExisting(step, b, subject(b.id), built);
       }
       return this.onFailure(out, subject(b.id));
     }
@@ -350,7 +353,7 @@ export class PlanSync {
       const found = certain.length > 0 ? certain : mine;
       if (found.length === 0) return 'send';
       if (found.length > 1) { this.fail(s, 'name-ambiguous'); return 'next'; }
-      this.bind(b, found[0]!.id, null, step.fingerprint);
+      this.bind(b, found[0]!.id, null, ADOPTED);
       return 'bound';
     }
     // name-in-project: a milestone has no creator (R3); its project holds only what ccrc made
@@ -361,27 +364,44 @@ export class PlanSync {
     const mine = milestones.filter((m) => (m.id === step.requestId || m.name === name) && !held.has(m.id));
     const found = mine.filter((m) => m.id === step.requestId).concat(mine.filter((m) => m.id !== step.requestId));
     if (found.length === 0) return 'send';
-    this.bind(b, found[0]!.id, null, step.fingerprint);
+    this.bind(b, found[0]!.id, null, ADOPTED);
     return 'bound';
   }
 
-  /** R2: a create answered "conflict on insert" (or a milestone "name not unique"): the object exists. Read it by the
-   *  requestId and bind it; never a second create. A milestone no project holds under that id is a failure. */
-  private async bindExisting(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject): Promise<Flow> {
+  /** R2 and C11: a create answered "conflict on insert" (or a milestone "name not unique"): an object exists at ccrc's id. Ids
+   *  are deterministic, so id alone adopts nothing: an initiative or project is adopted only when the by-name read (name as
+   *  sent, team-narrowed) shows that id made by this key's viewer; an issue only when it is in the planned team and no other
+   *  binding holds it; a milestone only inside ccrc's own bound project (R2). Anything else fails the binding
+   *  `linear-invalid`, mailed once, and never sends a second create. Adopted bindings carry the `adopted` fingerprint. */
+  private async bindExisting(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<Flow> {
     const id = step.requestId;
+    const held = built.snap.bindings.some((x) => x.id !== b.id && x.linearId === id);
     if (step.op === 'projectMilestoneCreate') {
       const out = await this.deps.call(this.readAsk('projectById', s, step.teamKey, { id: String(step.input['projectId']) }));
       if (!out.ok) return this.onFailure(out, s);
       const ms = ((out.value['project'] as { milestones?: { id: string }[] }).milestones ?? []).find((m) => m.id === id);
-      if (ms === undefined) { this.fail(s, 'linear-invalid'); return 'next'; }
-      this.bind(b, ms.id, null, step.fingerprint);
+      if (ms === undefined || held) { this.fail(s, 'linear-invalid'); return 'next'; }
+      this.bind(b, ms.id, null, ADOPTED);
       return 'next';
     }
-    const read = step.op === 'initiativeCreate' ? 'initiativeById' : step.op === 'projectCreate' ? 'projectById' : 'issueOwned';
-    const out = await this.deps.call(this.readAsk(read, s, step.teamKey, { id }));
+    if (step.op === 'issueCreate') {
+      const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id }));
+      if (!out.ok) return this.onFailure(out, s);
+      const issue = out.value['issue'] as { id: string; identifier?: string; teamKey?: string };
+      if (held || issue.id !== id || issue.teamKey?.toUpperCase() !== step.teamKey?.toUpperCase()) { this.fail(s, 'linear-invalid'); return 'next'; }
+      this.bind(b, issue.id, typeof issue.identifier === 'string' ? issue.identifier : null, ADOPTED);
+      return 'next';
+    }
+    const viewer = built.snap.workspaces.find((w) => w.workspaceId === step.workspaceId)?.directory?.viewerId ?? null;
+    if (viewer === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
+    const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: String(step.input['name']) }));
     if (!out.ok) return this.onFailure(out, s);
-    const obj = out.value[step.op === 'initiativeCreate' ? 'initiative' : step.op === 'projectCreate' ? 'project' : 'issue'] as { id: string; identifier?: string };
-    this.bind(b, obj.id, typeof obj.identifier === 'string' ? obj.identifier : null, step.fingerprint);
+    const team = step.teamKey?.toUpperCase() ?? null;
+    const nodes = out.value['nodes'] as { id: string; name: string; creatorId: string | null; teamKeys?: string[] }[];
+    const mine = nodes.find((n) => n.id === id && n.name === step.input['name'] && n.creatorId === viewer
+      && (step.op !== 'projectCreate' || team === null || (n.teamKeys ?? []).includes(team)));
+    if (mine === undefined || held) { this.fail(s, 'linear-invalid'); return 'next'; }
+    this.bind(b, mine.id, null, ADOPTED);
     return 'next';
   }
 

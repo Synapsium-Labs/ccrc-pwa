@@ -84,7 +84,7 @@ describe('statusOfType', () => {
 });
 
 describe('the refresher since wave 3', () => {
-  async function refreshWith(probe: (q: string) => unknown): Promise<LinearDirectoryEntries | null> {
+  async function refreshWith(probe: (q: string) => unknown, statusesBody: () => unknown = () => linearRecord('read-project-statuses').body): Promise<LinearDirectoryEntries | null> {
     const dir = path.join(mkTmp('ccrc-linear-dirh-'), '.ccrc');
     mkdirSync(dir, { recursive: true });
     sent.length = 0;
@@ -96,7 +96,7 @@ describe('the refresher since wave 3', () => {
         : q === LINEAR_DIRECTORY_DOCUMENTS.labels ? { data: { issueLabels: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.projects ? { data: { projects: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.users ? { data: { viewer: { id: VIEWER }, users: conn([]) } }
-        : q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses ? linearRecord('read-project-statuses').body
+        : q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses ? statusesBody()
         : probe(q);
       return linearAnswer({ ok: true, status: 200, json: async () => body });
     };
@@ -127,8 +127,19 @@ describe('the refresher since wave 3', () => {
     expect((await refreshWith(() => ({ data: { initiatives: null } })))?.initiatives).toBe('unknown');
   });
 
-  it('a refused probe page leaves the directory as it was', async () => {
-    const held = await refreshWith(() => (RATELIMITED_ERRORS));
-    expect(held).toBeNull();
+  it('a rate-limited probe keeps the four core collections and `unknown`', async () => {
+    const held = await refreshWith(() => RATELIMITED_ERRORS);
+    expect(held).not.toBeNull();
+    expect(held?.viewerId).toBe(VIEWER);
+    expect(held?.initiatives).toBe('unknown');
+    expect(held?.projectStatuses).toHaveLength(5);
+  });
+
+  it('a failed project-statuses page keeps the core collections, so names still resolve, with no statuses', async () => {
+    const held = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => ({ data: {} }));
+    expect(held).not.toBeNull();
+    expect(held?.viewerId).toBe(VIEWER);
+    expect(held?.projectStatuses).toEqual([]);
+    expect(held?.initiatives).toBe('on');
   });
 });
