@@ -468,7 +468,7 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 - Comments, bogus comments, attributes and raw text (script's escape states included) are tokenized exactly and push nothing.
 - Outside foreign content, an end tag pops only its own top entry; `</form>`, `</body>` and `</html>` never pop.
 - Inside svg/math, the scan holds the foreign run exactly as Chromium does and refuses `foreign-markup` wherever it cannot model the parser. That covers any start tag inside an integration point, markup in a foreign raw-named element, CDATA with foreign open, a raw-text start inside `template`, an svg/math root in template/select or after a frameset, and a foreign end tag whose walk reaches HTML.
-- Limits: depth 256, tags 15 000, open formatting 32, attributes 64 per start tag.
+- Limits at v7 plus the cap (historical): depth 256, tags 15 000, open formatting 32, attributes 64 per start tag. **Current limits** (fix round 2, D-8695 and D-8671): depth 64, tags 15 000, open formatting 16, attributes 32 per start tag.
 - **The classes are closed by the rule, not only their instances:**
   - Top-only pops and exact foreign tracking mean the scan never pops an entry Chromium keeps. That is the structural condition the 8-round adoption agency turned into every formatting storm from round 1 to round 6.
   - Every start tag's attributes are capped, which closes round 7's clone-copy class.
@@ -484,8 +484,8 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
   - tokenizer states (round 5: comments, bogus comments, `</`, script escapes, attribute states);
   - the adoption agency and implicit closes (rounds 4-6);
   - foster parenting, template and select (rounds 5-7).
-- **Cost of the rule:** omitted end tags are retained up to the depth limit (128 copies of `<div><p>text</div>` reach 256), and 33 inline svgs that each hold an `<a>` are refused.
-- **Bounded parse evidence:** Chromium 156.0.8078.4, build `chromium-1248`, headless Linux, at most 12 generated fixtures per run, medians of three, ms. What the tree reproduces is the gate: the browser file holds each at 1 000 ms or less. Every reading in this table is **local**: the v6 column was taken on code no longer in the tree, and the v7 + cap column is one run's readings (review run 2259 read 217 for formatting, 832 for reconstruction at 64 attributes and 601 for text-heavy on a loaded box).
+- **Cost of the rule:** omitted end tags are retained up to the depth limit (at depth 64, 32 copies of `<div><p>text</div>` reach it and 21 lists whose items are left open; at the historical 256, 128 copies), and 33 inline svgs that each hold an `<a>` are refused.
+- **Bounded parse evidence at the historical limits** (v7 plus the cap: depth 256, formatting 32, attributes 64; the current limits' readings are in fix round 2 below): Chromium 156.0.8078.4, build `chromium-1248`, headless Linux, at most 12 generated fixtures per run, medians of three, ms. What the tree reproduces is the gate: the browser file holds each at 1 000 ms or less. Every reading in this table is **local**: the v6 column was taken on code no longer in the tree, and the v7 + cap column is one run's readings (review run 2259 read 217 for formatting, 832 for reconstruction at 64 attributes and 601 for text-heavy on a loaded box).
 
 | Gate | v6 (**local**) | v7 + cap (**local**) |
 |---|---|---|
@@ -669,13 +669,46 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 {"id": "NDR-C1-FR2-F7-WITHVERDICTS-ADMITTED", "pkg": "pwa", "file": "src/docs/mockup/load.ts", "old": "  return { ...plan, rows };", "new": "  return { ...plan, rows, admitted: new Map() };", "tests": ["test/mockup-load.test.ts"], "t": "a rewritten plan keeps", "status": "red", "red": "Tests  1 failed | 42 skipped (43): the plans loadMockupAssets and buildMockupSrcdoc return extend as the plan they were given: a duplicate is admitted once", "sha256": "cac17509f230ec24a3ce124b90bc15aa5728ed3e3c4766c13b67cc35a57dfa61", "restored": true}
 ```
 
+- Item 8 (the coordinator's addendum, mail 21828; D-8695, `039a748aa`). Merge-queue run 43905778054 dequeued PR #2915: in `browser (pwa) 2/3` at the `2ef6fa23d` content, reconstruction at 32 open elements with 64 attributes read medians 1 490.8, 1 410.4 and 1 341.3 ms (median 1 410.4), and text-heavy at depth 256 read 1 051.6, 1 223.9 and 1 037.6 ms (median 1 051.6), both over the 1 000 ms gate. The ruling: the gate stays and the limits come down, to at most 150 ms alone on the fleet box when quiet, keeping K1's 2x headroom. The current limits against the historical ones:
+
+| Limit | Historical (v7 plus the cap) | Current | K1's maximum (committed test) | Headroom |
+|---|---|---|---|---|
+| `MOCKUP_MAX_DEPTH` | 256 | 64 (D-8695) | 17 | 3.8x |
+| `MOCKUP_MAX_OPEN_FORMATTING` | 32 | 16 (D-8695) | 2 | 8x |
+| `MOCKUP_MAX_ATTRIBUTES` | 64 | 32 (D-8671, with D-8695) | 7 | 4.6x |
+| `MOCKUP_MAX_TAGS` | 15 000 | 15 000 | 5 394 | 2.8x |
+
+  The sweep, alone on the fleet box (Chromium 156.0.8078.4, `chromium-1248`, headless Linux, the browser file's gate rows, medians of three, ms, all **local**; load averages 7 to 11):
+
+| Depth, formatting, attributes | reconstruction | text-heavy | formatting | worst property | adoption | deep | tables |
+|---|---|---|---|---|---|---|---|
+| 256, 32, 64 (historical) | 700.8 | 663.9 | 178.6 | 169.6 | 93.4 | 10.1 | 21.9 |
+| 128, 16, 16 | 74.5 | 239.5 | 29.5 | — | — | — | — |
+| 64, 32, 16 | 174.0 | 148.6 | 94.8 | 96.3 | 23.3 | — | — |
+| 64, 16, 64 | 175.4 | 133.9 | 31.1 | 29.3 | 38.8 | — | — |
+| 64, 16, 32 (chosen) | 108.0 | 138.1 | 31.1 | 34.1 | 20.5 | — | — |
+| 64, 16, 16 | 68.8 | 132.3 | 29.3 | 28.0 | 16.8 | 3.1 | 5.3 |
+| 48, 16, 16 | 70.9 | 130.5 | 29.6 | — | — | — | — |
+
+  Text-heavy needs depth (it has a floor near 130 ms from the 2 MiB size), and reconstruction needs both formatting and attributes, so (64, 16, 32) is the smallest measured change that meets the target. One full run of the browser file at the chosen limits passed 71/71 on a loaded box (load 9.6, E13 control 30.9 s against 12.5 s quiet): reconstruction 307.9 ms, text-heavy 394.6 ms (**local**, about 2.5x slow by the control). A second full run at the head, at load 5.7 to 6.2 (E13 control 15.2 s), passed 71/71: reconstruction 205.8 ms, text-heavy 237.9 ms, formatting 74.1, worst property 80.4, adoption 32.0, deep 4.2, tables 7.6 (**local**). So the whole file reads the two slowest shapes above the sweep's figures, which ran only the gate rows. Text-heavy is at its depth floor, and a lower limit would not move it. These are local readings: they are not a hosted-runner pass or proof of the 2x hosted margin. That is the coordinator's full CI run.
+  - All five committed mockups stay admitted (K1). The absolute pins hold 64 / 15 000 / 16 / 32. The tests that assumed depth 256 are rescaled to `MOCKUP_MAX_DEPTH`; ordinary markup repeats 8 times; and the property test generates 1 200 documents (141 admitted, worst ratio 0.3236).
+  - Mutation rows, each in the tree, sequential, restored from a saved copy and its hash checked:
+
+```json
+{"id": "NDR-C1-FR2-D8695-DEPTH", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_DEPTH = 64;", "new": "export const MOCKUP_MAX_DEPTH = 65;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
+{"id": "NDR-C1-FR2-D8695-FORMATTING", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_OPEN_FORMATTING = 16;", "new": "export const MOCKUP_MAX_OPEN_FORMATTING = 17;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
+{"id": "NDR-C1-FR2-D8695-ATTR", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_ATTRIBUTES = 32;", "new": "export const MOCKUP_MAX_ATTRIBUTES = 33;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
+{"id": "NDR-C1-FR2-D8695-TAGS", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_TAGS = 15_000;", "new": "export const MOCKUP_MAX_TAGS = 15_001;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
+{"id": "NDR-C1-FR2-D8695-DEPTH-OLD", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_DEPTH = 64;", "new": "export const MOCKUP_MAX_DEPTH = 256;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
+```
+
 **Suites** (`ccrc test`, foreground):
 - before fix round 1: the whole pwa suite in four shards before the last pre-scan rounds; the pre-scan, parse, docs-scans, browser-leg, mockup-policy and literal-census files at `2ef6fa23d`: 755/755; the browser file 71/71; tsc rc 0;
 - fix round 1, at `71e515bf4`:
   - the whole pwa suite in four shards, 543 files. Shard 4 had one load timeout in `docs-screen.test.tsx`, which passed 121/121 alone, twice;
   - tsc rc 0, and the server censuses (`deviation-refs`: the four stale-base numbers);
   - the browser file 69/71 on four runs at load averages 5 to 28: reconstruction at 64 attributes and text-heavy over the 1 000 ms gate, every gate slowing with the E13 control. Review run 2281 read 71/71 three times at load about 13, with medians of 477.5 and 419.4 ms (**local**);
-- fix round 2: run at its head after this commit, and recorded in PR #2915's body and the wave-done.
+- fix round 2: run at its head after this commit (item 8 included), and recorded in PR #2915's body and the wave-done.
 
 ## Where things stand
 
