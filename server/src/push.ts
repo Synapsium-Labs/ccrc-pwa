@@ -24,6 +24,9 @@ export interface PushPayload {
    *  sends the first two option labels and deep-links for the rest. Ignored by
    *  an older service worker, which simply shows the notification. */
   actions?: { action: string; title: string }[];
+  /** The outbox row's push id (Overlord W1, C67): set by the sender at the send, from the row, only when the push's
+   *  response row stands; read by the service worker's receipts. Not text, and never stored in the outbox's payload. */
+  pushId?: string;
 }
 
 /** What the service masks a payload with: `SecretMasker`'s `maskDeep`, declared here so `push.ts` loads no masker

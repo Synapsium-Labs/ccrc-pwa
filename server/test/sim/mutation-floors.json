@@ -109,6 +109,7 @@
   "server/src/operatorModel/messages.ts#nextMessageId": 1,
   "server/src/operatorModel/privacyJournal.ts#privacyCoherence": 1,
   "server/src/operatorModel/privacyJournal.ts#privacyJournalEntry": 1,
+  "server/src/responses.ts#receiptVerdict": 1,
   "server/src/coord/answerMarks.ts#itemMarkable": 1,
   "server/src/coord/answerMarks.ts#markViewOf": 1,
   "shared/answerMarks.ts#parseAnswerMarkWrite": 1,

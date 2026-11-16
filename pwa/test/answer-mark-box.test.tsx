@@ -6,7 +6,7 @@ import type { AnswerMarkView, AnswerMarksView } from '../../shared/answerMarks';
 import { ApiError, api } from '../src/lib/api';
 import { memoryStorage, type StoragePort } from '../src/lib/storage';
 import { AnswerMarkBoxes } from '../src/ledgers/AnswerMarkBox';
-import { ANSWER_MARK_EXPLAINER, ANSWER_MARK_LABEL } from '../src/ledgers/answerMarkWords';
+import { ANSWER_MARK_EXPLAINER, ANSWER_MARK_LABEL, TASK_COULD_HANDLE_LABEL } from '../src/ledgers/answerMarkWords';
 import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { NOW, MIN } from './ledgersFixture';
 
@@ -23,10 +23,13 @@ const deferred = <T,>() => {
 type Answer = Awaited<ReturnType<typeof api.setAnswerMark>>;
 const store = (): (() => StoragePort) => { const s = memoryStorage(); return () => s; };
 
-const draw = (m: AnswerMarksView | undefined, o: { current?: boolean; storage?: () => StoragePort | null } = {}) => {
+const draw = (m: AnswerMarksView | undefined, o: { current?: boolean; storage?: () => StoragePort | null; kind?: string } = {}) => {
   const storage = o.storage ?? store();
   const ui = (v: AnswerMarksView | undefined) => (
-    <AnswerMarkBoxes item={{ id: 7, ...(v === undefined ? {} : { answerMarks: v }) }} current={o.current ?? true} storage={storage} />
+    <AnswerMarkBoxes
+      item={{ id: 7, ...(o.kind === undefined ? {} : { kind: o.kind }), ...(v === undefined ? {} : { answerMarks: v }) }}
+      current={o.current ?? true} storage={storage}
+    />
   );
   const r = render(ui(m));
   return { rerender: (v: AnswerMarksView | undefined) => r.rerender(ui(v)) };
@@ -123,6 +126,47 @@ describe('the answer-mark boxes', () => {
     draw(marks(), { storage });
     await act(async () => { fireEvent.click(box('could-answer')); });
     expect(screen.queryByText(ANSWER_MARK_EXPLAINER)).toBeNull();
+  });
+
+  // Answer marks C (#2900): a task draws one box, worded for a task, with the same tick, settle and rollback.
+  describe('on a do item', () => {
+    const task = () => screen.getByLabelText(TASK_COULD_HANDLE_LABEL) as HTMLInputElement;
+
+    it('draws one box, "The Overlord could handle this", and no unsure box', () => {
+      draw({ couldAnswer: NEVER }, { kind: 'do' });
+      expect(screen.getAllByRole('checkbox')).toHaveLength(1);
+      expect(task().checked).toBe(false);
+      expect(screen.queryByLabelText(ANSWER_MARK_LABEL['could-answer'])).toBeNull();
+      expect(screen.queryByLabelText(ANSWER_MARK_LABEL.unsure)).toBeNull();
+    });
+
+    it('a tap sends could-answer on the item, checks at once, and settles by the record id', async () => {
+      const call = deferred<Answer>();
+      const spy = vi.spyOn(api, 'setAnswerMark').mockReturnValue(call.promise);
+      const d = draw({ couldAnswer: NEVER }, { kind: 'do' });
+      fireEvent.click(task());
+      expect(spy).toHaveBeenCalledWith('item', 7, 'could-answer', true);
+      expect([task().checked, task().disabled]).toEqual([true, true]);
+      await act(async () => { call.resolve({ ok: true, mark: 'could-answer', answerMark: { state: 'marked', id: 5, at: NOW, signedIn: true } }); });
+      d.rerender({ couldAnswer: NEVER });
+      expect([task().checked, task().disabled]).toEqual([true, false]);
+    });
+
+    it('a refusal unchecks it again and shows the sentence', async () => {
+      vi.spyOn(api, 'setAnswerMark').mockRejectedValue(new ApiError(409, { ok: false, error: 'not-markable', detail: 'past-window' }));
+      draw({ couldAnswer: NEVER }, { kind: 'do' });
+      await act(async () => { fireEvent.click(task()); });
+      expect(task().checked).toBe(false);
+      expect(screen.getByRole('alert').textContent).toBe(LEDGER_REFUSAL_TEXT['not-markable']);
+    });
+
+    it('is disabled on a page that is not current, and draws nothing when the field is absent', () => {
+      draw({ couldAnswer: NEVER }, { kind: 'do', current: false });
+      expect(task().disabled).toBe(true);
+      cleanup();
+      draw(undefined, { kind: 'do' });
+      expect(screen.queryByRole('checkbox')).toBeNull();
+    });
   });
 
   it('a storage that throws changes nothing else: the tap still goes through', async () => {

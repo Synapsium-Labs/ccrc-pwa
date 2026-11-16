@@ -25,6 +25,7 @@ import { QUIZ_MUTANT_SETS } from './quizSets.js';
 import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
+import { RESPONSES_MUTANT_SETS } from './responsesSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
@@ -180,6 +181,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
   ...OPERATOR_MODEL_MUTANT_SETS,
+  ...RESPONSES_MUTANT_SETS,
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,

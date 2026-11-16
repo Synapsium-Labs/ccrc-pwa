@@ -7,9 +7,11 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 import { answerRegionOf, applyAnswerRegion, renderAnswerRegion } from './answerRegion';
 import { answerRequest, askCommandOf } from '../src/session/answerLifecycle';
+import { RECEIPT_WORKER_VERSION, parseReceiptBody } from '../../shared/responses';
 
 const SW_PATH = path.join(__dirname, '..', 'public', 'push-sw.js');
 const SRC = readFileSync(SW_PATH, 'utf8');
@@ -20,7 +22,11 @@ interface Posted { url: string; body: unknown }
 interface FakeSelf {
   listeners: Record<string, (e: unknown) => void>;
   addEventListener: (t: string, fn: (e: unknown) => void) => void;
-  registration: { showNotification: (title: string, opts: Record<string, unknown>) => Promise<void> };
+  registration: {
+    showNotification: (title: string, opts: Record<string, unknown>) => Promise<void>;
+    pushManager: { getSubscription: () => Promise<{ endpoint: string } | null> };
+  };
+  crypto: { subtle: SubtleCrypto };
   clients: {
     matchAll: () => Promise<unknown[]>;
     openWindow: (u: string) => Promise<void>;
@@ -37,6 +43,15 @@ let fetchImpl: (url: string, init: { body: string }) => Promise<unknown>;
 // `posted` and `fetchImpl` keep meaning the answer alone. The default `/health` has no `questions-v1`, an older
 // server's: every row answers through the family's door all the same.
 let gets: string[] = [];
+// The receipts door's POSTs, apart from the answer's: the worker's `shown` and `opened` (C67) go to their own URL, so
+// `posted` and `fetchImpl` keep meaning the answer alone.
+const RECEIPTS_URL = '/api/responses/receipts';
+let receipts: unknown[] = [];
+let receiptFetchImpl: () => Promise<unknown>;
+let subscription: { endpoint: string } | null;
+const ENDPOINT = 'https://push.example/sub-a';
+const PUSH_ID = 'a1'.repeat(16);
+const HASH = createHash('sha256').update(ENDPOINT).digest('hex');
 let healthImpl: () => Promise<unknown>;
 
 /** Load the real worker source against a fresh fake `self` + `fetch`. Both are
@@ -54,13 +69,16 @@ function load(): FakeSelf {
     addEventListener(t, fn) { this.listeners[t] = fn; },
     registration: {
       showNotification: async (title, opts) => { shown.push({ title, opts }); },
+      pushManager: { getSubscription: async () => subscription },
     },
+    crypto: globalThis.crypto,
     clients: {
       matchAll: async () => [],
       openWindow: async (u) => { opened.push(u); },
     },
   };
   const fetch = (url: string, init: { body: string; method?: string }): Promise<unknown> => {
+    if (url === RECEIPTS_URL) { receipts.push(JSON.parse(init.body)); return receiptFetchImpl(); }
     if (init.method === undefined) { gets.push(url); return healthImpl(); }
     posted.push({ url, body: JSON.parse(init.body) });
     return fetchImpl(url, init) as Promise<unknown>;
@@ -97,7 +115,9 @@ async function push(self: FakeSelf, payload: unknown): Promise<void> {
 }
 
 beforeEach(() => {
-  shown = []; opened = []; posted = []; gets = [];
+  shown = []; opened = []; posted = []; gets = []; receipts = [];
+  subscription = { endpoint: ENDPOINT };
+  receiptFetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) });
   fetchImpl = async () => ({ ok: true, json: async () => ({ ok: true }) });
   healthImpl = async () => ({ ok: true, json: async () => ({ ok: true, build: null, caps: [] }) });
 });
@@ -536,5 +556,145 @@ describe('push-sw: one door, the family\'s, and no /health read (C7p)', () => {
     expect(region).not.toMatch(/\/api\/sessions\//);
     expect(region).not.toMatch(/\/health/);
     expect(region).not.toMatch(/questionsDoor/);
+  });
+});
+
+// C67 (Overlord W1 responses A, plan Task 4): the worker tells the server a push was SHOWN and was OPENED, so the
+// response record can tell "delivered and seen" from "sent". Both receipts are best-effort: never retried, never
+// awaited ahead of anything the operator sees, and a push with no id (an older server) posts nothing.
+describe('push-sw: shown and opened receipts (C67)', () => {
+  const receiptOf = (receipt: 'shown' | 'opened') => ({
+    v: 1,
+    receipts: [{
+      ref: { kind: 'push', pushId: PUSH_ID },
+      receipt,
+      from: { source: 'worker', version: 1, endpointHash: HASH },
+    }],
+  });
+
+  it('pins the worker version to the shared constant', () => {
+    expect(RECEIPT_WORKER_VERSION).toBe(1);
+    expect(SRC).toMatch(/const RECEIPT_WORKER_VERSION = 1;/);
+  });
+
+  it('shows a push with an id exactly as before, its id joined to data, then posts one shown', async () => {
+    const self = load();
+    const actions = [{ action: 'ask:k1:0', title: 'Red' }];
+    await push(self, { title: 'T', body: 'B', sessionId: 'cc-a', tag: 'ask-cc-a', actions, pushId: PUSH_ID });
+    expect(shown).toEqual([{
+      title: 'T',
+      opts: {
+        body: 'B', tag: 'ask-cc-a', renotify: true, icon: '/icons/icon-192.png', badge: '/icons/icon-192.png',
+        actions, data: { sessionId: 'cc-a', url: null, actions, pushId: PUSH_ID },
+      },
+    }]);
+    expect(receipts).toEqual([receiptOf('shown')]);
+  });
+
+  it('the posted body is one the server parses', async () => {
+    const self = load();
+    await push(self, { title: 'T', body: 'B', pushId: PUSH_ID });
+    const parsed = parseReceiptBody(receipts[0]);
+    expect(parsed.ok).toBe(true);
+  });
+
+  it('a push with no push id posts nothing, keeps data as before, and its tap posts nothing either', async () => {
+    const self = load();
+    await push(self, { title: 'T', body: 'B', sessionId: 'cc-a' });
+    expect(shown[0]!.opts.data).toEqual({ sessionId: 'cc-a', url: null, actions: [] });
+    expect(receipts).toEqual([]);
+    await click(self, '', shown[0]!.opts.data);
+    expect(receipts).toEqual([]);
+    expect(opened).toEqual(['/s/cc-a']);
+  });
+
+  it('a push id that is not a string is not carried and posts nothing', async () => {
+    const self = load();
+    await push(self, { title: 'T', body: 'B', pushId: 7 });
+    expect(shown[0]!.opts.data).toEqual({ sessionId: null, url: null, actions: [] });
+    expect(receipts).toEqual([]);
+  });
+
+  it('no subscription posts nothing, and the notification still shows', async () => {
+    subscription = null;
+    const self = load();
+    await push(self, { title: 'T', body: 'B', pushId: PUSH_ID });
+    expect(shown).toHaveLength(1);
+    expect(receipts).toEqual([]);
+    await click(self, '', { sessionId: null, pushId: PUSH_ID });
+    expect(receipts).toEqual([]);
+    expect(opened).toEqual(['/']);
+  });
+
+  it('a subscription lookup that throws posts nothing and changes nothing the operator sees', async () => {
+    const self = load();
+    self.registration.pushManager.getSubscription = async () => { throw new Error('no manager'); };
+    await push(self, { title: 'T', body: 'B', pushId: PUSH_ID });
+    expect(shown).toHaveLength(1);
+    expect(receipts).toEqual([]);
+  });
+
+  it('a plain tap posts opened and opens the same url as before', async () => {
+    const self = load();
+    await click(self, '', { sessionId: 'cc-a', pushId: PUSH_ID });
+    expect(receipts).toEqual([receiptOf('opened')]);
+    expect(opened).toEqual(['/s/cc-a']);
+    expect(posted).toEqual([]);
+  });
+
+  it('the open never waits on the receipt: a receipt that hangs still lets openApp resolve', async () => {
+    let release: (v: unknown) => void = () => undefined;
+    receiptFetchImpl = () => new Promise((r) => { release = r; });
+    const self = load();
+    const waits: Promise<unknown>[] = [];
+    self.listeners['notificationclick']!({
+      action: '',
+      notification: { close() { /* noop */ }, data: { sessionId: 'cc-a', pushId: PUSH_ID }, tag: 't' },
+      waitUntil: (p: Promise<unknown>) => { waits.push(p); },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(opened).toEqual(['/s/cc-a']);
+    expect(receipts).toEqual([receiptOf('opened')]);
+    release({ ok: true });
+    await Promise.all(waits);
+  });
+
+  it('an ask action posts opened and then answers as before', async () => {
+    const self = load();
+    await click(self, 'ask:abc123:1', { sessionId: 'cc-a', pushId: PUSH_ID },
+      { actions: [{ action: 'ask:abc123:1', title: 'Blue' }] });
+    expect(receipts).toEqual([receiptOf('opened')]);
+    expect(posted).toEqual([
+      { url: '/api/questions/session-cc-a/answer', body: { kind: 'ask', askKey: 'abc123', optionIndexes: [1] } },
+    ]);
+    expect(shown.at(-1)!.title).toBe('Answered');
+    expect(shown.at(-1)!.opts.body).toBe('Blue');
+  });
+
+  it('a failed receipt fetch changes nothing the operator sees', async () => {
+    receiptFetchImpl = async () => { throw new Error('offline'); };
+    const self = load();
+    await push(self, { title: 'T', body: 'B', pushId: PUSH_ID });
+    expect(shown).toHaveLength(1);
+    await click(self, '', { sessionId: 'cc-a', pushId: PUSH_ID });
+    expect(opened).toEqual(['/s/cc-a']);
+    await click(self, 'ask:k:0', { sessionId: 'cc-a', pushId: PUSH_ID });
+    expect(shown.at(-1)!.title).toBe('Answered');
+  });
+
+  it('replace() keeps the push id, so a tap on a replaced notification counts too', async () => {
+    const self = load();
+    await click(self, 'ask:k:0', { sessionId: 'cc-a', pushId: PUSH_ID });
+    expect((shown.at(-1)!.opts.data as { pushId?: string }).pushId).toBe(PUSH_ID);
+    expect(shown.at(-1)!.opts.data).toEqual({ sessionId: 'cc-a', pushId: PUSH_ID });
+    receipts = [];
+    await click(self, '', shown.at(-1)!.opts.data);
+    expect(receipts).toEqual([receiptOf('opened')]);
+  });
+
+  it('replace() with no push id writes data as before', async () => {
+    const self = load();
+    await click(self, 'ask:k:0', { sessionId: 'cc-a' });
+    expect(shown.at(-1)!.opts.data).toEqual({ sessionId: 'cc-a' });
   });
 });

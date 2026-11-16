@@ -28,6 +28,8 @@ import {
   asSendVerdict, itemPushPayload, outboxBootVerdict, outboxNextState, pushDue, type PreparedPush, type PushDueFacts,
 } from './pushOutbox.js';
 import type { Clock, TimePorts } from './time/ports.js';
+import type { ResponseStamp } from '../../shared/responses.js';
+import type { PushResponseOf } from './coord/responsesStore.js';
 
 /** The outbox members the sender reaches, declared by this consumer (a `Pick` of `CoordStore`, as `WatcherCoordPort` is). */
 export type OutboxStorePort = Pick<CoordStore,
@@ -45,6 +47,9 @@ export interface SenderDeps {
   readonly time?: TimePorts | undefined;
   /** Absent until `index.ts` sets it: meanwhile the push service's own masker (the shape-only one it is built with). */
   readonly masker?: PayloadMasker | undefined;
+  /** The response record's stamp (`Deps.responseStamp`, Overlord W1): absent, a push is sent with no response row and no
+   *  push id (slug no-stamp-no-response-row). */
+  readonly responseStamp?: (() => ResponseStamp) | undefined;
 }
 
 /** A bound row's source as it stands at the claim: settled (answered, withdrawn, closed, or an item the operator ticked),
@@ -60,8 +65,9 @@ export interface PushSender {
    *  it still mints the id and answers `payload: null, service: false` (F4). Throws without time ports: a bound caller
    *  always holds them. */
   prepare(payload: PushPayload | null): PreparedPush;
-  /** An unbound push: insert it claimed, send it now. `failed` is the caller's sentence for a rejected send. */
-  send(payload: PushPayload, opts?: { readonly failed?: string }): void;
+  /** An unbound push: insert it claimed, send it now. `failed` is the caller's sentence for a rejected send. `label`, the
+   *  notifier kind, gives the push a response row (Overlord W1, question 2); a push with none gets no row and no id. */
+  send(payload: PushPayload, opts?: { readonly failed?: string; readonly label?: string }): void;
   /** A bound row its raising or arming transaction wrote `pending`: re-read its source, claim it, send it now. */
   sendRow(row: BoundRowTarget, settledOf: SettledOf): void;
   /** The lane's pass: the held items' reach, every due row sent in parallel, the purge. Resolves when the pass's attempts
@@ -108,15 +114,22 @@ export function senderFor(deps: SenderDeps): PushSender {
   const warnByCause = (cause: string, line: string): void => {
     if (st === null || st.latch.changed(cause)) console.warn(`ccrc-server: push outbox: ${line}`);
   };
+  /** A response-row write that threw, logged once per cause; the push still goes, with no push id (C67). */
+  const warnResponse = (detail: string | undefined): void => { if (detail !== undefined) warnByCause(`response:${detail}`, detail); };
+  /** The response row a push gets, when it has a label and the deps carry the stamp (questions 2, 6 and 18). */
+  const responseOf = (label: string | undefined, carries: PushResponseOf['carries']): PushResponseOf | undefined =>
+    (label === undefined || deps.responseStamp === undefined ? undefined : { label, carries, stamp: deps.responseStamp() });
 
   /** One attempt of one payload. With a row, its verdict (or a deadline's null, or a rejection's null) lands on the row
-   *  by `claimSeq` through `outboxNextState`; with none, the send is today's. Never rejects. */
+   *  by `claimSeq` through `outboxNextState`; with none, the send is today's. `pushId` is the outbox row's id, added to the
+   *  payload sent only when the push's response row stands (C67; slug push-id-from-the-row-at-the-attempt), and null
+   *  otherwise, so no other byte of the payload changes. Never rejects. */
   const attempt = (payload: PushPayload, row: { id: number; claimSeq: number; attempts: number; armedAt: number } | null,
-    failed?: string): Promise<void> => {
+    failed: string | undefined, pushId: string | null): Promise<void> => {
     if (push === undefined || st === null) return Promise.resolve();
     let sent: Promise<unknown>;
     // A double that answers no promise (a bare mock) is read as an answer, never as a throw: today's funnel tolerated it.
-    try { sent = Promise.resolve(push.notify(payload)); } catch (e) { sent = Promise.reject(e); }
+    try { sent = Promise.resolve(push.notify(pushId === null ? payload : { ...payload, pushId })); } catch (e) { sent = Promise.reject(e); }
     let cancel: (() => void) | null = null;
     let settle!: () => void;
     const done = new Promise<void>((resolve) => { settle = resolve; });
@@ -132,7 +145,7 @@ export function senderFor(deps: SenderDeps): PushSender {
           // The move's shape follows the decider: `sent` and `retrying` always carry the verdict that decided them.
           const move = next.to === 'retrying' ? { to: next.to, verdict: v!, nextAttemptAt: next.nextAttemptAt }
             : next.to === 'sent' ? { to: next.to, verdict: v! } : { to: next.to, verdict: v };
-          port.markOutboxVerdict(row.id, row.claimSeq, move, at);
+          warnResponse(port.markOutboxVerdict(row.id, row.claimSeq, move, at).responseDetail);
         } catch (e) {
           warnByCause(`verdict:${message(e)}`,
             `the verdict of row ${row.id} was not written (${message(e)}); the row stays sending and the next boot seals it unknown`);
@@ -161,16 +174,21 @@ export function senderFor(deps: SenderDeps): PushSender {
     try {
       const due = pushDue({ event: 'claim', service: push !== undefined, source: row.source ?? 'none', blocking: src.blocking,
         viewing: false, settled: src.settled, superseded: row.source === null && port.supersededUnbound(row.id), payload: true });
-      if (due.due === 'silent') { port.silenceOutboxRow(row.id, due.why, at); return Promise.resolve(); }
-      claim = port.claimOutboxRow(row.id, at);
+      if (due.due === 'silent') { warnResponse(port.silenceOutboxRow(row.id, due.why, at).responseDetail); return Promise.resolve(); }
+      claim = port.claimOutboxRow(row.id, at, row.source === null ? undefined
+        : responseOf(row.source, { kind: row.source, id: row.sourceId }));   // a bound push's label is its source (question 18)
     } catch (e) {
       warnByCause(`claim:${message(e)}`, `row ${row.id} was neither claimed nor silenced (${message(e)}); the next drain reads it again`);
       return Promise.resolve();
     }
     if (!claim.changed) return Promise.resolve();            // a drain or a boot won it
-    if (claim.payload !== null) return attempt(claim.payload, { id: row.id, ...claim });
+    warnResponse(claim.responseDetail);
+    if (claim.payload !== null) {
+      return attempt(claim.payload, { id: row.id, claimSeq: claim.claimSeq, attempts: claim.attempts, armedAt: claim.armedAt }, undefined,
+        claim.responseWritten ? claim.pushId : null);
+    }
     try {
-      port.markOutboxVerdict(row.id, claim.claimSeq, { to: 'failed', verdict: null }, at);
+      warnResponse(port.markOutboxVerdict(row.id, claim.claimSeq, { to: 'failed', verdict: null }, at).responseDetail);
       warnByCause(`payload:${row.id}`, `row ${row.id} was claimed with no readable payload and is sealed failed`);
     } catch (e) {
       warnByCause(`verdict:${message(e)}`, `row ${row.id} was claimed with no readable payload and its seal was not written `
@@ -190,18 +208,24 @@ export function senderFor(deps: SenderDeps): PushSender {
       if (push === undefined || st === null) return;          // no push service: no row and no send, as today
       const masked = masker.maskDeep(payload);
       let row: { id: number; claimSeq: number; attempts: number; armedAt: number } | null = null;
+      let sentId: string | null = null;
       if (port !== null && time !== undefined) {
         const at = time.clock.wall();
+        const pushId = time.entropy.hex(PUSH_ID_BYTES);
         let w: ReturnType<OutboxStorePort['insertUnboundRow']>;
         try {
           w = typeof masked.tag === 'string'
-            ? port.insertUnboundRow({ pushId: time.entropy.hex(PUSH_ID_BYTES), payload: masked as OutboxPayload, at })
+            ? port.insertUnboundRow({ pushId, payload: masked as OutboxPayload, at }, responseOf(opts.label, null))
             : { ok: false, detail: 'the payload has no tag' };
         } catch (e) { w = { ok: false, detail: message(e) }; }
-        if (w.ok) { st.latch.clear(); row = { id: w.id, claimSeq: w.claimSeq, attempts: 1, armedAt: at }; }
-        else warnByCause(`insert:${w.detail}`, `${w.detail} — the push is sent with no row`);
+        if (w.ok) {
+          st.latch.clear();
+          row = { id: w.id, claimSeq: w.claimSeq, attempts: 1, armedAt: at };
+          warnResponse(w.responseDetail);
+          if (w.responseWritten) sentId = pushId;
+        } else warnByCause(`insert:${w.detail}`, `${w.detail} — the push is sent with no row`);
       }
-      void attempt(masked, row, opts.failed);
+      void attempt(masked, row, opts.failed, sentId);
     },
     sendRow(row, settledOf) { void sendBound(row, settledOf); },
     async drain(now, settledOf) {
@@ -212,7 +236,7 @@ export function senderFor(deps: SenderDeps): PushSender {
       // The boot's horizon, applied again here, so a row the boot pass could not seal is never sent stale (review 2150 F6):
       // such a row is failed by the boot pass's own seal (slug drain-applies-the-boot-horizon).
       const failStale = (id: number): Promise<void> => {
-        try { port.sealAtBoot(id, 'failed', now); } catch (e) {
+        try { warnResponse(port.sealAtBoot(id, 'failed', now).responseDetail); } catch (e) {
           warnByCause(`stale:${message(e)}`, `the stale row ${id} was not failed (${message(e)}); the next drain tries again`);
         }
         return Promise.resolve();
@@ -274,7 +298,10 @@ export function bootPushOutbox(coord: OutboxStorePort, clock: Clock): void {
   if (!open.ok) { console.warn(`ccrc-server: push outbox: the boot pass read nothing (${open.detail})`); return; }
   // One row's failed seal never stops the rest (review 2150 F6); the drain fails a stale row the boot left.
   const seal = (id: number, to: 'unknown' | 'failed'): void => {
-    try { coord.sealAtBoot(id, to, now); } catch (e) {
+    try {
+      const detail = coord.sealAtBoot(id, to, now).responseDetail;
+      if (detail !== undefined) console.warn(`ccrc-server: push outbox: the boot pass sealed row ${id} ${to}, but ${detail}`);
+    } catch (e) {
       console.warn(`ccrc-server: push outbox: the boot pass did not seal row ${id} ${to} (${message(e)})`);
     }
   };

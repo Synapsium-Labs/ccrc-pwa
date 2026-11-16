@@ -850,6 +850,7 @@ describe('the grouped Recently cleared list and item references on a card (D-819
 });
 
 describe('the answer marks on the list (Overlord W1)', () => {
+  const NEVER = { state: 'never' as const };
   const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true } };
   const view = (withMarks: boolean) => waitingView({
     items: [itemView({ id: 1, kind: 'decide', title: 'Pick a branch', ...(withMarks ? { answerMarks: MARKS } : {}) })],
@@ -898,6 +899,24 @@ describe('the answer marks on the list (Overlord W1)', () => {
     const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
     expect(boxes).toHaveLength(2);
     for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+
+  // Answer marks C (#2900): an open and a cleared task each draw one box, worded for a task.
+  it('an open do row and a cleared do row each draw one box, "The Overlord could handle this"', () => {
+    const TASK = { couldAnswer: { state: 'marked' as const, id: 9, at: NOW - MIN, signedIn: true } };
+    open({ view: waitingView({
+      items: [itemView({ id: 3, kind: 'do', title: 'Rotate the key', answerMarks: TASK })],
+      cleared: [itemView({ id: 4, kind: 'do', state: 'done', title: 'Restart the box', closedAt: NOW - 60 * MIN, answerMarks: { couldAnswer: NEVER } })],
+    }) });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-item'))).toEqual(['3', '4']);
+    const boxes = groups.map((g) => within(g).getAllByRole('checkbox') as HTMLInputElement[]);
+    expect(boxes.map((b) => b.length)).toEqual([1, 1]);
+    expect(boxes.map(([b]) => [b!.checked, b!.disabled])).toEqual([[true, false], [false, false]]);
+    for (const g of groups) {
+      expect(within(g).getByLabelText('The Overlord could handle this')).toBeTruthy();
+      expect(within(g).queryByLabelText("I'm not sure of my answer")).toBeNull();
+    }
   });
 });
 

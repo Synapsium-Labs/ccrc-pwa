@@ -3733,6 +3733,42 @@ measurements are in `c33.md`. Under D-8656, with no number of its own.
 across the two trees. The guard reds with one converted entry put back. **Rollback.** A plain revert. The guard and the
 conversion revert together, because the guard is red on the hyphen form.
 
+### Task C35: the timeout helper's pure-bash arm passes the caller's stdin through (D-8658) — now
+
+**Why.** C28's fix round 1 found that on a box with neither `timeout` nor `gtimeout` the shared timeout helper starts
+the command as `"$@" &` in a shell without job control, so bash gives it /dev/null for stdin and no pasted sign-in code
+reached the mint. Ask 357 ruled that fix at the sign-in helper's call sites and left the helper alone. The same arm still
+gave every other caller /dev/null, while the binary arm passes stdin through. The operator made fixing it a goal of this
+programme. Each claim below is labelled measured or inferred in `c35.md`, with the call-site census and the runs.
+
+**What was done.**
+- **The change.** In all four copies (`_plat_timeout` in `ccd/ccd` and `ccd/ccrc`, `_auth_timeout` in the sign-in
+  helper, `_rt_timeout` in `ccd/ccgpt-runtime`, pinned two by two byte for byte) the arm runs `"$@" <&0 &`, in one
+  commit. `<&0` is a stdin redirection of the job's own, so bash keeps the caller's fd 0 (measured on bash 5.3, and in
+  `--posix`); with fd 0 closed the command still runs with it closed, as under the binary, which a copy through a spare
+  descriptor would not do (measured). The expiry code 124, the stamp, the single TERM with no pid escalation (D-2764),
+  the watcher's discarded streams and the whole binary arm are unchanged.
+- **The census.** 85 call sites in seven files (measured). On a box with coreutils every one already gets the caller's
+  stdin; the change reaches only a box with neither binary, and makes each behave as it does on Linux (inferred). Sites
+  whose call binds the command's stdin, the strict neighbour's sites and C28's spawns and drain change nothing. The
+  commands that read no stdin change nothing in effect, the two inside a redirected read loop included. The three
+  `claude -p` account probes in `ccd/ccrc` read a non-terminal stdin and now get the caller's on both arms (inferred).
+- **C28's call-site handling** (the fd-5 trampoline, the drain's `read -u 8`, the ccgpt probe's own `< probe.py`) is
+  kept exactly; only the comments that described the old arm are updated.
+- **Tests.** A new describe in `ccd-plat-timeout.test.ts`, on all four copies, each on a PATH with no deadline binary:
+  a reader gets the caller's bytes (a redirect, a here-string, the shell's own stdin); a read loop loses its remaining
+  input as under the binary, with a binary-arm parity case; a reader blocked on stdin still answers 124; a closed stdin
+  stays closed and the command runs. Red first: 16 red on `main`'s helpers, the 4 parity cases green.
+
+- **D-8658** — `pure-bash-arm-stdin`: Task C35, issued on 2026-11-16. The shared timeout helper's pure-bash arm gave
+  its command /dev/null for stdin, where the binary arm passes the caller's through. All four copies now run
+  `"$@" <&0 &`. Departures are named by slug in `c35.md`.
+
+**Acceptance.** `ccd-plat-timeout.test.ts` passes in full at the PR's tip, with the new cases red on `main`'s helpers;
+every server test file that drives a copy passes; the `macos.yml` run on the branch is reported in the PR and the
+wave-done mail (it runs after the one push).
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

@@ -488,7 +488,7 @@ describe.skipIf(!LINUX)('_ws_reclaim_idwalk — unmeasured, never "no row": the 
     expect([w.rc, w.lines, w.why]).toEqual(['[rc=2]', [], 'the identity walk could not be measured (exit 127)']);
   });
 
-  it('the requests reach python under the pure-bash deadline arm, which gives its command /dev/null for stdin', () => {
+  it('the requests reach python under the pure-bash deadline arm, with the /dev/null stdin the call gives it', () => {
     const c = dir('c'); const d = toolsDir('nodeadline', ['env', 'python3', 'sleep', 'rm']);
     const r = grouped(`PATH=${q(d)}; `
       + 'if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then echo "a deadline binary is reachable" >&2; exit 90; fi; '

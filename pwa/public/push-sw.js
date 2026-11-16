@@ -58,6 +58,47 @@ function askRequestOf(ask) {
 
 const ICON = '/icons/icon-192.png';
 
+// The receipt worker's version: the same number as shared/responses.ts#RECEIPT_WORKER_VERSION. The worker cannot import
+// shared/, so push-sw.test.ts pins the two equal.
+const RECEIPT_WORKER_VERSION = 1;
+
+/** The hex SHA-256 of this subscription's endpoint (the bytes the server hashes), or null when there is no
+ *  subscription or anything throws: a receipt with no hash is not sent. */
+async function endpointHash() {
+  try {
+    const sub = await self.registration.pushManager.getSubscription();
+    if (!sub || typeof sub.endpoint !== 'string') return null;
+    const digest = await self.crypto.subtle.digest('SHA-256', new TextEncoder().encode(sub.endpoint));
+    return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return null;
+  }
+}
+
+/** Tell the server this push was 'shown' or 'opened' (C67). Best effort: no push id or no hash posts nothing, a failure
+ *  is swallowed, nothing is retried, and the returned promise never rejects. */
+async function postReceipt(pushId, receipt) {
+  if (typeof pushId !== 'string') return;
+  try {
+    const hash = await endpointHash();
+    if (hash === null) return;
+    await fetch('/api/responses/receipts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        v: 1,
+        receipts: [{
+          ref: { kind: 'push', pushId },
+          receipt,
+          from: { source: 'worker', version: RECEIPT_WORKER_VERSION, endpointHash: hash },
+        }],
+      }),
+    });
+  } catch {
+    /* the receipt is a measurement, never something the operator waits on */
+  }
+}
+
 self.addEventListener('push', (event) => {
   let data = {};
   try {
@@ -71,6 +112,7 @@ self.addEventListener('push', (event) => {
   // extras silently dropped by the browser anyway — better to drop them where
   // the reason is written down.
   const actions = Array.isArray(data.actions) ? data.actions.slice(0, 2) : [];
+  const pushId = typeof data.pushId === 'string' ? data.pushId : null;
   event.waitUntil(
     self.registration.showNotification(title, {
       body: data.body || '',
@@ -82,8 +124,11 @@ self.addEventListener('push', (event) => {
       // The actions are mirrored into `data` because `notification.actions` is
       // not readable on every platform, and the click handler needs the tapped
       // action's LABEL to say what it just answered.
-      data: { sessionId: data.sessionId || null, url: sameOriginPath(data.url), actions },
-    }),
+      data: {
+        sessionId: data.sessionId || null, url: sameOriginPath(data.url), actions,
+        ...(pushId === null ? {} : { pushId }),
+      },
+    }).then(() => postReceipt(pushId, 'shown')),
   );
 });
 
@@ -146,9 +191,10 @@ async function openApp(url) {
 
 /** Replace the notification the operator just tapped, keeping its tag so the
  *  reply lands in the same slot rather than stacking underneath. */
-function replace(title, body, sessionId, tag) {
+function replace(title, body, sessionId, tag, pushId) {
   return self.registration.showNotification(title, {
-    body, tag, icon: ICON, badge: ICON, data: { sessionId },
+    body, tag, icon: ICON, badge: ICON,
+    data: typeof pushId === 'string' ? { sessionId, pushId } : { sessionId },
   });
 }
 
@@ -168,6 +214,9 @@ self.addEventListener('notificationclick', (event) => {
   const action = event.action || '';
   const notification = event.notification;
   const sid = (notification.data && notification.data.sessionId) || null;
+  const pushId = (notification.data && notification.data.pushId) || null;
+  // Started first and never awaited ahead of the open or the answer (C67): the tap does not wait on its receipt.
+  const receipt = postReceipt(pushId, 'opened');
   // A payload url (a release push's '/settings/updates', design 2026-09-20 §13) wins
   // over the session deep-link. The push listener filtered it already; it is
   // filtered again here because the data is whatever this notification carries —
@@ -183,12 +232,12 @@ self.addEventListener('notificationclick', (event) => {
   const ask = askOf(action, sid);
   if (ask === null) {
     notification.close();
-    event.waitUntil(openApp(url));
+    event.waitUntil(Promise.all([receipt, openApp(url)]));
     return;
   }
 
   notification.close();
-  event.waitUntil((async () => {
+  event.waitUntil(Promise.all([receipt, (async () => {
     // The door: the question family's operator door, the only one (W7 C7p
     // retired the old /ask and the /health read that chose between them).
     const req = askRequestOf(ask);
@@ -205,13 +254,13 @@ self.addEventListener('notificationclick', (event) => {
       // looking for a menu that may be long gone — or, worse, believes one is
       // still up. Only the response can tell "never sent" from "sent and
       // applied", so say exactly that and leave the way back open.
-      await replace("Couldn't confirm", 'No connection — tap to open the session.', sid, notification.tag);
+      await replace("Couldn't confirm", 'No connection — tap to open the session.', sid, notification.tag, pushId);
       return;
     }
 
     if (res.ok) {
       const label = labelFor(notification, action);
-      await replace('Answered', label, sid, notification.tag);
+      await replace('Answered', label, sid, notification.tag, pushId);
       return;
     }
 
@@ -236,6 +285,7 @@ self.addEventListener('notificationclick', (event) => {
       REFUSAL[token] || `No reason given (HTTP ${res.status}) — tap to open the session.`,
       sid,
       notification.tag,
+      pushId,
     );
-  })());
+  })()]));
 });
