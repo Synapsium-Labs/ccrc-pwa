@@ -129,7 +129,7 @@ describe('_route_holddown_settle: the settle\'s act on the decider\'s answer', (
 describe('the stale-intent clear is never held (question 4)', () => {
   it('a long-lived row with a one-second stamp and a new intended class is restored at once', () => {
     h.sh(`_reg_set ${ID} class haiku; _reg_set ${ID} degraded opus; _reg_set ${ID} profile overlord`);
-    h.sh(`${CLOCK} _route_stale_degrade_clear ${ID} haiku`);
+    h.sh(`_route_stale_degrade_clear ${ID} haiku`);   // ccd's own clock: the stamp is a second old, inside the hold-down
     expect(h.reg(ID, 'degraded')).toBeNull();
     expect(String(eventsOf(h.home, 'route')[0]!['detail'])).toBe('degraded: opus -> ∅');
   });
