@@ -3847,7 +3847,8 @@ row per item with the measurement, the cause, the fix or the reason not, and the
   goes to the sheet's last control instead of the page (item 2). A switch card's confirm closed by Cancel, Escape or the
   scrim gives the focus back to its radio group, on the checked radio, even when a disabled fieldset dropped the
   opener's focus to the page before the sheet could read it, and a radio is no longer treated as a text field on a phone
-  (item 5, every switch card with a confirm).
+  (item 5: measured for a radio opener on Worktrees left behind and Shadow lanes, the other cards and openers inferred;
+  `c38.md` row 5).
 - **The worktree row's box** (`ProjectCard.tsx`, `fleet.css`) says `aria-busy` while its act is in flight and draws the
   page's focus ring after a keyboard action, reversing review 1623 F8 (d) (item 3).
 - **Worktrees left behind's read** (`useDelegationAdoptView.ts`): a poll nobody asked for moves no `landed`, so a failed
