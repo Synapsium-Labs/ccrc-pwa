@@ -164,6 +164,21 @@ number from `POST /api/ledger/deviations`.
 - **D-8407 (2026-11-13)** — linear-hierarchy-fx2: FX2's hierarchy capture lands as recorded fixtures, and its one
   schema defect is fixed: `ProjectMilestone` has no `creator`, so no document selects one and a milestone binds by name
   inside its project. Its other findings are the departures above.
+- **D-8675 (2026-11-16)** — conflict-detail: a repeated create's "conflict on insert" and "name not unique" answers are
+  recognised in `hierarchyOps.ts`'s shapers (`ops.ts` is frozen), carried as `detail` through `runCcrcOp`. Record:
+  `2026-11-10-linear-hierarchy/w3-plan-sync.md`.
+- **D-8676 (2026-11-16)** — recovery-by-request-id: recovery adopts only ccrc's own object, at `id === requestId` (and
+  made by the viewer, for an initiative or project); a name-only match is sent again. Record: the wave 3 note.
+- **D-8677 (2026-11-16)** — link-by-fingerprint: a project's link to its initiative is tracked by its fingerprint, with
+  no link row. Record: the wave 3 note.
+- **D-8678 (2026-11-16)** — write-ask-destination-team: `LinearWriteAsk.resource` gains `destinationTeamKey`, so a
+  cross-team issue move asks the write policy about both teams. Record: the wave 3 note.
+- **D-8679 (2026-11-16)** — pr-link-rule: the dispatch's PR link is sent whenever the run's branch lacks the issue
+  identifier, and a refused link is given up for that URL with one mail. Record: the wave 3 note.
+- **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
+  updates and never creates. Record: the wave 3 note.
+- **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
+  (wave 4's open point). Record: the wave 3 note.
 
 ## Global Constraints
 
