@@ -39,7 +39,7 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { initiativesItemInput, initiativesItemVerdicts, planSyncSteps, type Local, type SyncSnapshot, type SyncStep } from './planSyncPolicy.js';
+import { initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, planSyncSteps, type Local, type SyncSnapshot, type SyncStep } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
  *  plan verbs becomes one pass. */
@@ -117,6 +117,7 @@ export class PlanSync {
    *  debounce, one at a time, until the tick's deadline. A pass in flight (even the one a restarted tick left) is joined. */
   async tick(now: number): Promise<void> {
     this.notConfigured.clear();
+    try { await this.settleInitiativesItems(now); } catch { console.warn('ccrc-server: linear plan sync initiatives item settle failed'); }
     try { this.meetOperatorActs(now); } catch { console.warn('ccrc-server: linear plan sync operator-act check failed'); }
     const deadlineAt = this.deps.now() + (this.deps.tickDeadlineMs ?? PLAN_SYNC_TICK_DEADLINE_MS);
     try { await this.requeueSweep(now); } catch { console.warn('ccrc-server: linear plan sync requeue failed'); }
@@ -165,18 +166,46 @@ export class PlanSync {
     return true;
   }
 
-  /** Raise the operator item of a workspace reading `off` and settle it when it reads `on` (L1's `initiativesItemVerdicts`
-   *  decides; this acts). One item per workspace: the open ones are looked up by their action. */
+  private openInitiativesItems(now: number): { id: number; workspaceId: string }[] {
+    const out: { id: number; workspaceId: string }[] = [];
+    for (const i of this.deps.coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open) {
+      if (i.action?.verb === 'linear-initiatives') out.push({ id: i.id, workspaceId: i.action.workspaceId });
+    }
+    return out;
+  }
+
+  /** Raise the operator item of a workspace reading `off` (L1's `initiativesItemVerdicts` decides; this acts). One item per
+   *  workspace: the open ones are looked up by their action. */
   private reconcileInitiativesItems(snap: SyncSnapshot): void {
     const { coord } = this.deps;
     const now = this.deps.now();
-    const open = new Map<string, number>();
-    for (const i of coord.itemsFor(LINEAR_SYNC_PROGRAMME, now).open) {
-      if (i.action?.verb === 'linear-initiatives') open.set(i.action.workspaceId, i.id);
-    }
-    for (const { workspaceId, verdict } of initiativesItemVerdicts(snap, new Set(open.keys()))) {
+    const open = new Set(this.openInitiativesItems(now).map((i) => i.workspaceId));
+    for (const { workspaceId, verdict } of initiativesItemVerdicts(snap, open)) {
       if (verdict === 'raise') coord.raiseItem(initiativesItemInput(workspaceId), now, 'ccrc');
-      else if (verdict === 'settle') coord.moveItem(open.get(workspaceId)!, 'settle', 'ccrc', { note: 'Initiatives are on in this workspace.' }, now, { programmeHasOpenRun: false });
+    }
+  }
+
+  /** Each beat, independent of any programme being due: an open initiatives item whose workspace now reads `on` settles, and
+   *  the programmes that were waiting on an initiative there are marked due, so the next beat creates them. Nothing but one
+   *  query when no item is open. */
+  private async settleInitiativesItems(now: number): Promise<void> {
+    const open = this.openInitiativesItems(now);
+    if (open.length === 0) return;
+    const store = await this.deps.readLinearStore();
+    const slots = slotsOf(store);
+    const readsOf = (ws: string): 'on' | 'off' | 'unknown' | null => {
+      const slot = slots.get(ws);
+      return slot === undefined ? null : this.deps.directory.get(slot.ref, slot.digest)?.initiatives ?? null;
+    };
+    for (const item of initiativesItemsToSettle(open, readsOf)) {
+      const moved = this.deps.coord.moveItem(item.id, 'settle', 'ccrc', { note: 'Initiatives are on in this workspace.' }, now, { programmeHasOpenRun: false });
+      if (!moved.ok) continue;
+      for (const p of this.deps.coord.programs()) {
+        const snap = this.snapshot(p.slug, store)?.snap;
+        if (snap?.projects.some((x) => x.workspaceId === item.workspaceId && x.initiatives === 'on')) {
+          this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
+        }
+      }
     }
   }
 

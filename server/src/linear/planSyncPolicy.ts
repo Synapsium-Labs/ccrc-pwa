@@ -413,21 +413,27 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
 
 // ── The initiatives-off item (Task 3.5, §5.2's "initiatives off") ──
 
-/** What the pass does about one workspace's operator item: raise it, settle it, or leave things as they are. */
-export type InitiativesItemVerdict = 'raise' | 'settle' | 'none';
+/** What the pass does about one workspace's operator item: raise it or leave things as they are (settling is the tick's:
+ *  {@link initiativesItemsToSettle}). */
+export type InitiativesItemVerdict = 'raise' | 'none';
 
 /**
  * Per workspace of the snapshot: a workspace reading `off` where this programme has a project whose setting is `on` needs
- * the item (one per workspace, so none when `openFor` already holds one); a workspace reading `on` settles the one that
- * stands. `unknown` (a probe that has not answered) changes nothing, and a project set `off` needs nothing.
+ * the item (one per workspace, so none when `openFor` already holds one). `unknown` (a probe that has not answered)
+ * changes nothing, and a project set `off` needs nothing.
  */
 export function initiativesItemVerdicts(s: SyncSnapshot, openFor: ReadonlySet<string>): { workspaceId: string; verdict: InitiativesItemVerdict }[] {
   return s.workspaces.map((w) => {
     const needed = s.projects.some((p) => p.workspaceId === w.workspaceId && p.initiatives === 'on');
-    const verdict: InitiativesItemVerdict = w.initiatives === 'off' && needed && !openFor.has(w.workspaceId) ? 'raise'
-      : w.initiatives === 'on' && openFor.has(w.workspaceId) ? 'settle' : 'none';
-    return { workspaceId: w.workspaceId, verdict };
+    return { workspaceId: w.workspaceId, verdict: w.initiatives === 'off' && needed && !openFor.has(w.workspaceId) ? 'raise' : 'none' };
   });
+}
+
+/** The open initiatives items whose workspace's directory now reads `on` (`null`: no directory held yet): the ones to settle. */
+export function initiativesItemsToSettle(
+  open: readonly { id: number; workspaceId: string }[], initiativesOf: (workspaceId: string) => 'on' | 'off' | 'unknown' | null,
+): { id: number; workspaceId: string }[] {
+  return open.filter((i) => initiativesOf(i.workspaceId) === 'on');
 }
 
 /** The operator item that asks for initiatives to be turned on in one workspace. Its steps name no workspace or team. */

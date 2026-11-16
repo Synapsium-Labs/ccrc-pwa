@@ -87,6 +87,29 @@ describe('the initiatives-off item (D-8182)', () => {
     expect(itemsOf(r).map((i) => i.state)).toEqual(['done']);
   });
 
+  it('a tick settles the item when the directory reads on, with no programme due', async () => {
+    const r = await rig();
+    await tick(r);
+    r.db.prepare('DELETE FROM plan_sync_due').run();
+    r.dir.initiatives = 'on';
+    await r.sync.tick(r.t.now + 1);
+    expect(itemsOf(r).map((i) => i.state)).toEqual(['done']);
+  });
+
+  it('settling marks the waiting programmes due, and the next pass creates their initiative', async () => {
+    const r = await rig();
+    await tick(r);
+    r.db.prepare('DELETE FROM plan_sync_due').run();
+    r.dir.initiatives = 'on';
+    const asks: string[] = [];
+    (r.sync as unknown as { deps: { call: (a: { op: string }) => Promise<unknown> } }).deps.call = async (a) => { asks.push(a.op); return { ok: false, word: 'unreachable', maybeSent: false }; };
+    await r.sync.tick(r.t.now + 1);
+    const due = (r.db.prepare('SELECT program FROM plan_sync_due ORDER BY program').all() as { program: string }[]).map((d) => d.program);
+    expect(due).toEqual(['prog-a', 'prog-b']);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 10);
+    expect(asks).toContain('initiativeCreate');
+  });
+
   it('a project set off raises nothing', async () => {
     const r = await rig({ projectAInitiatives: 'off', projectBInitiatives: 'off' });
     await tick(r);
