@@ -2842,7 +2842,7 @@ These headers apply to docs routes only. The rest of the server gets a global ba
 - **In Markdown** (§4.11): `![](d.svg)` resolves to a pin. The PWA calls `docs.file` and renders `<img src="data:image/svg+xml;base64,...">`, never `blob:` and never `/api/`. E6: it paints, its script does not run, and its external references make no requests. Opened top-level, a `data:` SVG is opaque-origin.
 - **Opened directly** (a leaf of class `svg`): the same `data:` image, fitted to the pane, with Source (the text renderer) and Download. No iframe and no scripted mode.
 - **Inside a mockup:** inlined as `data:image/svg+xml` (E3).
-- **Cap:** `DOCS_MAX_IMAGE_BYTES` (§6.1), checked against the listed size before any fetch.
+- **Cap:** `DOCS_MAX_IMAGE_BYTES` (§6.1), checked against the listed size before any fetch when that size belongs to the exact pin. Otherwise ccd's class cap answers: on a version page (§4.11), and for a mockup asset reserved at its class cap (§5.6.3; amended 2026-11-16; C1, D-8659).
 
 ### 5.6 The HTML mockup viewer
 
@@ -2965,21 +2965,22 @@ An extension outside the table, or one that does not fit its element, is `unsupp
 
 ```ts
 type MockupRefVerdict =
-  | { v: 'inline'; pin: DocPin; kind: 'image' | 'css' | 'script' | 'module' | 'font'; mime: string; size: number; draft: boolean }
+  | { v: 'inline'; pin: DocPin; kind: 'image' | 'css' | 'script' | 'module' | 'font'; mime: string; size: number; draft: boolean }   // size: the admission reservation, not a measurement (amended 2026-11-16; C1, D-8659)
   | { v: 'kept'; why: 'fragment' | 'self-contained' }
   | { v: 'external'; origin: string; via: 'src' | 'script-text' }   // via: amended 2026-10-13 (W6)
-  | { v: 'refused'; why: string }            // DocRefResolution's refused whys
+  | { v: 'refused'; why: string }            // DocRefResolution's refused whys, and `repo` and `scheme` as DocImage refuses them (amended 2026-11-16; C1)
   | { v: 'missing'; why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' }
   | { v: 'unsupported'; why: 'kind' | 'element' | 'css-depth' }
   | { v: 'skipped'; why: 'too-large' | 'over-budget' }
   | { v: 'failed'; failure: string };
 ```
 
-**Budgets.** All are decided from listed sizes **before any fetch**, in DOM order and then CSS discovery order. A duplicate is fetched and counted once.
+**Budgets** (amended 2026-11-16; C1, D-8659). Each is decided **before any fetch**, from one reservation per admitted asset, in DOM order and then CSS discovery order (parents in row order, a parent's discoveries in their token order). A duplicate pin is fetched, reserved and counted once.
 
-- `MOCKUP_MAX_ASSETS` = 64.
-- `MOCKUP_MAX_ASSET_BYTES` = 5 MiB in total. The worst srcdoc is then about a 2 MiB page plus 5 MiB of base64 assets, about 9.1 M chars, inside the 11.2 M measured to render (E4).
-- An image over `DOCS_MAX_IMAGE_BYTES`, or any asset over its class cap, is `skipped:'too-large'`.
+- **The reservation.** A listed size is used only when it belongs to the exact admitted pin: a `CommittedPin` at the served listing's own commit, or a `DraftPin` at the listed fingerprint (basis `listed`). For a historical commit C that differs from the listing's commit, the listing still decides whether an asset is eligible, but its size is the tip's, not C's: admission reserves the asset class's full cap (basis `class-cap`), CSS discoveries included. An unknown listed size reserves the class cap too. An `inline` verdict's `size` is that reservation. Reservations never shrink or recycle within one attempt: a smaller reply, a failed read and a duplicate return nothing to the budget. The bytes that come back are counted separately, and bytes over the reservation are `failed`, never inlined. A historical page can therefore skip an asset whose actual size would have fitted; the viewer says the admission was conservative rather than calling the asset too large. No service reports sizes at a historical commit.
+- `MOCKUP_MAX_ASSETS` = 64 admitted assets, inclusive.
+- `MOCKUP_MAX_ASSET_BYTES` = 5 MiB of reservations in total, inclusive. The worst srcdoc is then about a 2 MiB page plus 5 MiB of base64 assets, about 9.1 M chars, inside the 11.2 M measured to render (E4).
+- An asset whose listed size is over its class cap (an image over `DOCS_MAX_IMAGE_BYTES`) is `skipped:'too-large'`; a class-cap reservation is never too large before a fetch. An admission that would pass either budget is `skipped:'over-budget'`. Neither makes a request.
 
 **Loader** (`mockup/load.ts`):
 

@@ -1008,7 +1008,8 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 //     template piece that begins with `<` and a letter, `/` or `!`, except `EXPORT_PREFIX`'s own initialiser in
 //     `docs/export/policy.ts`;
 //   - M4.EX11: the name `imagePinFor` (a call, an import, any identifier) appears only in `docs/docsLinks.ts`, its
-//     definition, and `docs/DocImage.tsx`, whose `planImageRef` is the one way Export reaches it;
+//     definition, `docs/DocImage.tsx`, whose `planImageRef` is the one way Export reaches it, and, from W6 (completion
+//     plan Task 6, C1), `docs/mockup/plan.ts`, the mockup planner (base 4.11), and in no other mockup file;
 //   - M4.EX16: across `pwa/src`, a `react-dom/server` specifier (any subpath) and the name `renderToStaticMarkup` only in
 //     `docs/export/buildExport.tsx`, which exports `buildExport` and types only; `./export/buildExport` imported only by
 //     `docs/ExportSheet.tsx`, through a dynamic `import()`; `ExportSheet.tsx` calls `downloadExport`, reads no member
@@ -1216,6 +1217,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/docsLinks.ts imagePinFor',
       'src/docs/export/buildExport.tsx react-dom/server',
       'src/docs/export/buildExport.tsx renderToStaticMarkup',
+      'src/docs/mockup/plan.ts imagePinFor',
       'src/docs/objectUrls.ts createObjectURL',
       'src/docs/objectUrls.ts new Blob',
     ]);
@@ -1234,6 +1236,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     ['a Blob in the builder', 'src/docs/export/buildExport.tsx', "\nexport const plantedBlob = () => new Blob(['x']);\n", 'src/docs/export/buildExport.tsx new Blob'],
     ['an iframe in the builder', 'src/docs/export/buildExport.tsx', '\nexport const PlantedFrame = () => <iframe srcDoc="x" />;\n', 'src/docs/export/buildExport.tsx iframe'],
     ['imagePinFor in Export', 'src/docs/export/exportMarkdown.tsx', "\nimport { imagePinFor as plantedPin } from '../docsLinks';\nexport const plantedP = plantedPin;\n", 'src/docs/export/exportMarkdown.tsx imagePinFor'],
+    ['imagePinFor in a mockup file other than the planner', 'src/docs/mockup/ports.ts', "\nimport { imagePinFor as plantedPin } from '../docsLinks';\nexport const plantedP = plantedPin;\n", 'src/docs/mockup/ports.ts imagePinFor'],
   ])('M4.EX16/M4.EX11 planted: %s is red', (_name, rel, text, use) => {
     expect(scanSrc(planted(rel, text), exportUses)).toContain(use);
   });
