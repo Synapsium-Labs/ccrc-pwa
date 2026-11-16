@@ -431,20 +431,17 @@ export type DueWrite = { due: true; why: RenewalTrigger; cls: TriggerClass; at: 
  *  piece), so a request is read once: a due write that is refused leaves the cursor, and the next pass reads it again. */
 export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[],
   cursor: CursorAdvance | null = null): { changed: boolean } {
-  const write = (): { changed: boolean } => {
-    const b = JSON.stringify(blind);
-    if (!due.due) {
-      return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
-        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`).run(b, ...casArgs(id, expect)));
-    }
-    return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
-      + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`)
-      .run(due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)));
-  };
   try {
-    if (cursor === null) return write();
+    const b = JSON.stringify(blind);
+    const st = !due.due
+      ? stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
+        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`)
+      : stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
+        + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`);
+    const args = !due.due ? [b, ...casArgs(id, expect)] : [due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)];
+    if (cursor === null) return changedOf(st.run(...args));
     return tx(db, () => {
-      const w = write();
+      const w = changedOf(st.run(...args));
       if (w.changed && !advanceCursorIn(db, cursor)) throw new Superseded();
       return w;
     });

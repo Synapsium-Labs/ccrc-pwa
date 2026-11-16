@@ -313,7 +313,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots'] as const;
+  'operator_responses', 'response_receipts', 'response_boots',
+  'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -409,6 +410,10 @@ describe(TABLES_PIN, () => {
       operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       response_receipts: ['server/src/coord/responsesStore.ts#insertReceipt'],
       response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
+      // The renewal hand-offs (Overlord W1a): the Renew now door's request, the prompt route's mark and the lane's quiet of it.
+      continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
+      operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
+      operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
     });
   });
 
