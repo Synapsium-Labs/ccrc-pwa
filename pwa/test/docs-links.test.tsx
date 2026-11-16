@@ -235,6 +235,17 @@ describe('docsLocation: a version page keeps its version (refinements (o), (q))'
     expect((docsLocation(version, { kind: 'version', at: SHA_2 }) as { frame: string }).frame).toBe((version as { frame: string }).frame);
   });
 
+  it('the version target keeps frame=full on an html leaf, setting or clearing at', () => {
+    const framed = pageAt(`/docs/demo/specs/m.html?ref=ws/a&at=${SHA}&frame=full`);
+    expect(framed).toMatchObject({ kind: 'path', frame: 'full', at: SHA });
+    const cleared = docsLocation(framed, { kind: 'version', at: null });
+    expect(cleared).toMatchObject({ kind: 'path', at: null, view: 'effective', frame: 'full' });
+    expect(docsPageUrl(cleared)).toBe('/docs/demo/specs/m.html?ref=ws/a&frame=full');
+    const set = docsLocation(pageAt('/docs/demo/specs/m.html?ref=ws/a&frame=full'), { kind: 'version', at: SHA_2 });
+    expect(set).toMatchObject({ kind: 'path', at: SHA_2, frame: 'full' });
+    expect(docsPageUrl(set)).toBe(`/docs/demo/specs/m.html?ref=ws/a&at=${SHA_2}&frame=full`);
+  });
+
   it('a version target from a section page throws', () => {
     expect(() => docsLocation(pageAt('/docs/demo/specs?ref=ws/a'), { kind: 'version', at: SHA })).toThrow(/needs a leaf page/);
     expect(() => docsLocation(pageAt('/docs/demo?ref=ws/a'), { kind: 'version', at: SHA })).toThrow(/needs a leaf page/);
