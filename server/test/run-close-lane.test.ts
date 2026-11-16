@@ -2,7 +2,7 @@
 // the real `closeRun`. Shadow records and counts down; armed warns and closes. Every other input is a scripted fake, so nothing
 // reaches a box and no test waits on a clock.
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -97,7 +97,7 @@ const rig = async (o: Opts = {}) => {
     const w = coord.runCloseWarning(program)!;
     coord.markDelivered(w.deliveryId, at);
   };
-  return { coord, state, pass, open, seed, stateOf, mail, feed, deliver, verdicts, closesSeen, ccd, memory };
+  return { coord, state, pass, open, seed, stateOf, mail, feed, deliver, verdicts, closesSeen, ccd, memory, home };
 };
 
 type Rig = Awaited<ReturnType<typeof rig>>;
@@ -530,9 +530,21 @@ describe('armed: the close', () => {
     const r = await rig({ names: ARMED });
     const id = await ready(r);
     r.coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run('s-aaaa', id);
+    // The registry still lists the session: a release of one it positively lists as absent is not sent (D-8664).
+    writeFileSync(path.join(r.home, '.cc-sessions', 's-aaaa.uuid'), 'u-s-aaaa');
     r.state.mark = { kind: 'child', runId: id };
     expect((await r.pass()).closed).toEqual([id]);
     expect(r.ccd.some((a) => a[0] === 'ws-release' || a[0] === 'ws-hold')).toBe(true);
+  });
+
+  it('an E1 close of a run whose session the registry no longer lists closes it with no ccd call (D-8664)', async () => {
+    const r = await rig({ names: ARMED });
+    const id = await ready(r);
+    r.coord.db.prepare('UPDATE runs SET sessionId = ? WHERE id = ?').run('s-aaaa', id);
+    r.state.mark = { kind: 'child', runId: id };
+    expect((await r.pass()).closed).toEqual([id]);
+    expect(r.ccd.filter((a) => a[0] === 'ws-release' || a[0] === 'ws-hold')).toEqual([]);
+    expect(r.coord.runEvents(id).map((e) => e.detail ?? '')).toContain('fleet-act-omitted:session-absent');
   });
 
   it('an E1 close of a reused name makes no ccd call', async () => {

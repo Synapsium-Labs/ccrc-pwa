@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { AnswerMarkView, AskMarkRow } from '../../shared/answerMarks';
 import {
-  ANSWER_MARK_LABEL, ANSWER_MARK_UNMEASURED_NOTE, answerMarksOf, askMarksFor, askRowsOf, markOf, settledMark, shownMark,
+  ANSWER_MARK_EXPLAINER, ANSWER_MARK_LABEL, ANSWER_MARK_UNMEASURED_NOTE, TASK_COULD_HANDLE_LABEL, answerMarkLabel, answerMarksOf,
+  askMarksFor, askRowsOf, markOf, settledMark, shownMark,
 } from '../src/ledgers/answerMarkWords';
 import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { NOW, MIN } from './ledgersFixture';
@@ -38,6 +39,43 @@ describe('answerMarksOf, the one reader of the field', () => {
   });
   it('labels each mark in the operator\'s words', () => {
     expect(ANSWER_MARK_LABEL).toEqual({ 'could-answer': 'The Overlord could answer this', unsure: "I'm not sure of my answer" });
+  });
+
+  // Answer marks C (#2900): a task carries the first box alone, worded for a task.
+  it('a do item reads couldAnswer alone, and markOf answers no unsure box', () => {
+    const v = answerMarksOf({ kind: 'do', answerMarks: { couldAnswer: marked(5) } });
+    expect(v).toStrictEqual({ couldAnswer: marked(5) });
+    if (v === 'unsupported') return;
+    expect(markOf(v, 'could-answer')).toEqual(marked(5));
+    expect(markOf(v, 'unsure')).toBeNull();
+  });
+  it('a do item never shows an unsure box, even when the field carries one', () => {
+    expect(answerMarksOf({ kind: 'do', answerMarks: { couldAnswer: NEVER, unsure: NEVER } })).toStrictEqual({ couldAnswer: NEVER });
+  });
+  it('a do item with no well-formed couldAnswer is unsupported', () => {
+    for (const v of [{}, { unsure: NEVER }, { couldAnswer: { state: 'sure' } }, { couldAnswer: { state: 'marked', id: 1 } }]) {
+      expect(answerMarksOf({ kind: 'do', answerMarks: v as never }), JSON.stringify(v)).toBe('unsupported');
+    }
+  });
+  it('a question, an ask (no kind) or a secret with couldAnswer alone is unsupported, failing closed', () => {
+    for (const kind of ['decide', 'value', 'secret', undefined]) {
+      expect(answerMarksOf({ ...(kind === undefined ? {} : { kind }), answerMarks: { couldAnswer: NEVER } }), String(kind)).toBe('unsupported');
+    }
+  });
+  it('a task\'s first box reads "The Overlord could handle this"; every other row keeps the question\'s words', () => {
+    expect(TASK_COULD_HANDLE_LABEL).toBe('The Overlord could handle this');
+    expect(answerMarkLabel('could-answer', 'do')).toBe('The Overlord could handle this');
+    // Only the first box changes its words: unsure keeps the question's words, whatever the kind.
+    expect(answerMarkLabel('unsure', 'do')).toBe("I'm not sure of my answer");
+    for (const kind of ['decide', 'value', undefined, 'approval']) {
+      expect(answerMarkLabel('could-answer', kind)).toBe('The Overlord could answer this');
+      expect(answerMarkLabel('unsure', kind)).toBe("I'm not sure of my answer");
+    }
+  });
+  it('the explainer covers tasks too', () => {
+    expect(ANSWER_MARK_EXPLAINER).toMatch(/tasks/);
+    expect(ANSWER_MARK_EXPLAINER).toMatch(/handle/);
+    expect(ANSWER_MARK_EXPLAINER).toMatch(/no authority/);
   });
 });
 

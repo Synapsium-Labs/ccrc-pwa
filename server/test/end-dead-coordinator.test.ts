@@ -97,6 +97,8 @@ const rig = async (o: Opts = {}) => {
     const r = coord.openRun({ program, title: program, project: 'demo', wave: 1, waveOf: 2, claimedBy: CRASHED });
     if (!('id' in r)) throw new Error('openRun refused');
     coord.markDispatched(r.id, worker, worker, `ws/${worker}`, false);
+    // The worker is still in the registry: a release of one it positively lists as absent is not sent (D-8664).
+    writeFileSync(path.join(reg, `${worker}.uuid`), `u-${worker}`);
     for (const to of ['dispatched', 'working'] as const) expect(coord.advance(r.id, to, 'coordinator').ok).toBe(true);
     return r.id;
   };

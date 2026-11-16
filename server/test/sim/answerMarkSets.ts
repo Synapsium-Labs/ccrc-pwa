@@ -35,26 +35,47 @@ const word = (v: { markable: boolean; reason?: string }): string => (v.markable 
 
 // ---------- itemMarkable ----------
 
+/** Each case asks both marks and reads one word when they agree, else `<could-answer>/<unsure>` (answer marks C, #2900): a
+ *  question (`decide`, `value`) carries both boxes, a task (`do`) only `could-answer`, and a `secret` item none. */
 export function itemMarkableCases(m: Pick<AnswerMarkDeciders, 'itemMarkable'>): Record<string, SuiteCase> {
-  const at = (o: Partial<Row>, now = NOW): string => word(m.itemMarkable(row(o), now));
+  const at = (o: Partial<Row>, now = NOW): string => {
+    const could = word(m.itemMarkable(row(o), now, 'could-answer'));
+    const unsure = word(m.itemMarkable(row(o), now, 'unsure'));
+    return could === unsure ? could : `${could}/${unsure}`;
+  };
+  const DO_UNSURE = '/no-box';
   return {
     'a shown decide or value item that is open or checking is markable': () => {
       for (const kind of ['decide', 'value']) for (const state of ['open', 'checking']) expect(at({ kind, state })).toBe('markable');
     },
-    'a do item and a secret item carry no box whatever their state': () => {
-      for (const kind of ['do', 'secret']) {
-        for (const state of ['open', 'checking', 'done', 'withdrawn', 'dismissed']) {
-          expect(at({ kind, state, closedAt: state === 'open' || state === 'checking' ? null : NOW - HOUR })).toBe('no-box');
-        }
+    'a secret item carries no box whatever its state': () => {
+      for (const state of ['open', 'checking', 'done', 'withdrawn', 'dismissed']) {
+        expect(at({ kind: 'secret', state, closedAt: state === 'open' || state === 'checking' ? null : NOW - HOUR })).toBe('no-box');
       }
+    },
+    'a do item carries could-answer only: unsure is no-box whatever its state': () => {
+      for (const state of ['open', 'checking']) expect(at({ kind: 'do', state })).toBe(`markable${DO_UNSURE}`);
+      expect(at({ kind: 'do', state: 'done', closedAt: NOW - HOUR })).toBe(`markable${DO_UNSURE}`);
+      for (const state of ['withdrawn', 'dismissed']) expect(at({ kind: 'do', state, closedAt: NOW - HOUR })).toBe(`not-listed${DO_UNSURE}`);
+    },
+    'a do item follows the same hold rule and window as a question for could-answer': () => {
+      expect(at({ kind: 'do', heldUntil: NOW + 1 })).toBe(`not-shown${DO_UNSURE}`);
+      expect(at({ kind: 'do', heldUntil: NOW })).toBe(`markable${DO_UNSURE}`);
+      expect(at({ kind: 'do', raisedAt: NOW + 1 })).toBe(`not-shown${DO_UNSURE}`);
+      expect(at({ kind: 'do', state: 'done', heldUntil: NOW - HOUR, closedAt: NOW - 2 * HOUR })).toBe(`not-shown${DO_UNSURE}`);
+      expect(at({ kind: 'do', state: 'done', raisedAt: NOW - WINDOW - HOUR, closedAt: NOW - WINDOW })).toBe(`markable${DO_UNSURE}`);
+      expect(at({ kind: 'do', state: 'done', raisedAt: NOW - WINDOW - HOUR, closedAt: NOW - WINDOW - 1 })).toBe(`past-window${DO_UNSURE}`);
+      expect(at({ kind: 'do', state: 'done', closedAt: null })).toBe(`past-window${DO_UNSURE}`);
     },
     'a kind this build does not know carries no box, before any other reason': () => {
       expect(at({ kind: 'approval' })).toBe('no-box');
       expect(at({ kind: 'toString' })).toBe('no-box');
+      expect(at({ kind: 'hasOwnProperty' })).toBe('no-box');
       expect(at({ kind: 'approval', heldUntil: NOW + HOUR })).toBe('no-box');
     },
     'no-box comes before not-shown': () => {
-      expect(at({ kind: 'do', heldUntil: NOW + HOUR })).toBe('no-box');
+      expect(at({ kind: 'secret', heldUntil: NOW + HOUR })).toBe('no-box');
+      expect(at({ kind: 'do', heldUntil: NOW + HOUR })).toBe(`not-shown${DO_UNSURE}`);
     },
     'a held item is not shown until heldUntil, and is at it': () => {
       expect(at({ heldUntil: NOW + 1 })).toBe('not-shown');
@@ -112,7 +133,7 @@ export function markViewCases(m: Pick<AnswerMarkDeciders, 'markViewOf' | 'itemMa
       expect(m.markViewOf('unmeasured')).toEqual({ state: 'unmeasured', detail: 'the mark could not be read' });
     },
     'itemMarksView: a markable item carries both marks, each from its own record': () => {
-      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: { id: 8, value: 1, at: NOW - MIN, actor: 'op-a' }, unsure: null })).toEqual({
+      expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: { id: 8, value: 1, at: NOW - MIN, actor: 'op-a' }, unsure: null })).toStrictEqual({
         couldAnswer: { state: 'marked', id: 8, at: NOW - MIN, signedIn: true }, unsure: { state: 'never' },
       });
       expect(m.itemMarksView(row({}), NOW, { ok: true, couldAnswer: null, unsure: { id: 9, value: 1, at: NOW, actor: 'flag-off' } })).toEqual({
@@ -120,8 +141,21 @@ export function markViewCases(m: Pick<AnswerMarkDeciders, 'markViewOf' | 'itemMa
       });
     },
     'itemMarksView: an item that carries no box carries no field, even when its read failed': () => {
-      expect(m.itemMarksView(row({ kind: 'do' }), NOW, { ok: true, couldAnswer: null, unsure: null })).toBeUndefined();
+      expect(m.itemMarksView(row({ kind: 'secret' }), NOW, { ok: true, couldAnswer: null, unsure: null })).toBeUndefined();
+      expect(m.itemMarksView(row({ kind: 'do', heldUntil: NOW + HOUR }), NOW, { ok: false, detail: 'x' })).toBeUndefined();
       expect(m.itemMarksView(row({ state: 'dismissed', closedAt: NOW - HOUR }), NOW, { ok: false, detail: 'x' })).toBeUndefined();
+    },
+    'itemMarksView: a do item carries could-answer alone, never unsure, even when an unsure record stands': () => {
+      const v = m.itemMarksView(row({ kind: 'do' }), NOW, {
+        ok: true, couldAnswer: { id: 8, value: 1, at: NOW - MIN, actor: 'op-a' }, unsure: { id: 9, value: 1, at: NOW, actor: 'op-a' },
+      });
+      expect(v).toStrictEqual({ couldAnswer: { state: 'marked', id: 8, at: NOW - MIN, signedIn: true } });
+      expect(m.itemMarksView(row({ kind: 'do', state: 'done', closedAt: NOW - HOUR }), NOW, { ok: true, couldAnswer: null, unsure: null }))
+        .toStrictEqual({ couldAnswer: { state: 'never' } });
+    },
+    'itemMarksView: a failed read gives a do item could-answer unmeasured, and no unsure': () => {
+      expect(m.itemMarksView(row({ kind: 'do' }), NOW, { ok: false, detail: 'database is locked' }))
+        .toStrictEqual({ couldAnswer: { state: 'unmeasured', detail: 'database is locked' } });
     },
     'itemMarksView: a failed read gives a markable item both marks unmeasured, with the detail': () => {
       expect(m.itemMarksView(row({}), NOW, { ok: false, detail: 'database is locked' })).toEqual({
@@ -284,11 +318,11 @@ export const ITEM_MARKABLE_SET: MutantSet<AnswerMarkDeciders> = {
   modulePath: DECIDER_TS,
   suite: itemMarkableCases,
   mutants: [
-    // The plan's red checks: ignore heldUntil; accept a do item; `>` for `>=` at the window's edge.
+    // The plan's red checks: ignore heldUntil; accept unsure on a do item (answer marks C); `>` for `>=` at the window's edge.
     { id: 'AM-ITEM-1', old: 'if (shownAt === null || shownAt > now) return', new: 'if (false) return' },
-    { id: 'AM-ITEM-2', old: 'do: false, secret: false', new: 'do: true, secret: false' },
+    { id: 'AM-ITEM-2', old: "do: { 'could-answer': true, unsure: false }", new: "do: { 'could-answer': true, unsure: true }" },
     { id: 'AM-ITEM-3', old: 'row.closedAt >= now - CLEARED_WINDOW_MS', new: 'row.closedAt > now - CLEARED_WINDOW_MS' },
-    { id: 'AM-ITEM-4', old: 'do: false, secret: false', new: 'do: false, secret: true' },
+    { id: 'AM-ITEM-4', old: "secret: { 'could-answer': false, unsure: false }", new: "secret: { 'could-answer': true, unsure: false }" },
     { id: 'AM-ITEM-5', old: 'shownAt === null || shownAt > now', new: 'shownAt === null' },
     { id: 'AM-ITEM-6', old: 'shownAt === null || shownAt > now', new: 'shownAt > now' },
     { id: 'AM-ITEM-7', old: "if (row.state === 'done') {", new: "if (row.state !== 'withdrawn') {" },
@@ -296,7 +330,13 @@ export const ITEM_MARKABLE_SET: MutantSet<AnswerMarkDeciders> = {
     { id: 'AM-ITEM-9', old: '? { markable: true } : { markable: false, reason: \'past-window\' }', new: '? { markable: true } : { markable: false, reason: \'not-listed\' }' },
     { id: 'AM-ITEM-10', old: 'if ((OPEN_ITEM_STATES as readonly string[]).includes(row.state)) return { markable: true };', new: "if (row.state === 'open') return { markable: true };" },
     { id: 'AM-ITEM-11', old: "return { markable: false, reason: 'not-listed' };\n}", new: "return { markable: true };\n}" },
-    { id: 'AM-ITEM-12', old: 'BOXED_KINDS[row.kind as ItemKind] !== true', new: 'BOXED_KINDS[row.kind as ItemKind] === false' },
+    // Answer marks C (#2900): a do item back to no box; the mark ignored; an unknown or inherited kind read as boxed.
+    { id: 'AM-ITEM-12', old: 'boxes === null || boxes[mark] !== true', new: 'boxes?.[mark] === false' },
+    { id: 'AM-ITEM-13', old: "do: { 'could-answer': true, unsure: false }", new: "do: { 'could-answer': false, unsure: false }" },
+    { id: 'AM-ITEM-14', old: 'boxes[mark] !== true', new: "boxes['could-answer'] !== true" },
+    { id: 'AM-ITEM-15', old: 'boxes[mark] !== true', new: "boxes['unsure'] !== true" },
+    { id: 'AM-ITEM-16', old: "secret: { 'could-answer': false, unsure: false }", new: "secret: { 'could-answer': false, unsure: true }" },
+    { id: 'AM-ITEM-17', old: "value: { 'could-answer': true, unsure: true }", new: "value: { 'could-answer': true, unsure: false }" },
   ],
 };
 
@@ -311,11 +351,15 @@ export const MARK_VIEW_SET: MutantSet<AnswerMarkDeciders> = {
     { id: 'AM-VIEW-4', old: 'at: newest.at,', new: 'at: 0,' },
     { id: 'AM-VIEW-5', old: "if (newest === 'unmeasured') return { state: 'unmeasured', detail };", new: "if (newest === 'unmeasured') return { state: 'never' };" },
     { id: 'AM-VIEW-6', old: "detail = 'the mark could not be read'", new: "detail = ''" },
-    { id: 'AM-VIEW-7', old: 'if (!itemMarkable(row, now).markable) return undefined;', new: '' },
+    { id: 'AM-VIEW-7', old: "if (!itemMarkable(row, now, 'could-answer').markable) return undefined;", new: '' },
     { id: 'AM-VIEW-8', old: "if (!read.ok) return { couldAnswer: markViewOf('unmeasured', read.detail), unsure: markViewOf('unmeasured', read.detail) };", new: "if (!read.ok) return undefined;" },
     { id: 'AM-VIEW-9', old: 'unsure: markViewOf(read.unsure) }', new: 'unsure: markViewOf(read.couldAnswer) }' },
     { id: 'AM-VIEW-10', old: "markViewOf('unmeasured', read.detail) };", new: "markViewOf('unmeasured') };" },
     { id: 'AM-VIEW-11', old: 'id: newest.id,', new: 'id: 0,' },
+    // Answer marks C (#2900): a do item given unsure; a do item given no field; unsure kept as never.
+    { id: 'AM-VIEW-12', old: "itemMarkable(row, now, 'unsure').markable ? marks :", new: 'true ? marks :' },
+    { id: 'AM-VIEW-13', old: "if (!itemMarkable(row, now, 'could-answer').markable) return undefined;", new: "if (!itemMarkable(row, now, 'unsure').markable) return undefined;" },
+    { id: 'AM-VIEW-14', old: '{ couldAnswer: marks.couldAnswer }', new: "{ couldAnswer: marks.couldAnswer, unsure: { state: 'never' } }" },
   ],
 };
 

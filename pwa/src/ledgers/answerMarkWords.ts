@@ -8,16 +8,23 @@ import {
   type AskMarkRow,
 } from '../../../shared/answerMarks';
 
-/** The operator's words for the two marks. */
+/** The operator's words for the two marks on a question. */
 export const ANSWER_MARK_LABEL: Readonly<Record<AnswerMarkName, string>> = {
   'could-answer': 'The Overlord could answer this',
   unsure: "I'm not sure of my answer",
 };
 
-/** Shown once per device, the first time either box is used. */
+/** The first mark's words on a task (answer marks C, #2900): a task is handled, a question is answered. */
+export const TASK_COULD_HANDLE_LABEL = 'The Overlord could handle this';
+
+/** A box's words: the wording follows the row's kind, so a `do` item's first box is a task's. */
+export const answerMarkLabel = (mark: AnswerMarkName, rowKind: unknown): string =>
+  mark === 'could-answer' && rowKind === 'do' ? TASK_COULD_HANDLE_LABEL : ANSWER_MARK_LABEL[mark];
+
+/** Shown once per device, the first time any box is used. */
 export const ANSWER_MARK_EXPLAINER =
-  'Tick the questions you would let the Overlord answer for you, and the answers you are not sure of. It learns from both. A tick ' +
-  'gives it no authority, and you can untick at any time.';
+  'Tick the questions you would let the Overlord answer and the tasks you would let it handle, and the answers you are not ' +
+  'sure of. It learns from them. A tick gives it no authority, and you can untick at any time.';
 
 /** The per-device key that remembers the explainer was shown. */
 export const ANSWER_MARK_EXPLAINED_KEY = 'ccrc.answerMarks.explained';
@@ -41,17 +48,21 @@ const isMarkView = (v: unknown): v is AnswerMarkView => {
 
 /** THE ONE READER of a row's `answerMarks`, an item's or an ask's (plan question 14). Absent means this server cannot mark
  *  this row (an older server, or a row with no box), never "never marked": `unsupported`, and the row draws no box. A field
- *  that is not an `AnswerMarksView` is `unsupported` too. */
-export function answerMarksOf(item: { readonly answerMarks?: unknown }): AnswerMarksView | 'unsupported' {
+ *  that is not an `AnswerMarksView` is `unsupported` too. A task (`do` item) reads `couldAnswer` alone and never an `unsure`,
+ *  even one the field carries (answer marks C, #2900); every other row, an ask (no `kind`) among them, needs both, so a
+ *  question missing one fails closed. */
+export function answerMarksOf(item: { readonly answerMarks?: unknown; readonly kind?: unknown }): AnswerMarksView | 'unsupported' {
   const v: unknown = item.answerMarks;
   if (typeof v !== 'object' || v === null) return 'unsupported';
   const o = v as Record<string, unknown>;
-  return isMarkView(o['couldAnswer']) && isMarkView(o['unsure']) ? (v as AnswerMarksView) : 'unsupported';
+  if (!isMarkView(o['couldAnswer'])) return 'unsupported';
+  if (item.kind === 'do') return { couldAnswer: o['couldAnswer'] };
+  return isMarkView(o['unsure']) ? { couldAnswer: o['couldAnswer'], unsure: o['unsure'] } : 'unsupported';
 }
 
-/** The one key of each mark in the view. */
-export const markOf = (marks: AnswerMarksView, mark: AnswerMarkName): AnswerMarkView =>
-  mark === 'could-answer' ? marks.couldAnswer : marks.unsure;
+/** The one key of each mark in the view: `null` when the row carries no box for it (a task's `unsure`). */
+export const markOf = (marks: AnswerMarksView, mark: AnswerMarkName): AnswerMarkView | null =>
+  (mark === 'could-answer' ? marks.couldAnswer : marks.unsure) ?? null;
 
 const idOf = (v: AnswerMarkView): number | null => (v.state === 'marked' || v.state === 'withdrawn' ? v.id : null);
 

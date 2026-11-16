@@ -45,6 +45,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -75,6 +76,10 @@ export interface Deps {
   /** The egress mask (D-5513, accounts plan Task A10): every server egress of session-derived text passes it. Absent
    *  (a test, mainly): `SHAPE_ONLY_MASKER`, so the shapes are masked even where nothing wires the table. */
   masker?: SecretMasker;
+  /** The response record's stamp (Overlord W1, `responses/stamp.ts#responseStampNow`): set once by `index.ts` from this
+   *  boot's `response_boots` row. Absent (a narrow test), a push is sent with no response row and no push id (slug
+   *  no-stamp-no-response-row). */
+  responseStamp?: () => ResponseStamp;
   /** Remote-mode reachability, straight from `connectFleet().state` — its
    *  `connected`/`downSince` fields are ignored in local mode (the fleet is
    *  always "connected" there; every reader gates on `cfg.fleetMode ===

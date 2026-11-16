@@ -287,6 +287,22 @@ describe('decideClose, the sweep, ledger, verb, fleet and re-measure steps', () 
     expect(outcomeOf(decideClose({ step: 'fleet', res: { ok: false, stderr: 'boom' } }))).toEqual({ ok: false, kind: 'fleetFailed', stderr: 'boom' });
     expect(decideClose({ step: 'fleet', res: { ok: true } }).kind).toBe('go');
   });
+  it('gone (D-8664): only a release of a session the registry positively lists as absent is already done', async () => {
+    let reads = 0;
+    const read = (kind: 'found' | 'absent' | 'unlistable' | 'unmeasurable' | 'bad-id') => async () => { reads += 1; return kind; };
+    expect(await decideClose({ step: 'gone', verb: 'wsRelease', read: read('absent') }))
+      .toEqual({ kind: 'go', plan: { gone: true } });
+    // FAIL-SHUT: every other answer is "act as before", and ccd's own answer decides.
+    for (const kind of ['found', 'unlistable', 'unmeasurable', 'bad-id'] as const) {
+      expect(await decideClose({ step: 'gone', verb: 'wsRelease', read: read(kind) })).toEqual({ kind: 'go', plan: { gone: false } });
+    }
+    // The hold and the archive are not releases: the registry is not even read for them.
+    reads = 0;
+    for (const verb of ['wsHold', 'wsArchive'] as const) {
+      expect(await decideClose({ step: 'gone', verb, read: read('absent') })).toEqual({ kind: 'go', plan: { gone: false } });
+    }
+    expect(reads).toBe(0);
+  });
   const commit = (closed: CommitFacts['closed'], acted: boolean) => decideClose({ step: 'commit', closed, acted });
   it('commit: a refusal BEFORE any act is refused; the same refusal AFTER one is STALE; ok goes', () => {
     const changed = { ok: false, error: 'claimant-changed', claimedBy: 'heir' } as const;

@@ -736,10 +736,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a)
     // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1)
     // and MIGRATIONS[80] (overlord_authority_head, the Overlord authority journal's head row, Overlord W1)
-
-    // and MIGRATIONS[81] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(82);
-    expect(MIGRATIONS.length).toBe(82);
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, the response record, Overlord W1)
+    // and MIGRATIONS[82] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(83);
+    expect(MIGRATIONS.length).toBe(83);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -846,9 +846,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a)
     // and MIGRATIONS[79] (answer_marks, Overlord W1)
     // and MIGRATIONS[80] (overlord_authority_head, Overlord W1)
-
-    // and MIGRATIONS[81] (the goals versions' ratification columns, Overlord W1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(82);
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, Overlord W1)
+    // and MIGRATIONS[82] (the goals versions' ratification columns, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(83);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2990,11 +2990,11 @@ describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9
 });
 
 describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; §3.8, Table 11.1a)', () => {
-  /** Found by its DDL, never hard-coded. Provisional: responses A also holds 82, and whichever lands second renumbers to 83. */
+  /** Found by its DDL, never hard-coded. Responses A (#2884) landed 82, so this is 83 (the coordinator's word). */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;')) + 1;
-  it('FIVE NULLABLE COLUMNS on existing tables and nothing else, the entry after the authority journal\'s head row', () => {
-    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE overlord_authority_head (')) + 2);
-    expect(SLOT).toBe(82);
+  it('FIVE NULLABLE COLUMNS on existing tables and nothing else, the entry after the response record\'s tables', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE operator_responses (')) + 2);
+    expect(SLOT).toBe(83);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean)).toEqual([
       'ALTER TABLE programs ADD COLUMN ratifiedBy TEXT', 'ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER',
       'ALTER TABLE programs ADD COLUMN doneWhenBy TEXT', 'ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT',

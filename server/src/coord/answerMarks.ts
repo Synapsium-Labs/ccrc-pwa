@@ -4,16 +4,20 @@
 // (`answerMarkStore.ts`) answers the newest records these read.
 //
 // ONE RULE FOR "ON THE LIST" (Review Focus 2). `itemMarkable` reads the same hold rule, open states and Recently cleared window
-// as `ledgersStore.ts#itemsFor` (`operatorShownAt`, `OPEN_ITEM_STATES`, `CLEARED_WINDOW_MS`), never a copy, so a `decide` or
-// `value` item the list shows carries boxes exactly when the door accepts a mark on it. `answer-marks.test.ts` pins that
+// as `ledgersStore.ts#itemsFor` (`operatorShownAt`, `OPEN_ITEM_STATES`, `CLEARED_WINDOW_MS`), never a copy, so an item the list
+// shows carries a box exactly when the door accepts that mark on it: both on a `decide` or `value` item, `could-answer` alone
+// on a `do` item (answer marks C, #2900). `answer-marks.test.ts` pins that
 // agreement over one fixture set in a real `coord.db`. `askMarkable` is the same rule for asks: `answerMarkStore.ts#askMarkTargets`
 // lists exactly the asks it calls markable, and `answer-marks.test.ts` pins that agreement too.
 import { CLEARED_WINDOW_MS, OPEN_ITEM_STATES, operatorShownAt, type ItemKind } from '../../../shared/ledgers.js';
-import { ASK_MARK_HOW_MAP, isAnswerMarkName, type AnswerMarkView, type AnswerMarksView } from '../../../shared/answerMarks.js';
+import {
+  ASK_MARK_HOW_MAP, isAnswerMarkName, type AnswerMarkName, type AnswerMarkView, type AnswerMarksView, type BothMarksView,
+} from '../../../shared/answerMarks.js';
 import { ASK_OPERATOR_PRINCIPAL } from '../../../shared/api.js';
 
 /** Why a row carries no box (plan question 13, the `not-markable` refusal's `detail`):
- *  `no-box`: a `do` or `secret` item, which is not a question the Overlord could answer (Table 6.1a);
+ *  `no-box`: the item carries no box for this mark: a `secret` item, which no session ever sees (Table 6.1a), either mark;
+ *  a `do` item, `unsure` (a task has no answer that could serve as a yardstick); a kind this build does not know, either;
  *  `not-shown`: the operator was never shown it (held, or settled inside its hold; an ask held, or answered by its parent);
  *  `past-window`: done (or, for an ask, released or answered) longer ago than the Recently cleared window;
  *  `not-listed`: in no list's state (withdrawn, dismissed, or a state this build does not know). */
@@ -25,8 +29,16 @@ export const isAnswerMarkKebab = (tok: string): boolean =>
   isAnswerMarkName(tok) || Object.hasOwn(NOT_MARKABLE_REASON_MAP, tok) || Object.hasOwn(ASK_MARK_HOW_MAP, tok);
 export type Markable = { markable: true } | { markable: false; reason: NotMarkableReason };
 
-/** The kinds that carry an answer the Overlord could give, and so the two boxes. */
-const BOXED_KINDS: Readonly<Record<ItemKind, boolean>> = { decide: true, value: true, do: false, secret: false };
+/** Which boxes each kind of item carries (spec §9.2.1, C70; answer marks C, #2900). A question (`decide`, `value`) carries
+ *  both. A task (`do`) carries `could-answer` alone: handing a task over is the same signal as handing a question over, and
+ *  the box reads "The Overlord could handle this"; it has no answer, so no `unsure`. A `secret` item carries none. Every kind
+ *  that carries `unsure` carries `could-answer` too, which `itemMarksView` relies on. */
+const ITEM_MARKS: Readonly<Record<ItemKind, Readonly<Record<AnswerMarkName, boolean>>>> = {
+  decide: { 'could-answer': true, unsure: true },
+  value: { 'could-answer': true, unsure: true },
+  do: { 'could-answer': true, unsure: false },
+  secret: { 'could-answer': false, unsure: false },
+};
 
 /** The fields of an item row the rule reads. `state` is a string: a state this build does not know is `not-listed`. */
 export interface MarkableItem {
@@ -34,10 +46,11 @@ export interface MarkableItem {
   readonly raisedAt: number; readonly heldUntil: number | null; readonly closedAt: number | null;
 }
 
-/** Whether the operator may mark this item now, first match: `no-box`, `not-shown`, then its state. A shown `decide` or
- *  `value` item that is `open` or `checking`, or `done` inside the Recently cleared window, is markable. */
-export function itemMarkable(row: MarkableItem, now: number): Markable {
-  if (BOXED_KINDS[row.kind as ItemKind] !== true) return { markable: false, reason: 'no-box' };
+/** Whether the operator may set `mark` on this item now, first match: `no-box`, `not-shown`, then its state. A shown item
+ *  that carries a box for `mark` and is `open` or `checking`, or `done` inside the Recently cleared window, is markable. */
+export function itemMarkable(row: MarkableItem, now: number, mark: AnswerMarkName): Markable {
+  const boxes = Object.hasOwn(ITEM_MARKS, row.kind) ? ITEM_MARKS[row.kind as ItemKind] : null;
+  if (boxes === null || boxes[mark] !== true) return { markable: false, reason: 'no-box' };
   const shownAt = operatorShownAt(row);
   if (shownAt === null || shownAt > now) return { markable: false, reason: 'not-shown' };
   if ((OPEN_ITEM_STATES as readonly string[]).includes(row.state)) return { markable: true };
@@ -68,14 +81,16 @@ export type ItemMarkRead =
   | { readonly ok: false; readonly detail: string };
 
 /** The `answerMarks` an item's view carries: none (`undefined`, the field absent) when the item carries no box now, else
- *  both marks, each `unmeasured` when the read failed. A failed read never hides the item (Review Focus 3). */
+ *  each mark it carries, each `unmeasured` when the read failed: both on a question, `couldAnswer` alone on a task (its
+ *  `unsure` key absent, never `never`, whatever records stand). A failed read never hides the item (Review Focus 3). */
 export function itemMarksView(row: MarkableItem, now: number, read: ItemMarkRead): AnswerMarksView | undefined {
-  if (!itemMarkable(row, now).markable) return undefined;
-  return rowMarksView(read);
+  if (!itemMarkable(row, now, 'could-answer').markable) return undefined;
+  const marks = rowMarksView(read);
+  return itemMarkable(row, now, 'unsure').markable ? marks : { couldAnswer: marks.couldAnswer };
 }
 
 /** Both marks of a markable row from its read: each from its own record, or both `unmeasured` when the read failed. */
-export function rowMarksView(read: ItemMarkRead): AnswerMarksView {
+export function rowMarksView(read: ItemMarkRead): BothMarksView {
   if (!read.ok) return { couldAnswer: markViewOf('unmeasured', read.detail), unsure: markViewOf('unmeasured', read.detail) };
   return { couldAnswer: markViewOf(read.couldAnswer), unsure: markViewOf(read.unsure) };
 }
@@ -123,7 +138,7 @@ export const askLiveOf = (read: { kind: 'unmeasured' } | { kind: 'read'; key: st
  *  `asks` (their boxes sit on the child's question row) and every other in `asksCleared` (a row of Recently cleared). */
 export function askListsView<T extends { readonly id: number; readonly live: boolean | 'unmeasured' }>(
   rows: readonly T[], readOf: (id: number) => ItemMarkRead,
-): { asks: (T & { answerMarks: AnswerMarksView })[]; asksCleared: (T & { answerMarks: AnswerMarksView })[] } {
+): { asks: (T & { answerMarks: BothMarksView })[]; asksCleared: (T & { answerMarks: BothMarksView })[] } {
   const marked = rows.map((r) => ({ ...r, answerMarks: rowMarksView(readOf(r.id)) }));
   return { asks: marked.filter((r) => r.live === true), asksCleared: marked.filter((r) => r.live !== true) };
 }

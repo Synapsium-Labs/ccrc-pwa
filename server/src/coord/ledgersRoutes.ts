@@ -792,7 +792,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   });
 
   // The answer marks (Overlord W1, spec §9.2.1 C70, plan w1-delegation-marks.md Tasks 3 and 5): the operator's two boxes on a row of
-  // Waiting on you, "the Overlord could answer this" and "I'm not sure of my answer". Session-gated only, no box token
+  // Waiting on you, "the Overlord could answer this" and "I'm not sure of my answer"; a task (`do`) carries the first alone, as
+  // "the Overlord could handle this" (answer marks C, #2900), and `unsure` on it is `not-markable`. Session-gated only, no box token
   // (`LEDGER_OPERATOR_DOORS`), and no `ccrc-api` row: no session has a path to it while sign-in is armed. A MARK GRANTS
   // NOTHING AND IS NEVER AN ANSWER, so the door calls no account gate and takes no step-up, and it works while sign-in is dark
   // (slug answer-mark-door-works-dark), as the rank door does. Dark, any local process that reaches the server can call it,
@@ -825,7 +826,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     } else {
       const item = coord.itemById(write.id);
       if (item === null || !operatorWasShown(item, now)) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });
-      may = itemMarkable(item, now);
+      may = itemMarkable(item, now, write.mark);
     }
     if (!may.markable) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notMarkable, { detail: may.reason });
     const res = coord.recordAnswerMark(write, actor, now);

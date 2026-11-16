@@ -476,6 +476,7 @@ describe('the act’s own re-measure', () => {
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
     const r = f.working(A, 'alpha');
+    f.plant('demo-worker-1');   // the worker is still listed, so its release is sent (D-8664)
     await f.pass(); await walk(f, HOUR - 60_000);
     const anchor = f.anchorOf(A);
     armed = true;
@@ -496,6 +497,7 @@ describe('the act’s own re-measure', () => {
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
     const r = f.working(A, 'alpha');
+    f.plant('demo-worker-1');   // the worker is still listed, so its release is sent (D-8664)
     await f.pass(); await walk(f, HOUR - 60_000);
     f.next(); await f.pass();
     expect(f.stateOf(r), 'the run stays open under the coordinator that came back').toBe('working');
@@ -550,6 +552,7 @@ describe('the act’s own re-measure', () => {
     f.touch(DEAD_COORDINATOR_LANE_LIVE_MARKER);
     f.plant(A);
     const r = f.working(A, 'alpha');
+    f.plant('demo-worker-1');   // the worker is still listed, so its release is sent (D-8664)
     // The commit throws AFTER the fleet act ran: the release happened, the close did not.
     f.coord.closeRun = () => { throw new Error('database or disk is full'); };
     await anHourDead(f);
