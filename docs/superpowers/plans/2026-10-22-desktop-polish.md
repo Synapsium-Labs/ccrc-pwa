@@ -3928,17 +3928,18 @@ options and the screenshots.
   width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
   parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
   unchanged. No `ccd`, tmux window size or PWA change.
-- **Tests.** Six cases in `drawer-mask-screen.test.ts`, red on `main` (heads at 207 to 220 at the edge and 7 columns
+- **Tests.** Seven cases in `drawer-mask-screen.test.ts`, red on `main` (heads at 207 to 220 at the edge and 7 columns
   before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
   ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
-  by digest from `main`). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  by digest from `main`, the sliced arm included; and, from review 2307's fix round, one mark per row a key touches for
+  keys of 11 to 8,192 characters, with no SGR beside a mark). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
   drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
 
 - **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
   (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
   never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
 
-**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its six C39 cases are red on `main`'s masker;
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its seven C39 cases are red on `main`'s masker;
 `secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
 fixture.
 
