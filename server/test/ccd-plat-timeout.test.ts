@@ -352,3 +352,57 @@ describe('_plat_timeout_capability and _plat_timeout_strict (plan W2 Task 11)', 
     });
   }
 });
+
+// ── The pure-bash arm passes the caller's stdin through (desktop polish Task C35, D-8658) ────────────────
+// A box with neither `timeout` nor `gtimeout` runs the fallback arm, which starts the command as a background job of
+// a non-interactive shell. Bash gives such a job /dev/null for stdin unless it carries a stdin redirection of its own,
+// so a command bounded there used to read nothing at all, while the same call under the binary read the caller's
+// stdin (C28's fix round 1 found it on the sign-in mint). The arm now hands the job the caller's stdin, so both arms
+// give the command the same stdin. Every case runs on all four copies: the three above and ccgpt-runtime's
+// `_rt_timeout`, which is pinned to ccrc's body byte for byte. Each forces the fallback arm with a PATH that holds
+// no deadline binary, and its first field proves that (`type -P` finds neither).
+const STDIN_COPIES: Array<[string, string, string]> = [...COPIES, ['runtime', 'ccgpt-runtime', '_rt_timeout']];
+const STDIN_TOOLS = [...BASE_TOOLS, 'sleep', 'cat', 'mkfifo', 'tr'];
+const NO_DEADLINE = 'printf "arm:%s|" "$(type -P timeout gtimeout)"\n';
+
+describe('the pure-bash arm passes the caller\'s stdin through (D-8658)', () => {
+  for (const [label, file, name] of STDIN_COPIES) {
+    describe(label, () => {
+      const bare = (script: string): Run => drive(file, name, NO_DEADLINE + script, toolDir(STDIN_TOOLS));
+
+      it('a command that reads stdin gets the caller\'s bytes: a redirect on the call, a here-string, the shell\'s own', () => {
+        const r = bare(`printf FILE-BYTES > @HOME@/in\na=$(@SHIM@ 5 cat < @HOME@/in)\nb=$(@SHIM@ 5 cat <<<HERE-BYTES)\n`
+          + `exec 5<&0 < @HOME@/in; c=$(@SHIM@ 5 cat); exec 0<&5 5<&-\nprintf '%s|%s|%s' "$a" "$b" "$c"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('arm:|FILE-BYTES|HERE-BYTES|FILE-BYTES');
+      });
+
+      it('inside a read loop the command takes the rest of the loop\'s input, as it does under the binary', () => {
+        // The hazard the call-site census looks for (c35.md): a stdin reader inside `while read … done < file`
+        // consumes the lines the loop has not read yet. The binary arm has always done this; the fallback now does too.
+        const r = bare(`printf '1\\n2\\n3\\n' > @HOME@/lines\nwhile IFS= read -r l; do printf '<%s>' "$l"; @SHIM@ 5 cat; done < @HOME@/lines | tr '\\n' ,`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('arm:|<1>2,3,');
+      });
+
+      itDelegating('the same loop answers the same under the binary arm: the two arms agree', () => {
+        const r = drive(file, name, `printf '1\\n2\\n3\\n' > @HOME@/lines\nwhile IFS= read -r l; do printf '<%s>' "$l"; @SHIM@ 5 cat; done < @HOME@/lines | tr '\\n' ,`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('<1>2,3,');
+      });
+
+      it('a reader blocked on a stdin that never ends still answers 124 at its deadline', () => {
+        // The fifo is held open read-write by this shell, so `cat` never sees EOF: before the change it read
+        // /dev/null and answered 0 at once; now it waits on the caller's stdin and the deadline ends it.
+        const r = bare(`mkfifo @HOME@/f; exec 3<>@HOME@/f\n@SHIM@ 1 cat <&3 >/dev/null 2>&1; printf %s "$?"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('arm:|124');
+        expect(r.ms, 'the deadline did not end a reader blocked on stdin').toBeLessThan(8000);
+      });
+
+      it('a closed stdin stays closed, and the command still runs', () => {
+        // `<&0` and not a copy through another descriptor: a copy of a closed fd 0 fails, and the command would not
+        // run at all. With `<&0` it runs with fd 0 closed, exactly as under the binary.
+        const r = bare(`@SHIM@ 5 bash -c ': > @HOME@/ran; cat' <&- 2>/dev/null; printf %s "$?"`);
+        expect(r.rc, `stderr: ${r.err}`).toBe('arm:|1');
+        expect(existsSync(path.join(r.home, 'ran')), 'the command never ran').toBe(true);
+      });
+    });
+  }
+});
