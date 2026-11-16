@@ -13,6 +13,7 @@
 //
 // THE ENDPOINT IS CHECKED AT EACH CALL (question 6, ruling F8). A `local` host must resolve to loopback or private addresses
 // only, and an `http:` endpoint to loopback only, so a name that later resolves elsewhere is refused before any request.
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { DECISION_DEADLINE_MS, DECISION_RETRY_MIN_LEFT_MS, type DecisionHostKind } from '../../../shared/decisionModel.js';
 import type { TimePorts } from '../time/ports.js';
 import type { DecisionCall, DecisionFetch, DecisionModel, DecisionWireRequest } from './decisionModelPort.js';
@@ -20,8 +21,8 @@ import type { DecisionCall, DecisionFetch, DecisionModel, DecisionWireRequest } 
 /** The largest answer body read as an answer (64 KiB); a larger one is `malformed`, `too-large`. */
 export const DECISION_ANSWER_MAX_BYTES = 65536;
 
-/** What the key reader answers: the value, or why there is none. */
-export type DecisionKeyRead = { kind: 'value'; value: string } | { kind: 'absent' | 'unreadable' };
+/** What the key reader answers: the value, or why there is none, in the one absent/unreadable vocabulary (D-1438). */
+export type DecisionKeyRead = { kind: 'value'; value: string } | { kind: ReadFailure };
 
 export interface DecisionHttpDeps {
   fetch: DecisionFetch;
