@@ -262,6 +262,13 @@ describe('a version page reads its images at the version (refinement (n))', () =
     expect(assets.raster.mock.calls[0]?.slice(0, 2)).toEqual(['demo', committedPin('i.png', SHA)]);
   });
 
+  it("a loaded image on a version page opens its own leaf at the page's ref and version", async () => {
+    const { container } = renderDoc('![i](i.png)', { tree: withImage(), url: VERSION_URL });
+    await waitFor(() => expect(imgs(container)).toHaveLength(1));
+    fireEvent.click(container.querySelector('button.doc-img-link')!);
+    expect(location.pathname + location.search).toBe(`/docs/demo/specs/i.png?ref=main&at=${SHA}`);
+  });
+
   it('it is never marked uncommittedNotShown', async () => {
     const t = withImage({ draft: draftOf('modified', { fp: FP_2 }) });
     expect(imagePinFor(t.entries[1], t, VERSION)).toMatchObject({ ok: true, uncommittedNotShown: false, draft: false });
