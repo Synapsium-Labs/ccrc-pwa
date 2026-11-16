@@ -3417,6 +3417,23 @@ export const MIGRATIONS: readonly string[] = [
     updatedAt INTEGER NOT NULL);
   INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
   `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
+  // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
+  // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
+  // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
+  // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
+  // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 85` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // Responses B (#2914) landed 84, so this is 85. RE-MEASURE the slot before the PR and before merge (it must print 84
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
