@@ -196,8 +196,9 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  (`hideOthers`: `aria-hidden` plus its `data-aria-hidden` mark) from the content's mount to its unmount, and the content
  *  stays mounted through the exit animation, so a refusal's live region, or a focus a row places as the sheet leaves, sat in
  *  a hidden page and might not be announced. Radix's trap already follows `open` (`trapFocus={open}`); this makes the hiding
- *  follow it too. As the sheet turns closed with its panel still mounted, the marks Radix made are lifted, unless another
- *  modal is still open, and a reopen during the exit, where Radix hides nothing again, puts them back. An element the page
+ *  follow it too. As the sheet turns closed with its panel still mounted, the marks Radix made are lifted; while another
+ *  sheet is still open under it, only the marks over that sheet are, so the page stays hidden behind it. A reopen during
+ *  the exit, where Radix hides nothing again, puts them back. An element the page
  *  hid itself before the sheet opened is left as it was, and so are Radix's focus guards. Radix's own undo at the unmount
  *  then removes what is left. */
 function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
@@ -220,10 +221,12 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
       return;
     }
     if (el === null || !el.isConnected) return;
-    const otherOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].some((d) => d !== el);
-    if (otherOpen) return;
+    // A sheet still open under this one (a confirm stacked on a sheet) keeps the page hidden: then only what holds that
+    // sheet is lifted, so it is announced from the moment this one starts to close (review 2272 F1, F2).
+    const stillOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].filter((d) => d !== el);
     const marked = [...document.querySelectorAll('[data-aria-hidden="true"][aria-hidden="true"]')]
-      .filter((node) => !own.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el));
+      .filter((node) => !own.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el))
+      .filter((node) => stillOpen.length === 0 || stillOpen.some((d) => node.contains(d)));
     for (const node of marked) node.removeAttribute('aria-hidden');
     lifted.current = marked;
   }, [open]);

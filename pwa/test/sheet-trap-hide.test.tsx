@@ -110,6 +110,44 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
     } finally { release(); }
   });
 
+  // Review 2272 F1, F2: a confirm stacked on a sheet still open (SessionActionsSheet, SwapSheet, PrSheet). As the confirm
+  // closes, the sheet under it is announced at once, and the page stays hidden behind that sheet.
+  it('a confirm closing over a sheet still open: that sheet is announced, and the page stays hidden behind it', async () => {
+    function Stacked(): ReactNode {
+      const [open, setOpen] = useState(false);
+      const [asking, setAsking] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setOpen(true)}>Open it</button>
+          <Sheet open={open} onClose={() => setOpen(false)} title="Actions">
+            <button type="button" onClick={() => setAsking(true)}>Release</button>
+          </Sheet>
+          <QuickConfirm open={asking} onClose={() => setAsking(false)} title="Release?" consequence="It releases."
+            confirmLabel="Yes, release" onConfirm={() => undefined} />
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    try {
+      render(<Stacked />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Release' }));
+      await settle();
+      const hiddenUp = (el: Element): boolean => {
+        for (let at: Element | null = el; at !== null; at = at.parentElement) if (at.getAttribute('aria-hidden') === 'true') return true;
+        return false;
+      };
+      const releaseButton = screen.getByRole('button', { name: 'Release', hidden: true });
+      expect(hiddenUp(releaseButton), 'CONTROL: the confirm hides the sheet under it').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the confirm is closing, the sheet still open').toBe(2);
+      expect(pageHidden(), 'the page behind the sheet still open was announced as the confirm closed').toBe(true);
+      expect(hiddenUp(releaseButton), 'the sheet under the closing confirm stayed hidden').toBe(false);
+    } finally { release(); }
+  });
+
   it('an element the page hid itself stays hidden when the sheet closes', async () => {
     const release = holdClosingContent();
     try {

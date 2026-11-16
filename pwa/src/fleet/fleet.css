@@ -2302,10 +2302,10 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 /* The box takes focus from script only (`tabIndex=-1`), after an act disables its buttons. It draws base.css's page-wide
-   ring after a keyboard action, as the app's other small script-only targets do (the halt line, the docs plain-view
-   note), so the operator who acted from the keyboard can see where the focus went (Task C38, D-8670, review 1624; it
-   reverses review 1623 F8 (d), which treated the box like the whole fleet column). A tap draws no ring: Chrome does not
-   mark a script focus after a pointer action as `:focus-visible`. */
+   ring after a keyboard action, as the halt line does, so the operator who acted from the keyboard can see where the
+   focus went (Task C38, D-8670, review 1624; it reverses review 1623 F8 (d), which treated the box like the whole fleet
+   column). A tap draws no ring: Chrome does not mark a script focus after a pointer action as `:focus-visible`. (The
+   docs plain-view note rings on any focus, a tap included; an accounts row focused by script draws none.) */
 
 /* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
    never a --glow — it explains a row, it is not a row — and it takes
