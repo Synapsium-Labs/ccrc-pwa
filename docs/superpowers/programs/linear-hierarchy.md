@@ -38,7 +38,7 @@ They decide every question the plan leaves open.
 | 1 | the proxy additions | D-8180 | #2612 | **merged** 2026-11-11 as `a9cfd134f` (no run) |
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
-| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 |
+| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1 |
 | 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | not started |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
@@ -94,6 +94,22 @@ They decide every question the plan leaves open.
   call 2, and the plan's clause 21 (Task 6.1), are amended to match. Wave 4's Task 4.3 also changes `planPolicy.ts`,
   and its Upkeep epic is a natural waveless epic: whichever of WM6 and wave 4 lands second builds on the other by
   merge. The two coordinators agree the order at wave 4's dispatch.
+
+- **2026-11-16 — review 2311 of wave 3 (tip `35bb54112`): fix round 1, and a second deviation block (numbers 8699
+  to 8708, allocated for wave 3's fix round and waves 4 to 7).** Fixed in the round:
+  - F1, an unread statuses page or an `unknown` initiatives probe defers instead of failing every epic (D-8701);
+  - F2, a team key moved to another workspace creates no initiative there;
+  - F3, a bound ticket's team stays on its epic's project;
+  - F5, the snapshot leaves out put-back records, as Task 3.1 says;
+  - F6, an open checkpoint's milestone leaves `targetDate` alone; ccrc owns the date only once the checkpoint is met
+    (spec §6.2; the ruling is D-8700);
+  - F7, route-level and lane-wiring tests that go red on mutation;
+  - the advisories A2 (a mismatch with no old slot fails once), A5 (`item-act-mismatch`'s sentence), A7/A12 (a
+    failure's backoff holds) and A8 (the note's record).
+
+  F4 is ledgered as D-8699 (ownership-by-name-first-page): proving ownership of an initiative or project with ten or
+  more same-named objects can fail. The fix needs `creator { id }` on the by-id documents in the frozen `ops.ts`, so it
+  waits for the next capture, on the operator's go. A1, A3, A4, A6, A10 and A11 are carried to wave 4.
 
 ## Carried constraints
 
