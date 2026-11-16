@@ -24797,9 +24797,12 @@ _upd_floor_check() {
 # leads the refusal, because the update control plane keeps only a report detail's first 200 characters. It names only a
 # way out that exists: the operator clears the set from their own shell (`ccd route` refuses inside a session), and PR B2's
 # `--below-cap <word>` (update, rollback, rollout) passes that word's row alone, with a WARN, and is put at the refusal's
-# front. The designation piece rewrites the `poolset` remedy when its Settings doors land.
+# front. The designation piece rewrites the `poolset` and `profiledigest` remedies when its Settings doors land. The
+# `profiledigest` row is the sandbox piece's (PR A2): a ccd without `launch-surface-v1` ignores the field and renders the
+# Overlord's row fail-open.
 CAP_FLOOR_ROWS=(
   'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
+  'profiledigest|launch-surface-v1|the operator clears the launch digest from their own shell, never a session: ccd route --session <id> --set profiledigest='
   'acctorder|keep-awake-v1|the operator releases the Overlord from their own shell, never a session: ccd keep-awake --session <id> --state off, then ccd route --session <id> --set acctorder='
 )
 _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable

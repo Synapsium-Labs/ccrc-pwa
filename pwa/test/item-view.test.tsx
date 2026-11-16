@@ -173,8 +173,9 @@ describe('the item view', () => {
       'wrong-actor', // an operator's own tick and dismiss are never the wrong actor
     ];
     const operatorCodes = [...Object.values(LEDGER_ROUTE_REFUSALS), ...ITEM_MOVE_REFUSALS].filter((c) => !COORDINATOR_ONLY.includes(c));
-    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store.
-    const generic = ['bad-request', 'duplicate', 'not-configured'];
+    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store; and
+    // the two asks' words the answer-mark door's ask arm sends (answer marks B), which are the question lane's, not the ledger's.
+    const generic = ['bad-request', 'duplicate', 'not-configured', 'unknown-ask', 'ask-unreadable'];
     expect([...new Set([...operatorCodes, ...generic])].sort()).toEqual(Object.keys(LEDGER_REFUSAL_TEXT).sort());
   });
 

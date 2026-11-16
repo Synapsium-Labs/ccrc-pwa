@@ -1118,6 +1118,11 @@ export const ACCOUNT_POOLS_CAP = 'account-pools';
  *  among them, so no build that lacks a part advertises it. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s
  *  reason; ccd's `echo pool-set` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
 export const POOL_SET_CAP = 'pool-set';
+/** The `ccd caps` word that says this box renders a route's `profiledigest` whole or refuses the spawn, and refuses a swap
+ *  or a start it could not respawn (the Overlord W1 sandbox, PR A2). Designation's create and rebind need it. Spelled
+ *  ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo launch-surface-v1` and `ccd-archive.test.ts`'s
+ *  `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const LAUNCH_SURFACE_CAP = 'launch-surface-v1';
 export const POOL_SYNC_INSTALLED_CAP = 'pool-sync-installed';
 export const POOL_SYNC_ABSENT_CAP = 'pool-sync-absent';
 

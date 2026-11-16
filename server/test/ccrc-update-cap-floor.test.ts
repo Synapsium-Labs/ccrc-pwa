@@ -383,7 +383,7 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
 
 describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is read by the same check, no code changed', () => {
   const ROW = "  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='\n";
-  const EXTRA = "  'profiledigest|launch-surface-v1|retire the launch profile in Settings'\n";
+  const EXTRA = "  'tablefact|table-word-v1|the remedy of a row this test adds'\n";
 
   /** A fixture home with a PATCHED COPY of ccd/ccrc (one more row, nothing else), and a stamp file with `caps`. */
   function patched(home: string, caps: string[]): { script: string; stamp: string } {
@@ -406,13 +406,13 @@ describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is rea
     writeFileSync(join(home, '.cc-sessions', name), 'x\n');
   };
 
-  it('a <id>.profiledigest entry stands, the target holds pool-set but not launch-surface-v1: refused, naming the word and the new remedy', () => {
+  it('a <id>.tablefact entry stands, the target holds pool-set but not table-word-v1: refused, naming the word and the new remedy', () => {
     const home = freshUpdateBox('ccrc-capfloor-table-refuse-');
     const { script, stamp } = patched(home, ['pool-set']);
-    plantEntry(home, 'lane-a-overlord.profiledigest');
+    plantEntry(home, 'lane-a-overlord.tablefact');
     const r = check(home, script, stamp);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain('retire the launch profile in Settings: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord');
+    expect(r.stderr).toContain('the remedy of a row this test adds: the target build lacks table-word-v1; a tablefact stands for lane-a-overlord');
     expect(r.stderr).not.toContain('lacks pool-set');
     expect(r.stderr).toContain(NOTHING);
   });
@@ -420,28 +420,28 @@ describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is rea
   it('both facts stand and the target lacks both words: one refusal names both rows', () => {
     const home = freshUpdateBox('ccrc-capfloor-table-both-');
     const { script, stamp } = patched(home, ['ws-add']);
-    plantEntry(home, 'lane-a-overlord.profiledigest');
+    plantEntry(home, 'lane-a-overlord.tablefact');
     plantSet(home);
     const r = check(home, script, stamp);
     expect(r.code).toBe(1);
     expect(r.stderr).toContain(`${REMEDY}: ${LACKS}; a poolset stands for lane-b-overlord`);
-    expect(r.stderr).toContain('retire the launch profile in Settings: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord');
+    expect(r.stderr).toContain('the remedy of a row this test adds: the target build lacks table-word-v1; a tablefact stands for lane-a-overlord');
   });
 
   it('the target holds both words: proceeds silently', () => {
     const home = freshUpdateBox('ccrc-capfloor-table-pass-');
-    const { script, stamp } = patched(home, ['pool-set', 'launch-surface-v1']);
-    plantEntry(home, 'lane-a-overlord.profiledigest');
+    const { script, stamp } = patched(home, ['pool-set', 'table-word-v1']);
+    plantEntry(home, 'lane-a-overlord.tablefact');
     plantSet(home);
     const r = check(home, script, stamp);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout + r.stderr).toBe('');
   });
 
-  it('the shipped ccd/ccrc, unpatched, ignores a profiledigest entry (the row is the only difference)', () => {
+  it('the shipped ccd/ccrc, unpatched, ignores a tablefact entry (the row is the only difference)', () => {
     const home = freshUpdateBox('ccrc-capfloor-table-shipped-');
     const { stamp } = patched(home, ['pool-set']);
-    plantEntry(home, 'lane-a-overlord.profiledigest');
+    plantEntry(home, 'lane-a-overlord.tablefact');
     const r = check(home, join(REPO, 'ccd', 'ccrc'), stamp);
     expect(r.code, r.stderr).toBe(0);
   });
@@ -452,6 +452,60 @@ describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is rea
     const a = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     expect(readFileSync(script, 'utf8')).toBe(a.replace(ROW, ROW + EXTRA));
     copyFileSync(script, join(home, 'unused'));
+  });
+});
+
+describe('capability floor, the launch-surface-v1 row (the Overlord W1 sandbox, PR A2): data in the shipped table, read by the same readers', () => {
+  const LS_REMEDY = 'the operator clears the launch digest from their own shell, never a session: ccd route --session <id> --set profiledigest=';
+  /** A standing launch digest for `id`: a regular file at `~/.cc-sessions/<id>.profiledigest`. */
+  function plantDigest(home: string, id = 'lane-a-overlord'): void {
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', `${id}.profiledigest`), `${'a'.repeat(64)}\n`);
+  }
+  it('the row is one line of data beside the pool-set row', () => {
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    expect(src).toContain(`  'profiledigest|launch-surface-v1|${LS_REMEDY}'\n`);
+  });
+  it('a profiledigest stands and the target lacks launch-surface-v1: a bare update is refused, the remedy first, nothing changed', () => {
+    const home = movingBox('ccrc-capfloor-ls-refuse-', ['ws-add', 'pool-set']);
+    plantDigest(home);
+    const before = snapshot(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain(`${LS_REMEDY}: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord. ${NOTHING}`);
+    expect(snapshot(home)).toEqual(before);
+  });
+  it('a profiledigest stands and the target holds launch-surface-v1: proceeds', () => {
+    const home = movingBox('ccrc-capfloor-ls-holds-', ['ws-add', 'launch-surface-v1']);
+    plantDigest(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+  });
+  it('no profiledigest stands: proceeds although the target lacks the word', () => {
+    const home = movingBox('ccrc-capfloor-ls-none-', ['ws-add']);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'lane-a-overlord.profile'), 'overlord\n');
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+  });
+  it('a dangling symlink at <id>.profiledigest counts as standing', () => {
+    const home = movingBox('ccrc-capfloor-ls-dangling-', ['ws-add']);
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    symlinkSync(join(home, 'nowhere-at-all'), join(home, '.cc-sessions', 'lane-a-overlord.profiledigest'));
+    expect(runUpdate(home).stderr).toContain('the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord');
+  });
+  it('the unattended paths warn and proceed: --from watchdog and --from restore', () => {
+    const home = freshUpdateBox('ccrc-capfloor-ls-warn-');
+    plantDigest(home);
+    const stamp = join(home, 'target-build.json');
+    writeFileSync(stamp, shippedStamp('v2.0.0', 'c'.repeat(40)));
+    setCaps(stamp, ['pool-set']);
+    for (const from of ['watchdog', 'restore']) {
+      const r = spawnSync(BASH, ['-c', '. "$1"; _upd_cap_floor_check "$2" "$3"', 'ccrc-under-test', join(REPO, 'ccd', 'ccrc'), stamp, from],
+        { env: updateEnv(home), encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      expect(r.stdout).toContain(`update: WARN: ${LS_REMEDY}: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord${WARN_TAIL(from)}`);
+    }
   });
 });
 

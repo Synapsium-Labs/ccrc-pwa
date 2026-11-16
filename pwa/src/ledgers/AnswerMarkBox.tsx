@@ -8,8 +8,7 @@
 // as `settled` when the call resolves, and rolls back to the server's value on any refusal or failure, with the reason beside
 // it. The one settle rule (`settledMark`) decides what shows after that: the newer of `settled` and the view's mark.
 import { useEffect, useState, type ReactNode } from 'react';
-import { ANSWER_MARK_NAMES, type AnswerMarkName, type AnswerMarkView } from '../../../shared/answerMarks';
-import type { ItemView } from '../../../shared/ledgers';
+import { ANSWER_MARK_NAMES, type AnswerMarkKind, type AnswerMarkName, type AnswerMarkView } from '../../../shared/answerMarks';
 import { api } from '../lib/api';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { pageStorage, readKey, writeKey, type StorageSource } from '../lib/storage';
@@ -17,8 +16,8 @@ import {
   ANSWER_MARK_EXPLAINED_KEY, ANSWER_MARK_EXPLAINER, ANSWER_MARK_LABEL, ANSWER_MARKS_LABEL, answerMarksOf, markOf, settledMark, shownMark,
 } from './answerMarkWords';
 
-function AnswerMarkBox({ id, mark, view, current, onUse }: {
-  id: number; mark: AnswerMarkName; view: AnswerMarkView; current: boolean; onUse: () => void;
+function AnswerMarkBox({ kind, id, mark, view, current, onUse }: {
+  kind: AnswerMarkKind; id: number; mark: AnswerMarkName; view: AnswerMarkView; current: boolean; onUse: () => void;
 }): ReactNode {
   const [pending, setPending] = useState<boolean | null>(null);
   const [settled, setSettled] = useState<AnswerMarkView | null>(null);
@@ -30,7 +29,7 @@ function AnswerMarkBox({ id, mark, view, current, onUse }: {
     onUse();
     setRefusal(null);
     setPending(value);
-    api.setAnswerMark('item', id, mark, value).then(
+    api.setAnswerMark(kind, id, mark, value).then(
       (res) => { setSettled(res.answerMark); setPending(null); },
       (err: unknown) => { setPending(null); setRefusal(refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err)); },
     );
@@ -47,10 +46,11 @@ function AnswerMarkBox({ id, mark, view, current, onUse }: {
   );
 }
 
-/** Both boxes of one item, or nothing when the server cannot mark it (`answerMarksOf` answers `unsupported`). `current` is
- *  false on the device's saved copy, where every box is disabled. Its own control beside the row's button, never inside it. */
-export function AnswerMarkBoxes({ item, current, storage = pageStorage }: {
-  item: Pick<ItemView, 'id' | 'answerMarks'>; current: boolean; storage?: StorageSource;
+/** Both boxes of one row, an item or (answer marks B) an ask the operator has, or nothing when the server cannot mark it
+ *  (`answerMarksOf` answers `unsupported`). `current` is false on the device's saved copy, where every box is disabled. Its
+ *  own control beside the row's button, never inside it. */
+export function AnswerMarkBoxes({ item, kind = 'item', current, storage = pageStorage }: {
+  item: { readonly id: number; readonly answerMarks?: unknown }; kind?: AnswerMarkKind; current: boolean; storage?: StorageSource;
 }): ReactNode {
   const [explain, setExplain] = useState(false);
   const marks = answerMarksOf(item);
@@ -62,9 +62,9 @@ export function AnswerMarkBoxes({ item, current, storage = pageStorage }: {
     setExplain(true);
   };
   return (
-    <div className="wl-marks" role="group" aria-label={ANSWER_MARKS_LABEL} data-item={item.id}>
+    <div className="wl-marks" role="group" aria-label={ANSWER_MARKS_LABEL} {...(kind === 'ask' ? { 'data-ask': item.id } : { 'data-item': item.id })}>
       {ANSWER_MARK_NAMES.map((m) => (
-        <AnswerMarkBox key={m} id={item.id} mark={m} view={markOf(marks, m)} current={current} onUse={onUse} />
+        <AnswerMarkBox key={m} kind={kind} id={item.id} mark={m} view={markOf(marks, m)} current={current} onUse={onUse} />
       ))}
       {explain && <p className="wl-marks-explainer" role="note">{ANSWER_MARK_EXPLAINER}</p>}
     </div>

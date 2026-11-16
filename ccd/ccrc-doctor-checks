@@ -210,7 +210,7 @@ CCRC_DOCTOR_CHECKS=(
   accounts
   credentials auto-memory   # one line, as `flock timeout`: _check_auto-memory follows _check_credentials (Overlord W1a launch profiles PR B)
   pools
-  pool-sync cap-floor   # one line, as `flock timeout`: _check_cap-floor is at the very END of this file (Overlord W1 pool set)
+  pool-sync cap-floor overlord-mods   # one line, as `flock timeout`: _check_cap-floor (Overlord W1 pool set) and then _check_overlord-mods (sandbox A2) are at the very END of this file
   transcripts transcript_work   # one line, as `flock timeout`: _check_transcript_work is at the END of this file
   update-sync server-caps approval-verifier-runnable approval-key approval-key-colocated approval-digest-mismatch   # one line, as `flock timeout`: _check_server-caps is APPENDED near the end of this file, just before _check_oom-policy; the four approval checks are at the very END
   graphify
@@ -10678,6 +10678,9 @@ _dh_events() {   # -> the approved event names on stdout, one per line; rc 1 unr
   printf '%s\n' PreToolUse
 }
 
+# CCRC'S OWN HOOK, as the installer writes it: a hook object whose command names `/session-hook.sh`. One jq definition,
+# read by `_check_delegation-hooks` and `_check_overlord-mods` (Overlord W1 sandbox A2, Task 7).
+DR_OWN_HOOK_JQ='def ownhook: type == "object" and ((.command // "") | tostring | contains("/session-hook.sh"));'
 _check_delegation-hooks() {
   local _srv_role=""
   # `-f` BEFORE `-r` (D-3025); `${BOX_ENV_FILE:-}` because a test sources this file bare under `set -u`.
@@ -10751,14 +10754,13 @@ _check_delegation-hooks() {
     fi
     if [ ! -f "$f" ]; then unread+=("$id: settings.json is not a regular file"); continue; fi
     if [ ! -r "$f" ]; then unread+=("$id: settings.json is not readable"); continue; fi
-    out="$(jq -rs --argjson want "$want_json" '
-      def own: type == "object" and ((.hooks // []) | type == "array")
-        and any((.hooks // [])[]?; type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")));
+    out="$(jq -rs --argjson want "$want_json" "$DR_OWN_HOOK_JQ"'
+      def own: type == "object" and ((.hooks // []) | type == "array") and any((.hooks // [])[]?; ownhook);
       def managed($star): type == "array" and any(.[]?; own and (($star == null) or .matcher == $star));
       # One word per HOOK of an entry list, not per entry (R55): "own" if its command names /session-hook.sh, else "other"
       # (an entry with no hooks list, or a hook with no command, is "other": it is not the ccrc hook).
       def cmds: .[]? | if type == "object" and ((.hooks // []) | type) == "array" and ((.hooks // []) | length) > 0
-        then (.hooks[] | if type == "object" and ((.command // "") | tostring | contains("/session-hook.sh")) then "own" else "other" end)
+        then (.hooks[] | if ownhook then "own" else "other" end)
         else "other" end;
       if length != 1 then "DOCS"
       elif (.[0] | type) != "object" then "SHAPE"
@@ -12221,4 +12223,56 @@ _check_cap-floor() {
   done
   [ -z "$bad" ] || { _dr_fail cap-floor "$bad" "$fix"; return 1; }
   _dr_pass cap-floor "every standing fact's capability is advertised by this box's ccd"
+}
+
+# ── overlord-mods: a mod on an account that can serve the Overlord (Overlord W1 sandbox, Task 7; W0-19, W0b) ────────
+# An installed mod can approve a call the Overlord's launch profile denies (spec §3.6's deny-set note): a hook on a
+# permission or tool event, or a plugin's. So every rostered home (`_skills_roster_rows`, as `skills` walks them; a
+# `server` box SKIPs) is read for mods: in `settings.json` and `settings.local.json`, an `enabledPlugins` entry that is
+# `true` and a hook on any event that is not ccrc's (`DR_OWN_HOOK_JQ`; a matcher group's `hooks` or a flat entry); and every
+# plugin `plugins/installed_plugins.json` lists, which is where a plugin's commands, skills and hooks come from. Only
+# names and event names are printed, never a command. A file that cannot be read, or an empty one, is its own finding,
+# never a pass. Task 1's M8 measured that a pinned launch on
+# 2.1.323 and 2.1.325 does not load an account's enabled plugin: that sets how urgent a line is, not whether it prints.
+# THE LEVEL (ruled, fix round 2): a FAIL only for an account that can serve the Overlord while a `profiledigest` stands
+# (the registry row's `wrapper`; while that row carries a `poolset`, each rostered account `ccd pool-answer --session <id>
+# --account <a>` answers `serve`, so the projection keeps ccd as its one reader (fix round 1 F6); every account while an
+# answer is anything else (an unreadable or stale projection, an older ccd), or a wrapper or the registry cannot be read);
+# a WARN on every other account and while none stands. Doctor never writes an account's settings.
+_check_overlord-mods() {
+  local role="" reg="$HOME/.cc-sessions" rows id suffix dir f e n w des=" " all="" out fix
+  local -a fail=() warn=(); local homes=0
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  [ "$role" != server ] || { _dr_skip overlord-mods "this box records CCRC_ROLE=server, so it hosts no sessions and no account's mods are its concern"; return 3; }
+  rows="$(_skills_roster_rows "$HOME/.ccrc/accounts.json")" && [ -n "$rows" ] || { _dr_skip overlord-mods "no usable account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check owns that"; return 3; }
+  command -v jq >/dev/null 2>&1 || { _dr_fail overlord-mods "jq is not on PATH, so no account's settings could be read" "install jq — see the 'jq' check above"; return 1; }
+  [[ ! -e "$reg" || ( -r "$reg" && -x "$reg" ) ]] || all=1
+  for e in "$reg"/*.profiledigest "$reg"/.*.profiledigest; do
+    [[ -e "$e" || -L "$e" ]] || continue; n="${e##*/}"; n="${n%.profiledigest}"; w=""
+    if [[ -e "$reg/$n.poolset" || -L "$reg/$n.poolset" ]]; then
+      while IFS=$'\t' read -r id suffix; do
+        out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" pool-answer --session "$n" --account "$id" </dev/null 2>/dev/null 3>&-)" || out=""
+        case "$out " in *" verdict=serve "*) des+="$id " ;; *" verdict=mismatch "*) ;; *) all=1 ;; esac
+      done <<< "$rows"
+    else IFS= read -r w < "$reg/$n.wrapper" 2>/dev/null && [[ -n "$w" ]] && des+="$w " || all=1; fi
+  done
+  while IFS=$'\t' read -r id suffix; do
+    dir="$HOME/$suffix"; [ -n "$id" ] && [ -d "$dir" ] || continue; homes=$((homes + 1)); out=""
+    for f in settings.json settings.local.json; do
+      [[ -e "$dir/$f" || -L "$dir/$f" ]] || continue
+      n="$([[ -s "$dir/$f" ]] && jq -rs "$DR_OWN_HOOK_JQ"' [.[] | ((.enabledPlugins // {}) | to_entries[] | select(.value == true) | "plugin " + .key),
+        ((.hooks // {}) | to_entries[] | select([.value[]? | if type == "object" and has("hooks") then .hooks[]? else . end] | any(ownhook | not)) | "hook on " + .key)] | join(", ")' "$dir/$f" 2>/dev/null)" || n="$f could not be read"
+      out+="${n:+$n, }"
+    done
+    f="$dir/plugins/installed_plugins.json"
+    if [[ -e "$f" || -L "$f" ]]; then n="$(jq -r '[.plugins // {} | keys[] | "installed plugin " + .] | join(", ")' "$f" 2>/dev/null)" || n="plugins/installed_plugins.json could not be read"; out+="${n:+$n, }"; fi
+    [ -n "$out" ] || continue
+    if [[ -n "$all" || "$des" == *" $id "* ]]; then fail+=("$id: ${out%, }"); else warn+=("$id: ${out%, }"); fi
+  done <<< "$rows"
+  [ "$homes" -gt 0 ] || { _dr_skip overlord-mods "none of the roster's config directories exist on this box, so there is no account to read"; return 3; }
+  fix="disable or remove each named mod in that account's settings.json or settings.local.json (enabledPlugins, hooks) or uninstall the plugin; doctor never edits them"
+  [ "${#fail[@]}" -eq 0 ] || _dr_fail overlord-mods "an account that can serve the Overlord carries a mod, which can approve a call its launch profile denies: $(_dr_join "${fail[@]}")" "$fix"
+  [ "${#warn[@]}" -eq 0 ] || _dr_warn overlord-mods "an account that cannot serve an Overlord today carries a mod: $(_dr_join "${warn[@]}")" "$fix, before the account serves an Overlord"
+  [ "${#fail[@]}" -eq 0 ] || return 1; [ "${#warn[@]}" -eq 0 ] || return 2
+  _dr_pass overlord-mods "$homes/$homes rostered homes carry no plugin and no hook but ccrc's"
 }

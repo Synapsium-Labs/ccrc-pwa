@@ -169,6 +169,27 @@ describe('ccd pool-answer: the line agrees with _pool_ok and _crosspool_valid', 
   });
 });
 
+describe('ccd pool-answer --account: the same answer for another account (sandbox A2 fix round 1 F6, read by doctor)', () => {
+  it('under a set, each account answers as _pool_ok does for it, and the line names the asked account', () => {
+    seedRow('lane-a');
+    plantSet('pool-a');
+    for (const account of ['lane-a', 'lane-b', 'lane-c']) {
+      const d = direct(account);
+      const r = verb('--session', ID, '--account', account);
+      expect(r.code, account).toBe(0);
+      expect(r.stdout, account).toBe(`pool-answer side=${d.side} verdict=${d.verdict} pool-side=${d.poolSide} pool-state=${d.poolState} crossing=${d.crossing} account=${account}\n`);
+    }
+    expect(verb('--session', ID, '--account', 'lane-a').stdout).toContain('verdict=serve');
+    expect(verb('--session', ID, '--account', 'lane-b').stdout).toContain('verdict=mismatch');
+  });
+  it('a stale projection is undecidable for the asked account too', () => {
+    seedRow('lane-a');
+    plantSet('pool-a');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
+    expect(verb('--session', ID, '--account', 'lane-b').stdout).toContain('verdict=undecidable');
+  });
+});
+
 describe('ccd pool-answer: its refusals carry no line', () => {
   it('rc 1: no such session (no uuid)', () => {
     const r = verb('--session', 'lane-a-nobody');
@@ -178,7 +199,9 @@ describe('ccd pool-answer: its refusals carry no line', () => {
 
   it('rc 2: usage, for any other argument shape or an id outside the registry-id grammar', () => {
     seedRow('lane-a');
-    for (const args of [[], ['--session'], [ID], ['--session', ID, 'extra'], ['--id', ID], ['--session', '-x'], ['--session', 'a b'], ['--session', '../x']]) {
+    for (const args of [[], ['--session'], [ID], ['--session', ID, 'extra'], ['--id', ID], ['--session', '-x'], ['--session', 'a b'], ['--session', '../x'],
+      ['--session', ID, '--account'], ['--session', ID, '--account', 'a b'], ['--session', ID, '--account', ''], ['--session', ID, '--wrapper', 'lane-b'],
+      ['--session', ID, '--account', 'lane-b', 'extra']]) {
       const r = verb(...args);
       expect(r, JSON.stringify(args)).toMatchObject({ code: 2, stdout: '' });
     }

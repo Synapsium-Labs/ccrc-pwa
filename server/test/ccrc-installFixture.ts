@@ -1896,6 +1896,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "name": "SKIP",
   "node": "PASS",
   "oom-policy": "PASS",
+  // The Overlord W1 sandbox A2 (plan Task 7): PASS at every stage, as `delegation-hooks` is: the install registers only
+  // ccrc's hook in each rostered home and installs no plugin, so no home carries a mod.
+  "overlord-mods": "PASS",
   "pane-scope-stop": "PASS",
   "path": "PASS",
   "playwright": "SKIP",

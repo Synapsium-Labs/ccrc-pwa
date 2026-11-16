@@ -100,6 +100,7 @@ _profile_spawn_compose -> _route_get
 _profile_spawn_compose -> _route_note_floored
 _profile_spawn_compose -> _route_reject_note
 _profile_spawn_compose -> _route_unread_note
+_profile_workspace -> _reg_get
 _redrive_after_spawn -> _reg_get
 _redrive_after_spawn -> _tmux_at
 _redrive_after_spawn -> _tmx
@@ -216,6 +217,8 @@ _supervised_start -> _reg_get
 _supervised_start -> _rw_field
 _swap_idle_gate -> _pane_measurable
 _swap_idle_gate -> _tmux_t
+_swap_refuse -> _profile_launch_ok
+_swap_refuse -> _profile_refused
 _swap_refuse -> _svc_reset_failed
 _swap_refuse -> _svc_start
 _swap_refuse -> cmd_ensure
@@ -528,6 +531,8 @@ cmd_swap -> _graceful_stop_after
 cmd_swap -> _graceful_stop_before
 cmd_swap -> _operator_choice_keep
 cmd_swap -> _operator_choice_unmark
+cmd_swap -> _profile_launch_ok
+cmd_swap -> _profile_refused
 cmd_swap -> _svc_run_detached
 cmd_swap -> _svc_start
 cmd_swap -> _svc_stop

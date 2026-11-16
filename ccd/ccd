@@ -3352,10 +3352,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 208
-# invocations across 176 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 209
+# invocations across 177 non-comment lines.
 #
-# THE LAST MOVE WAS `_default_pool` (overlord W1 pool set A3), the −1 call on its own line: its project read for a pay-per-use lane became `_session_pool_side`'s; before it `_spawn_mode` (overlord W1a, fresh start), the −1 call on two fewer lines: four copies of the spawn-mode line's `started` read became one reader making three calls on two lines; before it `_pane_type_ready`'s refusal-memo read (D-8271), the +1 call on its own line; before it `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `_profile_workspace` (overlord W1 sandbox A2), the +1 call on its own line: the launch workspace reads the row's `workdir`; before it `_default_pool` (overlord W1 pool set A3), the −1 call on its own line: its project read for a pay-per-use lane became `_session_pool_side`'s; before it `_spawn_mode` (overlord W1a, fresh start), the −1 call on two fewer lines: four copies of the spawn-mode line's `started` read became one reader making three calls on two lines; before it `_pane_type_ready`'s refusal-memo read (D-8271), the +1 call on its own line; before it `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -9431,6 +9431,10 @@ EOF
   # (`ccd/lib/pool-set.sh#cmd_pool_answer`), and the word that says this box has all of the set: the session side, the
   # route fields `poolset` and `acctorder`, and that verb. Added last among them, so no build lacking a part says it.
   echo pool-answer; echo pool-set
+  # `launch-surface-v1` (the Overlord W1 sandbox, PR A2): a route's `profiledigest` makes this ccd render the row's whole
+  # surface (flags, settings, environment and the workspace entries) or refuse the spawn, and refuse a swap or a start
+  # that would end a pane it then cannot respawn. Printed only by a build that has every part; designation needs it.
+  echo launch-surface-v1
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -26237,6 +26241,45 @@ _profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `pr
   else PROFILE_DIGEST_P="$p" PROFILE_DIGEST_D="$d" PROFILE_DIGEST_ROW="$row"; return 0; fi
   return 1
 }
+# THE WORKSPACE (Overlord W1 sandbox PR A2, Task 6; question 2, slug workspace-links-for-skill-and-constitution). For a
+# surfaced row, after the digest check, before the pane: every `stagedSkills` entry (`.claude/skills/<name>`) and the
+# `memory` entry (`CLAUDE.md`) is checked by shape (a name of `[a-z0-9-]`; a target of `[a-z0-9.-]` segments under `$REG`,
+# no `.` or `..` segment), and one that stands must already be ccd's link to `$REG/<target>`. The workspace may hold no
+# other project source Claude Code reads under `--setting-sources project` (anything under a `.claude` but those links,
+# `.mcp.json`, `CLAUDE.local.md`, a `CLAUDE.md` below the top, and any link but ccd's, so a linked `.claude` or a linked
+# directory cannot hide one from a `find` that does not follow links: one bounded `find`, `.git` pruned), and no directory above
+# it, to `/`, a `CLAUDE.md` or `CLAUDE.local.md`: Task 1's M2 measured the pinned launch loading both, and M1 and M2 links
+# loading. The workdir must be an absolute, slash-clean directory (the walk above it ends at `/`) and its own repository:
+# a `.git` that is a directory, never a linked worktree's `.git` file, whose `info/exclude` is the parent repository's
+# file, shared by every sibling worktree, which ccd must not write (fix round 1 F4, F5). Only with `make` (the spawn) are
+# the missing links then made, and each name added once to `.git/info/exclude`, so it is never committed; without it this
+# is the read-only check every move asks before it ends a pane or writes (F1). Every check comes before the first write,
+# so a refusal makes nothing. rc 1 and PROFILE_DIGEST_WHY.
+_profile_workspace() {   # id row [make] -> 0 iff the entries are ccd's links and no other project source stands; else 1
+  local LC_ALL=C IFS=' ' wd n t l ok=" " out e d found
+  PROFILE_DIGEST_WHY="workspace entries could not be made"; wd=$(_reg_get "$1" workdir); [[ "$wd" == /* && "$wd" != */ && -d "$wd" ]] || return 1
+  [[ -d "$wd/.git" && ! -L "$wd/.git" ]] || { PROFILE_DIGEST_WHY="the workspace is not its own repository: .git is not a directory"; return 1; }
+  out=$(jq -r '[(.stagedSkills | to_entries[] | [".claude/skills/" + .key, .value]), ["CLAUDE.md", .memory]][] | map(strings) | if length == 2 then join("\t") else error("shape") end' <<<"$2" 2>/dev/null) || return 1
+  while IFS=$'\t' read -r n t; do
+    [[ "$n" =~ ^(\.claude/skills/[a-z0-9-]+|CLAUDE\.md)$ && "$t" =~ ^[a-z0-9.-]+(/[a-z0-9.-]+)*$ && "/$t/" != */../* && "/$t/" != */./* ]] || return 1
+    l="$wd/$n"; ok+="$l "
+    [[ ! -e "$l" && ! -L "$l" ]] || { [[ -L "$l" && "$(readlink "$l")" == "$REG/$t" ]] || { PROFILE_DIGEST_WHY="$n is not ccd's link"; return 1; }; }
+  done <<<"$out"
+  found=$(_plat_timeout 10 find -H "$wd" -mindepth 1 -name .git -prune -o \( -type l -o -name .claude -o -path '*/.claude/*' -o -name .mcp.json -o -name CLAUDE.local.md -o -name CLAUDE.md \) -print 2>/dev/null) || return 1
+  while IFS= read -r e; do
+    [[ -z "$e" || "$ok" == *" $e "* || ( ( "$e" == "$wd/.claude" || "$e" == "$wd/.claude/skills" ) && ! -L "$e" ) ]] || { PROFILE_DIGEST_WHY="a project source stands: ${e#"$wd/"}"; return 1; }
+  done <<<"$found"
+  d="$wd"; while [[ -n "$d" ]]; do d="${d%/*}"; for e in CLAUDE.md CLAUDE.local.md; do [[ ! -e "$d/$e" && ! -L "$d/$e" ]] || { PROFILE_DIGEST_WHY="a CLAUDE.md stands above the workspace: $d/$e"; return 1; }; done; done
+  [[ "${3-}" == make ]] || return 0
+  mkdir -p "$wd/.git/info" || return 1
+  while IFS=$'\t' read -r n t; do
+    [[ -L "$wd/$n" ]] || { mkdir -p "$(dirname "$wd/$n")" && ln -s "$REG/$t" "$wd/$n"; } || return 1
+    grep -qxF "/$n" "$wd/.git/info/exclude" 2>/dev/null || printf '/%s\n' "$n" >> "$wd/.git/info/exclude" || return 1
+  done <<<"$out"
+}
+_profile_launch_ok() {   # id [make] -> 0 iff the digest holds and, under a standing one, the workspace (made with `make`); else 1 and PROFILE_DIGEST_WHY
+  _profile_digest_ok "$1" && { [[ -z "$PROFILE_DIGEST_ROW" ]] || _profile_workspace "$1" "$PROFILE_DIGEST_ROW" "${2-}"; }
+}
 _profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
   echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
 }
@@ -26244,7 +26287,7 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
   if [[ -e "$REG/$id.profiledigest" || -L "$REG/$id.profiledigest" ]]; then
-    _profile_digest_ok "$id" || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
+    _profile_launch_ok "$id" make || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
     sf=1 p="$PROFILE_DIGEST_P" d="$PROFILE_DIGEST_D" src=/dev/stdin   # render the row the digest covered: one read (F7)
   fi
   [[ -n "$sf" || -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
@@ -27954,6 +27997,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
+  # The launch profile (sandbox A2): a start its spawn would refuse (the digest, the workspace) refuses here, before it writes anything.
+  _profile_launch_ok "$id" || { _profile_refused "$id" "start: $PROFILE_DIGEST_WHY (the operator clears a stale digest: ccd route --session $id --set profiledigest=)"; return 1; }
   # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
   # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
   # this verb dies with a retryable message naming the lock and leaves NOTHING
@@ -30032,10 +30077,13 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   # conversation a live background job is writing — must not end by offering
   # it, or the operator is handed a command that answers with this same
   # refusal.
-  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}" hint="${6-}"
+  local id="$1" cur="$2" target="$3" reason="$4" restart="${5:-0}" hint="${6-}" stays="stays on $2"
+  # The launch profile (sandbox A2): a restart its spawn would refuse is not attempted. The session stays down, journalled
+  # as a refused supervised respawn is, and the row and the banner say so rather than "stays on" (fix round 1 F2).
+  [[ "$restart" != 1 ]] || _profile_launch_ok "$id" || { _profile_refused "$id" "restart on $cur after a refused swap: $PROFILE_DIGEST_WHY"; restart=0 stays="is down, not restarted" reason="$reason; the session is down, not restarted: launch profile: $PROFILE_DIGEST_WHY"; }
   _reg_set "$id" swapblocked "$(date +%s) $reason"
   echo "$(date '+%F %T') swap-refused $id: $cur -> $target ($reason)" >> "$REG/swap.log"
-  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id stays on $cur — $reason" >/dev/null 2>&1
+  [[ -x "$REG/notify.sh" ]] && "$REG/notify.sh" "cc swap BLOCKED: $id $stays — $reason" >/dev/null 2>&1
   # `lastswap` is CLEARED here, not merely left unwritten. On the AUTO-swap path
   # (_auto_swap_check, both the hard-blocked rescue arm and the return-home arm) it is
   # already stamped BEFORE `_dispatch_swap` ever runs — seconds before this function is
@@ -31833,6 +31881,13 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
       "--force does not move it: --force accepts a transcript that cannot be found, and this is the opposite hazard — two writers. Swap again once the job has ended."
     return 1
   fi
+  # THE LAUNCH PROFILE (Overlord W1 sandbox A2, question 5: never end what cannot be respawned). A route whose
+  # `profiledigest` the row it reads does not hash to, or whose workspace holds a project source (`_profile_workspace`'s
+  # read-only check, fix round 1 F1), cannot spawn (`_spawn_start` refuses it), so the swap ends nothing: refused here
+  # with the other pre-flights, before the act gates, the session left running on $cur, `wrapper` unmoved. Through
+  # `_swap_refuse` too, so the row shows it and the auto-swap backs off for SWAPBLOCK_COOLDOWN. --force does not move it.
+  # A route without the field passes (`_profile_digest_ok`'s first test).
+  _profile_launch_ok "$id" || { _profile_refused "$id" "swap to $target: $PROFILE_DIGEST_WHY"; _swap_refuse "$id" "$cur" "$target" "launch profile: $PROFILE_DIGEST_WHY" 0 "--force does not move it: the session's launch profile cannot spawn here (the digest or the workspace named above); fix that, or retire or rebind the session first."; return 1; }
   # ── THE AUTOMATIC GATES, AT THE ACT (D-5240) ───────────────────────────
   # Last before the first write the stop path makes (`.choicekept`, then the
   # stop), so a refusal leaves nothing behind but the `lastswap` it restores.

@@ -4,9 +4,10 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedTrail, itemNumber,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
 } from '../src/ledgers/ledgerWords';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
+import type { AskMarkRow } from '../../shared/answerMarks';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -365,6 +366,7 @@ describe('review caps in the grouping (Task 24, F21)', () => {
 
 // D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
 describe('clearedTrail and itemNumber (D-8194)', () => {
+  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
   const HOUR = 60 * MIN;
   const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
 
@@ -374,7 +376,26 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
 
   it('keeps what was cleared inside the window, edge included, newest first; drops the older and the undated', () => {
     const items = [done(1, NOW - 2 * HOUR), done(2, NOW - CLEARED_WINDOW_MS), done(3, NOW - CLEARED_WINDOW_MS - 1), done(4, NOW - HOUR), done(5, null)];
-    expect(clearedTrail(items, NOW).map((i) => i.id)).toEqual([4, 1, 2]);
+    expect(clearedTrail(items, NOW).map(idOf)).toEqual(['i4', 'i1', 'i2']);
+  });
+
+  // Answer marks B: the asks the operator has that are not live join the trail by their time.
+  const NEVER = { state: 'never' as const };
+  const ask = (id: number, at: number, o: Partial<AskMarkRow> = {}): AskMarkRow => ({
+    id, childId: `lane-a-${id}`, program: 'prog-a', question: 'q?', how: 'lapsed', reason: null, at, live: false,
+    answerMarks: { couldAnswer: NEVER, unsure: NEVER }, ...o,
+  });
+
+  it('orders items and asks that are not live together by their time, an item first at the same instant; a live ask is not in it', () => {
+    const items = [done(1, NOW - 2 * HOUR), done(2, NOW - 4 * HOUR)];
+    const asks = [ask(1, NOW - HOUR), ask(3, NOW - 3 * HOUR), ask(4, NOW - 2 * HOUR), ask(5, NOW - 30 * MIN, { live: true }),
+      ask(6, NOW - 30 * MIN, { live: 'unmeasured' }), ask(7, NOW - CLEARED_WINDOW_MS - 1)];
+    expect(clearedTrail(items, NOW, asks).map(idOf)).toEqual(['a6', 'a1', 'i1', 'a4', 'a3', 'i2']);
+  });
+
+  it('groups the trail by programme in the order of its newest clear, the asks in no programme as one group', () => {
+    const trail = clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [ask(2, NOW - HOUR, { program: null }), ask(3, NOW - 3 * HOUR), ask(4, NOW - 4 * HOUR, { program: null })]);
+    expect(clearedGroups(trail).map((g) => [g.program, g.entries.map(idOf)])).toEqual([[null, ['a2', 'a4']], ['prog-a', ['i1', 'a3']]]);
   });
 
   it('the shown count is five', () => {

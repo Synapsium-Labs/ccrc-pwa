@@ -147,3 +147,22 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
     expect(anyVerdictFor(runDoctor(home).stdout, 'cap-floor')).toMatch(/^(PASS|SKIP|WARN|FAIL) cap-floor: /);
   });
 });
+
+describe('cap-floor: the launch-surface-v1 row (the Overlord W1 sandbox, PR A2)', () => {
+  function digestBox(prefix: string, ccd: string): { home: string } {
+    const b = box(prefix, { ccd });
+    writeFileSync(join(b.reg, 'lane-a-overlord.profiledigest'), `${'a'.repeat(64)}\n`);
+    return b;
+  }
+  it('FAIL naming launch-surface-v1 and the id while a profiledigest stands and the ccd lacks the word, with the operator\'s own clear', () => {
+    const r = check(digestBox('ccrc-doctor-capfloor-ls-fail-', 'printf "ws-add\\npool-set\\n"').home);
+    expect(r.code).toBe(1);
+    expect(r.line).toContain('this box\'s ccd lacks launch-surface-v1 while a profiledigest stands for lane-a-overlord');
+    expect(r.remedy).toContain('ccd route --session <id> --set profiledigest=');
+  });
+  it('PASS when the ccd advertises launch-surface-v1', () => {
+    const r = check(digestBox('ccrc-doctor-capfloor-ls-pass-', 'printf "ws-add\\nlaunch-surface-v1\\n"').home);
+    expect(r.code).toBe(0);
+    expect(r.line).toMatch(/^PASS cap-floor: /);
+  });
+});

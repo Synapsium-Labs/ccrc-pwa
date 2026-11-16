@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
 import { CCD_CAPABILITY_TOKENS } from './ccdCapTokens.js';
-import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, EXPIRE_CAP, KEEP_AWAKE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SET_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
+import { ACCOUNT_POOLS_CAP, ACTOR_FLAGS_CAP, BROWSER_ROUTE_CAP, CHILD_ARGV_CAP, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP, EXPIRE_CAP, KEEP_AWAKE_CAP, LAUNCH_SURFACE_CAP, POOL_SYNC_ABSENT_CAP, POOL_SET_CAP, POOL_SYNC_INSTALLED_CAP, POOLS_CAP, PR_STATE_PR_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, ROUTE_DEFAULT_CAP, SWAP_BUSY_CAP, WIN_SIZE_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -175,6 +175,7 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_INSTALLED_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SYNC_ABSENT_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOL_SET_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(LAUNCH_SURFACE_CAP);   // the Overlord W1 sandbox, PR A2
     // Terminal drawer wave 2's token. Task 2 added the STRING to the list
     // above; this line is what holds it equal to the constant wave 3 reads —
     // without it `win-size-v1` would be the one known token whose three
