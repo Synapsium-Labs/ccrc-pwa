@@ -185,7 +185,9 @@ export function docLinkTarget(ctx: DocLinkContextValue, raw: string): DocLinkTar
       return { kind: 'external', href: r.url };
     case 'repo': {
       const link = githubBlobUrl(ctx.tree.github, ctx.tree.ref, { kind: 'repo', repoPath: r.repoPath });
-      return link.ok ? { kind: 'github', href: link.url, note: link.note } : inert(link.why);
+      // Refinement (o), ruled: the link names the branch, and the file there may differ from this version's, so on a
+      // version page its caution always shows.
+      return link.ok ? { kind: 'github', href: link.url, note: ctx.pageAt !== null ? 'may-differ' : link.note } : inert(link.why);
     }
     case 'self-contained':
       return inert(r.scheme);

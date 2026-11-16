@@ -249,6 +249,18 @@ describe('docsLocation: a version page keeps its version (refinements (o), (q))'
     expect(firstLink(container).getAttribute('href')).toBe(`/docs/demo/plans/p.md?ref=ws/a&at=${SHA}`);
   });
 
+  it('a repo link inside a version page keeps its GitHub link with the may-differ caution', () => {
+    const t = treeOk();
+    // An origin-side listing: without `at` the same link carries no caution.
+    const tree: DocsTreeOk = { ...t, ref: { ...t.ref, side: 'origin', relation: 'equal' } };
+    const d = detachUrls(treeOf('[r](../../../README.md)'));
+    const href = 'https://github.com/example-org/example-repo/blob/main/README.md';
+    expect(docLinkTarget(ctxFor(d, { tree, pageAt: SHA }), '../../../README.md')).toEqual({ kind: 'github', href, note: 'may-differ' });
+    expect(docLinkTarget(ctxFor(d, { tree, pageAt: null }), '../../../README.md')).toEqual({ kind: 'github', href, note: null });
+    const { container } = renderDoc('[r](../../../README.md)', { tree, pageAt: SHA });
+    expect(container.querySelector('.doc-link-gh')?.getAttribute('title')).toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+  });
+
   it('the crumbs above a version leaf drop at, its own crumb keeps it', () => {
     const deep = pageAt(`/docs/demo/specs/d/a.md?ref=ws/a&at=${SHA}`);
     expect(docsCrumbs(deep).map((c) => c.href)).toEqual([
