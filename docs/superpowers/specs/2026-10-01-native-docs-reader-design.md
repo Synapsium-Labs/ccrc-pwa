@@ -56,7 +56,7 @@ A W1 implementer reads §2, then §6.1 and §7.1, which set the final argv, the 
 | `Q3` | Where the index gets its data | A fourth verb, `docs-index --all` | One exec, 0.27–0.32 s over 16 repos, against about 21 execs. It reads ccd's projects root like every other docs call, so the inherited root seam (§1) does not reappear inside Docs. |
 | `Q4` | When a view is stale | Stale 10 min after the last attempt. A failure is retried after 60 s, except `remote-branch-absent`, which waits 10 min. Auto-refresh fetches only the viewed branch, and only when the ref resolved. ccd enforces a 10 s per-branch floor. | Every fetch moves a remote-tracking ref in repos where live sessions work. Ten minutes matches how often specs change. Counting from the attempt stops an unpushed branch from refetching on every open. The ccd floor bounds a POST loop across server restarts. |
 | `freshness` | How a page refreshes | Auto-refresh on open when stale, plus a manual Refresh. A GET never mutates git. | Reads and the one write are separated three ways: by port, by a source scan and by a PATH recorder (§2 (g)). |
-| `http` | The HTTP surface (§3) | Approved as written in §3:<br>- a marker header (`x-ccrc-docs: 1`) plus `Sec-Fetch-*` replaces the approved Origin fallback;<br>- page URLs never carry a commit;<br>- `view=committed` and `frame=full`;<br>- `/docs/@<node>` is reserved. | The PWA's own same-origin GET sends no `Origin` (§3.0 M-g). An Origin rule would therefore either admit every subresource or refuse the PWA itself. A durable pointer to one commit is a GitHub URL. |
+| `http` | The HTTP surface (§3) | Approved as written in §3:<br>- a marker header (`x-ccrc-docs: 1`) plus `Sec-Fetch-*` replaces the approved Origin fallback;<br>- page URLs never carry a commit, except a leaf's `at=` (rich-docs A14) (amended 2026-11-16; W5b-2);<br>- `view=committed` and `frame=full`;<br>- `/docs/@<node>` is reserved. | The PWA's own same-origin GET sends no `Origin` (§3.0 M-g). An Origin rule would therefore either admit every subresource or refuse the PWA itself. A durable pointer to one commit is a GitHub URL. |
 | `U1` | Size caps | Images 2 MiB. Documents 2 MiB. | Every PNG over 2 MiB on the fleet is gitignored evidence that Docs never lists, and the largest committed PNG is 0.36 MiB.<br>A 10 MiB cap would exceed the agent's 8 MiB exec buffer, and would stall terminals about 1.1 s per image at 100 Mbit.<br>Transcoding to WebP on the fleet box was rejected, for five reasons: it means native decoding of untrusted images outside the browser sandbox; it risks decompression-bomb memory use on the session box; it adds a dependency; it makes a GET do heavy work; and its pixels would differ from the repository's.<br>Larger images, if ever needed, go through a chunked `docs-show-range` verb, never a bigger cap. |
 | `U2` | Outbound network in mockups | A per-view "Load external (N)" tap. Exact `https` origins only. Never remembered. | One of the three committed mockups draws its charts from a CDN, and two load hosted fonts. By default they render without those. One tap per view loads exactly the origins the census lists. |
 | `U3` | How much of the hardening chat gets | (b):<br>- error boundaries;<br>- iterative `remarkAlerts`;<br>- the highlight cap;<br>- the nesting pre-scan;<br>- the parse worker for messages over 4 KiB;<br>- refusal of root-relative and protocol-relative image sources. | Chat shares the renderer. Measured: 10 KB of `>` overflows the stack, and 40 KB of nested emphasis freezes the page for 42.7 s. A same-origin image source fires a GET carrying the operator's cookie. |
@@ -1329,16 +1329,17 @@ Measured at `c62e22b9a`. Browser facts come from Chromium 153 driven headless th
 
 `/docs/`, `/docs/<p>/` and `/docs/<p>/<section>/` canonicalise to the slash-less form. Whether a slash-less path is a leaf or a directory is decided by the tree answer, never by URL shape; a directory reached without its slash is replace-navigated to the slash form.
 
-**Query keys**, `DOCS_PAGE_KEYS = ['ref','view','frame']`, written in that order:
+**Query keys**, `DOCS_PAGE_KEYS = ['ref','at','view','frame']`, written in that order (amended 2026-11-16; W5b-2):
 - `ref=<ref>`: any page except the index. The bare or qualified grammar of §2 (a). Written verbatim, because its charset (`A-Z a-z 0-9 . _ / -`) is query-safe; the parser also accepts `%2F`.
+- `at=<commit>`: leaf only (rich-docs R-d, G6, A14). A full 40- or 64-character lower-case commit id, kept beside `ref`. The leaf shows the committed bytes at that commit, for a doc the served listing holds as a committed file; on a directory it is canonicalised away. (amended 2026-11-16; W5b-2)
 - `view=committed`: leaf only, and only together with `ref`. It shows the committed bytes at the commit that **this visit's** tree answer resolved `ref` to. Without `ref` it is redundant, because the default view never overlays drafts, and it is canonicalised away. Beside `at` it is redundant too, since a version is committed bytes, and it is canonicalised away (amended 2026-11-16; W5b-2).
 - `frame=full`: leaf only, and only when `contentClass(path) === 'html'` (§5.6.7, the full-screen mockup). On any other class it is canonicalised away.
 - `#fragment`: passed through untouched to §4.
 
 **Refused, never canonicalised:**
-- any pin key (`commit`, `servedRef`, `branch`, `head`, `fp`) gives `commit-in-page`. The page grammar never carries a commit (s2-decisions); a durable pointer to one exact commit is a GitHub URL (3.11), which Share builds (§4.16). Share and Export add no page key;
+- any pin key (`commit`, `servedRef`, `branch`, `head`, `fp`) gives `commit-in-page`. The page grammar carries a commit only as a leaf's `at` (rich-docs R-d, A14), never as a pin key (s2-decisions) (amended 2026-11-16; W5b-2); a durable pointer to one exact commit is a GitHub URL (3.11), which Share builds (§4.16). Share and Export add no page key;
 - any other key gives `unknown-param`; a repeated key gives `repeated-param`;
-- a bad value gives `bad-ref`, `bad-view` or `bad-frame`.
+- a bad value gives `bad-ref`, `bad-at`, `bad-view` or `bad-frame` (amended 2026-11-16; W5b-2).
 
 **What a leaf shows:**
 
@@ -1347,6 +1348,7 @@ Measured at `c62e22b9a`. Browser facts come from Chromium 153 driven headless th
 | no `ref` | committed bytes at the origin default commit. Drafts never apply (ruling) |
 | `?ref=<b>` | the effective file: the draft with its badge when `entryView` (§4.6) opens a draft, otherwise the committed bytes at the served commit |
 | `?ref=<b>&view=committed` | the committed bytes at the served commit |
+| `?at=<c>` or `?ref=<b>&at=<c>` | the committed bytes at `<c>`; drafts never apply (rich-docs G6) (amended 2026-11-16; W5b-2) |
 
 **Encoding.** `docsPageUrl` encodes each path segment with `encodeURIComponent`. The parser splits on `/` and decodes each segment strictly (`bad-escape` on a malformed escape). A `%2F` inside a segment gives `encoded-slash`, so one path has one spelling. Dot segments never arrive, because the URL parser resolves `..` and `%2e%2e` before `location.pathname` exists. After decoding, `(section, path)` must pass the §2 section and rel-path grammars.
 
@@ -1361,7 +1363,7 @@ export const DOCS_PAGE_PREFIX = '/docs';
 export const DOCS_API_PREFIX = '/api/docs';
 export const DOCS_REQUEST_HEADER = 'x-ccrc-docs';          // 3.8
 export const DOCS_REQUEST_HEADER_VALUE = '1';
-export const DOCS_PAGE_KEYS = ['ref', 'view', 'frame'] as const;
+export const DOCS_PAGE_KEYS = ['ref', 'at', 'view', 'frame'] as const;   // (amended 2026-11-16; W5b-2)
 export const DOCS_PIN_KEYS = ['commit', 'servedRef', 'branch', 'head', 'fp'] as const;
 
 export type DocsRefSpec = { kind: 'bare'; name: string } | { kind: 'qualified'; ref: string };
@@ -1373,8 +1375,8 @@ export type DocsPageLocation =
   | { kind: 'project'; project: string; ref: DocsRefSpec | null }
   | { kind: 'section'; project: string; section: DocSectionSlug; ref: DocsRefSpec | null }
   | { kind: 'path'; project: string; section: DocSectionSlug; path: string; dirSlash: boolean;
-      ref: DocsRefSpec | null; view: 'effective' | 'committed'; frame: 'inline' | 'full' };
-export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref'
+      ref: DocsRefSpec | null; at: string | null; view: 'effective' | 'committed'; frame: 'inline' | 'full' };   // (amended 2026-11-16; W5b-2)
+export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'   // (amended 2026-11-16; W5b-2)
   | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
   | 'repeated-param' | 'reserved-node';
 export type DocsPageParse = { ok: true; loc: DocsPageLocation; canonical: string } | { ok: false; why: DocsPageParseFailure };
@@ -1747,11 +1749,11 @@ type TreeSlot =
 ```
 
 `docs/useDocsVisit.ts` owns:
-1. **Tree slots**, one GET per key at a time. A tree answer is **reused while the user navigates within the visit** (project, section, leaf, sibling cost no GET; §2 (e)). It is re-fetched: on mount; after a refresh answer; after `draft-changed`, `worktree-moved`, `worktree-gone` or `unknown-commit` from a file read (once automatically, then an inline "changing, Retry"); on `visibilitychange` to visible when the slot is older than `DOCS_STALE_MS` (a GET only, never a refresh); and on `onAuthRegained` for slots in `auth`.
+1. **Tree slots**, one GET per key at a time. A tree answer is **reused while the user navigates within the visit** (project, section, leaf, sibling cost no GET; §2 (e)). It is re-fetched: on mount; after a refresh answer; after `draft-changed`, `worktree-moved`, `worktree-gone` or `unknown-commit` from a file read (once automatically, then an inline "changing, Retry"); on `visibilitychange` to visible when the slot is older than `DOCS_STALE_MS` (a GET only, never a refresh); and on `onAuthRegained` for slots in `auth`. On a version page a file read's re-list word re-lists nothing and is not read again automatically; the page offers Retry (§2 (e)) (amended 2026-11-16; W5b-2).
 2. **File slots.** Committed bodies are keyed by `blob`, so a file unchanged across a moving default branch is not re-downloaded. A body at a version (rich-docs G6) is keyed by its pin's commit instead, so a version whose blob equals the latest's still remounts (amended 2026-11-16; W5b-2). Drafts are keyed by `(branch, head, section, path, fp)`. Every request carries the current pin.
 3. **Auto-refresh.** `autoRefreshed: Set<key>` in a `useRef`, checked and added synchronously before the POST, so StrictMode's double effect cannot fire twice. It dies with the mount; a mount is one screen open.
 4. **Retry bookkeeping.** `autoRetried: Set<key + word>`.
-5. **The leaf's expected pin** (amended 2026-10-13). `pinFor(tree, page): DocPin | null` is pure. It answers the pin the current tree implies for the page's leaf: a `CommittedPin` at `ref.commit`, or a `DraftPin` when `entryView` opens the draft, or `null` when the leaf opens nothing. The file slot's own pin is the **opened pin**. A raster leaf has no file answer: `DocImage` loads it through `docs.raster`, which answers bytes and a MIME only (§5.4). Its opened pin is the pin `DocImage` loaded, and wherever Export needs "the file slot is `ok`", a raster leaf reads "the image is loaded". Share, which needs only the pin, reads "the image has settled, loaded or failed", as a failed file read settles any other leaf; a raster over its class cap, which `DocImage` refuses without a load, is settled at once, as a file slot's `too-large` is (amended 2026-11-02; Share). The two pins differ only while a re-list is in flight (the auto-refresh paragraph below), and Share and Export are disabled while they differ (§4.16, §4.17).
+5. **The leaf's expected pin** (amended 2026-10-13). `pinFor(tree, page): DocPin | null` is pure. It answers the pin the current tree implies for the page's leaf: a `CommittedPin` at `ref.commit`, or a `DraftPin` when `entryView` opens the draft, or `null` when the leaf opens nothing. The file slot's own pin is the **opened pin**. A raster leaf has no file answer: `DocImage` loads it through `docs.raster`, which answers bytes and a MIME only (§5.4). Its opened pin is the pin `DocImage` loaded, and wherever Export needs "the file slot is `ok`", a raster leaf reads "the image is loaded". Share, which needs only the pin, reads "the image has settled, loaded or failed", as a failed file read settles any other leaf; a raster over its class cap, which `DocImage` refuses without a load, is settled at once, as a file slot's `too-large` is (amended 2026-11-02; Share). The two pins differ only while a re-list is in flight (the auto-refresh paragraph below), and Share and Export are disabled while they differ (§4.16, §4.17). On a version page (rich-docs G6) it answers a `CommittedPin` at `at`, with `ref.served`, when the entry's committed side is a file or exec, else `null`; never a `DraftPin` (amended 2026-11-16; W5b-2).
 6. **`ExportAssets`** (amended 2026-10-13): one registry per leaf pin, holding the raster `Blob`s and SVG `data:` strings that `DocImage` already holds for display. Each entry is keyed by the image's own full `DocPin`: a `CommittedPin`'s commit, section and path, or a `DraftPin`'s branch, head, section, path and `fp`. Export looks an entry up only by `imagePinFor`'s answer for that image (§4.11), so an entry holding earlier bytes, for example a drafted image whose `fp` changed while the leaf's pin did not, never matches. It holds them by reference and never copies them. It is cleared when the leaf's pin changes and dies with the visit, so it holds no more than the page does. That bound is the page's, not a count: Load image can take a page past `DOCS_MAX_IMAGES_PER_PAGE` (§4.11), and each entry is within its own class cap.
 
 **Auto-refresh** (s2-decisions Q4 and attack 10): when a tree slot becomes `ok` with `refreshDue` true and the key is not in `autoRefreshed`, add it, then `POST refresh {ref: docsRefText(page.ref) or null, reason:'auto'}`. Only an ok tree triggers it; an `unresolved-ref` page offers a manual **Fetch from origin** (`reason:'manual'`). On the answer: an ok `tree` replaces the slot; a `fetch` failure changes only the freshness chip; a `tree` failure keeps the old listing and shows "re-list failed: <sentence>" in the chip. If the new tree changes the leaf's pin the leaf re-reads, keeping scroll, with an inline note "Updated to <short commit>". Until the re-read answers, Share and Export read "Updating to <short commit>…" and are disabled (amended 2026-10-13; §4.16, §4.17).
@@ -2219,7 +2221,7 @@ export type DocRefResolution =
 Steps: trim leading and trailing ASCII whitespace and C0 controls (as a browser does for an attribute URL); any remaining C0, DEL, space, or backslash anywhere gives `malformed` (fail closed, never delete-and-continue); empty gives `empty`; a leading `#` gives `fragment`; a scheme (`^[A-Za-z][A-Za-z0-9+.-]*:`) gives `external` for http, https and mailto, `self-contained` for data and blob, otherwise `scheme`; a leading `//` gives `protocol-relative`; a leading `/` gives `root-relative` (where every `/api/...` lands); otherwise resolve with `new URL(ref, 'https://docs.invalid/' + dirname(docRepoPath(section, path)) + '/')`, require that sentinel origin, drop query, keep the fragment, decode each segment once (a throw is `bad-path`); a path climbing above the repo root is `above-root`; under one of the four section paths the remainder must pass the rel-path grammar (`bad-path` otherwise) and gives `doc`; any other in-repo path gives `repo`.
 
 **Markdown `a` (`DocLink`):**
-- `doc`: `<a href>` built with `docsPageUrl` for the same project, the page's `ref`, `view` dropped; a plain left click is prevented and navigated in-app; modifier and middle clicks are left to the browser (a new tab onto `/docs/...`). An `.html` target reaches §5's viewer through the leaf.
+- `doc`: `<a href>` built with `docsPageUrl` for the same project, the page's `ref`, `view` dropped, and, on a version page, its `at` (rich-docs G6) (amended 2026-11-16; W5b-2); a plain left click is prevented and navigated in-app; modifier and middle clicks are left to the browser (a new tab onto `/docs/...`). An `.html` target reaches §5's viewer through the leaf.
 - `fragment`: `<a href="#id">` whose click scrolls the matching element inside the article (`CSS.escape`), no history entry. Only ids the pipeline emits exist (GFM footnotes); no heading ids are generated (2 fragment links in 899 real docs).
 - `external`: `target="_blank" rel="noopener noreferrer"`, opened with `openExternal` on tap only; nothing prefetches.
 - `repo`: a GitHub link through `githubBlobUrl` with a trailing "↗ GitHub" mark when one exists, else inert. The `repo` target it needs is the 2026-10-13 widening of `GithubTarget` (§3.11). That is why the widening is W5's first L0 task.
@@ -2290,7 +2292,7 @@ Deferred by the Share and Export amendment (2026-10-13):
 - **The options not taken.** The native share sheet on the first tap (decision 1, option (b)). Export fetching images that are not loaded (decision 3, option (b)). `navigator.share({files})` as Export's first route (decision 7, option (b)); it stays as the contingency `export-share-file`.
 - **Export after W8.** On the 2026-10-12 spec's reader path, a page renders inside a sandboxed frame and produces no hast tree. Export builds from the plain pipeline's tree, so it would no longer export exactly what a reader-path page shows. W8 must decide between two options: keep Export on the plain render, with the provenance saying so; or the no-JS static variant that spec lists under Later. Until W8, every page uses the plain pipeline, and the two are the same. That spec's W8 row carries this decision, edited in the same change (§7.7).
 - **W8's copy op.** That spec's reader copy op (its M8.19) calls `writeText` from the parent, under `pwa/src/docs`. M4.SH7 allows `clipboard.writeText(` there only in `docs/share.ts`, so the copy op must go through `copyText`. M8.19's hidden-character check then wraps the one writer, and covers Share's Copy link and "copy commit" too. That spec's W8 row says so, edited in the same change (§7.7).
-- **Share on a version view (W5b).** The 2026-10-12 spec's `at=<sha>` page (W5b, after W5) opens a commit that need not be the served ref's tip. Share's rows judge `ref.relation`, which describes the tip, so W5b re-derives Share's rows for version views. W5's Share never sees one. W5b's rule: the link names the version's commit and is offered only when `githubPermalink` would link the served ref's tip and the read measured `onRef === 'contains'`; otherwise the refusal is `version-unmeasured`, with Export's clause, and a version carries no draft notes (amended 2026-11-16; W5b-2).
+- **Share on a version view (W5b).** The 2026-10-12 spec's `at=<sha>` page (W5b, after W5) opens a commit that need not be the served ref's tip. Share's rows judge `ref.relation`, which describes the tip, so W5b re-derives Share's rows for version views. W5's Share never sees one. W5b's rule: the link names the version's commit and is offered only when `githubPermalink` would link the served ref's tip and the read measured `onRef === 'contains'`; otherwise the refusal is `version-unmeasured`, with Export's clause, while `no-github-origin`, `bad-slug` and `bad-target` keep their own words, and a version carries no draft notes (amended 2026-11-16; W5b-2).
 
 ### 4.14 CSS, contrast, tap targets
 
@@ -2469,7 +2471,7 @@ Every sheet that has a slug also carries the `access` note, above.
 | `unmeasured` | "Docs could not measure whether origin has <short>; Refresh, then share." |
 | `new-draft` | "Not committed yet, so GitHub has nothing to show. Export makes a file you can send." |
 | `new-withheld` | "Not committed yet, and Docs did not read it (<WITHHELD_SENTENCE>); nothing to share or export." |
-| `version-unmeasured` | "Docs cannot tell whether origin has <short>, so it gives no link to this version." (amended 2026-11-16; W5b-2) |
+| `version-unmeasured` | "Docs cannot tell whether origin has <short>, so it gives no link to this version. Export makes a file you can send." (amended 2026-11-16; W5b-2) |
 
 Where Export is not offered (section, directory and project pages, and leaves of §4.17's excluded kinds), the clause "Export makes a file you can send" is left out.
 
@@ -2589,7 +2591,7 @@ Export is offered only after the page has drawn the same tree with the same comp
 
 The export limits live in `docs/export/policy.ts`, not in `lib/markdownLimits.ts`. That file's rule covers render limits, and these are limits on a saved file.
 
-**Links** (`EXPORT_COMPONENTS.a`; C is the commit the leaf opened, §4.16). On a version page (rich-docs G6) C is not the listing's commit, and `githubPermalink` judges only the served ref's tip, so there the `doc` and `repo` rows give an inert span with `version-unmeasured`'s sentence (amended 2026-11-16; W5b-2):
+**Links** (`EXPORT_COMPONENTS.a`; C is the commit the leaf opened, §4.16). When C is not the listing's commit (a version page's, rich-docs G6, unless its `at` is the listing's own commit), `githubPermalink`, which judges only the served ref's tip, cannot vouch for it, so there the `doc` and `repo` rows give an inert span with `version-unmeasured`'s sentence (amended 2026-11-16; W5b-2):
 
 | Resolution (`resolveDocRef`) | In the file |
 |---|---|
