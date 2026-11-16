@@ -160,6 +160,10 @@ const CONTRACT = [
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
   // double quotes are escaped here and typed straight in SKILL.md.
   "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
+  // Overlord W1a, the recall clause (spec 2026-11-09 §11.4, its clause 23, numbered 21 at its merge; plan
+  // `docs/superpowers/plans/2026-11-10-overlord/w1a-clause-23.md`). ASCII only, no apostrophe, no quote. Its second
+  // sentence names the act the note door serves (`POST /api/sessions/:id/notes`, `ccrc-api note add`), not the door.
+  'After a compaction or a renewal, check what you recall against `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what you intend next.',
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -233,7 +237,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -258,7 +262,7 @@ describe('the coordinator skill: its contract', () => {
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
     // 5 discussion) from counting as a hit.
-    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+    const stated = [...skill.matchAll(/(?<![a-z-])([a-z]+(?:-[a-z]+)?) (?:clauses|lines|sentences)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
       .toBeGreaterThanOrEqual(1);
@@ -274,7 +278,7 @@ describe('the coordinator skill: its contract', () => {
       const text = readFileSync(path.join(root, rel), 'utf8');
       let hits = 0;
       for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
-        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        const m = /(?<![a-z-])([a-z]+(?:-[a-z]+)?)\s+clauses\b/.exec(text.slice(i, i + 160));
         expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
         expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
           .toBe(COUNT_WORD);
