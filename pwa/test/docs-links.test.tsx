@@ -251,6 +251,12 @@ describe('docsLocation: a version page keeps its version (refinements (o), (q))'
     expect(() => docsLocation(pageAt('/docs/demo?ref=ws/a'), { kind: 'version', at: SHA })).toThrow(/needs a leaf page/);
   });
 
+  it('a version target from a directory page leaves at null, as the grammar does', () => {
+    const dir = pageAt('/docs/demo/specs/d/?ref=ws/a');
+    expect(dir).toMatchObject({ kind: 'path', dirSlash: true, at: null });
+    expect(at(docsLocation(dir, { kind: 'version', at: SHA_2 }))).toBeNull();
+  });
+
   it('a doc link inside a version page keeps the version', () => {
     const d = detachUrls(treeOf('[x](../plans/p.md#s)'));
     const target = docLinkTarget(ctxFor(d, { pageAt: SHA }), '../plans/p.md#s');
