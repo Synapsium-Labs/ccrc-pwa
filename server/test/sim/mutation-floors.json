@@ -91,5 +91,6 @@
   "shared/poolset.ts#parsePoolSet": 1,
   "server/src/chainedJournal.ts#decodeChainedLine": 1,
   "server/src/chainedJournal.ts#ChainVerifier": 1,
-  "server/src/chainedJournal.ts#chainedTailHealPlan": 1
+  "server/src/chainedJournal.ts#chainedTailHealPlan": 1,
+  "server/src/responses.ts#receiptVerdict": 1
 }
