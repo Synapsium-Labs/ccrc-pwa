@@ -208,6 +208,7 @@ import {
 import { renderMailNudge } from './coord/envelope.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
+import { FLEET_ROLES } from '../../shared/fleetRoles.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -7049,13 +7050,18 @@ export class FleetWatcher {
       console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
       return;
     }
+    // The restarted arm reaches a long-lived session run-less (the renewal hand-offs, Task 7): its role from `roleFactsOf`, as a
+    // claimant of open runs, so a row whose child marker reads a child is never told.
+    const role = roleOf(roleFactsOf(id, { child: tick.records.find((x) => x.id === id)?.child ?? { kind: 'unreadable' }, childRunKind: 'unmeasured',
+      openCoordinators: new Set([id]), intentDeclared: 'unmeasured' }));
     const si: StallSessionInput = {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+      longLived: role.kind === 'role' && FLEET_ROLES[role.role].longLived,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
-    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
+    for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
     // coord-blocked (D-6942): the same session facts, with the claimant's child marker from this tick's rows
