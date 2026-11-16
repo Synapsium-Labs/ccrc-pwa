@@ -3769,6 +3769,40 @@ every server test file that drives a copy passes; the `macos.yml` run on the bra
 wave-done mail (it runs after the one push).
 **Rollback.** A plain revert.
 
+### Task C36: the terminal view's stale and overlapping characters, from the drawer's provisional mask (D-8665) — now
+
+**Why.** The operator saw a session's terminal on desktop drawn with doubled lines, two lines' letters interleaved in
+one row, and leftover characters in rows that should be blank, with tmux's status row ending `‹secret m` and its date
+alone on the row below. The brief's lead, a terminal narrower or wider than the program believes, was measured and does
+not hold: the xterm, the tmux client and the window are 220 columns on every glass and in both views. Each claim below
+is labelled measured or inferred in `c36.md`, with the widths, the reproduction and the screenshots.
+
+**What was done.**
+- **The cause** (measured through a real tmux at the drawer's 220 x 51, on headless xterm). With fingerprint rows held,
+  the drawer's masker drew a 15-column provisional `SECRET_MASK` in place of an open run whose hold had expired, and
+  erased it later with `CUB 15` and `ECH 15`. The date that ends tmux's status row is 9 columns and ends in the last
+  column of the last row, so the mask ran past the edge, the terminal wrapped and scrolled the whole screen, and every
+  later redraw landed a row off tmux's picture of the glass: all 51 rows differed from the raw stream's screen, against
+  none with the shape-only masker.
+- **The change**, in `DrawerMask` alone: a withheld run is drawn as nothing until it resolves, so the drawer sends the
+  stream's own bytes unless a secret is masked in it. No mark can be drawn and taken back safely without knowing the
+  cursor's column (a mark at the right edge leaves the wrap pending, and neither `CUB` nor a saved cursor recovers it,
+  measured). D-5995's fail-closed rule and its accepted gaps are unchanged. No window size, no `ccd`, no PWA file.
+- **Tests.** `drawer-mask-screen.test.ts` renders on `@xterm/headless` (a new server dev dependency): Claude-Code-like
+  redraws ending on the status row's date leave the screen exactly as the raw stream draws it; a secret-free stream cut
+  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes;
+  and no byte of a withheld run reaches the screen before it resolves, nor ever when it never resolves (two leak
+  mutants turn it red). Red first on `main`'s masker. `@xterm/headless` is pinned to 6.0.0, the PWA's xterm release. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
+
+- **D-8665** — `drawer-provisional-mark-dropped`: Task C36, issued on 2026-11-16. The drawer's provisional mask, 15
+  columns drawn in place of a shorter run and erased with `CUB` and `ECH`, ran past the right edge on tmux's status
+  row and moved the glass a row off tmux's picture of it. A withheld run is now drawn as nothing until it resolves.
+  Departures are named by slug in `c36.md`, `drawer-final-mask-columns` among them (reported, not fixed).
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its three cases are red on `main`'s masker;
+`secret-mask.test.ts` and `pty.test.ts` pass in full; before and after screenshots at 1920 and 390 px from a fixture.
+**Rollback.** A plain revert.
+
 ### Task C37: the programme page shows its work, done and outstanding (design) (D-8669) — now
 
 **Why.** The operator, 2026-11-16, on a programme's page: "I want to see at a glance on that page what work remains
