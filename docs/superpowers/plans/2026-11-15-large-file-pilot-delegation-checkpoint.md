@@ -336,6 +336,17 @@ each slice exercises are listed per task.
     `delegation-recovery` and `lease-routes`.
 - **Pins it exercises:** the `DELEGATION_REPAIR_FULL_MS` named imports from Task 1 Step 6. Without them, `plan` refuses
   with "a namespace import … uses DELEGATION_REPAIR_FULL_MS".
+- **The run (2026-11-16, on `origin/main` `17e86164e`):**
+  - [x] Step 1: Preflight. 18 open heads, none carrying a move; `"ok": true`, `"slots": ["C5"]`, `"refusals": []`.
+  - [x] Step 2: Plan. 8 moved, `destContexts` `["C5"]`, `destUsesSource` `sessionKeyOf` and `DelegationEvidenceCounts`,
+    `sourceUsesDest` `[]`, `problems` `[]`.
+  - [x] Step 3: Move, then the L3 header above the marker.
+  - [x] Step 4: Gates. All 38 `delegation-*` suites and the ten named ones, the rings, `census-w7` and
+    `single-definition` suites, both typechecks, and the tests-project typecheck printing nothing.
+  - [x] Step 5: Commit, by the 11 files `move` wrote.
+  - [x] Step 6: Verdict on the commit. `pure: true`, 8 moved, `differing: []`, `newlyExported` empty;
+    `delegation-durability.ts` (+1) and the 8 tests change on import lines alone. The source measures 1,260 code lines
+    (delta -149 against the merge-base).
 
 ### Task 5: Slice 3, recovery → `server/src/coord/delegation-recovery.ts`
 
