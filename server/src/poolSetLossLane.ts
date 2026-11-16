@@ -21,13 +21,14 @@
 import type { SessionRecord } from './registry.js';
 import type { FleetState } from './fleetstate.js';
 import type { WatcherCoordPort } from './coord/ports.js';
-import { POOL_SET_CAP } from './ccdargv.js';
+import { LAUNCH_SURFACE_CAP, POOL_SET_CAP } from './ccdargv.js';
 import { notify, type NoticeDeps } from './notice.js';
 import { LOSS_EPISODE_PROBE_MAX, poolSetClearKey, poolSetLoss, poolSetLossKey, type CapFloorLoss, type CapFloorRow, type CapFloorSession } from './poolrule.js';
 
 /** The capability floor's rows the server reads, the twin of `ccd/ccrc#CAP_FLOOR_ROWS` (fact and word only). */
 export const CAP_FLOOR_FACTS: readonly CapFloorRow[] = [
   { fact: 'poolset', word: POOL_SET_CAP },
+  { fact: 'profiledigest', word: LAUNCH_SURFACE_CAP },
 ];
 
 /** At most this many session ids are named per lost word in the push body; the rest are counted. */
