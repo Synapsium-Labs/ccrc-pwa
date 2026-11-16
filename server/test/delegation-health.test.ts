@@ -36,7 +36,7 @@ import {
   type DelegationCheckpointV1,
   type DelegationObservationInterval,
 } from '../src/coord/delegation-model.js';
-import { type DelegationProjectionPort } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
 import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import { delegationCarrierHealthOf, delegationUncensusedLeasesOf, type DelegationHealthInput, type DelegationObservationHealth } from '../../shared/api.js';

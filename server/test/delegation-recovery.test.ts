@@ -64,7 +64,6 @@ import {
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
-  DELEGATION_REPAIR_FULL_MS,
   DELEGATION_RESTORE_IN_PROGRESS,
   DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
@@ -72,10 +71,8 @@ import {
   encodeDelegationCheckpoint,
   recoverDelegation,
   recoverDelegationState,
-  repairDelegationProjection,
-  type DelegationProjectionPort,
-  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
 import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';
 import type { DelegationApplyOutcome } from '../src/coord/delegation-durability.js';
