@@ -250,7 +250,7 @@ describe('the account arm denies on every session (D-6202)', () => {
     ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a copy or recursive read of ~\/\.ccrc/);
     for (const command of [
       'ls ~/.ccrc', 'ls ~/.ccrc/*.db', 'cat ~/.ccrc/*.json', 'sqlite3 ~/.ccrc/coord.db', 'cp ~/.ccrc/coord.db /tmp/x', 'cat ~/.ccrc/coord.db*',
-      'grep -r token server/src', 'cp -r ~/.ccrc-old /tmp/x', 'ls ~/.ccrc/update-*.json',
+      'grep -r token server/src', 'cp -r ~/.ccrc-old /tmp/x', 'ls ~/.ccrc/update-*.json', 'cp /tmp/notes ~/.ccrc/', 'rsync -a /tmp/x/ ~/.ccrc/',
     ]) expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
   });
 

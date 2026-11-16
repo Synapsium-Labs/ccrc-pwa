@@ -68,8 +68,10 @@ and the store's snapshot, restore set and deny path. Each departure from the pla
 - **`store-deny-has-cd-and-glob-arms`** (F4, ruled: more than parity with the account guard). The session hook's account
   arm (`apmatch`) refuses three further shapes:
   - a `cd` into `~/.ccrc` followed by the store's or the journal's name;
-  - a glob under `~/.ccrc/` that can match the store, its sidecars or the journal (a bare `ls` excepted);
-  - a copier, archiver or recursive reader (`cp`, `rsync`, `tar`, `zip`, `scp`, `grep`, `rg`) given `~/.ccrc` itself.
+  - a named reader or copier (`cat`, `sqlite3`, `cp`, `grep` and their kin, `PMRD`) given a glob under `~/.ccrc/` that
+    can match the store, its sidecars or the journal;
+  - an archiver or recursive reader (`tar`, `zip`, `grep`, `rg`) given `~/.ccrc` itself, or `cp`, `rsync` or `scp` with
+    `~/.ccrc` as their source (a copy into it stays open).
 
   The account prefilter now admits any Bash payload naming `.ccrc`. `must-allow.json` is unchanged, and none of its
   entries matches. These are accident guards, like the rest of the arm: `bash -c` with an assembled string, a script file,
