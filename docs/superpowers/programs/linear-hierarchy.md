@@ -86,6 +86,15 @@ They decide every question the plan leaves open.
   existing link (D-8681 leaves the link in place); `creator { id }` on `issueOwned` at the next capture; a project's
   extra `teamIds` passed to the write policy.
 
+- **2026-11-16 — an epic may list no waves (the operator's answer to desktop-polish item 359, relayed by its
+  coordinator).** A run into a waveless epic names one of its tickets, and its wave is not checked against that epic.
+  A run that names no ticket, into a plan where any epic lists no waves, is refused `ticket-required`. Epics that list
+  waves keep `waves-not-contiguous`, `wave-overlap` and `wave-epic-mismatch`. The work-map plan's Task WM6 builds it
+  (`shared/plan.ts`, `planPolicy.ts`, `openRun.ts`), after its WM0 and WM1. The design's §4.1 "Wave" call and §16
+  call 2, and the plan's clause 21 (Task 6.1), are amended to match. Wave 4's Task 4.3 also changes `planPolicy.ts`,
+  and its Upkeep epic is a natural waveless epic: whichever of WM6 and wave 4 lands second builds on the other by
+  merge. The two coordinators agree the order at wave 4's dispatch.
+
 ## Carried constraints
 
 Reviewers of every wave get these.

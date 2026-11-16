@@ -1652,10 +1652,12 @@ executable block runs).
 
 **Interfaces:**
 - Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
-  plan-sized with their waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
+  plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
   is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
   team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
-  by the clause line alone.
+  by the clause line alone. (Clause 21's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
+  an epic may list no waves, built by the work-map plan's Task WM6. Wave 6 writes the clause as amended here, and
+  `references/plan.md` names `ticket-required` once WM6 has landed.)
 - `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
   `plan triage` (never another programme's plan). It names only verbs whose client row and route exist by wave 6:
   `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus
