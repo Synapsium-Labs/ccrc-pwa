@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseFile, ts } from '../scan/parse.js';
+import { sqlWrites } from './sqlStatements.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -315,23 +316,10 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots'] as const;
 
-/** Each table's writers, `file#Class.method`, sorted and unique. */
+/** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
   const out: Record<string, Set<string>> = Object.fromEntries(TABLES.map((t) => [t, new Set<string>()]));
-  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${TABLES.join('|')})\\b`, 'g');
-  for (const f of files) {
-    // Comment lines blanked to spaces, so prose naming a statement is not a writer and offsets still hold.
-    const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-    if (!TABLES.some((t) => text.includes(t))) continue;
-    const hits = [...text.matchAll(verb)];
-    if (hits.length === 0) continue;
-    const syms = parseFile(f).symbols;
-    for (const m of hits) {
-      const at = m.index!;
-      const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-      out[m[1]!]!.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
-    }
-  }
+  for (const w of sqlWrites(files, TABLES)) out[w.table]!.add(w.writer);
   return Object.fromEntries(Object.entries(out).map(([t, s]) => [t, [...s].sort()]));
 };
 
