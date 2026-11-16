@@ -54,7 +54,9 @@ export interface MockupSize {
 }
 
 /** One row per reference. `size` is the admission reservation basis: non-null exactly when the row's pin was
- *  admitted (its verdict `inline`, or `failed` after an admitted read failed); null for every row never admitted. */
+ *  admitted: its verdict is `inline`, or `failed` after an admitted read failed, or `skipped:'over-budget'` where the
+ *  build's output cap kept an admitted, loaded use out (D-8662), or `unsupported:'css-depth'` where the build reached the
+ *  row at no use within the depth limit; null for every row never admitted. */
 export interface MockupAssetRow {
   readonly ref: MockupRef;
   readonly verdict: MockupRefVerdict;

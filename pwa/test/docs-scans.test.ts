@@ -174,8 +174,9 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   In `pwa/src/docs`: no `postMessage` call, no `MessageChannel` identifier, no `onmessage` member, no JSX `iframe`
 //   element or string holding `<iframe`, no `srcdoc` (any case) identifier, property name, JSX attribute or string, no
 //   `default-src 'none'` string (any case); except Export's two allowances, by exact path (A2b, M8.10): the `iframe`
-//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`. The
-//   allowance holds whether or not those files exist yet.
+//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, and the
+//   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
+//   path, never the directory. The allowance holds whether or not those files exist yet.
 //   Across `pwa/src`: `addEventListener('message', …)` as a member call or a bare call, and an assignment to
 //   `window.onmessage`, `self.onmessage`, `globalThis.onmessage` or a bare `onmessage`, outside the parse workers'
 //   own entries.
@@ -321,7 +322,7 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
       if (text !== undefined) {
         if (/<iframe/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:iframe');
         if (/srcdoc/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
-        if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file)) hit(n, 'docs:default-src-none');
+        if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file) && file !== 'src/docs/mockup/policy.ts') hit(n, 'docs:default-src-none');
       }
     }
     if (inMessageScope(file)) {
@@ -451,6 +452,14 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     const { files, hits } = readerScan(dir);
     expect(files).toEqual(expect.arrayContaining(['src/docs/export/buildExport.tsx', 'src/docs/export/policy.ts']));
     expect(hits).toEqual([]);
+  });
+
+  it("M5.16: the mockup viewer's default-src none is allowed at src/docs/mockup/policy.ts only, and the same string in src/docs/mockup/origins.ts is red", () => {
+    const dir = treeCopy();
+    plant(dir, 'src/docs/mockup/policy.ts', "export const PLANTED_MOCKUP_POLICY = \"default-src 'none'\";\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    plant(dir, 'src/docs/mockup/origins.ts', "export const PLANTED_ORIGIN_POLICY = \"default-src 'none'\";\n");
+    expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/mockup/origins.ts docs:default-src-none']);
   });
 
   it('M8.21: a value import of readerRenderJob sits only in the worker entry', () => {

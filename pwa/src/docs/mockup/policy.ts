@@ -2,7 +2,8 @@
 // pre-scan, 5.6.3's Budgets and asset MIME). Ring L1: constants and one pure lookup, no I/O, no DOM, no timer; it imports
 // only L0 tables from `shared/docs.ts`, so the pre-scan, the planner and the loader all read the same values and nothing
 // restates them.
-import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
+import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
+import type { HttpsOrigin } from './ports';
 
 /** The deepest stack of open elements the pre-scan admits (base 5.6.2). Fixed; the measurement never raises it. */
 export const MOCKUP_MAX_DEPTH = 256;
@@ -15,7 +16,9 @@ export const MOCKUP_MAX_DEPTH = 256;
 export const MOCKUP_MAX_TAGS = 15_000;
 
 /** The most formatting elements the pre-scan admits open at once (base 5.6.2, amended 2026-10-13: a multiset that only
- *  each element's own end tag decrements). Fixed by measurement (completion plan Task 5). */
+ *  each element's own end tag decrements). Fixed by measurement (completion plan Task 5, C1): the reconstruction shape
+ *  at 32 open elements and 20 000 tags parsed in a median 119 to 234 ms in Chromium 156 (the box's load varied), 16 in
+ *  37 to 78 ms. */
 export const MOCKUP_MAX_OPEN_FORMATTING = 32;
 
 /** The most attributes any one start tag may carry, inclusive (D-8671; the exact attribute tokenizer counts every attribute
@@ -90,3 +93,80 @@ export function mockupMimeRow(path: string): MockupMimeRow | null {
   }
   return Object.prototype.hasOwnProperty.call(MOCKUP_ASSET_MIME, ext) ? MOCKUP_ASSET_MIME[ext]! : null;
 }
+
+/** The frame's `sandbox` attribute in the static mode: present and empty (base 5.6.5). */
+export const MOCKUP_SANDBOX_STATIC = '';
+
+/** The frame's `sandbox` attribute with scripts run: exactly this one token and no other (base 5.6.5). The build's bytes
+ *  do not depend on the mode; the sandbox carries it. */
+export const MOCKUP_SANDBOX_SCRIPTED = 'allow-scripts';
+
+/** The base policy a mockup's frame is held to (base 5.6.4), verbatim. `connect-src`, `frame-src`, `worker-src`,
+ *  `object-src` and `manifest-src` fall back to `default-src 'none'`; `'self'` never appears, because from a srcdoc it
+ *  would mean the console's own origin. */
+export const MOCKUP_CSP = "default-src 'none'; script-src 'unsafe-inline' data:; style-src 'unsafe-inline' data:; img-src data: blob:; font-src data:; media-src data: blob:; base-uri 'none'; form-action 'none'";
+
+/** The four directives a confirmed origin is appended to, and no other (base 5.6.4; ruling U2). */
+const MOCKUP_ORIGIN_DIRECTIVES: ReadonlySet<string> = new Set(['script-src', 'style-src', 'img-src', 'font-src']);
+
+/** The one host grammar (base 5.6.4, hardened in review): lower-case LDH labels, each 1 to 63 characters and neither
+ *  starting nor ending with `-`, at least two labels, at most 253 characters in all. A trailing dot is refused: `new URL`
+ *  keeps it (`https://a.example.` is its own origin), but a CSP host-source has no such form, so it would break the
+ *  directive. `parseMockupOrigin` (the validator) and `mockupCsp` (the policy builder) both ask this ONE function, so an
+ *  origin the first accepts can never make the second throw. */
+export function isMockupHost(host: string): boolean {
+  if (host.length > 253) return false;
+  const labels = host.split('.');
+  if (labels.length < 2) return false;
+  return labels.every((l) => l.length >= 1 && l.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(l));
+}
+
+/** Whether `raw` is exactly `https://<host>` or `https://<host>:<port>` with a host `isMockupHost` accepts and a port of
+ *  1 to 5 digits. The shape of an origin as a CSP source: nothing here can end or widen a directive. */
+export function isMockupOrigin(raw: string): boolean {
+  if (!raw.startsWith('https://')) return false;
+  const rest = raw.slice('https://'.length);
+  const colon = rest.indexOf(':');
+  if (colon < 0) return isMockupHost(rest);
+  const port = rest.slice(colon + 1);
+  return /^\d{1,5}$/.test(port) && Number(port) <= 65535 && isMockupHost(rest.slice(0, colon));
+}
+
+/** The policy with each confirmed origin appended to `script-src`, `style-src`, `img-src` and `font-src` only, never to
+ *  `connect-src`, `default-src`, `worker-src` or `frame-src`, an origin given twice once. With none it is `MOCKUP_CSP`.
+ *  It does not depend on the sandbox mode (base 5.6.4). THROWS on a value `isMockupOrigin` refuses. */
+export function mockupCsp(extra: readonly HttpsOrigin[]): string {
+  const origins: string[] = [];
+  for (const o of extra) {
+    if (!isMockupOrigin(o)) throw new RangeError(`mockupCsp: '${o}' is not an exact https origin`);
+    if (!origins.includes(o)) origins.push(o);
+  }
+  if (origins.length === 0) return MOCKUP_CSP;
+  return MOCKUP_CSP.split('; ').map((directive) => {
+    const name = directive.slice(0, directive.indexOf(' '));
+    return MOCKUP_ORIGIN_DIRECTIVES.has(name) ? `${directive} ${origins.join(' ')}` : directive;
+  }).join('; ');
+}
+
+/** The click guard injected right after the CSP meta (base 5.6.6, E5), verbatim. In scripted mode it keeps the frame
+ *  alive and makes fragment links scroll; it is UX, never the wall (the parent's `frame-src 'none'` is). */
+export const MOCKUP_CLICK_GUARD = "<script>document.addEventListener('click',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href],area[href]');if(!a)return;e.preventDefault();var h=a.getAttribute('href')||'';if(h.charAt(0)==='#'&&h.length>1){var id=decodeURIComponent(h.slice(1));var t=document.getElementById(id)||document.getElementsByName(id)[0];if(t)t.scrollIntoView();}},true);</script>";
+
+/** The meta tag that carries `csp`, its content attribute escaped (`&`, `"`, `<`, `>`). The build puts it first in the
+ *  byte stream, before the author's doctype, so the policy applies before any author byte (base 5.6.2 step 6). */
+export function metaFor(csp: string): string {
+  const content = csp.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return `<meta http-equiv="Content-Security-Policy" content="${content}">`;
+}
+
+/** The most characters a built mockup page may have (D-8662): the spec's worst case (base 5.6.3's Budgets), which E4 measured
+ *  to render at 11.2 M characters and above: a page at its 2 MiB source limit, the 5 MiB asset budget base64-encoded, one
+ *  `data:<mime>;base64,` prefix per admitted asset at the longest the MIME table has, the CSP meta, the click guard and the
+ *  doctype. Derived from those constants, never a second literal. `buildMockupSrcdoc` never returns more. */
+export const MOCKUP_MAX_SRCDOC_CHARS =
+  DOCS_MAX_DOC_BYTES
+  + 4 * Math.ceil(MOCKUP_MAX_ASSET_BYTES / 3)
+  + MOCKUP_MAX_ASSETS * Math.max(...Object.values(MOCKUP_ASSET_MIME).map((r) => `data:${r.mime};base64,`.length))
+  + metaFor(MOCKUP_CSP).length
+  + MOCKUP_CLICK_GUARD.length
+  + '<!doctype html>'.length;
