@@ -461,6 +461,7 @@ _spawn_settings_last	C2
 _fleet_spawn_compose	C2
 _profile_digest_ok	C2
 _profile_workspace	C2
+_profile_launch_ok	C2
 _profile_refused	C2
 _profile_spawn_compose	C2
 _compact_text_to	C3

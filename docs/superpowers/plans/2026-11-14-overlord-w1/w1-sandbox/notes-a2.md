@@ -24,26 +24,29 @@ ledger. PR A's notes are in `notes.md` beside this file.
   outlasts.
 - **`swap-refuse-restart-skipped-on-a-mismatch`**: `_swap_refuse`'s probe runs only on its restart arm (the pane is
   already gone there). On a mismatch it journals and skips the restart, so the unit stays stopped and the session down,
-  as a refused supervised respawn ends; it never starts a unit whose every spawn would be refused.
+  as a refused supervised respawn ends; it never starts a unit whose every spawn would be refused. Since fix round 1 it
+  runs before the row, the journal and the banner are written, so they say the session is down and not restarted (F2).
 - **`start-probe-before-any-write`**: `cmd_start`'s probe sits right after its "already running" return, so a refused
   start writes nothing (the stop marker, a hibernation's wake, the lifecycle line all stay as they were).
 - **`workspace-refusal-checks-before-it-writes`**: `_profile_workspace` checks every entry's shape and ownership, the
   bounded `find` (10 s, `_plat_timeout`; one that cannot finish refuses) and the directories above before it makes a
   link or writes `info/exclude`, so a refused spawn leaves the workspace as it found it. A workspace that is not a git
-  repository has no exclude file and is refused. The journal line names the source it found (`a project source stands:
+  repository is refused. The journal line names the source it found (`a project source stands:
   <path>`) or the directory above.
 - **`workspace-scan-refuses-links`** (from a security review of the build): the scan's `find` does not follow links, so a
   `.claude` that is a link, a linked `.claude/skills` or a linked subdirectory would have hidden what it points at. Any
   link in the workspace but ccd's own entries refuses the spawn (`find -H`, `-type l`), and the two directories ccd allows
   (`.claude`, `.claude/skills`) must not be links. Three cases pin it, red without the change.
 - **`workspace-edges-recorded`**: five new cross-context lines in `ccd/contexts-edges.tsv`: `cmd_swap` and
-  `_swap_refuse` (C1) call `_profile_digest_ok` and `_profile_refused` (C2), because the swap must ask the spawn's own
-  digest test rather than keep a second one; and `_profile_workspace -> _reg_get` reads the row's workdir.
-- **`doctor-reads-a-standing-pool-set-as-every-account`**: the designated set is the `wrapper` of each registry row with a
-  `profiledigest`; while such a row carries a `poolset`, or its `wrapper` or the registry cannot be read, the check reads
-  every rostered account as able to serve the Overlord (FAIL scope), because doctor does not resolve pools (the central
-  edges are the server's and ccd's). Wider than the ruled set, in the fail-closed direction, and only while an Overlord
-  stands; an ordinary box with no `profiledigest` is a WARN at most, as ruled.
+  `_swap_refuse` (C1) call `_profile_launch_ok` (since fix round 1; `_profile_digest_ok` before it) and `_profile_refused`
+  (C2), because the swap must ask the spawn's own test rather than keep a second one; and `_profile_workspace -> _reg_get`
+  reads the row's workdir.
+- **`doctor-reads-a-standing-pool-set-as-every-account`**, narrowed by fix round 1 (F6, see
+  `doctor-asks-pool-answer-per-account` below): the designated set is the `wrapper` of each registry row with a
+  `profiledigest`, and for a row with a `poolset`, the accounts ccd says serve it. Every rostered account is in the FAIL
+  scope only while that cannot be decided: an answer that is not `serve` or `mismatch` (an unreadable or stale
+  projection, an older ccd without `--account`), or a `wrapper` or the registry that cannot be read. Fail-closed, and only
+  while an Overlord stands; an ordinary box with no `profiledigest` is a WARN at most, as ruled.
 - **`doctor-mods-are-plugins-and-foreign-hooks`**: a mod is an `enabledPlugins` entry that is `true`, a plugin listed in
   `plugins/installed_plugins.json` (where a plugin's commands, skills and hooks come from), or a hook on any event that is
   not ccrc's, in `settings.json` or `settings.local.json`. The plan's "a plugin command or skill directory" is read as a
@@ -60,8 +63,42 @@ ledger. PR A's notes are in `notes.md` beside this file.
   suites; this build waited out their lease. B2 then held `ccd/ccrc` and `ccrc-update-cap-floor.test.ts` and granted the
   one data row, the table describe's switch to a fictional `tablefact` row, and a new describe at the end of that suite.
 
+## Fix round 1 (review 2215, rulings in the coordinator's mail)
+
+- **`probes-ask-the-workspace-check`** (F1, ruled): `_profile_workspace` is split by an argument into its read-only check
+  and its writes (`make`: the links and the exclude lines). `_profile_launch_ok` asks the digest and, under a standing
+  one, the read-only workspace check; the three probes (`cmd_swap`, `_swap_refuse`'s restart arm, `cmd_start`) ask it
+  before any teardown, write or journal line, and the spawn asks it with `make`. A row without `profiledigest` returns at
+  `_profile_digest_ok`'s first test, as before, with no fork. Pinned by a digest-equal `.mcp.json` case for each of the
+  three moves, and a no-digest case that swaps as today with the same source planted. The swap's `--force` hint now names
+  the digest or the workspace rather than the two builds.
+- **`swap-refuse-says-down-not-restarted`** (F2): see `swap-refuse-restart-skipped-on-a-mismatch` above. The banner reads
+  `cc swap BLOCKED: <id> is down, not restarted — …` and `swapblocked`'s reason ends `the session is down, not restarted:
+  launch profile: <why>`; the restart case pins both.
+- **`workspace-walk-through-a-linked-workdir`** (F3): a case whose `workdir` is a link to a workspace holding `.mcp.json`
+  kills the `find -H` survivor (red with `find` in its place).
+- **`workdir-absolute-and-slash-clean`** (F4): the check refuses a `workdir` that is not `/*` or ends in `/` before the walk
+  above it; a relative and a trailing-slash case pin it.
+- **`overlord-workdir-is-its-own-repository`** (F5, ruled): the workspace's `.git` must be a directory, not a link and not
+  a linked worktree's `.git` file, whose `info/exclude` is the parent repository's, shared by every sibling worktree. The
+  exclude written is `<workdir>/.git/info/exclude`, so `git rev-parse` is no longer asked. A linked-worktree case pins the
+  refusal and that the parent's exclude file stays clean; a non-git workspace now reads `the workspace is not its own
+  repository`.
+- **`doctor-asks-pool-answer-per-account`** (F6, ruled): for a designated row with a `poolset`, doctor asks
+  `ccd pool-answer --session <id> --account <a>` of each rostered account (bounded by `CCRC_DOCTOR_DOCS_TIMEOUT`) and
+  FAILs only those that answer `serve`, so `_acct_pool_state` stays the projection's one reader. `pool-answer` gains the
+  optional `--account <a>` (the account-id shape, else usage rc 2), which asks `_pool_ok` and `_crosspool_valid` of `a` in
+  place of the session's `wrapper`. The exec whitelist is unchanged: it grants `pool-answer --session` as a prefix, so the
+  agent would pass the new form too, which is read-only and writes nothing, like the form it extends; the server composes
+  only `--session <id>` (`CCD_ARGV.poolAnswer`). Also from F6: an empty `settings.json` or `settings.local.json` reads "could not be read",
+  and a flat hook entry with no `hooks` array is seen. Each has a case.
+- **F7** accepted as ruled (the probe sits after the detach arm, as every pre-flight above it does).
+- **`start-refusal-names-its-remedy`** (F8): `cmd_start`'s refusal ends `(the operator clears a stale digest: ccd route
+  --session <id> --set profiledigest=)`.
+
 ## Measured growth (against the merge base `43e5d366e`)
 
+After fix round 1: `ccd/ccd` +29, `ccd/ccrc` +1, `ccd/ccrc-doctor-checks` +37, `ccd/lib/pool-set.sh` +2. Before it:
 `ccd/ccd` +24 net code lines (the workspace step +20, the three probes +3, the word +1; the `ccd (program)` sum the same),
 `ccd/ccrc` +1 (the row), `ccd/ccrc-doctor-checks` +32 (the check, the shared hook definition +1, the delegation-hooks edit
 net 0). Every file is within 40, so the doctor check ships with its ruled FAIL scope here and no A3 is needed.

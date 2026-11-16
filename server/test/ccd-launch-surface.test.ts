@@ -211,6 +211,16 @@ describe('the workspace entries and the workspace refusal (PR A2, Task 6; questi
     expect(fs.lstatSync(path.join(wsDir(), 'CLAUDE.md')).ino).toBe(before);
     expect(exclude().sort()).toStrictEqual([`/${SKILL}`, '/CLAUDE.md']);
   });
+  it('the check every move asks writes nothing; only the spawn (make) links and excludes (fix round 1 F1)', () => {
+    seed(OVERLORD);
+    h.sh(`_profile_launch_ok ${ID}`);
+    expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+    expect(fs.existsSync(path.join(wsDir(), '.claude'))).toBe(false);
+    expect(fs.existsSync(path.join(wsDir(), '.git', 'info', 'exclude')) ? exclude() : []).toStrictEqual([]);
+    h.sh(`_profile_launch_ok ${ID} make`);
+    expect(linkOf('CLAUDE.md')).toBe(path.join(h.home, '.cc-sessions', 'lib', 'overlord-constitution.md'));
+    expect(exclude().sort()).toStrictEqual([`/${SKILL}`, '/CLAUDE.md']);
+  });
   it('a route without profiledigest makes no entry (Review Focus 1)', () => {
     seed([['profile', 'overlord']]);
     expect(spawn('new').status).toBe(0);
@@ -249,8 +259,38 @@ describe('the workspace entries and the workspace refusal (PR A2, Task 6; questi
   it('refuses a workspace that is not a git repository (no exclude file to write)', () => {
     seed(OVERLORD);
     fs.rmSync(path.join(wsDir(), '.git'), { recursive: true });
-    refused(spawn('new'), 'workspace entries could not be made');
+    refused(spawn('new'), 'the workspace is not its own repository');
   });
+  it('refuses a linked worktree, whose exclude file is the parent repository\'s, and writes nothing there (fix round 1 F5)', () => {
+    seed(OVERLORD);
+    const parent = path.join(h.home, 'projects', 'parent');
+    const wt = path.join(h.home, 'projects', 'overlord-wt');
+    fs.mkdirSync(parent, { recursive: true });
+    execFileSync('git', ['-C', parent, 'init', '-q']);
+    execFileSync('git', ['-C', parent, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'x']);
+    execFileSync('git', ['-C', parent, 'worktree', 'add', '-q', wt]);
+    h.sh(`_reg_set ${ID} workdir '${wt}'`);
+    refused(spawn('new'), 'the workspace is not its own repository: .git is not a directory');
+    const ex = path.join(parent, '.git', 'info', 'exclude');
+    expect(fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8').split('\n').filter((l) => l.startsWith('/')) : []).toStrictEqual([]);
+    expect(fs.existsSync(path.join(wt, 'CLAUDE.md'))).toBe(false);
+  });
+  it('a workspace reached through a link is walked through it: a source behind the link refuses (fix round 1 F3)', () => {
+    seed(OVERLORD);
+    const via = path.join(h.home, 'projects', 'overlord-via');
+    fs.symlinkSync(wsDir(), via);
+    fs.writeFileSync(path.join(wsDir(), '.mcp.json'), '{}\n');
+    h.sh(`_reg_set ${ID} workdir '${via}'`);
+    refused(spawn('new'), 'a project source stands: .mcp.json');
+  });
+  for (const [name, wd] of [['a relative workdir', 'projects/overlord'], ['a workdir with a trailing slash', 'TRAILING']] as const) {
+    it(`refuses ${name} before the walk above it (fix round 1 F4)`, () => {
+      seed(OVERLORD);
+      h.sh(`_reg_set ${ID} workdir '${wd === 'TRAILING' ? `${wsDir()}/` : wd}'`);
+      refused(spawn('new'), 'workspace entries could not be made');
+      expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+    });
+  }
   const shapes: [string, (rows: Record<string, any>) => unknown][] = [
     ['a skill name of a bad shape', (rows) => { rows.overlord.stagedSkills = { 'Bad Name': 'overlord-skill' }; return rows; }],
     ['a skill target with a .. segment', (rows) => { rows.overlord.stagedSkills = { 'ccrc-overlord': '../overlord-skill' }; return rows; }],

@@ -12229,14 +12229,16 @@ _check_cap-floor() {
 # An installed mod can approve a call the Overlord's launch profile denies (spec §3.6's deny-set note): a hook on a
 # permission or tool event, or a plugin's. So every rostered home (`_skills_roster_rows`, as `skills` walks them; a
 # `server` box SKIPs) is read for mods: in `settings.json` and `settings.local.json`, an `enabledPlugins` entry that is
-# `true` and a hook on any event that is not ccrc's (`DR_OWN_HOOK_JQ`); and every plugin `plugins/installed_plugins.json`
-# lists, which is where a plugin's commands, skills and hooks come from. Only names and event names are printed, never a
-# command. A file that cannot be read is its own finding, never a pass. Task 1's M8 measured that a pinned launch on
+# `true` and a hook on any event that is not ccrc's (`DR_OWN_HOOK_JQ`; a matcher group's `hooks` or a flat entry); and every
+# plugin `plugins/installed_plugins.json` lists, which is where a plugin's commands, skills and hooks come from. Only
+# names and event names are printed, never a command. A file that cannot be read, or an empty one, is its own finding,
+# never a pass. Task 1's M8 measured that a pinned launch on
 # 2.1.323 and 2.1.325 does not load an account's enabled plugin: that sets how urgent a line is, not whether it prints.
 # THE LEVEL (ruled, fix round 2): a FAIL only for an account that can serve the Overlord while a `profiledigest` stands
-# (the registry row's `wrapper`; while that row carries a `poolset`, or its wrapper or the registry cannot be read, every
-# account, since doctor does not resolve pools: slug doctor-reads-a-standing-pool-set-as-every-account); a WARN on every
-# other account and while none stands. Doctor never writes an account's settings.
+# (the registry row's `wrapper`; while that row carries a `poolset`, each rostered account `ccd pool-answer --session <id>
+# --account <a>` answers `serve`, so the projection keeps ccd as its one reader (fix round 1 F6); every account while an
+# answer is anything else (an unreadable or stale projection, an older ccd), or a wrapper or the registry cannot be read);
+# a WARN on every other account and while none stands. Doctor never writes an account's settings.
 _check_overlord-mods() {
   local role="" reg="$HOME/.cc-sessions" rows id suffix dir f e n w des=" " all="" out fix
   local -a fail=() warn=(); local homes=0
@@ -12247,14 +12249,19 @@ _check_overlord-mods() {
   [[ ! -e "$reg" || ( -r "$reg" && -x "$reg" ) ]] || all=1
   for e in "$reg"/*.profiledigest "$reg"/.*.profiledigest; do
     [[ -e "$e" || -L "$e" ]] || continue; n="${e##*/}"; n="${n%.profiledigest}"; w=""
-    [[ ! -e "$reg/$n.poolset" && ! -L "$reg/$n.poolset" ]] && IFS= read -r w < "$reg/$n.wrapper" 2>/dev/null && [[ -n "$w" ]] && des+="$w " || all=1
+    if [[ -e "$reg/$n.poolset" || -L "$reg/$n.poolset" ]]; then
+      while IFS=$'\t' read -r id suffix; do
+        out="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" pool-answer --session "$n" --account "$id" </dev/null 2>/dev/null 3>&-)" || out=""
+        case "$out " in *" verdict=serve "*) des+="$id " ;; *" verdict=mismatch "*) ;; *) all=1 ;; esac
+      done <<< "$rows"
+    else IFS= read -r w < "$reg/$n.wrapper" 2>/dev/null && [[ -n "$w" ]] && des+="$w " || all=1; fi
   done
   while IFS=$'\t' read -r id suffix; do
     dir="$HOME/$suffix"; [ -n "$id" ] && [ -d "$dir" ] || continue; homes=$((homes + 1)); out=""
     for f in settings.json settings.local.json; do
       [[ -e "$dir/$f" || -L "$dir/$f" ]] || continue
-      n="$(jq -rs "$DR_OWN_HOOK_JQ"' [.[] | ((.enabledPlugins // {}) | to_entries[] | select(.value == true) | "plugin " + .key),
-        ((.hooks // {}) | to_entries[] | select([.value[]?.hooks[]?] | any(ownhook | not)) | "hook on " + .key)] | join(", ")' "$dir/$f" 2>/dev/null)" || n="$f could not be read"
+      n="$([[ -s "$dir/$f" ]] && jq -rs "$DR_OWN_HOOK_JQ"' [.[] | ((.enabledPlugins // {}) | to_entries[] | select(.value == true) | "plugin " + .key),
+        ((.hooks // {}) | to_entries[] | select([.value[]? | if type == "object" and has("hooks") then .hooks[]? else . end] | any(ownhook | not)) | "hook on " + .key)] | join(", ")' "$dir/$f" 2>/dev/null)" || n="$f could not be read"
       out+="${n:+$n, }"
     done
     f="$dir/plugins/installed_plugins.json"

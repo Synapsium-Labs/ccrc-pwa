@@ -78,6 +78,21 @@ describe('overlord-mods: what a mod is', () => {
     const r = check(box('ccrc-doctor-om-own-'));
     expect(verdicts(r)[0]).toMatch(/^PASS /);
   });
+  it('a flat hook entry with no hooks array is seen (fix round 1 F6)', () => {
+    const home = box('ccrc-doctor-om-flat-');
+    edit(home, '.lane-a', (s) => { s.hooks.Notification = [{ type: 'command', command: 'bash "$HOME/bin/approve.sh"' }]; });
+    const r = check(home);
+    expect(verdicts(r)[0]).toMatch(/^WARN /);
+    expect(verdicts(r)[0]).toContain('lane-a: hook on Notification');
+    expect(r.lines.join('\n')).not.toContain('approve.sh');
+  });
+  it('an empty settings file reads could not be read, never a pass (fix round 1 F6)', () => {
+    const home = box('ccrc-doctor-om-empty-');
+    writeFileSync(join(home, '.lane-a', 'settings.local.json'), '');
+    const r = check(home);
+    expect(verdicts(r)[0]).toMatch(/^WARN /);
+    expect(verdicts(r)[0]).toContain('lane-a: settings.local.json could not be read');
+  });
   it('an unreadable settings file is its own line, never a pass', () => {
     const home = box('ccrc-doctor-om-unread-');
     writeFileSync(join(home, '.lane-a', 'settings.json'), '{ not json');
@@ -120,10 +135,33 @@ describe('overlord-mods: the scope (ruled, fix round 2)', () => {
     expect(verdicts(r).map((l) => l.split(':')[0])).toStrictEqual(['WARN overlord-mods']);
     expect(r.code).toBe(2);
   });
-  it('a designated row with a pool set reads every account as able to serve it (the doctor does not resolve pools)', () => {
+  /** A `ccd` whose `pool-answer --account` serves `lane-a` only, recording each ask. */
+  const poolAnswers = (home: string): string => {
+    const log = join(home, 'pool-asks');
+    writeFileSync(join(home, '.local', 'bin', 'ccd'), `#!/bin/sh\necho "$*" >> ${shq(log)}\n`
+      + 'case "$5" in lane-a) v=serve ;; *) v=mismatch ;; esac\n'
+      + 'echo "pool-answer side=set:pool-a verdict=$v pool-side=set pool-state=named:pool-a crossing=none account=$5"\n', { mode: 0o755 });
+    return log;
+  };
+  it('a designated row with a pool set FAILs only the accounts ccd pool-answer says serve it (fix round 1 F6)', () => {
     const home = box('ccrc-doctor-om-poolset-');
+    plugin(home, '.lane-a'); plugin(home, '.lane-b');
+    designate(home, 'lane-b', { poolset: true });
+    const log = poolAnswers(home);
+    const r = check(home);
+    const v = verdicts(r);
+    expect(v).toHaveLength(2);
+    expect(v[0]).toMatch(/^FAIL overlord-mods: .*lane-a: plugin p@m/);
+    expect(v[0]).not.toContain('lane-b');
+    expect(v[1]).toMatch(/^WARN overlord-mods: .*lane-b: plugin p@m/);
+    expect(readFileSync(log, 'utf8').split('\n').filter(Boolean).sort())
+      .toStrictEqual(['claude', 'lane-a', 'lane-b'].map((a) => `pool-answer --session lane-b-overlord --account ${a}`));
+  });
+  it('a pool-answer that is neither serve nor mismatch (an unreadable projection, an older ccd) reads every account', () => {
+    const home = box('ccrc-doctor-om-poolset-unmeas-');
     plugin(home, '.lane-b');
     designate(home, 'lane-a', { poolset: true });
+    writeFileSync(join(home, '.local', 'bin', 'ccd'), '#!/bin/sh\necho "usage: ccd pool-answer --session <id>" >&2; exit 2\n', { mode: 0o755 });
     const r = check(home);
     expect(verdicts(r)[0]).toMatch(/^FAIL overlord-mods: .*lane-b: plugin p@m/);
   });

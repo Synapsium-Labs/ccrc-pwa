@@ -89,6 +89,7 @@ describe('the moves, over a digest that differs', () => {
     expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stopped`))).toBe(true);
     expect(refusedLines()).toHaveLength(1);
     expect(refusedLines()[0]).toContain('start');
+    expect(r.out, 'the refusal names its remedy (fix round 1 F8)').toContain(`ccd route --session ${ID} --set profiledigest=`);
   });
   it('cmd_swap refuses before the teardown: the pane is not killed, wrapper stays, no swap line', () => {
     seed(OTHER);
@@ -130,6 +131,77 @@ describe('the moves, over a digest that differs', () => {
     expect(h.reg(ID, 'wrapper')).toBe('claude');
     expect(refusedLines()).toHaveLength(1);
     expect(refusedLines()[0]).toContain('restart');
+    expect(h.reg(ID, 'swapblocked'), 'the row says the session is down (F2)').toContain('the session is down, not restarted');
+  });
+});
+
+/** The banner hook, recording each notice. */
+const notifyHook = (): void => {
+  const f = path.join(h.home, '.cc-sessions', 'notify.sh');
+  fs.writeFileSync(f, '#!/bin/sh\nprintf \'%s\\n\' "$1" >> "$HOME/notices"\n');
+  fs.chmodSync(f, 0o755);
+};
+const notices = (): string[] => {
+  const p = path.join(h.home, 'notices');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+};
+const mcpPath = (): string => path.join(h.home, 'projects', 'overlord', '.mcp.json');
+
+describe('with the digest equal, a workspace the spawn would refuse refuses each move the same way (fix round 1 F1)', () => {
+  it('cmd_swap: no kill-session, wrapper unmoved, no swap line, launch-profile-refused naming the source', () => {
+    seed(DIGEST);
+    fs.writeFileSync(mcpPath(), '{}\n');
+    const r = run(`cmd_swap ${ID} claude-d`);
+    expect(r.code).not.toBe(0);
+    expect(kills()).toEqual([]);
+    expect(calls().filter((c) => c.startsWith('_svc_stop'))).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(swappedLines()).toEqual([]);
+    expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('swap to claude-d: a project source stands: .mcp.json');
+  });
+  it('cmd_start: refused before the stop marker or any lifecycle write, naming its remedy', () => {
+    seed(DIGEST);
+    fs.writeFileSync(mcpPath(), '{}\n');
+    h.sh(`: > "$HOME/.cc-sessions/${ID}.stopped"`);
+    const before = log();
+    const r = run(`CCD_IN_UNIT=1 cmd_start ${ID}`);
+    expect(r.code).not.toBe(0);
+    expect(panesMade()).toEqual([]);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stopped`))).toBe(true);
+    expect(log().filter((l) => !l.includes('launch-profile-refused'))).toStrictEqual(before);
+    expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('start: a project source stands: .mcp.json');
+    expect(r.out).toContain(`ccd route --session ${ID} --set profiledigest=`);
+  });
+  it("_swap_refuse's restart, when a source appears under it, starts nothing and says the session is down (F2)", () => {
+    seed(DIGEST);
+    notifyHook();
+    const r = run(`tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+        case "\${1:-}" in
+          kill-session) _reg_set ${ID} uuid ${UUID_B}; echo '{}' > '${mcpPath()}' ;;
+          has-session) echo "can't find session: x" >&2; return 1 ;;
+        esac; return 0; };
+      cmd_swap ${ID} claude-d`);
+    expect(r.code).not.toBe(0);
+    expect(kills()).toHaveLength(1);
+    expect(calls().filter((c) => c.startsWith('_svc_start'))).toEqual([]);
+    expect(panesMade()).toEqual([]);
+    expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('restart on claude after a refused swap: a project source stands: .mcp.json');
+    const banner = notices().filter((n) => n.startsWith('cc swap BLOCKED'));
+    expect(banner).toHaveLength(1);
+    expect(banner[0]).toContain(`cc swap BLOCKED: ${ID} is down, not restarted`);
+    expect(banner[0]).not.toContain('stays on');
+    expect(h.reg(ID, 'swapblocked')).toContain('the session is down, not restarted: launch profile: a project source stands: .mcp.json');
+  });
+  it('a row without profiledigest swaps as today though the workspace holds a source: the check never runs', () => {
+    seed(OTHER);
+    h.sh(`rm -f "$HOME/.cc-sessions/${ID}.profiledigest"`);
+    fs.writeFileSync(mcpPath(), '{}\n');
+    run(`cmd_swap ${ID} claude-d`);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+    expect(refusedLines()).toEqual([]);
   });
 });
 
