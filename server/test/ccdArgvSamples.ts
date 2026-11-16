@@ -160,4 +160,6 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   docsShowCommitted: ['demo', 'a'.repeat(40), 'refs/remotes/origin/main', 'specs', 'a.md', 2097152],
   docsShowDraft: ['demo', 'main', 'b'.repeat(40), 'plans', 'b.md', 'c'.repeat(64), 2097152],
   docsFetch: ['demo', null],
+  // NATIVE DOCS READER W5b-1: one doc's history, its own grant `['docs-log','--project']`.
+  docsLog: ['demo', 'a'.repeat(40), 'specs', 'a.md'],
 };

@@ -245,7 +245,8 @@ export const NOT_QUESTION_STORE_METHODS: Readonly<Record<string, string>> = {
 };
 
 /** The public `CoordStore` methods (no `private`) whose name says ask, approval, question or digest: the set
- *  `QUESTION_STORE_METHODS` and `NOT_QUESTION_STORE_METHODS` must partition. */
+ *  `QUESTION_STORE_METHODS` and `NOT_QUESTION_STORE_METHODS` must partition. An overloaded method's signatures are one
+ *  method, named once (slug overloads-count-once). */
 export function coordStoreQuestionShapedMethods(root: string = REPO): string[] {
   const abs = path.join(root, 'server/src/coord/store.ts');
   if (!existsSync(abs)) return [];
@@ -254,7 +255,7 @@ export function coordStoreQuestionShapedMethods(root: string = REPO): string[] {
     .filter((s) => s.kind === 'method' && s.name.startsWith('CoordStore.')
       && !/^\s*(?:(?:static|async|override)\s+)*private\b/.test(parsed.text.slice(s.start, s.start + 40)))
     .map((s) => s.name.slice('CoordStore.'.length))
-    .filter((n) => /ask|approv|question|digest/i.test(n))
+    .filter((n, i, all) => /ask|approv|question|digest/i.test(n) && all.indexOf(n) === i)
     .sort();
 }
 

@@ -20,7 +20,7 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'bad-project': 'That project name is not one Docs can address.',
   'bad-ref': 'That ref is not a branch name Docs can read.',
   'bad-commit': 'That commit id is not a full 40- or 64-character hex id.',
-  'bad-section': 'That section is not one of the four Docs sections.',
+  'bad-section': 'That section is not one of the Docs sections.',
   'bad-path': 'That path is not one Docs can address.',
   'bad-fingerprint': 'That draft fingerprint is not a 64-character hex hash.',
   'unknown-project': "There is no project by that name under the fleet box's projects folder ({root}).",
@@ -123,7 +123,7 @@ export const HELPER_UNAVAILABLE_DETAIL_SENTENCE: Readonly<Record<string, string>
 export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = {
   'not-docs': 'This address is not a Docs page.',
   'bad-project': 'This address names a project Docs cannot address.',
-  'bad-section': 'This address names a section that is not one of the four Docs sections.',
+  'bad-section': 'This address names a section that is not one of the Docs sections.',
   'bad-path': 'This address holds a path Docs cannot address.',
   'bad-ref': "This address's ref is not a branch name Docs can read.",
   'bad-view': "This address's view is not one Docs knows; only view=committed is.",
@@ -301,7 +301,7 @@ export const DOCS_RELIST_WORDS: ReadonlySet<DocsFailure> =
 
 /** Why a Markdown link on a Docs page is inert (spec 4.11, the `DocLink` arm "everything else"): a `resolveDocRef`
  *  refusal, a self-contained scheme (`data`, `blob`), or the reason `githubBlobUrl` gives no link for an in-repo
- *  file outside the four sections. */
+ *  file outside the Docs sections. */
 export type DocLinkInertReason =
   | Extract<DocRefResolution, { kind: 'refused' }>['why']
   | Extract<DocRefResolution, { kind: 'self-contained' }>['scheme']
@@ -331,7 +331,7 @@ export const DOC_LINK_OUTSIDE_PAGE = 'Links open only inside a Docs page';
 /** Why `DocImage` draws no image (spec 4.11: "Image not loaded: {reason}"): rendered outside a Docs page;
  *  `imagePinFor`'s three refusals; a document that is not a raster or an SVG (`not-image`); an http or https image
  *  (`external`: Docs never loads one); a listed size over its class cap (`too-large`, spec 5.5); an anchor; an
- *  in-repo file outside the four sections (`repo`); a self-contained scheme; or a `resolveDocRef` refusal. A
+ *  in-repo file outside the Docs sections (`repo`); a self-contained scheme; or a `resolveDocRef` refusal. A
  *  `mailto:` source is `scheme`. */
 export type DocImageRefusal =
   | 'outside-page'
@@ -403,6 +403,7 @@ export const DOCS_VIEW_TEXT = {
   opaque: 'Drafts inside nested repositories are not shown: {dirs}.',
   emptyListing: 'Nothing is listed here.',
   missing: 'Not in this listing at {short}.',
+  sectionUnserved: "The fleet box does not serve this section yet; it appears once that box's ccrc is updated.",
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',

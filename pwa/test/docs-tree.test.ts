@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import { DOC_SECTION_SLUGS, type DocsEntry } from '../../shared/docs';
 import {
-  SECTION_LABEL, SECTION_ORDER, docsPathKind, leafName, listDir, sectionCountsText,
+  SECTION_LABEL, SECTION_ORDER, docsPathKind, leafName, listDir, presentSectionCounts, sectionCountsText, sectionFacts,
 } from '../src/docs/docsTree';
 import { draftOf, entry, holder, treeOk } from './docsFixtures';
 
@@ -13,14 +13,15 @@ const NONE = treeOk().drafts;
 const names = (xs: readonly { entry: DocsEntry }[]): string[] => xs.map((x) => x.entry.path);
 
 describe('the section tables are derived from DOC_SECTION_SLUGS', () => {
-  it('SECTION_LABEL and SECTION_ORDER each have exactly the four slugs, in L0 order', () => {
+  it('SECTION_LABEL and SECTION_ORDER each have exactly the slugs, in L0 order', () => {
     expect(Object.keys(SECTION_LABEL)).toEqual([...DOC_SECTION_SLUGS]);
     expect(Object.keys(SECTION_ORDER)).toEqual([...DOC_SECTION_SLUGS]);
   });
 
-  it('specs and plans list newest first, product-design and conventions alphabetically', () => {
+  it('specs and plans list newest first, the other four alphabetically', () => {
     expect(SECTION_ORDER).toEqual({
       specs: 'newest-first', plans: 'newest-first', 'product-design': 'alphabetical', conventions: 'alphabetical',
+      vision: 'alphabetical', promise: 'alphabetical',
     });
   });
 
@@ -32,6 +33,18 @@ describe('the section tables are derived from DOC_SECTION_SLUGS', () => {
   it('a null count renders ?, never 0', () => {
     expect(sectionCountsText({ specs: null, plans: 1, 'product-design': null, conventions: 0 }))
       .toBe('? specs · 1 plan · ? design · 0 conventions');
+  });
+
+  it('presentSectionCounts leaves out a slug the row does not carry and keeps a null count', () => {
+    expect(presentSectionCounts({ specs: 2, plans: null })).toEqual([['specs', 2], ['plans', null]]);
+    expect(presentSectionCounts({ plans: 0, promise: 3 })).toEqual([['plans', 0], ['promise', 3]]);
+    expect(presentSectionCounts({})).toEqual([]);
+  });
+
+  it('sectionCountsText over a four-key record has four parts, and over six keys six', () => {
+    expect(sectionCountsText({ specs: 12, plans: 40, 'product-design': 3, conventions: 0 }).split(' · ')).toHaveLength(4);
+    expect(sectionCountsText({ specs: 1, plans: 1, 'product-design': 1, conventions: 1, vision: 2, promise: null }))
+      .toBe('1 spec · 1 plan · 1 design · 1 convention · 2 vision · ? promise');
   });
 
   it('a count of one takes the singular noun (D-5502)', () => {
@@ -120,5 +133,21 @@ describe('docsPathKind: the tree answer decides, never the URL (spec 3.1, 4.4)',
   it('leafName is the last segment', () => {
     expect(leafName('a/b/c.md')).toBe('c.md');
     expect(leafName('c.md')).toBe('c.md');
+  });
+});
+
+describe('sectionFacts: the one reader of the tree answer\'s sections', () => {
+  it('answers null for a slug the tree lacks (a fleet box without the sections token), the facts for one it holds', () => {
+    const t = treeOk();
+    t.sections = t.sections.filter((s) => s.slug !== 'vision' && s.slug !== 'promise');
+    expect(sectionFacts(t, 'vision')).toBeNull();
+    expect(sectionFacts(t, 'promise')).toBeNull();
+    expect(sectionFacts(t, 'specs')?.slug).toBe('specs');
+  });
+
+  it('an absent section is a fact of its own, never null', () => {
+    const t = treeOk();
+    t.sections[4] = { ...t.sections[4]!, state: 'absent', count: 0 };
+    expect(sectionFacts(t, 'vision')?.state).toBe('absent');
   });
 });

@@ -106,7 +106,7 @@ function scanRoutes(file: string): ScannedRoute[] {
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
  *  thirteen box-token routes since `link`, D-8141); SEVEN since the accounts lane routes (`server/src/accounts/routes.ts`, accounts plan Task A14:
  *  Check and the kill switch); SIX since named workspaces S4 (`server/src/linear/routes.ts`, its one preview read); FIVE files registered them since the native Docs reader's W3 (design
- *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its four on the docs
+ *  2026-10-01 §3.13): `server/src/docs/routes.ts` registers its five on the docs
  *  plugin's own instance, whose parameter is named `app` so this literal scan
  *  reads them like any other. FOUR since the box-token lifecycle (spec 4.6):
  *  `server/src/token/routes.ts` joined the three, after update-management W2
@@ -372,7 +372,8 @@ describe('the scanner is looking at something', () => {
     // armed-with-a-session alike, so the property loop below compares them as it
     // compares every other route, and the armed no-cookie sweep sees the gate's 401
     // first.
-    expect(scanRoutes('docs/routes.ts').length).toBe(4);
+    // 5 since the history route (docs W5b-1, rich-docs spec G4): `GET /api/docs/:project/history`, the same class.
+    expect(scanRoutes('docs/routes.ts').length).toBe(5);
     // 1 in `linear/routes.ts` (named workspaces S4, design 2026-10-20 §4.2): `GET /api/linear/resolve`, the
     // ticket-title preview read. Session-gated and NOT EXEMPT, no box token, `Cache-Control: no-store`.
     // 5 since S4b (design §5.1): the connection's `GET`, `PUT`, `POST …/check` and `DELETE /api/linear/connection`, all
@@ -651,7 +652,9 @@ describe('the scanner is looking at something', () => {
     // 241 since the portfolio (Overlord W1, 2026-11-15), in `coord/ledgersRoutes.ts`: `GET /api/portfolio` and `POST
     // /api/portfolio/rank`, session-gated and NOT EXEMPT, no box token: the HTTP half 236 -> 238, the gated count 142 -> 144,
     // the exempt-HTTP count stays 93.
-    expect(ROUTES.length).toBe(241);
+    // 242 since `GET /api/docs/:project/history` (docs W5b-1), session-gated and NOT EXEMPT, no box token: the HTTP half
+    // 238 -> 239, the gated count 144 -> 145, the exempt-HTTP count stays 93.
+    expect(ROUTES.length).toBe(242);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -706,6 +709,7 @@ describe('the scanner is looking at something', () => {
       // reading `docs/routes.ts` would lose all of them at once, the refresh POST too.
       'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
       'POST /api/docs/:project/refresh',
+      'GET /api/docs/:project/history',
       // The sixth file's one (named workspaces S4): a scanner that stopped reading `linear/routes.ts` would lose it.
       'GET /api/linear/resolve',
       // …and its four Settings routes for workspace keys (#1444, plan task LK11), lost with it.
@@ -826,7 +830,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 241 scanned + the static wildcard when the bundle is built.
+    // 242 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1541,7 +1545,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 238 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 239 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1605,7 +1609,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 238 HTTP routes, not the 93 exempt.
+          //    is not itself flag-aware — the assertion that covers all 239 HTTP routes, not the 93 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

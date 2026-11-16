@@ -75,7 +75,7 @@ const ID_BUILDERS = {
   // admits it, as `leaseMark`'s are, so it never reaches the argv unexamined; no server code composes it yet (the renewal
   // rows piece and the designation door do, and add their rows below).
   poolAnswer: 'no-id',
-  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
+  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {

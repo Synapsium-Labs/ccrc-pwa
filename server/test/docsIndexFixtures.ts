@@ -37,7 +37,7 @@ export const DOCS_INDEX_READY: DocsIndexOk = {
     {
       project: 'demo', state: 'ready', github: { state: 'named', slug: 'example-org/example-repo' }, repoKey: ZERO_KEY,
       default: { name: 'main', via: 'default:origin-head', commit: ZERO_SHA },
-      sections: { specs: 2, plans: 1, 'product-design': null, conventions: null },
+      sections: { specs: 2, plans: 1, 'product-design': null, conventions: null, vision: null, promise: null },
       fetch: { okAgeMs: 0, lastOutcome: 'ok' },
     },
     { project: 'nongit', state: 'not-a-git-repo', github: { state: 'none' }, sectionsOnDisk: ['specs'] },
@@ -53,7 +53,7 @@ export const DOCS_INDEX_UNREADABLE: DocsIndexOk = {
     {
       project: 'demo', state: 'ready', github: { state: 'none' }, repoKey: ZERO_KEY,
       default: { name: 'main', via: 'default:origin-head', commit: ZERO_SHA },
-      sections: { specs: null, plans: null, 'product-design': null, conventions: null },
+      sections: { specs: null, plans: null, 'product-design': null, conventions: null, vision: null, promise: null },
     },
   ],
 };
@@ -80,12 +80,17 @@ export function normaliseDocsIndex(o: unknown): unknown {
   return out;
 }
 
-/** A `#!/bin/sh` script that prints `line` and a newline with shell builtins only, so a doctor or install
- *  fixture can plant it as `ccd` on a PATH that holds nothing else. A line holding a single quote or a newline
- *  cannot be quoted by this shape, so it is refused rather than mangled. */
-export function docsIndexStubScript(line: string): string {
+/** A `#!/bin/sh` script that answers `caps` with the `caps` lines and anything else with `line` and a newline,
+ *  with shell builtins only, so a doctor or install fixture can plant it as `ccd` on a PATH that holds nothing
+ *  else. The default `caps` are the two words the doctor's `docs` check reads, so a stub planted without them
+ *  stays a healthy ccd. A line or a cap holding a single quote or a newline cannot be quoted by this shape, so
+ *  it is refused rather than mangled. */
+export function docsIndexStubScript(line: string, caps: readonly string[] = ['docs-log-v1', 'docs-sections-v2']): string {
   if (/['\n\r]/.test(line)) throw new Error('docsIndexStubScript: the line holds a single quote or a newline');
-  return `#!/bin/sh\nprintf '%s\\n' '${line}'\n`;
+  if (caps.some((c) => /['\n\r]/.test(c))) throw new Error('docsIndexStubScript: a cap holds a single quote or a newline');
+  const capLines = caps.map((c) => `'${c}'`).join(' ');
+  const capsArm = caps.length === 0 ? ':' : `printf '%s\\n' ${capLines}`;
+  return `#!/bin/sh\ncase "$1" in\n  caps) ${capsArm} ;;\n  *) printf '%s\\n' '${line}' ;;\nesac\n`;
 }
 
 const sha256Hex = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');

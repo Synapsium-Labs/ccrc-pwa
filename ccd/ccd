@@ -9471,6 +9471,8 @@ EOF
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
+  echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
+  echo docs-log; echo docs-log-v1   # native Docs reader W5b (rich-docs spec G4): the verb, and the token that says it takes exactly this argv; the server sends it only behind the token
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -44630,9 +44632,9 @@ _pr_state_by_pr() {   # project number -> ONE JSON line: one PR by number, no wo
   printf '%s' "$out" | _pr_py by-pr "$n" ""
 }
 
-# ── DOCS: the four docs verbs (spec 2026-10-01 §2) ──────────────────────────
-# `docs-index`, `docs-tree` and `docs-show` are read-only views of a project's
-# four docs sections; `docs-fetch` moves ONE remote-tracking ref. Each verb is a
+# ── DOCS: the five docs verbs (spec 2026-10-01 §2) ──────────────────────────
+# `docs-index`, `docs-tree`, `docs-show` and `docs-log` are read-only views of a project's
+# docs sections; `docs-fetch` moves ONE remote-tracking ref. Each verb is a
 # bash front over one embedded python helper, `_docs_py`, and the front does
 # three things, in this order and nothing else (spec §2 (a) Shape):
 #   1. the exact arity and flag-order check, the `--max-bytes` grammar included.
@@ -44703,7 +44705,7 @@ cmd_docs_index() {   # --all; every project under ccd's projects root, as one JS
   _docs_py docs-index "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
-cmd_docs_tree() {   # --project P [--ref R]; one project's four sections at one ref, with its drafts
+cmd_docs_tree() {   # --project P [--ref R]; one project's sections at one ref, with its drafts
   [[ "${1-}" == --project && ( $# -eq 2 || ( $# -eq 4 && "${3-}" == --ref ) ) ]] \
     || die "usage: ccd docs-tree --project P [--ref R]"
   _docs_front docs-tree || return 0
@@ -44734,6 +44736,15 @@ cmd_docs_fetch() {   # --project P [--branch B]; fetch ONE branch from origin in
     || die "usage: ccd docs-fetch --project P [--branch B]"
   _docs_front docs-fetch || return 0
   _docs_py docs-fetch "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+cmd_docs_log() {   # --project P --commit C --section S --path X; one doc's commits from C back, newest first (rich-docs spec G4)
+  # Exactly 8 tokens in this order; the helper reads each value by fixed index, so the path is a value and never a
+  # pathspec: git logs the fixed section path, and the helper matches the doc's path by exact bytes.
+  [[ $# -eq 8 && "${1-}" == --project && "${3-}" == --commit && "${5-}" == --section && "${7-}" == --path ]] \
+    || die "usage: ccd docs-log --project P --commit C --section S --path X"
+  _docs_front docs-log || return 0
+  _docs_py docs-log "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
 _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
@@ -44787,7 +44798,7 @@ HELPER_FAILED_DETAIL_MAX_BYTES = 512
 # declares, each compared with its TS twin by docs-parity.test.ts, in both
 # directions. Nothing but those literals and comments goes between the markers.
 # docs-parity: begin
-SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions'}
+SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions','vision':'docs/vision','promise':'docs/promise'}
 PROJECT_RE=r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}'
 BARE_REF_RE=r'(?!HEAD$)(?!refs/)(?!.*\.\.)(?!.*\.lock(?:/|$))(?!.*\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
 REF_MAX_CHARS=200
@@ -44810,6 +44821,10 @@ DOCS_MAX_ENTRIES=5000
 DOCS_DRAFT_HASH_BUDGET=33554432
 DOCS_MAX_DRAFTS=1000
 DOCS_FETCH_MIN_INTERVAL_MS=10000
+DOCS_LOG_MAX_ENTRIES=100
+DOCS_LOG_SUBJECT_MAX_CHARS=200
+DOCS_LOG_AUTHOR_MAX_CHARS=100
+DOCS_LOG_MAX_WIRE_BYTES=131072
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
 # docs-parity: end
@@ -44975,9 +44990,11 @@ TreeArgs = namedtuple('TreeArgs', ['project', 'ref'])
 ShowCommittedArgs = namedtuple('ShowCommittedArgs', ['project', 'commit', 'ref', 'section', 'path', 'max_bytes'])
 ShowDraftArgs = namedtuple('ShowDraftArgs', ['project', 'branch', 'head', 'section', 'path', 'fp', 'max_bytes'])
 FetchArgs = namedtuple('FetchArgs', ['project', 'branch'])
+LogArgs = namedtuple('LogArgs', ['project', 'commit', 'section', 'path'])
 
 SHOW_COMMITTED_FLAGS = ('--project', '--commit', '--ref', '--section', '--path', '--max-bytes')
 SHOW_DRAFT_FLAGS = ('--project', '--draft-branch', '--head', '--section', '--path', '--fingerprint', '--max-bytes')
+LOG_ARG_FLAGS = ('--project', '--commit', '--section', '--path')
 
 
 def _contract(ok, what):
@@ -45015,7 +45032,7 @@ def read_args(verb, rest):
 
     Order: tree -- project, ref (bare or qualified). show committed -- project, commit, ref (qualified
     only), section, path. show draft -- project, draft branch (bare), head, section, path, fingerprint.
-    fetch -- project, branch (bare). --max-bytes is the front's grammar: re-asserted, never refused."""
+    fetch -- project, branch (bare). log -- project, commit, section, path. --max-bytes is the front's grammar: re-asserted, never refused."""
     rest = list(rest)
     if verb == 'docs-index':
         _contract(rest == ['--all'], 'docs-index takes exactly --all')
@@ -45051,6 +45068,14 @@ def read_args(verb, rest):
         _refuse(valid_project(project), 'bad-project')
         _refuse(branch is None or valid_bare_ref(branch), 'bad-ref')
         return FetchArgs(project, branch)
+    if verb == 'docs-log':
+        project, commit, section, raw_path = _values(rest, LOG_ARG_FLAGS)
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(valid_sha(commit), 'bad-commit')
+        _refuse(valid_section(section), 'bad-section')
+        rel = valid_rel_path(raw_path)
+        _refuse(rel is not None, 'bad-path')
+        return LogArgs(project, commit, section, rel)
     raise RuntimeError('docs argv contract: no argument reader for ' + repr(verb))
 
 # ===== docs: runner =====
@@ -45076,8 +45101,8 @@ import time
 # Budgets. Each literal is ONE line, so W2's budget test can extract it. A verb
 # builds one Deadline from HELPER_DEADLINE_S at its start; each git call it
 # makes is bounded by min(CALL_S[its class], what is left of that deadline).
-HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}
-CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5}
+HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}
+CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}
 KILL_GRACE_S=2
 REDACT_BUDGET_MS=900
 GIT_STDOUT_CAP=16777216
@@ -45401,19 +45426,33 @@ class GitRefused(ValueError):
 
 # The subcommand allowlist of section 2 (a), verbatim: each row is a token
 # prefix the subcommand must start with. docs-fetch alone may also run fetch.
+# The log row (rich-docs spec G4, M9.5; docs-log only): `log` runs with exactly
+# these -c pairs and this head, then `--end-of-options <commit> -- <section
+# path>`, and nothing else: no -n, no other pathspec, no caller's path
+# (git_argv checks the whole tail). The format has no `format:` prefix, so the
+# no-colon rule below holds for log too (git reads a string holding % as
+# tformat): five NUL-ended fields, the newline before the names, NUL-ended names.
+# The -c pairs pin every log.* setting that changes that shape, since the
+# user's and the repository's config are still read: under log.showRoot=false
+# a root commit prints no newline and no names (measured, git 2.53).
+LOG_CFLAGS = ('-c', 'log.showSignature=false', '-c', 'log.follow=false', '-c', 'log.mailmap=false',
+              '-c', 'log.showRoot=true')
+LOG_ROW = ('log', '--no-show-signature', '--encoding=UTF-8', '--no-merges',
+           '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only')
 READ_ALLOW = (
     ('rev-parse',), ('symbolic-ref',), ('for-each-ref',), ('ls-tree',),
     ('cat-file', '--batch-check'), ('cat-file', 'blob'),
     ('worktree', 'list'), ('status',), ('ls-files',),
     ('merge-base', '--is-ancestor'), ('rev-list', '--left-right', '--count'),
     ('config', '--get'), ('config', '-z', '--get-regexp'),
+    LOG_ROW,
 )
 FETCH_ALLOW = READ_ALLOW + (('fetch',),)
 # The spec's "never used" list, enforced rather than remembered: no filter or
 # textconv driver ever runs, and no <rev>:<path> object name reaches a command
 # that would read through it.
 NEVER_FLAGS = ('--textconv', '--filters')
-OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list')
+OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list', 'log')
 # The two settings the prefix pins. git lets a later -c win, so a caller's -c
 # may never set either again.
 PINNED_KEYS = ('core.fsmonitor', 'core.hookspath')
@@ -45461,6 +45500,10 @@ def git_argv(cwd, args, fetch=False):
             raise GitRefused('a flag the runner never passes: ' + a.split('=', 1)[0])
     if sub[0] in OBJECT_NAME_VERBS and any(':' in a for a in sub[1:]):
         raise GitRefused('no <rev>:<path> object names: ' + sub[0])
+    if sub[0] == 'log' and (tuple(cflags) != LOG_CFLAGS or len(sub) != len(LOG_ROW) + 4
+                            or sub[-4] != '--end-of-options' or sub[-2] != '--'
+                            or sub[-1] not in SECTIONS.values()):
+        raise GitRefused('log takes its fixed flags, one commit and one section path')
     prefix = FETCH_PREFIX if fetch else READ_PREFIX
     return list(prefix) + cflags + ['-C', cwd] + sub
 
@@ -46125,7 +46168,7 @@ def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
     """The committed half of a tree answer, from ONE ls-tree at `commit`.
 
     Returns (sections, entries, unlisted, blobs):
-    - sections: all four, in SECTIONS order, each {slug, path, state, count}.
+    - sections: every one in SECTIONS, in its order, each {slug, path, state, count}.
       state is 'present' (records under it), 'absent' (nothing there at C:
       section 2 (h) 7, an ok answer, never an error) or 'not-a-directory'
       (the section path is itself a record: a symlink, a gitlink or a file).
@@ -46360,7 +46403,7 @@ def index_name(raw):
 
 
 def index_sections_on_disk(path):
-    """The sections a non-git directory holds as directories: four lstats, in
+    """The sections a non-git directory holds as directories: one lstat each, in
     SECTIONS order. A section that cannot be lstat'd is not there."""
     have = []
     for slug, sec in SECTIONS.items():
@@ -46374,7 +46417,7 @@ def index_sections_on_disk(path):
 
 
 def index_section_counts(repo, commit, dl):
-    """{slug: count or None} for the four sections at commit, from ONE
+    """{slug: count or None} for every section at commit, from ONE
     ls-tree --name-only, which never lazy-fetches. A count is what docs-tree
     would list there: the names under the section that listing_admit admits,
     so a section whose every name is refused counts 0. None means nothing is
@@ -47430,7 +47473,7 @@ def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOU
 # ===== docs: tree =====
 # docs-tree (spec 2026-10-01 section 2 (b) DocsTreeOk, (e) "Snapshot", (g) "The
 # signal docs-tree reports"). One call does everything, in the snapshot's
-# order: resolve the served commit C, list the four sections at C, then take
+# order: resolve the served commit C, list the sections at C, then take
 # the holder snapshot of the draft branch Bd = ref.name, bracketed by its own
 # HEAD checks. The draft phase runs in BOTH views: in the default view its
 # facts feed only the PWA's hint, in a ref view they overlay iff baseEqual,
@@ -47970,6 +48013,139 @@ def verb_show(ctx, a):
             'mode': mode, 'onRef': on_ref(repo, a.commit, a.ref, dl)}
     return encode_show(data, base)
 
+# ===== docs: log =====
+# docs-log (rich-docs spec 2026-10-12 G4; W5b): one doc's commits, newest
+# first, from --commit back. ONE `git log` of the fixed SECTION path (LOG_ROW),
+# so the caller's path never reaches an argv or a pathspec. No -n: the helper
+# keeps the first DOCS_LOG_MAX_ENTRIES records whose names hold the doc's repo
+# path, byte for byte, and stops there. The helper deadline and GIT_STDOUT_CAP
+# bound the walk; a walk either ended short of that many is `truncated`, and so
+# is a shallow repository's short walk, since a cut history can hide older
+# commits (on_ref's rule). A shallow walk that read past a parentless record
+# touching the doc is `truncated` however full its list.
+LOG_SHA_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
+
+
+def parse_log(buf, sec_b, want, limit, shallow=False):
+    """`(rows, skipped)`: the records of LOG_ROW's output whose names hold
+    `want` exactly, as (sha, parents, date, author, subject) byte strings,
+    newest first, at most `limit`, and the count of parentless records a
+    shallow walk read past that touched `want` (each may be a change to the
+    doc). A record is five NUL-ended fields, the newline git writes before the
+    names, then NUL-ended names, each under `sec_b` + '/' or `sec_b` itself
+    (the pathspec limits them; the bare name is a commit that touched a
+    FILE at the section path, which is never the doc but must be read past);
+    the next record starts after the last name's NUL. A record git prints
+    without names (a gitlink under diff.ignoreSubmodules=all) has no newline
+    and is read as touching nothing. A buffer cut inside a
+    record (an expiry or the stdout cap) ends the walk at the last whole
+    record. A record that does not parse is git-failed {step:'log'}. When
+    `shallow`, a parentless record is parsed and read past but never listed: a
+    shallow boundary is a root to git, so it prints every file of the section,
+    and it cannot be told from a true root without reading the shallow file."""
+    rows = []
+    skipped = 0
+    prefix = sec_b + b'/'
+    bare = sec_b + b'\0'
+    i, n = 0, len(buf)
+    while i < n and len(rows) < limit:
+        fields = []
+        for _ in range(5):
+            j = buf.find(b'\0', i)
+            if j < 0:
+                return rows, skipped
+            fields.append(buf[i:j])
+            i = j + 1
+        if i >= n:
+            return rows, skipped
+        parent = fields[1].split(b' ')[0]
+        if (not LOG_SHA_RE.fullmatch(fields[0])
+                or (parent and not LOG_SHA_RE.fullmatch(parent))):
+            raise fail('git-failed', step='log', detail='unexpected log output')
+        hit = False
+        if buf[i:i + 1] == b'\n':
+            i += 1
+            while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):
+                j = buf.find(b'\0', i)
+                if j < 0:
+                    return rows, skipped
+                hit = hit or buf[i:j] == want
+                i = j + 1
+        if hit and not (shallow and not parent):
+            rows.append(tuple(fields))
+        elif hit:
+            skipped += 1
+    return rows, skipped
+
+
+def log_entries(rows):
+    """The wire entries for parse_log's rows: sha, first parent (None for a
+    root commit), the committer date, and the author and subject decoded,
+    redacted by ONE redactor call over their lines (neither can hold a
+    newline; the line count is checked), then cut to their caps in code
+    points, so a cut never splits a secret the redactor would have matched. A
+    cut can end inside a mask (`?token=*`); the server's check re-applies
+    redact-then-cut, so such a text passes."""
+    texts = []
+    for row in rows:
+        texts.append(row[3].decode('utf-8', 'replace'))
+        texts.append(row[4].decode('utf-8', 'replace'))
+    red = redact('\n'.join(texts)).split('\n') if texts else []
+    if len(red) != len(texts):
+        raise RuntimeError('docs-log: the redactor changed the line count')
+    out = []
+    for k, row in enumerate(rows):
+        first = row[1].split(b' ')[0]
+        out.append({'sha': row[0].decode('ascii'),
+                    'parent': first.decode('ascii') if first else None,
+                    'date': row[2].decode('ascii', 'replace'),
+                    'author': red[2 * k][:DOCS_LOG_AUTHOR_MAX_CHARS],
+                    'subject': red[2 * k + 1][:DOCS_LOG_SUBJECT_MAX_CHARS]})
+    return out
+
+
+def guard_log(obj, line):
+    """docs-log's final guard (M9.7): `line`, or too-many-entries {count,
+    bytes} in its place when the entries pass DOCS_LOG_MAX_ENTRIES or the line,
+    framed as the agent frames it, passes DOCS_LOG_MAX_WIRE_BYTES (the
+    listings' word and measure). run() hands it ok lines only."""
+    count = len(obj['entries'])
+    size = framed_len(line)
+    if count <= DOCS_LOG_MAX_ENTRIES and size <= DOCS_LOG_MAX_WIRE_BYTES:
+        return line
+    return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
+                    'failure': 'too-many-entries', 'count': count, 'bytes': size})
+
+
+def verb_log(ctx, a):
+    """docs-log: the doc's history as DocsLogOk's body. Discovery first, as in
+    every verb; the commit must be the repository's own object-id length (else
+    bad-commit), present (else unknown-commit) and a commit (else
+    not-a-commit), as a committed docs-show checks it. One log call, soft: an
+    expiry or the stdout cap keeps what was read, and any other non-zero rc is
+    git-failed {step:'log'}. run() puts the line through guard_log."""
+    dl = Deadline(HELPER_DEADLINE_S[ctx.verb])
+    repo = discover(ctx, a.project, dl)
+    if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    kind = show_object_type(repo, a.commit, dl)
+    if kind is None:
+        raise fail('unknown-commit')
+    if kind != 'commit':
+        raise fail('not-a-commit')
+    sec = SECTIONS[a.section]
+    r = docs_git(repo.path, list(LOG_CFLAGS) + list(LOG_ROW) + ['--end-of-options', a.commit, '--', sec],
+                 call_s=CALL_S['log'], dl=dl, ceiling=ceiling_of(repo.path), soft=True)
+    cut = r.timed_out or r.overflow
+    if not cut and r.rc != 0:
+        raise show_failed('log', r)
+    want = (sec + '/' + a.path).encode('utf-8')
+    rows, skipped = parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES, repo.shallow)
+    entries = log_entries(rows)
+    # A full list is truncated too when a shallow walk read past a parentless record that touched the doc.
+    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow) or skipped > 0
+    return {'commit': a.commit, 'section': a.section, 'path': a.path, 'entries': entries, 'truncated': truncated}
+
 # ===== docs: fetch =====
 # docs-fetch (spec 2026-10-01 section 2 (g) steps 1-9): ONE branch from origin
 # into refs/remotes/origin/<b>, and nothing else. In order: discovery (a
@@ -48230,7 +48406,7 @@ def verb_fetch(ctx, a, fetch_s=CALL_S['fetch'], total_s=HELPER_DEADLINE_S['docs-
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
 # make run() reach a stand-in body.
-VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch}
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log}
 
 # The verbs whose ok answer is a listing, bounded by guard_listing.
 LISTING_VERBS = ('docs-index', 'docs-tree')
@@ -48296,7 +48472,7 @@ def run(argv):
 
     Ctx and read_args (the grammar section) build the context and the verb's
     arguments; guard_listing(obj, line) bounds every ok docs-tree and
-    docs-index answer, and guard_show(line) every ok docs-show answer. Each is
+    docs-index answer, and guard_show(line) every ok docs-show answer, and guard_log(obj, line) every ok docs-log answer. Each is
     looked up by name when run() reaches it, and each guard takes the line
     WITHOUT its newline and returns the line to write, also without it."""
     verb = argv[0] if len(argv) > 0 else None
@@ -48327,6 +48503,8 @@ def _run_verb(verb, argv):
             line = guard_listing(obj, line)
         elif verb == 'docs-show':
             line = guard_show(line)
+        elif verb == 'docs-log':
+            line = guard_log(obj, line)
         return line + b'\n'
     except Fail as f:
         try:
@@ -48635,7 +48813,8 @@ case "${1:-}" in
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
+  docs-log)   shift; cmd_docs_log "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|version} <args>" >&2; exit 1 ;;
 esac
 fi

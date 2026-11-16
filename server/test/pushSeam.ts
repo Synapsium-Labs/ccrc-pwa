@@ -6,7 +6,8 @@
 // changes (the double starts to answer one), and no site's test is edited: that is why no case builds its own
 // `{ notify }` literal.
 //
-// Today `notify` records the payload it receives, in order, and resolves with nothing, as `PushService.notify` does.
+// `notify` records the payload it receives, in order, and answers a `PushSendVerdict` (one subscription, accepted), as
+// `PushService.notify` does since the push outbox (Task 3). The sender (Task 4) reads it: this is the suite's one seam change.
 import type { PushPayload, PushService } from '../src/push.js';
 
 /** What a harness installs: the double itself (`push`) and what it recorded (`sent`). */
@@ -22,8 +23,7 @@ export interface PushSeam {
 export function pushSeam(): PushSeam {
   const sent: PushPayload[] = [];
   let rejects: { err: Error; left: number } | null = null;
-  // Today the funnel never reads what `notify` resolves with, and the double resolves with nothing. The cast is the one place
-  // the double's answer type is named: when `PushService.notify` answers a verdict, this is the line that starts to answer one.
+  // The cast is the one place the double's answer type is named.
   const push = {
     notify: (payload: PushPayload): Promise<unknown> => {
       sent.push(payload);
@@ -31,7 +31,7 @@ export function pushSeam(): PushSeam {
         rejects.left -= 1;
         return Promise.reject(rejects.err);
       }
-      return Promise.resolve(undefined);
+      return Promise.resolve({ kind: 'sent', subs: [{ endpointHash: 'seam', verdict: 'accepted', status: 201 }] });
     },
   } as unknown as Pick<PushService, 'notify'>;
   return { sent, push, rejectNext: (err, n = 1) => { rejects = { err, left: n }; } };

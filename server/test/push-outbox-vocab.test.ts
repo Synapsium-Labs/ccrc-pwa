@@ -55,8 +55,8 @@ describe('the push outbox vocabulary (Overlord spec §6.7, Table 11.1a)', () => 
   it('the verdict, silence, actor and source words are those the plan names', () => {
     expect(OUTBOX_ACTORS).toEqual(['raise', 'sender', 'boot', 'arm']);
     expect(OUTBOX_SOURCES).toEqual(['ask', 'item']);
-    expect(SUBSCRIPTION_VERDICTS).toEqual(['accepted', 'refused', 'refused-for-good', 'gone', 'no-answer']);
-    expect(PUSH_SILENT_WHYS).toEqual(['level', 'viewing', 'settled', 'no-payload', 'no-service', 'older-build']);
+    expect(SUBSCRIPTION_VERDICTS).toEqual(['accepted', 'refused', 'refused-for-good', 'gone', 'no-answer', 'unsendable']);
+    expect(PUSH_SILENT_WHYS).toEqual(['level', 'viewing', 'settled', 'no-payload', 'no-service', 'older-build', 'superseded']);
   });
 
   it('the bounds: the per-request timeout is below the deadline, and the horizon is the push TTL', () => {

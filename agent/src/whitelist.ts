@@ -444,7 +444,7 @@ export const REQUIRED_VERB_FLAG = {
   'project-pool': '--project', 'route': '--session',
   'win-size': '--session', 'ws-reclaim': '--expect',
   'reclaim-pause': '--state', 'ws-expire': '--expect',
-  'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project',
+  'docs-index': '--all', 'docs-tree': '--project', 'docs-show': '--project', 'docs-fetch': '--project', 'docs-log': '--project',
   'ws-collect': '--expect',
   'ws-orphan': '--expect',
   'ws-title': '--session',
@@ -756,6 +756,9 @@ export const EXEC_WHITELIST = {
     ['docs-show',  '--project'],
     // The one docs verb that writes: a fetch of one branch from origin.
     ['docs-fetch', '--project'],
+    // One doc's history (rich-docs spec G4; the server sends it behind its own cap token): read-only, 8 tokens, ENROLLED above on
+    // `--project` like the four; ccd dies with usage on any other shape.
+    ['docs-log',   '--project'],
     // THE CHILD TEMP-ROOT COLLECTOR (child reclamation spec 2026-09-22 §5.10): the fourth destructive verb, and the third
     // the SERVER sends with no human in the path — on a witnessed child temp root whose workspace is gone. Granted on its
     // confirmation token for ws-reclaim's reason, ENROLLED in `REQUIRED_VERB_FLAG` above (g20), and its audit rides
