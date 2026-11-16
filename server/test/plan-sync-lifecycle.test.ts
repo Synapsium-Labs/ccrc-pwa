@@ -81,6 +81,23 @@ function settle(s: SyncSnapshot): SyncSnapshot {
   }
   throw new Error('settle did not converge');
 }
+/** The steps of the first pass that emits `op`, applying every earlier create as `settle` does. */
+function settleUntil(s: SyncSnapshot, op: string): SyncStep[] {
+  let linear = 800;
+  for (let i = 0; i < 14; i += 1) {
+    const { steps } = planSyncSteps(s);
+    if (steps.some((x) => x.kind !== 'skip' && x.op === op)) return steps;
+    for (const st of steps) {
+      if (st.kind !== 'create') continue;
+      s.bindings.push({
+        id: 300 + i * 10 + s.bindings.length, localKind: st.local.kind, localId: st.local.id, workspaceId: st.workspaceId, teamKey: st.teamKey,
+        linearId: U(linear++), identifier: null, fingerprint: st.fingerprint, syncedAt: 1, state: 'bound', failedAt: null, failedWord: null,
+        failedInputs: null, driftCount: 0, driftSince: null, heldItemId: null,
+      } as BindingRow);
+    }
+  }
+  throw new Error(`no ${op}`);
+}
 const ep = (s: SyncSnapshot) => s.plan.epics[0]!;
 const ops = (steps: SyncStep[]): string[] => steps.map((x) => (x.kind === 'skip' ? `skip:${x.why}` : `${x.kind}:${x.op}`));
 const stepOf = (steps: SyncStep[], op: string): Extract<SyncStep, { kind: 'update' | 'create' }> =>
@@ -111,13 +128,36 @@ describe('moves (design §5.3, one row each)', () => {
     expect(u.input).toMatchObject({ targetDate: '2026-11-16', description: expect.stringContaining('Met on 2026-11-16: PR #77') });
   });
 
-  it('a milestone update with a cleared target date sends null', () => {
+  // D-8700 (milestone-target-date-once-met; spec §6.2 "target date once met", §5.3): the target date is ccrc's only from the
+  // day its checkpoint is met. An open checkpoint's create and update leave it out of the input and of the fields list, so a
+  // date someone set in Linear survives a rename; a met one sets it and owns it from then on.
+  it('D-8700: an open checkpoint renamed sends no target date, in its input or its fields', () => {
+    const s = settle(snap({ cps: [cp()] }));
+    ep(s).checkpoints[0]!.title = 'Renamed checkpoint';
+    const u = stepOf(planSyncSteps(s).steps, 'projectMilestoneUpdate');
+    expect(u.input).toMatchObject({ name: 'Renamed checkpoint' });
+    expect('targetDate' in u.input).toBe(false);
+    expect(u.fields).not.toContain('targetDate');
+    const created = stepOf(settleUntil(snap({ cps: [cp()] }), 'projectMilestoneCreate'), 'projectMilestoneCreate');
+    expect('targetDate' in created.input).toBe(false);
+    expect(created.fields).not.toContain('targetDate');
+  });
+
+  it('D-8700: a met checkpoint owns its target date: its update sets it and lists it, and a later rename sends it again', () => {
+    const s = settle(snap({ cps: [cp({ state: 'met', metAt: Date.parse('2026-11-16T10:00:00Z'), evidence: { pr: 1 } })] }));
+    ep(s).checkpoints[0]!.title = 'Renamed checkpoint';
+    const u = stepOf(planSyncSteps(s).steps, 'projectMilestoneUpdate');
+    expect(u.input).toMatchObject({ targetDate: '2026-11-16' });
+    expect(u.fields).toContain('targetDate');
+  });
+
+  it('D-8700: a met checkpoint reopened leaves the target date out again (the met line goes, the date is not cleared)', () => {
     const s = settle(snap({ cps: [cp({ state: 'met', metAt: Date.parse('2026-11-16T10:00:00Z'), evidence: { pr: 1 } })] }));
     ep(s).checkpoints[0]!.state = 'open';
     ep(s).checkpoints[0]!.metAt = null;
     const u = stepOf(planSyncSteps(s).steps, 'projectMilestoneUpdate');
-    expect(u.input).toMatchObject({ targetDate: null });
-    expect(u.fields).toContain('targetDate');
+    expect('targetDate' in u.input).toBe(false);
+    expect(u.fields).not.toContain('targetDate');
   });
 
   it('an epic active, then done: the project status moves to started, then completed; a planned epic reads planned', () => {

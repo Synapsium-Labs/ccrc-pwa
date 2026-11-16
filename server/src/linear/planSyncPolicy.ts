@@ -381,18 +381,23 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       const cb = bindingOf('checkpoint', c.id, wsId);
       if (c.state === 'dropped' && cb === undefined) continue;
       if (cb?.state === 'bound' && cb.linearId !== null) msIds.set(c.id, cb.linearId);
+      // D-8700 (milestone-target-date-once-met; spec §6.2, §5.3): the target date is ccrc's only once the checkpoint is met.
+      // An open (or dropped) checkpoint's create and update leave it out of the input and the fields, so a date set in Linear
+      // stands; a met one sets it, and owns it from then on.
       const mp = {
         name: egress(c.title), description: milestoneDescription(c), targetDate: c.state === 'met' && c.metAt !== null ? dayOf(c.metAt) : null, sortOrder: c.ordinal,
       };
+      const dated = mp.targetDate === null ? {} : { targetDate: mp.targetDate };
+      const dateField = mp.targetDate === null ? [] : ['targetDate'];
       decide({
         phase: 2, kind: 'checkpoint', id: c.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectMilestoneCreate', update: 'projectMilestoneUpdate' },
         b: cb, ready: true, statusMissing: false, texts: [mp.name, mp.description], facts: [pl.fact], planned: mp, fp: plannedFingerprint(mp),
         isCurrent: (st) => st === plannedFingerprint(mp),
         create: () => ({
-          input: { projectId, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...(mp.targetDate === null ? {} : { targetDate: mp.targetDate }) },
-          fields: ['name', 'description', ...(mp.targetDate === null ? [] : ['targetDate']), 'project'],
+          input: { projectId, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...dated },
+          fields: ['name', 'description', ...dateField, 'project'],
         }),
-        update: (id) => ({ input: { id, name: mp.name, description: mp.description, targetDate: mp.targetDate, sortOrder: mp.sortOrder }, fields: ['name', 'description', 'targetDate'] }),
+        update: (id) => ({ input: { id, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...dated }, fields: ['name', 'description', ...dateField] }),
         recover: 'name-in-project',
       });
     }
