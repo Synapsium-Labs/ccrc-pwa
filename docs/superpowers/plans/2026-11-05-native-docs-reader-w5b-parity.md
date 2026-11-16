@@ -2361,18 +2361,19 @@ Execution: superpowers:subagent-driven-development, one implementer per task (So
 | 21 the spec text | `391c35f6b` | Sonnet/medium: approved |
 | 22 the whole-branch fix wave | `28ad8dbc9` ... `5f89a4df7` (10 commits, F1-F10) | Opus/high scoped re-review: all addressed |
 | 22 base §3.11 for version-github-caution | `bc7d63ce6` | — |
+| review run 2201's fix round 1 | `ddd300fe3` ... `04e954dc2` (5 commits), then these Results | rows measured (below) |
 
 Every subagent's model was passed explicitly; the lenses self-reported `claude-opus-5-5` and the refuters and Sonnet reviewers `claude-sonnet-5-5` (the runtime reports no effort).
 
 ### Rulings made while executing
 
-- **Task 16, a forced literal.** `pwa/test/docs-export.test.tsx` gained one token, `pageAt: null,`, which `tsc` named. The plan held the file byte-identical for the Export residue, which W5h-b had already closed, and Step 3's rule (every fake `tsc` names gains `pageAt: null`) governs a forced literal. W5b-2's Export case is in `docs-version.test.tsx`.
+- **Task 16, a forced literal.** `pwa/test/docs-export.test.tsx` gained one token, `pageAt: null,`, which `tsc` named. The plan held the file byte-identical for the Export residue, which W5h-b had already closed, and Step 3's rule (every fake `tsc` names gains `pageAt: null`) governs a forced literal. W5b-2's Export case is in `docs-version.test.tsx`. This was my own ruling on a stop-and-ask (the plan makes any file outside its list one), not an answer to an ask; the coordinator accepted it at review on 2026-11-16 (F7, below).
 - **Task 17, no automatic re-read on a version page.** `docsRetryPlan` answers `auto` at 0 ms for `unknown-commit`, so the version's missing commit was read twice. On a version page a re-list word now gets neither a re-list nor an automatic re-read (`applyFile`), as Task 21's failure-table text says ("auto, none on a version page"). Inside version-needs-listed-file's departure from that table row. Row W5B-T17-M7.
-- **Task 17, a version body keyed by the page.** Step 3 keyed a version body by commit only when `pin.commit !== tree.ref.commit`, so a version at the listing's own commit took the blob key and, when the listing moved, was read again and showed a false "Updated to". `fileKey(pin, tree, version)` keys by the pin's commit whenever the page is a version (refinement (p): "keyed by its pin"). Rows W5B-T17-M2 (restated) and M8.
-- **Task 17, a green row.** W5B-T17-M4 (`version ||` dropped from the body key) stayed green: a first visit to a version shows a loading frame, which remounts the reader anyway. Case (6) now goes latest, version, latest, version with both bodies held, and M4 reds it. The plan makes a green row a stop-and-ask; the remedy followed case (6)'s own title, so it was ruled and is reported here.
+- **Task 17, a version body keyed by the page.** Step 3 keyed a version body by commit only when `pin.commit !== tree.ref.commit`, so a version at the listing's own commit took the blob key and, when the listing moved, was read again and showed a false "Updated to". `fileKey(pin, tree, version)` keys by the pin's commit whenever the page is a version (refinement (p): "keyed by its pin"). Rows W5B-T17-M2 (restated) and M8. Its `version` parameter is required, not defaulted, so no caller can omit the distinction; that forced the `false` arguments in `docs-visit.test.tsx`. Also my own ruling, which the coordinator accepted at review on 2026-11-16 (F7).
+- **Task 17, a green row.** W5B-T17-M4 (`version ||` dropped from the body key) stayed green: a first visit to a version shows a loading frame, which remounts the reader anyway. Case (6) now goes latest, version, latest, version with both bodies held, and M4 reds it. The plan makes a green row a stop-and-ask, and no coordinator answer exists for it: I ruled it myself, following case (6)'s own title. The coordinator accepted it at review on 2026-11-16, on the review's measurement: W5B-T17-M4 reds case (6) after the strengthening (F8).
 - **Task 18, every gate pinned.** Seven per-gate rows (W5B-T18-M8 to M14), with fixtures that produce the withheld, typechange and conflicted banners, and a case that a drafts-snapshot banner stays.
 - **Task 19, the version's own commit.** On a version page whose leaf opens nothing, `version-unmeasured` named the served tip; it now names `page.at`. Per-term cases pin `leaf !== null`, the read's own commit, and `bad-slug`/`bad-target` (rows W5B-T19-M5 to M8).
-- **Task 20, the co-edit.** `pwa/src/lib/api.ts` was edited under a co-edit grant from the holder of its claim: the type of `api.docs`, the one `history:` line, and one name in each of two imports.
+- **Task 20, the co-edit.** `pwa/src/lib/api.ts` was edited under a co-edit grant from the holder of its claim: the type of `api.docs`, the one `history:` line, and one name in each of two imports: three diff hunks, +4/-2, as Task 20 Step 3 prescribes, additive and with no reflow. The coordinator accepted them at review on 2026-11-16 and measured that the tree merges cleanly with #2879's (F9).
 - **Two items carried here by W5b-1.** G1's reason names the W5-era server's refusal (`server/src/docs/policy.ts#entryOk`), and `docsLinks.ts`'s "the four sections" comments read "the docs sections".
 
 ### The held-out whole-branch review (Task 22 Step 1)
@@ -2389,7 +2390,7 @@ One fix agent (Sonnet/high) made F1-F10, one commit each, and measured each new 
 
 ### Named, without a number (W5b-2)
 
-- **Files outside the plan's list,** each changed by one token `tsc` or a failing runtime literal forced (`pageAt: null`, `at: null`, a `false` argument to `fileKey`, a word in an exhaustive list): `pwa/browser/docs-export.browser.test.ts`, `pwa/test/{docs-export-assets,docs-export-body,docs-export-sheet,docs-export,docs-failures,docs-highlight-budget,docs-markdown,docs-screen,docs-visit,highlight-wiring,reader-frame}.test.tsx`, `pwa/test/{reader-images,reader-policy}.test.ts`. Each was claimed before or as it was edited. The take-up's test files among them were no longer in flight (#2806 merged).
+- **Files outside the plan's list,** each changed only where `tsc` or a failing runtime literal forced it (`pageAt: null`, `at: null`, a `false` argument to `fileKey`, a word in an exhaustive list). Measured in changed lines: `docs-markdown` 2, `docs-screen` 2, `docs-visit` 3 (four `false` arguments to `fileKey`), every other file 1. The files: `pwa/browser/docs-export.browser.test.ts`, `pwa/test/{docs-export-assets,docs-export-body,docs-export-sheet,docs-export,docs-failures,docs-highlight-budget,docs-markdown,docs-screen,docs-visit,highlight-wiring,reader-frame}.test.tsx`, `pwa/test/{reader-images,reader-policy}.test.ts`. Each was claimed before or as it was edited. The take-up's test files among them were no longer in flight (#2806 merged).
 - **Refinement (q)'s badge sentence narrowed.** (q) said the entry badge is drawn for every source but `draft` and `version`; on a version page none is drawn (F4), since a version is one commit. Plan text only; base §4.5's truth-line row already said no badge beside a version.
 - **One review lens measured mutations in a scratch copy of the tree** under the session temp root, against the plan's low-disk rule; nothing of it remains, and every recorded row was re-measured in the workspace.
 
@@ -2469,6 +2470,55 @@ Local runs on the fleet box through `ccrc test`, in the foreground or, past ten 
 | server | the whole suite's first slice, `a`, `b` and `d`-`g` (`391c35f6b`) | 236 files: 231 passed; 10 tests failed, each a 20 s timeout at load 10-18, in `approvals-routes`, `delegation-delta-projection`, `delegation-recovery`, `delegation-watch` and `expire-id-boundary`. Each alone, once: `approvals-routes` 46 passed, `delegation-delta-projection` 131 passed, `expire-id-boundary` 21 passed; `delegation-watch` 310 passed and 1 failed, its "at every cut of the third append" case again a 20 s timeout; `delegation-recovery` 462 passed and 3 failed, its O5 fault-matrix cases again 20 s timeouts (W5b-1 measured the same alone). None of these files reads anything this branch changed |
 
 **The server suite was not run whole** (the coordinator's ruling on this run's ask). This branch reaches the server package only through `shared/docs.ts` and two test files; the second slice was killed by the fleet test slice's memory cap (exit 137) with about 1,400 files left. No `server/src` file uses a symbol this branch changed in `shared/docs.ts`: a grep of `server/src` and `shared` (`*.ts`, `*.mjs`) for `parseDocsPage`, `docsPageUrl`, `DOCS_PAGE_KEYS`, `DocsPathLocation`, `DocsPageLocation`, `DocsPageParseFailure`, `pageKeepsAt` and `pageKeepsView` finds only `shared/docs.ts` itself. 1166 server test files import it transitively; the pull request's traced selection and the merge queue's full run cover them.
+
+### Review run 2201 and fix round 1 (W5b-2)
+
+Review run 2201 read `c08b8d4b1..c16276de2` with the held-out panel: three Opus/high lenses and Sonnet/high refuters, 28 agents. It confirmed two important findings (F1, F2), kept advisory notes (F3 to F6) and asked three rulings (F7 to F9). No production behaviour was wrong; the round closes proof and text gaps. The coordinator sent the run back for fix round 1 on 2026-11-16 (review cap 3), with no merge of `main`. The coordinator counts the round as a failed check of the shallow kind: a proof-list item pinned only at the unit seam, a spec row only appended to, and a stop-and-ask the worker ruled.
+
+- **F1 (important).** Task 4's "body links and images keep the version" was pinned only where docs-links and docs-images build the link context by hand, so `DocsLeaf`'s `pageAt: page.at` could become `null` with 440 tests green. A screen-level case in `docs-version.test.tsx` opens a `?ref=&at=` page whose body holds a doc link and an image. It asserts that the link's href keeps `ref` and `at`, that the image is read at the version, and that the image's own leaf link keeps both. Row W5B-RF1-M1.
+- **F2 (important).** The rich-docs G6 row kept its old clause, that Back to the latest keeps its ref in `history.state`, beside the text Task 21 appended. Task 21 Step 1's find/replace appended the new text instead of replacing that clause. The clause is narrowed to "Only this day" keeping its base there, so the row reads once and agrees with D-8648.
+- **F3.** `DocLinkTarget`'s docstring says that on a version page the github arm's note is always `may-differ`, and base §3.11 says that the builder is unchanged and that its callers add that note on a version page.
+- **F4.** `bodyKeyOf`'s docstring says that a version page's body is keyed by its pin.
+- **F5.** Rows for the three guard terms that had none: W5B-RF1-M2 (`imagePinFor`'s `page.at === null &&`), M3 (`docLinkTarget`'s `at: ctx.pageAt`) and M4 (the version arm's `page.dirSlash ? null`). M4 stayed green at first; the new case "a version target from a directory page leaves at null" reds it.
+- **F6.** Two `api.docs.history` cases of its own, for `unreachable` and `no-docs-route` (row W5B-RF1-M5, a history loader that bypasses `read`), and a case that `DocsLoaders` names no `history` and the visit fakes build none (rows M6 and M7).
+- **D-8650's wording.** Its definition also names base §4.3 item 1 and item 5's `pinFor` sentence, which Task 21 amended. The coordinator amends the ledger's copy.
+
+**The coordinator's rulings on the review's asks (2026-11-16).**
+- **F7, accepted.** `pwa/test/docs-export.test.tsx`'s one `pageAt: null` token is forced by the required `DocLinkContextValue.pageAt` and leaves W5b-2's Export case in `docs-version.test.tsx`, as the plan intends. `fileKey`'s required `version: boolean` is accepted too: a defaulted flag would let a caller omit the distinction. Both were my own rulings on a stop-and-ask; the coordinator accepted them at review on 2026-11-16.
+- **F8, accepted.** No coordinator answer exists for W5B-T17-M4's stop-and-ask: I ruled it myself. The coordinator accepted it on the review's measurement: the row reds case (6) after the strengthening.
+- **F9, accepted.** `pwa/src/lib/api.ts`'s three hunks are what Task 20 Step 3 prescribes, additive, with no reflow, and the tree merges cleanly with #2879's.
+- **Accepted with no change:** F3's judgment of D-8653 (real, stated, minimal), the carried items m6, m9 and m12, and the server half's symbol claim.
+
+| Item | Commit |
+|---|---|
+| F1 a rendered version page's body | `ddd300fe3` |
+| F6 the history loader's own cases; no history in the visit fakes | `86e35f24b` |
+| F5 a version target from a directory page | `3e4d321a0` |
+| F2 the G6 row | `13561163a` |
+| F3, F4 and D-8650's wording | `04e954dc2` |
+| these Results | the head commit |
+
+The round's seven rows were run in the workspace at `04e954dc2`, sequentially, each restored from a sha256-checked copy with `git status --porcelain` clean after it, and every one went red. M1 to M6 were also measured as each case landed. M7 is measured by pwa's `tsc`, since the visit-fakes case's compile-time line is what reds. These are local measurements of the committed tests.
+
+```json
+{"id": "W5B-RF1-M1", "spec": "Task 4 proof list (F1)", "pkg": "pwa", "file": "src/docs/DocsLeaf.tsx", "old": "pageRef: page.ref, pageAt: page.at, view: page.view", "new": "pageRef: page.ref, pageAt: null, view: page.view", "tests": ["test/docs-version.test.tsx", "test/docs-links.test.tsx", "test/docs-images.test.tsx", "test/docs-screen.test.tsx", "test/docs-visit.test.tsx", "test/docs-share.test.ts"], "red": "1 failed: a doc link and an image in the body of a ?ref=&at= page keep the ref and the version"}
+{"id": "W5B-RF1-M2", "spec": "(n) (F5)", "pkg": "pwa", "file": "src/docs/docsLinks.ts", "old": "committed(page.at === null && page.ref !== null && admitDraft(e, drafts))", "new": "committed(page.ref !== null && admitDraft(e, drafts))", "tests": ["test/docs-images.test.tsx"], "red": "1 failed: it is never marked uncommittedNotShown"}
+{"id": "W5B-RF1-M3", "spec": "(o) (F5)", "pkg": "pwa", "file": "src/docs/docsLinks.ts", "old": "path: r.path, dirSlash: false, at: ctx.pageAt }));", "new": "path: r.path, dirSlash: false }));", "tests": ["test/docs-links.test.tsx", "test/docs-version.test.tsx"], "red": "2 failed: a doc link inside a version page keeps the version; a doc link and an image in the body of a ?ref=&at= page keep the ref and the version"}
+{"id": "W5B-RF1-M4", "spec": "(q) (F5)", "pkg": "pwa", "file": "src/docs/docsLinks.ts", "old": "return { ...page, at: page.dirSlash ? null : to.at, view: 'effective' };", "new": "return { ...page, at: to.at, view: 'effective' };", "tests": ["test/docs-links.test.tsx", "test/docs-version.test.tsx"], "red": "1 failed: a version target from a directory page leaves at null, as the grammar does"}
+{"id": "W5B-RF1-M5", "spec": "(s) (F6)", "pkg": "pwa", "file": "src/lib/api.ts", "old": "history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),", "new": "history: async (project, ask) => readDocsEnvelope<DocsHistoryResponse>(await request(docsApi.history(project, ask), { headers: marker }, unlimited), ['log']),", "tests": ["test/docs-api.test.ts"], "red": "4 failed: a docs failure body resolves {s:failed}; a 401 raises the login overlay through request; a fetch that rejects with a TypeError (offline) answers unreachable; a 404 {error: not-found} with no failur..."}
+{"id": "W5B-RF1-M6", "spec": "(s) (F6)", "pkg": "pwa", "file": "test/docsFixtures.ts", "old": "loaders: { projects, tree, file, raster, refresh },", "new": "loaders: { projects, tree, file, raster, refresh, history: vi.fn() },", "tests": ["test/docs-api.test.ts"], "red": "1 failed: the ordinary visit fakes carry no history loader: DocsLoaders names none, and fakeLoaders builds none"}
+{"id": "W5B-RF1-M7", "spec": "(s) (F6)", "pkg": "pwa", "file": "src/docs/failures.ts", "old": "Promise<DocsRefreshLoaderAnswer>;\n}\n", "new": "Promise<DocsRefreshLoaderAnswer>;\n  history(project: string, ask: DocsLogAsk): Promise<DocsHistoryAnswer>;\n}\n", "tests": ["tsc --noEmit -p ."], "red": "tsc rc 2, 3 errors: docs-api.test.ts's compile-time line in the visit-fakes case, and the two fakes that build DocsLoaders (docsFixtures.ts, router-location.test.tsx)"}
+```
+
+Suites for the round, through `ccrc test`, in the foreground, at `04e954dc2` (the Results commit changes this plan only):
+
+| Package | Run | Result |
+|---|---|---|
+| pwa | `docs-version`, `docs-api`, `docs-links`: the files the round changes | 3 files, 129 passed |
+| pwa | those with `docs-images`, `docs-screen`, `docs-visit` and `docs-share`, the set the review's F1 measurement ran | 6 files, 442 passed |
+| pwa | `tsc` | rc 0 |
+| pwa browser | not run: the round's source edits are two docstrings, so nothing the browser files read changes | — |
+| server | after `git fetch -q origin main` (`origin/main` at `badf6e750`): `deviation-refs`, `dtbd`, `citations` and `docs-url`, on these Results | 4 files, 143 passed |
 
 ### Carried, not fixed (W5b-2)
 
