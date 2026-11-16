@@ -2,7 +2,8 @@
 // (`recoverDelegation` over a journal of evidence, two leases and their transitions), so a suite that holds a second reader of the
 // checkpoint (the snapshot tool's) meets the bytes a PR5b server will write, not a hand-made shape.
 import type { DelegationEventEnvelopeV1 } from '../../shared/api.js';
-import { encodeDelegationCheckpoint, recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import { buildDelegationJournalRecord } from '../src/coord/delegation-journal.js';
 import {
   delegationSha256Hex, deriveDelegationLineageId, formatDelegationInstant,
