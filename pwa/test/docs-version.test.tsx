@@ -6,15 +6,19 @@
 // mounted with. Later tasks append their cases below the helpers. Placeholders only: project `demo`, branch `ws/a`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, cleanup, render, renderHook, screen, waitFor } from '@testing-library/react';
-import { DOCS_CLASS_CAP, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
+import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { DOCS_CLASS_CAP, entryView, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
+import { DocsBanners } from '../src/docs/DocsBanners';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
-import { DOCS_FAILURE_SENTENCE, DOCS_VIEW_TEXT, fillSentence, kib, shortCommit } from '../src/docs/docsText';
+import {
+  DOCS_BANNER_TEXT, DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, servedRefText, shortCommit,
+} from '../src/docs/docsText';
 import { pinFor, useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
+import type { FileSlot } from '../src/docs/useDocsVisit';
 import { clearAuthLost } from '../src/lib/auth';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
@@ -102,6 +106,7 @@ afterEach(() => {
   cleanup();
   clearAuthLost();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   history.replaceState(null, '', '/');
 });
 
@@ -253,5 +258,171 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     expect(await screen.findByText(fillSentence(DOCS_VIEW_TEXT.noPreview, {}))).toBeInTheDocument();
     expect(container.textContent).not.toContain(kib(cap + 1));
     expect(f.file).not.toHaveBeenCalled();
+  });
+});
+
+/** matchMedia at `width`, as a real engine answers a min-width or max-width query (docs-compact-head.test.tsx#atWidth's form). */
+function atWidth(width: number): void {
+  vi.stubGlobal('matchMedia', (q: string) => {
+    const min = /min-width:\s*([\d.]+)px/.exec(q);
+    const max = /max-width:\s*([\d.]+)px/.exec(q);
+    const matches = (min === null || width >= Number(min[1])) && (max === null || width <= Number(max[1]))
+      && (min !== null || max !== null);
+    return {
+      matches, media: q, onchange: null,
+      addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
+    };
+  });
+}
+
+const SHORT = shortCommit(VERSION);
+const versionWords = (): string => fillSentence(DOCS_HEAD_TEXT.sourceVersion, { short: SHORT });
+const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 30)); }); };
+/** `a.md` modified in the holder's worktree: in a ref view it opens its draft, with a committed version to offer. */
+const drafted = (): ReturnType<typeof versionLoaders> => versionLoaders({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holder() });
+const bannerIdsNow = (): string[] => [...document.querySelectorAll('[data-banner]')].map((n) => n.getAttribute('data-banner') ?? '');
+/** The banner ids a screen at `url` draws once its leaf has settled; unmounts the screen. */
+async function bannersAt(url: string, f: FakeLoaders): Promise<string[]> {
+  open(url, f);
+  expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+  await settle();
+  const found = bannerIdsNow();
+  cleanup();
+  return found;
+}
+
+describe('the header and a banner name the version (refinement (q))', () => {
+  it('the truth line names the version and links back to the latest', async () => {
+    open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, versionLoaders());
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    const truth = document.querySelector('.docs-truth') as HTMLElement;
+    const source = truth.querySelector('.docs-truth-source') as HTMLElement;
+    expect(source.textContent).toBe(versionWords());
+    expect(source).toHaveAttribute('title', VERSION);
+    const back = within(truth).getByRole('link', { name: DOCS_HEAD_TEXT.backToLatest });
+    expect(back).toHaveClass('docs-hint-link');
+    expect(back).toHaveAttribute('href', '/docs/demo/specs/a.md?ref=ws/a');
+    expect(truth.querySelector('.docs-badge')).toBeNull();
+  });
+
+  it('the phone row\'s badge names the version', async () => {
+    atWidth(412);
+    open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, versionLoaders());
+    expect(await screen.findByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeInTheDocument();
+    const where = document.querySelector('.docs-compact-where') as HTMLElement;
+    expect(where.querySelector('.docs-badge')?.textContent).toBe(versionWords());
+  });
+
+  it('the version banner shows with Back to the latest', async () => {
+    open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, versionLoaders());
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    const banner = document.querySelector('[data-banner="version"]') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner).toHaveAttribute('data-tone', 'info');
+    const served = servedRefText(treeOk().ref);
+    expect(banner.querySelector('.docs-banner-text')?.textContent)
+      .toBe(fillSentence(DOCS_BANNER_TEXT.version, { short: SHORT, served }));
+    expect(within(banner).getByRole('link', { name: DOCS_HEAD_TEXT.backToLatest })).toHaveAttribute('href', '/docs/demo/specs/a.md?ref=ws/a');
+  });
+
+  it('the not-contained banner on a version says another branch, with no Re-list', async () => {
+    const f = versionLoaders();
+    f.file.mockImplementation(async (_project, pin) => {
+      const r = fileResponse('# A');
+      const commit = pin.kind === 'committed' ? pin.commit : COMMIT_A;
+      return { s: 'ok', value: { ...r, show: { ...r.show, commit, blob: BLOB_1, onRef: 'not-contained' } } };
+    });
+    open(`/docs/demo/specs/a.md?at=${VERSION}`, f);
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    const banner = document.querySelector('[data-banner="not-contained"]') as HTMLElement;
+    expect(banner).not.toBeNull();
+    expect(banner.querySelector('.docs-banner-text')?.textContent)
+      .toBe(fillSentence(DOCS_BANNER_TEXT.notContainedVersion, { short: SHORT, served: servedRefText(treeOk().ref) }));
+    expect(within(banner).queryByRole('button', { name: DOCS_BANNER_TEXT.relist })).toBeNull();
+    expect(screen.queryByRole('button', { name: DOCS_BANNER_TEXT.relist })).toBeNull();
+  });
+
+  it('no Open committed version on a version page', async () => {
+    open('/docs/demo/specs/a.md?ref=ws/a', drafted());
+    expect(await screen.findByRole('link', { name: DOCS_HEAD_TEXT.openCommitted })).toBeInTheDocument();
+    cleanup();
+    open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, drafted());
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    await settle();
+    expect(screen.queryByRole('link', { name: DOCS_HEAD_TEXT.openCommitted })).toBeNull();
+  });
+
+  it('a version page\'s draft badge is not drawn', async () => {
+    open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, drafted());
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    await settle();
+    const truth = document.querySelector('.docs-truth') as HTMLElement;
+    expect(truth.querySelector('.docs-truth-source')?.textContent).toBe(versionWords());
+    expect(truth.querySelector('.docs-badge')).toBeNull();
+  });
+
+  it('a leaf that opens nothing still draws its badge in the truth line, as its phone row does', async () => {
+    atWidth(412);
+    const withheld = { section: 'specs', path: 'n.md', committed: null, draft: draftOf('untracked', { fp: null }) } as const;
+    const tree = treeOk({ entries: [withheld], drafts: holder() });
+    const want = entryView(withheld, tree.drafts, 'ref').badge;
+    expect(want, 'the fixture withholds a new draft').not.toBeNull();
+    open('/docs/demo/specs/n.md?ref=ws/a', fakeLoaders({ tree: okTree(tree) }));
+    expect(await screen.findByText(DOCS_VIEW_TEXT.nothingToShow)).toBeInTheDocument();
+    const row = document.querySelector('.docs-compact-where .docs-badge');
+    const line = document.querySelector('.docs-more-panel .docs-truth .docs-badge');
+    expect(row?.textContent).toBe(ENTRY_BADGE_TEXT[want!]);
+    expect(line?.textContent).toBe(ENTRY_BADGE_TEXT[want!]);
+    expect(document.querySelector('.docs-more-panel .docs-truth-source')?.textContent).toBe(DOCS_HEAD_TEXT.sourceNone);
+  });
+
+  it('a version page shows no banner about the latest\'s drafts', async () => {
+    const entries = [
+      entry('specs', 'a.md', { draft: draftOf('deleted', { kind: 'absent', fp: null, size: null }) }),
+      entry('specs', 'b.md', { draft: draftOf('modified') }),
+    ];
+    // A ref view overlays only when the holder's base is the served commit, so the leaf's own `deleted` banner and the
+    // base hint never stand together: one tree each.
+    const loaders = (baseEqual: boolean): FakeLoaders => versionLoaders({ entries, drafts: holder(COMMIT_A, baseEqual) });
+    const LATEST_DRAFTS = ['base-hint', 'default-hint', 'withheld', 'deleted', 'typechange', 'conflicted', 'draft-assets'];
+    const ids = bannersAt;
+    // The same pages without `at` say all they have to say about the drafts: the controls.
+    expect(await ids('/docs/demo/specs/a.md?ref=ws/a', loaders(true))).toContain('deleted');
+    expect(await ids('/docs/demo/specs/a.md?ref=ws/a', loaders(false))).toContain('base-hint');
+    expect(await ids('/docs/demo/specs/a.md', loaders(true))).toContain('default-hint');
+    for (const [url, baseEqual] of [
+      [`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, true],
+      [`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, false],
+      [`/docs/demo/specs/a.md?at=${VERSION}`, true],
+    ] as const) {
+      const found = await ids(url, loaders(baseEqual));
+      expect(found, url).toContain('version');
+      for (const id of LATEST_DRAFTS) expect(found, `${url} ${id}`).not.toContain(id);
+    }
+    // A version page's own images are never drafts: the draft-images banner stays off whatever the page counts.
+    const none: FileSlot = { s: 'none' };
+    const tree = treeOk({ entries, drafts: holder(COMMIT_A, true) });
+    render(<DocsBanners page={pageAt(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`)} tree={tree} file={none} draftAssets={1} onRelist={vi.fn()} />);
+    expect(bannerIdsNow()).toEqual(['version']);
+  });
+
+  it.each([
+    ['withheld', draftOf('modified', { fp: null })],
+    ['typechange', draftOf('typechange', { kind: 'symlink', fp: null })],
+    ['conflicted', draftOf('conflicted')],
+  ] as const)('a version page shows no %s banner', async (id, draft) => {
+    const f = (): FakeLoaders => versionLoaders({ entries: [entry('specs', 'a.md', { draft })], drafts: holder() });
+    // The same page without `at`, in a ref view the holder's base agrees with, draws it: the control.
+    expect(await bannersAt('/docs/demo/specs/a.md?ref=ws/a', f())).toContain(id);
+    const found = await bannersAt(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, f());
+    expect(found).toContain('version');
+    expect(found).not.toContain(id);
+  });
+
+  it('a version page keeps the banners about the listing\'s drafts snapshot', async () => {
+    const f = (): FakeLoaders => versionLoaders({ drafts: { state: 'ambiguous', branch: 'main', candidates: ['/repo/wt/a', '/repo/wt/b'] } });
+    expect(await bannersAt('/docs/demo/specs/a.md?ref=ws/a', f())).toContain('ambiguous');
+    const found = await bannersAt(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, f());
+    expect(found).toEqual(expect.arrayContaining(['ambiguous', 'version']));
   });
 });

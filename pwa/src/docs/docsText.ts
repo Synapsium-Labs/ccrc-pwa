@@ -451,6 +451,8 @@ export const DOCS_HEAD_TEXT = {
   sourceDraft: '{badge} in {label}',
   sourceDraftUnbadged: 'draft',
   sourceNone: 'nothing opened',
+  sourceVersion: 'version {short}',
+  backToLatest: 'Back to the latest',
   updatedTo: 'Updated to {short}',
   github: 'View on GitHub',
   /** The full head's row shows this word beside its icon; the link's name stays `github` (desk-nav Part B, D-8101). */
@@ -530,6 +532,8 @@ export const DOCS_BANNER_TEXT = {
   draftAssets: 'This draft page embeds {k} uncommitted asset{s}.',
   viewCommitted: 'Showing the committed version at {short}.',
   backToDraft: 'Back to the draft',
+  version: 'Showing the version at {short}, not the latest on {served}.',
+  notContainedVersion: 'Commit {short} is not on {served}; it comes from another branch.',
 } as const;
 
 /** The served ref as the truth line and the banners name it (spec 4.5): `origin/<b>` when the origin side is served,

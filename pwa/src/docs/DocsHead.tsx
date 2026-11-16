@@ -115,10 +115,13 @@ export { githubTargetFor };
 type LeafSource =
   | { readonly kind: 'none' }
   | { readonly kind: 'committed'; readonly viewCommitted: boolean }
+  /** The version view (rich-docs spec G6): the committed bytes at `commit`, the page's `at`. */
+  | { readonly kind: 'version'; readonly commit: string }
   | { readonly kind: 'draft'; readonly badge: EntryBadge | null; readonly label: string; readonly worktreePath: string | null };
 
 function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): LeafSource {
   if (opened === null) return { kind: 'none' };
+  if (opened.kind === 'committed' && page.at !== null) return { kind: 'version', commit: opened.commit };
   if (opened.kind === 'committed') return { kind: 'committed', viewCommitted: page.view === 'committed' };
   const d = tree.drafts;
   const e = tree.entries.find((x) => x.section === page.section && x.path === page.path);
@@ -137,8 +140,8 @@ function badgeText(badge: EntryBadge | null): string {
   return badge === null ? DOCS_HEAD_TEXT.sourceDraftUnbadged : ENTRY_BADGE_TEXT[badge];
 }
 
-/** The truth line's source for a leaf (spec 4.5): `committed`, `committed (view=committed)`, or
- *  `draft · <state> in <worktree label>`. `opened` is the pin the leaf opened; null = nothing opened yet (or nothing
+/** The truth line's source for a leaf (spec 4.5): `committed`, `committed (view=committed)`, `version <short>` (a page
+ *  with `at`), or `draft · <state> in <worktree label>`. `opened` is the pin the leaf opened; null = nothing opened yet (or nothing
  *  to open), which reads "nothing opened". */
 export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): string {
   const s = leafSource(tree, page, opened);
@@ -147,6 +150,8 @@ export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null)
       return DOCS_HEAD_TEXT.sourceNone;
     case 'committed':
       return s.viewCommitted ? DOCS_HEAD_TEXT.sourceViewCommitted : DOCS_HEAD_TEXT.sourceCommitted;
+    case 'version':
+      return fillSentence(DOCS_HEAD_TEXT.sourceVersion, { short: shortCommit(s.commit) });
     case 'draft':
       return fillSentence(DOCS_HEAD_TEXT.sourceDraft, { badge: badgeText(s.badge), label: s.label });
   }
@@ -485,11 +490,20 @@ function TruthLine(p: {
             {fillSentence(SOURCE_DRAFT_TAIL, { label: s.label })}
           </span>
         )
-        : <span className="docs-truth-source">{truthSource(tree, page, opened)}</span>;
+        : s.kind === 'version'
+          ? (
+            <>
+              <span className="docs-truth-source" title={s.commit}>{truthSource(tree, page, opened)}</span>{SEP}
+              <DocsPageLink className="docs-hint-link" href={docsPageUrl(docsLocation(page, { kind: 'version', at: null }))}>
+                {DOCS_HEAD_TEXT.backToLatest}
+              </DocsPageLink>
+            </>
+          )
+          : <span className="docs-truth-source">{truthSource(tree, page, opened)}</span>;
       leaf = (
         <>
           {SEP}{source}
-          {k.view.badge !== null && s.kind !== 'draft' && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
+          {k.view.badge !== null && s.kind !== 'draft' && s.kind !== 'version' && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
           {file.s === 'ok' && <>{SEP}<span className="docs-truth-size">{kib(file.answer.show.size)}</span></>}
         </>
       );
@@ -716,7 +730,7 @@ function useHeadActions(p: ActionInputs): HeadActions {
   useAssetsVersion(p.exportAssets);
   const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
   let committedHref: string | null = null;
-  if (page.kind === 'path' && page.view !== 'committed') {
+  if (page.kind === 'path' && page.view !== 'committed' && page.at === null) {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
     if (k.kind === 'leaf' && k.view.offersCommitted) {
       const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed' } as const;
@@ -986,14 +1000,16 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
 /** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
  *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
  *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
- *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
- *  no draft word. */
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). On a version page the word is
+ *  the version's own (`version <short>`, `truthSource`'s), drawn as a badge. `null` when the truth line draws no draft
+ *  word. */
 interface RowBadge { readonly word: string; readonly badged: boolean }
 function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   if (k.kind !== 'leaf') return null;
   const s = leafSource(tree, page, openedPin(tree, page, file));
   if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
+  if (s.kind === 'version') return { word: truthSource(tree, page, openedPin(tree, page, file)), badged: true };
   return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
