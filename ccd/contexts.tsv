@@ -86,6 +86,8 @@ _is_codex_backend	C1
 _is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
+_acct_org	C1
+_org_rel	C1
 _pool_sync_installed	C1
 _acct_pool_state	C1
 _pool_ok	C1

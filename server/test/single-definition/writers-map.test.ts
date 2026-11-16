@@ -313,7 +313,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'claim_collisions', 'programme_pairs'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
  *  and the private store's for its own describe (Overlord W1 private store A). */
@@ -407,9 +407,14 @@ describe(TABLES_PIN, () => {
       // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
       // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
       // nothing deletes a receipt; the boot's record.
-      operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
-      response_receipts: ['server/src/coord/responsesStore.ts#insertReceipt'],
-      response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
+      // Responses B adds the Waiting on you rows' insert (in the reach's move), the digest lines' (in the digest's claim), the
+      // lane's one seal, the handled door's one mark, and the deleter by time, which also removes receipts and older boots.
+      operator_responses: ['deleteResponsesThroughInTx', 'insertDigestResponsesInTx', 'insertPushResponseInTx', 'insertWaitingResponseInTx',
+        'landPushVerdictInTx', 'markResponseHandled', 'sealResponse'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_receipts: ['deleteResponsesThroughInTx', 'insertReceipt'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_boots: ['deleteResponsesThroughInTx', 'recordResponseBoot'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      // The retention setting (responses B): its seed row, and the retention door's one writer.
+      response_settings: ['server/src/coord/responsesStore.ts#setResponseRetention', 'server/src/coord/schema.ts#(module)'],
       // Overlaps and goal conflicts (Overlord W2, plan w2-overlaps.md Task 3): a refused claim's record, prune included, written
       // only after the claim's own transaction committed; the pairs' rows by the arm's apply, and their goals stamps by the one
       // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.

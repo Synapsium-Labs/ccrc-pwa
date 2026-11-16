@@ -38,6 +38,7 @@ import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET`/`POST /api/face`'s answer. */
@@ -1108,6 +1109,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  armed; it works dark too. */
     setAnswerMark: (kind: AnswerMarkKind, id: number, mark: AnswerMarkName, value: boolean) =>
       postJson<{ readonly ok: true; readonly mark: AnswerMarkName; readonly answerMark: AnswerMarkView }>('/api/answer-marks', { kind, id, mark, value }),
+    /** `POST /api/responses/receipts` (Overlord W1, C67): the console's `opened` receipts, at most `RECEIPTS_MAX_PER_BODY` a body. */
+    postResponseReceipts: (receipts: readonly ReceiptIn[]) => postJson<{ readonly ok: true; readonly kept: number; readonly dropped: unknown }>('/api/responses/receipts', { v: 1, receipts }),
+    /** `GET /api/responses?ref=` (C69): the response rows of one message, `ref` as `item:<id>` or `digest:<key>`. A failure rejects, never an empty list. */
+    responsesFor: (ref: string) => getJson<{ readonly ok: true; readonly rows: readonly ResponseRowBrief[] }>(`/api/responses?ref=${encodeURIComponent(ref)}`),
+    /** `POST /api/responses/:id/handled` (C69): the operator handled that message elsewhere; no body, no undo. */
+    markResponseHandled: (id: number) => postJson<{ readonly ok: true; readonly id: number; readonly handledAt: number | null; readonly changed: boolean }>(`/api/responses/${id}/handled`),
+    /** `GET /api/responses/retention`: the retention in days, `days: null` with `unreadable` when the setting cannot be read (for a later Settings row). */
+    responseRetention: () => getJson<ResponseRetentionView>('/api/responses/retention'),
+    /** `POST /api/responses/retention`: sets the days; lowering takes a step-up, a refusal rejects with its `ApiError`. */
+    setResponseRetention: (days: number) => postJson<ResponseRetentionView>('/api/responses/retention', { days }),
     /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
      *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),
