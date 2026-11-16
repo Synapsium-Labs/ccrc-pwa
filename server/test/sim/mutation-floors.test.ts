@@ -25,11 +25,13 @@ import { QUIZ_MUTANT_SETS } from './quizSets.js';
 import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
+import { RESPONSES_MUTANT_SETS } from './responsesSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
+import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -177,8 +179,10 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
+  ...RESPONSES_MUTANT_SETS,
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
+  ...OVERLORD_AUTHORITY_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

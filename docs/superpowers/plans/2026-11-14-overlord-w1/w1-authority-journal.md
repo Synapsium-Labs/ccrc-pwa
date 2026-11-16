@@ -98,7 +98,9 @@ piece are quoted in their own section below.
      `writerFailed(cause)`. The guard (L4) implements it, and the composition root passes it. The writer imports no L4
      module. So a rollback the witness found (`witness-epoch`, `witness-heads`), which lives only in the guard while
      the file and the head row agree, still stops a widening at the writer.
-   - **A failure after the append fences at once** (slug `writer-failure-fences-trailing`, review F1). The landing
+   - **A failure after the append fences at once, writer-side** (slug `writer-failure-fences-trailing`, review F1;
+     qualified by review 2219, F3: "at once" holds for the writer's own failure; a caller's late one is seen at the
+     next append or boot). The landing
      journal does this with `landingFence`, set in `CoordStore.writeLandingAuthority`'s catch. Here the writer calls
      `writerFailed('trailing')` in two cases:
      - its own failure once the phase reached `append`: an uncertain append (`mayApply`), or a head-row write that
@@ -109,7 +111,9 @@ piece are quoted in their own section below.
 
      The guard then reads `rolled-back: trailing` (its fourth input), and the gates' step 3 refuses from that moment.
      Between a caller's late failure and the next authority write, the rows still hold what they held before the
-     failed write, which the operator granted, so nothing widens in that window. The next write, the next boot and
+     failed write, which the operator granted, so nothing widens in that window. When the trailing record narrows, the
+     rows are then wider than the file's fold while the guard reads `coherent`, until the next append or boot reads
+     the file past the head row (`trailing-narrowing-window`, review 2219 F3); gates B's step 3 must know it. The next write, the next boot and
      Confirm the restore each see the trailing record. Confirm decides "nothing waits" from the file's coherence and
      the guard together, never from the guard alone.
    - Reading and verifying the whole file at every write means the writer never trusts a cached head, and coherence
@@ -551,8 +555,9 @@ guard implements it, and `index.ts` passes the guard in. PR A0 ships `appendOnly
    narrowing writes its row only. A trailing record that widens is never applied: Confirm takes the stricter value
    field by field, so it drops a widening record and keeps a narrowing one. The witness can make the server refuse,
    and it can never make it permit.
-3. **A failure is seen at once.** A writer failure at or after the append puts the guard in `rolled-back: trailing`
-   before the writer answers. Confirm decides "nothing waits" from the file's coherence and the guard together, and a
+3. **A failure is seen at once, writer-side.** A writer failure at or after the append puts the guard in
+   `rolled-back: trailing` before the writer answers. A caller's own row or commit that fails after the writer answered is
+   seen at the next append or boot (`trailing-narrowing-window`). Confirm decides "nothing waits" from the file's coherence and the guard together, and a
    `malformed` journal can be confirmed.
 4. **The witness is off the volume.** Only a console and an agent measured `other-host` count. A same-host or
    unmeasured agent's tuple can refuse and can never lift a condition or hold a narrowing. A tuple from this boot lifts
@@ -688,7 +693,7 @@ a Confirm reaches `coherent` with no further restore, and stays there while no f
 | Mutation | Caught by |
 |---|---|
 | `same_host_agent_counts`: the same-host agent's answer lifts the condition and holds a narrowing | WH, and I7w after a whole-volume restore |
-| `epoch_in_db`: the epoch is stored in the database, so a restore lowers it with no fall in the heads | I7w |
+| `epoch_in_db`: the epoch is stored in the database, so a restore lowers it with no fall in the heads | L2 (the "stays" half: the Confirm after it sets the epoch from the lowered value) |
 | `heads_not_checked`: the verdict compares epochs only | I7w (a restore then enough appends to catch up) |
 | `confirm_no_epoch_raise`: Confirm leaves the epoch below a witness's | liveness |
 | `trailing_widening_applied`: Confirm takes the trailing record's value whatever it is | I11a |
@@ -1531,7 +1536,8 @@ numbers.
 - **`writer-reads-the-guard-by-port`**: the writer reads the guard through `AuthorityGuardPort`, which it declares,
   so a rollback only a witness found still stops a widening (question 1, review F10).
 - **`writer-failure-fences-trailing`**: a writer failure at or after the append, and a head-mismatch refusal, put the
-  guard in `rolled-back: trailing` at once, the landing fence's counterpart (question 1, review F1).
+  guard in `rolled-back: trailing` at once, writer-side (a caller's late failure is seen at the next append or boot),
+  the landing fence's counterpart (question 1, review F1).
 - **`overlord-authority-names`**: the spec's "authority journal" is `overlord-authority.jsonl` and the
   `OverlordAuthority*` names, named apart from `landing.log` (question 2).
 - **`one-sync-append-port`**: the landing journal's synchronous file mechanics move to a byte-level K port with one

@@ -4,6 +4,7 @@ import type { CcdPrLine } from '../prstate.js';
 import type { CloseCause, CloseOutcome, CloseRunBody, ChildGate } from './close.js';
 import type { DoneClaim, DoneVerdict } from './fingerprint.js';
 import type { PrHistoryRead } from './prhistory.js';
+import type { SingleRead } from '../registry.js';
 import { HANDOFF_SHA, holdReasonVerdict, prRowCounts, releaseIsSafe, survivorOf } from './rundefs.js';
 import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from './store.js';
 
@@ -26,6 +27,8 @@ import type { AdvanceResult, OpenSiblingsResult, RunReadResult, RunRow } from '.
  *   abandon   (abandon arm) the same question for the abandon: release, or hand the claim to the survivor.
  *   ledger    (work close) the `.prhistory` read, and which of its rows are this run's branch's.
  *   verb      whether the box lists the fleet verb about to be sent.
+ *   gone      (a release) the registry's answer for the session, read IMMEDIATELY BEFORE the act: positively absent
+ *             is a release already done, and the act is not sent (D-8664).
  *   fleet     ccd's answer to the act.
  *   recheck   (abandon, sweep word) the claimant re-measured AFTER the act.
  *   commit    the store's answer to the transition: a refusal before any act is `refused`, after one `stale`.
@@ -302,6 +305,24 @@ function decideVerb(f: VerbFacts): CloseDecision<null> {
   return f.can ? go(null) : refused({ ok: false, kind: 'unsupported' });
 }
 
+/** D-8664. ccd's `ws-release` dies `no such session` when the registry lists no `<id>.uuid`, so a run whose session
+ *  the fleet has since removed could never be abandoned: every retry answered `fleetFailed`. A release of a session the
+ *  registry POSITIVELY lists as absent (`readSessionRecord`'s `absent`: the listing succeeded and has no `.uuid`, the
+ *  same file ccd checks) is already done, and the act is not sent. FAIL-SHUT: an unlistable or unmeasurable registry is
+ *  not an absence, and the act runs as before, so ccd's own answer (and `fleetFailed` on any failure) still decides.
+ *  The hold and the archive are not releases: the registry is not read for them. The read is a thunk so it is taken
+ *  only for a release. */
+export interface GoneFacts {
+  step: 'gone';
+  verb: FleetAct['verb'];
+  read: () => Promise<SingleRead['kind']>;
+}
+
+async function decideGone(f: GoneFacts): Promise<CloseDecision<{ gone: boolean }>> {
+  if (f.verb !== 'wsRelease') return go({ gone: false });
+  return go({ gone: (await f.read()) === 'absent' });
+}
+
 export interface FleetFacts { step: 'fleet'; res: { ok: true } | { ok: false; stderr: string } }
 
 function decideFleet(f: FleetFacts): CloseDecision<null> {
@@ -342,13 +363,14 @@ function decideCommit(f: CommitFacts): CloseDecision<null> {
 
 export type CloseFacts =
   | RequestFacts | SweepFacts | VerifiedFacts | CloseActFacts | AbandonFacts
-  | LedgerFacts | VerbFacts | FleetFacts | RecheckFacts | CommitFacts;
+  | LedgerFacts | VerbFacts | GoneFacts | FleetFacts | RecheckFacts | CommitFacts;
 
 export function decideClose(f: RequestFacts): CloseDecision<RequestPlan>;
 export function decideClose(f: SweepFacts | VerbFacts | FleetFacts | RecheckFacts | CommitFacts): CloseDecision<null>;
 export function decideClose(f: VerifiedFacts): CloseDecision<{ line: CcdPrLine | null }>;
 export function decideClose(f: LedgerFacts): CloseDecision<{ entries: Extract<PrHistoryRead, { ok: true }>['entries'] }>;
 export function decideClose(f: CloseActFacts | AbandonFacts): Promise<CloseDecision<ActPlan>>;
+export function decideClose(f: GoneFacts): Promise<CloseDecision<{ gone: boolean }>>;
 export function decideClose(f: CloseFacts): unknown {
   switch (f.step) {
     case 'request': return decideRequest(f);
@@ -358,6 +380,7 @@ export function decideClose(f: CloseFacts): unknown {
     case 'abandon': return decideAbandon(f);
     case 'ledger': return decideLedger(f);
     case 'verb': return decideVerb(f);
+    case 'gone': return decideGone(f);
     case 'fleet': return decideFleet(f);
     case 'recheck': return decideRecheck(f);
     case 'commit': return decideCommit(f);

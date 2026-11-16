@@ -86,7 +86,7 @@ const body = (chars: number, i: number): string => {
 const page = (sizes: readonly number[]): HastRoot => root(sizes.map((n, i) => fence(body(n + 1, i))));
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
-  project: 'project-a', pageRef: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
+  project: 'project-a', pageRef: null, pageAt: null, view: 'effective', section: 'specs', path: 'a.md', tree: treeOk(),
   pageSource: 'committed', onFragment: () => {},
 };
 

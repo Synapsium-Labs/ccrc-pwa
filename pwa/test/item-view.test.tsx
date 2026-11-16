@@ -173,8 +173,9 @@ describe('the item view', () => {
       'wrong-actor', // an operator's own tick and dismiss are never the wrong actor
     ];
     const operatorCodes = [...Object.values(LEDGER_ROUTE_REFUSALS), ...ITEM_MOVE_REFUSALS].filter((c) => !COORDINATOR_ONLY.includes(c));
-    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store.
-    const generic = ['bad-request', 'duplicate', 'not-configured'];
+    // …and the three the routes send with no word of their own: a refused body, a duplicate tick, a box without the store; and
+    // the two asks' words the answer-mark door's ask arm sends (answer marks B), which are the question lane's, not the ledger's.
+    const generic = ['bad-request', 'duplicate', 'not-configured', 'unknown-ask', 'ask-unreadable'];
     expect([...new Set([...operatorCodes, ...generic])].sort()).toEqual(Object.keys(LEDGER_REFUSAL_TEXT).sort());
   });
 
@@ -586,5 +587,17 @@ describe('the answer marks on an item\'s page (Overlord W1)', () => {
     cleanup();
     show(itemView({ kind: 'value', answerMarks: MARKS }), { current: false });
     for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+  // Answer marks C (#2900): a task's page draws one box, worded for a task, open and cleared.
+  it('a do item draws one box, "The Overlord could handle this", open and done, and none for unsure', () => {
+    for (const o of [{}, { state: 'done' as const, closedAt: NOW - MIN }]) {
+      show(itemView({ kind: 'do', ...o, answerMarks: { couldAnswer: MARKS.couldAnswer } }));
+      const panel = screen.getByRole('region', { name: 'Your move' });
+      const boxes = within(panel).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([[true, false]]);
+      expect(within(panel).getByLabelText('The Overlord could handle this')).toBe(boxes[0]);
+      expect(within(panel).queryByLabelText("I'm not sure of my answer")).toBeNull();
+      cleanup();
+    }
   });
 });

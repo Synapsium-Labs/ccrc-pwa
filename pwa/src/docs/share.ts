@@ -33,7 +33,8 @@ export async function copyText(text: string): Promise<void> {
  *  `uncommitted`, which splits by what the leaf opens: `new-draft`, a readable new draft; `new-withheld`, a new file
  *  Docs did not read. They need different sentences, so they are different words. */
 export type ShareRefusal =
-  | 'no-github-origin' | 'bad-slug' | 'bad-target' | 'not-on-origin' | 'unmeasured' | 'new-draft' | 'new-withheld';
+  | 'no-github-origin' | 'bad-slug' | 'bad-target' | 'not-on-origin' | 'unmeasured' | 'new-draft' | 'new-withheld'
+  | 'version-unmeasured';
 
 /** The sheet's notes (spec 4.16 "Note words"), one word per note. */
 export type ShareNote =
@@ -90,6 +91,19 @@ export function shareTargetFor(tree: DocsTreeOk, page: DocsPageLocation, opened:
   const short = shortCommit(commit);
   const link = githubPermalink(tree.github, tree.ref, commit, target);
   const access: ShareNoteLine[] = tree.github.state === 'none' ? [] : [{ note: 'access', fields: { slug: tree.github.slug } }];
+  // A version view (rich-docs spec G6; base spec 4.13; refinement (r)). `githubPermalink` judges the served ref's TIP; a
+  // version is an older commit, which origin holds when the tip is on origin AND the version is on the served ref
+  // (`onRef === 'contains'`, measured by the read that showed it). Anything else is unmeasured, never a guessed link.
+  const version = leaf !== null && page.kind === 'path' && page.at !== null;
+  if (version && page.kind === 'path' && page.at !== null) { // the extra tests only narrow `page` for the compiler
+    const onRef = opened.kind === 'file' && opened.pin.kind === 'committed' && opened.show !== null
+      && opened.show.commit === opened.pin.commit ? opened.show.onRef : undefined;
+    const ownWord = !link.ok && (link.why === 'no-github-origin' || link.why === 'bad-slug' || link.why === 'bad-target');
+    if (!ownWord && (!link.ok || onRef !== 'contains')) {
+      // The page's own commit, even when the leaf opened nothing and `short` is the tree's.
+      return { ok: false, why: 'version-unmeasured', fields: { short: shortCommit(page.at) }, notes: access };
+    }
+  }
   if (!link.ok) {
     const why: ShareRefusal = link.why !== 'uncommitted' ? link.why
       : leaf !== null && leaf.view.opens === 'none' ? 'new-withheld' : 'new-draft';
@@ -105,7 +119,9 @@ export function shareTargetFor(tree: DocsTreeOk, page: DocsPageLocation, opened:
     const { entry, view } = leaf;
     const admitted = mode === 'ref' && admitDraft(entry, tree.drafts);
     const label = tree.drafts.state === 'holder' ? closedWorktreeLabel(tree.drafts.worktree) : DOCS_HEAD_TEXT.worktreeOther;
-    if (admitted && page.view === 'committed') notes.push({ note: 'view-committed', fields: { label } });
+    if (version) {
+      // A version is one commit: no draft is part of it, so no draft note applies.
+    } else if (admitted && page.view === 'committed') notes.push({ note: 'view-committed', fields: { label } });
     else if (view.opens === 'draft') notes.push({ note: 'drafts-excluded', fields: { short, label } });
     else if (admitted && view.badge !== null) {
       notes.push({ note: 'admitted-committed', fields: { badge: ENTRY_BADGE_TEXT[view.badge], label } });

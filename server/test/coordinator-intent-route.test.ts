@@ -28,8 +28,8 @@ import { CoordStore } from '../src/coord/store.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
   decodeDelegationCheckpoint,
-  type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
 import { DelegationDurability, type DelegationDurabilityDeps } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {

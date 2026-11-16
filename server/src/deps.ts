@@ -25,6 +25,8 @@ import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
+import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
+import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -43,6 +45,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
  *  generation journal `CoordStore.setCollectLane` appends to inside its transaction, and this process's boot nonce,
@@ -73,6 +76,10 @@ export interface Deps {
   /** The egress mask (D-5513, accounts plan Task A10): every server egress of session-derived text passes it. Absent
    *  (a test, mainly): `SHAPE_ONLY_MASKER`, so the shapes are masked even where nothing wires the table. */
   masker?: SecretMasker;
+  /** The response record's stamp (Overlord W1, `responses/stamp.ts#responseStampNow`): set once by `index.ts` from this
+   *  boot's `response_boots` row. Absent (a narrow test), a push is sent with no response row and no push id (slug
+   *  no-stamp-no-response-row). */
+  responseStamp?: () => ResponseStamp;
   /** Remote-mode reachability, straight from `connectFleet().state` — its
    *  `connected`/`downSince` fields are ignored in local mode (the fleet is
    *  always "connected" there; every reader gates on `cfg.fleetMode ===
@@ -198,6 +205,12 @@ export interface Deps {
   /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
    *  Absent (a test, a script): the lane does not run. */
   quiz?: QuizLanePort;
+  /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
+   *  over `~/.ccrc/overlord-authority.jsonl`, the guard passed to the journal as its `AuthorityGuardPort`. The designation and
+   *  ladder stores append through `overlordAuthority.appendInTx`; gates B's step 3 reads `overlordAuthorityGuard.state()`.
+   *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
+  overlordAuthority?: OverlordAuthorityJournal;
+  overlordAuthorityGuard?: OverlordAuthorityGuard;
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;

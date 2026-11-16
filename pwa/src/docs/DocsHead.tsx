@@ -115,10 +115,13 @@ export { githubTargetFor };
 type LeafSource =
   | { readonly kind: 'none' }
   | { readonly kind: 'committed'; readonly viewCommitted: boolean }
+  /** The version view (rich-docs spec G6): the committed bytes at `commit`, the page's `at`. */
+  | { readonly kind: 'version'; readonly commit: string }
   | { readonly kind: 'draft'; readonly badge: EntryBadge | null; readonly label: string; readonly worktreePath: string | null };
 
 function leafSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): LeafSource {
   if (opened === null) return { kind: 'none' };
+  if (opened.kind === 'committed' && page.at !== null) return { kind: 'version', commit: opened.commit };
   if (opened.kind === 'committed') return { kind: 'committed', viewCommitted: page.view === 'committed' };
   const d = tree.drafts;
   const e = tree.entries.find((x) => x.section === page.section && x.path === page.path);
@@ -137,8 +140,8 @@ function badgeText(badge: EntryBadge | null): string {
   return badge === null ? DOCS_HEAD_TEXT.sourceDraftUnbadged : ENTRY_BADGE_TEXT[badge];
 }
 
-/** The truth line's source for a leaf (spec 4.5): `committed`, `committed (view=committed)`, or
- *  `draft · <state> in <worktree label>`. `opened` is the pin the leaf opened; null = nothing opened yet (or nothing
+/** The truth line's source for a leaf (spec 4.5): `committed`, `committed (view=committed)`, `version <short>` (a page
+ *  with `at`), or `draft · <state> in <worktree label>`. `opened` is the pin the leaf opened; null = nothing opened yet (or nothing
  *  to open), which reads "nothing opened". */
 export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null): string {
   const s = leafSource(tree, page, opened);
@@ -147,6 +150,8 @@ export function truthSource(tree: DocsTreeOk, page: Leaf, opened: DocPin | null)
       return DOCS_HEAD_TEXT.sourceNone;
     case 'committed':
       return s.viewCommitted ? DOCS_HEAD_TEXT.sourceViewCommitted : DOCS_HEAD_TEXT.sourceCommitted;
+    case 'version':
+      return fillSentence(DOCS_HEAD_TEXT.sourceVersion, { short: shortCommit(s.commit) });
     case 'draft':
       return fillSentence(DOCS_HEAD_TEXT.sourceDraft, { badge: badgeText(s.badge), label: s.label });
   }
@@ -485,11 +490,20 @@ function TruthLine(p: {
             {fillSentence(SOURCE_DRAFT_TAIL, { label: s.label })}
           </span>
         )
-        : <span className="docs-truth-source">{truthSource(tree, page, opened)}</span>;
+        : s.kind === 'version'
+          ? (
+            <>
+              <span className="docs-truth-source" title={s.commit}>{truthSource(tree, page, opened)}</span>{SEP}
+              <DocsPageLink className="docs-hint-link" href={docsPageUrl(docsLocation(page, { kind: 'version', at: null }))}>
+                {DOCS_HEAD_TEXT.backToLatest}
+              </DocsPageLink>
+            </>
+          )
+          : <span className="docs-truth-source">{truthSource(tree, page, opened)}</span>;
       leaf = (
         <>
           {SEP}{source}
-          {k.view.badge !== null && s.kind !== 'draft' && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
+          {k.view.badge !== null && s.kind !== 'draft' && page.at === null && <>{SEP}<span className="docs-badge">{ENTRY_BADGE_TEXT[k.view.badge]}</span></>}
           {file.s === 'ok' && <>{SEP}<span className="docs-truth-size">{kib(file.answer.show.size)}</span></>}
         </>
       );
@@ -526,12 +540,15 @@ function RowFace(p: { readonly icon: 'folder-code' | 'share' | 'download' | 'fil
 
 /** View on GitHub (spec 3.11, opened with `openExternal` on tap), with its may-differ note, or its refusal in words.
  *  `showsDraft`: the leaf shows draft bytes, which GitHub never has, so the note stands whatever the ref's relation.
+ *  `onVersion`: a version page (rich-docs G6) shows the bytes at a commit and GitHub shows the branch, which may differ,
+ *  so the note stands there too.
  *  `row`: the full head's form (desk-nav Part B): the icon and "GitHub", named "View on GitHub". There the note is a
  *  marker (`≠`) that takes no room from the crumbs (fix round 1, F1): its words are its `title`, a screen reader's
  *  text inside it, and the link's accessible description. Under a coarse pointer, which has no hover to show a
  *  `title`, the row's note draws its words instead (review 1697 F5; Task C16, D-8139). */
 function GithubAction(p: {
-  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly row?: boolean;
+  readonly tree: DocsTreeOk; readonly target: GithubTarget; readonly showsDraft: boolean; readonly onVersion: boolean;
+  readonly row?: boolean;
 }): ReactNode {
   const noteId = useId();
   const coarse = useMediaQuery(COARSE_POINTER_QUERY);
@@ -542,7 +559,7 @@ function GithubAction(p: {
     const off = fillSentence(DOCS_HEAD_TEXT.githubOff, { reason: GITHUB_REFUSAL_TEXT[link.why] });
     return <span className="docs-action-off" title={row ? off : undefined}>{off}</span>;
   }
-  const noted = link.note === 'may-differ' || p.showsDraft;
+  const noted = link.note === 'may-differ' || p.showsDraft || p.onVersion;
   return (
     <>
       <a
@@ -663,11 +680,11 @@ function ShareAction(p: {
 function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
   const { page, tree, file } = p;
   const row = p.form === 'row';
-  const { target, showsDraft, share, exported, committedHref } = useHeadActions(p);
+  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions(p);
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
-      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} row={row} />}
+      {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} row={row} />}
       {share.s !== 'absent' && (
         <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} row={row} />
       )}
@@ -702,6 +719,8 @@ interface ActionInputs {
 interface HeadActions {
   readonly target: GithubTarget | null;
   readonly showsDraft: boolean;
+  /** The page is a version page: View on GitHub carries its may-differ caution there (rich-docs G6). */
+  readonly onVersion: boolean;
   readonly share: ShareState;
   readonly exported: ExportState;
   readonly committedHref: string | null;
@@ -711,19 +730,20 @@ function useHeadActions(p: ActionInputs): HeadActions {
   const { page, tree, file } = p;
   const target = githubTargetFor(page, tree);
   const showsDraft = page.kind === 'path' && openedPin(tree, page, file)?.kind === 'draft';
+  const onVersion = page.kind === 'path' && page.at !== null;
   const share = shareStateFor(page, tree, file, p.leafImage);
   const settled = useStoreSettled(p.pageStore);
   useAssetsVersion(p.exportAssets);
   const exported = exportStateFor(page, tree, file, { body: p.exportBody, store: p.pageStore, settled, assets: p.exportAssets });
   let committedHref: string | null = null;
-  if (page.kind === 'path' && page.view !== 'committed') {
+  if (page.kind === 'path' && page.view !== 'committed' && page.at === null) {
     const k = docsPathKind(tree, page.section, page.path, modeOf(page));
     if (k.kind === 'leaf' && k.view.offersCommitted) {
       const to = { kind: 'path', section: page.section, path: page.path, dirSlash: false, view: 'committed' } as const;
       committedHref = docsPageUrl(docsLocation(page, to));
     }
   }
-  return { target, showsDraft, share, exported, committedHref };
+  return { target, showsDraft, onVersion, share, exported, committedHref };
 }
 
 /** The Docs header. `tree` null has one meaning: the visit's tree slot is not `ok` (loading, failed, or the page names
@@ -986,15 +1006,18 @@ function BackButton(p: { readonly page: DocsPageLocation }): ReactNode {
 /** The compact row's draft word (phone-header refinement (g)): the word, and the form, the truth line draws for this leaf, so the
  *  row follows the one source (M4.T7, one badge function). `entryView`'s badge through `ENTRY_BADGE_TEXT` is drawn as a
  *  `.docs-badge` (`badged`); for a draft whose entry no longer opens one (the pin outlived a re-list) the truth line draws
- *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). `null` when the truth line draws
- *  no draft word. */
+ *  `DOCS_HEAD_TEXT.sourceDraftUnbadged` as plain text, and so does the row (`badged` false). On a version page the word is
+ *  the version's own (`version <short>`, `truthSource`'s), drawn as a badge. `null` when the truth line draws no draft
+ *  word. */
 interface RowBadge { readonly word: string; readonly badged: boolean }
 function rowBadge(tree: DocsTreeOk, page: Leaf, file: DocsVisit['file']): RowBadge | null {
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   if (k.kind !== 'leaf') return null;
   const s = leafSource(tree, page, openedPin(tree, page, file));
   if (s.kind === 'draft') return { word: badgeText(s.badge), badged: s.badge !== null };
-  return k.view.badge === null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
+  if (s.kind === 'version') return { word: truthSource(tree, page, openedPin(tree, page, file)), badged: true };
+  // A version page draws no entry badge: the entry's is the latest's (a version page's source is `version` or `none`).
+  return k.view.badge === null || page.at !== null ? null : { word: ENTRY_BADGE_TEXT[k.view.badge], badged: true };
 }
 
 /** The compact row's two lines (phone-header refinements (c), (g)): where the page is over its name. The first line is the
@@ -1078,7 +1101,7 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
   const [open, setOpen] = useState(false);
   const toggle = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const { target, showsDraft, share, exported, committedHref } = useHeadActions({
+  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
     exportAssets: p.exportAssets, onPlainView: p.onPlainView,
   });
@@ -1125,7 +1148,7 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
         <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
         {(target !== null || committedHref !== null) && (
           <div className="docs-actions">
-            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} />}
+            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
             {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
           </div>
         )}

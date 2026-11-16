@@ -99,6 +99,7 @@ import { BackupLane } from './backupLane.js';
 import type { BackupHealth } from '../../shared/backup.js';
 import { TestboxLane } from './testboxLane.js';
 import { BuildCaptureLane } from './buildCaptureLane.js';
+import { PoolSetLossLane } from './poolSetLossLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
 import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-durability.js';
@@ -1104,6 +1105,7 @@ export class FleetWatcher {
   readonly testboxLane = new TestboxLane(() => this.deps);
   /** D-8289: the capture queue: a row per build the fleet runs, and one capture job at a time to the test box. */
   private readonly buildCaptureLane = new BuildCaptureLane(() => this.deps);
+  private readonly poolSetLossLane = new PoolSetLossLane(() => this.deps);   // pool set B2: the push when a floor word is lost
   private readonly tmpCensus = new TmpCensusBeat(() => this.deps);
   /** Each node's last box-settings read (D-6916): read inside the inventory run, served by `GET /api/updates` through `boxSettingsHeld()`. */
   private readonly boxSettingsLane = new BoxSettingsLane();
@@ -3032,6 +3034,7 @@ export class FleetWatcher {
       if (this.primed) void this.sweepRoll(sessions, records, registryRead.names)?.catch(() => { /* one bad sweep must not kill the poll */ });
       // D-8289: the capture queue, on THIS tick's builds (D-8276's newest-build signal and every live build). Own clock, never awaited.
       void this.buildCaptureLane.sweep(sessions.map((s) => s.version));
+      this.poolSetLossLane.check(records);   // pool set B2 (Task 10): this tick's route facts against the caps last recorded
       if (this.primed) void this.sweepStaleArchive(records, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // D-5373: NEVER awaited, `sweepMail`'s reason — it can call `sendPrompt` through the per-session queue. Own clock.
       // A due beat that lands on a pass still running is skipped by the row and still spends its slot, as it always did.
@@ -11381,7 +11384,7 @@ class DelegationLane {
           }
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
-            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker };
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker, responseStamp: deps.responseStamp };
             const before = this.adoptMemory.watch;                       // review 1622 F1: replaced only when the decider ran
             try {                                                         // PR7b: a throw here never skips PR6's carrier step
               await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,

@@ -3316,6 +3316,60 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
   `,
+
+  // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
+  // The Overlord authority journal's head row (spec §7.6, Table 7.6a; plan `w1-authority-journal.md` Task 3, question 5): the
+  // position of the last record of `~/.ccrc/overlord-authority.jsonl` whose row committed. ONE writer, the apply step of
+  // `overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx`, in the transaction of the authority row it records. Boot
+  // coherence compares the file's head with it. It landed first, so it keeps 81 and responses A takes 82 (the
+  // coordinator's word). A NEW TABLE: an older build at `user_version 81` takes rule 3 and never names it. RE-MEASURE the slot:
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_authority_head (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence   INTEGER NOT NULL,
+    journalId  TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    at         INTEGER NOT NULL     -- the record's acceptedAt, as epoch milliseconds
+  );
+  `,
+
+  // ── 82: user_version 81 -> 82 ─────────────────────────────────────────────
+  // The response record (Overlord spec §4.3 C66, C67; W1, plan `w1-responses.md` Task 2): `operator_responses`, one row per
+  // message ccrc put in front of the operator, sealed once by the response lane; `response_receipts`, what a device reported
+  // of it, written only by the receipts door; `response_boots`, one row per boot of this server (question 17). One writer
+  // for each fact, named in `responsesStore.ts` and `writers-map.test.ts`. Each kind's reference is one partial unique index
+  // over columns its own CHECKs make non-null, and every insert names its conflict, so a repeat is nothing and a CHECK throws.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 82` takes rule 3, never names
+  // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too: the renewal act (#2852) took 79,
+  // answer marks A (#2879) 80 and authority journal A (#2895) 81, so this is 82 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 81 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE operator_responses (id INTEGER PRIMARY KEY, kind TEXT NOT NULL, label TEXT NOT NULL, pushId TEXT UNIQUE,
+    refKind TEXT, refId INTEGER, refKey TEXT, carriesKind TEXT, carriesId INTEGER, hasActions INTEGER NOT NULL DEFAULT 0,
+    tag TEXT, delivery TEXT NOT NULL, state TEXT NOT NULL, acceptedSubs TEXT NOT NULL DEFAULT '[]',
+    sends INTEGER NOT NULL DEFAULT 0, bootMeasured INTEGER NOT NULL, bootEpoch INTEGER,
+    restoreMeasured INTEGER NOT NULL, restoreGeneration INTEGER, insertedAt INTEGER NOT NULL, admittedAt INTEGER,
+    deliveredAt INTEGER, windowCapAt INTEGER, shownAt INTEGER, openedAt INTEGER, actedAt INTEGER,
+    outcome TEXT, how TEXT, why TEXT, sealedAt INTEGER, handledAt INTEGER,
+    CHECK ((bootMeasured = 1) = (bootEpoch IS NOT NULL)),
+    CHECK ((restoreMeasured = 1) = (restoreGeneration IS NOT NULL)),
+    CHECK ((kind = 'push') = (pushId IS NOT NULL)), CHECK ((carriesKind IS NULL) = (carriesId IS NULL)),
+    CHECK ((kind = 'waiting') = (refKind IS NOT NULL)), CHECK ((kind IN ('waiting', 'reply')) = (refId IS NOT NULL)),
+    CHECK ((kind = 'digest') = (refKey IS NOT NULL)));
+  CREATE UNIQUE INDEX operator_responses_one_waiting ON operator_responses(refKind, refId) WHERE kind = 'waiting';
+  CREATE UNIQUE INDEX operator_responses_one_digest ON operator_responses(refKey) WHERE kind = 'digest';
+  CREATE UNIQUE INDEX operator_responses_one_reply ON operator_responses(refId) WHERE kind = 'reply';
+  CREATE INDEX operator_responses_open ON operator_responses(state, windowCapAt);
+  CREATE INDEX operator_responses_by_insert ON operator_responses(insertedAt);
+  CREATE TABLE response_receipts (id INTEGER PRIMARY KEY, responseId INTEGER NOT NULL, receipt TEXT NOT NULL,
+    source TEXT NOT NULL, version INTEGER, endpointHash TEXT NOT NULL DEFAULT '', at INTEGER NOT NULL,
+    CHECK ((source = 'worker') = (version IS NOT NULL)));
+  CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
+  CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

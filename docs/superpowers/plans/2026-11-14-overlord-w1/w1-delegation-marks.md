@@ -245,11 +245,13 @@ Measured on `main` at `dbf90dbfc` (2026-11-15).
   - The operator's answer path (`questions.ts`, through `takeAskForAnswer`, which takes `held` or `released`) settles it
     `answered` with `answeredBy` = `ASK_OPERATOR_PRINCIPAL` (`settleAsk`). A parent's answer records the parent's id.
   - No writer deletes an ask row. `pruneAskQuestions` blanks `question` and `options` after the retention.
-  - **A `released` or `declined` ask never leaves that state** (review 2176 F8, measured). `staleAsk` moves only `held`
-    and `answering`, and `releaseAsk` and `declineAsk` move only `held`. `takeAskForAnswer` refuses `declined`, and the
-    operator's answer path reads `heldAskFor` (`state IN ('held','released')`). So a `declined` ask the operator
-    answers in the pane is pressed unrecorded and stays `declined`, and a `released` ask whose dialog has gone stays
-    `released`. `releasedAt` is the last change of state of both, and `answeredAt` that of an answered ask.
+  - **A `declined` ask never leaves that state; a `released` one may** (review 2176 F8, measured; corrected by review
+    2217 F1). `releaseAsk` and `declineAsk` move only `held`, and `takeAskForAnswer` refuses `declined`, so a `declined`
+    ask the operator answers in the pane is pressed unrecorded and stays `declined`. But `takeAskForAnswer` takes
+    `released` into `answering`, a lapsed ask's parent may still answer it late, and `staleAsk` moves `answering` to
+    `stale` and overwrites `releasedAt`. So whether an ask reached the operator is read from its reach stamp
+    (`reachedOperatorAt`, `pushOutboxStore.ts#stampReach`) once its state has moved on (answer marks B, slug
+    reached-is-the-reach-stamp). A `released` ask whose dialog has gone, with no one mid-answer, stays `released`.
   - **The live signal exists.** `server/src/coord/ports.ts#LiveAskRead`, adapted by `FleetWatcher#liveAskKey`, answers
     the `askKey` of the ask a child's newest hook state is waiting on, `null`, or `unmeasured`. The portfolio reads it
     for a `released` or `declined` ask that is its child's newest row (`portfolioStore.ts#portfolioFacts`), and
@@ -907,8 +909,8 @@ coordinator mints numbers.
 - **`answer-mark-absent-is-unsupported`**: an absent `answerMarks` means "this server cannot mark", never "never marked"
   (question 14).
 - **`ask-marks-follow-todays-ask-states`**: PR B lists an ask while it is live, read through the portfolio's `liveAsk`
-  port, or within 48 hours of its last change of state, because a `released` or `declined` ask never leaves that
-  state (question 3, review 2176 F8). The first draft held each child's newest released ask open with no bound and
+  port, or within 48 hours of its release, its answer or the time it went stale; an ask that reached the operator
+  stays listed whoever answers it later (question 3, review 2176 F8, corrected by review 2217 F1). The first draft held each child's newest released ask open with no bound and
   joined it to a question row by child alone.
 - **`coordinator-read-carries-no-marks`**: the coordinator's box-token item read carries no marks, and each operator
   response carries the marks of the item it answers (Task 3, review 2176 F13).

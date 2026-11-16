@@ -344,6 +344,79 @@ const ANSWER_SET: MutantSet<PoolRuleServerModule> = {
   suite: parsePoolAnswerCases,
 };
 
+// ---------- poolSetLoss (plan Task 10) ----------
+
+const POOL_SET_ROW = { fact: 'poolset', word: 'pool-set' } as const;
+/** A second floor row on a copy of the table, as a later piece adds one (the coordinator's table ruling). */
+const SECOND_ROW = { fact: 'profiledigest', word: 'launch-surface-v1' } as const;
+const carries = (id: string, ...fields: string[]) => ({ id, fields, unreadable: [] as string[] });
+const unreadableAt = (id: string, ...unreadable: string[]) => ({ id, fields: [] as string[], unreadable });
+
+export function poolSetLossCases(m: Pick<PoolRuleServerModule, 'poolSetLoss'>): Record<string, SuiteCase> {
+  const loss = m.poolSetLoss;
+  const rows = [POOL_SET_ROW];
+  return {
+    'caps that list the word raise nothing, a set standing': () => {
+      expect(loss(rows, ['ws-add', 'pool-set'], [carries('lane-a-overlord', 'poolset')], 'abc')).toStrictEqual({ raise: false });
+    },
+    'caps without the word and no set raise nothing, another route field included': () => {
+      expect(loss(rows, ['ws-add'], [carries('lane-a-project-a', 'class', 'effort')], 'abc')).toStrictEqual({ raise: false });
+      expect(loss(rows, ['ws-add'], [], 'abc')).toStrictEqual({ raise: false });
+    },
+    'caps without the word and two sets raise once, naming both sorted, the build in the key': () => {
+      expect(loss(rows, ['ws-add'], [carries('lane-b-overlord', 'poolset', 'class'), carries('lane-a-overlord', 'poolset')], 'abc'))
+        .toStrictEqual({ raise: true, dedupeKey: 'pool-set-lost:abc:pool-set=lane-a-overlord,lane-b-overlord',
+          lost: [{ word: 'pool-set', fact: 'poolset', sessions: ['lane-a-overlord', 'lane-b-overlord'], unreadable: [] }] });
+    },
+    'one unreadable set alone raises, and is marked unreadable (N11 b)': () => {
+      expect(loss(rows, [], [unreadableAt('lane-a-overlord', 'poolset'), unreadableAt('lane-b-overlord', 'class')], null))
+        .toStrictEqual({ raise: true, dedupeKey: 'pool-set-lost:unmeasured:pool-set=lane-a-overlord',
+          lost: [{ word: 'pool-set', fact: 'poolset', sessions: ['lane-a-overlord'], unreadable: ['lane-a-overlord'] }] });
+    },
+    'null caps raise nothing: unmeasured is not lost': () => {
+      expect(loss(rows, null, [carries('lane-a-overlord', 'poolset')], 'abc')).toStrictEqual({ raise: false });
+    },
+    'a new build and a new set change the key': () => {
+      const key = (caps: string[], build: string | null, ...ids: string[]) => {
+        const v = loss(rows, caps, ids.map((id) => carries(id, 'poolset')), build);
+        return v.raise ? v.dedupeKey : '-';
+      };
+      expect(key([], 'abc', 'lane-a-overlord')).not.toBe(key([], 'def', 'lane-a-overlord'));
+      expect(key([], 'abc', 'lane-a-overlord')).not.toBe(key([], 'abc', 'lane-a-overlord', 'lane-b-overlord'));
+      expect(key([], 'abc', 'lane-a-overlord')).toBe(key([], 'abc', 'lane-a-overlord'));
+    },
+    'the table: a second row on a copy is honoured with no code change, each row on its own': () => {
+      const both = [POOL_SET_ROW, SECOND_ROW];
+      const sessions = [carries('lane-a-overlord', 'poolset', 'profiledigest'), carries('lane-b-project-a', 'profiledigest')];
+      expect(loss(both, ['pool-set'], sessions, 'abc')).toStrictEqual({ raise: true,
+        dedupeKey: 'pool-set-lost:abc:launch-surface-v1=lane-a-overlord,lane-b-project-a',
+        lost: [{ word: 'launch-surface-v1', fact: 'profiledigest', sessions: ['lane-a-overlord', 'lane-b-project-a'], unreadable: [] }] });
+      const v = loss(both, [], sessions, 'abc');
+      expect(v.raise && v.lost.map((l) => l.word)).toStrictEqual(['pool-set', 'launch-surface-v1']);
+      expect(loss(both, ['pool-set', 'launch-surface-v1'], sessions, 'abc')).toStrictEqual({ raise: false });
+    },
+  };
+}
+
+const LOSS_SET: MutantSet<PoolRuleServerModule> = {
+  modulePath: PARSER_MODULE,
+  mutants: [
+    { id: 'L1 null caps read as none', old: 'if (caps === null) return { raise: false };', new: 'if (caps === null) caps = [];' },
+    { id: 'L2 the word ignored', old: 'if (caps.includes(row.word)) continue;', new: 'if (caps.includes(row.word)) void 0;' },
+    { id: 'L3 an unreadable set not counted', old: 's.fields.includes(row.fact) || s.unreadable.includes(row.fact)', new: 's.fields.includes(row.fact)' },
+    { id: 'L4 any route field counts', old: 's.fields.includes(row.fact) ||', new: 's.fields.length > 0 ||' },
+    { id: 'L5 the unreadable list from the read fields', old: 'const unreadable = sessions.filter((s) => s.unreadable.includes(row.fact))', new: 'const unreadable = sessions.filter((s) => s.fields.includes(row.fact))' },
+    { id: 'L6 sessions unsorted', old: 's.unreadable.includes(row.fact)).map((s) => s.id).sort();\n    if (carrying', new: 's.unreadable.includes(row.fact)).map((s) => s.id);\n    if (carrying' },
+    { id: 'L7 a row with no session raises', old: 'if (carrying.length > 0) lost.push', new: 'lost.push' },
+    { id: 'L8 only the first row read', old: 'for (const row of rows) {\n    if (caps.includes', new: 'for (const row of rows.slice(0, 1)) {\n    if (caps.includes' },
+    { id: 'L9 the key without the build', old: "pool-set-lost:${build ?? 'unmeasured'}:", new: 'pool-set-lost:x:' },
+    { id: 'L10 the key without the sessions', old: '`${l.word}=${l.sessions.join(\',\')}`', new: 'l.word' },
+  ],
+  suite: poolSetLossCases,
+};
+
+export const POOL_SET_LOSS_KEY = 'server/src/poolrule.ts#poolSetLoss';
+
 export const POOL_ANSWER_PARSE_KEY = 'server/src/poolrule.ts#parsePoolAnswer';
 
 export const POOL_RULE_KEY = 'shared/poolrule.ts#poolRule';
@@ -355,4 +428,5 @@ export const POOL_SET_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [POOL_SET_SPELLING_KEY]: SPELL_SET as MutantSet<never>,
   [POOL_SET_PARSE_KEY]: PARSE_SET as MutantSet<never>,
   [POOL_ANSWER_PARSE_KEY]: ANSWER_SET as MutantSet<never>,
+  [POOL_SET_LOSS_KEY]: LOSS_SET as MutantSet<never>,
 };

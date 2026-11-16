@@ -10,9 +10,10 @@
 //
 // FOUR ANSWERS, NONE OF THEM NULL (plan question 14). On an item's view: the field absent means "this server cannot mark this
 // row" (an older server, or a row that carries no box); `never` means markable with no record; `marked` and `withdrawn` are
-// the newest record, ticked or unticked; `unmeasured` means the mark read failed.
+// the newest record, ticked or unticked; `unmeasured` means the mark read failed. A `do` item (a task) carries `couldAnswer`
+// alone, its `unsure` key absent: a task has no answer to be unsure of (answer marks C, #2900).
 
-/** The kind of row a mark names. `ask` is PR B's (plan Task 5): the parser accepts it, and the door refuses it until then. */
+/** The kind of row a mark names: an operator item, or an ask the operator has (PR B, plan Task 5). */
 export type AnswerMarkKind = 'item' | 'ask';
 export const ANSWER_MARK_KIND_MAP: Record<AnswerMarkKind, true> = { item: true, ask: true };
 export const ANSWER_MARK_KINDS = Object.keys(ANSWER_MARK_KIND_MAP) as readonly AnswerMarkKind[];
@@ -37,8 +38,12 @@ export type AnswerMarkView =
 export type AnswerMarkState = AnswerMarkView['state'];
 export const ANSWER_MARK_STATE_MAP: Record<AnswerMarkState, true> = { never: true, marked: true, withdrawn: true, unmeasured: true };
 
-/** Both marks of one row. */
-export interface AnswerMarksView { couldAnswer: AnswerMarkView; unsure: AnswerMarkView }
+/** The marks of one row: both on a question (a `decide` or `value` item) or an ask, `couldAnswer` alone on a task (`do`),
+ *  whose `unsure` is absent (answer marks C, #2900). Additive on the wire: an older console reads a view with no `unsure` as
+ *  unsupported and draws no box, failing closed. */
+export interface AnswerMarksView { couldAnswer: AnswerMarkView; unsure?: AnswerMarkView }
+/** Both marks of one row: a question or an ask. */
+export interface BothMarksView extends AnswerMarksView { unsure: AnswerMarkView }
 
 /** What the door writes: one mark of one row, ticked (`true`) or unticked (`false`). */
 export interface AnswerMarkWrite { kind: AnswerMarkKind; id: number; mark: AnswerMarkName; value: boolean }
@@ -57,4 +62,21 @@ export function parseAnswerMarkWrite(body: unknown): { ok: true; write: AnswerMa
   if (!isAnswerMarkName(mark)) return bad(`mark is one of ${ANSWER_MARK_NAMES.join(', ')}`);
   if (typeof value !== 'boolean') return bad('value is true or false');
   return { ok: true, write: { kind, id, mark, value } };
+}
+
+/** How an ask reached the operator (plan Task 5, slug ask-marks-follow-todays-ask-states): `declined`, its parent handed it
+ *  over; `lapsed`, released with no mint reason (the parent's window ran out); `released-at-mint`, minted `released` with a
+ *  reason, carried as the row's `reason`; `answered`, the operator answered it. An ask in any other state is not listed. */
+export type AskMarkHow = 'declined' | 'lapsed' | 'released-at-mint' | 'answered';
+export const ASK_MARK_HOW_MAP: Record<AskMarkHow, true> = { declined: true, lapsed: true, 'released-at-mint': true, answered: true };
+
+/** One ask the operator has, on the waiting view (plan Task 5). `at` is its last change of state (`releasedAt`, or
+ *  `answeredAt` for `answered`). `live` is `true` while its child's newest hook state waits on this ask's own key, `false` when
+ *  it waits on another or none, and `'unmeasured'` when the live-ask port could not say; an `answered` row is never live.
+ *  `question` is the ask's first line, which a child wrote (masked on the way out, as item titles are), and empty after the
+ *  retention. `reason` is the mint reason of a `released-at-mint` row, and null for every other. A listed ask is markable by
+ *  construction, and is a question, so it always carries both marks. */
+export interface AskMarkRow {
+  id: number; childId: string; program: string | null; question: string; how: AskMarkHow; reason: string | null;
+  at: number; live: boolean | 'unmeasured'; answerMarks: BothMarksView;
 }

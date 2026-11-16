@@ -2,10 +2,11 @@
 // with no domain tag; a record's kind lives in `entry.kind`. So a record of one journal verifies in another exactly when the other's
 // grammar accepts its entry. This census holds that from happening: the registered formats' `kinds` are pairwise disjoint, each
 // grammar refuses every other format's kinds (as its own refusal class, and for the kind), and every format under server/src is
-// registered: one declared as a `ChainedJournalFormat` or `satisfies` one, and one passed to a kernel export that takes a format.
+// registered: one declared as a `ChainedJournalFormat` or `satisfies` one, and one passed to a kernel export, or to the shared file adapter's `chainedJournalFileAt`, that takes a format.
 import { describe, expect, it } from 'vitest';
 import type { ChainedJournalFormat, ChainedRefusal } from '../src/chainedJournal.js';
 import { DELEGATION_JOURNAL_FORMAT } from '../src/coord/delegation-journal.js';
+import { OVERLORD_AUTHORITY_FORMAT } from '../src/coord/overlordAuthority.js';
 import { PROBE_JOURNAL_FORMAT, ProbeJournalError, ProbeJsonError } from './sim/chainedJournalSets.js';
 import { walkSrc } from './rings/walkSrc.js';
 import { parsedFile } from './scan/symbols.js';
@@ -29,9 +30,16 @@ const FORMATS: Record<string, Registered> = {
     sample: { kind: 'lease-carrier-seen', leaseId: 'lease-1', generation: 1, at: '2026-11-14T10:00:00.000Z' },
   },
   probe: { format: PROBE_JOURNAL_FORMAT, binding: null, sample: { kind: 'probe', n: 1 } },
+  overlordAuthority: {
+    format: OVERLORD_AUTHORITY_FORMAT as unknown as AnyFormat,
+    binding: 'server/src/coord/overlordAuthority.ts#OVERLORD_AUTHORITY_FORMAT',
+    sample: { kind: 'authority-latch-raise', opKey: 'op-1', cause: 'restore-detected', cap: 'chat' },
+  },
 };
 
 const KERNEL = 'server/src/chainedJournal.ts';
+/** The shared file adapter (authority journal A0): a journal binds it with its format, so its format-taking exports are takers too. */
+const FILE_ADAPTER = 'server/src/chainedJournalFile.ts';
 const FORMAT_TYPE = 'ChainedJournalFormat';
 
 /** Every `file#name` of a binding in the given files whose declared type names `ChainedJournalFormat`, or whose initialiser
@@ -143,8 +151,8 @@ function kindLeaks(registry: Record<string, Registered>): { leaks: string[]; pai
 describe('the kinds census', () => {
   const names = Object.keys(FORMATS);
 
-  it('registers the delegation format and the fixture format', () => {
-    expect(names.sort()).toEqual(['delegation', 'probe']);
+  it('registers the delegation format, the fixture format and the Overlord authority format', () => {
+    expect(names.sort()).toEqual(['delegation', 'overlordAuthority', 'probe']);
     for (const n of names) expect(FORMATS[n]!.format.kinds.length, n).toBeGreaterThan(0);
   });
 
@@ -192,13 +200,15 @@ describe('the kinds census', () => {
 
 describe('discovery: every format under server/src is registered, and every registered production format is found', () => {
   const real = walkSrc({ roots: ['server/src'], min: 100 }).map((file) => ({ file, parsed: parsedFile(file) }));
-  const takers = formatTakingExports(parsedFile(KERNEL));
+  const takers = [...new Set([KERNEL, FILE_ADAPTER].flatMap((f) => formatTakingExports(parsedFile(f))))].sort();
   const declared = declaredFormats(real);
   const passed = passedFormats(real, takers);
   const found = [...new Set([...declared, ...passed])].sort();
 
   it('the kernel\'s format-taking exports are read from its declarations', () => {
     expect(takers).toEqual(expect.arrayContaining(['ChainVerifier', 'buildChainedRecord', 'decodeChainedLine', 'encodeChainedRecord', 'verifyChainedBytes']));
+    // the file adapter's binding call is a taker: a format passed only to it, unannotated, is still found
+    expect(takers).toContain('chainedJournalFileAt');
     expect(takers).not.toContain('chainedTailHealPlan');
     expect(takers).not.toContain('findJsonDefect');
   });
@@ -237,23 +247,27 @@ describe('discovery: every format under server/src is registered, and every regi
     expect(declaredFormats([{ file: 'server/src/next/sat-journal.ts', parsed: planted }])).toEqual(['server/src/next/sat-journal.ts#SAT_FORMAT']);
   });
 
-  it('FIXTURE: an unannotated binding passed to a format-taking export is seen, by call, by new and by namespace member', () => {
+  it('FIXTURE: an unannotated binding passed to a format-taking export is seen, by call, by new, by namespace member and by the file adapter', () => {
     const planted = parseSource([
       "import * as kernel from '../chainedJournal.js';",
       "import { ChainVerifier, decodeChainedLine } from '../chainedJournal.js';",
+      "import { chainedJournalFileAt } from '../chainedJournalFile.js';",
       'const CALLED = makeFormat();',
       'const NEWED = makeFormat();',
       'const MEMBER = makeFormat();',
+      'const BOUND = makeFormat();',
       'const UNUSED = makeFormat();',
       'const NOT_A_TAKER = makeFormat();',
       'export const a = decodeChainedLine(CALLED, new Uint8Array(0));',
       'export const b = new ChainVerifier(NEWED);',
       'export const c = kernel.encodeChainedRecord(MEMBER, record);',
+      "export const e = chainedJournalFileAt(BOUND, dir, 'next.jsonl');",
       'export const d = kernel.chainedTailHealPlan(NOT_A_TAKER, true);',
       'export function viaParameter(fmt: unknown): unknown { return decodeChainedLine(fmt, new Uint8Array(0)); }',
     ].join('\n'), 'server/src/next/passed-journal.ts');
     expect(passedFormats([{ file: 'server/src/next/passed-journal.ts', parsed: planted }], takers)).toEqual([
-      'server/src/next/passed-journal.ts#CALLED', 'server/src/next/passed-journal.ts#MEMBER', 'server/src/next/passed-journal.ts#NEWED',
+      'server/src/next/passed-journal.ts#BOUND', 'server/src/next/passed-journal.ts#CALLED', 'server/src/next/passed-journal.ts#MEMBER',
+      'server/src/next/passed-journal.ts#NEWED',
     ]);
   });
 });

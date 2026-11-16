@@ -7,6 +7,8 @@ import {
 } from '../../shared/docs';
 import { ApiError, createApi } from '../src/lib/api';
 import { authLost, clearAuthLost } from '../src/lib/auth';
+import type { DocsLoaders } from '../src/docs/failures';
+import { fakeLoaders } from './docsFixtures';
 
 const jsonResponse = (status: number, body: unknown, contentType: string | null = 'application/json; charset=utf-8'): Response =>
   new Response(JSON.stringify(body), { status, headers: contentType === null ? {} : { 'content-type': contentType } });
@@ -286,5 +288,59 @@ describe('api.docs.raster: the two client checks (M5.18) and the representation 
     expect(() => api.docs.raster('demo', committed('a.md'))).toThrow('wrong-representation');
     expect(() => api.docs.raster('demo', committed('a.svg'))).toThrow('wrong-representation');
     expect(spy).not.toHaveBeenCalled();
+  });
+});
+
+describe('api.docs.history: the history loader beside DocsLoaders (refinement (s))', () => {
+  const ASK = { commit: C, section: 'specs' as const, path: 'a b+c.md' };
+  const LOG_OK = { ok: true, log: { entries: [], truncated: false } };
+
+  it('history GETs docsApi.history with the marker header', async () => {
+    const { api, spy } = apiOver(async () => jsonResponse(200, LOG_OK));
+    await api.docs.history('demo', ASK);
+    const [url, init] = callOf(spy);
+    expect(url).toBe(docsApi.history('demo', ASK));
+    expect(init.method).toBeUndefined();
+    expect(new Headers(init.headers).get(DOCS_REQUEST_HEADER)).toBe(DOCS_REQUEST_HEADER_VALUE);
+  });
+
+  it('an ok answer resolves {s:ok, value}', async () => {
+    const { api } = apiOver(async () => jsonResponse(200, LOG_OK));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'ok', value: LOG_OK });
+  });
+
+  it('a docs failure body resolves {s:failed}', async () => {
+    const body = { ok: false, failure: 'foreign-request' };
+    const { api } = apiOver(async () => jsonResponse(403, body));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'failed', body });
+  });
+
+  it('an answer without log is unexpected-response', async () => {
+    const { api } = apiOver(async () => jsonResponse(200, { ok: true }));
+    expect(await api.docs.history('demo', ASK))
+      .toEqual({ s: 'unexpected-response', status: 200, contentType: 'application/json; charset=utf-8' });
+  });
+
+  it('a 401 raises the login overlay through request', async () => {
+    const { api } = apiOver(async () => jsonResponse(401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'auth' });
+    expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
+  });
+
+  it('a fetch that rejects with a TypeError (offline) answers unreachable', async () => {
+    const { api } = apiOver(async () => { throw new TypeError('Failed to fetch'); });
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'unreachable' });
+  });
+
+  it('a 404 {error: not-found} with no failure is a server with no history route: no-docs-route', async () => {
+    const { api } = apiOver(async () => jsonResponse(404, { ok: false, error: 'not-found' }));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'no-docs-route' });
+  });
+
+  it('the ordinary visit fakes carry no history loader: DocsLoaders names none, and fakeLoaders builds none', () => {
+    // Compile-time: a `history` member on `DocsLoaders` makes this type `never`, and the compiler refuses the `true`.
+    const beside: 'history' extends keyof DocsLoaders ? never : true = true;
+    expect(beside).toBe(true);
+    expect(Object.keys(fakeLoaders().loaders).sort()).toEqual(['file', 'projects', 'raster', 'refresh', 'tree']);
   });
 });

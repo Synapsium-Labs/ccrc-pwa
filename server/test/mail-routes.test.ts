@@ -39,10 +39,12 @@ import { isLandingKebab } from '../src/coord/landing.js';
 import { LANDING_INFRASTRUCTURE_CODES, LANDING_MUTATION_CODES } from '../../shared/landingLine.js';
 import { isDelegationModelKebab } from '../src/coord/delegation-model.js';
 import { isDelegationJournalKebab } from '../src/coord/delegation-journal.js';
+import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
 import { isDelegationCheckpointKebab } from '../src/coord/delegation-durability.js';
 import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
+import { isReceiptDrop } from '../../shared/responses.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -1009,7 +1011,7 @@ describe('the rejection table is total, in both directions', () => {
         // checkpoint, the cursor detail, a verdict, an effect and a compaction outcome. Admitted through eight exported guards, each derived from its own file's
         // typed tables (or from `shared/api.ts`'s delegation vocabularies, read and never re-spelled), never NOT_CODES, for the
         // reason every union above gives.
-        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok)
+        || isDelegationModelKebab(tok) || isDelegationJournalKebab(tok) || isDelegationCheckpointKebab(tok) || isOverlordAuthorityKebab(tok)
         || isDelegationIngestKebab(tok) || isDelegationCorrelationKebab(tok) || isDelegationCensusKebab(tok)
         || isDelegationPolicyKebab(tok) || isDelegationCompactionKebab(tok)
         // DELEGATION BROKER, WAVE 4 (PR1): the projection's words, checked beside the seventeenth union and never merged into it, on
@@ -1148,8 +1150,12 @@ describe('the rejection table is total, in both directions', () => {
         // THE ANSWER MARKS (Overlord W1, #2870): `coord/answerMarks.ts` names why a row carries no box and the ask detail as
         // literals, and `coord/answerMarkStore.ts` a mark's name. A reason rides `not-markable`'s `detail`, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from its own map and L0's, never NOT_CODES.
-        || isAnswerMarkKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word or answer-mark word`).toBe(true);
+        || isAnswerMarkKebab(tok)
+        // THE RESPONSE RECORD'S RECEIPTS DOOR (Overlord W1): `coord/responsesStore.ts` names a drop word as a literal
+        // (`'no-row'`). It rides the door's answer as a `dropped` key, never a `refused` or `reject.code`. Admitted through
+        // L0's guard, derived from `RECEIPT_DROPS`, never NOT_CODES.
+        || isReceiptDrop(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word or receipt drop word`).toBe(true);
     }
   });
 });

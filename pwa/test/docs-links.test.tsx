@@ -17,6 +17,7 @@ import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/D
 import {
   detachUrls, docLinkTarget, docsLocation, type Detached,
 } from '../src/docs/docsLinks';
+import { docsCrumbs } from '../src/docs/DocsHead';
 import { DOCS_HEAD_TEXT, DOC_LINK_INERT_SENTENCE, DOC_LINK_OUTSIDE_PAGE, type DocLinkInertReason } from '../src/docs/docsText';
 import { pageAt, treeOk } from './docsFixtures';
 
@@ -35,7 +36,7 @@ const treeOf = (src: string): HastRoot => {
 /** The page every case renders on: `specs/a.md` of `demo`, at the ref `ws/a`, in the committed view. */
 function ctxFor(d: Detached, over: Partial<DocLinkContextValue> = {}): DocLinkContextValue {
   return {
-    project: 'demo', pageRef: { kind: 'bare', name: 'ws/a' }, view: 'committed', section: 'specs', path: 'a.md',
+    project: 'demo', pageRef: { kind: 'bare', name: 'ws/a' }, pageAt: null, view: 'committed', section: 'specs', path: 'a.md',
     tree: treeOk(), pageSource: 'committed', urls: d.urls, onFragment: vi.fn(), ...over,
   };
 }
@@ -178,7 +179,7 @@ describe('docsLocation: the one page-location builder (refinement (q))', () => {
       .toEqual({ kind: 'section', project: 'demo', section: 'plans', ref: { kind: 'bare', name: 'ws/a' } });
     expect(docsLocation(page, { kind: 'path', section: 'plans', path: 'd', dirSlash: true })).toEqual({
       kind: 'path', project: 'demo', section: 'plans', path: 'd', dirSlash: true, ref: { kind: 'bare', name: 'ws/a' },
-      view: 'effective', frame: 'inline',
+      at: null, view: 'effective', frame: 'inline',
     });
     expect(docsPageUrl(docsLocation(page, { kind: 'path', section: 'specs', path: 'a.md', dirSlash: false, view: 'committed' })))
       .toBe('/docs/demo/specs/a.md?ref=ws/a&view=committed');
@@ -191,6 +192,101 @@ describe('docsLocation: the one page-location builder (refinement (q))', () => {
 
   it('the index names no project: any target that keeps one is a programming error', () => {
     expect(() => docsLocation(pageAt('/docs'), { kind: 'section', section: 'specs' })).toThrow(/index names no project/);
+  });
+});
+
+describe('docsLocation: a version page keeps its version (refinements (o), (q))', () => {
+  const SHA = 'c'.repeat(40);
+  const SHA_2 = 'd'.repeat(40);
+  const version = pageAt(`/docs/demo/specs/a.md?ref=ws/a&at=${SHA}`);
+  const latest = pageAt('/docs/demo/specs/a.md?ref=ws/a');
+  const at = (loc: ReturnType<typeof docsLocation>): string | null => {
+    if (loc.kind !== 'path') throw new Error('not a leaf');
+    return loc.at;
+  };
+
+  it('a path target from a version page keeps its at', () => {
+    const to = docsLocation(version, { kind: 'path', section: 'plans', path: 'p.md', dirSlash: false });
+    expect(at(to)).toBe(SHA);
+    expect(docsPageUrl(to)).toBe(`/docs/demo/plans/p.md?ref=ws/a&at=${SHA}`);
+    expect(at(docsLocation(latest, { kind: 'path', section: 'plans', path: 'p.md', dirSlash: false }))).toBeNull();
+  });
+
+  it('a directory target drops at', () => {
+    const to = docsLocation(version, { kind: 'path', section: 'plans', path: 'd', dirSlash: true });
+    expect(at(to)).toBeNull();
+    expect(docsPageUrl(to)).toBe('/docs/demo/plans/d/?ref=ws/a');
+  });
+
+  it('a path target that names at: null goes to the latest', () => {
+    const to = docsLocation(version, { kind: 'path', section: 'plans', path: 'p.md', dirSlash: false, at: null });
+    expect(at(to)).toBeNull();
+    expect(at(docsLocation(version, { kind: 'path', section: 'plans', path: 'p.md', dirSlash: false, at: SHA_2 }))).toBe(SHA_2);
+  });
+
+  it('the version target sets and clears at, keeping ref and frame', () => {
+    const framed = pageAt(`/docs/demo/specs/a.md?ref=ws/a&at=${SHA}&view=committed`);
+    const cleared = docsLocation(framed, { kind: 'version', at: null });
+    expect(cleared).toMatchObject({ kind: 'path', project: 'demo', section: 'specs', path: 'a.md', ref: { kind: 'bare', name: 'ws/a' }, at: null, view: 'effective', frame: 'inline' });
+    expect(docsPageUrl(cleared)).toBe('/docs/demo/specs/a.md?ref=ws/a');
+    const set = docsLocation(latest, { kind: 'version', at: SHA_2 });
+    expect(at(set)).toBe(SHA_2);
+    expect(docsPageUrl(set)).toBe(`/docs/demo/specs/a.md?ref=ws/a&at=${SHA_2}`);
+    expect((docsLocation(version, { kind: 'version', at: SHA_2 }) as { frame: string }).frame).toBe((version as { frame: string }).frame);
+  });
+
+  it('the version target keeps frame=full on an html leaf, setting or clearing at', () => {
+    const framed = pageAt(`/docs/demo/specs/m.html?ref=ws/a&at=${SHA}&frame=full`);
+    expect(framed).toMatchObject({ kind: 'path', frame: 'full', at: SHA });
+    const cleared = docsLocation(framed, { kind: 'version', at: null });
+    expect(cleared).toMatchObject({ kind: 'path', at: null, view: 'effective', frame: 'full' });
+    expect(docsPageUrl(cleared)).toBe('/docs/demo/specs/m.html?ref=ws/a&frame=full');
+    const set = docsLocation(pageAt('/docs/demo/specs/m.html?ref=ws/a&frame=full'), { kind: 'version', at: SHA_2 });
+    expect(set).toMatchObject({ kind: 'path', at: SHA_2, frame: 'full' });
+    expect(docsPageUrl(set)).toBe(`/docs/demo/specs/m.html?ref=ws/a&at=${SHA_2}&frame=full`);
+  });
+
+  it('a version target from a section page throws', () => {
+    expect(() => docsLocation(pageAt('/docs/demo/specs?ref=ws/a'), { kind: 'version', at: SHA })).toThrow(/needs a leaf page/);
+    expect(() => docsLocation(pageAt('/docs/demo?ref=ws/a'), { kind: 'version', at: SHA })).toThrow(/needs a leaf page/);
+  });
+
+  it('a version target from a directory page leaves at null, as the grammar does', () => {
+    const dir = pageAt('/docs/demo/specs/d/?ref=ws/a');
+    expect(dir).toMatchObject({ kind: 'path', dirSlash: true, at: null });
+    expect(at(docsLocation(dir, { kind: 'version', at: SHA_2 }))).toBeNull();
+  });
+
+  it('a doc link inside a version page keeps the version', () => {
+    const d = detachUrls(treeOf('[x](../plans/p.md#s)'));
+    const target = docLinkTarget(ctxFor(d, { pageAt: SHA }), '../plans/p.md#s');
+    expect(target).toEqual({ kind: 'in-app', href: `/docs/demo/plans/p.md?ref=ws/a&at=${SHA}`, fragment: 's' });
+    expect(docLinkTarget(ctxFor(d, { pageAt: null }), '../plans/p.md')).toMatchObject({ href: '/docs/demo/plans/p.md?ref=ws/a' });
+    const { container } = renderDoc('[x](../plans/p.md)', { pageAt: SHA });
+    expect(firstLink(container).getAttribute('href')).toBe(`/docs/demo/plans/p.md?ref=ws/a&at=${SHA}`);
+  });
+
+  it('a repo link inside a version page keeps its GitHub link with the may-differ caution', () => {
+    const t = treeOk();
+    // An origin-side listing: without `at` the same link carries no caution.
+    const tree: DocsTreeOk = { ...t, ref: { ...t.ref, side: 'origin', relation: 'equal' } };
+    const d = detachUrls(treeOf('[r](../../../README.md)'));
+    const href = 'https://github.com/example-org/example-repo/blob/main/README.md';
+    expect(docLinkTarget(ctxFor(d, { tree, pageAt: SHA }), '../../../README.md')).toEqual({ kind: 'github', href, note: 'may-differ' });
+    expect(docLinkTarget(ctxFor(d, { tree, pageAt: null }), '../../../README.md')).toEqual({ kind: 'github', href, note: null });
+    const { container } = renderDoc('[r](../../../README.md)', { tree, pageAt: SHA });
+    expect(container.querySelector('.doc-link-gh')?.getAttribute('title')).toBe(DOCS_HEAD_TEXT.githubMayDiffer);
+  });
+
+  it('the crumbs above a version leaf drop at, its own crumb keeps it', () => {
+    const deep = pageAt(`/docs/demo/specs/d/a.md?ref=ws/a&at=${SHA}`);
+    expect(docsCrumbs(deep).map((c) => c.href)).toEqual([
+      '/docs',
+      '/docs/demo?ref=ws/a',
+      '/docs/demo/specs?ref=ws/a',
+      '/docs/demo/specs/d/?ref=ws/a',
+      `/docs/demo/specs/d/a.md?ref=ws/a&at=${SHA}`,
+    ]);
   });
 });
 
