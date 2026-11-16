@@ -593,6 +593,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
   'unmeasured': 'Docs could not measure whether origin has {short}; Refresh, then share.',
   'new-draft': 'Not committed yet, so GitHub has nothing to show.',
   'new-withheld': 'Not committed yet, and Docs did not read it ({withheld}); nothing to share or export.',
+  'version-unmeasured': 'Docs cannot tell whether origin has {short}, so it gives no link to this version.',
 };
 
 /** Export's clause (spec 4.16), and the refusals that take it on a page that offers Export. THE SEAM FOR EXPORT
@@ -600,7 +601,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
  *  sentence carries the clause. Export's run passes its own availability and changes no sentence here. */
 export const SHARE_EXPORT_CLAUSE = 'Export makes a file you can send.';
 export const SHARE_EXPORT_CLAUSE_FOR: ReadonlySet<ShareRefusal> =
-  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft']);
+  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft', 'version-unmeasured']);
 
 /** A refusal's sentence, filled from its fields, with Export's clause when the page offers Export. */
 export function shareRefusalSentence(why: ShareRefusal, fields: ShareFields, exportOffered: boolean): string {

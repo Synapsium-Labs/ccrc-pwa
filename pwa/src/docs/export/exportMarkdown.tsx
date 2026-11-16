@@ -59,11 +59,18 @@ function refusedTitle(why: Extract<GithubPermalink, { ok: false }>['why'], commi
 }
 
 /** Spec 4.17's link table, for the raw `href` a document wrote, on the leaf `link` names, at commit `commit`. A
- *  document's own fragment is not carried onto its permalink (refinement (m)). */
+ *  document's own fragment is not carried onto its permalink (refinement (m)). A version page's doc and repo links are
+ *  inert (refinement (t)). */
 export function exportLinkTarget(
   link: Pick<DocLinkContextValue, 'section' | 'path' | 'tree'>, commit: string, raw: string,
 ): ExportLinkTarget {
   const r = resolveDocRef({ section: link.section, path: link.path }, raw);
+  // Refinement (t), W5b: an export whose commit is not the listing's (a version page's) names a commit `githubPermalink`
+  // cannot vouch for, since it judges the served ref's tip and never `onRef`. Its doc and repo links stay inert, in
+  // Share's own words (refinement (r)), rather than risk a link that 404s.
+  if (commit !== link.tree.ref.commit && (r.kind === 'doc' || r.kind === 'repo')) {
+    return { kind: 'inert', title: shareRefusalSentence('version-unmeasured', { short: shortCommit(commit) }, false) };
+  }
   switch (r.kind) {
     case 'doc': {
       const kind = link.tree.entries.find((e) => e.section === r.section && e.path === r.path)?.committed?.kind;

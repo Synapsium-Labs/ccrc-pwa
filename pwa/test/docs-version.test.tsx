@@ -7,15 +7,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import { DOCS_CLASS_CAP, entryView, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
+import { DOCS_CLASS_CAP, entryView, resolveDocRef, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsBanners } from '../src/docs/DocsBanners';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import {
-  DOCS_BANNER_TEXT, DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, servedRefText, shortCommit,
+  DOCS_BANNER_TEXT, DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, servedRefText,
+  shareRefusalSentence, shortCommit,
 } from '../src/docs/docsText';
+import { exportLinkTarget } from '../src/docs/export/exportMarkdown';
 import { pinFor, useDocsVisit } from '../src/docs/useDocsVisit';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
 import type { FileSlot } from '../src/docs/useDocsVisit';
@@ -424,5 +426,24 @@ describe('the header and a banner name the version (refinement (q))', () => {
     expect(await bannersAt('/docs/demo/specs/a.md?ref=ws/a', f())).toContain('ambiguous');
     const found = await bannersAt(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, f());
     expect(found).toEqual(expect.arrayContaining(['ambiguous', 'version']));
+  });
+});
+
+describe('Export on a version page (refinement (t))', () => {
+  const GH = 'https://github.com/example-org/example-repo';
+  const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'b.md')] });
+  const at = { section: 'specs' as const, path: 'a.md', tree };
+
+  it('an Export of a version page writes its doc and repo links inert, in version-unmeasured\'s words', () => {
+    const inert = { kind: 'inert', title: shareRefusalSentence('version-unmeasured', { short: shortCommit(VERSION) }, false) };
+    expect(exportLinkTarget(at, VERSION, 'b.md')).toEqual(inert);
+    // The repo href really is a repo link, so the row is the one the version arm covers.
+    expect(resolveDocRef({ section: 'specs', path: 'a.md' }, '../../../README.md').kind).toBe('repo');
+    expect(exportLinkTarget(at, VERSION, '../../../README.md')).toEqual(inert);
+    expect(exportLinkTarget(at, VERSION, '#top')).toEqual({ kind: 'fragment', href: '#top' });
+    expect(exportLinkTarget(at, VERSION, 'https://a.example/x')).toEqual({ kind: 'external', href: 'https://a.example/x' });
+    // The listing's own commit: the same doc is a permalink.
+    expect(exportLinkTarget(at, COMMIT_A, 'b.md'))
+      .toEqual({ kind: 'permalink', href: `${GH}/blob/${COMMIT_A}/docs/superpowers/specs/b.md` });
   });
 });
