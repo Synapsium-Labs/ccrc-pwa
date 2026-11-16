@@ -197,7 +197,7 @@ checked.
 
 | Kind | Fields besides `kind` and `opKey` |
 |---|---|
-| `act-intent` | `actId`, `act` (a kind of `OVERLORD_ACT_KINDS`), `natural` (`{ kind: 'row', target, id, revision }` or `{ kind: 'start', requestId, name }`), `targets` (each `{ kind, id, revision }`, sorted), `requestId` (a count or null) |
+| `act-intent` | `actId`, `act` (a kind of `OVERLORD_ACT_KINDS`), `natural` (`{ kind: 'row', target, id, revision }` or `{ kind: 'start', requestId }`, one start per request), `targets` (each `{ kind, id, revision }`, sorted), `requestId` (a count or null) |
 | `act-settle` | the same, and `from` (`pending`, `unknown`, or null for a one-step act) and `to` (an act state of `ACT_STATES`) |
 | `act-open-request` | `requestId`, `actId` |
 

@@ -15,8 +15,10 @@
   line of the sequence, in one transaction. The natural key is unique among rows not settled `refused`. The operation
   key rides `x-ccrc-op-key`: the door process mints one per write tool call, and gates B's runner looks it up after the
   step-7 fence and before step 7a. A hit returns the stored row and outcome, consumes no witness and counts toward no
-  latch. A repeat with another body refuses `op-key-reused`, a new word with its Table 11.6 row. The act ceilings' counts
-  are wired into act catalogue A's decider.
+  latch. A repeat with another body refuses `op-key-reused`, a new word with its Table 11.6 row. The writer takes act
+  catalogue B's `MayActAllow`, asserts it at runtime, consumes it once and checks it against the row it writes, and
+  re-runs the ceilings for the act's group and the effect's group inside its own synchronous write: the gate's step 10
+  is only the early refusal (the coordinator's ruling on the act catalogue's review).
 - **PR B, settling.** The settling lane on its own `LANE_SCHEDULE` row, with a boot pass, re-measures every `pending` and
   `unknown` row. `acknowledge`, W2's one act whose effect lies in another store, writes its act row in two steps. I3's
   predicate joins sequence B's invariant table, and M32's "unsettled after the boot pass" figure is counted.
@@ -67,6 +69,11 @@ effect has an act row", and §12's M32 counts "acts left in the act state `pendi
 | Index "Where lanes meet" | `SEQUENCE_KIND_MAP` gains `act` here, and each writer that moves a stamped kind calls `stampSequenceInTx` after its journal append. I3's predicate needs sequence B |
 | Table 11.1e (index, coordinator's brief) | `acknowledge`'s act row is this piece's PR B |
 | The W1 door-process plan, F20 | The witness key is `x-ccrc-witness-key`; this piece's key is a header of its own |
+| The act catalogue's review (run 2271), as the coordinator ruled (mail of the run, F5) | The writer takes `MayActAllow`, asserts `isMayActAllow` at runtime, consumes the allow once, and compares the allow's act, effect, target (programme id and incarnation), natural key, cell and generation with the row it writes |
+| The same review, F6 | The writer re-reads `ActCountReader` and re-runs `actCeilingStep` for the act's group and the effect's group inside the same synchronous write. Step 10 is only the early refusal. `count(group)` counts rows whose effect is in the group as well as rows whose kind is |
+| The same review, F10 | A start's natural key is its request alone: one start per request. The natural key is the owner of "a request authorises at most one start", and relay A owns "one relay per owner" |
+| The same review, F4 | A `proposal` cell mints a staged allow, which the writer maps to a proposal row. An `armed` allow says shadow or live |
+| The same review, F8 | `escalate-request` is a catalogue act kind (class none, in the `request` ceiling group), which request record B's escalate door writes through this writer |
 
 **Out of scope:** the act catalogue and `overlordMayAct` (act catalogue A and B); the act journal's file, head and
 witness (the act journal plan); the act read, Seen and overturn (act reads); every door that performs an act other than
@@ -90,8 +97,9 @@ None needs the operator: each is implementation detail under the rulings above.
    and so would the follow-up's second nudge at an unchanged revision. **Recommendation:** the key is the act kind, the
    target's kind, its id and its revision, as one canonical text from `actNaturalKey`. A kind that may repeat at one
    revision names a discriminator in its target, which its own piece chooses: the follow-up's nudge ordinal, for
-   example (relay A). A start, which has no target row, is keyed by its request and its name (§8.2), in the same
-   function, for W5. A target with no revision column, such as an operator message, reads revision 0, and its door's own
+   example (relay A). A start, which has no target row, is keyed by its request alone, in the same function, for W5:
+   one start per request (the coordinator's ruling on the act catalogue's review, F10, narrowing §8.2's "its request
+   and its name"). A target with no revision column, such as an operator message, reads revision 0, and its door's own
    state check stops a second effect (question 10).
 3. **The replay answer** (slug `replay-answers-the-act`). A hit "returns the stored row and outcome", and each door
    answers in its own shape. **Recommendation:** every door that writes an act row answers with an `act` field, the
@@ -263,6 +271,8 @@ export type ActJournalAppend =
       detail: string };
 
 export interface ActWrite {
+  /** Act catalogue B's allow for this act: checked, consumed once, and compared with the row (F5). */
+  allow: MayActAllow;
   kind: OverlordActKind; state: 'pending' | 'done'; target: ActTarget; targets: readonly ActTargetRef[];
   requestId: number | null; widens: { programme: string } | null;
   opens: number | null;          // the open door's new request id: an act-open-request record follows the settle
@@ -275,9 +285,15 @@ export interface ActWrite {
 export type ActWritten =
   | { ok: true; act: ActAnswer }
   | { ok: false; error: 'natural-key-taken' | 'op-key-taken'; detail: string; holder: ActAnswer }
+  | { ok: false; error: 'act-ceiling'; detail: string; group: string }
+  | { ok: false; error: 'allow-forged' | 'allow-spent' | 'allow-mismatch' | 'cell-not-built'; detail: string }
   | { ok: false; error: 'not-in-transaction' | 'bad-row' | 'authority-rolled-back' | 'authority-unmeasured'
       | 'journal-append'; detail: string };
-/** Decide, append, apply: `actWriteVerdict` first (natural key and operation key free, the state an entering one);
+/** Implements act catalogue A's `ActCountReader` over `overlord_acts`: rows not settled `refused` whose kind OR
+ *  effect is in the group, since a time, in all and for one programme (F6). */
+export function actCountReaderInTx(db: DatabaseSync): ActCountReader;
+/** Decide, append, apply: `actWriteVerdict` first (the allow, the ceilings, natural key and operation key free, the
+ *  state an entering one);
  *  then the journal's record (`act-settle` with `from: null` for `done`, `act-intent` for `pending`, and
  *  `act-open-request` after it when `opens` is set); then the row; then the `act` line through
  *  `stampSequenceInTx`. A refusal before the append writes nothing. */
@@ -288,8 +304,25 @@ export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: num
   to: 'done' | 'refused' | 'unknown', by: 'door' | 'lane' | 'boot', at: number): ActSettled;
 ```
 
+- **The allow** (F5). `isMayActAllow(allow)` is asserted at runtime: an object the catalogue did not mint answers
+  `allow-forged`, whatever its static type, so a spread or a cast is caught. The allow is consumed once, through act
+  catalogue B's consume step, and a second use answers `allow-spent`. Its act, effect, target (programme id and
+  incarnation), natural key, cell and generation must equal the row's, or the writer answers `allow-mismatch`. None of
+  the three is a refusal word: each is a programming error, which the door answers 500 and logs, and a census test reds
+  a door that writes an act row without passing the allow it got.
+- **The cell** (F4). `ALLOW_CELL_WRITES` (L1) maps the allow's cell to what is written: `allow` writes the act row as
+  asked; `armed` writes it with the allow's mode, shadow or live; `proposal` writes a proposal row in the act's place;
+  `by-grant` writes the act row with the grant's authority. In W2 only `allow` is reachable. The `proposal`, `armed`
+  and `by-grant` rows answer `cell-not-built` and write nothing until W3 ships their tables and doors, and a test pins
+  that no act row is ever written under a `proposal` allow.
+- **The ceilings, again** (F6). Inside the same synchronous write, the writer reads the counts through
+  `actCountReaderInTx` and re-runs act catalogue A's `actCeilingStep` for the act's group and, when the act carries an
+  effect, the effect's group. A refusal answers `act-ceiling`, and the door answers that word (429). Gates B's step 10
+  ran the same decider over the same reader outside the transaction; that was the early refusal, and this is the
+  TOCTOU re-check, legitimately different as `advanceCounterGuarded` is in the gates plan.
 - **Decide before the append.** Every check that can refuse runs before the journal record is appended: the transaction,
-  the state's row in `ACT_TRANSITIONS`, the natural key and the operation key read free inside this `BEGIN IMMEDIATE`.
+  the allow, the ceilings, the state's row in `ACT_TRANSITIONS`, the natural key and the operation key read free inside
+  this `BEGIN IMMEDIATE`.
   So the insert can never meet a unique-index failure after its record, which would leave the record trailing and fence
   every Overlord door (§7.6). A failure after the append is still possible (the disk), and it reads as the journal
   plan's `trailing`, as the authority writer's does.
@@ -302,9 +335,8 @@ export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: num
 - **Text.** `summary` and `why` pass `redactCommand` and are cut whole (`ACT_SUMMARY_MAX` 200, `ACT_WHY_MAX` 600, in
   `shared/overlord.ts`), as review-cap reasons are.
 - **Readers.** `actByOpKey(db, sessionId, generationId, key)`, `actById`, `openActs(db)` (every `pending` and `unknown`
-  row, for the lane), and `actCountsInTx(db, kind, programme, sinceMs)` (rows of the kind not settled `refused` since a
-  time, in all and for one programme, for the ceilings). Each answers `unmeasured` with its detail on a failed read,
-  never a folded empty.
+  row, for the lane), and `actCountReaderInTx` (above), which gates B's step 10 and the writer both read. Each answers
+  `unmeasured` with its detail on a failed read, never a folded empty, and an `unmeasured` count refuses, never passes.
 
 ```mermaid
 flowchart TD
@@ -481,7 +513,8 @@ the gatherer in one synchronous read.
 | Seam | Owner | What this plan needs or gives |
 |---|---|---|
 | `shared/overlord.ts`, `OVERLORD_ACT_KINDS` | act catalogue A | This plan adds `ACT_STATES`, `ACT_TRANSITIONS`, `ActAnswer`, `ActTarget` and the text caps beside it |
-| The ceiling decider | act catalogue A | It takes counts. This plan binds the runner's `actCounts` port to `actCountsInTx`. Which target the count is per is the decider's input shape |
+| `actCeilingStep` and `ActCountReader` | act catalogue A | The decider takes counts through the reader. This plan implements the reader over `overlord_acts`, counting by kind and by effect, binds gates B's step 10 to it, and re-runs the decider in the writer (F6) |
+| `MayActAllow`, `isMayActAllow` and its consume step | act catalogue B | The writer's input. The allow carries the act, effect, target (programme id and incarnation), natural key, cell and generation that the writer compares (F5) |
 | Gates B's runner and `overlordGate` | gates B (W1) | The `opKey` port, the `opKeyVerdict` arm after step 7 and `GateRun`'s `replay`, as `w1-gates.md` names them |
 | `continuity_witness_checks`, `witnessVerdict` | door process B (W1) | The consuming operation key and the `retried` arm (question 4) |
 | `ccd/door-process.mjs`, `ccd/ccrc-api` | door process A2 (W1) | The minted key, its environment variable, the header and the one retry |
@@ -517,13 +550,13 @@ the gatherer in one synchronous read.
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
-| A, the row and the key | A1 to A6 | The act states and `ACT_TRANSITIONS`; `overlord_acts` and its store; the natural key and its index; the `act` sequence kind; the operation key end to end, `op-key-reused` and its Table 11.6 row; the `retried` witness arm; the ceiling counts | act catalogue A, sequence A, door process A2, gates B (door process B for the witness arm, else the index's request) | `server/src/coord/schema.ts` about +24 (one migration, columns grouped several to a line; question 11); `server/src/server.ts` about +6 (the runner's two ports bound); `server/src/coord/store.ts` 0; `shared/api.ts` 0 |
+| A, the row and the key | A1 to A6 | The act states and `ACT_TRANSITIONS`; `overlord_acts` and its store; the natural key and its index; the `act` sequence kind; the operation key end to end, `op-key-reused` and its Table 11.6 row; the `retried` witness arm; the allow, the cell and the ceilings inside the write | act catalogue A and B, sequence A, door process A2, gates B (door process B for the witness arm, else the index's request) | `server/src/coord/schema.ts` about +24 (one migration, columns grouped several to a line; question 11); `server/src/server.ts` about +6 (the runner's two ports bound); `server/src/coord/store.ts` 0; `shared/api.ts` 0 |
 | B, settling | B1 to B3 | The settle decider and its table; the lane, its `LANE_SCHEDULE` row and the boot pass; `dependsSince`; `acknowledge` in two steps; I3's predicate and M32's figure | PR A, act journal A, the inbox, sequence B | `server/src/watch.ts` about +6 (the lane's `runLane` line and its deps); `server/src/server.ts` about +2; `server/src/coord/schema.ts` 0 |
 
 *Table 6. The PR split. `ccd/ccrc-api` and `ccd/door-process.mjs` are not growth-checked.*
 
 **Order inside PR A:** A1, then A2 and A3 (the writer needs the states and the key), then A4 and A5 (the server's half,
-then the client's), then A6. **Inside PR B:** B1, then B2, then B3.
+then the client's), then A6, once act catalogue B's allow has merged. **Inside PR B:** B1, then B2, then B3.
 
 ## 11. Tasks
 
@@ -649,18 +682,35 @@ then the client's), then A6. **Inside PR B:** B1, then B2, then B3.
 - [ ] **Step 5: Run** the three suites. Green.
 - [ ] **Step 6: Commit.** `feat(ccd): the door process mints the operation key and retries once on transport (Overlord W2, §10.1)`
 
-### Task A6: The ceilings' counts (PR A)
+### Task A6: The allow, the cell and the ceilings inside the write (L1 and L3, PR A)
 
 **Files:**
-- Modify: `server/src/coord/overlordGateRun.ts` (the `actCounts` port act catalogue A's decider reads)
-- Modify: `server/src/server.ts` (the port bound to `actCountsInTx`)
-- Test: `server/test/overlord-acts-store.test.ts`, act catalogue A's ceiling suite through the runner
+- Modify: `server/src/coord/overlordActs.ts` (`actWriteVerdict`'s allow, cell and ceiling arms; `ALLOW_CELL_WRITES`)
+- Modify: `server/src/coord/overlordActsStore.ts` (`actCountReaderInTx`; the writer calls `isMayActAllow`, the consume
+  step and `actCeilingStep`)
+- Modify: `server/src/coord/overlordGateRun.ts` (step 10's count port, act catalogue A's) and `server/src/server.ts`
+  (the port bound to `actCountReaderInTx`)
+- Test: `server/test/overlord-acts-store.test.ts`, `server/test/overlord-acts.test.ts`, act catalogue A's ceiling suite
+  through the runner, and a census of every `writeActInTx(` call (`server/test/overlord-act-writers.test.ts`, new)
+- Modify: `server/test/sim/overlordActsSets.ts` and `mutation-floors.json`
 
-- [ ] **Step 1: Failing tests:** `actCountsInTx` counts rows not `refused`, in all and for one programme, inside the
-  window and not before it; overturned rows count (§10.3); an unreadable table answers `unmeasured`, and the ceiling
-  then refuses `unmeasured` at step 10, never passes.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
-- [ ] **Step 5: Commit.** `feat(coord): the act ceilings read their counts from overlord_acts (Overlord W2, Table 11.5b)`
+- [ ] **Step 1: Failing tests:**
+  - an allow the catalogue did not mint (a literal, a spread `{ ...allow, act: 'relay' }`, an `Object.assign` copy)
+    answers `allow-forged` and writes nothing; a second use of one allow answers `allow-spent`;
+  - each of the allow's act, effect, programme id, incarnation, natural key, cell and generation, changed alone, answers
+    `allow-mismatch`;
+  - every row of `ALLOW_CELL_WRITES`; under a `proposal` allow no act row is ever written;
+  - the reader counts rows not `refused` whose kind or effect is in the group, in all and for one programme, inside the
+    window and not before it; overturned rows count (§10.3); a carrier whose effect is in a second group counts in both;
+  - two writes that each passed step 10 at five of six: the second answers `act-ceiling` inside the write, and nothing
+    of it is appended;
+  - an unreadable count answers `unmeasured` at step 10 and in the writer, never passes;
+  - the census: every `writeActInTx(` call in `server/src` passes the allow its door's `overlordMayAct` call answered.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.**
+- [ ] **Step 4: Mutation.** `actWriteVerdict`'s set gains the allow, cell and ceiling arms. By hand: skip the runtime
+  assert; count by kind only; check the ceiling after the append; write the act row under a `proposal` allow.
+- [ ] **Step 5: Run** the tests and `test/sim/mutation-floors.test.ts`. Green.
+- [ ] **Step 6: Commit.** `feat(coord): the act writer checks and consumes its allow and re-runs the ceilings inside the write (Overlord W2)`
 
 ### Task B1: `settleVerdict`, the lane and the boot pass (L1 and L4, PR B)
 
@@ -739,9 +789,15 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   and a `refused` act that is not an answer sends nothing (question 8).
 - **`depends-since-reads-dispatch-and-prs`**: `dependsSince` reads dispatches and pull requests, not bare commits, in
   W2 (question 9).
+- **`start-keyed-on-its-request`**: §8.2 keys a start by its request and its name. The coordinator ruled the request
+  alone, one start per request (the act catalogue's review, F10).
+- **`ceilings-rechecked-in-the-write`**: §11.2 places the act ceiling at step 10 only. The writer re-runs it inside the
+  act's own transaction, for the act's group and the effect's (the act catalogue's review, F6).
 
 ## What the index should change
 
+- **Table W2's act rows row:** PR A needs act catalogue B too, for `MayActAllow` (the coordinator's ruling on the act
+  catalogue's review, F5), and Figure W2 gains the edge from act catalogue B to act rows A.
 - **Gates B's runner:** `GateFacts.opKey`, `GateVerdict`'s `replay` and `GateRun`'s `replay` (Table 3). If gates B builds
   after this plan is accepted, it may ship the port bound to `{ kind: 'none' }` and the arm, so PR A only binds it.
 - **Door process B:** its check row records the operation key it was consumed under, and `witnessVerdict` gains
