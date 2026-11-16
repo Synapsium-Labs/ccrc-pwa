@@ -654,6 +654,53 @@ function advanceIneligible(account, registry) {
   return null;
 }
 
+/** How old a catalogue staging file must be before the hourly writer may reap it (ruling 11, 2026-11-16). The
+ *  probe that writes one is bounded far below this, so a file this old is no probe's in flight. */
+const STALE_TMP_MS = 3_600_000;
+/** The largest pid a staging file's suffix may name; a larger number is not one of ours, and is left alone. */
+const TMP_PID_MAX = 2_147_483_647;
+
+/** `(id) => string[]`: unlink each `<id>.json.tmp.<pid>` the catalogue probe (`ccd/ccrc-models-probe`, its
+ *  `$OUT.tmp.$$`) left in the models directory when it was killed before its EXIT trap ran, and answer the names it
+ *  removed. The probe runs OUTSIDE the lane-files lock, so a file is reaped only when it is PROVED stale: a regular
+ *  file (lstat: never a symlink, a directory or a FIFO), named exactly `catalogueFileName(id)` + `.tmp.` + a pid,
+ *  whose pid no longer runs (`process.kill(pid, 0)` answers ESRCH; EPERM is a live process of another account), and
+ *  whose mtime is at least `STALE_TMP_MS` before `now()`. Another lane's file, the catalogue itself and every other
+ *  name are never touched. Best effort: a listing or an unlink that fails reaps nothing and fails nothing, and the
+ *  next hour tries again. Reached only through `advance-backfill`, a write op, so only under the lane-files lock. */
+function reapStaleCatalogueTmp(id) {
+  const nowMs = Date.parse(now());
+  const prefix = `${catalogueFileName(id)}.tmp.`;
+  let names;
+  try {
+    names = readdirSync(modelsDir());
+  } catch {
+    return [];
+  }
+  const reaped = [];
+  for (const n of [...names].sort()) {
+    if (!n.startsWith(prefix)) continue;
+    const suffix = n.slice(prefix.length);
+    if (!/^[1-9][0-9]{0,9}$/.test(suffix) || Number(suffix) > TMP_PID_MAX) continue;
+    const p = path.join(modelsDir(), n);
+    try {
+      const st = lstatSync(p);
+      if (!st.isFile() || !(st.mtimeMs <= nowMs - STALE_TMP_MS)) continue;
+      try {
+        process.kill(Number(suffix), 0);
+        continue;
+      } catch (e) {
+        if (e.code !== 'ESRCH') continue;
+      }
+      unlinkSync(p);
+      reaped.push(n);
+    } catch {
+      // best effort: the next hour tries again
+    }
+  }
+  return reaped;
+}
+
 /** `advance-backfill` (auto-advance spec §2.1): give a codex-kind lane whose registry probe is `codex` its advance
  *  file when it has none (`backfillOnce`). In a file that EXISTS it settles a pending intent under the same lock and
  *  rewrites nothing else (plan W2 Task 9, D-5215): the hourly advance step calls this first, so a move a SIGTERM cut
@@ -665,8 +712,10 @@ function advanceIneligible(account, registry) {
  *  word), never a refusal (D-5198); so does a file it cannot read, with the read's word. An Anthropic lane and a
  *  lane with no class registry never reach here: `main`'s gates refuse them first (`anthropic-lane`,
  *  `no-registry`), and the hourly step (W2) asks neither: only a lane whose probe is `codex` and whose probe,
- *  materialise and LiteLLM render all succeeded. */
+ *  materialise and LiteLLM render all succeeded. Before any of that it reaps the lane's stale catalogue staging
+ *  files (`reapStaleCatalogueTmp`, ruling 11) and names them as `reapedTmp`, present only when it removed one. */
 function backfillOp(a, account, registry) {
+  const reaped = reapStaleCatalogueTmp(a.id);
   const why = advanceIneligible(account, registry);
   const b = why === null ? backfillOnce(a.id, registry) : { created: false, why };
   if (b.err !== undefined) return refuse(1, b.err[0], b.err[1]);
@@ -680,8 +729,8 @@ function backfillOp(a, account, registry) {
     }
     recoveredMove = s.recoveredMove;
   }
-  out({ ok: true, op: 'advance-backfill', id: a.id, created: b.created, ...(b.created ? {} : { why: b.why }),
-    ...recoveredField(recoveredMove) });
+  out({ ok: true, op: 'advance-backfill', id: a.id, ...(reaped.length > 0 ? { reapedTmp: reaped } : {}),
+    created: b.created, ...(b.created ? {} : { why: b.why }), ...recoveredField(recoveredMove) });
   return 0;
 }
 

@@ -5313,3 +5313,112 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
     expect(r.body).toMatchObject({ ok: false, error: 'bad-argv' });
   });
 });
+
+// ── auto-advance ruling 11: the hourly writer reaps a stale catalogue staging file ───────────────────────────
+// `ccd/ccrc-models-probe` stages a lane's catalogue as `$OUT.tmp.$$` beside it, with an EXIT trap; a probe killed
+// hard leaves that file. The probe runs OUTSIDE the lane-files lock, so `advance-backfill` (the one write op the
+// hourly step runs on every advancing lane) reaps one only when it is proved stale: a regular file, named for this
+// lane, whose pid no longer runs and whose mtime is an hour or more before the op's clock. Every planted entry's own
+// times are set two hours before NOW (`lutimesSync`: a symlink's own, a file's or a directory's like `utimesSync`)
+// unless a case says otherwise, because a real mtime is later than this fixed NOW, so an entry left unset would be
+// kept by the age test alone and hide the guard its case is about. Neutral ids only.
+describe('advance-backfill reaps a stale catalogue staging file, and only that (ruling 11)', () => {
+  const R_NOW = '2026-10-23T09:00:00Z';
+  const TWO_HOURS_BEFORE = new Date(Date.parse(R_NOW) - 2 * 3_600_000);
+  /** Above Linux's largest `pid_max` (2^22) and above macOS's: a pid no process holds. */
+  const DEAD_PID = 4194305;
+  const dir = (): string => path.join(home, '.ccrc', 'models');
+  const at = (name: string): string => path.join(dir(), name);
+  const aged = (p: string, when: Date = TWO_HOURS_BEFORE): void => { fs.lutimesSync(p, when, when); };
+  const listing = (): string[] => fs.readdirSync(dir()).sort();
+  const backfill = (): Result =>
+    opEnv({ CCRC_MODELS_NOW: R_NOW }, 'advance-backfill', '--file', rosterPath(), '--id', 'lane-a');
+  /** A regular staging file holding a cut-short catalogue, its times two hours before NOW unless `when` says otherwise. */
+  const plantTmp = (name: string, when?: Date): string => {
+    const p = at(name);
+    fs.writeFileSync(p, '{"partial":');
+    aged(p, when);
+    return p;
+  };
+
+  beforeEach(() => {
+    seed(stepRoster({ ...STEP_PORTS, authDir: codexAuthDir('lane-a') }));
+    plantStep();
+    for (const n of fs.readdirSync(dir())) aged(at(n));
+  });
+
+  it('a regular <lane>.json.tmp.<pid> whose pid is gone, two hours old, is removed and named; the catalogue keeps its bytes', () => {
+    const catBefore = fs.readFileSync(at('lane-a.json'));
+    plantTmp(`lane-a.json.tmp.${DEAD_PID}`);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['reapedTmp']).toEqual([`lane-a.json.tmp.${DEAD_PID}`]);
+    expect(listing()).toEqual(before.filter((n) => n !== `lane-a.json.tmp.${DEAD_PID}`));
+    expect(fs.readFileSync(at('lane-a.json'))).toEqual(catBefore);
+  });
+
+  it('the same file 59 minutes old is kept: a probe may still be writing it', () => {
+    plantTmp(`lane-a.json.tmp.${DEAD_PID}`, new Date(Date.parse(R_NOW) - 59 * 60_000));
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('a staging file whose pid still runs is kept, however old', () => {
+    plantTmp(`lane-a.json.tmp.${process.pid}`);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('a symlink with the staging name is kept, the link and its target intact', () => {
+    const target = path.join(home, 'link-target');
+    fs.writeFileSync(target, 'kept\n');
+    aged(target);
+    const link = at(`lane-a.json.tmp.${DEAD_PID}`);
+    fs.symlinkSync(target, link);
+    aged(link);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link)).toBe(target);
+    expect(fs.readFileSync(target, 'utf8')).toBe('kept\n');
+  });
+
+  it('a directory with the staging name is kept', () => {
+    const d = at(`lane-a.json.tmp.${DEAD_PID}`);
+    fs.mkdirSync(d);
+    aged(d);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+    expect(fs.lstatSync(d).isDirectory()).toBe(true);
+  });
+
+  it('another lane\'s staging file, a suffix that is not a pid, pid 0, models-op\'s own staging spelling and the registry\'s are all kept', () => {
+    for (const n of [`lane-b.json.tmp.${DEAD_PID}`, 'lane-a.json.tmp.abc', 'lane-a.json.tmp.0',
+      `lane-a.json.${DEAD_PID}.tmp`, `lane-a.classes.json.tmp.${DEAD_PID}`]) plantTmp(n);
+    const before = listing();
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(listing()).toEqual(before);
+  });
+
+  it('with nothing to reap, the answer carries no reapedTmp key', () => {
+    const r = backfill();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).not.toHaveProperty('reapedTmp');
+    expect(r.body).toMatchObject({ ok: true, op: 'advance-backfill', id: 'lane-a', created: false });
+  });
+});
