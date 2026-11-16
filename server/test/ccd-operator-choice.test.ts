@@ -1641,3 +1641,15 @@ describe('live UUID rotation keeps the outgoing operator choice', () => {
     expect(sent().join('\n')).not.toContain('/effort');
   });
 });
+
+// A LONG-LIVED ROLE'S TYPED /model (Overlord W1 ccd arms, Task 5; spec §3.4 H16, "A change of model inside a generation
+// is drift"). Step 1's characterization: on `main` before the skip, a coordinator's acknowledged `/model` is promoted to
+// its route's `class` like any session's.
+describe('a long-lived role\'s typed /model (the Overlord W1 ccd arms)', () => {
+  it('characterization: profile=coordinator, an acknowledged /model opus is promoted to class=opus at the keep', () => {
+    seed(); record({ class: 'fable', profile: 'coordinator' }); const t = now() - 600;
+    writeTranscript([cmd(t, 'model', 'opus'), ack(t, MODEL_ACK('Opus 5.5'))]);
+    expect(keep()).toBe('rc=0');
+    expect(h.reg(ID, 'class')).toBe('opus');
+  });
+});

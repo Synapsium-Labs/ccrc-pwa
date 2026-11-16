@@ -708,3 +708,22 @@ describe('the Overlord W1 ccd arms: the fresh start passes keep-awake\'s own .no
     expect(has('hibernated')).toBe(false);
   });
 });
+
+// A PROVEN RENEWAL ENDS A SET-SIDE CROSSING (Overlord W1 ccd arms, Task 5; spec §3.4 C46, "Every renewal clears the
+// crossing marker"). Step 1's characterization: on `main` before the crossing end, `--roll --fresh` leaves the marker.
+describe('the Overlord W1 ccd arms: a proven fresh start and a crossing marker', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (extra = ''): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, REAL);
+  const CROSS = '1700000000 pool-b lane-b';
+  const cross = (): void => { fs.writeFileSync(regPath('crosspool'), `${CROSS}\n`); };
+
+  it('characterization: --roll --fresh with a set side and a crossing marker leaves the marker', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(has('crosspool')).toBe(true);
+  });
+});

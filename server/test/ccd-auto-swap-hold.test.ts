@@ -124,3 +124,14 @@ describe('_auto_swap_check and a held workspace', () => {
     expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
   });
 });
+
+// THE ORDERED LIST'S STAND-DOWN (Overlord W1 ccd arms, Task 5; spec §3.4 C57, question 2). Step 1's characterization: on
+// `main` before the stand-down, a row whose route carries `acctorder` is moved by the affinity arm like any other.
+describe('_auto_swap_check and a row with an ordered account list', () => {
+  const order = (v = 'claude,claude9'): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.acctorder`), v); };
+  it('characterization: an acctorder row with a target that has room is moved at a clean boundary', () => {
+    seed(); idleStatus(); order();
+    h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
+  });
+});
