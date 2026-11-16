@@ -308,7 +308,7 @@ describe('one decision-model catalogue (Overlord W2, decision model A, Task 1)',
   // The catalogue of questions a decision model may be asked, and the side of a row's arming move that the authority grammar
   // and the deciders share (review 2262 F21), each have one home in L0. A second catalogue is a second set of revisions.
   const CATALOGUE = /\b(?:export\s+)?const\s+DECISION_QUESTIONS\b/;
-  const SIDE = /\b(?:interface|type)\s+DecisionRowSide\b/;
+  const SIDE = /\binterface\s+DecisionRowSide\b|\btype\s+DecisionRowSide\s*=/;
 
   it('DECISION_QUESTIONS and DecisionRowSide are each defined in exactly one file, shared/decisionModel.ts', () => {
     expect(ALL.filter((f) => CATALOGUE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/decisionModel.ts']);
@@ -320,6 +320,8 @@ describe('one decision-model catalogue (Overlord W2, decision model A, Task 1)',
     expect(SIDE.test('export interface DecisionRowSide {')).toBe(true);
     expect(CATALOGUE.test("import { DECISION_QUESTIONS } from './decisionModel.js';")).toBe(false);
     expect(SIDE.test("import type { DecisionRowSide } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test("import { type DecisionRowSide, type DecisionRowId } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test('type DecisionRowSide = { mode: string };')).toBe(true);
   });
 });
 
@@ -836,8 +838,10 @@ describe('Build 7 nouns', () => {
     // The answer marks (Overlord W1): `answerMarkStore.ts` is `answer_marks`' one writer and its read, in the same idiom.
     // The Overlord authority journal (Overlord W1, H27): `overlordAuthorityJournal.ts` is `overlord_authority_head`'s one writer,
     // inside its caller's transaction, and its read; it names the handle by `import type`, and every method takes it as an argument.
+    // The decision-model records (Overlord W2): `decisionModelStore.ts` is `decision_records`' and `decision_days`' SQL, in
+    // `ledgersStore.ts`' idiom; the one caller reaches it through the `DecisionAskStore` port and never holds the handle.
     const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts',
-      'responsesStore.ts']);
+      'responsesStore.ts', 'decisionModelStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {
