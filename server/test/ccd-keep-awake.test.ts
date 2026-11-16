@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { approvalClass, rootsForChild, FORBIDDEN_CCD_VERBS } from '../src/coord/approvalguard.js';
 import { CHILD_DENY_RULES } from '../../shared/api.js';
 
@@ -167,7 +168,7 @@ describe('ccd keep-awake refuses before it writes', () => {
 
   it('a bare bash ccd/ccd keep-awake (not under -p) is refused entry-unprivileged, exit 125, nothing written', () => {
     seedRow();
-    const r = spawnSync('bash', [CCD, 'keep-awake', '--session', ID, '--state', 'on'], {
+    const r = spawnSyncGroup('bash', [CCD, 'keep-awake', '--session', ID, '--state', 'on'], {
       cwd: h.home, encoding: 'utf8', timeout: 60_000,
       env: ghContainedEnv(h.home, { ...inheritedEnv(), HOME: h.home }, { systemd: true, tmux: true }),
     });

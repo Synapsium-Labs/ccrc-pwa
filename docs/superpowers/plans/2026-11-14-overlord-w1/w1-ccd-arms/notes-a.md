@@ -73,6 +73,8 @@ says must be one no floor row uses; it now uses `profile`.
 - Mutation, one mutant at a time and restored from a saved copy: all 23 of the plan's mutants for Tasks 1 to 3 (and
   four more: a second writer line, the hook's expanded-head arm, the child deny list and the installer's deny loop)
   turn a case red. The dropped time bound blocks the FIFO race case until its outer timeout.
+- The PR's first full run was red in `spawn-group-pin.test.ts`: the entry case of `ccd-keep-awake.test.ts` spawned a
+  timed `bash` outside `spawnSyncGroup`. It now goes through `spawnSyncGroup` (#896), and both suites are green.
 - `secret-mask` failed once inside a 27-file batch under fleet load and passed alone.
 - The shellcheck ratchet is killed by the local test slice's 6 GB memory cap on `ccd/ccd`, so CI is the arbiter there.
   `shellcheck` reports nothing on `ccd/lib/long-lived.sh`.
