@@ -1303,6 +1303,7 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 | The operator changed the designated class in Settings | soft | overlord | The designation row's class, changed after the generation was minted |
 | Evaluation due: the skill, the card template or the model id is not the one this generation was minted with | soft | overlord | A digest of the three, stored on the generation row at its mint. One renewal clears the trigger. Answers stay in shadow until the replay passes that digest (§9.5). The replay lane waits while a renewal is due, so it runs once this one has landed |
 | Not local: the conversation is absent on the host that wakes the session | hard | overlord, coordinator | The host's report |
+| A lost door process: a refused act-key claim or lost tools on the live generation. A door process that dies takes its key with it, and a restarted one's claim answers `stale-generation` (`nonce-spent`), so it serves reads only | hard | overlord | `claimsRefused` on the act-key row, and a tool server the generation no longer offers. Proposed by the door process plan (its question 7, F12) and adopted by the coordinator; until W1 reads it, the remedy is the operator's Renew now |
 | A resumed long conversation | hard | overlord, coordinator | The start report says it resumed, and the context is above half the hard cap |
 | A wave boundary | soft | coordinator | Wave N+1's run is open and wave N's is closed, and the context is above a quarter of the hard cap |
 
@@ -2464,7 +2465,12 @@ holds private data and can change state, so it must never take untrusted text ra
     decision model's answer, the Overlord's own notes, and goal text a session wrote. Content informs. It never
     instructs, and no authority flows from it.
 - **Goals carry authority only when the operator ratified them.** Every goals version carries `ratifiedBy`: an item
-  answer, a request, the operator's door, or `coordinator`. Only a ratified version counts as goal evidence (§6.3). A
+  answer, a request, the operator's door, or `coordinator`. The operator's door is the ratify door,
+  `POST /api/programmes/:slug/goals/ratify`. It names the version by its stamp, the pin's `inShortAt` or a modification
+  id, and refuses a pin that changed since the operator read it, so the operator never ratifies text they were not
+  shown. It confers authority, so it calls the account gate and refuses `auth-off` while sign-in is dark (the portfolio
+  plan, its question 4). Until W3, only this door ratifies: an item answer ratifies from W3, when effects exist (§6.3).
+  Only a ratified version counts as goal evidence (§6.3). A
   bare message id never ratifies, because the goals text is the coordinator's own. A version that rests on a relayed
   request is listed under "Changed that matters" with the quote beside it (§4.1). It counts as goal evidence once
   the operator has opened it (§6.3). Unratified goal text, programme titles, session names and branch names are
@@ -3520,11 +3526,24 @@ operator's. Every measure and every date is computed by the server, never writte
 
 - **H38. The order is the operator's fact, and the server measures the rest.**
   - **`portfolio_rank` holds the order.** Each row: programme, position, class of service (Table 5.6a), fixed date,
-    set at and set by. Its one writer is a session-gated operator door.
+    set at and set by. Its one writer is a session-gated operator door, `POST /api/portfolio/rank`, in the programme
+    ledgers' operator registration (`server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes`). It confers no
+    authority, so it calls no account gate and works while sign-in is dark: its actor is the session's device actor
+    when sign-in is armed, and `flag-off` while it is dark (the portfolio plan, its questions 2 and 4).
+  - **Classes order the rank.** The order is the classes in Table 5.6a's order (`expedite`, `fixed-date`, `standard`,
+    `background`), then the position inside each class (the portfolio plan, its question 6).
+  - **A rank write merges, and never deletes what it did not show.** The console sends `seen`, the slugs it listed at
+    `basedOn`, and `order`, its new order of some of them. The writer writes each slug in `order` with its class, date
+    and position; deletes the rows of slugs in `seen` that are absent from `order`, so they become unranked; and keeps
+    every other ranked row, with its class and date. Inside each class band the listed entries come first in the given
+    order, then the kept rows in their old order, and the band is numbered again from 1. A one-row table,
+    `portfolio_rank_revision`, holds the revision with the act's `setAt` and `setBy`; it only rises, so a write that
+    empties the rank cannot bring it back to a value a stale tab holds. A write whose `basedOn` is not the current
+    revision is refused `rank-changed` (the portfolio plan, its question 8).
   - **The relay's priority comes from it.** The server renders the priority field from the rank. The Overlord never
     writes a priority.
-  - **A programme with no rank row reads as the bottom of `standard`,** in the order it was created. The server writes
-    no row. Only the operator's rank door places a programme.
+  - **A programme with no rank row reads as the bottom of `standard`,** in the order it was created (oldest
+    `createdAt` first, then by slug). The server writes no row. Only the operator's rank door places a programme.
   - **`portfolioFor` is an L1 reader that stores nothing.** Its answer is on the board and on the home. Per programme,
     in rank order, it answers:
     - work in progress, and waves closed in 7 and in 28 days;
@@ -3710,7 +3729,10 @@ it: the evidence floor and the ask-or-act decider.
     through the act read and cites it, not the Overlord, wherever D-8126 needs an operator ruling: a change to
     `doneWhen` or scope, or a spec approval (clause 22). Without this, an O3 grant would have nothing it could change.
   - **`goals modify` takes a reference the server validates:** a live grant of the right kind and scope, an item of
-    this programme that the operator answered and whose effect names this change, or a request this programme owns
+    this programme that the operator answered and whose effect names this change (from W3, when effects arrive, §6.7;
+    in W1 a modification that cites an item records the source `item`, and the item reads as not ratified with the
+    reason `effect-unmeasured`, judged again in W3 because the verdict is computed at read time, the portfolio plan,
+    its question 3), or a request this programme owns
     whose relay carried the widening (§5.3). A bare message id is no reference: the text is the coordinator's own. A
     reference that names no row, or that is not a live grant, an answered item of this programme or a relayed request
     this programme owns, is refused `reference-unknown`. A version that rests on a relayed request reads
@@ -3822,14 +3844,14 @@ from a ready Overlord, and a breaker stops the tier when holds keep lapsing.
 | `absent` | No session is bound to the designation: none was designated, or it was retired |
 | `off` | The `off` rung (§7.5), or `mail-disabled`. The coordinator pause stops starts only, not holds |
 | `unmeasured` | The registry cannot be read, or the server started less than one sweep ago |
-| `dead` | It measures dead, or it is within its measured restart time after a third restart in the last hour; and neither `restarting` nor a renewal the lane started (`renewing`, below) matches. So a swap landing or a crash restart within its bounds reads `restarting`, and a renewal reads `renewing`, never `dead`. A third restart in the hour reads `dead`, whatever state its last generation reached |
+| `dead` | It measures dead, or it is within its measured restart time after a third restart in the last hour; and neither `restarting` nor a renewal the lane started (`renewing`, below) matches. So a swap landing or a crash restart within its bounds reads `restarting`, and a renewal reads `renewing`, never `dead`. A third restart in the hour reads `dead`, whatever state its last generation reached: while its body is down, and after the generation mints, until the hour no longer holds three restarts. The renewing guard covers only the plain "measures dead" clause, never the third restart, so a crash loop reads `dead` before `renewing` can answer. The count is of the identity's generations minted in the hour whose predecessor ended with a restart outcome (`crashed`, `swapped`, `woken`, `woken-elsewhere` or `unmeasured`; `renewed` and `cleared` are no restart), plus one for the restart in progress while the body is down and the generation is not `renewing` (the readiness plan, F1) |
 | `restarting` | It is within its measured restart time, and it has restarted at most twice in the last hour |
 | `renewing` | Its generation is in `draining`, `checkpointed`, `clearing`, `carded` or `probing` (§3.3.11), or is not `degraded` and has not read its card or passed its probes. A pending designation reads `renewing`, through generation 1's state |
 | `degraded` | Its generation is `degraded`: chat only |
 | `stranded` | No account can serve it, a swap is blocked, or its last turn failed on its account |
 | `dialog-open` | A dialog has stood in its pane for 30 s |
 | `wedged` | A turn has run over ten minutes, or it is working with no hook event for five minutes |
-| `deaf` | Two held rows from two sources went past half their windows with no door call since each was offered, or an operator message was neither picked up nor settled within 2 minutes of `ready`. The prompt route's settlement mark settles a message too (§3.8) |
+| `deaf` | Two held rows from two sources went past half their windows with no door call since each was offered, or an operator message was neither picked up nor settled within 2 minutes. The two minutes run from the later of the message's arrival and `readySince`, the time of the newest `ready` row; with no such row the clock has not started, so no message is deaf (the readiness plan, F18). The prompt route's settlement mark settles a message too (§3.8) |
 | `saturated` | Its inbox cannot be served in time (the admission test, §6.8) |
 | `unproved` | None of the above, but no proof yet since the word last left `ready` |
 | `ready` | None of the above, with positive proof newer than the moment the word last left `ready` |
@@ -3840,7 +3862,11 @@ from a ready Overlord, and a breaker stops the tier when holds keep lapsing.
   11.5b).
 
 - **What counts as proof.** A door call (the inbox read is the heartbeat, and it is a fact on the server, not a
-  file), or an idle word over a finished turn. Proof older than the moment the word last left `ready` never counts.
+  file), or an idle word over a finished turn. Proof older than the moment the word last left `ready` never counts,
+  and neither does proof older than the current generation's start: a door call by the generation before does not
+  prove this one. A server restart counts as leaving `ready`: the first pass after boot writes an `unmeasured` row,
+  so an idle Overlord reads `unproved` until its next served read. That is the safe direction, and the inbox's wake
+  bounds it (the readiness plan, F13).
 - **Every change of word is a row and an event.** M16 counts the minutes spent in each word.
 - **The place shows it.** The Overlord place, Fleet health and Waiting on you show the word, since when, and where
   questions go meanwhile (§4.1).
@@ -5416,6 +5442,14 @@ one word for one thing.
   - **While sign-in is dark, any process on the box can call it,** as it can every operator door then (Table 11.6,
     `auth-off`). No hook rule names it. So every mark written dark records `flag-off` and carries the weaker basis
     above.
+- **Who sees them.** A mark grants nothing and is never an answer (above). The marks ride the operator's reads:
+  `GET /api/waiting`, the `waiting` frame on `/ws/fleet` and `GET /api/items/:id`, each session-gated, and each
+  operator response carries the marks of the item it answers. The coordinator's own box-token read,
+  `GET /api/programmes/:slug/items`, carries none. So a coordinator does not see the operator's marks, an unsure mark
+  least of all, but only while sign-in is armed, when the auth gate refuses a caller that holds only the box token. While
+  sign-in is dark, the waiting view, marks included, is open to any process on the box, a coordinator's session among
+  them, as every operator door is then (Table 11.6, `auth-off`; the delegation marks plan,
+  `coordinator-read-carries-no-marks`).
 - **Refusals.** A mark on a row that carries no box, or on a cleared row past the
   window, is refused `not-markable`, which the pull request that builds the door adds to Table 11.6.
 - **The privacy controls cover them.** Export carries the marks. "Wipe everything" removes them with the response rows
@@ -6335,7 +6369,8 @@ tested over its whole input domain (§11.7).*
 | The hook's reports: start (profile digest; the instruction files, settings sources, hooks, tool servers, mods, agents and skills the session loaded), witness (PreToolUse), reader start and stop, model switch, and the pick-up report, which writes an operator message's picked up (the message moves table, §3.8) | C3, L4 | the start record and counters; the renewal lane mints the generation from the start record; picked up on `operator_messages` | the hook, by direct call | n/a | W1a, W1 | n/a | No route: unmeasured |
 | `acknowledge` | C5, L4 | in W1, only the message row's state, through the private store's one message writer; act rows begin in W2, with `overlord_acts` | it | n/a | W1 (act row W2) | n/a | No route |
 | The ladder: rung, Pause, per-kind arming, engagement | K, L4 | ladder state | it | n/a | W1, W3 | n/a | No route |
-| The rank door | C5, L4 | `portfolio_rank` | it | n/a | W1 | n/a | No route |
+| The rank door, `POST /api/portfolio/rank`, in the programme ledgers' operator registration (`ledgersRoutes.ts`), working while sign-in is dark | C5, L4 | `portfolio_rank`, `portfolio_rank_revision` | it | n/a | W1 | n/a | No route |
+| The ratify door, `POST /api/programmes/:slug/goals/ratify`, refusing `auth-off` while sign-in is dark (§3.8) | C5, L4 | `ratifiedBy` on the goals version it names | it, beside the goals doors | n/a | W1 | n/a | No route |
 | Open a request: `POST /api/overlord/requests` | C5, L4 | `overlord_requests` | it | n/a | W2 | n/a | No route |
 | Route, route elsewhere, re-relay, drop and `close-request` | C5, L4 | `overlord_requests` | each its own move | n/a | W2 | n/a | No route |
 | The operator's request doors: answer, for a request that reached `needs-you` any other way; confirm `done-unverified`; withdraw; take (`routed`, `in-progress` or `blocked` to `needs-you`, storing that state as `takenFrom`, with the reason `operator-took-it` on the move's news row); and hand back, which returns a taken request to `takenFrom` and clears it | C5, L4 | `overlord_requests` | each its own move | n/a | W2 | n/a | No route |
@@ -6368,7 +6403,8 @@ tested over its whole input domain (§11.7).*
 | `GET /api/mail/:id` serves `overlord` mail only to its recipient or the console, and renders the attested field from the private store at fetch; a wiped message fetches as "withdrawn by the operator" | C5, L4 | none | n/a | n/a | W2 | n/a | Token-only, as today |
 
 *Table 11.1e. Doors. Each context's Overlord doors register from one new routes file of that context (C5's is
-`coord/overlordRoutes.ts`). Each such file is a lane source of its own for the box-token census, `auth/gate.ts`'s
+`coord/overlordRoutes.ts`). The rank door is the exception: it is the operator's door and registers with the programme
+ledgers' operator doors (`server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes`). Each such file is a lane source of its own for the box-token census, `auth/gate.ts`'s
 `EXEMPT` table and the rings allowlist.*
 
 - **Three more readers learn the `overlord` sender.** `SYSTEM_MAIL_SENDER_MAP` and `MAIL_ROLE_IDS` live in
@@ -6686,9 +6722,11 @@ reversible, so no act reads the two `reversible` weights in version 1.
 ### 11.6 Refusal words
 
 Every refusal this design adds is one word in `shared/refusal.ts`, the L0 home of the tree's refusal words, where they
-are grouped by door, each with its status (`REFUSAL_STATUS`). In W1a nothing generates those words from this table or
-checks one against the other; the words of doors not built yet (`probe-none-open`, `probe-closed`, `renew-pending`,
-`renew-not-long-lived`, `baseline-missing`) are in this table only. A refusal names its cause.
+are grouped by door, each with its status (`REFUSAL_STATUS`). Since W1 a guard suite reads this table and checks it
+against the code in both directions (`server/test/single-definition/refusal-table.test.ts`, the vocabulary plan): every
+word here is a route refusal, or waits for a later wave on the suite's wave map, and every word of the Overlord's groups
+is here, or on a shrink-only exception list. A word of a W1 door that is not built yet has no row until its code is on
+`main`, because no W1 word may wait on the wave map. A refusal names its cause.
 The egress refusal is the one exception, because a detailed answer there is an oracle.
 
 | Word | Door or lane | Meaning | Call |
@@ -7345,8 +7383,6 @@ agree them. Appendix B's Table B5 lists each one with its source.
   routine or big line tell them apart, and in W1 only the marks and the row's kind do (§9.2.1). Whether a richer
   classifier is needed, and who sets it (the coordinator when it raises the item, or the Overlord's own read, checked
   by code), is open for W3.
-- **This revision itself (R18).** You approve it on its pull request. The calls it settles under R18 are in C46 and
-  Appendix B, each with its reason, and each is open to overrule.
 - **The prerequisites.** D-8126 (PR #2487) and its four open questions. Its spec and plan have merged, and its waves A2
   and A3 have shipped; A4 to A10 have not (§1.1). D-8125 has merged. The Overlord's W1 starts when D-8126 has merged and
   been built. W0 and W1a do not wait for it.
