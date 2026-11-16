@@ -3784,10 +3784,12 @@ and no-plan mockups in the folder beside it. The build plan is `docs/superpowers
   862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale.
   A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
   many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
-- **Decided.** The plan has two axes: the work (epics and tickets) and the sequence (phases, a new level, each ticket
-  naming one). Epics lose their wave ranges, so they can run in parallel inside a phase. The Work card sits below Goals:
-  "N of M done" with a bar and a strip of each epic's count, then phases in order, each ticket inside with its epic as a
-  tag. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+- **Decided.** The card is built on the Linear hierarchy's plan model (programme, epic, checkpoint, ticket; its wave 2
+  is on `main`) and supersedes that plan's Task 5.2. To it the design adds a sequence axis: phases in order, each
+  referencing the epics and tickets it takes on, a ticket allowed in several phases. Epics lose their wave ranges, so
+  they can run in parallel inside a phase. The Work card sits below Goals: "N of M done" with a bar and a strip of each
+  epic's count and checkpoints, then phases in order, each ticket inside with its epic as a tag, a slipped ticket read
+  as carried in the earlier phase and counted once. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
   `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
   runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
   you moves to the top of the right column. The card replaces the Linear hierarchy plan's Task 5.2.
@@ -3795,16 +3797,18 @@ and no-plan mockups in the folder beside it. The build plan is `docs/superpowers
   with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
   ticket done except its own run. `runs open` now refuses `ticket-required` while the run's epic has an open declared
   ticket, and a coordinator's `plan ticket-done` records a finished ticket with its pull request.
-- **For the operator.** Three questions, raised as Waiting on you items: should live programmes declare their plans now
-  (Q1), which axis leads the card (Q2), and the word for a stage (Q3).
+- **For the operator.** Four questions, raised as Waiting on you items: should live programmes declare their plans now
+  (Q1), which axis leads the card (Q2), the word for a stage (Q3), and what a phase becomes in Linear (Q4).
 - **The build** is six tasks, WM0 to WM5, one PR each. Only WM4 touches claim 4522's files (`ProgrammeScreen.tsx` and
   `pwa/src/lib/api.ts`), so it waits for that claim. The others touch none of them.
 
 **Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
 words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
-wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." The spec now keeps
-the two axes apart, adds phases to the plan model and frees epics of wave ranges (spec §3, D13 and D14). Items 349 to
-351 are replaced by three new ones on the corrected model.
+wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." Then, the same day:
+"I guess we can allow references to epics / tickets that are part of a wave/phase"; a ticket in more than one phase is
+"a good idea"; and "I guess if we properly implement linear it should have the initiatives, projects, etc." The spec now
+keeps the two axes apart, builds the work on the hierarchy's model, adds phases that reference it, and frees epics of
+wave ranges (spec §3 and §8, D13 to D16). Items 349 to 351 are replaced by four new ones on the corrected model.
 
 - **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
   stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work

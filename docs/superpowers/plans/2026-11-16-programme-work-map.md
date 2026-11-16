@@ -3,14 +3,15 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** The programme page gains a Work card below Goals. It shows the programme's plan on two axes, as the operator
-ruled: the sequence leads, as phases in order, and inside each phase are its tickets, each tagged with its epic. A strip
-under the headline gives each epic's count. Every ticket has a status derived from facts the server already holds. A
-plan with no phases groups by epic. A programme with no plan shows its work runs so far, under a note that what remains
-is not known.
+**Goal:** The programme page gains a Work card below Goals, the realisation of the Linear hierarchy plan's Task 5.2,
+extended. It shows the hierarchy's plan model (programme, epic, checkpoint, ticket) with a separate sequence axis the
+operator asked for: phases in order, each referencing the epics and tickets it takes on. The card leads with the phases;
+each ticket in one has a status derived from facts the server holds and a tag naming its epic; a strip under the
+headline gives each epic's count and its checkpoints. A plan with no phases groups by epic. A programme with no plan
+shows its work runs so far, under a note that what remains is not known.
 
-**Architecture:** The plan model gains phases, a sequence level of its own, with each ticket naming one. Epics stop being
-tied to wave ranges (WM0). Two more additions keep "N of M" honest: a work run names its ticket, and a coordinator
+**Architecture:** The plan model gains phases and their references to epics and tickets, written by the plan store
+alone; epics stop being tied to wave ranges (WM0). Two more additions keep "N of M" honest: a work run names its ticket, and a coordinator
 records a finished ticket (WM1). One pure decider in Coordination, `workMapOf` (`server/src/coord/workMap.ts`, L1),
 turns the plan, the programme's runs and its open items into a `WorkMapView`, served as an additive `work` field on
 `GET /api/programmes/:slug/plan` (WM2). The PWA draws it in `WorkCard.tsx` (L4), with its words in `workMapWords.ts`
@@ -20,7 +21,8 @@ turns the plan, the programme's runs and its open items into a `WorkMapView`, se
 jsdom and the browser leg).
 
 **Spec:** `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`. Read it whole before any task; §n below are
-its sections, Table 4 is its status decider and Table 3 its measurement of work and sequence today. Desktop polish Task
+its sections, Table 6 is its status decider, Table 6a how a phase reads its tickets, Table 5 its measurement of work
+and sequence today, and Table 7 what it keeps and changes of the hierarchy's Task 5.2. Desktop polish Task
 C37 (D-8669) is the design wave that wrote both.
 
 ## What was read first
@@ -32,6 +34,17 @@ C37 (D-8669) is the design wave that wrote both.
 - `shared/api.ts#RunSummary` and `shared/ledgers.ts#ItemView` (`runId`, `state`, `neededBy`).
 - `docs/superpowers/specs/2026-10-31-programme-ledgers-design.md` §2 and §7, and
   `docs/superpowers/specs/2026-11-10-linear-hierarchy-design.md` §4 and §11.2, with its plan's Task 5.2.
+
+## Relation to the Linear hierarchy plan
+
+- **Built on its wave 2** (#2661, on `main`): `shared/plan.ts`, `planStore.ts`, `planPolicy.ts`, `planRoutes.ts`. Nothing
+  here depends on its waves 3 to 7. The card's *Open in Linear* links appear only once its sync (wave 3) binds the plan
+  objects; until then the card draws none.
+- **Supersedes its Task 5.2** (the Plan section): WM2 to WM4 build that section's design as the Work card (spec Table 7).
+  Its `PlanSection.tsx` is not built.
+- **Overlaps with its unbuilt tasks:** its Task 4.1 also adds a migration and writes `planStore.ts`; its Task 6.1 writes
+  `ccd/coordinator-skill/references/plan.md`, which WM5 also writes. Whichever lands second takes the next migration slot
+  and builds on the other. Its waves 3 to 7 are not planned here; the coordinator has put them to the operator.
 
 ## Gates: what each task waits for
 
@@ -75,14 +88,14 @@ for another programme. Only WM4 touches them.*
 
 | File | Task | Ring | Change |
 |---|---|---|---|
-| `server/src/coord/schema.ts` | WM0 | L3 | Migration: `plan_phases`; nullable `phase` on `plan_tickets` |
-| `shared/plan.ts` | WM0, WM1, WM2 | L0 | Phase body and view; `waves` optional; `ticket-required`; `PlanTicketDoneBody`; `WORK_STATUSES`, `WORK_GROUPS`, `WorkMapView` |
-| `server/src/coord/planPolicy.ts` | WM0, WM1 | L1 | Phase checks; contiguity and overlap among epics that list waves; `ticketRequired` |
-| `server/src/coord/planStore.ts` | WM0, WM1 | L3 | Phases and each ticket's phase; `markTicketDone` |
+| `server/src/coord/schema.ts` | WM0 | L3 | Migration: `plan_phases` and `plan_phase_refs` |
+| `shared/plan.ts` | WM0, WM1, WM2 | L0 | Phase and reference bodies and views; `waves` optional; `unknown-ref`, `ticket-required`; `PlanTicketDoneBody`; `WORK_STATUSES`, `WORK_GROUPS`, `WorkMapView` |
+| `server/src/coord/planPolicy.ts` | WM0, WM1 | L1 | Phase and reference checks; contiguity and overlap among epics that list waves; `ticketRequired` |
+| `server/src/coord/planStore.ts` | WM0, WM1 | L3 | Phases and references, their one writer; `markTicketDone` |
 | `server/src/coord/openRun.ts` | WM0, WM1 | L1 | `planGate`: a named ticket gives the epic; `ticket-required` |
-| `server/src/coord/planRoutes.ts` | WM0, WM1, WM2 | L4 | `phases` in `plan put` and `PlanView`; the ticket-done route; `work` on the `GET` |
-| `server/src/auth/gate.ts` | WM1 | L4 | The ticket-done route's EXEMPT row, like its siblings |
-| `ccd/ccrc-api` | WM1 | bash | The `plan ticket-done` row |
+| `server/src/coord/planRoutes.ts` | WM0, WM1, WM2 | L4 | `phases` in `plan put` and `PlanView`; the phase-ref and ticket-done routes; `work` on the `GET` |
+| `server/src/auth/gate.ts` | WM0, WM1 | L4 | The two new routes' EXEMPT rows, like their siblings |
+| `ccd/ccrc-api` | WM0, WM1 | bash | The `plan phase-ref` and `plan ticket-done` rows |
 | `shared/refusal.ts`, `pwa/src/lib/refusalWords.ts` | WM1 | L0, L1 | `ticket-required`'s status and sentence |
 | `server/src/coord/workMap.ts` | WM2 | L1 | New: `workMapOf` |
 | `server/src/coord/store.ts` | WM2 | L3 | One read: every work run of one programme, with its ticket's key |
@@ -94,52 +107,57 @@ for another programme. Only WM4 touches them.*
 
 ## Tasks
 
-### Task WM0: phases in the plan, and epics free of wave ranges
+### Task WM0: phases that reference epics and tickets, and epics free of wave ranges
 
-Spec §3, D13 and D14.
+Spec §3, D13, D14 and D15.
 
 **Files:** Modify `server/src/coord/schema.ts`, `shared/plan.ts`, `server/src/coord/planPolicy.ts`,
-`server/src/coord/planStore.ts`, `server/src/coord/openRun.ts`, `server/src/coord/planRoutes.ts`; Create
-`server/test/plan-phases.test.ts`; Test the existing `plan*`, `open-run*` and schema tests, and
-`server/test/single-definition/plan.test.ts`.
+`server/src/coord/planStore.ts`, `server/src/coord/openRun.ts`, `server/src/coord/planRoutes.ts`,
+`server/src/auth/gate.ts`, `ccd/ccrc-api`; Create `server/test/plan-phases.test.ts`; Test the existing `plan*`,
+`open-run*` and schema tests, the box-token census, the ccrc-api row tests and `server/test/single-definition/plan.test.ts`.
 
 **Interfaces:**
 
 ```ts
 // shared/plan.ts
-export interface PlanPhaseBody { key: string; title: string; summary: string; droppedWhy?: string }
+export const PHASE_REF_KINDS = ['epic', 'ticket'] as const;
+export interface PlanPhaseRefBody { kind: (typeof PHASE_REF_KINDS)[number]; key: string }   // an epic key or a ticket key
+export interface PlanPhaseBody { key: string; title: string; summary: string; refs: PlanPhaseRefBody[]; droppedWhy?: string }
 export interface PlanPutBody { home?: string; title?: string; phases?: PlanPhaseBody[]; epics: PlanEpicBody[] }
-// PlanEpicBody.waves becomes optional; PlanTicketBody gains phase?: string
-export const PHASE_STATES = ['planned', 'active', 'done', 'dropped'] as const;   // derived, never stored, except dropped
-export interface PhaseView { key: string; title: string; summary: string; state: (typeof PHASE_STATES)[number] }
-// PlanView gains phases: PhaseView[]; TicketView gains phase: string | null
+// PlanEpicBody.waves becomes optional
+export interface PlanPhaseRefMoveBody { byId: string; byUuid: string; phase: string; ref: PlanPhaseRefBody; op: 'add' | 'remove' }
+export interface PhaseView { key: string; title: string; summary: string; dropped: boolean; refs: PlanPhaseRefBody[] }
+// PlanView gains phases: PhaseView[] (in order). A phase stores no state: progress is the work map's (WM2).
 ```
 
 - The migration adds `plan_phases (id, program, key, ordinal, title, summary, droppedWhy)`, unique (`program`, `key`),
-  and `plan_tickets.phase TEXT` (a phase key, nullable). New table and nullable column only, so an older build reads the
-  file as-is.
-- `plan put` diffs phases by key as it diffs epics: a phase that disappears needs `droppedWhy`, and a ticket naming an
-  unknown or dropped phase is refused `unknown-phase` (a new word in `PLAN_REFUSALS`). At most 24 phases.
-  `plan ticket-add` and `plan ticket-move` take `phase`.
-- A phase's state is derived when the view is built: `dropped` if dropped, `done` when it has tickets and every one is
-  done or dropped, `active` when any is started or done, else `planned`.
+  and `plan_phase_refs (phaseId, kind, refId)`, unique on all three, `refId` an epic's or a ticket's id by `kind`. New
+  tables only, so an older build reads the file as-is.
+- `plan put` diffs phases by key as it diffs epics: a phase that disappears needs `droppedWhy`; its references go with
+  it and no ticket changes. Each phase's `refs` replace its stored references. A reference to an unknown or dropped epic
+  or ticket is refused `unknown-ref` (a new word in `PLAN_REFUSALS`). At most 24 phases.
+- `POST /api/programmes/:slug/plan/phases/refs` (`ccrc-api plan phase-ref <slug> --json <f>`): adds or removes one
+  reference, under the plan verbs' owner check, so a slip is one call. Its census rows go with it.
+- A ticket may be referenced by several phases, and a phase may reference a whole epic and single tickets of it.
 - `waves` on an epic is optional. `waves-not-contiguous` and `wave-overlap` are checked among epics that list waves.
   `planGate`: a run that names a ticket takes the ticket's epic, and checks its wave against that epic only when the epic
   lists waves. A run with no ticket still needs an epic that lists its wave (`wave-epic-mismatch` otherwise).
 
-- [ ] **Step 1: Write the failing tests** — `plan put stores phases in order`, `a ticket names its phase`, `a phase that
-  disappears needs a reason`, `a ticket naming an unknown phase is refused unknown-phase`, `a phase's state is derived:
-  planned, active, done`, `an epic with no waves is accepted`, `two epics with no waves run in parallel in one phase`,
-  `a run naming a ticket of an epic with no waves opens`, `an epic that lists waves keeps waves-not-contiguous,
-  wave-overlap and wave-epic-mismatch`, `a run with no ticket and no epic listing its wave is refused`.
+- [ ] **Step 1: Write the failing tests** — `plan put stores phases in order with their references`, `a phase may
+  reference a whole epic and a ticket`, `one ticket may be referenced by two phases`, `phase-ref adds and removes one
+  reference`, `phase-ref refuses a caller that is not the coordinator`, `a reference to an unknown or dropped epic or
+  ticket is refused unknown-ref`, `dropping a phase needs a reason and leaves its tickets alone`, `an epic with no waves
+  is accepted`, `two epics with no waves run in parallel`, `a run naming a ticket of an epic with no waves opens`, `an
+  epic that lists waves keeps waves-not-contiguous, wave-overlap and wave-epic-mismatch`, `a run with no ticket and no
+  epic listing its wave is refused`.
 - [ ] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-phases.test.ts`.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every `plan*`, `open-run*` and schema test, and `single-definition`.
-- [ ] **Step 5: Commit** — `feat(plan): phases in the plan, and epics free of wave ranges`.
+- [ ] **Step 4: Run to pass**, then every `plan*`, `open-run*` and schema test, the census and `single-definition`.
+- [ ] **Step 5: Commit** — `feat(plan): phases that reference epics and tickets, and epics free of wave ranges`.
 
 **Acceptance.** Every stored plan reads the same before and after (a characterization case over a fixture shaped like
-the two live plans). **Rollback.** A plain revert; the new table and column are left unread.
+the two live plans). **Rollback.** A plain revert; the new tables are left unread.
 
 ### Task WM1: a work run names its ticket, and a coordinator records a finished one
 
@@ -194,6 +212,8 @@ export type WorkGroup = (typeof WORK_GROUPS)[number];
 export interface WorkItemView {
   key: string; title: string; status: WorkStatus; group: WorkGroup;
   epic: { key: string; title: string } | null;     // the work axis, shown as a tag
+  carriedTo: string | null;        // a later phase that also references it, when not done (spec Table 6a)
+  carriedFrom: string | null;      // an earlier phase that also references it
   runId: number | null; lastMoveAt: number | null; wave: number | null;
   itemIds: number[];               // open operator items that make it waiting-on-you
   lastFailedRunId: number | null;  // the run that last held a ticket now back at not-started
@@ -201,13 +221,18 @@ export interface WorkItemView {
 export interface WorkGroupView {
   kind: 'phase' | 'epic' | 'no-phase' | 'before-plan' | 'runs';
   key: string; title: string; summary: string | null; finishedAt: number | null;
-  counts: Record<WorkGroup, number>; items: WorkItemView[];   // plan order
+  counts: Record<WorkGroup, number>; carried: number;         // carried tickets are neither done nor outstanding here
+  wholeEpics: string[];                                       // epic keys this phase takes on whole
+  items: WorkItemView[];                                      // plan order
 }
 export interface WorkMapView {
   source: 'plan' | 'runs';
   groupedBy: 'phase' | 'epic' | 'run';
   counts: Record<WorkGroup, number>;
-  epics: { key: string; title: string; done: number; total: number }[];   // the strip
+  epics: { key: string; title: string; done: number; total: number;
+    checkpoints: { key: string; title: string; kind: string; state: string; metAt: number | null;
+      evidence: CheckpointEvidence | null; url: string | null }[] }[];   // the strip
+  doneWhen: { text: string; proved: boolean }[];                         // the Done when line, from PlanView
   waves: { from: number; to: number } | null;                            // the no-plan source line
   groups: WorkGroupView[];
 }
@@ -222,8 +247,12 @@ export function workMapOf(input: {
 The builder may rename fields; the shape is the spec's.
 
 - `source` is `plan` when `plan.planned` is true, else `runs`. A plan groups by phase when it declares any phase, and by
-  epic otherwise; tickets with no phase in a phased plan form a last group, "No phase". A programme with no plan groups
-  by run: one group of its work runs, newest first.
+  epic otherwise. A phase's referenced set is its ticket references plus the not-dropped tickets of its whole-epic
+  references, now and later, each once (spec D15). A ticket in no phase sits in a last group, "Not in a phase". A
+  programme with no plan groups by run: one group of its work runs, newest first.
+- A ticket that is not done and is referenced by a later phase is `carriedTo` that phase in each earlier one, counted in
+  `carried` there and not as outstanding; a phase is finished when every ticket it references is done or carried. The
+  headline and the strip count each ticket once (spec D16).
 - On a planned programme, its work runs with no ticket form one `before-plan` group after the others, counted apart.
 - The store read returns every work run of the programme with its ticket's key (`runs.ticketId` joined to
   `plan_tickets.key`). A failed run keeps its `ticketId` while its ticket's `runId` is cleared (`onRunAdvancedInTx`), so
@@ -235,7 +264,10 @@ The builder may rename fields; the shape is the spec's.
 - [ ] **Step 1: Write the failing tests** — `work-map.test.ts`: one case per row of the spec's Table 4, plus `an open
   item on the run beats a stuck verdict`, `stuck beats working`, `a dropped ticket is in no total`, `a failed run's
   ticket reads not-started with lastFailedRunId`, `a review run makes no row`, `a phased plan groups by phase with each
-  ticket's epic`, `one phase holds tickets of two epics`, `a ticket with no phase goes to No phase`, `a plan with no
+  ticket's epic`, `one phase holds tickets of two epics`, `a whole-epic reference takes a ticket added later and leaves out
+  a dropped one`, `a ticket in two phases counts once in the headline`, `it reads carried in the earlier phase and from
+  the earlier phase in the later one`, `a phase whose only open ticket is carried is finished`, `a ticket in no phase goes
+  to Not in a phase`, `a plan with no
   phases groups by epic`, `the epic strip counts each epic over every phase`, `a finished phase carries finishedAt`,
   `no plan: grouped by run, no total, failed runs counted apart`, `runs with no ticket on a planned programme form
   before-plan, outside the total`, `a title equal to the programme's reads null`. The route's test: `the plan read
@@ -263,12 +295,14 @@ Modify `pwa/src/ledgers/ledgers.css`.
   and no route, so it merges before WM4. It keeps one piece of local state, the epic filter.
 - `workMapWords.ts` holds `statusWord(status)`, `headline(view)` ("11 of 20 done", or "38 work runs done" with no plan),
   `outstandingLine(view)`, `sourceLine(view, readAt, now)`, `groupLine(group)`, `foldLabel(n)` ("5 done"),
-  `epicChip(epic)` ("5 of 9") and the two fallback notes ("No phases declared: grouped by epic"; "No plan declared, so
+  `epicChip(epic)` ("5 of 9 · ◇ 1 of 2"), `carriedWords` ("carried to phase 3", "from phase 2"), `wholeEpicLine`
+("takes on all of …"), `doneWhenLine` ("Done when · 1 of 3 proved") and the two fallback notes ("No phases declared: grouped by epic"; "No plan declared, so
   what remains is not known. Below is the work run so far.").
-- The card: the headline and the bar; the epic strip (a chip per epic; a tap filters the groups to that epic's tickets,
-  a second tap clears it); the source line; the groups in order, a finished one folded to its line with its date; in each,
-  outstanding tickets first in plan order, then the done ones folded; each row its status word, its title, its epic tag
-  and its facts.
+- The card: the headline and the bar; the epic strip (a chip per epic; a tap filters the groups to that epic's tickets
+  and opens a row of its checkpoints, each with its state, kind, and when met its date and evidence; a second tap clears
+  it); the source line; the groups in order, a finished one folded to its line with its date; in each, outstanding
+  tickets first in plan order, carried ones next, then the done ones folded; each row its status word, its title, its
+  epic tag and its facts; the folded Done when line; *Open in Linear* only where a `url` is present.
 
 | Width | Layout |
 |---|---|
@@ -277,8 +311,9 @@ Modify `pwa/src/ledgers/ledgers.css`.
 
 - [ ] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the no-plan card has no M and says
   what remains is not known`, `a plan with no phases says it is grouped by epic`, `a finished phase is one line with its
-  date`, `done tickets fold into one counted line`, `each ticket shows its epic`, `a chip filters to its epic and a second
-  tap clears it`, `every status has a word` (over `WORK_STATUSES`), `a run link opens the run`, `an item link opens the
+  date`, `done tickets fold into one counted line`, `each ticket shows its epic`, `a chip filters to its epic, shows its
+  checkpoints, and a second tap clears it`, `a carried ticket reads carried to its later phase`, `Done when counts the
+  proved entries`, `no url draws no Open in Linear`, `every status has a word` (over `WORK_STATUSES`), `a run link opens the run`, `an item link opens the
   item`, `a long title wraps inside the card`.
 - [ ] **Step 2: Run to fail** —
   `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-card.test.tsx`.
@@ -327,7 +362,8 @@ runs list. **Rollback.** A plain revert; the server field stays and is unread.
 `server/test/coordinator-skill.test.ts`, so this task changes the reference file only.
 
 - [ ] **Step 1:** Add a section to `references/plan.md`: the programme page's Work card is drawn from this plan. A
-  coordinator declares its phases (the sequence) and its epics and tickets (the work), each ticket naming its phase; adds
+  coordinator declares its epics and tickets (the work) and its phases (the sequence), each phase referencing the epics
+  and tickets it takes on, and records a slip with `plan phase-ref`; adds
   a ticket (`plan ticket-add`) in the same act that adds the task to its plan file; names the ticket at `runs open`
   (`ticket-required`, with its recovery); and records a ticket finished before the plan with `plan ticket-done` and its
   pull request.
@@ -341,19 +377,21 @@ runs list. **Rollback.** A plain revert; the server field stays and is unread.
 
 ## Carried to other plans
 
-- **The Linear hierarchy plan** (`docs/superpowers/plans/2026-11-10-linear-hierarchy.md`): its Task 5.2 is replaced by
-  WM2 to WM4 (spec D8), and its design's §4.1 and §4.3 gain phases and optional epic waves (spec D13 and D14). Its
-  coordinator records both in that plan's own ledger, keeps the done-when list for its console wave, and decides how
-  phases reach Linear. This plan does not edit that file.
+- **The Linear hierarchy plan** (`docs/superpowers/plans/2026-11-10-linear-hierarchy.md`): its Task 5.2 is superseded by
+  WM2 to WM4 (spec D8 and Table 7); its design's §3 reads an epic as a plan-sized body of work, which may be a stage; its
+  §4.1 and §4.3 gain phases and their references, optional epic waves, `ticket-required` and `plan ticket-done` (spec §8).
+  Phases in Linear follow the operator's answer to Q4. Whoever picks up its waves 3 to 7 records these in its own
+  ledger. This plan does not edit that file.
 
 ## Deviations found
 
 Departures are named by slug and reported to the coordinator, who records them in the desktop-polish plan under
 D-8669, Task C37's number:
 
-- `phase-is-not-epic`: the operator ruled that a phase or wave and an epic or ticket are separate concepts, and one phase
-  can hold many tickets from several epics. The first draft mapped phase to epic; the plan model gains phases, and epics
-  lose their wave ranges (spec §3, D13, D14).
+- `phase-is-not-epic`: the operator ruled that a phase or wave and an epic or ticket are separate concepts, that a phase
+  references the epics and tickets it takes on, and that a ticket may sit in several phases (spec Table 1, O1 to O4).
+  The first draft mapped phase to epic; the plan model gains phases with references, and epics lose their wave ranges
+  (spec §3, D13 to D16).
 - `hierarchy-5-2-replaced`: the Work card takes the place of the Linear hierarchy plan's Task 5.2 (spec D8).
 - `waiting-card-moves-right`: on desktop, Waiting on you moves from under Goals to the top of the right column (spec D5).
 - `ticket-required-and-done`: the plan model gains a refusal at `runs open` and a verb that records a finished ticket
@@ -361,7 +399,9 @@ D-8669, Task C37's number:
 
 ## Where things stand
 
-- **Agreed:** the brief's rulings (2026-11-16) on placement, derived status and one owner; the operator's ruling the same
-  day that phases and epics are separate concepts.
-- **Waiting on you:** Q1 (plans for live programmes), Q2 (the leading axis) and Q3 (the stage's word), in the spec.
-- **Later:** phases in Linear; a frame for plan edits.
+- **Agreed:** the brief's rulings (2026-11-16) on placement, derived status and one owner; the operator's rulings the same
+  day (spec Table 1): the sequence and the work are separate axes, a phase references the epics and tickets it takes on,
+  a ticket may sit in several phases, and the Linear hierarchy design is the work model.
+- **Waiting on you:** Q1 (plans for live programmes), Q2 (the leading axis), Q3 (the stage's word) and Q4 (phases in
+  Linear), in the spec.
+- **Later:** the hierarchy's waves 3 to 7; a frame for plan edits.

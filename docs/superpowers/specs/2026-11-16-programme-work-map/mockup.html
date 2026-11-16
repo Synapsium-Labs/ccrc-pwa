@@ -102,32 +102,35 @@ const tag = (t) => `<span class="tag">${t}</span>`;
 const workPlan = `
 <section class="card" aria-label="Work">
   <h2 class="h">Work</h2>
-  <div class="sum"><b>11 of 20 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting'], [C.todo, '5 not started']])}</div>
-  ${bar([[11, C.done], [3, C.prog], [1, C.wait], [5, C.todo]], 20)}
-  <div class="strip"><span class="chip">The switch <em>5 of 9</em></span><span class="chip">The list screen <em>6 of 9</em></span><span class="chip">The operator's guide <em>0 of 2</em></span></div>
+  <div class="sum"><b>11 of 21 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting'], [C.todo, '6 not started']])}</div>
+  ${bar([[11, C.done], [3, C.prog], [1, C.wait], [6, C.todo]], 21)}
+  <div class="strip"><span class="chip">The switch <em>5 of 9 · ◇ 1 of 2</em></span><span class="chip">The list screen <em>6 of 10 · ◇ 0 of 1</em></span><span class="chip">The operator's guide <em>0 of 2 · ◇ 0 of 1</em></span></div>
   <div class="source">From the programme's plan · 3 phases · 3 epics · read 1 min ago</div>
 
   <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">1 · Foundations</span><span class="phase-count">6 of 6 done · finished 2026-11-02</span></div></div>
 
   <div class="phase">
-    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">2 · Build</span><span class="phase-count">5 of 8 done</span></div>
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">2 · Build</span><span class="phase-count">5 of 8 done · 1 carried to phase 3</span></div>
     <div class="phase-sum">The switch's Settings row and the list screen, at every width.</div>
     ${row('● working', 'prog', 'The switch\'s Settings row, with its confirm sheet ' + tag('The switch'), '<a href="#">run 412</a> · moved 12m ago')}
     ${row('● in review', 'prog', 'The list screen at phone width ' + tag('The list screen'), '<a href="#">run 415</a> · review round 1')}
     ${row('◆ waiting on you', 'wait', 'Which order the list opens in ' + tag('The list screen'), '<a href="#">1 item</a> · needed soon')}
+    ${row('↷ carried', 'todo', 'The list screen\'s empty state ' + tag('The list screen'), 'not started · carried to phase 3')}
     <div class="fold">▸ 5 done</div>
   </div>
 
   <div class="phase">
-    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">3 · Rollout</span><span class="phase-count">0 of 6 done</span></div>
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">3 · Rollout</span><span class="phase-count">0 of 7 done · takes on all of The operator's guide (◇ 0 of 1)</span></div>
     <div class="phase-sum">A shadow week, the switch turned on, the old path removed, and the guide.</div>
     ${row('● working', 'prog', 'The shadow week, measured and recorded ' + tag('The switch'), '<a href="#">run 418</a> · moved 2h ago')}
+    ${row('○ not started', 'todo', 'The list screen\'s empty state ' + tag('The list screen'), 'from phase 2')}
     ${row('○ not started', 'todo', 'Turn the switch on for every project ' + tag('The switch'), '')}
     ${row('○ not started', 'todo', 'Remove the old path and its readers ' + tag('The switch'), '')}
     ${row('○ not started', 'todo', 'The operator\'s guide ' + tag('The operator\'s guide'), '')}
     ${row('○ not started', 'todo', 'The README section ' + tag('The operator\'s guide'), '')}
     ${row('○ not started', 'todo', 'The list screen\'s closing review ' + tag('The list screen'), '')}
   </div>
+  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">Done when</span><span class="phase-count">1 of 3 proved</span></div></div>
 </section>`;
 
 const workNoPlan = `
