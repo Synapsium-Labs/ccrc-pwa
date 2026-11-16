@@ -26229,7 +26229,8 @@ _profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `pr
 # `memory` entry (`CLAUDE.md`) is checked by shape (a name of `[a-z0-9-]`; a target of `[a-z0-9.-]` segments under `$REG`,
 # no `.` or `..` segment), and one that stands must already be ccd's link to `$REG/<target>`. The workspace may hold no
 # other project source Claude Code reads under `--setting-sources project` (anything under a `.claude` but those links,
-# `.mcp.json`, `CLAUDE.local.md`, a `CLAUDE.md` below the top: one bounded `find`, `.git` pruned), and no directory above
+# `.mcp.json`, `CLAUDE.local.md`, a `CLAUDE.md` below the top, and any link but ccd's, so a linked `.claude` or a linked
+# directory cannot hide one from a `find` that does not follow links: one bounded `find`, `.git` pruned), and no directory above
 # it, to `/`, a `CLAUDE.md` or `CLAUDE.local.md`: Task 1's M2 measured the pinned launch loading both, and M1 and M2 links
 # loading. Only then are the missing links made, and each name is added once to the repository's `info/exclude`, so it is
 # never committed. Every check comes before the first write, so a refusal makes nothing. rc 1 and PROFILE_DIGEST_WHY.
@@ -26242,9 +26243,9 @@ _profile_workspace() {   # id row -> 0 iff the entries are ccd's links and no ot
     l="$wd/$n"; ok+="$l "
     [[ ! -e "$l" && ! -L "$l" ]] || { [[ -L "$l" && "$(readlink "$l")" == "$REG/$t" ]] || { PROFILE_DIGEST_WHY="$n is not ccd's link"; return 1; }; }
   done <<<"$out"
-  found=$(_plat_timeout 10 find "$wd" -mindepth 1 -name .git -prune -o \( -name .claude -o -path '*/.claude/*' -o -name .mcp.json -o -name CLAUDE.local.md -o -name CLAUDE.md \) -print 2>/dev/null) || return 1
+  found=$(_plat_timeout 10 find -H "$wd" -mindepth 1 -name .git -prune -o \( -type l -o -name .claude -o -path '*/.claude/*' -o -name .mcp.json -o -name CLAUDE.local.md -o -name CLAUDE.md \) -print 2>/dev/null) || return 1
   while IFS= read -r e; do
-    [[ -z "$e" || "$ok" == *" $e "* || "$e" == "$wd/.claude" || "$e" == "$wd/.claude/skills" ]] || { PROFILE_DIGEST_WHY="a project source stands: ${e#"$wd/"}"; return 1; }
+    [[ -z "$e" || "$ok" == *" $e "* || ( ( "$e" == "$wd/.claude" || "$e" == "$wd/.claude/skills" ) && ! -L "$e" ) ]] || { PROFILE_DIGEST_WHY="a project source stands: ${e#"$wd/"}"; return 1; }
   done <<<"$found"
   d="$wd"; while [[ -n "$d" ]]; do d="${d%/*}"; for e in CLAUDE.md CLAUDE.local.md; do [[ ! -e "$d/$e" && ! -L "$d/$e" ]] || { PROFILE_DIGEST_WHY="a CLAUDE.md stands above the workspace: $d/$e"; return 1; }; done; done
   ex=$(git -C "$wd" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null) && [[ "$ex" == /* ]] && mkdir -p "${ex%/*}" || return 1

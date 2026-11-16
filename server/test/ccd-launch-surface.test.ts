@@ -227,6 +227,9 @@ describe('the workspace entries and the workspace refusal (PR A2, Task 6; questi
     ['CLAUDE.local.md', (ws) => fs.writeFileSync(path.join(ws, 'CLAUDE.local.md'), 'x\n'), 'a project source stands'],
     ['a nested CLAUDE.md', (ws) => { fs.mkdirSync(path.join(ws, 'sub'), { recursive: true }); fs.writeFileSync(path.join(ws, 'sub', 'CLAUDE.md'), 'x\n'); }, 'a project source stands'],
     ['a nested .claude', (ws) => { fs.mkdirSync(path.join(ws, 'sub', '.claude'), { recursive: true }); }, 'a project source stands'],
+    ['a .claude that is a link to a directory holding settings', (ws) => { const d = path.join(ws, '..', 'elsewhere'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'settings.json'), '{}\n'); fs.symlinkSync(d, path.join(ws, '.claude')); }, 'a project source stands: .claude'],
+    ['a linked directory, which find does not follow', (ws) => { const d = path.join(ws, '..', 'elsewhere'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'CLAUDE.md'), 'x\n'); fs.symlinkSync(d, path.join(ws, 'sub')); }, 'a project source stands: sub'],
+    ['a linked .claude/skills', (ws) => { const d = path.join(ws, '..', 'skills'); fs.mkdirSync(path.join(d, 'mine'), { recursive: true }); fs.mkdirSync(path.join(ws, '.claude'), { recursive: true }); fs.symlinkSync(d, path.join(ws, '.claude', 'skills')); }, 'a project source stands: .claude/skills'],
     ['a CLAUDE.md in a directory above the workspace', (ws) => fs.writeFileSync(path.join(ws, '..', 'CLAUDE.md'), 'x\n'), 'a CLAUDE.md stands above the workspace'],
     ['a CLAUDE.local.md in a directory above the workspace', (ws) => fs.writeFileSync(path.join(ws, '..', '..', 'CLAUDE.local.md'), 'x\n'), 'a CLAUDE.md stands above the workspace'],
   ];
