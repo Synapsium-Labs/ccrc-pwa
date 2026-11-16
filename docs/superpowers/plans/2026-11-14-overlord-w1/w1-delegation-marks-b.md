@@ -82,6 +82,12 @@ the waiting view and its frame, ask lists included, are open to any local proces
   programme"; filtered to the sessions in no programme, the trail holds those asks alone.
 - **`sentence-table-names-ask-words`**: `item-view.test.tsx`'s sentence-table pin lists `unknown-ask` and `ask-unreadable` as
   the two words the ledger door sends that are not ledger words.
+- **`path-guard-w3-releases-pwa`** (the coordinator's ruling on this PR's first fast run): `consolidation-path-guard.test.ts`'s
+  W3 guard drops its `pwa/` arm. That arm stood because W3 was the server halves only and the PWA halves were W7's, and
+  consolidation W7 has landed (C7a to C7p, the last of them #1948 and #1952). This PR edits `coord/questions.ts` (its two
+  readers, `ask-reads-through-the-question-lane`) beside Task 6's `pwa/` files, which the arm refused. The signing-path arm
+  stays as it was: a W3-owned file beside the child's verifier, the server's signer or the session hook is still red. The
+  CONTROL now expects a W3-owned file beside a `pwa/` path to pass.
 
 ## Growth
 
@@ -99,3 +105,4 @@ Each was measured red, then restored from a saved copy:
   never-shown ask `not-markable`; empty lists on a failed asks read; the view built with no live port.
 - Task 6: `askMarksFor` ignoring `live` (the permission-prompt case, in the words and the screen suites); the trail keeping a
   live ask; the box sending `kind: 'item'` for an ask.
+- `path-guard-w3-releases-pwa`: the W3 guard with its signing-path check removed reds its CONTROL.
