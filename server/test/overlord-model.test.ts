@@ -19,7 +19,7 @@ const FAST = ['push', 'pause', 'race', 'asks', 'value', 'lineage', 'deadpush', '
 // Confirm, a second restore and a second Confirm: up to a million states), so it runs under CCRC_MODEL=full.
 const W1_MUTATIONS_FAST = ['same_host_agent_counts', 'heads_not_checked', 'trailing_widening_applied',
   'append_over_incoherent', 'narrowing_refused_while_incoherent', 'narrowing_refused_on_append_failure',
-  'writer_failure_unfenced', 'no_confirm_over_malformed', 'this_boot_witness_counts'];
+  'writer_failure_unfenced', 'no_confirm_over_malformed', 'confirm_ignores_told', 'this_boot_witness_counts'];
 const W1_MUTATIONS_FULL = ['epoch_in_db', 'confirm_no_epoch_raise', 'restore_generation_in_db',
   'generation_ignores_witnesses'];
 type MutationRow = { mutation: string; expected: string; caught: string[] };

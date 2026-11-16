@@ -1687,6 +1687,18 @@ def w1_confirm(s, c):
     # Task 8's stricter-of table: the lower rung, the union of latches (F4: the standing latch is not lifted).
     rung = s.rung if RANK[s.rung] <= RANK[fr] else fr
     latch = 'chat' if (s.latch or fl) else None
+    if m != 'confirm_ignores_told':
+        # told-narrowings-survive-confirm (the coordinator's ruling for PR B and PR C): an off-volume witness carries the
+        # newest narrowing state the operator was told took effect, and Confirm takes the narrowest of the restored rows,
+        # the journal and that witness. The model reads it from every witness that answered since boot and holds an
+        # epoch at or above the narrowing's record (the witness that made it `told`, WH).
+        for f, v, e in a.told:
+            if not any(i in a.answered and a.wit[i] is not None and a.wit[i][0] >= e for i in COUNTING):
+                continue
+            if f == 'rung' and RANK[v] < RANK[rung]:
+                rung = v
+            elif f == 'latch':
+                latch = 'chat'
     if m == 'trailing_widening_applied' and verdict == 'trailing':
         r = a.jr[-1]
         if r[0] == 'rung':
@@ -1698,7 +1710,8 @@ def w1_confirm(s, c):
     ns = s._replace(rung=rung, latch=latch,
                     auth=a._replace(jr=jr2, head=(len(jr2), lin), rows=True, mal=False, guard=COHERENT, cont=None,
                                     cfm=a.cfm - 1, lin=lin, settled=frozenset(a.answered), epdb=w1_db(c, ep), gdb=w1_db(c, gen),
-                                    # the operator's step-up'd review accepts the state (the model's reading of I7w)
-                                    pend=frozenset(), told=frozenset()))
+                                    # what the operator was told stays told: Confirm keeps it (I7w, amended by
+                                    # told-narrowings-survive-confirm; the plan's first reading dropped it here)
+                                    pend=frozenset()))
     return ('operator confirms the restore%s' % (' (over a malformed journal: a new chain)' if a.mal else ''), ns,
             {'w1': 'confirm'})

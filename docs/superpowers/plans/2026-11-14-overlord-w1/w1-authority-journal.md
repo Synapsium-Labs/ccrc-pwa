@@ -688,7 +688,7 @@ a Confirm reaches `coherent` with no further restore, and stays there while no f
 | Mutation | Caught by |
 |---|---|
 | `same_host_agent_counts`: the same-host agent's answer lifts the condition and holds a narrowing | WH, and I7w after a whole-volume restore |
-| `epoch_in_db`: the epoch is stored in the database, so a restore lowers it with no fall in the heads | I7w |
+| `epoch_in_db`: the epoch is stored in the database, so a restore lowers it with no fall in the heads | L2 (the "stays" half: the Confirm after it sets the epoch from the lowered value) |
 | `heads_not_checked`: the verdict compares epochs only | I7w (a restore then enough appends to catch up) |
 | `confirm_no_epoch_raise`: Confirm leaves the epoch below a witness's | liveness |
 | `trailing_widening_applied`: Confirm takes the trailing record's value whatever it is | I11a |

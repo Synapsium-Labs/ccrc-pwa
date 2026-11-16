@@ -53,14 +53,31 @@ the ledger should learn into the plan.
 
 `model-results.md` holds the numbers. What the plan's text should learn from them:
 
-- **`epoch_in_db` is caught by L2, not I7w.** A `coord.db`-only restore is refused by the heads at boot whatever the stored
+- **`epoch_in_db` is caught by L2, not I7w** (the plan's planted-mutation row now names L2, on the coordinator's word). A `coord.db`-only restore is refused by the heads at boot whatever the stored
   epoch; the harm is the Confirm after it, which sets the epoch from the lowered value, so a witness that answered refuses
   again. The planted-mutation table's row should name the liveness rule's "stays" half (L2).
-- **I7w holds within three limits the plan does not state.** It is checked once every off-volume witness that holds a tuple
-  has answered since boot (Q8's first window, F7b); the narrowings the operator was told took effect are dropped at Confirm;
-  and `off` is not a rung target (a rolled-back guard acts at the `chat` latch). The second is a decision for PR C and the
-  ladder's latch-clear door: after a whole-volume restore and Confirm, clearing `restore-detected` lets the server act on the
-  rung row the restore brought back, which can be wider than a narrowing the operator was told took effect.
+- **I7w holds within two limits the plan does not state.** It is checked once every off-volume witness that holds a tuple
+  has answered since boot (Q8's first window, F7b), and `off` is not a rung target (a rolled-back guard acts at the `chat`
+  latch). A third limit, the told narrowings dropped at Confirm, is now an open item the coordinator ruled on (below).
+
+## Open for PR B and PR C
+
+- **`told-narrowings-survive-confirm`** (the coordinator's ruling). The model's case: the operator narrows the rung to
+  `chat`, a counting witness holds the record's epoch (so the operator is told it took effect), the whole volume is restored
+  from a snapshot taken before it, the boot rolls back and raises the `chat` latch, the operator confirms the restore, and
+  then clears the latch. A Confirm that reads only the restored rows and the journal (both from before the narrowing) leaves
+  the rung at the restored `full`, so the server acts wider than the operator was told. The ruling:
+  - **I7w, amended:** an inequality in the safe direction. After Confirm, each row is at least as narrow as the journal's
+    fold, never wider; equality is no longer required. A told narrowing is never dropped at Confirm.
+  - **PR B:** the off-volume witness carries the newest narrowing state the operator was told took effect (the operator
+    rung, Off and the raised latches), beside its counts.
+  - **PR C:** Confirm takes the narrowest of the restored rows, the journal and that witness, so a told narrowing survives a
+    whole-volume restore; clearing `restore-detected` never widens past it.
+
+  The model shows it green (`model-results.md`): `told` survives Confirm, Confirm takes the told narrowings held by a
+  counting witness that answered since boot, and I7w checks the inequality while the guard is coherent. Every W1 scenario
+  holds; the mutation `confirm_ignores_told` (Confirm reading only the rows and the journal) is caught by I7w in `restore-w1`,
+  and the inequality also catches `writer_failure_unfenced`. PR A's code does not change.
 - **`confirm_no_epoch_raise` needs two restores and five exchanges** (about a million states), so it runs under
   `CCRC_MODEL=full` with three other mutations of the `confirm` scenario.
 

@@ -176,12 +176,22 @@ def i7w(s, c):
     # than every narrowing the operator was told took effect. This is I7, reading B, made exact."
     # The server acts on a field while the guard is coherent; a rolled-back or unmeasured guard refuses the Overlord's
     # doors and the ladder is latched at `chat`, so it acts at most there. `told` holds a narrowing only once a counting
-    # witness held an epoch at or above its record's (WH), and is dropped at Confirm, the operator's step-up'd review of
-    # the restored state, and when the operator widens the field. The check starts once every witness off the volume
-    # that holds a tuple has answered since this boot: before that the server is in Q8's first window, capped at
-    # `advise` (a stated residual, model-results.md), and no verdict can have been reached.
+    # witness held an epoch at or above its record's (WH), and is dropped only when the operator widens the field: it
+    # survives Confirm (told-narrowings-survive-confirm, the coordinator's ruling). The check starts once every witness
+    # off the volume that holds a tuple has answered since this boot: before that the server is in Q8's first window,
+    # capped at `advise` (a stated residual, model-results.md), and no verdict can have been reached.
+    # Amended I7w, the safe-direction inequality: while the guard is coherent each row is at least as narrow as the
+    # journal's fold, never wider; equality is no longer required (Confirm may take a witness's narrower state).
     a = s.auth
-    if not c.AUTH_W1 or a is None or not s.up or s.boot or a.cont is not None or a.lin == 0:
+    if not c.AUTH_W1 or a is None or not s.up or s.boot or a.cont is not None:
+        return None
+    if a.guard[0] == 'coherent' and not a.mal:
+        fr, fl = M.w1_fold(a.jr)
+        if M.RANK[s.rung] > M.RANK[fr]:
+            return 'the rung row %s is wider than the journal\'s fold (%s) while the guard is coherent' % (s.rung, fr)
+        if fl is not None and s.latch is None:
+            return 'the journal holds latch %s but no latch row stands while the guard is coherent' % fl
+    if a.lin == 0:
         return None
     if any(a.wit[i] is not None and i not in a.answered for i in M.COUNTING):
         return None
@@ -695,6 +705,9 @@ MUTATIONS = [
     ('no_confirm_over_malformed', 'malformed', {}, 'L1'),
     ('restore_generation_in_db', 'confirm', {}, 'RG'),
     ('generation_ignores_witnesses', 'confirm', {}, 'RG'),
+    # told-narrowings-survive-confirm: Confirm takes only the restored rows and the journal, not the witness's told
+    # narrowing state, so clearing the restore-detected latch after it lets the server act on the restored, wider rung.
+    ('confirm_ignores_told', 'restore-w1', {}, 'I7w'),
     ('this_boot_witness_counts', 'restore-w1', {},
      'none expected: a tuple from this boot lifts no-witness-since-boot, which weakens a mitigation, not an invariant'),
 ]

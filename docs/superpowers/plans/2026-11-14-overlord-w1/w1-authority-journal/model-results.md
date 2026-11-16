@@ -30,11 +30,11 @@ The test file pins `restore`'s 4563 / 13002 as well.
 
 | Scenario | States | Transitions | Seconds | Violated |
 |---|---|---|---|---|
-| restore-w1 (a snapshot, either restore, two changes, a crash, a Confirm, two exchanges) | 82,276 | 199,443 | 2.4 | none |
-| witness (one change, one privacy record, a restore, three exchanges in every order, a Confirm) | 216,691 | 580,628 | 6.6 | none |
-| writer-failure (a failure after the append, a failed append, a narrowing, a Confirm) | 39,686 | 86,030 | 1.1 | none |
-| malformed (damage past the heal, a narrowing, a Confirm) | 14,634 | 32,230 | 0.5 | none |
-| confirm (a restore, two Confirms, two exchanges, a change; full list only) | 475,044 | 1,110,269 | 12.9 | none |
+| restore-w1 (a snapshot, either restore, two changes, a crash, a Confirm, two exchanges) | 83,292 | 201,223 | 2.3 | none |
+| witness (one change, one privacy record, a restore, three exchanges in every order, a Confirm) | 220,003 | 587,020 | 6.4 | none |
+| writer-failure (a failure after the append, a failed append, a narrowing, a Confirm) | 40,006 | 86,574 | 1.0 | none |
+| malformed (damage past the heal, a narrowing, a Confirm) | 14,898 | 32,662 | 0.5 | none |
+| confirm (a restore, two Confirms, two exchanges, a change; full list only) | 486,684 | 1,131,875 | 12.9 | none |
 
 All four of the first rows are in the default (FAST) suite. `confirm` runs under `CCRC_MODEL=full`. The scenarios'
 sanity facts are reachable: a witness refuses a restored volume, boot coherence finds a restore, a failure after the
@@ -62,9 +62,14 @@ one exchange per witness (Task 5's table, first match); a crash; a boot that run
 (stricter-of; a new chain over a malformed journal; epoch and generation each above the journal's and every answered
 witness's; the head row moves to the Confirm record; the latch stands, F4).
 
-Invariants: I7w, I11a, RG, WH and NL as the plan states them; liveness as L1 (from any state whose journal is not
+Invariants: I7w as the coordinator's ruling amends it (below), I11a, RG, WH and NL as the plan states them; liveness as L1 (from any state whose journal is not
 coherent, a Confirm reaches `coherent` along edges that are not restores) and L2 (the "stays" half: after a Confirm and no
 restore, a witness that had answered before it never refuses again).
+
+**I7w, amended** (the coordinator's ruling, `told-narrowings-survive-confirm`): after any restore, no authority field
+the server acts on is wider than every narrowing the operator was told took effect, and a told narrowing is not dropped
+at Confirm; and, while the guard is coherent, each row is at least as narrow as the journal's fold, never wider.
+Equality is no longer required, because Confirm may take a witness's narrower state.
 
 ## Planted mutations
 
@@ -80,13 +85,14 @@ Each runs against its scenario with and without the mutation. "Caught by" is the
 | append_over_incoherent | writer-failure | I11a | I11a | 0.7 |
 | narrowing_refused_while_incoherent | writer-failure | NL | NL | 0.7 |
 | narrowing_refused_on_append_failure | writer-failure | NL | NL | 0.5 |
-| writer_failure_unfenced | writer-failure | liveness | L1 | 0.7 |
+| writer_failure_unfenced | writer-failure | liveness | L1, and I7w's inequality | 0.7 |
 | no_confirm_over_malformed | malformed | liveness | L1 | 0.2 |
 | restore_generation_in_db | confirm | RG | RG | 9.6 |
 | generation_ignores_witnesses | confirm | RG | RG | 11.0 |
+| confirm_ignores_told | restore-w1 | I7w (the ruling) | I7w | 4 |
 | this_boot_witness_counts | restore-w1 | none expected | not caught, as expected | 1.7 |
 
-The first nine rows without a long scenario run in the default suite (about 35 s with the scenarios; the whole test file
+The ten rows without a long scenario run in the default suite (about 35 s with the scenarios; the whole test file
 takes about 38 s). `epoch_in_db`, `confirm_no_epoch_raise`, `restore_generation_in_db` and `generation_ignores_witnesses`
 run under `CCRC_MODEL=full`.
 
@@ -101,11 +107,14 @@ run under `CCRC_MODEL=full`.
    - Before every off-volume witness that holds a tuple has answered since boot, the server is in Q8's first window
      (the ladder capped at `advise`, which is wider than a told `chat`). I7w is checked only once those witnesses have
      answered. This is the accepted residual of Q8 (F7b), now stated for I7w.
-   - `told` is dropped at Confirm, the operator's step-up'd review of the restored state. A whole-volume restore takes
-     the narrowing's record and its row together, so after Confirm nothing in the journal or the rows can recover it,
-     and the restore-detected latch (which stands, F4) is the only cap. If the operator then clears that latch, the
-     rung row the restore brought back is what the server acts on. Keeping `told` after Confirm makes I7w fail on that
-     path, so it is a decision the plan's text does not make: the latch's clear door is the operator's.
+   - A told narrowing must survive Confirm (`told-narrowings-survive-confirm`, the coordinator's ruling). A
+     whole-volume restore takes the narrowing's record and its row together, so after a Confirm that reads only the
+     journal and the rows nothing can recover it, and the restore-detected latch (which stands, F4) is the only cap. If
+     the operator then clears that latch, the rung row the restore brought back is what the server acts on. The first
+     run of this model dropped `told` at Confirm to hide that path. Now the model keeps `told` across Confirm, and
+     Confirm takes the narrowest of the restored rows, the journal and the told narrowings held by a counting witness
+     that answered since boot (PR B's witness carries them, PR C's Confirm reads them). Every scenario holds, and the
+     mutation `confirm_ignores_told` (the plan's first reading) is caught by I7w in `restore-w1`.
    - `off` is not a rung target in the scenarios. A rolled-back guard acts at the `chat` latch, wider than a told `off`.
      The gates' step 3 refuses the Overlord's own doors in that state, so the practical effect is nil, but I7w as worded
      would fail on it.
