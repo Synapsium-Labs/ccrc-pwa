@@ -10,13 +10,13 @@
 // only as a usage refusal or the read-only `ws-gc` listing. `roll` and `claude` are no verb of the body yet (D-8667): their
 // exact spelling reaches the dispatcher's usage line too, and their rows guard the spelling ahead of the verbs.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makePrHarness, type PrHarness } from './ccdPrHelpers.js';
 import { ghContainedEnv, installDirectEntry, type DirectEntry } from './ccdWsHelpers.js';
 import { inheritedEnv } from './gitEnvStrip.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 
 let h: PrHarness;
 let de: DirectEntry;
@@ -34,10 +34,11 @@ const cleanEnv = (): NodeJS.ProcessEnv => {
   return env;
 };
 interface Ran { code: number; stdout: string; stderr: string }
-/** The installed direct entry, executed by the kernel — the agent's own `execFile` shape. */
+/** The installed direct entry, executed by the kernel — the agent's own `execFile` shape — in a process group of its own,
+ *  so a timeout ends whatever the body started too (#896). */
 const direct = (args: readonly string[], env: Record<string, string> = {}): Ran => {
   const bin = path.join(h.home, '.local', 'bin');
-  const r = spawnSync(de.entry, [...args], {
+  const r = spawnSyncGroup(de.entry, [...args], {
     cwd: h.home, encoding: 'utf8', timeout: 120_000,
     env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, PATH: `${bin}:${process.env['PATH'] ?? ''}`, ...env },
       { systemd: true, tmux: true }),
