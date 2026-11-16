@@ -304,6 +304,26 @@ describe('one boardHome (board-placement wave 2, Task 1)', () => {
 });
 
 
+describe('one decision-model catalogue (Overlord W2, decision model A, Task 1)', () => {
+  // The catalogue of questions a decision model may be asked, and the side of a row's arming move that the authority grammar
+  // and the deciders share (review 2262 F21), each have one home in L0. A second catalogue is a second set of revisions.
+  const CATALOGUE = /\b(?:export\s+)?const\s+DECISION_QUESTIONS\b/;
+  const SIDE = /\b(?:interface|type)\s+DecisionRowSide\b/;
+
+  it('DECISION_QUESTIONS and DecisionRowSide are each defined in exactly one file, shared/decisionModel.ts', () => {
+    expect(ALL.filter((f) => CATALOGUE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/decisionModel.ts']);
+    expect(ALL.filter((f) => SIDE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/decisionModel.ts']);
+  });
+
+  it('CONTROL: the two patterns see a definition and pass an import', () => {
+    expect(CATALOGUE.test('export const DECISION_QUESTIONS: X = {')).toBe(true);
+    expect(SIDE.test('export interface DecisionRowSide {')).toBe(true);
+    expect(CATALOGUE.test("import { DECISION_QUESTIONS } from './decisionModel.js';")).toBe(false);
+    expect(SIDE.test("import type { DecisionRowSide } from './decisionModel.js';")).toBe(false);
+  });
+});
+
+
 describe('one repoLabel (board-placement wave 2, Task 1)', () => {
   // The three-state `ProjectRepoWire` switch. The card row and the session
   // view both render it; a second `state === 'named'` is a second renderer.
