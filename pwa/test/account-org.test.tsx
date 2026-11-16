@@ -41,10 +41,13 @@ const LANES = { 'lane-a': wire(USAGE[0]!), 'lane-b': wire(USAGE[1]!) };
 
 const json = (status: number, body: unknown): Response => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-function stubFetch(roster: () => RosterWire[], routes: Record<string, (init: RequestInit | undefined) => Promise<Response>>): ReturnType<typeof vi.fn> {
+function stubFetch(
+  roster: () => RosterWire[], routes: Record<string, (init: RequestInit | undefined) => Promise<Response>>, gate?: () => Promise<void>,
+): ReturnType<typeof vi.fn> {
   const f = vi.fn(async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = String(input);
     if (url === '/api/accounts') {
+      if (gate !== undefined) await gate();
       return json(200, { accounts: USAGE, projected: { wrapper: 'lane-a', score: 1 }, roster: roster(), lanes: LANES, connect: CONNECT });
     }
     const r = routes[url];
@@ -159,16 +162,23 @@ describe('the line on the card (account organization B1)', () => {
   });
 
   it('the line shows what the ack read back, not what was typed', async () => {
+    // The box's roster reads back `org-c` for a typed `org-b`; the refresh after it is held, so only the ack draws.
+    let held: Promise<void> | null = null;
+    let release!: () => void;
+    const read = [ROSTER[0]!, lane('lane-b', { label: 'Lane B', org: 'org-c' })];
     stubFetch(() => ROSTER, {
-      // The box answered a roster that still has no label: the line says so.
-      '/api/accounts/lane-b/set': async () => json(200, { ok: true, roster: ROSTER, lane: LANES['lane-b'] }),
-    });
+      '/api/accounts/lane-b/set': async () => {
+        held = new Promise<void>((r) => { release = r; });
+        return json(200, { ok: true, roster: read, lane: LANES['lane-b'] });
+      },
+    }, () => held ?? Promise.resolve());
     show();
     const dialog = await openSheet('lane-b');
     fireEvent.change(field(dialog), { target: { value: 'org-b' } });
     fireEvent.click(within(dialog).getByRole('button', { name: ORG_SAVE }));
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
-    expect(line('lane-b')).toHaveTextContent(orgRow(null));
+    expect(line('lane-b')).toHaveTextContent(orgRow('org-c'));
+    await act(async () => { release(); });
   });
 
   it('Clear sends none, and the line reads not set on the ack', async () => {
