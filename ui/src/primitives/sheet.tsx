@@ -199,14 +199,17 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  follow it too. As the sheet turns closed with its panel still mounted, the marks Radix made are lifted; while any other
  *  open Radix dialog (`[role="dialog"][data-state="open"]`) is still mounted, only the marks over or inside the topmost
  *  one are, so the page and any dialog under that one stay hidden behind it. A reopen during
- *  the exit, where Radix hides nothing again, puts them back. An element the page
- *  hid itself before the sheet opened is left as it was, and so are Radix's focus guards. Radix's own undo at the unmount
- *  then removes what is left. */
+ *  the exit, where Radix hides nothing again, puts them back. Only marks this sheet's own open added are ever lifted: a
+ *  node already `aria-hidden` as it opens is left as it was, whoever hid it (Task C40, D-8698; review 2310 F1, F2). That
+ *  covers an element the page hid itself which a dialog still closing has already marked: the `aria-hidden` package takes
+ *  such a node as hidden by the page and never puts it back, so a lift would leave it announced for good. Radix's focus
+ *  guards are left too. Radix's own undo at the unmount then removes what is left. */
 function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
   const panel = useRef<HTMLElement | null>(null);
   const lifted = useRef<Element[]>([]);
-  // What the page hid itself, read as the sheet opens, before Radix marks anything.
-  const own = useRef<ReadonlySet<Element>>(new Set());
+  // Every node already hidden as the sheet opens, read before this sheet's Radix marks anything: what the page hid itself,
+  // and what a dialog still mounted had marked, which the `aria-hidden` package cannot tell apart from the page's own.
+  const before = useRef<ReadonlySet<Element>>(new Set());
   useEffect(() => {
     const el = panel.current;
     if (open) {
@@ -216,7 +219,7 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
       if (el !== null && el.isConnected) {
         for (const node of lifted.current) if (node.isConnected) node.setAttribute('aria-hidden', 'true');
       } else {
-        own.current = new Set(document.querySelectorAll('[aria-hidden="true"]:not([data-aria-hidden])'));
+        before.current = new Set(document.querySelectorAll('[aria-hidden="true"]'));
       }
       lifted.current = [];
       return;
@@ -229,7 +232,7 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
     // open dialog in document order is the topmost.
     const top = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].filter((d) => d !== el).at(-1);
     const marked = [...document.querySelectorAll('[data-aria-hidden="true"][aria-hidden="true"]')]
-      .filter((node) => !own.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el))
+      .filter((node) => !before.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el))
       .filter((node) => top === undefined || node.contains(top) || top.contains(node));
     for (const node of marked) node.removeAttribute('aria-hidden');
     lifted.current = marked;
