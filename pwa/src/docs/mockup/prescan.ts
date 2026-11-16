@@ -99,7 +99,7 @@
 // the name of the TOP entry of the stack (v6): never through an entry above it, whatever that entry is. The scan keeps entries
 // the parser has closed or never made, and a pop through one popped what the parser kept (eight such specials leave a
 // formatting clone behind the adoption agency). THE COST: an end tag the markup omits leaves its element on the stack, so a page
-// that omits more than 256 of them is refused (as a long run of unclosed siblings already was).
+// that omits more than MOCKUP_MAX_DEPTH (64 since D-8695) of them is refused (as a long run of unclosed siblings already was).
 // FORMATTING: a count drops by ONE only when an HTML formatting entry is popped by its OWN end tag at the top; never otherwise.
 //
 // It stops at the first moment a limit is exceeded (checked in the order depth, tags, formatting) and reports the counts
@@ -109,7 +109,7 @@
 //   - the parser's own implied elements (html, head, body, tbody, colgroup) and the reconstruction clones are not stack
 //     entries here; the measured gates in `browser/mockup-parse.browser.test.ts` bound their cost;
 //   - a start tag never closes a `p`, `li`, `dd`, `dt`, `option`, `button` or heading the way the parser does, and an end tag
-//     never pops through an open child, so every omitted end tag is retained and a page that omits more than 256 is refused;
+//     never pops through an open child, so every omitted end tag is retained and a page that omits more than MOCKUP_MAX_DEPTH is refused;
 //   - foreign `<a>` and `<font>` raise the formatting count and nothing in the foreign namespace lowers it;
 //   - the text-only rule refuses a markup character inside an svg `style`, `script` or `title` text (a `<` followed by a
 //     letter, `/`, `!` or `?`, except inside a CDATA opener's text it still refuses), and any start tag inside `desc`,

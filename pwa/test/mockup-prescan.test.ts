@@ -41,10 +41,11 @@ describe('depth: the stack of open names (limit inclusive)', () => {
 
   it('an end tag pops only when its match is the TOP entry: anything above the match blocks it, and is retained', () => {
     // v6: the scan never pops through an entry it holds, because the parser may not hold that entry (a stale one).
-    const base = `${rep('<div>', 250)}<span></div>`;
-    expect(prescanMockup(`${base}${rep('<p>', D - 251)}`)).toMatchObject({ ok: true, depth: D });
-    expect(prescanMockup(`${base}${rep('<p>', D - 250)}`)).toMatchObject({ ok: false, why: 'too-deep' });
-    expect(prescanMockup(`${rep('<div>', 250)}<span></span></div>${rep('<p>', D - 249)}`)).toMatchObject({ ok: true, depth: D });
+    const K = D - 6;
+    const base = `${rep('<div>', K)}<span></div>`;
+    expect(prescanMockup(`${base}${rep('<p>', D - K - 1)}`)).toMatchObject({ ok: true, depth: D });
+    expect(prescanMockup(`${base}${rep('<p>', D - K)}`)).toMatchObject({ ok: false, why: 'too-deep' });
+    expect(prescanMockup(`${rep('<div>', K)}<span></span></div>${rep('<p>', D - K + 1)}`)).toMatchObject({ ok: true, depth: D });
   });
 
   it('an end tag with no matching open name is ignored: it pops nothing', () => {
@@ -59,7 +60,8 @@ describe('depth: the stack of open names (limit inclusive)', () => {
 
   it('the old divergence shape: </span> is BLOCKED by the div above it, so the stack keeps what the parser keeps', () => {
     // v1 popped here and kept depth 2; the parser ignores </span> with a div on top, so v2 changes nothing at </span>.
-    expect(prescanMockup(rep('<span><div></span>', 100))).toEqual({ ok: true, depth: 200, tags: 300, formatting: 0 });
+    const n = Math.floor(D / 2) - 2;
+    expect(prescanMockup(rep('<span><div></span>', n))).toEqual({ ok: true, depth: 2 * n, tags: 3 * n, formatting: 0 });
   });
 
   it('upper-case names count, and an end tag matches a name in another case', () => {
@@ -119,7 +121,7 @@ describe('formatting: a multiset only each element\'s own end tag decrements (li
   });
 
   it('an element that is not a formatting element is not counted', () => {
-    expect(prescanMockup(`${rep('<span>', 100)}${rep('<div>', 100)}`)).toMatchObject({ ok: true, formatting: 0 });
+    expect(prescanMockup(`${rep('<span>', Math.floor(D / 2))}${rep('<div>', Math.floor(D / 2))}`)).toMatchObject({ ok: true, formatting: 0 });
   });
 
   it('an unrelated close does not cancel an open one: </p> popping through <b> leaves it counted', () => {
@@ -340,7 +342,7 @@ describe('v2 (D-8661): the corrections the review of the rule added', () => {
   it('</form> never pops: the parser ignores it with a null form pointer, so a form entry stays (and blocks what is below it)', () => {
     expect(prescanMockup(rep('<form></form>', D))).toMatchObject({ ok: true, depth: D });
     expect(prescanMockup(rep('<form></form>', D + 1))).toMatchObject({ ok: false, why: 'too-deep' });
-    expect(prescanMockup(rep('<div><form></form></div>', 100))).toMatchObject({ ok: true, depth: 200 });
+    expect(prescanMockup(rep('<div><form></form></div>', Math.floor(D / 2)))).toMatchObject({ ok: true, depth: 2 * Math.floor(D / 2) });
     expect(prescanMockup(rep('<form><span></form>', D))).toMatchObject({ ok: false, why: 'too-deep' });
   });
 
@@ -385,7 +387,9 @@ describe('v2 (D-8661): the attribute section is tokenized as the tokenizer does'
   });
 });
 
-describe('v6 (D-8663): ordinary markup stays admitted (RE-BASELINED: an omitted end tag is retained, so each page repeats a unit a realistic 30 times, not 300)', () => {
+// RE-BASELINED twice: v6 (an omitted end tag is retained) took the repeats from 300 to 30, and D-8695's depth 64 (from 256) takes
+// them to 8. The units retain at most 7 entries each, so 8 copies stay within depth 64; the cost is pinned below.
+describe('v6 (D-8663): ordinary markup stays admitted (RE-BASELINED: an omitted end tag is retained, so each page repeats a unit 8 times, D-8695)', () => {
   it.each([
     ['an omitted </p> before </div>', '<div><p>text</div>'],
     ['an omitted </li> before </ul>', '<ul><li>a<li>b</ul>'],
@@ -405,15 +409,16 @@ describe('v6 (D-8663): ordinary markup stays admitted (RE-BASELINED: an omitted 
     ['a heading with an unclosed inline element', '<h2>a <span>b</h2>'],
     ['a template', '<template><p>x</template>'],
     ['an object with an unclosed inline element', '<object><span>x</object>'],
-  ])('%s, repeated 30 times', (_name, unit) => {
-    expect(prescanMockup(rep(unit, 30)).ok).toBe(true);
+  ])('%s, repeated 8 times', (_name, unit) => {
+    expect(prescanMockup(rep(unit, 8)).ok).toBe(true);
   });
 
-  it('the cost, pinned: an end tag the markup omits leaves its element on the stack, and a page that omits 256 of them is refused', () => {
-    expect(prescanMockup(rep('<div><p>text</div>', 128))).toMatchObject({ ok: true, depth: D });
-    expect(prescanMockup(rep('<div><p>text</div>', 129))).toMatchObject({ ok: false, why: 'too-deep' });
-    expect(prescanMockup(rep('<ul><li>a<li>b</ul>', 85))).toMatchObject({ ok: true, depth: 255 });
-    expect(prescanMockup(rep('<ul><li>a<li>b</ul>', 86))).toMatchObject({ ok: false, why: 'too-deep' });
+  it('the cost, pinned: an end tag the markup omits leaves its element on the stack, and a page that omits MOCKUP_MAX_DEPTH of them is refused', () => {
+    // At depth 64 (D-8695): 32 paragraphs left open in closed divs, or 21 lists whose items are left open.
+    expect(prescanMockup(rep('<div><p>text</div>', D / 2))).toMatchObject({ ok: true, depth: D });
+    expect(prescanMockup(rep('<div><p>text</div>', D / 2 + 1))).toMatchObject({ ok: false, why: 'too-deep' });
+    expect(prescanMockup(rep('<ul><li>a<li>b</ul>', Math.floor(D / 3)))).toMatchObject({ ok: true, depth: 3 * Math.floor(D / 3) });
+    expect(prescanMockup(rep('<ul><li>a<li>b</ul>', Math.floor(D / 3) + 1))).toMatchObject({ ok: false, why: 'too-deep' });
   });
 
   it('formatting starts inside raw text are not counted (v5: raw text pushes nothing), and the element\'s own end tag ends it', () => {
@@ -542,9 +547,10 @@ function genDoc(rand: () => number, forced?: { seed: string; wrap: (typeof WRAPS
   let id = 0;
   const segments: Array<readonly [string, number]> = [];
   let text = '';
-  // Half the classic documents hold the hostile unit to a few copies (at most 40, around the formatting limit), so the
-  // pre-scan ADMITS them and the bound is tested on the worst shapes it lets through; the fill takes the rest of the tags.
-  const fixed = classic && forced === undefined && rand() < 0.5 ? 1 + Math.floor(rand() * 40) : null;
+  // Half the classic documents hold the hostile unit to a few copies (at most 1.25 F, around the formatting limit: 40 at
+  // F = 32, 20 at D-8695's 16), so the pre-scan ADMITS them and the bound is tested on the worst shapes it lets through;
+  // the fill takes the rest of the tags.
+  const fixed = classic && forced === undefined && rand() < 0.5 ? 1 + Math.floor(rand() * Math.round(F * 1.25)) : null;
   units.forEach((unit, k) => {
     if (k === units.length - 1 && wrap !== null) text += `</${wrap}>`;
     let times = Math.max(1, Math.min(2000, Math.floor((budget * weights[k]! / sum) / Math.max(1, tagsIn(unit)))));
@@ -558,13 +564,14 @@ function genDoc(rand: () => number, forced?: { seed: string; wrap: (typeof WRAPS
 }
 
 describe('the property: an admitted page never makes a parser build more than (F + 4) x tags + 16 elements', { timeout: 300_000 }, () => {
-  it('800 generated documents (every hostile unit in every enclosing block, then random ones) of 200 to 3000 tags, parsed by the test environment\'s own parser', () => {
+  // 1 200 documents since D-8695 (800 before): depth 64 refuses more of them, and 100 admitted are still required.
+  it('1200 generated documents (every hostile unit in every enclosing block, then random ones) of 200 to 3000 tags, parsed by the test environment\'s own parser', () => {
     const rand = prng(0x5eed1d);
     let admitted = 0;
     let refused = 0;
     const violations: string[] = [];
     let worst = { ratio: 0, perTag: 0, elements: 0, tags: 0, desc: '' };
-    for (let n = 0; n < 800; n += 1) {
+    for (let n = 0; n < 1200; n += 1) {
       const sys = SEEDS.length * WRAPS.length;
       const doc = genDoc(rand, n < sys ? { seed: SEEDS[n % SEEDS.length]!, wrap: WRAPS[Math.floor(n / SEEDS.length)]! } : undefined);
       const verdict = prescanMockup(doc.text);
@@ -780,7 +787,7 @@ describe('v4 (D-8663): a self-closed svg or math is popped at once, so what foll
     expect(prescanMockup(rep('<SVG />', 1000))).toMatchObject({ ok: true, depth: 0 });
     expect(prescanMockup(rep('<svg viewBox="0 0 1 1" class=a />', 1000))).toMatchObject({ ok: true, depth: 0 });
     expect(prescanMockup(rep('<svg a="x"/>', 1000))).toMatchObject({ ok: true, depth: 0 });
-    expect(prescanMockup(rep('<svg/><foreignObject><span></foreignObject>', 100))).toMatchObject({ ok: true });
+    expect(prescanMockup(rep('<svg/><foreignObject><span></foreignObject>', 20))).toMatchObject({ ok: true });
   });
 
   it('only the tokenizer\'s own self-closing flag counts: a slash inside an unquoted value, or none, still pushes', () => {
@@ -951,7 +958,7 @@ describe('v5 (D-8663): the attribute tokenizer decides the tag\'s end and its se
   });
 
   it('a > ends the tag in before-attribute-value (missing value), in unquoted values, and after a name, but not inside quotes', () => {
-    expect(prescanMockup(rep('<div a=><div b=c><div d><div e=">"x="y">', 40))).toMatchObject({ ok: true, depth: 160 });
+    expect(prescanMockup(rep('<div a=><div b=c><div d><div e=">"x="y">', 15))).toMatchObject({ ok: true, depth: 60 });
     expect(prescanMockup(rep('<div a=>', D + 1))).toMatchObject({ ok: false, why: 'too-deep', depth: D + 1 });
   });
 
@@ -1019,7 +1026,7 @@ describe('v6 (D-8663): the parser\'s own foreign exits: </p> and </br> pop forei
     expect(prescanMockup(rep('<math></br>', 1000))).toMatchObject({ ok: true, depth: 1 });
     expect(prescanMockup(rep('<svg><g><path/></p>', 1000))).toMatchObject({ ok: true, depth: 2 });
     expect(prescanMockup(rep('<p><svg></p>', 1000))).toMatchObject({ ok: true, depth: 2 });
-    expect(prescanMockup(rep('<div><svg></br>', 100))).toMatchObject({ ok: true, depth: 101 });
+    expect(prescanMockup(rep('<div><svg></br>', 60))).toMatchObject({ ok: true, depth: 61 });
   });
 
   it('they stop at an integration point, which the parser also keeps', () => {
@@ -1338,21 +1345,21 @@ describe('K1 (fix round 1, A1): the committed mockups\' attributes and desk-nav-
   });
 });
 
-describe('the limits\' values are pinned in absolute numbers (fix round 1, A6): raising any one reds here', () => {
-  it('depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag', () => {
-    expect({ depth: D, tags: T, formatting: F, attributes: A }).toEqual({ depth: 256, tags: 15_000, formatting: 32, attributes: 64 });
+describe('the limits\' values are pinned in absolute numbers (fix round 1, A6; the values D-8695 lowered them to): raising any one reds here', () => {
+  it('depth 64, tags 15 000, open formatting 16, attributes 32 on a start tag', () => {
+    expect({ depth: D, tags: T, formatting: F, attributes: A }).toEqual({ depth: 64, tags: 15_000, formatting: 16, attributes: 32 });
   });
 
   it('each boundary at its literal value: admitted at the value, refused one past it', () => {
     const attrs = (n: number): string => Array.from({ length: n }, (_, k) => ` a${k}`).join('');
-    expect(prescanMockup(`<b${attrs(64)}>x</b>`).ok).toBe(true);
-    expect(prescanMockup(`<b${attrs(65)}>x</b>`)).toMatchObject({ ok: false, why: 'too-many-attributes' });
-    expect(prescanMockup('<div>'.repeat(256)).ok).toBe(true);
-    expect(prescanMockup('<div>'.repeat(257))).toMatchObject({ ok: false, why: 'too-deep' });
+    expect(prescanMockup(`<b${attrs(32)}>x</b>`).ok).toBe(true);
+    expect(prescanMockup(`<b${attrs(33)}>x</b>`)).toMatchObject({ ok: false, why: 'too-many-attributes' });
+    expect(prescanMockup('<div>'.repeat(64)).ok).toBe(true);
+    expect(prescanMockup('<div>'.repeat(65))).toMatchObject({ ok: false, why: 'too-deep' });
     expect(prescanMockup('<br>'.repeat(15_000)).ok).toBe(true);
     expect(prescanMockup('<br>'.repeat(15_001))).toMatchObject({ ok: false, why: 'too-many-tags' });
-    expect(prescanMockup('<b>'.repeat(32)).ok).toBe(true);
-    expect(prescanMockup('<b>'.repeat(33))).toMatchObject({ ok: false, why: 'too-many-formatting' });
+    expect(prescanMockup('<b>'.repeat(16)).ok).toBe(true);
+    expect(prescanMockup('<b>'.repeat(17))).toMatchObject({ ok: false, why: 'too-many-formatting' });
   });
 });
 

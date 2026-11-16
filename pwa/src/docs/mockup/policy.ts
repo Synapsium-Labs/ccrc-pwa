@@ -5,8 +5,12 @@
 import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
 import type { HttpsOrigin } from './ports';
 
-/** The deepest stack of open elements the pre-scan admits (base 5.6.2). Fixed; the measurement never raises it. */
-export const MOCKUP_MAX_DEPTH = 256;
+/** The deepest stack of open elements the pre-scan admits (base 5.6.2, lowered from 256 by D-8695). The merge queue's hosted
+ *  runner read the text-heavy gate (`<b>`, the deepest stack, then text and comment runs to 2 MiB) at a 1 052 ms median
+ *  at 256. Alone on the fleet box that shape read 240 ms at 128 and 132 ms at 64, with a floor near 130 ms from the
+ *  2 MiB size (local readings). The committed HTML docs peak at depth 17, so 64 keeps 3.8x headroom. The measurement
+ *  never raises it. */
+export const MOCKUP_MAX_DEPTH = 64;
 
 /** The most start and end tags the pre-scan admits (base 5.6.2). Re-derived by measurement after
  *  `MOCKUP_MAX_OPEN_FORMATTING` was fixed (base 5.6.2, decision 9; completion plan Task 5, C1): at the old 20 000 the
@@ -16,10 +20,11 @@ export const MOCKUP_MAX_DEPTH = 256;
 export const MOCKUP_MAX_TAGS = 15_000;
 
 /** The most formatting elements the pre-scan admits open at once (base 5.6.2, amended 2026-10-13: a multiset that only
- *  each element's own end tag decrements). Fixed by measurement (completion plan Task 5, C1): the reconstruction shape
- *  at 32 open elements and 20 000 tags parsed in a median 119 to 234 ms in Chromium 156 (the box's load varied), 16 in
- *  37 to 78 ms. */
-export const MOCKUP_MAX_OPEN_FORMATTING = 32;
+ *  each element's own end tag decrements). Fixed by measurement at 32 (completion plan Task 5, C1: the reconstruction
+ *  shape at 32 open and 20 000 tags parsed in a median 119 to 234 ms, 16 in 37 to 78 ms), then lowered to 16 by D-8695
+ *  after the merge queue's hosted runner read reconstruction at 32 open with 64 attributes each at a 1 410 ms median.
+ *  The committed HTML docs peak at 2 open, so 16 keeps 8x headroom. */
+export const MOCKUP_MAX_OPEN_FORMATTING = 16;
 
 /** The most attributes any one start tag may carry, inclusive (D-8671; the exact attribute tokenizer counts every attribute
  *  TOKEN, a repeated name included, though the parser keeps the first of a duplicated name). The parser copies every attribute of
@@ -27,9 +32,11 @@ export const MOCKUP_MAX_OPEN_FORMATTING = 32;
  *  150 000 attributes and 4 000 paragraphs took 19.1 s in Chromium 156. The most attributes on any start tag in this
  *  repository's committed HTML docs (measured with the exact tokenizer): `design/overlord/reference.html` 7,
  *  `2026-10-07-box-token-lifecycle-design.html` 2, `2026-10-11-design-system-audit.html` 3, `2026-11-04-runs-screen-rebuild-frames.html` 6
- *  (over the 2 MiB cap, so only a download), `2026-11-06-chat-reading-mockup.html` 4 and `2026-11-06-desk-nav-mockup.html` 5; at 64, with 32 open formatting elements each carrying 64
- *  and the tag limit's paragraphs, Chromium 156 parsed in a median 358 ms (the adoption-agency variant 40 ms). */
-export const MOCKUP_MAX_ATTRIBUTES = 64;
+ *  (over the 2 MiB cap, so only a download), `2026-11-06-chat-reading-mockup.html` 4 and `2026-11-06-desk-nav-mockup.html` 5. Fixed at
+ *  64 (32 open formatting elements each carrying 64 and the tag limit's paragraphs parsed in a median 358 ms, local), then
+ *  lowered to 32 with D-8695's depth and formatting limits: at 16 open elements each carrying 32 the reconstruction shape
+ *  read a 108 ms median alone on the fleet box (local). 32 keeps 4.6x headroom over the docs' 7. */
+export const MOCKUP_MAX_ATTRIBUTES = 32;
 
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
 export const MOCKUP_FORMATTING_ELEMENTS: ReadonlySet<string> = new Set([

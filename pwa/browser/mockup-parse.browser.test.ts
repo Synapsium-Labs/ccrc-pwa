@@ -18,7 +18,7 @@
 //       limit: its hostile unit at the most the pre-scan admits (F repeats), an enclosing block closed, then `<p>x</p>` to
 //       the tag limit. The unit is `<b data-i=k><table></b></table>`: the parser ignores that `</b>`, so each `<b>` stays
 //       in its list of active formatting elements while the pre-scan counts it;
-//   (t) the text- and comment-heavy shape at the deepest stack the pre-scan admits: `<b>`, 255 real divs, then `x<!---->` runs
+//   (t) the text- and comment-heavy shape at the deepest stack the pre-scan admits: `<b>`, D - 1 real divs, then `x<!---->` runs
 //       to the 2 MiB bound (a deep stack makes every text run and comment cost what its depth costs);
 //   (x) FOREIGN CONTENT (D-8663), one row per variant, small (128 repeats, about 3 000 tags): the formatting-leak unit through
 //       each integration point (svg foreignObject, desc, title; math mi, mo, mn, ms, mtext, annotation-xml), the two leaks the
@@ -131,8 +131,11 @@ const attributeAdoption = (open: number, attributes: number, tags: number): stri
   const cycle = `<div>x${'<div>'.repeat(8)}</b>${'</div>'.repeat(9)}`;
   return `${text}</div>${cycle.repeat(Math.floor((tags - 2 - open) / 19))}`;
 };
-/** (t): `<b>`, 255 real divs, then `x<!---->` runs filling the 2 MiB bound. */
-const textHeavyShape = (): string => `<b>${'<div>'.repeat(255)}${'x<!---->'.repeat(Math.floor((FIXTURE_MAX_BYTES - 3 - 5 * 255) / 8))}`;
+/** (t): `<b>`, `MOCKUP_MAX_DEPTH - 1` real divs, then `x<!---->` runs filling the 2 MiB bound. */
+const textHeavyShape = (): string => {
+  const divs = MOCKUP_MAX_DEPTH - 1;
+  return `<b>${'<div>'.repeat(divs)}${'x<!---->'.repeat(Math.floor((FIXTURE_MAX_BYTES - 3 - 5 * divs) / 8))}`;
+};
 /** (x): `<wrap>`, `copies` of a unit built per copy, `</wrap>`, then `<p>x</p>` paragraphs: the unit leaves formatting elements in
  *  the parser's list while the pre-scan's stack and count read small, and each paragraph clones them. */
 const foreignLeak = (unit: (k: number) => string, wrap: string, copies = 128, paragraphs = 1000): string =>
@@ -300,8 +303,8 @@ describe('M5.B8 (cap-a, D-8671): the attribute probes g1 to g3, in real Chromium
 });
 
 describe('M5.B8 (t): text and comment runs at the deepest admitted stack', { timeout: 120_000 }, () => {
-  it('<b>, 255 divs, then x<!----> runs to 2 MiB is admitted and parses within the budget', async () => {
-    await gate(`t-text-heavy D=${MOCKUP_MAX_DEPTH}`, textHeavyShape(), (p) => p.depth === MOCKUP_MAX_DEPTH && p.tags === 256);
+  it('<b>, MOCKUP_MAX_DEPTH - 1 divs, then x<!----> runs to 2 MiB is admitted and parses within the budget', async () => {
+    await gate(`t-text-heavy D=${MOCKUP_MAX_DEPTH}`, textHeavyShape(), (p) => p.depth === MOCKUP_MAX_DEPTH && p.tags === MOCKUP_MAX_DEPTH);
   });
 });
 
