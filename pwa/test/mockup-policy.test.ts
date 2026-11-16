@@ -308,7 +308,10 @@ describe('scriptTextOrigins: the script-text census (M5.EX3; base 5.6.3)', () =>
     const text = unit.repeat(Math.ceil((2 * 1024 * 1024) / unit.length));
     const t0 = performance.now();
     scriptTextOrigins(text);
-    expect(performance.now() - t0).toBeLessThan(250);
+    const ms = performance.now() - t0;
+    // The spec's M5.EX3 says 50 ms; this gate is 250 ms for a loaded box, and the reading is printed for Results (local).
+    process.stdout.write(`C1-EX3 row: ${_name}: ${ms.toFixed(1)} ms\n`);
+    expect(ms).toBeLessThan(250);
   });
 });
 

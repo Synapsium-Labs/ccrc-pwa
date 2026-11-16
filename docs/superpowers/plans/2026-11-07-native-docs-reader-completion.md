@@ -439,7 +439,7 @@ Each source is the corresponding completion-design §7 row. `measuredRef` is not
 
 ### C1 — run 2209 (the first item and Tasks 5-7), 2026-11-16
 
-Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c1`. Anchors rechecked at the base: `resolveDocRef`, `imagePinFor`, `DocImage.tsx` and `reader/images.ts` were present; `docs-scans.test.ts` held no parser census. That was asked (ask 445) and ruled: create it there as M5.16's DOMParser bullet, with no number. Every figure below is reproduced by a committed test unless it is marked **local**. Commits: F2 `25c04c1ff`, F1 `2fc24589b`, F3 `a527dea94`, Task 6 `8fb17f2cd`, Task 5 `6501a01d3`, Task 7 `2a0c72011`, and these Results.
+Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c1`. Anchors rechecked at the base: `resolveDocRef`, `imagePinFor`, `DocImage.tsx` and `reader/images.ts` were present; `docs-scans.test.ts` held no parser census. That was asked (ask 445) and ruled: create it there as M5.16's DOMParser bullet, with no number. Every figure below is reproduced by a committed test unless it is marked **local**. Commits: F2 `25c04c1ff`, F1 `2fc24589b`, F3 `a527dea94`, Task 6 `8fb17f2cd`, Task 5 `6501a01d3`, Task 7 `2a0c72011`, these Results `2ef6fa23d`, and fix round 1 (below): `0b5e7edc8`, `d121ed9d0`, `bb3097b3c` and its Results commit.
 
 **First item (review run 2208's F1-F3).**
 - F2: `reader-frame.test.tsx` passes a version context through `ReaderFrame`'s link context, `onLink` and `routeReaderLink`. A frame `navigate` keeps `at` and `ref`. The row was measured red with the frame's link context set to `pageAt: null` (1 failed | 50 passed; fence below).
@@ -476,15 +476,17 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
   - a raw-text start tag ignored in insertion modes other than template's column group (frameset is refused only for svg/math roots);
   - engines other than desktop Chromium. WebKit on phones was never measured, and lab E10 is desktop only;
   - the parser's own implied elements and reconstruction clones are bounded only by the measured gates, not modelled;
-  - parse cost from inputs that are none of tags, attributes or formatting (the text-heavy gate at depth 256 is the measured worst).
+  - parse cost from inputs that are none of tags, attributes or formatting (the text-heavy gate at depth 256 is the measured worst);
+  - the `<html>`/`<body>` attribute merge, which review run 2259 found unmodelled: the parser copies a repeated `<html>` or `<body>` tag's new attributes onto the one element. 255 `<html a0..a63>` tags are admitted and parse in about 300 ms (**local**, the reviewer's reading), bounded by depth 256. It is a cost class, not a bypass;
+  - the gate margin: under concurrent load the reviewer read the text-heavy gate at a 1 096.6 ms median (**local**), over its 1 000 ms gate, and 71/71 on a re-run alone. No gate was changed (fix round 1's ruling).
 - What the seventh review covered: Chromium's adjusted current node and integration points, MathML text integration points against annotation-xml, svg tag-name case adjustment, nested svg/math, breakouts and `font`, self-closing acknowledgement, CDATA after exits, svg in table, select and template, and the two fuzzers above. Earlier rounds covered:
   - tokenizer states (round 5: comments, bogus comments, `</`, script escapes, attribute states);
   - the adoption agency and implicit closes (rounds 4-6);
   - foster parenting, template and select (rounds 5-7).
 - **Cost of the rule:** omitted end tags are retained up to the depth limit (128 copies of `<div><p>text</div>` reach 256), and 33 inline svgs that each hold an `<a>` are refused.
-- **Bounded parse evidence:** Chromium 156.0.8078.4, build `chromium-1248`, headless Linux, at most 12 generated fixtures per run, medians of three, ms. The browser file gates each at 1 000 ms or less.
+- **Bounded parse evidence:** Chromium 156.0.8078.4, build `chromium-1248`, headless Linux, at most 12 generated fixtures per run, medians of three, ms. What the tree reproduces is the gate: the browser file holds each at 1 000 ms or less. Every reading in this table is **local**: the v6 column was taken on code no longer in the tree, and the v7 + cap column is one run's readings (review run 2259 read 217 for formatting, 832 for reconstruction at 64 attributes and 601 for text-heavy on a loaded box).
 
-| Gate | v6 | v7 + cap |
+| Gate | v6 (**local**) | v7 + cap (**local**) |
 |---|---|---|
 | formatting F=32 at 15 000 tags | 93.0 | 126.0 |
 | deep 256, span fill | 8.7 | 9.0 |
@@ -502,18 +504,18 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
   - Attributes measured at 0, 16, 32, 64, 96 and 128 per element gave 75, 173, 227, 358, 491 and 667 ms, so `MOCKUP_MAX_ATTRIBUTES` is 64.
 - **K1 (M5.EX4)**, every committed `docs/**/*.html` of at most 2 MiB, admitted:
 
-| File | Depth | Tags | Formatting | Most attributes on a tag |
+| File | Depth | Tags | Formatting | Most attributes on an element |
 |---|---|---|---|---|
 | `docs/design/overlord/reference.html` | 12 | 825 | 0 | 7 |
 | `2026-10-07-box-token-lifecycle-design.html` | 11 | 5 394 | 2 | 2 |
 | `2026-10-11-design-system-audit.html` | 8 | 763 | 1 | 3 |
 | `2026-11-06-chat-reading-mockup.html` | 17 | 1 391 | 1 | 4 |
-| `2026-11-06-desk-nav-mockup.html` | 12 (v6: 91) | 1 500 | 1 | 5 |
+| `2026-11-06-desk-nav-mockup.html` | 12 (v6: 91, **local**) | 1 500 | 1 | 5 |
 
-  The 6.7 MB frames file is over the cap, so it is download-only.
+  The 6.7 MB frames file is over the cap, so it is download-only. The K1 test prints depth, tags and formatting per file (`PRESCAN-DOCS-FILE`) and, since fix round 1, each file's most attributes on one element by jsdom's parser (`PRESCAN-DOCS-ATTRS`). It asserts that every one is within `MOCKUP_MAX_ATTRIBUTES` and that desk-nav-mockup.html stands at depth 12.
 - **Oracle and property test:** the real-Chromium oracle agrees with the scan on every page of its corpus (the browser file). The property test (jsdom/parse5, a bound of 36 elements per tag) has a worst admitted ratio of 0.33.
 - **Mutation rows:**
-  - The pre-scan's guard rows were measured red by the implementer on copies outside the work tree, the guard's own test failing in each: v5 10, v6 8, v7 9 and the cap 5. Rows are in the test files' named cases.
+  - The pre-scan's guard rows were measured red by the implementer on copies outside the work tree, the guard's own test failing in each: v5 10, v6 8, v7 9 and the cap 5 (**local**: no fence row records them). The guards are the test files' named cases; review run 2259 re-ran four of them in the tree and each went red.
   - The census rows below were measured in the tree.
 
 ```json
@@ -555,7 +557,7 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
   - the unbounded built page: 500 uses of a 100 KiB image built 68 285 665 chars on the old code (**local**). The committed row has 9 021 663 chars, with 66 inlined and 434 `skipped:'over-budget'`. Asks 446 and 447 ruled it.
   - origins the CSP could not carry;
   - nesting re-encoding;
-  - a 75 s build from 900 spellings of one import (now 347 ms);
+  - a 75 s build from 900 spellings of one import (the committed P4 row prints its time: 337-362 ms here, and review run 2259 read 1 307-1 313 ms on a loaded box, all **local**);
   - SVG style and script;
   - `@namespace`;
   - byte-exact stylesheets;
@@ -610,16 +612,41 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 {"id": "NDR-C1-T7-N2-desc", "pkg": "pwa", "file": "src/docs/mockup/css.ts", "old": "  return tokens.map((t, i) => ({ key: keyOf(i), raw: t.raw, basePath: base, kind: t.kind, depth }));", "new": "  return tokens.map((t, i) => ({ key: keyOf(i), raw: t.raw, basePath: base, kind: t.kind, depth })).sort((a, b) => b.kind.localeCompare(a.kind));", "tests": ["test/mockup-css.test.ts", "test/mockup-load.test.ts"], "status": "red", "red": "Tests  4 failed | 84 passed (88): keys are the parent key then the token index; depth is the parent's plus one; the base is the stylesheet's own path", "sha256": "6e0209d90e7d4fd2d2c6d5cb388be9dfc44fc850021470a98c8a3ca2e88199f9", "restored": true}
 ```
 
-**Lab and M5 rows C1 owns.**
-- Measured above: M5.7 (mockup half), M5.8, M5.9, M5.10, M5.11, M5.12, M5.16 (the DOMParser and `default-src 'none'` bullets), M5.21 (`parseMockupOrigin`, `mockupCsp`), M5.22, M5.EX3, M5.EX4, M5.B8.
-- E13: the control above. E3 and E9: `MOCKUP_CSP` is verbatim and origins reach the four directives only. E4: `MOCKUP_MAX_SRCDOC_CHARS`'s derivation.
-- Blocked for C2: M5.13-15, M5.19 (the shell meta stands from W8a: `shell-csp.test.ts`), M5.EX1, EX2, EX5-EX7, M5.B1-B4, B7, B10, B11, E1, E5-E8, E10-E12, and labs 1-4, 6, 7, 10.
+**Lab and M5 rows C1 owns** (as ruled in fix round 1: measured means a committed test in this tree reproduces it).
+- Measured above: M5.7 (mockup half), M5.8, M5.9, M5.10, M5.11, M5.12, M5.16 (the DOMParser and `default-src 'none'` bullets), M5.21 (`parseMockupOrigin`, `mockupCsp`), M5.22's pre-scan half (each refusal's typed return, with zero parsers constructed), M5.EX4, M5.B8, and D-8662's typed `too-large` return.
+- M5.EX3: the test gates each 2 MiB `import(` repetition at 250 ms, against the spec's 50 ms (the spec's figure stands); this box read 3.9 to 13.0 ms (**local**, the row prints it). Its script-text census check (`via: 'script-text'`) is C2's.
+- E13: the control above. E4: `MOCKUP_MAX_SRCDOC_CHARS`'s derivation (9 090 078, below E4's 11.2 M).
+- Blocked for C2: M5.22's rendering half (the refusal copy "Too complex to render — shown as source", Source, Download and no render control: nothing in `pwa/src` calls `parseMockup` or `buildMockupSrcdoc` until C2), D-8662's Download on a `too-large` page, E3 and E9 (real-browser request counts; a verbatim `MOCKUP_CSP` check is no CSP proof, Task 10), M5.EX3's script-text census check, M5.13-15, M5.19 (the shell meta stands from W8a: `shell-csp.test.ts`), M5.EX1, EX2, EX5-EX7, M5.B1-B4, B7, B10, B11, E1, E5-E8, E10-E12, and labs 1-4, 6, 7, 10.
+- Carried to C2: `isMockupOrigin`'s host grammar, which `mockupCsp`'s guard asks, accepts digit-only labels, so only `parseMockupOrigin` refuses an IP literal, `localhost` and the console's own host. A docs-scans clause (C1 origins) now holds that an `HttpsOrigin` is asserted only inside `parseMockupOrigin`; C2's caller must reach `mockupCsp` through it.
+
+**Fix round 1 (review run 2259 at `2ef6fa23d`, 2026-11-16).** Six important findings and eight minors. The coordinator's rulings:
+- F1 (planning quadratic in references, on untrusted input): fixed in this wave. The plan carries its basis (the page, whether it opens a draft, the listing indexed once) and each admitted pin's row index, and an extension derives only its new references (`0b5e7edc8`). `mockup-plan-linear.test.ts` counts one `resolveDocRef` per planned reference and a constant number of listing passes per plan. The review's page (190 000 uses of one image, then 63 stylesheets' references, a 100-entry listing) plans in 692-709 ms (**local**, three runs; the row prints it), where the reviewer measured about 0.8 s per extension and about 50 s in all. No row cap and no new limit.
+- F2 and A2/A3: Results calls measured only what a committed test reproduces (the section above).
+- F3, F5 (`d121ed9d0`): base §5.6.2 states the v7 rule in place, and D-8663 folds v3 to v7 (asks 448 and 450 to 454, found at the second review). `prescan.ts`'s header says the same.
+- F4: §5.6.2's Status names what is enforced, the browser leg's 1 000 ms median gate on desktop Chromium 156, in place of "158 ms".
+- F6: the figures no committed test reproduces are marked **local** above.
+- A1, A4, A6 (`bb3097b3c`): the limits pinned in absolute numbers, a `too-many-attributes` zero-parse row, K1's attribute and depth assertions, and the `HttpsOrigin` census.
+- A5: D-8662 and this section use one unit (100 KiB). A7: Task 5's interface union carries both new refusal words, and the test labels match this section's versions and rounds (v7, and the cap D-8671).
+- A8: `2ef6fa23d`'s `Ledger-Edit:` trailer sits in its own paragraph after `Co-Authored-By:`, so git reads only the Ledger-Edit line as a trailer. It is left as it is (no rewrite of a pushed commit); the fix round's commits keep both in one final trailer paragraph.
+- deviation-refs: its four reds (D-8344, D-8345, D-8354, D-8381) are the stale-base artifact the review confirmed (those entries moved between plan files on main after this branch's base; this branch touches neither file). Nothing was renumbered and main was not merged.
+- Mutation rows, each in the tree, sequential, restored from a saved copy and its hash checked:
+
+```json
+{"id": "NDR-C1-FR1-F1-REDERIVE", "pkg": "pwa", "file": "src/docs/mockup/plan.ts", "old": "  let reserved = plan.reservedBytes;\n", "new": "  for (const row of plan.rows) derive(context, basis, row.ref);\n  let reserved = plan.reservedBytes;\n", "tests": ["test/mockup-plan-linear.test.ts"], "status": "red", "red": "Tests  1 failed | 1 passed (2): derives each reference once across a plan and its extensions, the inline duplicates of earlier rows included", "sha256": "19174ff2a74f0672ccc4a7eabdd8604dd75a0a25fbcfad2088aeaf127c9a0a42", "restored": true}
+{"id": "NDR-C1-FR1-F1-REINDEX", "pkg": "pwa", "file": "src/docs/mockup/plan.ts", "old": "  return decide(plan, refs);\n}", "new": "  return decide({ ...plan, basis: basisFor(plan.context) }, refs);\n}", "tests": ["test/mockup-plan-linear.test.ts"], "status": "red", "red": "Tests  1 failed | 1 passed (2): searches the listing a constant number of times per plan, however many references and extensions", "sha256": "19174ff2a74f0672ccc4a7eabdd8604dd75a0a25fbcfad2088aeaf127c9a0a42", "restored": true}
+{"id": "NDR-C1-FR1-F1-PAGEDRAFT", "pkg": "pwa", "file": "src/docs/mockup/plan.ts", "old": "imagePinFor(e, ctx.tree, basis.page, basis.pageDraft)", "new": "imagePinFor(e, ctx.tree, basis.page)", "tests": ["test/mockup-plan-linear.test.ts"], "status": "red", "red": "Tests  1 failed | 1 passed (2): searches the listing a constant number of times per plan, however many references and extensions", "sha256": "19174ff2a74f0672ccc4a7eabdd8604dd75a0a25fbcfad2088aeaf127c9a0a42", "restored": true}
+{"id": "NDR-C1-FR1-A6-ATTR", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_ATTRIBUTES = 64;", "new": "export const MOCKUP_MAX_ATTRIBUTES = 65;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+{"id": "NDR-C1-FR1-A6-TAGS", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_TAGS = 15_000;", "new": "export const MOCKUP_MAX_TAGS = 15_001;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+{"id": "NDR-C1-FR1-A6-DEPTH", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_DEPTH = 256;", "new": "export const MOCKUP_MAX_DEPTH = 257;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+{"id": "NDR-C1-FR1-A6-FORMATTING", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_OPEN_FORMATTING = 32;", "new": "export const MOCKUP_MAX_OPEN_FORMATTING = 33;", "tests": ["test/mockup-prescan.test.ts"], "t": "pinned in absolute numbers", "status": "red", "red": "Tests  2 failed | 394 skipped (396): depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+{"id": "NDR-C1-FR1-A6-ZEROPARSE", "pkg": "pwa", "file": "src/docs/mockup/parse.ts", "old": "  if (!prescan.ok) return { ok: false, prescan };", "new": "  if (!prescan.ok && prescan.why !== 'too-many-attributes') return { ok: false, prescan };", "tests": ["test/mockup-parse.test.ts"], "t": "too-many-attributes", "status": "red", "red": "Tests  1 failed | 29 skipped (30): too-many-attributes (one start tag past MOCKUP_MAX_ATTRIBUTES; fix round 1, A6)", "sha256": "fca207b39c5cce7a9da6f26b3628bafc42a812ab31e50483f662a546b991ad7e", "restored": true}
+{"id": "NDR-C1-FR1-A1-K1", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_ATTRIBUTES = 64;", "new": "export const MOCKUP_MAX_ATTRIBUTES = 6;", "tests": ["test/mockup-prescan.test.ts"], "t": "K1 \\(fix round 1", "status": "red", "red": "Tests  1 failed | 395 skipped (396): each committed mockup's most attributes on one element is within MOCKUP_MAX_ATTRIBUTES, and desk-nav stands at depth 12", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+{"id": "NDR-C1-FR1-A4-CAST", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export function mockupCsp(extra: readonly HttpsOrigin[]): string {", "new": "export const castOrigin = (s: string): HttpsOrigin => s as HttpsOrigin;\nexport function mockupCsp(extra: readonly HttpsOrigin[]): string {", "tests": ["test/docs-scans.test.ts"], "t": "clause C1 origins", "status": "red", "red": "Tests  7 failed | 1 passed | 157 skipped (165): the real tree has exactly the one assertion, inside parseMockupOrigin", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+```
 
 **Suites** (`ccrc test`, foreground):
-- the whole pwa suite in four shards before the last pre-scan rounds;
-- the pre-scan, parse, docs-scans, browser-leg, mockup-policy and literal-census files at the head: 755/755;
-- the browser file: 71/71;
-- tsc rc 0.
+- before fix round 1: the whole pwa suite in four shards before the last pre-scan rounds; the pre-scan, parse, docs-scans, browser-leg, mockup-policy and literal-census files at `2ef6fa23d`: 755/755; the browser file 71/71; tsc rc 0;
+- fix round 1: run at its head after this commit, and recorded in PR #2915's body and the wave-done.
 
 ## Where things stand
 
