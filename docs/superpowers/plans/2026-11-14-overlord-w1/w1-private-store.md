@@ -256,6 +256,34 @@ recommendation unless the coordinator or the operator rules otherwise.
     arm before any typing, for every prompt (an unreadable `coord.db` is a server-wide failure already); a test pins
     that arm. A boolean or a null for an unreadable designation would send the route down the typing path and type the
     operator's words into the Overlord's pane unrecorded.
+17. **A retried send records once** (slug `send-key-dedupes-a-retry`; **ruled**, the chat plan's fix round 1, F2).
+    The chat keeps the draft whenever it reads no recorded answer, a lost `200` included, so its retry would record a
+    second message and queue a second nudge. **The ruling:** the console generates a send key for each message it
+    composes, and the prompt route records it.
+    - `sendKey` is a body field: 16 to 64 characters of `[A-Za-z0-9_-]` (`isSendKey`, L0). Absent is allowed (an older
+      console, or the Session screen), and a malformed key refuses `bad-request` (400) before any record.
+    - `operator_messages.sendKey` is a nullable column of migration 1, unique per session where it is set
+      (`operator_messages_send_key`).
+    - `recordMessage` looks the key up inside its transaction, before it issues an id. A row with the same session and
+      key answers that first record with `replay: true`: no journal record, no row, and no `@overlord` mark. The same
+      key with a different stored hash refuses `bad-request` (detail `send-key-reused`), because the key names one
+      composed message.
+    - On a replay the route queues no nudge and moves nothing. It answers the first record's id, `cut` and its current
+      state, so a lost answer never duplicates a message.
+18. **A chat send names the session and term it was composed for** (slug `chat-send-names-its-target`; **ruled**, the
+    chat plan's fix round 1, F10). The chat posts to the session id of its last read. After a retire or a rebind, a
+    send to that id would take "today's path" and type the words into a pane that is no longer the Overlord's,
+    unrecorded. **The ruling:** a chat send carries `overlordTerm`, the designation's term it was composed under. One
+    L1 decider, `promptTargetVerdict(designation, sessionId, body)` in `server/src/operatorModel/messages.ts`, answers
+    `record`, `type` or `refuse`:
+    - an unmeasured designation: `refuse unmeasured` (502) for every prompt (open question 16);
+    - `overlordTerm` present while the designation is not bound to this session at that term: `refuse
+      stale-designation` (409), and nothing is typed or recorded. The chat keeps the draft and reads the thread again;
+    - the designated session at its term, or with no `overlordTerm` (the Session screen): `record`;
+    - any other session with no `overlordTerm`: `type`, today's path.
+
+    The chat plan extends the same decider with its `offRecord` rule. No refusal decision sits inline in
+    `server.ts`.
 
 ## What exists today
 
@@ -456,7 +484,8 @@ absent-member and marker rules (Task 4) move into a module beside it first, in a
 - Authority journal B: `privacyJournalHead()` (the head digest, the record count and the highest message id) for the
   witness epoch, and the hook the epoch rises on, one call for each privacy record (the A0 adapter reports each
   append).
-- The chat (lane F): the message row's state and stamps for its ticks, and `cut`.
+- The chat (lane F): the message row's state and stamps for its ticks, and `cut`; the send key's replay answer (open
+  question 17); `promptTargetVerdict`, which the chat plan extends with its `offRecord` rule (open question 18).
 - W2's citing doors: `moveMessage(id, 'settle' | 'spend', 'citing-door')`, the citation adapter of the boot pass, and
   the stored `sha256`.
 
@@ -618,6 +647,7 @@ CREATE TABLE operator_messages (
   term        INTEGER NOT NULL,            -- the designation's term at the record
   actor       TEXT NOT NULL,               -- the account gate's actor, as actorOf renders it (open question 4)
   sha256      TEXT NOT NULL,               -- of `text` as stored
+  sendKey     TEXT,                        -- the console's key for one composed message, or null (open question 17)
   text        TEXT NOT NULL,               -- masked, then cut with the mark (open question 5)
   cut         INTEGER NOT NULL CHECK (cut IN (0, 1)),
   state       TEXT NOT NULL,
@@ -627,6 +657,7 @@ CREATE TABLE operator_messages (
 );
 CREATE INDEX operator_messages_unsettled ON operator_messages (state, id);
 CREATE INDEX operator_messages_at ON operator_messages (at);
+CREATE UNIQUE INDEX operator_messages_send_key ON operator_messages (sessionId, sendKey) WHERE sendKey IS NOT NULL;
 CREATE TABLE read_ledger (
   id             INTEGER PRIMARY KEY,
   at             INTEGER NOT NULL,
@@ -651,8 +682,10 @@ synchronous and catches nothing it cannot name):
 ```ts
 export type StoreWrite<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: 'refused'
   | 'write-failed' | 'journal-unwritable' | 'journal-unreadable' | 'not-open'; readonly detail: string };
-recordMessage(m: { at: number; sessionId: string; term: number; actor: AccountActor; text: string; mark: boolean }):
-  StoreWrite<{ id: number; cut: boolean; state: MessageState }>;   // refuses an actor isMintedActor refuses
+recordMessage(m: { at: number; sessionId: string; term: number; actor: AccountActor; text: string; mark: boolean;
+  sendKey: string | null }):
+  StoreWrite<{ id: number; cut: boolean; state: MessageState; replay: boolean }>;   // refuses an actor isMintedActor
+  // refuses; a key this session already recorded answers that record with replay: true (open question 17)
 moveMessage(id: number, event: MessageEvent, actor: MessageActor, at: number):
   StoreWrite<{ changed: boolean; state: MessageState }>;        // 'refused' names the move; absent id is 'refused'
 recordRead(l: ReadLine): StoreWrite<{ id: number }>;
@@ -670,7 +703,9 @@ type Read<T> = { readonly kind: 'measured'; readonly value: T } | { readonly kin
 `unnudged()` answers the rows the route can leave without a nudge: no `queuedAt`, no `deliveredAt` and no
 `pickedUpAt` (all three, because `deliver` may skip `queue`), and a state of `recorded`, or `settled` by `mark`.
 
-`recordMessage` asks `capMessageText` and `nextMessageId`, and in one `tx()` appends the privacy journal's
+`recordMessage` asks `capMessageText`, then, in its `tx()`, looks up `(sessionId, sendKey)` when a key is given: a row
+answers it with `replay: true` and writes nothing, and a row whose `sha256` differs refuses `refused` (detail
+`send-key-reused`). Otherwise it asks `nextMessageId`, and in the same `tx()` appends the privacy journal's
 `privacy-message-issued` record (Task 3) and then inserts the row, `recorded`, or `settled` with `settledBy: 'mark'`
 when `mark` is true. This task ships it against a journal double, and Task 3 wires the real one. `recordRead`
 validates the line against the L0 lists and the `CHECK`s before it writes, and refuses a line that does not fit.
@@ -695,7 +730,10 @@ existing pin's title ("coord.db's recorded tables") stays true.
   - `nextMessageId`: the store's highest and the journal's highest, each absent or present, and the larger wins.
   - `operator-model-store.test.ts`, on a fixture file: a fresh open migrates to 1 and creates the file at 0600 under a
     `0o022` umask, and its `-wal` and `-shm` at 0600 too; a 0-byte file refuses `PrivateStoreUnmigratable`; a higher
-    `user_version` opens with no migration and one warning; every move of Table 1 through `moveMessage` writes the
+    `user_version` opens with no migration and one warning; `recordMessage` with a send key twice for one session
+    answers one row, the second call `replay: true` with the first id and no second journal record; the same key for
+    another session records a second row; the same key with other text refuses `send-key-reused`; a null key never
+    dedupes; every move of Table 1 through `moveMessage` writes the
     state and the stamp and nothing else, but `unsettle`, which also NULLs `settledAt` and `settledBy`; `settle` after
     `unsettle` stamps both again, and the next boot's `bootSettlement` keeps the row; `deliver` on `picked-up` stamps
     `deliveredAt` and keeps the state; a refused move changes no byte; a move of an absent id is refused;
@@ -858,10 +896,11 @@ restated):
 
 **Files:**
 - Create: `server/src/operatorModel/promptRecord.ts` (L4: `recordOperatorPrompt`)
-- Modify: `server/src/operatorModel/messages.ts` (`settlementMarkOf`)
-- Modify: `server/src/server.ts` (the prompt route: after `knownId`, ask designation A's `designationRead()`. On
-  `unmeasured`, answer 502 `unmeasured` and type nothing, whatever the target. On `designated` with this `id`, call
-  `recordOperatorPrompt` and answer what it answers. Else today's path, W1a's `renewing` included)
+- Modify: `server/src/operatorModel/messages.ts` (`settlementMarkOf`; `promptTargetVerdict`, open question 18)
+- Modify: `shared/operatorMessages.ts` (`isSendKey`, open question 17)
+- Modify: `server/src/server.ts` (the prompt route: after `knownId`, ask designation A's `designationRead()`, then
+  `promptTargetVerdict`. `refuse` answers its word and types nothing; `record` calls `recordOperatorPrompt` and
+  answers what it answers; `type` is today's path, W1a's `renewing` included)
 - Modify: `server/src/coord/envelope.ts` (`renderOperatorMessageNudge(id)`, beside `renderMailNudge`: the generic
   head, then `Operator message <id>: read it with your messages door.`, one line, no mail-client instructions)
 - Modify: `server/src/watch.ts` (`sweepMail`'s operator-message branch, below; `pushNewMail`'s record-only list gains
@@ -879,8 +918,10 @@ restated):
    `insecure-origin`, `unauthenticated`), because no Overlord exists without sign-in.
 2. An attachment refuses `bad-attachment` (open question 6). Empty text refuses `bad-request`, as today.
 3. The text is masked through the egress mask (open question 5).
-4. `recordMessage({ at: clock.now(), sessionId, term, actor, text, mark: settlementMarkOf(text) === 'mark' })`, with
-   the `term` the designation read answered. A refusal answers its word: `journal-unreadable` or `journal-unwritable`
+4. `recordMessage({ at: clock.now(), sessionId, term, actor, text, mark: settlementMarkOf(text) === 'mark', sendKey
+   })`, with the `term` the designation read answered and the body's `sendKey` (open question 17; a malformed key was
+   refused `bad-request` before step 3). A `replay: true` answer skips step 5 and answers at once: no mail, no mark and
+   no move. A refusal answers its word: `journal-unreadable` or `journal-unwritable`
    (503), `write-failed` (503).
 5. In one `coord.db` transaction: `queueSystemMail(coord, null, { fromId: 'operator', toId: sessionId, runId: null,
    kind: 'status', subject: operatorMessageSubject(id), body })`, and W1a's mark writer for the key `@overlord`
@@ -888,8 +929,8 @@ restated):
    when the mail answered `queued: true`. A throw here leaves the row `recorded` (or mark-settled with no stamp),
    which the boot pass and the inbox both see; the answer is still `ok`, because the words are recorded, and a warning
    line names the id.
-6. The answer: `{ ok: true, messageId: id, cut, state }`, an additive shape the console reads only once lane F's chat
-   does.
+6. The answer: `{ ok: true, messageId: id, cut, state, replay }`, an additive shape the console reads only once lane
+   F's chat does.
 
 `replaceDraft` and `resume` are ignored for the designated session: nothing is typed.
 
@@ -911,6 +952,11 @@ restated):
   - a prompt to any other session types as today, and writes no row and no mark;
   - `designationRead()` answering `unmeasured` refuses 502 `unmeasured` for a prompt to the Overlord's id and for a
     prompt to any other session, and types nothing;
+  - `promptTargetVerdict` over every arm: a body with `overlordTerm` to the designated session at another term, to a
+    retired designation's old session and to a rebound designation's old session each refuse 409
+    `stale-designation`, type nothing and record nothing; with no `overlordTerm` the old session is typed to as today;
+  - the same `sendKey` sent twice records one row and queues one nudge, and the second answer carries the first id
+    and `replay: true`; a malformed key refuses `bad-request` before any record;
   - auth off answers `auth-off`, a plain-HTTP origin `insecure-origin`, and each writes nothing; an attachment answers
     `bad-attachment`; a journal that refused at boot answers `journal-unreadable`; in each, nothing is queued;
   - a secret in the text is stored masked, and its hash is of the masked text;
@@ -928,10 +974,12 @@ restated):
   echo-needle suites of `sendPrompt` as measured at build time, `growth-check.test.ts` armed for `server.ts` and
   `watch.ts`, `rings/*.test.ts`, `rings/watcher-store-port.test.ts` and both `tsc` runs: green.
 - [ ] **Step 5: Mutation.** Queue the mail before the record: the order case reds. Type the text when the designation
-  is unmeasured: red. Fold `unmeasured` into `not-designated`: the other-session case reds. Pass `resumeIfOwn: true` in
+  is unmeasured: red. Fold `unmeasured` into `not-designated`: the other-session case reds. Let
+  `promptTargetVerdict` answer `type` for a stale `overlordTerm`: the rebind case reds. Queue the nudge on a replay:
+  the double-send case reds. Pass `resumeIfOwn: true` in
   the branch: the other-message draft case reds. Drop the ack: the replay case reds. Drop `isOperatorMessageMail` from
   the record-only list: the push case reds. Let `settlementMarkOf` match a substring: red. Revert each. Register
-  `settlementMarkOf`.
+  `settlementMarkOf` and `promptTargetVerdict`.
 - [ ] **Step 6: Commit.** `feat(overlord): the console's prompt to the designated session is recorded, then nudged through the mail lane (H7)`
 
 ### Task 6: The boot pass (I8), and a nudge that was never queued
@@ -1098,6 +1146,10 @@ Decisions this plan takes, by slug:
 - **subject-is-the-link** — the mail lane finds a message by the nudge's subject, so neither file holds the other's
   ids.
 - **two-prs** — as the index has it.
+- **send-key-dedupes-a-retry** — a retried console send with the same key answers the first record and queues no
+  second nudge (open question 17, the chat plan's fix round 1).
+- **chat-send-names-its-target** — a chat send carries its term, and a moved designation refuses
+  `stale-designation` without typing (open question 18, the chat plan's fix round 1).
 
 Plan decisions stay plain-words slugs, as every W1 piece's do; no D-number is minted for them (cross-plan ruling X9).
 
