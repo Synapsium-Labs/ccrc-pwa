@@ -18,9 +18,10 @@ Overlord across its generations:
   and then nudges the pane (H7). Each send names the session and term it was composed for, and carries a send key, so a
   retry never records twice and a send to a moved designation is refused, not typed. A refused send keeps the draft,
   `renewing` included. The composer carries the off-the-record toggle (§9.4 rule 9).
-- **The console's `opened` receipts in the place.** When the place shows a reply of the Overlord, the console posts
-  an `opened` receipt for it through the responses piece's receipts door (C67). This part, with the reply rows it
-  names, **waits on operator item 327** (index question 10).
+- **Each reply is recorded, and the place sends its `opened` receipts.** Each reply of the Overlord is recorded in the
+  private store, `operator-model.db`, when its turn ends (operator item 327, index question 10). When the place shows a
+  recorded reply, the console posts an `opened` receipt for it through the responses piece's receipts door (C67), and
+  the reply carries "I handled this elsewhere" (C69).
 
 **Why:** R4 puts the operator's surface inside the console, and R9 makes the Overlord place the console's home. H7
 makes the operator's words server rows, so the chat must show those rows, never pane text, as the operator's words.
@@ -54,9 +55,10 @@ R19 asks that a renewal not be felt: the composer keeps working, and the chat sh
   the reads, the coalesced refresh, the send key) and `OverlordChat.tsx` with its parts (L4). The composer is today's
   `pwa/src/session/Composer.tsx`, gaining opt-in props that leave the Session screen's behaviour unchanged.
 
-Two pull requests (open question 7). PR A ships Tasks 1 to 4, everything but the reply rows. PR B ships Task 5 once the
-operator has answered item 327. The send key and the term check are the private store's (its open questions 17 and 18,
-added by this plan's fix round 1, in the same pull request as this plan).
+Two pull requests (open question 7). PR A ships Tasks 1 to 4, everything but the replies. PR B ships Task 5: the reply
+record, written by the private store's one reply writer when the turn ends, and the reply rows (open question 8). The
+send key and the term check are the private store's (its open questions 17 and 18, added by this plan's fix round 1, in
+the same pull request as this plan).
 
 **Tech Stack:** TypeScript (ESM), `node:sqlite`, React (the PWA), vitest and vitest's browser mode.
 
@@ -83,10 +85,10 @@ added by this plan's fix round 1, in the same pull request as this plan).
   door with a `shape` call of its own; its one column rides the private store's file (open question 4).
 
 The W1 index is `docs/superpowers/plans/2026-11-14-overlord-w1.md`, row "Chat", lane F, last. This plan builds on the
-index's questions 10 (the Overlord's replies, waiting on item 327), 17 (the operator's doors keep the account gate), 25
-and 32 (the read ceilings and `read-ceiling`), 26 (the nudge rides the mail lane) and 33 (the console hides the
-Overlord's doors until `overlord-v1`). It reads these piece plans, all on `main` under
-`docs/superpowers/plans/2026-11-14-overlord-w1/`: private store (`w1-private-store.md`), board and history
+index's questions 10 (the Overlord's replies, answered by item 327: recorded in the private store when the turn ends),
+17 (the operator's doors keep the account gate), 25 and 32 (the read ceilings and `read-ceiling`), 26 (the nudge rides
+the mail lane) and 33 (the console hides the Overlord's doors until `overlord-v1`). It reads these piece plans, all on
+`main` under `docs/superpowers/plans/2026-11-14-overlord-w1/`: private store (`w1-private-store.md`), board and history
 (`w1-board-history.md`), inbox (`w1-inbox.md`), responses (`w1-responses.md`), gates (`w1-gates.md`), designation
 (`w1-designation.md`) and ladder (`w1-ladder.md`). The readiness plan (`w1-readiness.md`) is in review beside this one,
 and this plan cites its interfaces as written there: `shared/overlord-readiness.ts` (`ReadinessWord`) and
@@ -112,7 +114,7 @@ flowchart LR
 
 *Figure 1. Where each line of the chat comes from. Every source is an existing owner's row or reader. The chat writes
 one column, `offRecord`, through the private store's one insert, and one read-ledger line per read. Both doors pass the
-account gate first. The dashed arrow is PR B, which waits on item 327.*
+account gate first. The dashed arrow is PR B, which records each reply when its turn ends (item 327).*
 
 ## Open questions
 
@@ -218,21 +220,24 @@ marked "(ruled)".
    The recogniser `operatorMessageNudgeIdOf(line)` lives in L0 beside the private store's `operatorMessageSubject`, and
    the envelope's renderer is pinned against it by a round-trip test, so the line has one grammar.
 7. **One pull request, or two** (slug `chat-ships-in-two-prs`). The index sizes the chat at "1 PR, 5 tasks". The reply
-   rows, the reply's `opened` receipt and its "I handled this elsewhere" control all depend on the answer to item 327
-   (question 8). **Recommendation:** PR A ships Tasks 1 to 4 when their needs are met. PR B ships Task 5 after the
-   operator's answer.
-8. **The Overlord's replies** (the index's question 10, operator item 327; **waits on the item**). W1's tables hold the
-   operator's words only. **What waits:** Task 5 alone. What changes with the answer:
-   - **(a) recorded at the turn:** a reply is a row in the private store with an integer id, written by the piece the
-     answer names. The chat then reads replies from the record as it reads messages. The reply's response row
-     (`ResponseRef` `{ kind: 'reply', id }`, responses A) lives in `coord.db`, so it cannot share the reply's
-     transaction: it is inserted after the reply's record commits, and the boot pass inserts the row for any recorded
-     reply that has none, as I8 re-derives across the two files.
-   - **(b) re-read from transcripts at checkpoint time:** a reply has no record id, so `ResponseRef`'s reply arm, typed
-     `id: number`, cannot name one. Task 5 then states the reply's key (the transcript entry's uuid) and the responses
-     piece's ref changes shape in the same pull request.
+   record, the reply rows, the reply's `opened` receipt and its "I handled this elsewhere" control need door process
+   B1's report door and the responses pieces, which PR A does not (question 8). **Recommendation:** PR A ships Tasks 1
+   to 4 when their needs are met. PR B ships Task 5 after PR A and those pieces.
+8. **The Overlord's replies** (the index's question 10, operator item 327). **Answered** by the operator on
+   2026-11-16: "Record each reply in the private store when the turn ends." Task 5 builds it:
+   - a reply is a row of its own table, `overlord_replies`, in the private store (`operator-model.db`), so §9.4's
+     privacy rules cover it: only the store's five callers read it, the egress mask runs on the way in, a reply to a
+     message sent off the record is off the record, and the privacy journal keeps the highest reply id;
+   - the row is written by the private store's one reply writer, `recordReply`, when the Overlord's turn ends, as the
+     hook's main-turn `Stop` reports it through door process B1's report door (a report kind `reply`). That also
+     answers the index's question 27: the server learns that the Overlord replied from that report;
+   - the reply's response row (`ResponseRef` `{ kind: 'reply', id }`, responses A) lives in `coord.db`, so it cannot
+     share the reply's transaction: it is inserted after the reply's record commits, and the boot pass inserts the row
+     for any recorded reply that has none, as I8 re-derives across the two files;
+   - the chat then reads replies from the record as it reads messages, and the checkpoint's thread reads them from the
+     same record (C37).
 
-   Tasks 1 to 4 build nothing either answer changes.
+   Tasks 1 to 4 build nothing the answer changes.
 9. **What every console read writes and counts** (slug `chat-read-ledger-doors`; **ruled, F4**). §9.4 rule 3: the
    operator's signed-in console is one of the store's five callers, and "every read leaves a ledger line".
    - Two door words join the private store's `READ_DOOR_MAP`: `chat` (the thread) and `chat-history` (an earlier
@@ -424,14 +429,18 @@ port and decider (board and history B1), the receipts door (responses A), the re
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
 | A, the chat | 1 to 4 | The chat's vocabulary and deciders; the `offRecord` fact; the inbox runner's operator mode and the counter by caller; the thread door and the earlier-generation door with every census; the chat part of the Overlord place, with ticks, server lines, dividers, the live generation with every pane turn's origin, earlier pages, the opt-in composer with the kept draft, the send key, the term and the toggle; the browser suite at every width | home B (`pwa/src/overlord/`, the place and its slot for part 7); private store B (the record, the send key, `promptTargetVerdict`, the answer); designation A (`overlordRoutes.ts`, `designationRead()`, `identityOf`); gates A (`OVERLORD_DOORS`); the inbox (`runOverlordRead`, `servedReadsSince`, `READ_CEILINGS`, `operator-message-readers.test.ts`); board and history B1 (the port and the decider); readiness (`ReadinessWord`, `readinessHistory`, and a prune that keeps the newest row); the vocabulary (`INJECTED_PROMPTS`); W1a renewal hand-offs (the Session screen's `renewing` rule, which the characterization test pins) | `pwa/src/lib/api.ts` about +18 (three calls, the answer type, imports); `server/src/server.ts` about +8 (two `MASKED_GET_ROUTES` entries, the `offRecord` field, the readers' wiring into the routes' deps) |
-| B, the replies | 5 | The reply rows' insert where the answer to item 327 puts it; the place's `opened` receipt for each reply shown; the reply's "I handled this elsewhere" control | PR A; responses A (the receipts door) and responses B (the handled door); the operator's answer to item 327 (**waits on item**) | `pwa/src/lib/api.ts` about +4 (if the responses piece's receipt call does not already serve the console); others 0 |
+| B, the replies | 5 | Each reply recorded in the private store when its turn ends (item 327): the hook's `reply` report at the main-turn `Stop`, the report door's `reply` arm, `recordReply` and `overlord_replies`, the response row after the record commits and the boot pass's arm; the reply rows in the place; the place's `opened` receipt for each reply shown; the reply's "I handled this elsewhere" control | PR A; door process B1 (the report door, `_hook_door_report` and `HOOK_REPORT_KIND_MAP`); responses A (the receipts door, `ResponseRef`, `operator_responses` with its one-reply index) and responses B (the handled door) | `server/src/server.ts` about +4 (the reply adapter); `ccd/session-hook.sh` about +14 (the `Stop` arm and the spool); `pwa/src/lib/api.ts` about +4 (if the responses piece's receipt call does not already serve the console); others 0 |
 
 **Order:** PR A when every "needs first" above has merged. It is the last pull request of lane F in W1, and
-`overlord-v1` needs it. PR B after PR A, the responses pieces and the operator's answer. `overlord-v1` does not wait for
-PR B (open question 7): the chat works without reply rows, which only measure.
+`overlord-v1` needs it. PR B after PR A, door process B1 and the responses pieces. `overlord-v1` does not wait for PR B
+(open question 7): the chat works without reply rows. The checkpoint's thread carries the Overlord's replies only once
+PR B has merged (What later pieces read), so whether `overlord-v1` waits for it is the coordinator's call.
 
 **What later pieces read** (the states this piece exposes):
-- W4's feeds (§9.2): `operator_messages.offRecord`, which they skip.
+- W4's feeds (§9.2): `operator_messages.offRecord` and `overlord_replies.offRecord`, which they skip; W4's wipe and
+  export cover `overlord_replies` as they cover `operator_messages`.
+- The checkpoint's thread (C37): `repliesSince(sinceMs)`, the replies since the operator's last break, word for word,
+  rendered as untrusted data. The piece that assembles the Overlord's checkpoint reads it (PR B).
 - W2's requests: the thread's message entry is the place where the bound request ids and matched names are drawn; W2
   adds a field to `ChatEntry`'s message arm and changes no W1 field.
 - W3's proposals: the composer's "I command" path opens the proposals list in front of the settlement mark.
@@ -918,35 +927,202 @@ after no answer carries the same key, so the private store answers the first rec
   reds). Revert each.
 - [ ] **Step 6: Commit.** `feat(console): the Overlord's chat, with ticks, the server's lines, generations, pane turns marked and the kept draft (Overlord W1)`
 
-### Task 5: Reply rows and the place's `opened` receipts (**waits on item 327**)
+### Task 5: The reply record, reply rows and the place's `opened` receipts (PR B)
 
-This task is planned in its common part now and completed when the operator answers item 327 (question 8). It is PR B.
+Operator item 327 answered question 8 on 2026-11-16: "Record each reply in the private store when the turn ends." This
+task records each reply of the Overlord in the private store, `operator-model.db`, when its turn ends, and builds the
+chat's reply rows, their `opened` receipts and the "I handled this elsewhere" control on them. It is PR B.
 
-**Files (common to both answers):**
-- Modify: `pwa/src/overlord/OverlordChat.tsx` (a reply on screen, at least half visible for one second while the
-  document is visible, posts one `opened` receipt for it, once per reply per page load)
+**What a reply is** (slug `a-reply-is-a-turns-text`). One row for each main-thread turn of the designated session that
+ends with text: the text blocks of every main-thread assistant entry since the turn's prompt entry, in order, joined
+with one blank line. No thinking block, tool input or tool output is part of it. A turn with no text block records
+nothing. Its key is the uuid of the turn's last assistant entry, so one turn is one row however often it is reported.
+
+**Where the insert sits** (question 8). Five steps, each in the owner the index names:
+
+```mermaid
+sequenceDiagram
+  participant H as The hook, main-turn Stop
+  participant D as The report door, reply arm
+  participant S as recordReply, operator-model.db
+  participant R as coord.db, operator_responses
+  participant B as The boot pass
+  H->>H: turn_reply reads the transcript tail
+  H->>D: POST report, kind reply, entry uuid and text
+  D->>D: attribution, then the designated session and term
+  D->>D: the egress mask
+  D->>S: recordReply, in its one transaction
+  S-->>D: id, cut, offRecord, inReplyTo, replay
+  D->>R: insertReplyResponse, after the record commits
+  D-->>H: 200 with replyId
+  B->>R: at boot, a row for each recorded reply that has none
+```
+
+*Figure 3. Where the reply is recorded. The record is written in the private store's one reply writer when the turn
+ends, as the hook reports that end. The response row is inserted after the record commits, and the boot pass inserts
+any row a crash between the two commits left out.*
+
+1. **The hook, at the turn's end.** On the main-turn `Stop` (never `SubagentStop`, and never with a reader's agent id),
+   in a session with a door (the gate door process B1's arms use), the hook reads the turn's reply from the event's
+   `transcript_path` through a new definition, `turn_reply`, in `ccd/lib/transcript.jq`, the library the `Stop` arm's
+   `start_loads` already reads the transcript with. It reads at most `REPLY_READ_MAX_BYTES` (4 MiB) from the tail. It
+   sends one report through `_hook_door_report` to door process B1's report door, `POST /api/sessions/:id/report`,
+   kind `reply`, body `{ entryUuid, turnAt, text, truncated }`, with the text cut at a code point to at most
+   `REPLY_REPORT_MAX_BYTES` (65,536) and `truncated: true` when it was cut. Task 5's first step measures whether the
+   `Stop` event of the pinned Claude Code build carries the turn's last assistant text itself; if it does, the hook
+   still reads the transcript, because one turn may hold several text entries.
+   - **The reply report is the one report that spools** (slug `reply-report-spools`). Every other report of door
+     process B1 is sent once, because the next event heals a lost one. A lost reply is not healed by anything later, so
+     a send that is not answered 200 appends its body to `$REG/<id>.replyspool` (one body a line, at most
+     `REPLY_SPOOL_MAX`, 8; past it the oldest is dropped and the count rides the next body as `droppedBefore`). The
+     next main `Stop` resends the spool, oldest first, before its own report, each send under `REPORT_TIMEOUT_S`. The
+     store's key makes a resend a replay. The registry purge removes the spool with the row.
+2. **The report door's `reply` arm** (`server/src/continuity/routes.ts`). After the token and the attribution every
+   kind passes:
+   - `replies.designated(id)`, through `designationRead()`: a session that is not the designated session at the
+     designation's current term answers 403 `not-the-overlord` and records nothing; an unreadable designation answers
+     502 `unmeasured`;
+   - the egress mask (`SecretMasker`), on the text, as the prompt route's act masks a message (§9.4 rule 4);
+   - `replies.record(...)`, a port declared in that file beside `MessagePickUp`: `ReplyRecord`, `{ record(r):
+     StoreWrite<ReplyRecorded> }`, adapted in `server/src/server.ts` over the private store's `recordReply`. A refusal
+     answers 502 with the store's word (`write-failed`, `journal-unwritable`, `journal-unreadable`, `not-open`).
+3. **The private store's one reply writer**, `OperatorModelStore.recordReply`. Inside its `tx()`:
+   - it looks up `(sessionId, entryUuid)`: a row answers it with `replay: true` and writes nothing, and a row whose
+     `sha256` differs refuses `refused` (detail `entry-reused`);
+   - otherwise it cuts the text with `capMessageText` (the one cutter: the same cap and the same mark as a message);
+   - it asks `nextReplyId`: the larger of the store's highest reply id and the privacy journal's, plus one, so a reply
+     id is never used twice across a wipe and a restore, as a message id is not (§9.4 rule 12);
+   - it appends the privacy journal's `privacy-reply-issued` record, `{ kind, id, at }`, which holds no words;
+   - it reads this session's operator messages picked up after its previous reply's `at` and at or before this one's,
+     and asks `replyLinks` (L1, pure) for `inReplyTo`, the newest of their ids or null, and `offRecord`, true when any
+     of them is off the record: a reply to a message sent off the record is off the record too (§9.4 rule 9);
+   - it inserts the row.
+4. **The response row.** After the record commits, the arm inserts the reply's row of `operator_responses` in
+   `coord.db` through `insertReplyResponse(db, replyId, stamp, at)`, a new insert beside the responses piece's others
+   in `server/src/responses/responsesStore.ts`. It is idempotent on `operator_responses_one_reply`, so a replay inserts
+   the row when it is missing and changes nothing when it stands. The two files share no transaction (the index's
+   question 31). The arm answers 200 `{ ok: true, replyId, replay }`. A failed response insert is logged and still
+   answers 200, because the record holds, and the boot pass inserts the row.
+5. **The boot pass** (`server/src/operatorModel/bootPass.ts`) gains one arm: each recorded reply younger than the
+   response window that has no response row gets one, through the same insert. So a crash between the two commits loses
+   no row, as I8 re-derives across the two files.
+
+**Why a table of its own** (slug `replies-are-their-own-table`). `operator_messages` holds the operator's words, and
+each of its readers (the inbox, `messages`, the citing doors and `said-not-operator`) reads a row as the operator's. A
+reply among them would let the Overlord's text read as the operator's words, which H7 forbids.
+
+**The schema** (the private store's next migration, after the chat's `offRecord` migration):
+
+```sql
+CREATE TABLE overlord_replies (
+  id         INTEGER PRIMARY KEY,    -- issued by nextReplyId, never AUTOINCREMENT
+  at         INTEGER NOT NULL,       -- wall ms, the server's clock at the record
+  turnAt     INTEGER NOT NULL,       -- the hook's clock at the turn's end
+  sessionId  TEXT NOT NULL,          -- the designated session that wrote it
+  term       INTEGER NOT NULL,       -- the designation's term at the record
+  entryUuid  TEXT NOT NULL,          -- the turn's last assistant entry
+  sha256     TEXT NOT NULL,          -- of `text` as stored
+  text       TEXT NOT NULL,          -- masked, then cut with the mark
+  cut        INTEGER NOT NULL CHECK (cut IN (0, 1)),
+  inReplyTo  INTEGER,                -- the newest operator message the turn answered, or null
+  offRecord  INTEGER NOT NULL CHECK (offRecord IN (0, 1))
+);
+CREATE UNIQUE INDEX overlord_replies_entry ON overlord_replies (sessionId, entryUuid);
+CREATE INDEX overlord_replies_at ON overlord_replies (at);
+```
+
+**Files:**
+- Modify: `shared/operatorMessages.ts` (`OverlordReplyRow`, `REPLY_REPORT_MAX_BYTES`, `replyLinks`)
+- Modify: `server/src/operatorModel/` (the migration, `recordReply`, `nextReplyId`, the readers `repliesPage` and
+  `repliesSince`, and the boot pass's reply arm)
+- Modify: `server/src/operatorModel/privacyJournal.ts` (`privacy-reply-issued`, and the highest reply id read at boot)
+- Modify: `shared/continuity-reports.ts` (`HOOK_REPORT_KIND_MAP` gains `reply`, and `HookReport` its arm) and
+  `server/src/continuity/hookReports.ts` (`hookReportOf`'s `reply` arm: a uuid, an integer time, a string of at most
+  `REPLY_REPORT_MAX_BYTES`, a boolean and an optional count)
+- Modify: `server/src/continuity/routes.ts` (the `reply` arm and the `ReplyRecord` port)
+- Modify: `server/src/server.ts` (the adapter over `recordReply` and `insertReplyResponse`, about +4)
+- Modify: `server/src/responses/responsesStore.ts` (`insertReplyResponse`) and `shared/responses.ts` (the `reply`
+  kind's words, "a chat reply of the Overlord, recorded when its turn ends")
+- Modify: `ccd/lib/transcript.jq` (`turn_reply`) and `ccd/session-hook.sh` (the `Stop` arm and the spool, about +14)
+- Modify: `shared/overlordChat.ts` (`ChatEntry` gains `{ kind: 'reply'; row: OverlordReplyRow; handled: 'row' |
+  'no-row' }`; `ChatThread` gains `replies: ChatPart<{ more: boolean }>`; `readChatThread` reads the arm),
+  `server/src/coord/overlordChat.ts` (`composeChat` places replies by `at`, a reply after a message at the same
+  millisecond) and the thread door (it reads `repliesPage` beside `messagesPage`, and which shown replies have a
+  response row through a text-free reader beside `responsesFor`; the read-ledger line counts both)
+- Modify: `pwa/src/overlord/chatWords.ts` (`mergeLive`: a recorded reply whose `entryUuid` is a live transcript entry
+  gives that row its reply id and is not drawn twice; `historyItemsToChat` does the same on an earlier page)
+- Modify: `pwa/src/overlord/OverlordChat.tsx` (a recorded reply on screen, at least half visible for one second while
+  the document is visible, posts one `opened` receipt for it, once per reply per page load)
 - Modify: `pwa/src/overlord/useOverlordChat.ts` (the receipt batch, posted through the responses piece's client call,
   at most one request a second)
 - Modify: the reply bubble (the "I handled this elsewhere" control, through responses B's handled door, drawn only on
-  a reply that has a response row)
-- Test: `pwa/test/overlord-chat-receipts.test.tsx`, `pwa/browser/overlord-chat.browser.test.ts` (the control at every
-  width), and the responses piece's receipts door suite (a console `opened` for a reply is kept)
+  a reply whose `handled` is `row`)
+- Modify: `pwa/src/lib/api.ts` (about +4, only if the responses piece's receipt call does not already serve the
+  console)
+- Modify: `server/test/single-definition/writers-map.test.ts` (`overlord_replies: [recordReply]` in the private
+  store's describe), `server/test/chained-journal-formats.test.ts#FORMATS` (the new kind, disjoint from every other
+  format's), and `server/test/sim/mutation-floors.test.ts` with `mutation-floors.json` (`replyLinks`, `nextReplyId`
+  and `hookReportOf`'s new arm)
+- Test: `server/test/operator-model-replies.test.ts` (new), `server/test/continuity-report-route.test.ts`,
+  `server/test/continuity-hook-reports.test.ts`, `server/test/session-hook-door-reports.test.ts`,
+  `server/test/ccd-transcript-turn-reply.test.ts` (new), the responses store suite,
+  `server/test/overlord-chat-compose.test.ts`, `pwa/test/overlord-chat-receipts.test.tsx` (new),
+  `pwa/test/overlord-chat-words.test.ts`, and `pwa/browser/overlord-chat.browser.test.ts` (the control at every
+  width)
 
-**Files that depend on the answer:**
-- **(a) recorded at the turn:** the reply rows' writer (in the piece the answer names) records the reply in the
-  private store; the reply's `operator_responses` row in `coord.db` is inserted after that commit, and the boot pass
-  inserts it for a recorded reply that has none (question 8); `ChatEntry` gains a `reply` arm read from the record; the
-  receipt names `{ kind: 'reply', id }`.
-- **(b) re-read at checkpoint time:** the reply's key is its transcript entry's uuid; `ResponseRef`'s reply arm takes
-  that key, in a change to `shared/responses.ts` and its reader in the same pull request; the row's insert is made
-  where the answer puts the checkpoint's read.
-
-- [ ] **Step 1: Failing tests** (common): a reply scrolled into view posts one `opened`; a reply scrolled past in
-  under a second posts none; a hidden document posts none; the same reply twice posts one; a failed post changes
-  nothing on screen; the handled control appears only on a reply with a row and calls the handled door once.
-- [ ] **Step 2 to Step 4:** Red, implement, green, as Task 4, with the responses suites.
-- [ ] **Step 5: Mutation.** Post on render instead of on view (red); post twice for one reply (red). Revert each.
-- [ ] **Step 6: Commit.** `feat(console): the place's opened receipts and the handled control for the Overlord's replies (Overlord W1)`
+- [ ] **Step 1: Measure, then write the failing tests.** Measure whether the pinned build's `Stop` event carries the
+  turn's last assistant text, on a fixture transcript, and write the answer in the pull request. Then:
+  - `ccd-transcript-turn-reply.test.ts` (fixture transcripts, no live `$HOME`): a turn of one text entry; a turn of
+    text, a tool call and more text joins the two texts with one blank line; thinking blocks, tool input and tool output
+    are left out; a turn with no text answers nothing; a sidechain entry is left out; the previous turn's text is never
+    taken; the key is the last assistant entry's uuid; a tail past `REPLY_READ_MAX_BYTES` reads the turn inside it.
+  - `session-hook-door-reports.test.ts` (a fixture HOME, a recording `ccrc-api` stub): a main `Stop` in a session with
+    a door sends one `reply` report; a `SubagentStop` and a session without a door send none; a text past
+    `REPLY_REPORT_MAX_BYTES` is cut at a code point with `truncated: true`; a stub answering 502 spools the body, and
+    the next `Stop` resends it before its own, with the same `entryUuid`; a ninth spooled body drops the oldest and the
+    next body carries `droppedBefore: 1`; a hanging stub is cut at the bound and the `Stop` goes on.
+  - `continuity-hook-reports.test.ts`: `hookReportOf` accepts a good `reply` body, and refuses an `entryUuid` that is
+    not a uuid, a text one byte past the bound, a non-integer `turnAt` and a negative `droppedBefore`.
+  - `continuity-report-route.test.ts` (fake ports): a `reply` from the designated session records once and inserts
+    its response row; a second report of the same entry answers `replay: true` and records nothing new; a session that
+    is not designated, or designated at an older term, answers 403 `not-the-overlord` and records nothing; an
+    unreadable designation answers 502; a text carrying a fixture shaped like the masker's pattern is stored masked; a
+    failed response insert still answers 200.
+  - `operator-model-replies.test.ts` (a fixture store): `recordReply` issues ids above the journal's highest after a
+    restore that lowered the store's; the same key twice is a replay, and a different hash under the same key refuses
+    `entry-reused`; `inReplyTo` and `offRecord` follow the messages picked up since the previous reply, an
+    off-the-record one among them making the reply off the record; a text over the cap is cut with the mark; a closed
+    store answers `not-open`; the boot arm inserts a response row for a recorded reply that has none and leaves a
+    standing one alone.
+  - The thread door and `composeChat`: replies sit by `at` among the messages, a reply after a message at the same
+    millisecond; an unreadable reply page is its own `unmeasured` part, never an empty one; `handled` reads `row` only
+    for a reply with a response row.
+  - `overlord-chat-receipts.test.tsx` and `overlord-chat-words.test.ts`: a recorded reply scrolled into view posts one
+    `opened` for `{ kind: 'reply', id }`; a reply scrolled past in under a second posts none; a hidden document posts
+    none; the same reply twice posts one; a failed post changes nothing on screen; a recorded reply whose entry is in
+    the live transcript is drawn once; the handled control appears only on a reply with a row and calls the handled door
+    once.
+- [ ] **Step 2: Run** each suite above in turn, through `ccrc test -- ./node_modules/.bin/vitest run test/<file>` from
+  `server/` and `pwa/`. Red.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run** the suites of Step 2, the responses suites, the private store's suites, `writers-map.test.ts`,
+  `chained-journal-formats.test.ts`, every `session-hook*` suite, `test/rings/*.test.ts`,
+  `test/single-definition/*.test.ts`, pwa's whole suite and its `tsc`, the browser suite in full, the three `tsc` runs,
+  and `growth-check.test.ts` armed for `server/src/server.ts`, `ccd/session-hook.sh` and `pwa/src/lib/api.ts`. Green.
+- [ ] **Step 5: Mutation.** One per guard, each red, each reverted:
+  - drop the designation check from the `reply` arm: the not-designated case records;
+  - skip the egress mask: the masked-text case reds;
+  - skip `recordReply`'s key lookup: the second report records twice;
+  - let `nextReplyId` ignore the journal (through `mutation-run.py`): the restore case reuses an id;
+  - let `replyLinks` ignore `offRecord` (through `mutation-run.py`): the off-the-record case reds;
+  - drop `hookReportOf`'s length bound on `reply`: the one-byte-over case is accepted;
+  - let `turn_reply` keep thinking blocks, or take the previous turn's text: its cases red;
+  - let the hook skip the spool on a 502: the resend case reds;
+  - skip the boot arm: the crash-between case has no response row;
+  - in the PWA: post on render instead of on view (red); post twice for one reply (red); draw a recorded reply beside
+    its live row (red).
+  `replyLinks`, `nextReplyId` and `hookReportOf`'s `reply` arm join `MUTANT_SETS` with their floors.
+- [ ] **Step 6: Commit.** `feat(overlord): each reply recorded in the private store when its turn ends, with the place's opened receipts and the handled control (Overlord W1)`
 
 ## Rollback and older builds
 
@@ -985,8 +1161,15 @@ numbers.
   on every refusal in the chat, through one opt-in decider, with a send key against duplicates (question 5).
 - **`pane-text-is-never-the-operators-words`**: the chat draws every transcript user turn by its origin, and never as
   the operator's words (question 6).
-- **`chat-ships-in-two-prs`**: the index sizes the chat at one pull request. The reply part is a second, after item 327
-  (question 7).
+- **`chat-ships-in-two-prs`**: the index sizes the chat at one pull request. The reply part is a second, because it
+  needs door process B1's report door and the responses pieces, which PR A does not (question 7).
+- **`replies-are-their-own-table`**: the spec records the replies in the private store (item 327) without naming a
+  table. They are `overlord_replies`, apart from `operator_messages`, so no reader of the operator's words can read a
+  reply as theirs (Task 5).
+- **`a-reply-is-a-turns-text`**: a reply is the text of one main-thread turn, keyed by its last assistant entry, and a
+  turn with no text records nothing (Task 5).
+- **`reply-report-spools`**: the reply report is the one hook report that spools and resends, because nothing later
+  heals a lost reply (Task 5).
 - **`chat-read-ledger-doors`**: two read-ledger door words, two ceiling rows and a counter by caller, so the console
   and the Overlord never spend each other's ceilings (question 9).
 - **`generations-keyed-by-identity-and-term`**: a generation is named by `(term, n)` of the identity `overlord`, and
@@ -1010,18 +1193,20 @@ numbers.
   generations by identity and term (F6); dividers at `startReportedAt` (F7); readiness through `readinessHistory` (F8);
   pane turns drawn by their origin (F9); a send that names its term, refused `stale-designation` when the designation
   moved (F10, the private store's open question 18); and the minors and nits as the report gave them.
+- The operator's answer to item 327 (2026-11-16): "Record each reply in the private store when the turn ends" (question
+  8, index question 10). Task 5 builds it.
 
-**Waiting on the operator:**
-- Question 8 (index question 10, item 327): where the Overlord's replies are recorded. It blocks Task 5 (PR B) only.
+**Waiting on the operator:** nothing.
 
 **Waiting on the coordinator** (open questions with recommendations): 1, 2, 4, 7, 11 and 13.
 
 **What the index should change:**
-- Table W1, the chat's row: "2 PRs, 5 tasks: A (Tasks 1 to 4) and B (Task 5, the replies, **waits on item**)". Needs
-  first, PR A: home B, private store B, designation A, gates A, the inbox, board and history **B1** (not B2: the chat
-  reads the history door's reader, not the board), readiness, the vocabulary, and W1a's renewal hand-offs. PR B: PR A,
-  responses A and B, and item 327. Figure W1: the chat's edge from board and history comes from B1, and edges join from
-  gates A, the inbox, readiness and the vocabulary; responses A's edge moves to PR B.
+- Table W1, the chat's row: "2 PRs, 5 tasks: A (Tasks 1 to 4) and B (Task 5, the replies, after item 327's answer)".
+  Needs first, PR A: home B, private store B, designation A, gates A, the inbox, board and history **B1** (not B2: the
+  chat reads the history door's reader, not the board), readiness, the vocabulary, and W1a's renewal hand-offs. PR B: PR
+  A, responses A and B, and door process B1. Figure W1: the chat's edge from board and history comes from B1, and edges
+  join from gates A, the inbox, readiness and the vocabulary; responses A's edge moves to PR B, and door process B1's
+  joins it.
 - The private store's row: PR B also ships the send key and `promptTargetVerdict` (its open questions 17 and 18).
 - The readiness row: its prune keeps the newest row (question 3).
 - "Where lanes meet": lane F edits other lanes' files in additive spots:
@@ -1032,12 +1217,23 @@ numbers.
     operator mode (`server/src/coord/overlordRead.ts`), `servedReadsSince`'s caller, and the census lists of
     `operator-message-readers.test.ts`;
   - lane C's continuity store: `generationsOf` (`server/src/continuity/continuityStore.ts`);
-  - lane F and W1a share `pwa/src/session/Composer.tsx`, whose new props are opt-in.
+  - lane F and W1a share `pwa/src/session/Composer.tsx`, whose new props are opt-in;
+  - PR B, in lane D's private store: the `overlord_replies` migration, `recordReply`, `nextReplyId`, `repliesPage`,
+    `repliesSince`, the privacy journal's `privacy-reply-issued` kind and the boot pass's reply arm;
+  - PR B, in door process B1's files: the report kind `reply` (`shared/continuity-reports.ts`,
+    `server/src/continuity/hookReports.ts`), the report door's `reply` arm (`server/src/continuity/routes.ts`), and the
+    hook's `Stop` arm with its spool (`ccd/session-hook.sh`, `ccd/lib/transcript.jq`);
+  - PR B, in the responses piece's files: `insertReplyResponse` (`server/src/responses/responsesStore.ts`) and the
+    `reply` kind's words (`shared/responses.ts`).
+- The private store's row: the Overlord's replies are recorded by chat PR B's `recordReply`, in the private store.
 - `overlordRoutes.ts`' handler list gains the chat's two operator reads.
-- Index question 10's text: the only chat task it holds is Task 5.
+- Index question 10 reads answered by item 327, and its writer is Task 5 (PR B).
 
 **Spec fixes for the spec-fixes run:**
 - Table 9.1a and Table 11.1a: `operator_messages` gains `offRecord` and `sendKey`, written by the prompt route's insert.
+- Item 327's answer (the reply record in the private store, written when the turn ends) is in the spec from the pull
+  request that recorded the operator's answers; the table's name, `overlord_replies`, and the report kind `reply` are
+  this plan's (Task 5).
 - §4: the console reads earlier generations through an operator door that calls the history reader; the server's line
   is derived from the readiness rows; the composer keeps the draft on every refusal and sends with a key and a term;
   pane text is drawn as pane text.
@@ -1050,4 +1246,3 @@ numbers.
   citing request ids as live state.
 - W3: "I command" opening the open proposals.
 - Paging earlier generations by the history door's cursor, once it ships.
-- The reply rows, the place's `opened` receipts and the reply's control (Task 5), after item 327.
