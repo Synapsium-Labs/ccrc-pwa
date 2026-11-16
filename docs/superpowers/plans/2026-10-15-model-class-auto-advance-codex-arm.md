@@ -18617,3 +18617,7 @@ Where: wave R2 (Tasks 14 and 15), and runbook step 4. Ruled by the programme's o
 ### D-8690 — #1441 closes with W4's sheet, and its other asks move out
 
 Where: wave R4 (Task 20), and #1441. Ruled by the programme's operator on 2026-11-16. #1441 is narrowed to this programme's Models sheet and closes with it. Its acceptance line "values stored on the server, read by ccd" is dropped: it contradicts D4, under which holds live on the fleet box. The Fable share ceiling and per-lane effort move to a separate issue outside this programme. Cost if wrong: the Fable ceiling waits for its own programme.
+
+### D-8691 — W3's four doctor checks grow ccd/ccrc-doctor-checks past its per-PR limit, by the operator's waiver
+
+Where: wave R2 (Task 15), `ccd/ccrc-doctor-checks` and `server/test/growth-waivers/D-8691-ccd-ccrc-doctor-checks.json`. Ruled by the programme's operator on 2026-11-16. `ccd/ccrc-doctor-checks` is a listed file with a per-PR limit of 40 net code lines, and Task 15's block (the four `_check_model-…` functions, their one bounded `advance-health` read, the shared report and the four remedy builders) measures +219 net code lines against the merge-base under the armed growth check. The block stays in this file because `cmd_doctor` sources only this table, and splitting it into a sourced library would add a second loader for four checks. The waiver's `maxDelta` is the measured 219. Cost if wrong: the doctor file grows by one wave's block past its per-PR limit once, by name, rather than through a new file.
