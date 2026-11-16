@@ -13,7 +13,10 @@
   call record's door, and one `ccrc-api` verb. PR B (2 tasks) clears edges on measurement, through the done-test
   vocabulary's one reader, once done tests and forecasts A have landed.
 - **Live at merge** (the index's question 20, accepted). The door needs only the box token, attribution and ownership,
-  as D-8126's call record does. No capability word gates it, and it changes nothing a running session reads.
+  as D-8126's call record does. No capability word gates it, and it changes nothing a running session reads. A
+  programme's history starts only when its coordinator begins stating what is left, so the door goes live early. As at
+  the call record's door, every text and the wave range are bounded, and every text is masked in and out (the index
+  review's F11).
 - **What the reviewer checks.** One writer per table and per column group; the door's order copied from the call record's
   door; an edge that the server cannot measure stays open and says so; the census sites of a new lane source, all in
   PR A.
@@ -97,7 +100,11 @@ every recommendation unless the coordinator rules otherwise.
      `claimsProgramme`, else `not-your-programme`. The door goes beside `server/src/coord/coordCallsRoute.ts`.
    - **Q13** makes the done-tests piece the owner of the predicate vocabulary and its one reader. PR B clears edges
      through that reader, so PR B lands after done tests.
-   - **Q20** makes the door live at merge, gated only by the box token and ownership.
+   - **Q20** makes the door live at merge, gated only by the box token and ownership. The index review (run 2253,
+     F11) accepted it with two additions, both built here: every text and the wave range carry a length bound, and
+     every text is masked on the way in and on the way out, in the pattern of `coordCalls.ts`' `CALL_WHY_MAX` and
+     `callViewOf`. Its reason, reworded by that review: a programme's remaining-work history starts only when its
+     coordinator begins stating it, so the door is live before the Overlord exists.
    - **Q23** lets PR A be built before W1 finishes. PR A reads nothing W1 has not merged.
 2. **An edge's target is one of three shapes, each a Table 5.5a word** (slug `edge-targets-are-done-test-words`). The
    spec says the server clears an edge "with the done test's vocabulary" and does not say what an edge names. Done
@@ -397,14 +404,16 @@ It never updates a statement and never changes an edge's state.
 **The reads.** `remainingOf(db, program, limit)` answers the newest statements, newest first. `openEdgesOf(db,
 programs)` answers every edge whose state is not `met`, for the listed programmes. Both read `kind` and `state` through
 their guards: an unknown `kind` row is carried with `kindUnreadable: true` and never dropped, and an unknown state reads
-as `open` with `stateUnreadable: true`.
+as `open` with `stateUnreadable: true`. Both mask `reason` and `why` again as they read them (`redactCommand`, as
+`coordCalls.ts#callViewOf` does), so a text stored by an older mask is served through today's.
 
 - [ ] **Step 1: Failing tests** (`test/programme-facts-store.test.ts`, an in-memory `coord.db`): a fresh database has
   both tables and no rows; a statement with two edges writes three rows in one transaction and answers both as
   `added`; the same edge in a later statement is answered `kept` and not duplicated; an edge a later statement omits
   stays open; a throw inside the transaction (a planted bad `program`) leaves no row in either table; the reads answer
   newest first and carry the guard flags for a row written by hand with `kind = 'needs-x'` and `state = 'paused'`; the
-  canonical target form makes `{pr, repo, predicate}` and `{predicate, repo, pr}` one edge.
+  canonical target form makes `{pr, repo, predicate}` and `{predicate, repo, pr}` one edge; a `reason` and a `why`
+  written by hand with a token-shaped string read back masked.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement** the migration, the store file and the delegates.
 - [ ] **Step 4: Run** this suite, `test/coord-db.test.ts`, `test/run-close-switch.test.ts`,
@@ -559,7 +568,8 @@ the numbers.
 ## 9. What the index should change
 
 - **The "Remaining work and edges" row:** B's "needs first" becomes "PR A, done tests, forecasts A" (question 5).
-  Figure W2 gains `FCA --> RWB`.
+  Figure W2 gains `FCA --> RWB`, and `RWB --> RV1`: remaining work B feeds `overlord-route-v1` (the index review,
+  F12.1).
 - **"Where lanes meet", `ccd/ccrc-api` and `DOOR_TOOLS`:** remaining work A adds a `ccrc-api` row only. The door is a
   coordinator's, so it takes no `DOOR_TOOLS` row, and `ccd/door-process.mjs` is not on `main` yet.
 - **"Where lanes meet", `LANE_SCHEDULE`:** the forecast lane's row also carries remaining work B's edge arm.

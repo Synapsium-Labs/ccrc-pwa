@@ -11,9 +11,10 @@
 - **Two pull requests in lane P.** PR A (4 tasks): `forecastProgramme`, the sealed forecasts, their scoring and
   calibration, and the forecast lane. It needs remaining work A. PR B (4 tasks): `programmeHealth`, the health words in
   the trigger table, health changes as rows, what a run cost, and `portfolioFor`'s W2 measures. It needs PR A and
-  portfolio B (#2904).
-- **Live at merge** (the index's question 20, accepted). The forecast lane starts sealing at PR A's merge, so the
-  forecast has a scored history before the Overlord reads it.
+  portfolio B (#2904), which is open and not queued, so PR B waits on its merge.
+- **Live at merge** (the index's question 20, accepted). The forecast lane starts sealing at PR A's merge. A forecast
+  needs remaining work, whose history starts only when coordinators begin stating it, so the seals start as early as
+  they can, and are scored before the Overlord reads them.
 - **One measured gap, for the coordinator.** The index's question 22 reads spend from "what the usage sweep already
   measures, … no new writer". The sweep holds only each live session's newest reading, in memory, so a closed wave's
   spend is gone once its session ends. This plan recommends recording each run's spend once, at its close, in a row the
@@ -109,7 +110,8 @@ is implementation or tech direction.
    - **Q22.** "A request's spend is the window use, by model class, of the sessions of the runs that carry its
      `requestId` … A programme's spend is the same over its runs." This plan builds the programme half; home requests A
      builds the request half on the same reader. The measured gap is question 10.
-   - **Q23.** PR A is built once remaining work A merges; PR B once PR A and portfolio B (#2904) merge.
+   - **Q23.** PR A is built once remaining work A merges; PR B once PR A and portfolio B (#2904) merge. The index
+     review (run 2253, F12.2) measured #2904 open and not queued, so PR B waits on its merge, not on a queue slot.
 2. **A forecast samples wave lead time, close to close** (slug `forecast-samples-wave-lead`). The spec says "a Monte
    Carlo over past wave cycle times". `portfolioFor`'s cycle time is a wave's dispatch to its close. That leaves out the
    time between waves: review, the coordinator's turn, waits on the operator. A forecast built from it would be early
@@ -207,7 +209,8 @@ Measured on `main` at `9cf263d44` (2026-11-16).
   ended in 28 days, hours waiting on the operator, and what blocks it (`blocking`: items shown to the operator and live
   asks). It has no spend, no abandon rate, no edges, no dates and no health. Percentiles come from
   `server/src/perf/stats.ts#percentile`.
-- **Portfolio B (#2904) is in the merge queue.** It adds `PortfolioRun.rebuilt` and `PortfolioEntry.oldestOpenUnmeasured`
+- **Portfolio B (#2904) is open, not in the merge queue** (measured with `gh pr view 2904`: `state` OPEN, `mergedAt`
+  null, no auto-merge). It adds `PortfolioRun.rebuilt` and `PortfolioEntry.oldestOpenUnmeasured`
   and edits `portfolio.ts`' entry builder around the cycle and oldest-wave lines, where PR B edits too.
 - **The runs.** `runs` carries `program`, `wave`, `kind`, `state`, `openedAt`, `dispatchedAt`, `closedAt`,
   `closeDetail` and `sessionId` ("null until dispatch mints the workspace"). There is no `abandoned` state: an abandon
@@ -474,7 +477,8 @@ PR B starts here. It needs PR A and portfolio B (#2904) on `main`.
   the limits of Task 6)
 - Modify: `shared/practice-triggers.ts` (`TRIGGER_KIND_TABLE` gains `health`; `TriggerSignature` gains `{ kind:
   'health'; key: ProgrammeHealthWord }`; `TRIGGER_TABLE` spreads the words; `parseSignature` gains its branch)
-- Modify: `server/test/sim/vocabularySets.ts` (the expected kinds and rows), `server/test/practice-triggers.test.ts`
+- Modify: `server/test/sim/vocabularySets.ts` (its `TRIGGER_KINDS` pin, `['stall-arm', 'refusal']` today, moves with
+  the health kind, and the expected rows; the index review's lens), `server/test/practice-triggers.test.ts`
 - Test: `server/test/single-definition/vocabularies.test.ts`
 
 The words, worst first, are §5.6's order: `blocked-on-you`, `slipping`, `stalled`, `aging`, `churning`,
