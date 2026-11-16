@@ -8,12 +8,25 @@ import { DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
 export const MOCKUP_MAX_DEPTH = 256;
 
 /** The most start and end tags the pre-scan admits (base 5.6.2). Re-derived by measurement after
- *  `MOCKUP_MAX_OPEN_FORMATTING` is fixed (base 5.6.2, decision 9; completion plan Task 5). */
-export const MOCKUP_MAX_TAGS = 20_000;
+ *  `MOCKUP_MAX_OPEN_FORMATTING` was fixed (base 5.6.2, decision 9; completion plan Task 5, C1): at the old 20 000 the
+ *  worst admitted shape, misnested formatting (`<b><div></b>` repeated), parsed in a median 430 ms in Chromium 156 on a
+ *  loaded box, so the limit is lowered for headroom against the 1 000 ms budget. This repository's committed HTML docs
+ *  peak at 5 394 tags (`browser/mockup-parse.browser.test.ts` gates every worst shape). */
+export const MOCKUP_MAX_TAGS = 15_000;
 
 /** The most formatting elements the pre-scan admits open at once (base 5.6.2, amended 2026-10-13: a multiset that only
  *  each element's own end tag decrements). Fixed by measurement (completion plan Task 5). */
 export const MOCKUP_MAX_OPEN_FORMATTING = 32;
+
+/** The most attributes any one start tag may carry, inclusive (D-8671; the exact attribute tokenizer counts every attribute
+ *  TOKEN, a repeated name included, though the parser keeps the first of a duplicated name). The parser copies every attribute of
+ *  a formatting element into each clone it makes (reconstruction, adoption agency), so the cost is attributes x clones: a tag with
+ *  150 000 attributes and 4 000 paragraphs took 19.1 s in Chromium 156. The most attributes on any start tag in this
+ *  repository's committed HTML docs (measured with the exact tokenizer): `design/overlord/reference.html` 7,
+ *  `2026-10-07-box-token-lifecycle-design.html` 2, `2026-10-11-design-system-audit.html` 3, `2026-11-04-runs-screen-rebuild-frames.html` 6
+ *  (over the 2 MiB cap, so only a download), `2026-11-06-chat-reading-mockup.html` 4 and `2026-11-06-desk-nav-mockup.html` 5; at 64, with 32 open formatting elements each carrying 64
+ *  and the tag limit's paragraphs, Chromium 156 parsed in a median 358 ms (the adoption-agency variant 40 ms). */
+export const MOCKUP_MAX_ATTRIBUTES = 64;
 
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
 export const MOCKUP_FORMATTING_ELEMENTS: ReadonlySet<string> = new Set([

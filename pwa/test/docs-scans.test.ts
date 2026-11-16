@@ -1390,3 +1390,173 @@ describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bound
     expect(control).toMatch(/class="language-javascript"/);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause C1 (native Docs reader, completion plan Task 5, C1; base spec 2026-10-01 5.6.2 and the DOMParser bullet of
+// M5.16 as ruled for this wave). The HTML parser's entry points sit in ONE file, `src/docs/mockup/parse.ts`, and
+// exactly once there: the native parse cannot be aborted, so the pre-scan is the only guard, and a second way into the
+// parser would be a way round it. Across every `.ts` and `.tsx` file under `pwa/src`, TypeScript's parser finds:
+//   (1) the identifier `DOMParser` in ANY position: `new DOMParser(`, a member name (`window.DOMParser`,
+//       `globalThis.DOMParser`, `self.DOMParser`), a value alias (`const P = DOMParser`), an argument
+//       (`Reflect.construct(DOMParser, [])`), a type reference, an import or a declaration. `Identifier.text` is the
+//       unescaped name, so `new DOMParser()` is the same hit;
+//   (2) a string or no-substitution template whose whole text is `DOMParser` (`globalThis['DOMParser']`,
+//       `Reflect.get(globalThis, 'DOMParser')`);
+//   (3) the member names `parseFromString`, `createHTMLDocument`, `createContextualFragment`, `parseHTMLUnsafe`,
+//       `setHTMLUnsafe` and the Sanitizer API's `parseHTML` and `setHTML`, as an identifier in any position (a
+//       property access, a property name, a method or a variable) or as a string key (`x['setHTMLUnsafe']`).
+// In `src/docs/mockup/parse.ts` the ONLY allowed hits are one `new DOMParser(` whose callee is the bare identifier and
+// one `.parseFromString(` member call; everything else, a second constructor, an alias, a string, is red, and the
+// allowance is that one file by exact path, never a directory (a parser in `src/docs/mockup/prescan.ts` is red).
+// NOT EXHAUSTIVE. Known evasions it does not see: a name built at run time (`'DOM' + 'Parser'`, a template with a
+// substitution); `eval` and `new Function`; a re-export through a file outside `pwa/src`; `Reflect.get` with a key held
+// in a variable; and the writes that parse without these names (`innerHTML`, `outerHTML`, `insertAdjacentHTML` and
+// `document.write`), which this census does not read: the W5h-a clause's note names the same, and its sink clause and
+// Export's M4.EX2 hold those; and an `XMLHttpRequest` with `responseType = 'document'`, which parses a response as HTML
+// through no name this census lists. Review lens 4 reads for them.
+// ---------------------------------------------------------------------------------------------------------------
+
+const PARSER_HOME = 'src/docs/mockup/parse.ts';
+const PARSER_MEMBERS: readonly string[] = [
+  'parseFromString', 'createHTMLDocument', 'createContextualFragment', 'parseHTMLUnsafe', 'setHTMLUnsafe', 'parseHTML', 'setHTML',
+];
+
+/** Every parser entry point in one module, as `<file> <label>`: `new DOMParser(` (a bare-identifier callee), `DOMParser`
+ *  (any other identifier), `'<name>'` (a string or template of exactly that name), `.<member>(` (a member call of one of
+ *  the five names) and `<member>` (the name in any other position). */
+function parserHits(source: string, file: string): string[] {
+  const hits: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n)) {
+      const p = n.parent;
+      if (n.text === 'DOMParser') hits.push(`${file} ${ts.isNewExpression(p) && p.expression === n ? 'new DOMParser(' : 'DOMParser'}`);
+      else if (PARSER_MEMBERS.includes(n.text)) {
+        const call = ts.isPropertyAccessExpression(p) && p.name === n && ts.isCallExpression(p.parent) && p.parent.expression === p;
+        hits.push(`${file} ${call ? `.${n.text}(` : n.text}`);
+      }
+    } else if (isPlainString(n) && (n.text === 'DOMParser' || PARSER_MEMBERS.includes(n.text))) hits.push(`${file} '${n.text}'`);
+    ts.forEachChild(n, visit);
+  };
+  visit(parse(source, file));
+  return hits;
+}
+
+/** The census over a set of sources (path relative to `pwa`, `/` separators): what is left after parse.ts's own
+ *  allowance (the first `new DOMParser(` and the first `.parseFromString(` there), and how much of it was found. */
+function parserCensus(sources: ReadonlyMap<string, string>): { hits: string[]; allowed: number } {
+  const hits: string[] = [];
+  let allowed = 0;
+  const spent = new Set<string>();
+  for (const [file, source] of [...sources].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const hit of parserHits(source, file)) {
+      const label = hit.slice(file.length + 1);
+      if (file === PARSER_HOME && (label === 'new DOMParser(' || label === '.parseFromString(') && !spent.has(label)) {
+        spent.add(label);
+        allowed += 1;
+      } else hits.push(hit);
+    }
+  }
+  return { hits, allowed };
+}
+
+/** Every `.ts` and `.tsx` source under `<base>/src`, by its path relative to `base`. */
+function treeSources(base: string): Map<string, string> {
+  return new Map(sourceFiles(path.join(base, 'src')).map((f) => [path.relative(base, f).split(path.sep).join('/'), readFileSync(f, 'utf8')] as const));
+}
+
+describe('clause C1: the HTML parser has one home, one constructor and one parse call (M5.16, the DOMParser bullet)', { timeout: 30_000 }, () => {
+  const real = treeSources(PWA);
+  /** The real tree with `text` appended to `rel` (created when it is absent). */
+  const planted = (rel: string, text: string): ReadonlyMap<string, string> => new Map([...real, [rel, `${real.get(rel) ?? ''}${text}`]]);
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the real tree has exactly the allowance and no other hit: parse.ts holds one constructor and one parse call', () => {
+    expect(real.size).toBeGreaterThan(100);
+    expect(real.has(PARSER_HOME)).toBe(true);
+    expect(parserCensus(real)).toEqual({ hits: [], allowed: 2 });
+  });
+
+  it('a planted file in a COPY of the tree on disk is found by the same read', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-c1-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, 'src', 'docs', 'DocsLeaf.tsx');
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\nexport const plantedParser = () => new DOMParser();\n`);
+    expect(parserCensus(treeSources(dir)).hits).toEqual(['src/docs/DocsLeaf.tsx new DOMParser(']);
+  });
+
+  const LEAF = 'src/docs/DocsLeaf.tsx';
+  it.each([
+    ['new DOMParser() in another file', 'export const planted = () => new DOMParser();', 'new DOMParser('],
+    ['new window.DOMParser()', 'export const planted = () => new window.DOMParser();', 'DOMParser'],
+    ['new globalThis.DOMParser() and new self.DOMParser()', 'export const planted = () => [new globalThis.DOMParser(), new self.DOMParser()];', 'DOMParser|DOMParser'],
+    ["new globalThis['DOMParser']()", "export const planted = () => new globalThis['DOMParser']();", "'DOMParser'"],
+    ['a template-literal key', 'export const planted = () => new globalThis[`DOMParser`]();', "'DOMParser'"],
+    ['an alias: const P = DOMParser; new P()', 'const P = DOMParser;\nexport const planted = () => new P();', 'DOMParser'],
+    ['Reflect.construct(DOMParser, [])', 'export const planted = () => Reflect.construct(DOMParser, []);', 'DOMParser'],
+    ['the unicode-escaped new \\u0044OMParser()', 'export const planted = () => new \\u0044OMParser();', 'new DOMParser('],
+    ["Reflect.get(globalThis, 'DOMParser')", "export const planted = () => Reflect.get(globalThis, 'DOMParser');", "'DOMParser'"],
+    ['a type reference', 'export type PlantedParser = DOMParser;', 'DOMParser'],
+    ['parseFromString alone', "export const planted = (p: P) => p.parseFromString('', 'text/html');", '.parseFromString('],
+    ['createHTMLDocument alone', "export const planted = () => document.implementation.createHTMLDocument('');", '.createHTMLDocument('],
+    ['createContextualFragment alone', "export const planted = (r: Range) => r.createContextualFragment('');", '.createContextualFragment('],
+    ['parseHTMLUnsafe alone', "export const planted = () => (Document as D).parseHTMLUnsafe('');", '.parseHTMLUnsafe('],
+    ['setHTMLUnsafe alone', "export const planted = (e: Element) => (e as E).setHTMLUnsafe('');", '.setHTMLUnsafe('],
+    ['parseHTML alone (the Sanitizer API)', "export const planted = (e: E) => (e as S).parseHTML('');", '.parseHTML('],
+    ['setHTML alone (the Sanitizer API)', "export const planted = (e: Element) => (e as E).setHTML('');", '.setHTML('],
+    ["a member name as an element-access key: x['setHTMLUnsafe']", "export const planted = (e: E) => e['setHTMLUnsafe']('');", "'setHTMLUnsafe'"],
+    ['a member name as a property name', 'export const planted = { createHTMLDocument: 1 };', 'createHTMLDocument'],
+  ])('planted: %s is red, with its exact hit', (_name, text, labels) => {
+    const expected = labels.split('|').map((l) => `${LEAF} ${l}`).sort();
+    expect(parserCensus(planted(LEAF, `\n${text}\n`)).hits).toEqual(expected);
+  });
+
+  it('planted: the home file with the other extension (parse.tsx) is not the allowance', () => {
+    expect(parserCensus(planted('src/docs/mockup/parse.tsx', 'export const p = () => new DOMParser();\n')).hits)
+      .toEqual(['src/docs/mockup/parse.tsx new DOMParser(']);
+  });
+
+  it('planted: the allowance widened to a directory: a parser in src/docs/mockup/prescan.ts is red', () => {
+    expect(parserCensus(planted('src/docs/mockup/prescan.ts', '\nexport const planted = () => new DOMParser();\n')).hits)
+      .toEqual(['src/docs/mockup/prescan.ts new DOMParser(']);
+  });
+
+  it.each([
+    ['a second new DOMParser()', 'export const second = () => new DOMParser();', 'new DOMParser('],
+    ['an alias', 'const P = DOMParser;\nexport const second = () => new P();', 'DOMParser'],
+    ['a second parseFromString call', "export const second = (p: P) => p.parseFromString('', 'text/html');", '.parseFromString('],
+    ['a string', "export const second = 'DOMParser';", "'DOMParser'"],
+    ['Reflect.construct', 'export const second = () => Reflect.construct(DOMParser, []);', 'DOMParser'],
+    ['another entry point', "export const second = (r: Range) => r.createContextualFragment('');", '.createContextualFragment('],
+  ])('planted in parse.ts itself: %s is red beyond the allowance', (_name, text, label) => {
+    const answer = parserCensus(planted(PARSER_HOME, `\n${text}\n`));
+    expect(answer.hits).toEqual([`${PARSER_HOME} ${label}`]);
+    expect(answer.allowed).toBe(2);
+  });
+
+  it('the allowance is counted, not assumed: a parse.ts with no constructor and no parse call finds none of it', () => {
+    expect(parserCensus(new Map([...real, [PARSER_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 0 });
+  });
+
+  it.each([
+    ['a comment', '// new DOMParser() and parseFromString\nexport const x = 1;'],
+    ['a block comment', '/* DOMParser.parseFromString */\nexport const x = 1;'],
+    ['a string that only mentions it', "export const x = 'a DOMParser here';"],
+    ['a member of another name', "export const x = (p: P) => p.parseFromStrings('') + p.DOMParsers;"],
+    ['the lower-case name', 'export const x = (domParser: D) => domParser;'],
+  ])('does not count %s', (_name, source) => {
+    expect(parserHits(source, 'planted.ts')).toEqual([]);
+  });
+
+  it.each([
+    ['a name built by concatenation', "export const x = globalThis['DOM' + 'Parser'];"],
+    ['a template with a substitution', 'export const x = globalThis[`DOM${"Parser"}`];'],
+    ['eval', "export const x = () => eval('new DOMParser()');"],
+    ['new Function', "export const x = () => new Function('return new DOMParser()');"],
+  ])('known evasion, not seen (the header says not exhaustive): %s', (_name, source) => {
+    expect(parserHits(source, 'planted.ts')).toEqual([]);
+  });
+});
