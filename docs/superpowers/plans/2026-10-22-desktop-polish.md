@@ -3790,8 +3790,9 @@ is labelled measured or inferred in `c36.md`, with the widths, the reproduction 
   measured). D-5995's fail-closed rule and its accepted gaps are unchanged. No window size, no `ccd`, no PWA file.
 - **Tests.** `drawer-mask-screen.test.ts` renders on `@xterm/headless` (a new server dev dependency): Claude-Code-like
   redraws ending on the status row's date leave the screen exactly as the raw stream draws it; a secret-free stream cut
-  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes.
-  Red first on `main`'s masker. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
+  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes;
+  and no byte of a withheld run reaches the screen before it resolves, nor ever when it never resolves (two leak
+  mutants turn it red). Red first on `main`'s masker. `@xterm/headless` is pinned to 6.0.0, the PWA's xterm release. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
 
 - **D-8665** — `drawer-provisional-mark-dropped`: Task C36, issued on 2026-11-16. The drawer's provisional mask, 15
   columns drawn in place of a shorter run and erased with `CUB` and `ECH`, ran past the right edge on tmux's status

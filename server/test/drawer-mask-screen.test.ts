@@ -169,4 +169,31 @@ describe('D-8665 — the drawer\'s mask never moves what the terminal draws', ()
       m.close();
     }
   });
+
+  it('no byte of a withheld run reaches the screen before it resolves, and none ever does when it never resolves', async () => {
+    // Drawn as nothing must stay fail-closed: the run is withheld from its hold's expiry on, through every quiet gap,
+    // and when the drawer is closed with the run still open (it never resolves) nothing of it was ever sent. Each case
+    // writes its run on a row of its own, so the row's text is exactly what reached the screen.
+    const ROW = 20;
+    const QUIET = [1, 6, 12, 13, 50, 1_000, 60_000];
+    const m = fingerprinted();
+    try {
+      // A burst of output that ends inside a run that could be the key: none of the run is shown, at any time.
+      const burst = `${firstPaint()}${at(ROW, 1)}\x1b[m\x1b[2Kkey: ${SECRET.slice(0, 30)}`;
+      for (const quietMs of QUIET) {
+        const rows = await screenOf(throughDrawer(m, [{ text: burst, quietMs }]));
+        expect(rows[ROW - 1], `a burst, ${quietMs} ms quiet`).toBe('key: ');
+      }
+      // Typed one key at a time: the first 19 bytes show (D-5995's accepted gap); not one byte after them, at any time.
+      const typed: Chunk[] = [{ text: `${firstPaint()}${at(ROW, 1)}\x1b[m\x1b[2K> `, quietMs: 40 }];
+      for (const ch of SECRET.slice(0, 30)) typed.push({ text: ch, quietMs: 30 });
+      for (const quietMs of QUIET) {
+        const last = typed.at(-1)!;
+        const rows = await screenOf(throughDrawer(m, [...typed.slice(0, -1), { text: last.text, quietMs }]));
+        expect(rows[ROW - 1], `typed, ${quietMs} ms quiet`).toBe(`> ${SECRET.slice(0, 19)}`);
+      }
+    } finally {
+      m.close();
+    }
+  });
 });
