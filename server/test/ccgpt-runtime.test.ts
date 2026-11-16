@@ -473,6 +473,8 @@ describe.skipIf(!PY)('ccgpt-runtime: the builder\'s decisions, over a scripted r
   // bash hands an async command /dev/null unless it carries a stdin
   // redirection of its OWN. A `< probe.py` on the CALL is not its own, so the
   // probe read nothing and every build failed at `probe` (measured, 68beba7e).
+  // Since D-8658 the arm passes the caller's stdin through; the probe still
+  // binds its own, and this case stays as that call site's regression case.
   // The link farm is this case's PATH: every name the runner's PATH resolves,
   // first spelling wins, except the two deadline binaries.
   it('builds on a PATH with no timeout and no gtimeout, and the probe still reads EXACTLY probe-source\'s bytes', () => {
