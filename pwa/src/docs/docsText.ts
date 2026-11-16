@@ -128,10 +128,11 @@ export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = 
   'bad-ref': "This address's ref is not a branch name Docs can read.",
   'bad-view': "This address's view is not one Docs knows; only view=committed is.",
   'bad-frame': "This address's frame is not one Docs knows; only frame=full is.",
+  'bad-at': "This address's at= is not a full 40- or 64-character lower-case commit id.",
   'bad-escape': 'This address holds a percent-escape that does not decode.',
   'encoded-slash': 'This address hides a slash inside one path segment (%2F).',
   'commit-in-page':
-    'A Docs page address never names a commit; open the page without it, or use a GitHub link for one exact commit.',
+    'A Docs page address names a commit only as at=; open the page without the other key, or use a GitHub link for one exact commit.',
   'unknown-param': 'This address carries a query key Docs pages do not use.',
   'repeated-param': 'This address carries the same query key twice.',
   'reserved-node': 'This address names a fleet node, which Docs does not serve yet.',

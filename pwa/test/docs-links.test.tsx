@@ -178,7 +178,7 @@ describe('docsLocation: the one page-location builder (refinement (q))', () => {
       .toEqual({ kind: 'section', project: 'demo', section: 'plans', ref: { kind: 'bare', name: 'ws/a' } });
     expect(docsLocation(page, { kind: 'path', section: 'plans', path: 'd', dirSlash: true })).toEqual({
       kind: 'path', project: 'demo', section: 'plans', path: 'd', dirSlash: true, ref: { kind: 'bare', name: 'ws/a' },
-      view: 'effective', frame: 'inline',
+      at: null, view: 'effective', frame: 'inline',
     });
     expect(docsPageUrl(docsLocation(page, { kind: 'path', section: 'specs', path: 'a.md', dirSlash: false, view: 'committed' })))
       .toBe('/docs/demo/specs/a.md?ref=ws/a&view=committed');

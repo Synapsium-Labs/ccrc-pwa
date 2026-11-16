@@ -310,7 +310,7 @@ describe('a tree renders through detachUrls and DOC_COMPONENTS (spec 4.10 step 4
     expect(linkOf(tree).properties).not.toHaveProperty('href');
     expect(linkOf(outcome.tree).properties['href']).toBe('../plans/p.md');
     expect(container.querySelector('article a')?.getAttribute('href')).toBe(docsPageUrl({
-      kind: 'path', project: 'demo', section: 'plans', path: 'p.md', dirSlash: false, ref: null, view: 'effective', frame: 'inline',
+      kind: 'path', project: 'demo', section: 'plans', path: 'p.md', dirSlash: false, ref: null, at: null, view: 'effective', frame: 'inline',
     }));
     expect(container.querySelector('img')).toBeNull();
     expect(container.querySelector('.doc-img-refused')).not.toBeNull();

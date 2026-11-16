@@ -133,6 +133,7 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
     case 'path':
       return {
         kind: 'path', project, section: to.section, path: to.path, dirSlash: to.dirSlash, ref,
+        at: null,
         view: to.view ?? 'effective', frame: 'inline',
       };
   }
