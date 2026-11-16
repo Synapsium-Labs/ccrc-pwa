@@ -13,7 +13,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
-import { CCD, makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { parsePoolAnswer } from '../src/poolrule.js';
 import { parsePoolAnswerCases } from './sim/poolSetSets.js';
 
@@ -59,7 +59,7 @@ const plantCrossing = (pool: string, account: string): void => {
 
 const verb = (...args: string[]): { code: number; stdout: string; stderr: string } => {
   const r = spawnSyncGroup('bash', [CCD, 'pool-answer', ...args], {
-    encoding: 'utf8', cwd: h.home, timeout: 30_000, env: h.env(),
+    encoding: 'utf8', cwd: h.home, timeout: 30_000, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }),
   });
   return { code: r.status ?? -1, stdout: String(r.stdout ?? ''), stderr: String(r.stderr ?? '') };
 };

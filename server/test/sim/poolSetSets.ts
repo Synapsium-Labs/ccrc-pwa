@@ -286,7 +286,7 @@ export function parsePoolAnswerCases(m: Pick<PoolRuleServerModule, 'parsePoolAns
       }
     },
     'an extra key, a missing key, a key out of order and a repeated key are unparsed': () => {
-      expect(kind(poolAnswerLine().replace('\n', ' extra=1\n'))).toBe('unparsed');
+      expect(kind(`${poolAnswerLine().slice(0, -1)} extra=1\n`)).toBe('unparsed');
       expect(kind(poolAnswerLine().replace(' crossing=none', ''))).toBe('unparsed');
       expect(kind(poolAnswerLine().replace('verdict=serve pool-side=account', 'pool-side=account verdict=serve'))).toBe('unparsed');
       expect(kind(poolAnswerLine().replace('account=lane-a', 'crossing=none'))).toBe('unparsed');
