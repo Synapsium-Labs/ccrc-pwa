@@ -313,7 +313,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'claim_collisions', 'programme_pairs'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -409,6 +409,11 @@ describe(TABLES_PIN, () => {
       operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       response_receipts: ['server/src/coord/responsesStore.ts#insertReceipt'],
       response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
+      // Overlaps and goal conflicts (Overlord W2, plan w2-overlaps.md Task 3): a refused claim's record, prune included, written
+      // only after the claim's own transaction committed; the pairs' rows by the arm's apply, and their goals stamps by the one
+      // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
+      claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
+      programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
     });
   });
 
