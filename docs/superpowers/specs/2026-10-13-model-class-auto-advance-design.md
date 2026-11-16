@@ -1,6 +1,6 @@
 # Model classes follow new releases automatically
 
-**Spec** · 2026-10-13 · Status: Accepted 2026-10-15 · Owner: ccrc · Linear: none · Related:
+**Spec** · 2026-10-13 · Status: Accepted 2026-10-15, amended 2026-11-16 · Owner: ccrc · Linear: none · Related:
 `docs/superpowers/specs/2026-09-08-model-class-registry-design.md` (amended here),
 `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`
 
@@ -11,7 +11,8 @@ Today a lane's model classes (`haiku`, `sonnet`, `opus`, `fable`) move only when
 provider ships a newer one. This spec makes the hourly `ccrc models refresh` move each class to the newest model
 of its own family on its own: it sends one canary request through the lane first, keeps the previous pin, and
 honours a per-class hold. Anthropic lanes already launch on the newest model, so for them the same step derives
-what ccrc keeps by hand and moves running sessions. The operator approved the four design parts in
+what ccrc keeps by hand and moves running sessions (narrowed on 2026-11-16, provisional until A0: §2.5's note).
+The operator approved the four design parts in
 conversation (D1 to D10). Writing them down surfaced gaps, answered here as D11 to D22, and the operator accepted
 the written spec with them on 2026-10-15.
 
@@ -202,6 +203,24 @@ picks the new one up by itself or is relaunched. The typed-`/model` measurement 
 
 ### 2.5 Anthropic lanes
 
+> [!NOTE]
+> **Amended 2026-11-16 (D-8683, provisional until A0).** The arm stays in scope, per the
+> owner's ruling of 2026-10-07: every provider, GPT and Anthropic first, OpenRouter later. But Anthropic homes pin a
+> class alias (`opus`), so Claude Code already resolves the newest model at launch. The arm builds only what the
+> alias does not give:
+> - hold and revert, as a held id in the launch environment (§2.7, D19);
+> - labels from data (D17's Anthropic half);
+> - effort carried across an id change. Today a per-model effort pin is keyed by id, so an alias that resolves to a
+>   new id loses it;
+> - "a model listing no effort levels takes none", in place of the haiku rule (item 3);
+> - readback by id, as part of item 5's move of running sessions (D5 unchanged);
+> - doctor's causes (§2.8).
+>
+> The canary by real use (item 4, D9) stays. There is no Anthropic class registry and no hourly canary like the
+> Codex arm's. A0, a read-only measurement, tests the premise: does the alias always resolve to the newest model the
+> account may use? If A0 refutes it, the arm widens back to this section as written. D18's source is ruled
+> separately (D-8684, §3).
+
 Launching already follows new models here. ccrc routes Anthropic lanes by alias only (`ROUTE_CLASSES` in `ccd/ccd`,
 and its tests), and Claude Code resolves each alias to its family's newest model at launch. What lags behind is
 what ccrc keeps by hand, and the sessions already running.
@@ -250,6 +269,11 @@ The home's `settings.json` belongs to Claude Code, and ccrc never writes it on a
 - An Anthropic lane's label comes from its `aliases.json`.
 - Which source applies is decided by the roster's lane kind, never by a wrapper name.
 
+> [!NOTE]
+> **2026-11-16.** Until the server box's roster is measured (an owner item), R1 keeps the wrapper check as a
+> fallback. This is a temporary exception to D17 set by the 2026-11-16 route, and it ends with the definition of
+> done's item 4 (the plan's "Re-plan of 2026-11-16").
+
 A test turns red when a class moves and its label does not.
 
 ### 2.7 Holds, revert, and the Models panel
@@ -281,8 +305,8 @@ sequenceDiagram
 - **How the panel reads (D14, Agreed).** This changes the approved Section 4, in which the panel reads the class
   files through the agent's existing file read. That read's whitelist does not admit `~/.ccrc/models/`, so instead
   the `models` operation also answers a read-only `show`.
-- **The operation is security-sensitive.** It is a third wire-triggered spawn outside the exec whitelist, after the
-  two that `agent/CLAUDE.md` counts today.
+- **The operation is security-sensitive.** It is the sixth wire-triggered spawn outside the exec whitelist, after the
+  five `agent/CLAUDE.md` counts (re-measured 2026-11-16).
   - Its child is `ccrc models`, in exactly two argv shapes: `ccrc models <id> show` and
     `ccrc models <id> <hold|release|revert> <class>`.
   - The request is validated before any spawn: the id against the models writer's stricter id pattern
@@ -339,7 +363,7 @@ them with the written spec on 2026-10-15; D18 stays open until the measurement i
 | D7 | The registry part | - (approved as presented) | `family`, `hold`, `previous`, `history` per class | Agreed |
 | D8 | The Codex advance part | - (approved as presented) | Choose, canary, re-pin through the writer, move sessions, push | Agreed |
 | D9 | The Anthropic part | - (approved as presented) | Catalogue cache, canary by real use, no `settings.json` writes | Agreed |
-| D10 | Holds, revert, panel, doctor | - (approved as presented) | The panel, an agent `models` op, three named WARNs | Agreed |
+| D10 | Holds, revert, panel, doctor | - (approved as presented) | The panel, an agent `models` op, three named WARNs (a fourth since D15) | Agreed |
 | D11 | Codex sessions need no typed `/model` | Keep the typed step; drop it if the next-turn pickup holds | Drop it only if the plan's first task confirms §2.4. Re-measured 2026-10-16: it did not, so the fallback applies | Agreed |
 | D12 | Shell verbs documented | Taps only in the README; taps plus the verbs | Document the verbs, for a box whose console is down | Agreed |
 | D13 | Where the advance state lives | Inside the registry after a reader release; a sibling file | A sibling file, so a rollback never breaks a lane | Agreed |
@@ -347,11 +371,23 @@ them with the written spec on 2026-10-15; D18 stays open until the measurement i
 | D15 | A WARN for a lane that cannot advance | Report nothing; a named fourth WARN | `model-advance-blocked`, named now | Agreed |
 | D16 | Id grammar | Loose parsing; exactly three parts | Exactly three parts, anything else ignored | Agreed |
 | D17 | Labels from data | Anthropic only; both kinds of lane | Both kinds, chosen by lane kind | Agreed |
-| D18 | The Anthropic source for a home with no cache | A roster grouping; Claude Code's account state | Open until the Anthropic plan's first task measures the cache | Open |
+| D18 | The Anthropic source for a home with no cache | A roster grouping; Claude Code's account state | A roster-declared source, adopted only after A0 measures the cache (D-8684). Open until A1 | Open |
 | D19 | Revert on a running Anthropic session | Next idle point; next relaunch | Next relaunch: the idle point needs a settings write | Agreed |
 | D20 | Delivery order | Both arms in one plan; Codex first, Anthropic second | Codex first, since that is where classes are stale today | Agreed |
-| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise | Agreed |
+| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise. Its Anthropic scope narrowed (D-8683) | Amended |
 | D22 | When a canary counts | Any failure fails; not-ready waits silently | Not-ready waits; only a real refusal fails | Agreed |
+
+> [!NOTE]
+> **Amended 2026-11-16, by the programme's operator.**
+> - **D18 (D-8684).** A home with no cache takes its catalogue from a source the roster declares: one
+>   home's fresh cache serves the homes the roster groups with it. That is adopted only after A0 measures what
+>   writes Claude Code's catalogue cache, when, and whether one organisation means one catalogue, Fable entitlement
+>   included. Until then a home with no source gets no advance, and doctor names it (`model-advance-blocked`). D18
+>   stays Open until A1.
+> - **D21 (D-8683, provisional until A0).** The one writer, its lock and its rules stand. On an
+>   Anthropic lane it carries only what the narrowed arm keeps (§2.5's note): holds, revert and their history, with
+>   no hourly canary-and-commit, because there is no Anthropic class registry to re-pin. If A0 refutes the alias
+>   premise, D21's scope widens back with §2.5.
 
 ## 4. What this amends
 
@@ -362,7 +398,8 @@ Three written statements change once this design ships.
   it joins a class only when the operator assigns one.
 - **README, `ccrc models`:** its "never classed on its own" sentence changes to match. If D12 is agreed, the section
   also gains the three shell verbs.
-- **`agent/CLAUDE.md`:** "two wire-triggered spawns" becomes three, naming the `models` operation and its guards.
+- **`agent/CLAUDE.md`:** its five wire-triggered spawns become six (re-measured 2026-11-16), naming the `models`
+  operation and its guards.
 
 ## 5. How it is tested
 
@@ -401,13 +438,56 @@ Each part ships with tests that go red when its guard is removed, measured, per 
 
 - D1 to D10: the design as presented in conversation on 2026-10-07. Its last part was approved on 2026-10-13.
 - The written spec, with D11 to D17 and D19 to D22, accepted by the operator on 2026-10-15.
-- The stopgap of 2026-10-13: both Codex lanes now pin the newest model of each family, until this ships.
+- The stopgap of 2026-10-13: both Codex lanes pinned the newest model of each family until W2 shipped.
+- 2026-10-19: the operator approved the Codex arm's plan, and gave the go for the typed-`/model` measurement on a
+  throwaway session (§2.4, D11's fallback).
+- Shipped:
+  - #713: this spec and the Codex arm's plan.
+  - #867: W1, the advance file, its one writer, the lane-files lock, and hold, release and revert.
+  - #1099: W2, the hourly advance step, canary first, with one push per move.
+  - #2701 (D-8384): doctor's `models` row names a move that lowered a lane's window, and history records why a class
+    moved.
+  - #2736 (D-8406): the pickers name each class's model from the lane registry, through `GET /api/models/:lane`
+    (a file-read grant departing from D14 under D-8406; retired in R3b, D-8688).
+  - #2761 (D-8564): a lane's window follows the provider's promise, so an unmeasured model no longer halves it.
+- 2026-11-16: the owner delegated this programme's operator role to its coordinator, with merge authority through
+  the merge queue; box-level acts stay the owner's.
+- The rulings of 2026-11-16 (D-8683 to D-8690, issued by the allocator):
+  - D-8683: the Anthropic arm builds only what the alias does not give (§2.5's note).
+    Provisional until A0.
+  - D-8684: D18's source is a roster-declared one, adopted only after A0 measures the cache. D18 stays
+    Open until A1.
+  - D-8685: #2607's options 1 and 2 are overtaken by D-8564. Its residual, a stale catalogue under an
+    unmeasured model, is covered by extending #2701's window notice, not by a fifth WARN.
+  - D-8686: W4 is a delta on #2736. It extends the existing route and its read type, uses the roster's
+    existing kind, and puts the Models sheet in the account sheet.
+  - D-8687: the `models` agent op has a local arm and a remote arm, so local mode answers.
+  - D-8688: #2736's file-read grant is retired in a later PR than the op's, once both boxes run
+    the op.
+  - D-8689: W3's four checks go before `docs-sw`, and W3 merges only after the Codex bridge's check week
+    closes on 2026-11-21.
+  - D-8690: #1441 closes with W4's sheet. The Fable share ceiling and per-lane effort move to a separate
+    issue.
+- Recorded on 2026-11-16, not departures:
+  - The typed-`/model` test keeps the 10-19 go. It runs on a Codex lane at the next real model release, with a watch
+    armed for that moment, as part of the natural-event acceptance. It blocks no wave.
+  - R-O9, the gate before any wave reached the fleet, was replaced by ruling on 2026-10-17, and its replacement
+    criteria were verified met on 2026-10-19.
+  - A stray temporary registry file left in the models directory on 2026-10-23 is reaped by the writer in W3, never
+    by hand.
+- The route to done: R0 (these docs), R1 (picker labels by lane kind), R2 (W3, doctor), R3 (W4a, the `models` op),
+  R3b (the grant retired), R4 (W4b, the POST and the Models sheet), then A0 (Anthropic measurement), A1 (spec
+  amendment and plan), A2 (shared and writer), A3 (ccd) and A4 (PWA). R1, R2, R3 and A0 can run side by side after
+  R0. The plan's "Re-plan of 2026-11-16" section gives each wave's scope, waits and gates, and the definition of
+  done.
 
 ### Waiting on you
 
-- Review of the Codex arm's plan, which comes first (D20).
-- A go for the typed-`/model` measurement on a throwaway session (§2.4, D11's fallback).
-- D18 stays open until the Anthropic arm's plan measures what writes Claude Code's catalogue cache, and when.
+- **The server box's roster.** Both Codex lanes need `exec.kind: "codex"` there (read on the wire as `kind: 'codex'`,
+  `managed: true`; the plan's runbook step 7). It can be
+  measured only through the console.
+- **Any rollback** of a wave that reached the fleet.
+- **Reaping the throwaway workspace** the typed-`/model` test leaves behind, once it has run.
 
 ### Later
 
