@@ -36,8 +36,8 @@ Written against `main` at `9cf263d44` (2026-11-16).
 - **One pull request, three tasks.** Red tests first, then the eleven rows, then the readers that follow the group.
 - **Each word gets one status**, chosen by `shared/refusal.ts`'s family rule. The coordinator approves the eleven at
   this plan's review (question 1).
-- **No console sentence yet.** No W2 door exists until its own piece, which also ships the sentence where an operator
-  sees the word, as W1 did (question 2).
+- **No console sentence** (ruled, F16). No W2 door exists until its own piece, which also ships the sentence where an
+  operator sees the word, as W1 did (question 2).
 - **`W2` leaves the wave map's closed list,** so no W2 word can be deferred again (question 3).
 - **Nothing a session sees changes.** No door sends these words until its piece lands. The trigger table gains eleven
   rows, derived from the group, with no writer until W4b.
@@ -68,7 +68,8 @@ operator: they are implementation detail.
 
   *Table V1. The eleven words and their statuses.*
 
-- **Q2. No console sentence in this pull request** (slug `w2-words-no-console-sentence-yet`). The index's row says
+- **Q2. No console sentence in this pull request** (slug `w2-words-no-console-sentence-yet`; **ruled, F16** on the
+  index's review: W2's vocabulary follows W1 and adds no PWA sentence). The index's row says
   "each word's sentence in `pwa/src/lib/refusalWords.ts`". W1's vocabulary added none, because no W1 door existed
   yet, and it left each sentence to the piece that ships an operator's door (`w1-vocabulary.md`, Global Constraints).
   Today the console shows the raw code for any word it does not know. **Recommendation:** none here either. Of the
@@ -260,10 +261,11 @@ By slug; the coordinator mints numbers (cross-plan ruling X9).
 
 **Agreed:**
 - One pull request moves all eleven words (index question 6, accepted by the coordinator).
+- No console sentence in this pull request (question 2, ruled F16).
 
 **Waiting on the coordinator** (approved at this plan's review):
 - The eleven statuses of Table V1 (question 1).
-- No console sentence in this pull request (question 2), and `W2` out of the guard's waves (question 3).
+- `W2` out of the guard's waves (question 3).
 
 **Later:**
 - Each W2 door's piece sends its word, and adds the console sentence where the operator sees it.

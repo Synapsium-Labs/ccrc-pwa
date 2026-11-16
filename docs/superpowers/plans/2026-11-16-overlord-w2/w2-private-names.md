@@ -68,8 +68,9 @@ interface from the W1 private-store plan, and its builder re-measures it once #2
 - **`privateNameHits` answers ids, never text,** so a refusal built on it can say one word and count.
 - **The uploaded list is keyed hashes in the private store,** under a key the server mints, in a server-level slot of
   the operator-secrets store. The plain names exist only in the request's memory.
-- **No list, an empty list and an unreadable list are three answers.** With no list the check is skipped (index
-  question 9); with an empty list it runs and finds nothing; an unreadable list is never read as either.
+- **Only a list never uploaded skips the check** (ruled, F9). An empty list runs it and finds nothing. A list that was
+  uploaded and cannot be read now, or whose key is lost, answers `unreadable`, and the relay refuses `egress-refused`.
+  The list's row and its key slot, kept in two different stores, witness each other that an upload happened.
 - **Nothing a session sees changes at merge.** No door runs the check until the relay piece wires it.
 
 ## 1. Open questions
@@ -80,7 +81,8 @@ uploading the list is the operator's act, but how it is stored is implementation
 - **Q1. Where the key binds** (slug `the-key-binds-at-the-index`). The matcher hashes each token of the text as it scans,
   so the key must reach the per-token hash (`lookup`, and `windows`' check against an entry's `h`), not only
   `hashEntry`. **Recommendation:** each entries array's index (`INDEXES`) records the key it was built with, and the
-  token-hash cache (`HASHES`) is kept per key. `hashEntry(text, key = PRIVATE_NAME_SALT)`, `entryOf(text, mode, key)`
+  token-hash cache (`HASHES`, today keyed on the text alone) is kept per key. So the key threads through `hashEntry`,
+  `entryFrom`, `lookup` and `hashOf` (F10); a wrong key silently never matches, which question 5 guards. `hashEntry(text, key = PRIVATE_NAME_SALT)`, `entryOf(text, mode, key)`
   and `entriesOf(text, mode, key)` take the key with the salt as default. `hitsAt`, `matchLine`, `hitsIn`, `pairHits`
   and `maskText` keep their signatures and use the salt, because their only lists are the committed ones. An entries
   array met with another key gets an index of its own.
@@ -122,12 +124,30 @@ uploading the list is the operator's act, but how it is stored is implementation
   stored, and the index names no read. **Recommendation:** `GET /api/overlord/private-names`, session-gated, answering
   `{ state: 'none' }`, `{ state: 'list', rows, uploadedAt }` or `{ state: 'unreadable', reason }`. It never answers an
   entry or a hash.
-- **Q8. No list, an empty list, and back** (index question 9; slug `no-list-is-not-an-empty-list`).
-  **Recommendation:** the reader answers `none` when the store has no `private_name_list` row, and `list` with zero
-  entries after the canary when the operator uploaded no rows. The relay skips the check on `none` and records
-  `skipped: no-list` (its own act row); on an empty list the check runs and finds nothing. An older build has no table
-  and runs no check (Table 11.1a, "Ignores it"). W2 offers no door back to `none`: an empty upload is the way to turn the
-  check into a no-op.
+- **Q8. Never uploaded, empty, and unreadable** (index question 9, refined by the review's F9; slug
+  `only-never-uploaded-skips`; **ruled, F9**). "No list" must not absorb "a list we cannot read now": the spec's rule is
+  that an unset or unread fact refuses in its own word, and the repository's that two conditions a caller treats
+  differently never share one value. **Built:** a durable fact that a list was uploaded, kept twice. The key slot is
+  written at the first upload and nothing in ccrc removes it, and the list's row is in the private store; each is the
+  other's witness. Table P1 is `nameListState`'s whole domain.
+
+  | The store's read | The key slot | Answer |
+  |---|---|---|
+  | no list row | absent | `none`: never uploaded |
+  | no list row | present or unreadable | `unreadable: list-missing` |
+  | a list | absent | `unreadable: key-missing` |
+  | a list | unreadable | `unreadable: key-unreadable` |
+  | a list | present, the canary differs | `unreadable: key-mismatch` |
+  | a list | present, the canary matches | `list` (with zero rows after the canary for an empty upload) |
+  | failed | anything | `unreadable: store` |
+
+  *Table P1. The reader's answers. Only the first row skips the check.*
+
+  The relay (its piece B) skips the check on `none` and records `skipped: no-list` on its act row; runs it on `list`,
+  where an empty list finds nothing; and refuses `egress-refused` on `unreadable`, recording the reason on its act row.
+  The residual: losing both the private store's row and the key slot together (a whole state directory restored from
+  before the first upload) reads as never uploaded. W2 offers no door back to `none`: an empty upload is the way to turn
+  the check into a no-op.
 - **Q9. No journal record** (slug `name-list-not-journalled`). The privacy journal records message ids (W1), and the
   authority journal records authority. **Recommendation:** an upload writes neither. The list narrows what may leave,
   and the step-up is its guard. The status read and `uploadedAt` say when it last changed.
@@ -193,8 +213,8 @@ relay piece's.*
     `ledgersSecrets.ts`' writer; the reader `readPrivateNameList` is the one way any door reads either.
   - **Decide in L1, act in L4.** `nameListState` decides the reader's answer from what the store and the slot gave,
     with no I/O. The route handler parses, calls the writer and answers, and decides nothing beyond its body shape.
-  - **No overloaded null.** The reader answers `none`, `list` or `unreadable` with a reason (`store`, `key-missing`,
-    `key-unreadable`, `key-mismatch`), and the relay reads each differently.
+  - **No overloaded null.** The reader answers `none`, `list` or `unreadable` with a reason (`store`, `list-missing`,
+    `key-missing`, `key-unreadable`, `key-mismatch`), and the relay reads each differently: only `none` skips.
   - **Rings.** `shared/private-names.mjs` keeps to `node:crypto` (the `.mjs` carve-out); `shared/privateNames.ts`
     imports nothing.
 - **Privacy.** The plain names never reach a log, a journal, a file, a response or an error detail. Tests use synthetic
@@ -218,7 +238,7 @@ relay piece's.*
 2. Under a key, the scan uses that key at every hash: an index and a token cache never answer for another key.
 3. `privateNameHits` never returns text, and finds a phrase across a line break.
 4. The plain rows never leave the handler, by any path, an error included.
-5. A list under a lost or replaced key reads `unreadable: key-mismatch`, never clean.
+5. A list under a lost or replaced key, or a key whose list is gone, reads `unreadable`, never clean and never `none`.
 6. No list, an empty list and an unreadable list are three answers.
 
 ## 5. The PR split
@@ -261,8 +281,9 @@ relay piece's.*
 
 - [ ] **Step 1: Red.** In `private-names-key.test.ts`:
   - `hashEntry(t)` equals `hashEntry(t, PRIVATE_NAME_SALT)`, and two other keys give two other hashes;
-  - a list made by `entriesOf(name, mode, k1)` is hit by `privateNameHits` under `k1`, for each mode, and not under
-    `k2` or the salt;
+  - a keyed list with a real hit (F10): a list made by `entriesOf(name, mode, k1)` from synthetic names is hit by
+    `privateNameHits` under `k1` on a line that spells one of them, for each mode, and the answer is that entry's `h8`;
+    the same line under `k2` or the salt finds nothing;
   - one entries array asked under `k1`, then `k2`, then `k1` again answers right each time (the index is per key), and
     tokens hashed under one key are never answered from another's cache (interleaved calls);
   - every answer is a list of distinct `/^[0-9a-f]{8}$/` strings in first-hit order, and `[]` for clean text and for an
@@ -319,20 +340,21 @@ relay piece's.*
 - Create: `server/test/private-names-list.test.ts`
 - Modify: `server/test/sim/privateNamesSets.ts`, `server/test/sim/mutation-floors.json`
 
-- [ ] **Step 1: Red.** `nameListState(storeRead, keyRead)` over its whole domain, as a table test with a monotonicity
-  property: a store `none` answers `none` whatever the key; a stored list with the key absent answers
+- [ ] **Step 1: Red.** `nameListState(storeRead, keyRead)` over its whole domain, as a table test of Table P1's seven
+  rows with a monotonicity property: only no list row with the key slot absent answers `none`; a key slot present or
+  unreadable with no list row answers `unreadable: list-missing`; a stored list with the key absent answers
   `unreadable: key-missing`, with the key unreadable `unreadable: key-unreadable`, with a key whose canary entry differs
   from the list's first `unreadable: key-mismatch`; a store read that failed answers `unreadable: store`; only a stored
-  list with a matching key answers `list`. Making any input worse never moves the answer from `unreadable` to `list`.
+  list with a matching key answers `list`. Making any input worse never moves the answer from `unreadable` to `list` or
+  to `none`.
   `readPrivateNameList` over a fixture HOME and a fresh store gives the same answers. The server-level slot is written
   mode 0600, under `operator-secrets/`, and is not listed by any programme's secrets read. Run: FAIL.
 - [ ] **Step 2: Green.** Add the server-level slot to `ledgersSecrets.ts` through its existing writer and reader (a
   fixed directory beside the programme directories that no programme slug can name). `mintNameListKey` writes 32
   random bytes as hex. `nameListState` decides; `readPrivateNameList` reads both and asks it. Run: PASS.
 - [ ] **Step 3: Mutation.** Add `nameListState`'s mutants to `privateNamesSets.ts` (each `unreadable` reason answered as
-  `list` or as `none`; the canary check skipped), register it, run its case alone (`-t 'nameListState'`), and set its
-  floor at the measured score. Expected: every mutant
-  killed.
+  `list` or as `none`, `list-missing` above all; the canary check skipped), register it, run its case alone
+  (`-t 'nameListState'`), and set its floor at the measured score. Expected: every mutant killed.
 - [ ] **Step 4: Commit:** `feat(operator-model): the name list's key slot and its one reader`.
 
 ### Task 5: The upload door and the status read (PR B)
@@ -353,8 +375,9 @@ relay piece's.*
   - the first upload mints the key; a second keeps it; an upload with the slot removed and a list stored mints a new key
     and replaces the list;
   - a store or slot that cannot be written answers `write-failed`;
-  - `GET` answers `none` before any upload, `list` with `rows` and `uploadedAt` after one, `unreadable` with its reason
-    after the slot is removed, and never an entry or a hash;
+  - `GET` answers `none` before any upload, `list` with `rows` and `uploadedAt` after one, `unreadable: key-missing`
+    after the slot is removed, `unreadable: list-missing` after the list row is removed with the slot kept, and never an
+    entry or a hash;
   - no line written to the console during the test names any synthetic row (a spy on `console.warn` and `console.log`).
 
   Run: FAIL.
@@ -395,6 +418,8 @@ By slug; the coordinator mints numbers (cross-plan ruling X9).
 - **`name-list-key-in-a-server-slot`**: the spec says the key stays on the server. It is a server-level slot of the
   operator-secrets store, shared in kind with the decision model's key (question 4).
 - **`the-canary-checks-the-key`**: a list under a lost key reads `unreadable: key-mismatch`, never clean (question 5).
+- **`only-never-uploaded-skips`**: the index's question 9 has two states. A list once uploaded and now unreadable, or
+  whose key is lost, is a third, `unreadable`, on which the relay refuses (question 8, ruled F9).
 - **`name-list-status-read`**: a status read the index does not name, for the Settings row (question 7).
 - **`name-list-not-journalled`**: an upload writes no journal record (question 9).
 
@@ -404,10 +429,17 @@ By slug; the coordinator mints numbers (cross-plan ruling X9).
   entries keeping the public salt, the key bound to each list's index; `privateNameHits(text, list)` (K, L0) in
   `shared/private-names.mjs`, answering entry ids, never text (question 26); characterization first. B: the hashed list
   in the private store (two tables, one writer), under a server-minted key in a server-level slot of the
-  operator-secrets store, checked by the list's canary; one reader, `readPrivateNameList`, answering `none`, `list` or
-  `unreadable` with its reason (question 9); `PUT /api/overlord/private-names` behind the step-up (question 7) and the
+  operator-secrets store, checked by the list's canary; one reader, `readPrivateNameList`, answering `none` (never
+  uploaded, the only answer that skips the check), `list`, or `unreadable` with its reason (question 9, refined by F9); `PUT /api/overlord/private-names` behind the step-up (question 7) and the
   status read `GET /api/overlord/private-names`, in `server/src/operatorModel/nameListRoutes.ts`, a new lane source."
   Size: **2 PRs, 6 tasks (A 2, B 4)**, up from 5: B's census sites are a task of their own.
+- **Question 9:** as refined by F9: the list's row and its key slot witness that an upload happened; only "never
+  uploaded" skips; an uploaded list that cannot be read, or whose key is lost, refuses `egress-refused` at the relay with
+  the reason on the act row. Drop "An older build has no store, so it skips the check" (no W1 build has a relay door).
+  The relay's row (B) gains that refusal.
+- **Question 26 and lane X's bullet:** the matcher's consumer is `server/src/linking/publicTextClasses.ts`, not
+  `server/src/accounts/egress.ts`; the key threads through `hashEntry`, `entryFrom`, `lookup` and `hashOf`'s `HASHES`
+  cache (F10).
 - **Question 7's table:** add "The name list's status | `GET /api/overlord/private-names` | session".
 - **"Where lanes meet":**
   - the private store bullet: private names B adds `private_name_list` and `private_name_entries` with the store's next
@@ -428,8 +460,12 @@ By slug; the coordinator mints numbers (cross-plan ruling X9).
 - The matcher is already in `shared/` (index question 26, settled); the list is the private store's (§11.1); the
   upload is behind the step-up (§9.4, C35).
 
+- Only a list never uploaded skips the check; an unreadable list or a lost key refuses (question 8, ruled F9).
+- The key threads through `hashEntry`, `entryFrom`, `lookup` and `hashOf`, with a keyed-list test that has a real hit
+  (ruled, F10).
+
 **Waiting on the coordinator** (at this plan's review):
-- Questions 1 to 9's recommendations, chiefly the key's home (question 4) and the status read (question 7).
+- The other questions' recommendations, chiefly the key's home (question 4) and the status read (question 7).
 
 **Later operator acts:**
 - Uploading the list, from Settings once the W2 Settings piece lands, so the relay's name check runs.
