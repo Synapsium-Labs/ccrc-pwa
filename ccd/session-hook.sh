@@ -5648,15 +5648,16 @@ def g2re: gsub("(?<c>[.+^$()|\\\\])"; "\\\(.c)") | gsub("\\[!"; "[^") | gsub("\\
   | gsub("\\{(?<x>[^{}]*)\\}"; "(?:" + (.x | gsub(","; "|")) + ")");
 def pmglob: [match(DANC + "\\.ccrc" + SEPP + "(?<g>" + GLOBW + "[*?\\[{]" + GLOBW + ")(?=$|[" + WS + META + "])"; "g") | .captures[0].string]
   | any(.[]; g2re as $r | any(PMNS[]; try test("^(?:" + $r + ")$") catch true));
-def PMRD: NB + "(?:cat|tac|less|more|head|tail|sqlite3|strings|xxd|od|hexdump|base64|jq|sed|awk|diff|cmp|wc|sort|cut|cp|rsync|scp|tar|zip|grep|egrep|fgrep|rg)" + NA;
+def PMEX: "^" + SP + "*(?:ls|rm)" + NW;
 def PMBULK: NB + "(?:tar|zip|grep|rg)" + NA;
 def PMCOPY: NB + "(?:cp|rsync|scp)" + NA;
+def PMCPT: NB + "cp" + NA + "[^\n]*(?:^|" + SP + ")(?:--target-directory|-[A-Za-z]*t[A-Za-z]*)(?=$|[=" + WS + "])";
 def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
-  (select(cdthen(CDT("\\.ccrc"); PMN; test("(?:^|[" + WS + "/=])" + PMN))) | "account\tthe private store or its journal, after a cd into ~/.ccrc"),
-  (select(test("\\.ccrc") and any(split(SEG; null)[]; test(PMRD) and pmglob)) | "account\ta glob under ~/.ccrc that can match the private store or its journal"),
+  (select(test(PMN) and cdthen(CDT("\\.ccrc"); PMN; test("(?:^|[" + WS + "/=])" + PMN))) | "account\tthe private store or its journal, after a cd into ~/.ccrc"),
+  (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMEX) | not) and pmglob)) | "account\ta glob under ~/.ccrc that can match the private store or its journal"),
   (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMBULK) and test(PDIR("\\.ccrc")))
-     or (test(PMCOPY) and test(PDIR("\\.ccrc") + SP + "+[^" + WS + META + "]")))) | "account\ta copy or recursive read of ~/.ccrc, which holds the private store"),
+     or (test(PMCOPY) and test(PDIR("\\.ccrc") + SP + "+[^" + WS + META + "]")) or (test(PMCPT) and test(PDIR("\\.ccrc"))))) | "account\ta copy or recursive read of ~/.ccrc, which holds the private store"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
   (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
   (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),

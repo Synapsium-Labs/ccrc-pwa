@@ -243,10 +243,12 @@ describe('the account arm denies on every session (D-6202)', () => {
     for (const command of [
       'sqlite3 ~/.ccrc/*.db', 'cat "$HOME"/.ccrc/*.log', 'cp ~/.ccrc/* /tmp/x', 'cat ~/.ccrc/operator-*', 'sqlite3 ~/.ccrc/{coord,operator-model}.db',
       'cat ~/.ccrc/priv?cy-journal.log', 'cp ~/.ccrc/*.db-wal /tmp/x', 'grep -l x ~/.ccrc/[op]*',
+      'nl ~/.ccrc/*.log', 'python3 script.py ~/.ccrc/*.db', 'vim ~/.ccrc/operator-*',
     ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a glob under ~\/\.ccrc/);
     for (const command of [
       'cp -r ~/.ccrc /tmp/x', 'tar czf /tmp/x.tgz ~/.ccrc', 'tar czf /tmp/x.tgz -C ~ .ccrc', 'rsync -a ~/.ccrc/ /tmp/x', 'grep -r token ~/.ccrc',
-      'cp -a "$HOME/.ccrc/." /tmp/x', 'zip -r /tmp/x.zip ~/.ccrc',
+      'cp -a "$HOME/.ccrc/." /tmp/x', 'zip -r /tmp/x.zip ~/.ccrc', 'cp -r -t /tmp/x ~/.ccrc', 'cp -rt /tmp/x ~/.ccrc/',
+      'cp --target-directory=/tmp/x -r ~/.ccrc',
     ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a copy or recursive read of ~\/\.ccrc/);
     for (const command of [
       'ls ~/.ccrc', 'ls ~/.ccrc/*.db', 'cat ~/.ccrc/*.json', 'sqlite3 ~/.ccrc/coord.db', 'cp ~/.ccrc/coord.db /tmp/x', 'cat ~/.ccrc/coord.db*',
