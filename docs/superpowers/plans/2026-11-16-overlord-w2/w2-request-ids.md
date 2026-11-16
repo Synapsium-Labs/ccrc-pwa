@@ -21,6 +21,9 @@
   - `ratifiedBy` gains the source `{ kind: 'request' }`, carrying its request's id.
   - One rule at all three doors: an unknown or foreign request answers `request-not-yours`, so no door tells a
     coordinator whether another programme's request exists.
+  - `CoordStore.runsForRequest` and `modificationsForRequest` are the one read of a request's runs and goals changes,
+    beside the columns and the `runs_request` index. Done tests B, follow-up, the operator doors and forecasts read them
+    from here (review 2282, F10).
 - **PR B, the sender and the quote.**
   - `GET /api/mail/:id` serves `overlord` mail only to its recipient or a signed-in console. It renders the attested
     quote from the private store at fetch: "withdrawn by the operator" after a wipe, and "no longer on record" on a hash
@@ -32,7 +35,8 @@
 - **What changes at merge.** Nothing a running session sees. `requestId` is optional everywhere, and no request exists
   until `overlord-route-v1` opens the Overlord's doors, so every new check is reachable only after that.
 - **Fix round 1 (review 2279) is folded in.** The coordinator ruled F1, F5, F7, F10 and F12, and every other finding is
-  folded as the report says. Each change is marked "(fix round 1, Fn)".
+  folded as the report says. Each change is marked "(fix round 1, Fn)". The coordinator added review 2282's F10 to the
+  round: the two readers above, marked "(review 2282, F10)".
 - **What the reader must check.** Twenty open questions (§2), each with a recommendation or a ruling. None is for the
   operator.
 
@@ -199,6 +203,23 @@ direction the spec already gives.
   NULL` for the done tests' and the spend's reads. Each column is nullable (an `ALTER TABLE … ADD COLUMN` with `NOT
   NULL` is the dangerous shape, `schema.ts`'s entry 65 note). The pin (`programs`) takes none: §5.5 names `goals
   modify` only.
+
+  **The readers are this plan's too** (review 2282, F10, the coordinator's addition; slug `runs-by-request-readers`).
+  Without them, done tests B, follow-up, the operator doors' `runStatesByRequest` and forecasts' spend read would each
+  write their own read of runs by `requestId`. Task A1 adds two reads beside the columns, each one definition that
+  every consumer takes through a port it declares as a `Pick` of `CoordStore`:
+
+  ```ts
+  // server/src/coord/store.ts, beside `run()`, through its row mapper:
+  runsForRequest(requestId: number, program: string): readonly RunRow[];   // id order; [] when none
+  // server/src/coord/ledgersStore.ts, with a one-line delegate on CoordStore (ARCH-01):
+  modificationsForRequest(requestId: number, program: string): number;    // a count of programme_modifications rows
+  ```
+
+  Both take the programme as well as the request, as done tests' `DoneTestReadPort` declares them, so a row of another
+  programme is never counted. Neither catches: a throw reaches the caller, which answers it as its own unmeasured
+  case. The operator doors drop their fallback `runStatesByRequest`, and the done tests' one-reader census
+  (`done-test-reader.test.ts`) counts callers of these, not a second definition.
 - **RI12. `overlord` mail is served to its recipient or a signed-in console** (fix round 1, F9). Today
   `GET /api/mail/:id` checks the box token only. **Recommendation:** for a delivery whose mail's `fromId` is `overlord`,
   one L1 decider, `mailFetchVerdict`, takes:
@@ -582,8 +603,10 @@ This section names what this plan takes from other pieces, and what it hands the
 | Private store B | `messageById`, `sha256Of`; W4's `gone` | takes |
 | Overlaps B | `SYSTEM_MAIL_SENDER_PUSH`, `isRecordOnlySystemSender` (RI15) | creates if first; else takes |
 | Relay A | Writes mail from `overlord` with `requestId`; adds the `widens` half to the goals door | hands |
-| Done tests | Reads `runs.requestId` and `programme_modifications.requestId` | hands |
-| Home requests A, forecasts B | The spend read through runs that carry `requestId` (index question 22) | hands |
+| Done tests B | `runsForRequest` and `modificationsForRequest`, through its `DoneTestReadPort` (review 2282, F10) | hands |
+| Follow-up | `runsForRequest` (review 2282, F10) | hands |
+| The operator's request doors | `runsForRequest`, in place of their fallback `runStatesByRequest` (review 2282, F10) | hands |
+| Home requests A, forecasts B | The spend read through `runsForRequest` (index question 22; review 2282, F10) | hands |
 
 *Table 6. The seams.*
 
@@ -637,7 +660,7 @@ This section gives the two pull requests, their files and their growth against t
 |---|---|---|
 | `server/src/coord/schema.ts` | +5 (three `ALTER`s and one index) | 0 |
 | `server/src/coord/routes.ts` | +24 (the run door's fact, the mail door's verdict call and its two answer kinds, check 9's branch, the transaction's two writes) | +12 (the fetch's call into `mailFetchVerdict` and `mailFetch.ts`, and the inbox's render); measured first (RI20) |
-| `server/src/coord/store.ts` | +10 (`insertMail`'s and `openRun`'s column, `reportAtsInLastHour`, `mailOrigin`'s two fields, two delegates) | +3 (`deliveryEnvelope` reads `mail.fromId` and `requestId`) |
+| `server/src/coord/store.ts` | +16 (`insertMail`'s and `openRun`'s column, `reportAtsInLastHour`, `mailOrigin`'s two fields, two delegates; `runsForRequest` and the `modificationsForRequest` delegate, review 2282 F10) | +3 (`deliveryEnvelope` reads `mail.fromId` and `requestId`) |
 | `server/src/watch.ts` | +3 (`pushNewMail` asks the `overlord-report` row; the sweep's null-line hold, if the inbox's branch does not already read it) | +1 (`pushNewMail`'s predicate) |
 | `shared/api.ts` | 0 code lines (one word on an existing line, RI1) | 0 |
 | `server/src/server.ts`, `pwa/src/lib/api.ts`, `ccd/ccrc-doctor-checks` | 0 | 0 |
@@ -658,7 +681,10 @@ flowchart LR
   PSB["private store B"] --> B
   GA["gates A"] --> B
   A --> CD["coordinator doors"]
-  A --> DT["done tests"]
+  A --> DT["done tests B"]
+  A --> FU["follow-up"]
+  A --> OD["the operator's request doors"]
+  A --> FCB["forecasts B"]
   A --> RLA["relay A"]
   A --> HRA["home requests A"]
   B --> OVB["overlaps B"]
@@ -676,20 +702,27 @@ Each task is red first, then green, then its mutation step where it adds a guard
 - Modify: `server/src/coord/schema.ts` (one migration), `server/test/coord-db.test.ts` (the version pins and the
   entry's comment line), `server/test/run-close-switch.test.ts` (drop the index, then the three columns, and the
   replay count in its prose)
-- Modify: `server/src/coord/store.ts` (`insertMail` and `openRun` take `requestId`), `server/src/coord/ledgersStore.ts`
-  (`addModification` takes `requestId`)
-- Create: `server/test/request-id-columns.test.ts`
+- Modify: `server/src/coord/store.ts` (`insertMail` and `openRun` take `requestId`; `runsForRequest`, and the
+  `modificationsForRequest` delegate), `server/src/coord/ledgersStore.ts` (`addModification` takes `requestId`;
+  `modificationsForRequest`)
+- Create: `server/test/request-id-columns.test.ts`, `server/test/request-id-readers.test.ts`
 
 - [ ] **Step 1: Measure the slot**, then write the failing tests:
   `git fetch origin main && git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`.
   - each column is nullable and accepts NULL, and a row written without it reads NULL;
   - `insertMail`, `openRun` and `addModification` store the id they are given;
-  - an older build's shape: a `SELECT` that names no new column still works on the migrated file.
+  - an older build's shape: a `SELECT` that names no new column still works on the migrated file;
+  - in `request-id-readers.test.ts` (review 2282, F10): `runsForRequest` returns the request's runs of that programme
+    in id order, none of another programme or of no request, and `[]` for a request with no run;
+    `modificationsForRequest` counts the same way and answers 0 for none; `EXPLAIN QUERY PLAN` of `runsForRequest`
+    names `runs_request`; and a census that each reader is defined once under `server/src` (a second definition, or a
+    `requestId = ?` read of `runs` or `programme_modifications` outside these two, reds it).
 - [ ] **Step 2: Run red**, one file at a time: `ccrc test -- ./node_modules/.bin/vitest run test/request-id-columns.test.ts`,
-  then `coord-db`, then `run-close-switch`.
+  then `request-id-readers`, `coord-db` and `run-close-switch`.
 - [ ] **Step 3: Implement** the migration as entry 65 is written, with its comment: one writer per column, NULL means
   "names no request", and an older build ignores it.
-- [ ] **Step 4: Run green**, the same files, then `growth-check` and `typecheck-tests`.
+- [ ] **Step 4: Run green**, the same files, then `growth-check` and `typecheck-tests`. Mutate the census: add a
+  second `runsForRequest` under `server/src` and see it red.
 - [ ] **Step 5: Commit** (no push: PR A pushes once, at A5).
 
 ### Task A2: The run door's `request` gate (L1, PR A)
@@ -957,6 +990,9 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
   coordinator reports or fails a request before the final close (RI18, ruled F7).
 - **`raw-session-mail-to-the-overlord`:** an accepted residual: mail to the bound session's id is ordinary mail, with
   no request, news or report quota (RI19, ruled F10).
+- **`runs-by-request-readers`:** the index gives request ids A the columns and the index only. It owns the two reads by
+  request as well, so the four pieces that read them share one definition (RI11, review 2282 F10, the coordinator's
+  addition).
 
 ## What the index should change
 
@@ -972,7 +1008,13 @@ From this plan and from review 2279's list:
     the inbox read's render (RI13).
   - The row's "`goals modify` checks ownership" reads "answers an unknown or foreign request `request-not-yours`"
     (RI9, F12).
-- **Figure W2:** edges `VOC --> RIA`, `DA --> RIA`, `OT --> RIA` and `IN --> RIA`; `RIB --> OVB` is present.
+  - PR A ships `CoordStore.runsForRequest(requestId, program)` and `modificationsForRequest(requestId, program)`, the
+    one read of runs and goals changes by request (review 2282, F10).
+- **The done tests, follow-up, operator doors and forecasts rows** (review 2282, F10): each reads runs by request
+  through `runsForRequest` (and done tests B `modificationsForRequest` too) from request ids A, and declares no reader
+  of its own; the operator doors' fallback `runStatesByRequest` goes.
+- **Figure W2:** edges `VOC --> RIA`, `DA --> RIA`, `OT --> RIA` and `IN --> RIA`; `RIB --> OVB` is present. Review
+  2282's F10 adds `RIA` edges to done tests B, follow-up, the operator doors and forecasts B, where they are missing.
 - **The overlaps row:** overlaps B adds only its `server` row to the push table when request ids B created it.
 - **The inbox band 3 row:** band 3 serves held reports (`overlord-report` deliveries) by the mail row's `toId`, as unread
   reports, and acks them; `overlord-route-v1` waits for band 3, so held reports cannot pile up before it.
@@ -1007,6 +1049,7 @@ From this plan and from review 2279's list:
 - **The `overlord` sender, `isRecordOnlySystemSender`,** and the readers' treatment of it.
 - **The `overlord-report` row,** its hold and its record-only push.
 - **`ratifiedBy`'s `request` source,** whose `not-opened` arm a later piece replaces.
+- **`runsForRequest` and `modificationsForRequest`,** the one read of a request's runs and goals changes.
 
 ## Where things stand
 
@@ -1017,6 +1060,8 @@ From this plan and from review 2279's list:
 - Fix round 1 (review 2279): F1 (a refused report is a recorded rejection), F7 (no widening; report before the final
   close), F10 (raw session-id mail is an accepted residual) and F12 (one rule, no oracle) ruled by the coordinator, and
   F2, F3, F8, F9, F11, F14, F17 and F20 folded as the report says.
+- The coordinator's addition from review 2282: F10, the runs-by-request and modifications-by-request readers are
+  request ids A's (RI11, Task A1).
 
 **Waiting on the coordinator** (at this plan's review):
 - Every RI question the coordinator has not ruled (all but RI1, RI18, RI19 and the one-word rule of RI4 and RI9), each

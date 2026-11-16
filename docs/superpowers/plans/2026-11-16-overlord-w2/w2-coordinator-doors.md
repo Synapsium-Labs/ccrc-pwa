@@ -25,7 +25,8 @@
 - **What changes at merge.** Nothing a running session sees. Each door refuses `capability-missing` naming
   `overlord-route-v1` until that word ships, and no request exists before then.
 - **Fix round 1 (review 2279) is folded in.** The coordinator ruled F5, F7 and F12, and every other finding is folded
-  as the report says. Each change is marked "(fix round 1, Fn)".
+  as the report says. Each change is marked "(fix round 1, Fn)". The coordinator added review 2282's F8 to the round:
+  a counter's `proposed` is parsed with done tests A's `parseDoneTest`, marked "(review 2282, F8)".
 - **What the reader must check.** Thirteen open questions (§2), each with a recommendation or a ruling. None is for
   the operator.
 
@@ -66,8 +67,9 @@ are box-token doors and join the census (§11.2)."
   is a record only, and no inbox row is written.
 - **Q6:** `dependency-cycle` and `request-not-yours` reach `shared/refusal.ts#OVERLORD_REFUSALS` with the W2
   vocabulary. This plan reads them from the group.
-- **Q13:** the done-test predicates and their one reader are the done tests piece's. This plan treats a done test and a
-  counter's proposal as opaque.
+- **Q13:** the done-test predicates and their one reader are the done tests piece's. This plan treats the request's
+  own done test as opaque, and checks a counter's proposal with done tests A's `parseDoneTest`, the one parser of the
+  shape (review 2282, F8).
 - **Q23:** this plan is written now, against plans not yet built, and takes each interface from the plan that defines
   it.
 - **The request record's RQ14:** `requestRoutes.ts` is created by the first piece that registers a route in it, the
@@ -138,8 +140,12 @@ direction the spec already gives.
   `counters-store-the-proposal`; fix round 1, F19). Table 5.1a's `counters` is "Counter-proposals received in the
   read-back", and the Overlord must read the proposal to re-relay. **Recommendation:** `counters` is a JSON list of
   `{ at, owner, proposed, why }`:
-  - `proposed` is the counter's done test, a JSON value of at most 2,048 bytes, checked for shape only until the done
-    tests piece checks it against its vocabulary;
+  - `proposed` is the counter's done test, a JSON value of at most 2,048 bytes (`too-large` past it), parsed by done
+    tests A's `parseDoneTest` (`server/src/coord/doneTests.ts`, L1) inside `ackBodyOf` (review 2282, F8). A refusal
+    answers `bad-request` with the detail `done-test-<why>`, where `<why>` is the parse's word (`not-a-list`, `empty`,
+    `too-many`, `unknown-predicate`, `duplicate` or `no-measured-predicate`). What is stored is the parsed `DoneTest`,
+    so the re-relay writes back a test the relay door and the done-test lane both read. No second shape check is
+    written here;
   - `why` is 1 to 600 characters, masked;
   - `owner` is the request's owner when the counter was made.
 
@@ -316,7 +322,8 @@ is a record and changes nothing in the transaction, and the coordinator never se
 
 ```ts
 export type AckBody = { revision: number; outcome: string;
-  answer: { kind: 'accept'; firstNewsMs: number } | { kind: 'counter'; proposed: unknown; why: string } };
+  answer: { kind: 'accept'; firstNewsMs: number } | { kind: 'counter'; proposed: DoneTest; why: string } };
+// `DoneTest` and `parseDoneTest` are done tests A's (`server/src/coord/doneTests.ts`); `ackBodyOf` calls the parse.
 export function ackBodyOf(raw: unknown): { ok: true; body: AckBody } | { ok: false; word: 'bad-request' | 'too-large'; detail: string };
 export function declineBodyOf(raw: unknown): { ok: true; body: { revision: number; reason: DeclineReason;
   duplicateOf: number | null; note: string | null } } | { ok: false; word: 'bad-request' | 'too-large'; detail: string };
@@ -343,7 +350,8 @@ This section names what this plan takes from other pieces, and what it hands the
 | The operator's request doors | `requestRoutes.ts` and its census sites, if they landed first (RQ14) | takes; else creates |
 | W2 vocabulary | `dependency-cycle`, `request-not-yours` | takes |
 | Decision model A | `gatherDecisions`, the `readback.*` rows and their catalogue fields; its Table 1's `readback` ref (RD12) | takes; asks one catalogue change |
-| Done tests | Reads `dependsOn` to unblock; validates a counter's `proposed` against its vocabulary; unblocks at once a request blocked on what has already ended | hands |
+| Done tests A | `parseDoneTest` and `DoneTest`, which `ackBodyOf` calls on a counter's `proposed` (RD6, review 2282 F8) | takes |
+| Done tests B | Reads `dependsOn` to unblock; unblocks at once a request blocked on what has already ended | hands |
 | Follow-up | Reads `followUpAt` set from the read-back's promise; a decline leaves the next step to the Overlord; two silent nudges carry an orphaned request to `needs-you` (RD13) | hands |
 | Inbox band 3 | Serves each move as an inbox row, which wakes the Overlord; serves the read-back flags once a row is armed | hands |
 | Home requests B, the board | Read the moves, the counters and the news | hand |
@@ -410,9 +418,10 @@ This section gives the pull request, its files and its growth against the 40-lin
 
 | PR | Tasks | Ships | Needs first |
 |---|---|---|---|
-| The one PR | 1 to 5 | The four doors, their deciders, the read-back flags in shadow, the `ccrc-api` verbs, the censuses | Request record A, request ids A, the W2 vocabulary, decision model A |
+| The one PR | 1 to 5 | The four doors, their deciders, the read-back flags in shadow, the `ccrc-api` verbs, the censuses | Request record A, request ids A, the W2 vocabulary, decision model A, done tests A |
 
-*Table 6. The pull request. Its needs gain the W2 vocabulary and decision model A (§12).*
+*Table 6. The pull request. Its needs gain the W2 vocabulary and decision model A (§12), and done tests A for
+`parseDoneTest` (review 2282, F8).*
 
 | Growth-checked file | The PR |
 |---|---|
@@ -429,11 +438,13 @@ flowchart LR
   RIA["request ids A"] --> CD
   VOC["W2 vocabulary"] --> CD
   DMA["decision model A"] --> CD
-  CD --> DT["done tests"]
+  DTA["done tests A"] --> CD
+  CD --> DT["done tests B"]
   CD --> FU["follow-up"]
   CD --> RV1["overlord-route-v1"]
 ```
-*Figure 3. The order. Done tests and the follow-up wait on these doors, and `overlord-route-v1` opens them.*
+*Figure 3. The order. Done tests A's parser comes first (review 2282, F8). Done tests B and the follow-up wait on these
+doors, and `overlord-route-v1` opens them.*
 
 ## 9. Tasks
 
@@ -452,7 +463,9 @@ Each task is red first, then green, then its mutation step where it adds a guard
 - [ ] **Step 1: Write the failing tests**, an exhaustive table per decider in `requestAnswerCases.ts`:
   - each body decider: every field missing, wrong in type, at its bound and over it, and a masked text past its bound;
   - `ackBodyOf`: `firstNewsIn` of 0, 1, 10,080 and 10,081 minutes; a counter with no `why`; an accept with a
-    `proposed`;
+    `proposed`; a counter whose `proposed` each of `parseDoneTest`'s six refusals rejects, answering `bad-request` with
+    `done-test-<why>`; a `proposed` past 2,048 bytes, answering `too-large` before the parse; and a valid one, whose
+    parsed test is what the body carries (review 2282, F8);
   - `counterVerdict`: 0 gives `stay`, 1 and more give `needs-you`;
   - `dependencyCycle`:
     - a self-dependency;
@@ -471,7 +484,8 @@ Each task is red first, then green, then its mutation step where it adds a guard
 - [ ] **Step 4: Run green**, the same files, then `sim/mutation-floors`, `rings/wire-totality` and `rings/shared-imports`.
 - [ ] **Step 5: Mutation.** Let `counterVerdict(1)` answer `stay`: its case reds. Drop the added owner edge: the R1 and
   R2 case reds. Drop the visited set: the planted cycle case times out or reds. Let `firstNewsIn` reach 10,081: its
-  bound case reds. Restore each from a saved copy.
+  bound case reds. Skip `parseDoneTest` on a counter's `proposed`: each `done-test-<why>` case reds (review 2282, F8).
+  Restore each from a saved copy.
 - [ ] **Step 6: Commit** (no push: the PR pushes once, at Task 5).
 
 ### Task 2: The routes file and the `ack` door (L4)
@@ -601,14 +615,16 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
   through a door, so its ref is the request and the revision it answers (RD12).
 - **`report-before-final-close`:** the owner's doors work only while the programme has an open run; a coordinator
   answers its requests before the final close (RD13, ruled F7).
+- **`counter-proposal-parsed-by-done-tests`:** the index leaves the counter's proposal to the done tests piece. These
+  doors parse it with done tests A's `parseDoneTest` at the door, so they need done tests A first (RD6, review 2282 F8).
 
 ## What the index should change
 
 From this plan and from review 2279's list:
 
 - **Table W2's coordinator doors row:**
-  - its "Needs first" gains the W2 vocabulary (`dependency-cycle`, `request-not-yours`) and decision model A (the
-    read-back flags);
+  - its "Needs first" gains the W2 vocabulary (`dependency-cycle`, `request-not-yours`), decision model A (the
+    read-back flags) and done tests A (`parseDoneTest`, review 2282 F8);
   - "in `server/src/coord/requestRoutes.ts`" becomes "in `server/src/coord/requestRoutes.ts`, which this piece creates
     with every census site unless the operator's request doors did first" (the request record's RQ14);
   - the ack's fields as RD5, the counter's proposal and owner stored in `counters` (RD6), and two counters per owner
@@ -616,7 +632,7 @@ From this plan and from review 2279's list:
   - the writer's names, `planRequestMoveInTx` then `applyRequestMoveInTx`, and the `request-move-callers` carve-out for
     the second counter's `server` `needs-you` (RD4, RD7);
   - the read-back rows are private-state rows: not asked on a hosted host, and never shown to the coordinator (RD12).
-- **Figure W2:** edges `VOC --> CD` and `DMA --> CD`.
+- **Figure W2:** edges `VOC --> CD`, `DMA --> CD` and `DTA --> CD` (review 2282, F8).
 - **The request record row:** `REQUEST_MOVE_FIELDS.counter` includes `counters` (RD6), and `REQUEST_MOVE_REASONS` takes
   the coordinator doors' words.
 - **The decision model row:** Table 1's `readback` ref reads "the request and revision the read-back answers", not a
@@ -625,8 +641,10 @@ From this plan and from review 2279's list:
   in it (the coordinator doors or the operator's request doors), and `request-move-callers.test.ts` gains a row per
   file, or per handler where both pieces share the file.
 - **The follow-up row:** two silent nudges carry a request orphaned by a closed programme to `needs-you` (RD13).
-- **The done tests row:** it validates a counter's `proposed` against its vocabulary once it lands (RD6), and unblocks
-  at once a request blocked on what has already ended (RD10).
+- **The done tests row:** done tests A's `parseDoneTest` is called by the coordinator doors on a counter's `proposed`
+  (RD6, review 2282 F8), so done tests A's parser census lists `server/src/coord/requestAnswers.ts` beside
+  `doneTestRead.ts` and relay A's handler; done tests B unblocks at once a request blocked on what has already ended
+  (RD10).
 - **Table 11.6's spec fix:** `bad-transition` with `stale-revision` at the coordinator's request doors (RD8),
   `reference-unknown` at `blocked` (RD10), and `request-not-yours` at the four doors (RD3).
 
@@ -647,6 +665,8 @@ From this plan and from review 2279's list:
 - Fix round 1 (review 2279): F5 (the read-back rows are private-state), F7 (no widening; answer before the final close)
   and F12 (one rule, no oracle) ruled by the coordinator, and F4, F6, F13, F15, F16 and F18 to F20 folded as the report
   says.
+- The coordinator's addition from review 2282: F8, a counter's `proposed` is parsed by done tests A's `parseDoneTest`
+  (RD6); F3's writer names, `planRequestMoveInTx` then `applyRequestMoveInTx`, were already folded in fix round 1 (F4).
 
 **Waiting on the coordinator** (at this plan's review):
 - RD1, RD2, RD4 to RD11, each with its recommendation.
