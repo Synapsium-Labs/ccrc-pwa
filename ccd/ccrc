@@ -1896,7 +1896,7 @@ BOX_TOKEN_SYNC_REPORT="$HOME/.ccrc/token-sync.json"
 #        spawns). Every os: the op runs it in the foreground, never --detach.
 # ccrc-install-*.test.ts pins every word to the machinery it names, so a word
 # cannot ship ahead of its code.
-CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync)
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback versions token-sync below-cap)
 
 # The words only a LINUX install can do: detach (W4). `--detach` hands the run
 # to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
@@ -2673,7 +2673,9 @@ already running).
             only by the automatic restore and by 'ccrc rollback' itself,
             never typed by hand on THIS verb — that is refused. Through
             that caller, any of the three may go below the floor, which
-            stays.
+            stays. [--below-cap <word>] passes the capability floor for that
+            word alone, with a WARN (a fact stands that needs ccd's word and
+            the target lacks it); --force never does.
             --detach (Linux only, and it needs --to) hands the run to a
             transient systemd --user unit and returns at once, so the update
             survives the restart of the unit that asked for it; the detached
@@ -2707,7 +2709,8 @@ already running).
             rollback whose gate fails is NOT restored — its target was the
             known-good build. [--detach] (Linux) returns at
             once and runs it as a transient systemd --user unit;
-            [--from <who>] names the caller (${UPD_FROM_WORDS[*]}).
+            [--from <who>] names the caller (${UPD_FROM_WORDS[*]});
+            [--below-cap <word>] as update's.
             A version kept under ~/ccrc-versions is rolled back to by a
             flip of ~/ccrc and its own spine, with no download.
   versions  list the kept release trees under ~/ccrc-versions (* marks the one ~/ccrc points at);
@@ -2734,8 +2737,9 @@ already running).
             the fleet box then the server box (--server-first inverts), stops
             at the first failure (a box's exit 3 is relayed, not a stop; its
             exit 4 stops), and re-measures both ('ccrc version', /health).
-            --check only prints where each box stands; --force, --downgrade
-            and --allow-unsigned pass through to each box's update, and a
+            --check only prints where each box stands; --force, --downgrade,
+            --allow-unsigned and --below-cap pass through to each box's update
+            (--below-cap is refused unless every box's ccrc lists it), and a
             box below its floor refuses the whole rollout before anything
             moves unless --downgrade was typed; [--to vX.Y.Z] pins a tag, or
             [--channel stable|dev] pins the one tag each box's own
@@ -20915,7 +20919,7 @@ _inst_floor() {
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 detach=0 from="" from_set=0 no_gate=0 channel="" channel_set=0 below=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -20928,6 +20932,7 @@ cmd_update() {
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
       --no-gate) no_gate=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --detach) detach=1 ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
@@ -20995,6 +21000,7 @@ cmd_update() {
     echo "$PROG: update: --check and --allow-unsigned are exclusive — --check measures and writes nothing, --allow-unsigned admits an unsigned install; pick one" >&2
     exit 2
   fi
+  [ "$check" -eq 0 ] || [ -z "$below" ] || { echo "$PROG: update: --check and --below-cap are exclusive — --check measures and writes nothing, --below-cap passes the capability floor of a run that moves this box; pick one" >&2; exit 2; }
   # And `--from` (design §10): it attributes a run that MOVES this box, which
   # --check never does — the same trap, the same refusal.
   if [ "$check" -eq 1 ] && [ "$from_set" -eq 1 ]; then
@@ -21205,6 +21211,7 @@ cmd_update() {
     [ "$downgrade" -eq 1 ] && dflags+=(--downgrade)
     [ "$allow_unsigned" -eq 1 ] && dflags+=(--allow-unsigned)
     [ "$no_gate" -eq 1 ] && dflags+=(--no-gate)
+    [ -n "$below" ] && dflags+=(--below-cap "$below")
     _upd_detach update "$to" "$UPD_FROM" ${dflags[@]+"${dflags[@]}"}
     return 0
   fi
@@ -21363,7 +21370,7 @@ cmd_update() {
   # The capability floor (Overlord W1 pool set, Task 8's call site (a)): the staged stamp's `ccdCaps`, inside the
   # reporting window and before anything is installed. It covers the rollout's per-box update, a rollback's fall-through
   # and restore arm 2's child (`--from restore`, which warns and proceeds).
-  _upd_cap_floor_check "$UPD_TREE/build.json" "$UPD_FROM"
+  _upd_cap_floor_check "$UPD_TREE/build.json" "$UPD_FROM" "$below"
   _upd_phase backing-up
   _upd_backup
   # THE BASELINE (design §10): written after the backup and BEFORE the staged
@@ -21955,7 +21962,7 @@ _rollback_killed_flip_state() {   # <to> <role> -> 0 holds, 1 not applicable, 2 
 # shellcheck disable=SC2128,SC2178  # kept is a local string here; the arrays named kept are other functions' locals (shellcheck does not scope names by function)
 cmd_rollback() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0
+  local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0 below=""
   local -a extra=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -21965,6 +21972,7 @@ cmd_rollback() {
         to="$2"; shift ;;
       --to=*) to="${1#--to=}" ;;
       --detach) detach=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --from)
         [ $# -ge 2 ] || { echo "$PROG: rollback: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
         from="$2"; shift ;;
@@ -22159,7 +22167,7 @@ cmd_rollback() {
   UPD_REPORTING=0
 
   if [ "$detach" -eq 1 ]; then
-    _upd_detach rollback "$to" "$from"
+    _upd_detach rollback "$to" "$from" ${below:+--below-cap "$below"}
     return 0
   fi
 
@@ -22210,7 +22218,7 @@ cmd_rollback() {
     UPD_REPORTING=1
     # The capability floor's call site (b), AFTER the reporting window opens so a refused console tap gets its `failed`
     # row, and before `_ver_flip_back` changes anything: the kept tree's stamp copy (`--from watchdog` warns and proceeds).
-    _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$to/$VER_STAMP_COPY" "$run_from"
+    _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$to/$VER_STAMP_COPY" "$run_from" "$below"
     # A belt: the resume at the top of this verb already ran, so this one is
     # masked by it — it exists for a crash made in the migration's window
     # between the two by a lockless plain install (final review F11).
@@ -22279,6 +22287,7 @@ cmd_rollback() {
   # absent or one-line record reads verified: the safe direction, because it
   # refuses a bundle-less target instead of admitting it.
   _upd_marker_unsigned && extra+=(--allow-unsigned)
+  [ -n "$below" ] && extra+=(--below-cap "$below")   # the cap floor is the one refusal --downgrade leaves
   echo "rollback: returning this box to $to (named by $via; asked by --from $from) — update's own path, as --from $run_from --downgrade: below the floor if need be, and the floor itself is never lowered"
   # Fix round 1 item 10 / review 155 C16: the process-local caller marker
   # `cmd_update`'s own argument-refusal block requires for `--from
@@ -24773,8 +24782,9 @@ _upd_floor_check() {
 # included, because the newer ccd fails closed on each and an older one ignores it (slug
 # `standing-set-is-a-poolset-entry`). The word is read from the target stamp's `ccdCaps` (`BOX_BUILD[5]`). The remedy
 # leads the refusal, because the update control plane keeps only a report detail's first 200 characters. It names only a
-# way out that exists: today the operator clears the set from their own shell (`ccd route` refuses inside a session), and
-# PR B2 adds `--below-cap`. The designation piece rewrites the `poolset` remedy when its Settings doors land.
+# way out that exists: the operator clears the set from their own shell (`ccd route` refuses inside a session), and PR B2's
+# `--below-cap <word>` (update, rollback, rollout) passes that word's row alone, with a WARN, and is put at the refusal's
+# front. The designation piece rewrites the `poolset` remedy when its Settings doors land.
 CAP_FLOOR_ROWS=(
   'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
 )
@@ -24788,9 +24798,22 @@ _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whos
     [[ -z "$ids" ]] || { CAP_FLOOR_STANDING+=("$row|$ids"); n="${row#*|}"; CAP_FLOOR_NEEDS+="${CAP_FLOOR_NEEDS:+,}${n%%|*}"; }
   done
 }
-_upd_cap_floor_check() {   # <target-stamp|-> <from> -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN for restore/watchdog
-  local stamp="$1" from="$2" row fact word say ids why msg="" caps="" brc=-
-  _cap_floor_standing || msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"
+_cap_floor_words() {   # -> every row's word, comma-joined, in row order
+  local LC_ALL=C row w ws=""
+  for row in "${CAP_FLOOR_ROWS[@]}"; do w="${row#*|}"; ws+="${ws:+,}${w%%|*}"; done; printf '%s' "$ws"
+}
+_cap_floor_lifted() {   # <words, comma-joined | unmeasured> <the --below-cap list> -> 0 when the list names every word (unmeasured: every row's)
+  local LC_ALL=C IFS=',' ws="$1" w; local -a a=()
+  [[ "$ws" != unmeasured ]] || ws="$(_cap_floor_words)"
+  read -ra a <<<"$ws"; for w in "${a[@]}"; do [[ ",$2," == *",$w,"* ]] || return 1; done
+}
+_below_cap_arg() {   # <$#> <value> -> 0 for floor words, comma-joined; else the usage refusal (exit 2): an unknown word passes nothing
+  [[ "$1" -ge 2 && "$2" =~ ^[a-z][a-z0-9-]*(,[a-z][a-z0-9-]*)*$ ]] && _cap_floor_lifted "$2" "$(_cap_floor_words)" && return 0
+  echo "$PROG: --below-cap names capability floor words, comma-joined: $(_cap_floor_words) (got: ${2:-nothing})" >&2; usage >&2; exit 2
+}
+_upd_cap_floor_check() {   # <target-stamp|-> <from> [--below-cap list] -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN
+  local stamp="$1" from="$2" below="${3:-}" row fact word say ids why msg="" need="" passed="" caps="" brc=-
+  _cap_floor_standing || { _cap_floor_lifted unmeasured "$below" && passed="an unlistable ~/.cc-sessions" || { need="$(_cap_floor_words)"; msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"; }; }
   # The stamp is read once, in a subshell, so the caller's BOX_BUILD is never touched; `-` (restore arm 3) has none.
   [[ "$stamp" == - ]] || { caps="$(_box_build_fields "$stamp" && printf '%s' "${BOX_BUILD[5]}")"; brc=$?; }
   for row in "${CAP_FLOOR_STANDING[@]}"; do
@@ -24801,11 +24824,13 @@ _upd_cap_floor_check() {   # <target-stamp|-> <from> -> 0 proceed; else the refu
     elif [[ "$caps" == "<malformed>" ]]; then why="the target's ccdCaps cannot be read"
     elif [[ " $caps " == *" $word "* ]]; then continue
     else why="the target build lacks $word"; fi
-    msg+="${msg:+ | }$say: $why; a $fact stands for$ids"
+    _cap_floor_lifted "$word" "$below" && { passed+="${passed:+; }$word ($why; a $fact stands for$ids)"; continue; }
+    need+="${need:+,}$word"; msg+="${msg:+ | }$say: $why; a $fact stands for$ids"
   done
+  [[ -z "$passed" ]] || echo "update: WARN: --below-cap passed the capability floor for $passed - a box below the word ignores that fact"
   [[ -n "$msg" ]] || return 0
   case "$from" in restore|watchdog) echo "update: WARN: $msg - proceeding because this run is --from $from"; return 0 ;; esac
-  _ccrc_die "$msg. Nothing on this box was changed"
+  _ccrc_die "pass --below-cap $need, or $msg. Nothing on this box was changed"
 }
 
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
@@ -26723,7 +26748,7 @@ _rollout_channel() {
 # on each box, `/health` on the server), never read off update's stdout.
 cmd_rollout() {
   UPD_REDACT_ACTIVE=1   # fix round 1 X1: every die from here on redacts
-  local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none=""
+  local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none="" below="" nob=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -26736,6 +26761,7 @@ cmd_rollout() {
       --force) force=1 ;;
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
+      --below-cap) _below_cap_arg $# "${2:-}"; below+="${below:+,}$2"; shift ;;
       --channel)
         [ $# -ge 2 ] || { echo "$PROG: --channel needs a value: stable or dev" >&2; usage >&2; exit 2; }
         channel="$2"; chan_given=1; shift ;;
@@ -26766,6 +26792,7 @@ cmd_rollout() {
     echo "$PROG: rollout: --check and --allow-unsigned are exclusive — --check measures and touches nothing, --allow-unsigned admits an unsigned install; pick one" >&2
     exit 2
   fi
+  [ "$check" -eq 0 ] || [ -z "$below" ] || { echo "$PROG: rollout: --check and --below-cap are exclusive — --check measures and touches nothing, --below-cap passes the capability floor of a box's move; pick one" >&2; exit 2; }
   local t
   for t in ssh curl jq; do
     command -v "$t" >/dev/null 2>&1 \
@@ -26926,6 +26953,10 @@ cmd_rollout() {
   # authorize explicitly, on this preflight's own say-so rather than each
   # box's own converged check deciding after the OTHER box had already
   # moved).
+  # `--below-cap` (pool set B2) reaches only a box whose check line lists `below-cap`: an older ccrc refuses the flag as
+  # a usage error (exit 2) after the box before it moved. It has no capability floor either, so it moves without it.
+  for i in "${!boxes[@]}"; do case ",${capss[$i]}," in *,below-cap,*) ;; *) nob+=" ${labels[$i]}" ;; esac; done
+  [ -z "$below" ] || [ -z "$nob" ] || { echo "$PROG: rollout: --below-cap needs a ccrc that lists below-cap in its caps, and these boxes' do not:$nob — their ccrc has no capability floor, so move them without --below-cap first; nothing was touched" >&2; exit 2; }
   for i in "${!boxes[@]}"; do
     case "${floors[$i]}" in
       unreadable|malformed)
@@ -26941,7 +26972,7 @@ cmd_rollout() {
     esac
     # The capability floor (pool set B1): a box's own update reads the target's ccdCaps, which no check line carries, so a
     # box whose standing fact needs a word (or could not say) may only go FIRST; after another box moved it is too late.
-    [ "$i" -eq 0 ] || [ "${needss[$i]:-none}" = none ] || { echo "$PROG: rollout: the ${labels[$i]} box has a standing fact that needs ccd's ${needss[$i]}, which its own update checks against the target only after ${labels[0]} has moved — run it first (drop --server-first), or clear the fact there; nothing was touched" >&2; exit 2; }
+    [ "$i" -eq 0 ] || [ "${needss[$i]:-none}" = none ] || _cap_floor_lifted "${needss[$i]}" "$below" || { echo "$PROG: rollout: the ${labels[$i]} box has a standing fact that needs ccd's ${needss[$i]}, which its own update checks against the target only after ${labels[0]} has moved — run it first (drop --server-first), or clear the fact there; nothing was touched" >&2; exit 2; }
     if [[ "${floors[$i]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _ver_newer "${floors[$i]}" "$ROLLOUT_VERSION" \
        && [ "$downgrade" -eq 0 ]; then
       echo "$PROG: rollout: the ${labels[$i]} box's floor is ${floors[$i]:-unstated}, above $ROLLOUT_VERSION — pass --downgrade to move it down; nothing was touched" >&2
@@ -26961,10 +26992,12 @@ cmd_rollout() {
     flags="$forceflag"
     [ "$downgrade" -eq 1 ] && flags="$flags --downgrade"
     [ "$allow_unsigned" -eq 1 ] && flags="$flags --allow-unsigned"
+    [ -n "$below" ] && flags="$flags --below-cap $below"   # every box lists below-cap, by the gate above
     case ",${capss[$i]}," in *,update-json,*) flags="$flags --from rollout" ;; esac
     echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$flags"
     "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$flags" 2>&1 | sed "s/^/${labels[$i]}: /"
     rc="${PIPESTATUS[0]}"
+    untouched=""; [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
     # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
     # the box's health, not the rollout's — relay it, carry on, verify, and
     # say it again in this verb's own exit code. 4 (design §11) = its health
@@ -27019,12 +27052,10 @@ cmd_rollout() {
           ;;
       esac
     elif [ "$rc" -eq 4 ]; then
-      untouched=""
-      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update failed its health gate and restored itself (exit 4) — stopped here.$untouched Its ~/.ccrc/update.json names the restore arm; 'ccrc update --check' there says where it now stands"
+    elif [ "$rc" -eq 2 ]; then   # every exit 2 cmd_update reaches is an argument refusal, before its backup
+      _ccrc_die "rollout: the ${labels[$i]} box's update exited 2, a usage error from that box's ccrc: it changed nothing and took no backup — stopped here.$untouched"
     elif [ "$rc" -ne 0 ]; then
-      untouched=""
-      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update exited $rc — stopped here.$untouched Its lines above name the backup taken before anything changed; deploy.sh remains the fallback"
     fi
   done
