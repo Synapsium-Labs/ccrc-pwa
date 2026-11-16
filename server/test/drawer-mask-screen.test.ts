@@ -94,7 +94,7 @@ const firstPaint = (): string => {
 const redraw = (tick: number): string => {
   let s = `\x1b[m${at(PINNED_WINDOW_ROWS, 1)}\r\x1b[3A`;
   for (let k = 0; k < 4; k++) s += `\x1b[2K${prose(100 * tick + k, 80 + 30 * k)}${k < 3 ? '\r\n' : ''}`;
-  return s + statusRow(`13:5${7 + tick}`);
+  return s + statusRow(`14:0${tick}`);
 };
 
 /** The rows that are on the screen twice. A status row and blank rows are never doubled content. */
@@ -133,8 +133,9 @@ describe('D-8665 — the drawer\'s mask never moves what the terminal draws', ()
 
   it('a stream with no secret in it reaches the terminal byte for byte, wherever a quiet gap cuts it', () => {
     // The same frames, cut at every 97th byte with a gap longer than two holds after each cut: whatever run a cut
-    // leaves open is held, expires, and must come out as the bytes it was, never as a mark in its place.
-    const raw = firstPaint() + redraw(1) + redraw(2);
+    // leaves open is held, expires, and must come out as the bytes it was, never as a mark in its place. The stream
+    // ends as tmux ends a frame, parking the cursor (measured off a real attach), so its last run is closed too.
+    const raw = `${firstPaint()}${redraw(1)}${redraw(2)}\x1b(B\x1b[m\x1b[?12l\x1b[?25h${at(PINNED_WINDOW_ROWS, 3)}`;
     const m = fingerprinted();
     try {
       for (let cut = 1; cut < raw.length; cut += 97) {

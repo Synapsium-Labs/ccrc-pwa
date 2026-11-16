@@ -951,12 +951,7 @@ function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): 
   return Math.max(0, base + (hold === null ? bodyEnd : origin(v, hold)) - lead.length);
 }
 
-/** The width the provisional mask takes on a terminal. */
-const MASK_COLUMNS = [...SECRET_MASK].length;
-/** Erases the provisional mask: back over its columns, then blank them (CUB, ECH), so the completed text is drawn
- *  where the terminal would have drawn it. */
-const ERASE_MASK = `\x1b[${MASK_COLUMNS}D\x1b[${MASK_COLUMNS}X`;
-/** How many holds a provisional mask whose run ended its row waits for a wrapped next row (D-5995): a TUI writes a
+/** How many holds a withheld run that ended its row waits for a wrapped next row (D-5995): a TUI writes a
  *  wrapped line's rows in one write, so a quiet row end is the line's end, and its text is drawn as typed. */
 const ROW_SETTLE_HOLDS = 2;
 
@@ -994,14 +989,24 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
 /** The drawer is a byte stream. A chunk whose tail could start a secret holds that tail back until the next chunk, or
  *  for `holdMs` from the FIRST hold, so a secret split across two chunks is masked whole; every other chunk goes at
  *  once. What was sent stays as context for the next chunk. An expired hold fails closed: a begun shape, an open Codex
- *  value, or (fingerprints held) a run that could still be a key is drawn as a PROVISIONAL mask and withheld until it
- *  ends; then the mask is erased and the completed run is drawn masked or not, as one chunk would have been (D-5995).
- *  So an ordinary path, sha, blob or word typed slowly reaches the screen unmasked once it is complete. */
+ *  value, or (fingerprints held) a run that could still be a key is WITHHELD until it ends, and the completed run is
+ *  then drawn masked or not, as one chunk would have been (D-5995). So an ordinary path, sha, blob or word typed slowly
+ *  reaches the screen unmasked once it is complete.
+ *
+ *  NOTHING IS DRAWN IN THE WITHHELD RUN'S PLACE (D-8665). The drawer is a tmux client, and tmux sends each redraw as
+ *  cursor moves over its own picture of the client's screen, so a byte this class adds, or a mark wider than the run it
+ *  stands for, moves the glass off that picture for good. A provisional `SECRET_MASK` used to be drawn here and erased
+ *  with CUB and ECH: drawn for the date that ends tmux's status row (9 columns, against the mask's 15) it ran past the
+ *  last column, the terminal wrapped and scrolled, and every later redraw landed a row off (measured through a real
+ *  tmux, desktop polish Task C36). No mark can be drawn safely without knowing the cursor's column (a mark that reaches
+ *  the right edge leaves the terminal's wrap pending, and neither CUB nor a saved cursor gets it back, measured on
+ *  xterm), so a withheld run shows nothing until it resolves, and what reaches the terminal is the stream's own bytes
+ *  unless a secret was masked in it (`drawer-mask-screen.test.ts`). */
 export class DrawerMask {
   private held = '';
   private carry = false;
   private ctx = '';
-  /** The run an expired hold drew as a provisional mask, while it is still open. */
+  /** The run an expired hold withheld, while it is still open: nothing of it, nor anything after it, is sent yet. */
   private pending: string | null = null;
   /** A run past what a drawer holds ended in a mask: the next chunk's leading run continues it. */
   private taint = false;
@@ -1016,7 +1021,7 @@ export class DrawerMask {
     if (chunk === '') return;
     if (this.pending !== null) {
       const s = this.pending + chunk;
-      // Still able to be a secret, by the rule that drew the mask: keep it behind the provisional mask. The context is
+      // Still able to be a secret, by the rule that withheld it: keep withholding it. The context is
       // read through the same escape view (D-5995): a cursor escape before the run is a delimiter, never run bytes.
       const v = viewOf(s, '\0');
       let k = 0;
@@ -1043,7 +1048,7 @@ export class DrawerMask {
     // A keystroke's echo is at most two visible characters (a surrogate pair), its escapes aside.
     const typed = viewOf(chunk, '').t.length <= 2;
     this.heldTyped = (this.held === '' || this.heldTyped) && typed;
-    this.route(this.held + chunk, '');
+    this.route(this.held + chunk);
   }
 
   /** Sends whatever is held, failing closed on a secret it may begin. */
@@ -1067,25 +1072,24 @@ export class DrawerMask {
     const v = viewOf(lead + h, '\0');
     const fpMax = this.masker.fingerprintMax();
     let p = failClosedStart(v.t, fpMax, this.heldTyped ? RUN_MIN_BYTES : 1);
-    // A run held at its row end (D-5995): drawn as the provisional mask, and settled after the row settle when no
+    // A run held at its row end (D-5995): withheld, and settled after the row settle when no
     // wrapped next row follows.
     const rowEnded = p === null && tail === '' ? rowTailAt(v.t, fpMax) : null;
     if (rowEnded !== null && origin(v, rowEnded) >= lead.length) p = rowEnded;
     // A start inside the context: the run began before the held text, which is all of it.
     const cut = p === null ? null : Math.max(0, origin(v, p) - lead.length);
-    if (cut === null) { this.out(h, false, ''); this.held = tail; return; }
-    if (cut > 0) this.out(h.slice(0, cut), false, '');
-    this.emit(SECRET_MASK);
-    this.pending = h.slice(cut) + tail;
+    if (cut === null) { this.out(h, false); this.held = tail; return; }
+    if (cut > 0) this.out(h.slice(0, cut), false);
+    this.pending = h.slice(cut) + tail;   // withheld, and nothing drawn in its place (D-8665)
     if (p === rowEnded) this.timer = setTimeout(() => { this.timer = null; this.settlePending(); }, ROW_SETTLE_HOLDS * this.holdMs);
   }
 
-  /** The provisional mask's run ended in blanks that nothing followed within the hold: resolve it now. */
+  /** The withheld run ended in blanks that nothing followed within the hold: resolve it now. */
   private settlePending(): void {
     if (this.pending === null) return;
     const s = this.pending;
     this.pending = null;
-    this.route(s, ERASE_MASK, false);   // settled: a run that ended its row is drawn, never held again
+    this.route(s, false);   // settled: a run that ended its row is drawn, never held again
   }
 
   dispose(): void {
@@ -1095,22 +1099,22 @@ export class DrawerMask {
     this.pending = null;
   }
 
-  /** The provisional mask's run has ended (or can no longer be a secret): erase the mask and draw the text as one
+  /** The withheld run has ended (or can no longer be a secret): draw the text as one
    *  chunk would have been drawn. */
   private resolve(s: string): void {
-    this.route(s, ERASE_MASK);
+    this.route(s);
   }
 
-  /** Sends `s` up to its open tail (prefixed by `lead`, raw), and holds the tail. */
-  private route(s: string, lead: string, rowTail = true): void {
+  /** Sends `s` up to its open tail, and holds the tail. */
+  private route(s: string, rowTail = true): void {
     this.held = '';
     const cut = openTailAt(s, this.masker.fingerprintMax(), this.ctx, rowTail);
     if (cut === null) {   // an open tail past the bound: sent now, failing closed on a begun secret
       this.stopTimer();
-      this.out(s, true, lead);
+      this.out(s, true);
       return;
     }
-    if (cut > 0 || lead !== '') this.out(s.slice(0, cut), false, lead);
+    if (cut > 0) this.out(s.slice(0, cut), false);
     if (cut < s.length) {
       this.held = s.slice(cut);
       if (this.timer === null) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, this.holdMs);
@@ -1124,14 +1128,14 @@ export class DrawerMask {
     this.timer = null;
   }
 
-  private out(text: string, failClosedTail: boolean, lead: string): void {
+  private out(text: string, failClosedTail: boolean): void {
     const r = this.masker.maskWithCarry(text, {
       rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint,
     });
     this.carry = r.carry;
     this.taint = failClosedTail && r.text.endsWith(SECRET_MASK);
     this.ctx = (this.ctx + text).slice(-DRAWER_CONTEXT);
-    this.emit(lead + r.text);
+    this.emit(r.text);
   }
 }
 
