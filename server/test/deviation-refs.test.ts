@@ -13,7 +13,7 @@ import { execFileSync, execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { crossTreeCollisions, definitionsIn, floorFromScan,
-         LEDGER_ALLOCATOR_ERA } from '../src/coord/ledger.js';
+         LEDGER_ALLOCATOR_ERA, type Definition } from '../src/coord/ledger.js';
 import { LEDGER_SEED_GAP } from '../../shared/api.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -693,6 +693,7 @@ function unreadDefinitionShapes(
   const out = new Map<string, number[]>();
   for (const f of files) {
     const lines = f.text.split('\n');
+    let before: Definition[] | null = null;   // the file as written, read once per file
     for (let i = 0; i < lines.length; i++) {
       const m = DEFINITION_SHAPE.exec(lines[i]!);
       if (!m) continue;
@@ -700,11 +701,13 @@ function unreadDefinitionShapes(
       // but it re-reads the whole file, and most shaped lines are readable.
       if (definitionsIn([{ path: f.path, text: lines[i]! }]).length > 0) continue;
       const n = Number(m[1]);
-      const count = (text: string): number =>
-        definitionsIn([{ path: f.path, text }]).filter((d) => d.n === n).length;
+      const count = (ds: readonly Definition[]): number => ds.filter((d) => d.n === n).length;
+      before ??= definitionsIn([f]);
       const probe = [...lines];
       probe[i] = `- **D-${n}** — probe`;
-      if (count(probe.join('\n')) <= count(f.text)) continue;   // fenced: a quotation
+      if (count(definitionsIn([{ path: f.path, text: probe.join('\n') }])) <= count(before)) {
+        continue;   // fenced: a quotation
+      }
       out.set(f.path, [...(out.get(f.path) ?? []), n]);
     }
   }
