@@ -128,8 +128,9 @@ console says so.
 
 ### migration-slot
 
-The migration is entry 83 on this branch. Responses B and portfolio B each hold 83 on theirs, so the coordinator
-renumbers it at landing. Re-measure the slot before merge, as its comment says.
+The migration is entry 84 on this branch: portfolio B (#2904) landed 83 on main, and this branch absorbed it. Responses B
+holds 84 on its branch, and the coordinator's word (2026-11-16) is 85 for this entry once responses B lands, so whichever
+lands second renumbers. Re-measure the slot before merge, as its comment says.
 
 ## Stable exports for W1's consumers
 
