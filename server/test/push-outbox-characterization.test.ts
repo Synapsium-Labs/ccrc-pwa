@@ -49,6 +49,7 @@ import { FLEET_LABEL, SERVER_LABEL } from '../src/update/inventory.js';
 import { runDriftPass, type DriftLaneDeps } from '../src/coord/driftLane.js';
 import { landedPass, type LandedLaneDeps } from '../src/coord/landedLane.js';
 import { BuildCaptureLane, type BuildCaptureAnswer, type BuildCaptureTransport } from '../src/buildCaptureLane.js';
+import { PoolSetLossLane } from '../src/poolSetLossLane.js';
 import type { ClaimantReading } from '../src/deadCoordinator.js';
 import type { CcdResult } from '../src/coord/ports.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -309,6 +310,26 @@ const CAPTURE: PushPayload = {
   body: 'The replay tests failed on the test box, so 2.1.321 stays untrusted and children on it are refused approvals. '
     + 'Settings › Automation › Test box shows the output (its last 8192 characters) and Capture again.',
   sessionId: '', tag: 'claude-build-capture', url: '/settings',
+};
+
+// ── #30 PoolSetLossLane.check (the pool set B2: a placing box lost pool-set while a set stands) ─────────────────────────
+
+const lossSite = async (e: Env): Promise<Record<string, number>> => {
+  const home = mkTmp('ccrc-pushchar-');
+  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
+  await notifyLog.load();
+  const fleetState = { ccdVerbs: ['ws-add'], build: { sha: 'c'.repeat(40) } };
+  const deps = installPush({ coord, notifyLog, viewers: e.viewers, fleetState }, e.seam);
+  const row = { id: 'lane-a-overlord', route: { fields: { poolset: 'pool-a' }, degraded: null, inert: [], unreadable: [] } } as unknown as SessionRecord;
+  new PoolSetLossLane(() => deps as never).check([row]);
+  return {};
+};
+const POOL_SET_LOST: PushPayload = {
+  title: 'The fleet box lost pool-set',
+  body: 'The box that places sessions no longer honours what stands on it: its ccd lacks pool-set while a poolset stands for '
+    + 'lane-a-overlord. Move it up to a release that carries pool-set; Settings shows each box\'s build.',
+  sessionId: '', tag: 'pool-set-lost', url: '/settings',
 };
 
 // ── #21 ledgersRoutes.ts#pushBlocking ──────────────────────────────────────────────────────────────────────────────
@@ -1053,7 +1074,7 @@ const SITES: Site[] = [
     sent: () => [RELEASE], sentVisible: () => [RELEASE] },
   { n: '29', name: 'POST /api/notify push:true (notifyPushOnly)', drive: (e) => notifySite(e),
     sent: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }],
-    sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },
+    sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },  { n: '30', name: 'PoolSetLossLane.check (coord, push)', drive: lossSite, sent: () => [POOL_SET_LOST], sentVisible: () => [POOL_SET_LOST] },
 ];
 
 /** The source rows a site leaves, by their columns that carry no clock: asks and items. */

@@ -1,6 +1,6 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
 import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
-import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import type { ProjectPlacement, ProjectPoolWire, RouteField } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
 import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';
@@ -253,4 +253,37 @@ export function parsePoolAnswer(r: { readonly ran: boolean; readonly code: numbe
   if (!isWordOf(POOL_ANSWER_CROSSINGS, crossing)) return { kind: 'unparsed', why: 'crossing' };
   if (!ACCOUNT_ID_RE.test(account)) return { kind: 'unparsed', why: 'account' };
   return { kind: 'answer', answer: { side, verdict, poolSide, poolState, crossing, account } };
+}
+
+/** One row of the capability floor as the server reads it: a route field whose standing on a session needs the placing
+ *  box's ccd to advertise `word`. The twin of `ccd/ccrc#CAP_FLOOR_ROWS`' `fact|word` columns (the remedy is the box's). */
+export interface CapFloorRow { readonly fact: RouteField; readonly word: string }
+/** One session's route facts as a registry read measured them (`SessionRecord.route`): the fields it carries, read, and
+ *  those whose entry was listed but could not be read. */
+export interface CapFloorSession { readonly id: string; readonly fields: readonly string[]; readonly unreadable: readonly string[] }
+/** One row the placing box has lost: its word and fact, every session carrying the fact (sorted), and the unreadable ones. */
+export interface CapFloorLoss { readonly word: string; readonly fact: string; readonly sessions: readonly string[]; readonly unreadable: readonly string[] }
+export type PoolSetLoss = { readonly raise: false } | { readonly raise: true; readonly lost: readonly CapFloorLoss[]; readonly dedupeKey: string };
+
+/**
+ * Whether a box that places sessions has lost a capability while a session on it carries the fact that needs it (the
+ * pool-set plan's Task 10; §11.5, open question 15), for EVERY row of the floor (`rows`, the coordinator's table ruling).
+ * `caps` is what the box's `ccd caps` last answered (`null` = unmeasured, which raises nothing). An unreadable entry
+ * counts: a set the box cannot read is the fail-open the floor exists for (N11 b). The key names the build (`build`, the
+ * measured stamp sha, or `unmeasured`) and each lost word's sessions, so one loss pushes once and a new build or a new
+ * set pushes again. Pure: no clock, no I/O.
+ */
+export function poolSetLoss(rows: readonly CapFloorRow[], caps: readonly string[] | null,
+  sessions: readonly CapFloorSession[], build: string | null): PoolSetLoss {
+  if (caps === null) return { raise: false };
+  const lost: CapFloorLoss[] = [];
+  for (const row of rows) {
+    if (caps.includes(row.word)) continue;
+    const unreadable = sessions.filter((s) => s.unreadable.includes(row.fact)).map((s) => s.id).sort();
+    const carrying = sessions.filter((s) => s.fields.includes(row.fact) || s.unreadable.includes(row.fact)).map((s) => s.id).sort();
+    if (carrying.length > 0) lost.push({ word: row.word, fact: row.fact, sessions: carrying, unreadable });
+  }
+  if (lost.length === 0) return { raise: false };
+  const key = lost.map((l) => `${l.word}=${l.sessions.join(',')}`).join(';');
+  return { raise: true, lost, dedupeKey: `pool-set-lost:${build ?? 'unmeasured'}:${key}` };
 }
