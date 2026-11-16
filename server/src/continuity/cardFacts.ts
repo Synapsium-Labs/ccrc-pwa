@@ -25,10 +25,11 @@
  */
 import { OUTSTANDING_DELIVERY_STATES, type ChildMark, type ChildReclaimGeneration, type RunKind } from '../../../shared/api.js';
 import {
-  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardHistory, type CardItem, type CardMail,
+  CARD_MAIL_MAX, type CardCheckpoint, type CardClaim, type CardFacts, type CardGoal, type CardHistory, type CardItem, type CardMail,
   type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
+import { ratificationOf, type Ratification } from '../../../shared/ledgers.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
@@ -185,8 +186,12 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
       }
       return read([...slugs].sort().map((slug): CardProgramme => {
         const g = coord.goalsFor(slug);
-        // No goals version carries `ratifiedBy` yet, so every goal is rendered as not ratified (slug goals-unratified).
-        const goals = [...(g.inShort === null ? [] : [g.inShort]), ...(g.doneWhen ?? [])].map((text) => ({ text, ratified: false }));
+        // Each goal's `ratified` is its version's verdict (Overlord W1, portfolio B): the In short goal's is the pin's, each
+        // definition-of-done line's the version that wrote the list (`doneWhenBy`), read through `ratificationOf`, with who
+        // ratified it (review 2240 F8).
+        const goalOf = (text: string, r: Ratification): CardGoal => (r.ratified ? { text, ratified: true, ratifiedBy: r.source.kind } : { text, ratified: false });
+        const pinR = ratificationOf(g.pinRatification), doneR = ratificationOf(g.doneWhenRatification);
+        const goals = [...(g.inShort === null ? [] : [goalOf(g.inShort, pinR)]), ...(g.doneWhen ?? []).map((text) => goalOf(text, doneR))];
         const decisions = g.modifications.map((m) => ({ at: m.at, text: m.ruling === null ? m.text : `${m.text} (ruling: ${m.ruling})` }));
         return { slug, goals, decisions, openItems: openItems.value.filter((i) => i.programme === slug) };
       }));

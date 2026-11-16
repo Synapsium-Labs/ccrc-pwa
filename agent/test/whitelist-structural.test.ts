@@ -230,6 +230,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the pool answer verb granted without --session',
     codes: ['TS2322'],
   },
+  // THE SLEEP MARKERS' VERB (Overlord W1 ccd arms, plan Task 3), g29's shape: enrolled on `--session`, its whole argument
+  // surface, so the narrowed grant is a compile error.
+  'g30-keep-awake-without-session.ts': {
+    what: 'the keep-awake verb granted without --session',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -502,6 +508,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     expect(() => auditExecWhitelist(withCcd([['pool-answer', '--session']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pool-answer'), 'one pool-answer grant, on --session')
       .toEqual([['pool-answer', '--session']]);
+  });
+
+  it('throws on a keep-awake without --session, and grants exactly the one prefix (Overlord W1 ccd arms)', () => {
+    expect(() => auditExecWhitelist(withCcd([['keep-awake']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['keep-awake', '--state']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['keep-awake', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'keep-awake'), 'one keep-awake grant, on --session')
+      .toEqual([['keep-awake', '--session']]);
   });
 
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {

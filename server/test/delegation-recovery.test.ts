@@ -60,18 +60,15 @@ import {
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DELEGATION_CHECKPOINT_FILE,
-  DELEGATION_RECOVERY_PHASES,
   DelegationCheckpointBuilder,
   DelegationCheckpointError,
   COORDINATION_RESTORE_MARKER_FILE,
   DELEGATION_RESTORE_IN_PROGRESS,
-  DelegationEvidenceIndex,
   assertDelegationCheckpointProjectable,
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  recoverDelegation,
-  recoverDelegationState,
 } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_RECOVERY_PHASES, DelegationEvidenceIndex, recoverDelegation, recoverDelegationState } from '../src/coord/delegation-recovery.js';
 import { DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
 import { DELEGATION_DURABILITY_EDGES, DelegationDurability, isDelegationCheckpointKebab, recoverDelegationFromFiles, type DelegationDurabilityDeps, type DelegationDurabilityEdge, type DelegationDurableBatch } from '../src/coord/delegation-durability.js';
 import { unreadableDelegationBucketResult } from '../src/coord/delegation-ingest.js';

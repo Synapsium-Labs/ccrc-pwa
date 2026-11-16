@@ -24,7 +24,7 @@ export const run = (o: Partial<PortfolioRun> & { program?: string }): PortfolioR
   state: o.state ?? 'working', openedAt: o.openedAt ?? NOW - 20 * DAY,
   dispatchedAt: o.dispatchedAt === undefined ? NOW - 20 * DAY : o.dispatchedAt,
   closedAt: o.closedAt === undefined ? (o.state === 'done' || o.state === 'failed' ? NOW - HOUR : null) : o.closedAt,
-  closeDetail: o.closeDetail ?? null,
+  closeDetail: o.closeDetail ?? null, ...(o.rebuilt === true ? { rebuilt: true as const } : {}),
 });
 export const item = (o: Partial<PortfolioItem>): PortfolioItem => ({
   id: o.id ?? nextId++, program: o.program ?? 'prog-a', title: o.title ?? 'an item', neededBy: o.neededBy ?? 'soon',
@@ -156,6 +156,20 @@ export const WAVE_CASES: PortfolioCase[] = [
   { name: 'no started open wave reads null, never 0', run: (m) => {
     expect(entry(m, facts({ runs: [run({ state: 'planned', dispatchedAt: null })] })).oldestOpenMs).toBeNull();
   } },
+  { name: 'F10: a dispatch stamped after now (clock skew) ages the wave 0, never negative', run: (m) => {
+    const e = entry(m, facts({ runs: [run({ state: 'working', dispatchedAt: NOW + HOUR })] }));
+    expect(e.oldestOpenMs).toBe(0);
+    expect(e.oldestOpenUnmeasured).toBe(0);
+  } },
+  { name: 'F10: a rebuilt open wave is never aged from the rebuild\'s stand-in; it counts in oldestOpenUnmeasured', run: (m) => {
+    const rebuiltOnly = entry(m, facts({ runs: [run({ wave: 1, state: 'working', dispatchedAt: NOW - HOUR, rebuilt: true })] }));
+    expect(rebuiltOnly.oldestOpenMs).toBeNull();
+    expect(rebuiltOnly.oldestOpenUnmeasured).toBe(1);
+    const both = entry(m, facts({ runs: [run({ wave: 1, state: 'working', dispatchedAt: NOW - HOUR, rebuilt: true }),
+      run({ wave: 2, state: 'awaiting-review', dispatchedAt: NOW - 3 * HOUR })] }));
+    expect(both.oldestOpenMs).toBe(3 * HOUR);
+    expect(both.oldestOpenUnmeasured).toBe(1);
+  } },
 ];
 
 const doneWave = (wave: number, hours: number, o: Partial<PortfolioRun> = {}) =>
@@ -173,6 +187,15 @@ export const CYCLE_CASES: PortfolioCase[] = [
   { name: 'a done wave with no dispatch is left out of n and counts in cycleUnmeasured', run: (m) => {
     const e = entry(m, facts({ runs: [run({ wave: 9 }), doneWave(1, 2), doneWave(2, 0, { dispatchedAt: null })] }));
     expect(e.cycle.n).toBe(1);
+    expect(e.cycleUnmeasured).toBe(1);
+  } },
+  { name: 'F10: a close stamped before its dispatch (clock skew) is a cycle of 0, never negative', run: (m) => {
+    const e = entry(m, facts({ runs: [run({ wave: 9 }), doneWave(1, -2)] }));
+    expect(e.cycle).toEqual({ n: 1, medianMs: 0, p85Ms: 0 });
+  } },
+  { name: 'F10: a done wave whose dispatch a rebuild stood in for is left out of n and counts in cycleUnmeasured', run: (m) => {
+    const e = entry(m, facts({ runs: [run({ wave: 9 }), doneWave(1, 2), doneWave(2, 1, { rebuilt: true })] }));
+    expect(e.cycle).toEqual({ n: 1, medianMs: 2 * HOUR, p85Ms: 2 * HOUR });
     expect(e.cycleUnmeasured).toBe(1);
   } },
   { name: 'the cycle starts at the wave\'s earliest dispatch across its work runs', run: (m) => {

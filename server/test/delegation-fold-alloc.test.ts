@@ -26,7 +26,8 @@ import {
   type DelegationJournalRecordV1,
 } from '../src/coord/delegation-model.js';
 import { buildDelegationJournalRecord } from '../src/coord/delegation-journal.js';
-import { DelegationCheckpointBuilder, encodeDelegationCheckpoint, recoverDelegation } from '../src/coord/delegation-checkpoint.js';
+import { DelegationCheckpointBuilder, encodeDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import * as modelNs from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';
 

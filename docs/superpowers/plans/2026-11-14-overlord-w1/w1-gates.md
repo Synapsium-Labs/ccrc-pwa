@@ -359,7 +359,10 @@ None of their code is on `main`.
   - **B:** `continuity_witness_checks`, its writer `hookReportStore.ts#recordWitnessCheck`, and
     `hookReports.ts#witnessVerdict`, answering `{ witnessed, witnessId }`,
     `{ unwitnessed, why: 'none' | 'stale' | 'used' | 'reader-scope' | 'before-generation' }` or
-    `{ unmeasured, why }`. The operation key is the `x-ccrc-op-key` header, and a missing one is `none`.
+    `{ unmeasured, why }`. The witness key is the `x-ccrc-witness-key` header (door process F20), and a missing one is
+    `none`. `x-ccrc-op-key` is W2's operation key, never the witness. W2's act rows A adds the operation-key lookup to
+    this runner, after the step-7 fence and before step 7a, scoped to the session and generation; a hit consumes no
+    witness and counts toward no latch (the W2 index, question 3).
 - **What the private store ships** (its plan): `operator_messages.actor` from its first migration, filled from the
   account gate's pass. `recordMessage` refuses an actor `isMintedActor` refuses.
 - **The censuses this piece meets** (measured):
@@ -1160,7 +1163,7 @@ export interface OverlordGateDeps {
   readonly actKey: (generationId: number, presentedKey: string | null) =>
     'match' | 'mismatch' | 'unissued' | 'unmeasured';             // door process A's actKeyOf, compared by digest (F12)
   readonly counter: (generationId: number, counter: number) => 'advanced' | 'not-above' | 'ended' | 'unmeasured';
-  readonly witness: (sessionId: string, generationId: number, opKey: string | null) => WitnessVerdict;   // door process B
+  readonly witness: (sessionId: string, generationId: number, witnessKey: string | null) => WitnessVerdict;   // door process B
   readonly recordWitness: (check: WitnessCheck) => void;          // door process B's recordWitnessCheck
   readonly recordFenceRefusal: (row: FenceRefusalRow) => void;
   readonly serverWords: readonly string[];                        // SERVER_CAPS

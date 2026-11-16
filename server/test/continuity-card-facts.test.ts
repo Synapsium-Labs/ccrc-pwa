@@ -36,12 +36,29 @@ const raise = (c: CoordStore, program: string, raisedBy: string, title: string, 
 const gather = (c: CoordStore, over: Partial<CardFactsDeps> = {}): Promise<{ facts: CardFacts; renderer: string }> =>
   gatherCardFacts(deps(c, over), ME, NOW);
 
+describe('gatherCardFacts: each goal is ratified only when its version\'s verdict is (Overlord W1, portfolio B)', () => {
+  it('a pin and a definition of done that rest on an unanswered item, or on nothing recorded, read not ratified; the operator\'s ratify flips them', async () => {
+    const c = store();
+    openRun(c, 'prog-a', ME, 2);
+    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, null, { kind: 'coordinator' });
+    c.db.prepare('UPDATE programs SET ratifiedBy = NULL WHERE slug = ?').run('prog-a');  // a pin from before the column
+    const item = raise(c, 'prog-a', ME, 'which list?');
+    const mod = c.addModification('prog-a', { text: 'new list', ruling: null, itemId: item, pr: null, doneWhen: ['it ships'] }, NOW - 900);
+    const goalsOf = async (): Promise<unknown> => value((await gather(c)).facts.ledger)[0]!.goals;
+    expect(await goalsOf()).toEqual([{ text: 'Ship the card.', ratified: false }, { text: 'it ships', ratified: false }]);
+    expect(c.ratifyGoalsVersion('prog-a', { pin: { inShortAt: NOW - 1_000 } }, NOW, 'phone-a 0123abcd')).toEqual({ ok: true, changed: true });
+    expect(c.ratifyGoalsVersion('prog-a', { modification: mod }, NOW, 'phone-a 0123abcd')).toEqual({ ok: true, changed: true });
+    // Who ratified rides each ratified goal, for the card to say (review 2240 F8).
+    expect(await goalsOf()).toEqual([{ text: 'Ship the card.', ratified: true, ratifiedBy: 'operator' }, { text: 'it ships', ratified: true, ratifiedBy: 'operator' }]);
+  });
+});
+
 describe('gatherCardFacts: each fact is read from its rows', () => {
   it('a coordinator: its open runs, its programme ledger, its claims, its raised items, its outstanding mail', async () => {
     const c = store();
     const r1 = openRun(c, 'prog-a', ME, 2);
     openRun(c, 'prog-b', OTHER);
-    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, ['the card door answers']);
+    c.setSpecPin('prog-a', 'docs/spec.md', 'Ship the card.', NOW - 1_000, ['the card door answers'], { kind: 'coordinator' });
     c.addModification('prog-a', { text: 'drop the badge', ruling: 'agreed', itemId: null, pr: null }, NOW - 900);
     const mine = raise(c, 'prog-a', ME, 'pick a name');
     const theirs = raise(c, 'prog-a', OTHER, 'pick a colour', NOW - 4_000);
@@ -58,7 +75,9 @@ describe('gatherCardFacts: each fact is read from its rows', () => {
     expect(value(f.runs)).toEqual([{ id: r1, programme: 'prog-a', wave: 2, waveOf: 3, state: 'planned', planPath: null, kind: 'work' }]);
     const ledger = value(f.ledger);
     expect(ledger.map((p) => p.slug)).toEqual(['prog-a']);
-    expect(ledger[0]!.goals).toEqual([{ text: 'Ship the card.', ratified: false }, { text: 'the card door answers', ratified: false }]);
+    // (Question 1, operator item 328: yes.) A coordinator's own pin counts, so its goals read ratified, by the coordinator.
+    expect(ledger[0]!.goals).toEqual([
+      { text: 'Ship the card.', ratified: true, ratifiedBy: 'coordinator' }, { text: 'the card door answers', ratified: true, ratifiedBy: 'coordinator' }]);
     expect(ledger[0]!.decisions).toEqual([{ at: NOW - 900, text: 'drop the badge (ruling: agreed)' }]);
     expect(ledger[0]!.openItems.map((i) => i.id)).toEqual([mine, theirs]);
     expect(value(f.claims)).toEqual([{ id: (claim as { claims: { id: number }[] }).claims[0]!.id, paths: ['server/src/a.ts'], runId: r1 }]);

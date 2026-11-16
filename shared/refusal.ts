@@ -178,6 +178,8 @@ export const LEDGER_ROUTE_REFUSALS = {
   notBig: 'not-big',
   // The portfolio's rank door (Overlord W1, question 8): a write based on a revision that is no longer current.
   rankChanged: 'rank-changed',
+  // The goals ratify door (Overlord W1, portfolio B, question 4): the pin changed since the operator read it.
+  goalsChanged: 'goals-changed',
   // The answer-mark door (Overlord W1, §9.2.1 C70): the row exists and carries no box, or is not on the operator's list.
   notMarkable: 'not-markable',
 } as const;
@@ -549,6 +551,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The Seen door (D-8126): CHOSEN, not measured. 409 as `not-open`: the row is there, in a state this door does not act on.
   [LEDGER_ROUTE_REFUSALS.notBig]: 409,
   [LEDGER_ROUTE_REFUSALS.rankChanged]: 409,
+  [LEDGER_ROUTE_REFUSALS.goalsChanged]: 409,
   [LEDGER_ROUTE_REFUSALS.notMarkable]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
