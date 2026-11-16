@@ -22,36 +22,36 @@ pull request; this pull request does not edit the plan.
 - **Growth** of the capped files over the whole pull request: `watch.ts` +2, `server.ts` +1, `coord/store.ts` 0,
   `coord/routes.ts` +4.
 
-## Deviations found
+## Departures (defined in the plan)
 
-These seven numbers were issued for this wave by the coordinator (block D-8675..D-8681).
+The coordinator issued these seven numbers for this wave (block D-8675..D-8681). Each one is defined briefly in the plan's own `## Deviations found`, where the deviation-refs scan reads definitions. This note keeps the full record.
 
-- **D-8675 (2026-11-16)** — conflict-detail: `ops.ts` is frozen, so a repeated create's answers are recognised in
+- D-8675, conflict-detail (defined in the plan): `ops.ts` is frozen, so a repeated create's answers are recognised in
   `hierarchyOps.ts`'s create shapers, not in `ops.ts`'s error table. The two answers are "conflict on insert of
   <Type>" and, for a milestone, "name not unique". `CcrcShaped`'s refusal arm gains `detail: 'conflict' | 'name-taken'`,
   and `runCcrcOp` passes it through. The journal still records `linear-invalid`.
-- **D-8676 (2026-11-16)** — recovery-by-request-id: this replaces the plan's name-and-creator and name-in-project
+- D-8676, recovery-by-request-id (defined in the plan): this replaces the plan's name-and-creator and name-in-project
   recovery. A create that may not have been sent adopts only ccrc's own object: an initiative or project at
   `id === requestId` made by the viewer, or a milestone at `id === requestId` inside its own bound project. Anything
   else is sent again with its id, so a lost race answers `conflict`. The conflict path then adopts only on
   `id === requestId` and `creatorId === viewer`, read by name. For an issue it adopts only on the planned team and when
   no other binding holds the issue. The final review measured another programme's same-named project being adopted
   after a rate-limited create.
-- **D-8677 (2026-11-16)** — link-by-fingerprint: there is no link row and no migration. A project's link to its
+- D-8677, link-by-fingerprint (defined in the plan): there is no link row and no migration. A project's link to its
   initiative is tracked by its fingerprint, F(planned) against F(planned with `initiativeId` null). The link carries
   the deterministic requestId `requestIdOf('epic', id, workspace, 'link')`, and its `conflict` answer means the link
   is already made.
-- **D-8678 (2026-11-16)** — write-ask-destination-team: `LinearWriteAsk.resource` gains an optional
+- D-8678, write-ask-destination-team (defined in the plan): `LinearWriteAsk.resource` gains an optional
   `destinationTeamKey`, so a cross-team issue move asks the write policy about both teams. The journal keeps the current
   team. Nothing changes under `allowAll`.
-- **D-8679 (2026-11-16)** — pr-link-rule: the dispatch's PR link (`issueLink`) is sent whenever the run's branch does
+- D-8679, pr-link-rule (defined in the plan): the dispatch's PR link (`issueLink`) is sent whenever the run's branch does
   not carry the issue identifier, replacing a check on the project's mode. A session's PR counts only when its branch
   is the run's own branch. A link refused with a failing word is given up for that URL: the issue stays bound and one
   mail names the cause. A deferring word defers.
-- **D-8680 (2026-11-16)** — requeue-keeps-bound: `requeueFailed` returns a binding that has a Linear id to `bound`,
+- D-8680, requeue-keeps-bound (defined in the plan): `requeueFailed` returns a binding that has a Linear id to `bound`,
   keeping its fingerprint, so a retry sends an update (or a move, or a link), never a create. A binding with no Linear
   id returns to `pending`. The plan put every requeued binding back to `pending`.
-- **D-8681 (2026-11-16)** — no-unlink: the brief's `SyncStep` listed `unlink`, but wave 3 builds none. A project
+- D-8681, no-unlink (defined in the plan): the brief's `SyncStep` listed `unlink`, but wave 3 builds none. A project
   whose initiatives are set off after it was linked keeps its link. The design's "Off by choice" (§9) covers only
   what comes next.
 
