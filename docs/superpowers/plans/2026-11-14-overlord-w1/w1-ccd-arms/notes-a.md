@@ -70,5 +70,9 @@ says must be one no floor row uses; it now uses `profile`.
 - New suite `ccd-keep-awake.test.ts` (31 cases) was green on its first run.
 - The plan's suites, the library sites, the capability-token suites, the approval and hook deny suites, the context
   map, the split pin, growth-check armed, `deviation-refs`, `single-definition/*` and `rings/*` are green.
+- Mutation, one mutant at a time and restored from a saved copy: all 23 of the plan's mutants for Tasks 1 to 3 (and
+  four more: a second writer line, the hook's expanded-head arm, the child deny list and the installer's deny loop)
+  turn a case red. The dropped time bound blocks the FIFO race case until its outer timeout.
+- `secret-mask` failed once inside a 27-file batch under fleet load and passed alone.
 - The shellcheck ratchet is killed by the local test slice's 6 GB memory cap on `ccd/ccd`, so CI is the arbiter there.
   `shellcheck` reports nothing on `ccd/lib/long-lived.sh`.
