@@ -12444,7 +12444,7 @@ _dr_ma_sessions_fix() {   # <lane> <session>…
 # names, including the RC7-letter one (a directory this account owns but cannot write), which the next writer's
 # `chmod 700` repairs by itself.
 _dr_ma_blocked_fix() {   # <lane> <cause>…
-  local id="$1" c part head seen="|" out=""; shift
+  local id="$1" c part head ma_seen="|" out=""; shift
   for c in "$@"; do
     case "$c" in
       advance-file-unreadable|advance-file-invalid)
@@ -12467,8 +12467,8 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
         part="$c — see the finding" ;;
     esac
     head="${part%% — *}"
-    case "$seen" in *"|$head|"*) continue ;; esac
-    seen+="$head|"
+    case "$ma_seen" in *"|$head|"*) continue ;; esac
+    ma_seen+="$head|"
     out+="${out:+; }$part"
   done
   printf '%s' "per cause: $out"
@@ -12513,7 +12513,7 @@ _check_model-held-behind() {
 }
 
 _check_model-sessions-behind() {
-  local rc rows state live="" id sid text w dead=0 unasked=0 unmeasured tail=""
+  local rc rows state live="" id sid text w dead=0 ma_unasked=0 unmeasured tail=""
   _dr_ma_read model-sessions-behind; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   state="$(printf '%s' "$DR_MA_JSON" | jq -r '.sessions' 2>/dev/null)"
@@ -12554,12 +12554,12 @@ _check_model-sessions-behind() {
     w="$(_svc_is_active "claude-session@$sid.service" </dev/null)"
     case "$w" in
       active|activating|reloading|refreshing|deactivating) live+="$id"$'\x1f'"$sid"$'\x1f'"$text"$'\n' ;;
-      '') unasked=$((unasked + 1)) ;;
+      '') ma_unasked=$((ma_unasked + 1)) ;;
       *) dead=$((dead + 1)) ;;
     esac
   done <<< "$rows"
   [ "$dead" -eq 0 ] || tail+="; $dead listed session(s) not running"
-  [ "$unasked" -eq 0 ] || tail+="; $unasked listed session(s) whose state the service manager did not report"
+  [ "$ma_unasked" -eq 0 ] || tail+="; $ma_unasked listed session(s) whose state the service manager did not report"
   [ -z "$unmeasured" ] || tail+="; $unmeasured"
   _dr_ma_report model-sessions-behind "$live" _dr_ma_sessions_fix \
     "$DR_MA_LANES lane(s) with a model registry: no running session is still on a model a move replaced 24 h or more ago" \
