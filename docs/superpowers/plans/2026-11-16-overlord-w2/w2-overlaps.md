@@ -36,8 +36,8 @@ today ccrc measures overlap only inside one project and tells nobody across prog
     and readers.
   - `server/src/coord/overlapsLane.ts` (C5, L4) is the overlaps arm, on a `LANE_SCHEDULE` row of its own. It records and
     sends nothing.
-- **PR B, telling and ruling (Tasks 5 to 7), after PR A, designation A, the Overlord's timers, request ids B,
-  decision model A and the operator's answer to question 1.**
+- **PR B, telling and ruling (Tasks 5 to 7), after PR A, designation A, the Overlord's timers, request ids B and
+  decision model A.** The operator answered question 1 (item 357), so the door's choices are settled.
   - The arm sends one mail per new pair to the role `overlord`, from a new system sender, `server`.
   - The arm asks `goals.conflict` in shadow through decision model A's one caller.
   - The ruling door joins the programme ledgers' operator registration, and `GET /api/portfolio` gains the standing
@@ -84,12 +84,13 @@ Written against `main` at `9cf263d44` (2026-11-16). This plan defines no D-numbe
 - **A pair has episodes.** An overlap stands while it is seen and lapses after 24 hours unseen. A goal conflict stands
   until either programme ends, and a ruled one opens a new episode only when either programme's goals change and the
   signal comes back. Each new episode is one new pair: one mail, and for a goal conflict one `goals.conflict` ask.
-- **The relay's check ships in PR A,** with the choice table built from question 1's recommended three choices, so relay
-  A needs only overlaps A. No ruling can exist before PR B's door, so the ruled arms wait unreachable until then.
-- **Question 1 is the operator's.** The door's choice list is one table, `GOAL_CONFLICT_CHOICES`. The operator's answer
-  fills its rows, and every other part of this plan is the same under any answer.
-- **Nothing a running session sees changes at PR A's merge.** The arm records pairs and sends nothing. At PR B's merge
-  the operator can rule pairs on the home, and a designated Overlord gets the pair mail.
+- **The operator answered question 1** (item 357): three choices, both stand, A goes first, or B goes first. The door's
+  choice list is one table, `GOAL_CONFLICT_CHOICES`, holding those three rows.
+- **The relay's check ships in PR A,** with that table, so relay A needs only overlaps A. No ruling can exist before PR
+  B's door, so the ruled arms wait unreachable until then.
+- **The overlaps arm is live at PR A's merge** (question 20): it records pairs from its first pass and sends nothing, so
+  no running session sees a change. At PR B's merge the operator can rule pairs on the home, a designated Overlord gets
+  the pair mail, and `goals.conflict` is asked only while the operator has its row in shadow or armed.
 
 ## Open questions
 
@@ -98,8 +99,8 @@ leaves open or the tree contradicts. The plan builds every recommendation unless
 otherwise.
 
 1. **What the operator can rule on a goal conflict** (the index's question 1, operator item 357; slug
-   `goal-conflict-choices`). **Waiting on the operator.** The plan builds the index's recommended three choices as the
-   default:
+   `goal-conflict-choices`). **Answered** by the operator in item 357: the three choices the index recommended, exactly.
+   The plan builds them as the rows of the choice table, not as a placeholder:
 
    | Choice | Label | What relays do | Conflict? |
    |---|---|---|---|
@@ -107,19 +108,19 @@ otherwise.
    | `a-first` | `<A>` goes first | A relay that deepens the conflict on B's side waits for A's next landing after the ruling | yes |
    | `b-first` | `<B>` goes first | The same, the other way round | yes |
 
-   *Table 1. The default rows of `GOAL_CONFLICT_CHOICES`. A and B are the pair's programmes in key order.*
+   *Table 1. The rows of `GOAL_CONFLICT_CHOICES`, as item 357 answered. A and B are the pair's programmes in key order.*
 
    Every choice lifts `goal-conflict-open` for the relays it lets through, and the relay quotes the choice to the owning
    coordinator (the relay piece's text). A later signal on the same pair raises nothing new until either programme's
    goals change. The last column is the `goals.conflict` row's `operator-answer` label (Task 6).
 
-   The answer reaches only these sites, each tagged "(question 1)" where it appears:
+   The answer reaches these sites, each tagged "(question 1)" where it appears:
    - the table's rows and their `waits` column (Task 1);
    - `relayConflictVerdict`'s ruled arms and their tests (Task 2), which read only the `waits` column;
    - the door's body check and its tests (Task 7), which read only the table's keys.
 
-   An answer whose choice has an effect outside `waits` (`none`, `a`, `b`), such as "stop one programme", adds its effect
-   word and its decider arm in PR B. The columns, writers, mail, ask and read are the same under any answer.
+   A later choice whose effect falls outside `waits` (`none`, `a`, `b`) would add its effect word and its decider arm.
+   The answer needs none.
 2. **The index's questions 6, 7, 20 and 23** (accepted by the coordinator).
    - Question 6: `goal-conflict-open` lands with the W2 vocabulary piece in `shared/refusal.ts#OVERLORD_REFUSALS`. This
      plan reads it from there. If PR A builds first, Task 2 adds the word with its Table 11.6 row, and the vocabulary
@@ -127,7 +128,8 @@ otherwise.
    - Question 7: the ruling door is `POST /api/programme-pairs/:key/rule`, session-gated (question 11 below sets its
      gate).
    - Question 20: the overlaps arm and the ruling door describe programmes, not the Overlord's authority, so neither
-     waits for `overlord-route-v1`. The arm records from PR A's merge, and the door works from PR B's.
+     waits for `overlord-route-v1`. The overlaps arm is live at PR A's merge: it records pairs from its first pass. The
+     door works from PR B's merge.
    - Question 23: PR A reads nothing W1 has not merged, so it is built now.
    - Question 19 (the act ceilings) does not touch this piece: the ruling door is the operator's, and the arm writes no
      act row.
@@ -314,11 +316,12 @@ Measured on `main` at `9cf263d44` (2026-11-16).
 - **Wire: additive.** `GET /api/portfolio` gains an optional `pairs`. `FLEET_PROTO` is not bumped. An older console
   ignores the field, and the newer console reads a missing field as "this server measures no pairs".
 - **What a merge arms.**
-  - PR A: the arm records pairs from the first pass and sends nothing. The relay's check exists for relay A to call. No
-    session sees anything new.
+  - PR A: the overlaps arm is live at merge (question 20). It records pairs from its first pass and sends nothing. The
+    relay's check exists for relay A to call. No session sees anything new.
   - PR B: the operator can rule pairs (the home's controls come with home requests B). A designated Overlord gets one mail
-    per standing episode. `goals.conflict` is asked only once the operator arms its row (decision model B), and its answer
-    changes nothing.
+    per standing episode, through `insertSystemMailTx` with `deliverTo`, never `POST /api/mail`. `goals.conflict` is
+    asked only while the operator has its row in shadow or armed; every row ships off, so nothing is asked at merge.
+    Its answer changes nothing.
 - **SAFETY (`CLAUDE.md`).** No ccd verb, no fleet act and no live `~/.ccrc`. Tests build `coord.db` in memory or in a
   fixture directory under the per-run temp root. A watcher a test builds goes through
   `quietAtTestEnd(new FleetWatcher(...))` (`server/test/laneQuiet.ts`).
@@ -386,7 +389,7 @@ dashed edge changes no row.*
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
 | A | 1 to 4 | The pair vocabulary and choice table; the five deciders; `claim_collisions` and `programme_pairs` in one migration; the collision record in `claimAttempt`; the pairs store; the overlaps arm and its lane row | nothing: **ready to build** | `schema.ts` +34 (one migration, two tables and three indexes in SQL); `store.ts` +10 (the record call and its catch, six delegates, one import); `watch.ts` +9 (`sweepOverlaps`, its tick dispatch, one import) |
-| B | 5 to 7 | The `server` sender; one mail per new episode; `goals.conflict` in shadow; the ruling door; `pairs` on the portfolio read; the two refusal words | PR A; designation A; the Overlord's timers (W1); request ids B; decision model A; question 1 | `store.ts` +4 (delegates); `watch.ts` +4 (the mail step's and the ask's deps) |
+| B | 5 to 7 | The `server` sender; one mail per new episode; `goals.conflict` in shadow; the ruling door; `pairs` on the portfolio read; the two refusal words | PR A; designation A; the Overlord's timers (W1); request ids B; decision model A (question 1 answered, item 357) | `store.ts` +4 (delegates); `watch.ts` +4 (the mail step's and the ask's deps) |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 
@@ -413,7 +416,8 @@ The index (#2917) should carry these. The coordinator passes them to the index's
 - **The "Overlaps and goal conflicts" row:**
   - A ships "`claim_collisions` (the refused claims' record, question 4) and `programme_pairs` with episodes, in one
     migration; the overlap and goal-conflict deciders; the episode moves; the relay's check `relayConflictVerdict` with
-    `pairBlocks` and the choice table's default rows (question 1); the overlaps arm, recording only";
+    `pairBlocks` and the choice table's three rows (question 1, item 357); the overlaps arm, live at merge, recording
+    only";
   - B ships "the `server` sender and one mail per new episode; `goals.conflict` in shadow; the ruling door; the standing
     pairs on `GET /api/portfolio` (question 17)";
   - the goal-conflict signal is "the claims history, A then B then A within 14 days"; the revert signal moves to a
@@ -502,7 +506,7 @@ export interface PairEvidence {
 export const PAIR_CLOSED_MAP = { lapsed: true, 'programme-ended': true, 'goals-changed': true } as const;
 export type PairClosedWhy = keyof typeof PAIR_CLOSED_MAP;
 
-/** Question 1: the operator's answer fills these rows. `waits`: whose deepening relays wait for the other's landing. */
+/** Question 1, answered by item 357: these three rows. `waits`: whose deepening relays wait for the other's landing. */
 export const GOAL_CONFLICT_WAITS_MAP = { none: true, a: true, b: true } as const;
 export type GoalConflictWaits = keyof typeof GOAL_CONFLICT_WAITS_MAP;
 export interface GoalConflictChoiceRow {
@@ -672,7 +676,7 @@ closed ones included.
 | 9 | any | anything else | nothing |
 
 *Table 2. The episode moves. A goal-conflict episode never lapses on time. Rule 6 is "raises nothing new until either
-programme's goals change" (question 1's recommendation).*
+programme's goals change" (question 1, item 357).*
 
 **`pairBlocks`** (question 7): the pair is a `goal-conflict`, the relay's target is `a` or `b`, and either
 `expectedPaths` is empty, or the evidence is `unreadable` or `pathsCut`, or some expected path overlaps some evidence path
@@ -945,7 +949,8 @@ pins each.
 1. It runs only when the designation reads bound to a live session (designation A's one reader) and the switches read
    shows no `mail-disabled` (`MAIL_DISABLED_MARKER`). An unmeasured designation or switches read holds the step this pass.
 2. It reads the standing episodes with no `mailedAt`, oldest `firstSeenAt` first, at most `PAIR_MAILS_PER_PASS`.
-3. For each, one transaction: `insertSystemMailTx(coord, null, { fromId: 'server', toId: 'overlord', deliverTo, runId:
+3. For each, one transaction (never `POST /api/mail`, which refuses `toId: 'overlord'` by the timers piece's rule):
+   `insertSystemMailTx(coord, null, { fromId: 'server', toId: 'overlord', deliverTo, runId:
    null, kind: 'finding', subject: pairNoticeSubject(row), body: pairNoticeBody(row) })`, then
    `markPairMailedInTx(id, now)`, which throws if the row was already mailed or no longer stands. A throw rolls back
    that mail alone.
@@ -983,14 +988,16 @@ either programme". It quotes no claim `intent`, no title and no operator word. T
 - Modify: `server/src/watch.ts` (the pass's dep on decision model A's one caller)
 - Create: `server/test/overlaps-goals-ask.test.ts`
 
-**The ask step.** For each goal-conflict episode `applyPairMoves` opened this pass, the arm calls decision model A's one
-caller (its plan, `w2-decision-model.md`, names it) for the row `goals.conflict`, with:
+**The ask step.** For each goal-conflict episode `applyPairMoves` opened this pass, and only while the `goals.conflict`
+row's state reads `shadow` or `armed`, the arm calls decision model A's one caller (its plan, `w2-decision-model.md`,
+names it) for that row. The row states (off, shadow, armed) and who switches them are the decision-model piece's (the
+index review's F7): every row ships off, and the operator switches shadow on. While the row reads `off`, or its state
+cannot be read, the arm makes no call and writes no record. The call carries:
 - the state: both programmes' goals (`inShort` and `doneWhen` from `goalsFor`), each under an opaque id, which the caller
   presents in both orders;
 - the key `pair:<key>#<episode>`, so the same episode is never asked twice.
 
-The caller owns everything else: a row that is off is not asked and writes no record, the 2 s deadline and its one retry,
-the records, and the hosted rule (`goals.conflict` holds no private state, Table 3.7b). The arm awaits the call, and its
+The caller owns everything else: the 2 s deadline and its one retry, the records, and the hosted rule (`goals.conflict` holds no private state, Table 3.7b). The arm awaits the call, and its
 answer changes no row: a pair stands on its code signal whatever the model says ("No flag proves nothing", fail open).
 A rejected or timed-out call is warned once a pass and changes nothing.
 
@@ -999,7 +1006,9 @@ choice table's `conflict` column: `both-stand` labels "no", `a-first` and `b-fir
 reads it from `programme_pairs` (What the index should change).
 
 - [ ] **Step 1: Failing tests** (a fake caller):
-  - a new goal-conflict episode is asked once, under `pair:<key>#<episode>`, with both programmes' goals;
+  - a new goal-conflict episode is asked once, under `pair:<key>#<episode>`, with both programmes' goals, while the row
+    reads `shadow`, and again once for a new episode while it reads `armed`;
+  - while the row reads `off`, or its state read fails, no call is made and no record is written;
   - a refreshed episode, an overlap and a ruled episode seen again are never asked;
   - answers `yes`, `no`, `unsure` and a timeout each leave the pair row unchanged;
   - a rejected call warns once and the pass still applies its moves.
@@ -1007,7 +1016,9 @@ reads it from `programme_pairs` (What the index should change).
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** this suite, `test/overlaps-lane.test.ts`, decision model A's suites, `test/rings/*.test.ts` and both
   server `tsc` runs. Green.
-- [ ] **Step 5: Red check.** Let a `yes` answer write the row: a case reds. Revert.
+- [ ] **Step 5: Red check.** Each reds a case. Revert each.
+  - Let a `yes` answer write the row.
+  - Call the model while the row reads `off`.
 - [ ] **Step 6: Commit.** `feat(overlaps): ask goals.conflict in shadow behind each new goal conflict (Overlord W2)`
 
 ### Task 7: The ruling door and the pairs on the portfolio read (PR B)
@@ -1134,18 +1145,19 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 - **`next-landing-is-a-closed-work-run`**: "A's next landing" is a work run of A reaching `done` after the ruling
   (question 14).
 - **`relay-check-ships-in-overlaps-a`**: the index puts the relay's `goal-conflict-open` read in PR B. It ships in PR A
-  with the default choice rows, so relay A needs only overlaps A (question 1).
+  with the choice table item 357 settled, so relay A needs only overlaps A (question 1).
 
 ## Where things stand
 
 **Agreed:**
 - The index's questions 6, 7, 17, 20 and 23, as the coordinator accepted them.
 - PR A is ready to build now: it reads only `main`.
-- The door's choice list is one table, and the plan builds the recommended three choices as its default.
+- Question 1, answered by the operator in item 357: three choices, both stand, A goes first, or B goes first. They are
+  the rows of the door's one choice table.
+- The overlaps arm is live at PR A's merge (question 20). Pair mail goes through `insertSystemMailTx` with `deliverTo`,
+  and `goals.conflict` is asked only while its row is in shadow or armed (the index review's F7).
 
-**Waiting on the operator:**
-- Question 1 (item 357): what the operator can rule on a goal conflict. Only the choice table's rows, the relay's ruled
-  arms and the door's body check change with the answer.
+**Waiting on the operator:** nothing.
 
 **Waiting on the coordinator:**
 - Questions 4 to 15 above, each with a recommendation. Question 6 (where the revert signal goes) changes the index's
