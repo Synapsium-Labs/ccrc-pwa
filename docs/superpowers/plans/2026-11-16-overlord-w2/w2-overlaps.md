@@ -83,7 +83,7 @@ Written against `main` at `9cf263d44` (2026-11-16). This plan defines no D-numbe
   and W2 changes no ccd code. Question 6 recommends a follow-up piece.
 - **A pair has episodes.** An overlap stands while it is seen and lapses after 24 hours unseen. A goal conflict stands
   until either programme ends, and a ruled one opens a new episode only when either programme's goals change and the
-  signal comes back. Each new episode is one new pair: one mail, one `goals.conflict` ask.
+  signal comes back. Each new episode is one new pair: one mail, and for a goal conflict one `goals.conflict` ask.
 - **The relay's check ships in PR A,** with the choice table built from question 1's recommended three choices, so relay
   A needs only overlaps A. No ruling can exist before PR B's door, so the ruled arms wait unreachable until then.
 - **Question 1 is the operator's.** The door's choice list is one table, `GOAL_CONFLICT_CHOICES`. The operator's answer
