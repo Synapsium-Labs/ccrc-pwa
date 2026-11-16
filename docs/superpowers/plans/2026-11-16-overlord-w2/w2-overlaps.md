@@ -12,12 +12,13 @@ conflict.
 - An **overlap** is two programmes reaching for the same paths at once: a claim one programme's session was refused
   because another programme's session held the path, or two open pull requests the landing radar measured as
   conflicting.
-- A **goal conflict** is a code signal first: one programme changed some paths, then another programme, then the first
-  again, within 14 days.
-- The Overlord gets one mail per new pair. The decision model's `goals.conflict` row is asked behind each new goal
-  conflict, in shadow, and its answer changes nothing.
-- The relay refuses `goal-conflict-open` while a goal conflict it would deepen stands unruled. The operator rules on the
-  pair from the home, through one session-gated door, `POST /api/programme-pairs/:key/rule`.
+- A **goal conflict** is a code signal first: one programme claimed some paths, then another programme, then the first
+  again, twice over, within 14 days, on paths that at most two programmes touched in that time.
+- The Overlord gets one mail per new pair, recorded for the operator and never pushed. The decision model's
+  `goals.conflict` row is asked behind each new goal conflict, in shadow, and its answer changes nothing.
+- The relay refuses `goal-conflict-open` while a goal conflict it would deepen stands unruled. That refusal is reachable
+  only after `overlord-route-v1`, last of all, and the firing rate measured before then gates it. The operator rules on
+  the pair from the home, through one session-gated door, `POST /api/programme-pairs/:key/rule`.
 
 **Why:** H23 (§5.5): "No coordinator sees across programmes. The Overlord does, so cross-programme overlap is put where
 it routes." H38 (§5.6): goal conflicts are "found by code first", and "until the operator rules, the Overlord relays
@@ -29,7 +30,8 @@ today ccrc measures overlap only inside one project and tells nobody across prog
 - **PR A, the record (Tasks 1 to 4), ready to build.** It reads only what is on `main`.
   - `shared/programmeFacts.ts` (L0) gains the pair vocabulary, the evidence wire and the goal-conflict choice table.
   - `server/src/coord/overlaps.ts` (C5, L1) holds five pure deciders: the overlap sightings, the goal-conflict
-    sightings, the episode moves, the relay's verdict and the one "does this pair block this request" predicate.
+    sightings, the episode moves, the relay's verdict and the one "does this pair block this request" predicate. That
+    predicate stays on the server: every reader asks it there, and the console reads its answer off the wire.
   - One migration adds `claim_collisions` (the refused claims' record, which nothing keeps today) and
     `programme_pairs`.
   - `server/src/coord/claimCollisions.ts` and `server/src/coord/programmePairsStore.ts` (C5, L3) hold their writers
@@ -38,10 +40,11 @@ today ccrc measures overlap only inside one project and tells nobody across prog
     sends nothing.
 - **PR B, telling and ruling (Tasks 5 to 7), after PR A, designation A, the Overlord's timers, request ids B and
   decision model A.** The operator answered question 1 (item 357), so the door's choices are settled.
-  - The arm sends one mail per new pair to the role `overlord`, from a new system sender, `server`.
+  - The arm sends one mail per new pair to the role `overlord`, from a new system sender, `server`. The operator gets
+    the mail as a record, never as a push.
   - The arm asks `goals.conflict` in shadow through decision model A's one caller.
   - The ruling door joins the programme ledgers' operator registration, and `GET /api/portfolio` gains the standing
-    pairs, so the home can show and rule them (question 17).
+    pairs and their firing rate, so the home can show and rule them (question 17).
 
 **Tech Stack:** TypeScript (ESM), `node:sqlite`, Fastify, vitest. No new dependency, no ccd change, no PWA screen.
 
@@ -74,23 +77,31 @@ Written against `main` at `9cf263d44` (2026-11-16). This plan defines no D-numbe
 - **Two pull requests, seven tasks.** PR A records pairs and is ready to build now. PR B tells the Overlord, asks the
   decision model in shadow, and opens the operator's ruling door.
 - **Two measured sources of overlap, one of them new.** The landing radar's conflict pairs are in memory today. A
-  refused claim is not recorded anywhere, so PR A records each refused claim's collisions in the claim's own
-  transaction, without changing the 409.
+  refused claim is not recorded anywhere, so PR A records each refused claim's collisions in a transaction of its own
+  after the claim's commits, so the 409 can never change.
 - **"Files changed" is read from the claims history.** The server has no record of which files a merged pull request
   changed, but every claim a session takes is kept, with its paths and its run. A goal conflict is programme A claiming
-  some paths, then programme B, then A again, within 14 days.
-- **The revert signal waits.** Detecting "a revert of another programme's commit" needs a read of git on the fleet box,
-  and W2 changes no ccd code. Question 6 recommends a follow-up piece.
+  some paths, then programme B, then A again, twice over within 14 days. A path that three or more programmes claimed
+  in the window is hot and does not count (the coordinator's ruling on the review's F3).
+- **The signal records first and refuses later.** The arm records goal conflicts from its first pass, and the portfolio
+  read shows how many open each week. The relay's refusal waits for `overlord-route-v1`, last of all, so that rate is
+  measured before any relay is refused on it.
+- **The revert signal waits for W3.** Detecting "a revert of another programme's commit" needs a read of git on the
+  fleet box, and W2 changes no ccd code (question 6).
 - **A pair has episodes.** An overlap stands while it is seen and lapses after 24 hours unseen. A goal conflict stands
-  until either programme ends, and a ruled one opens a new episode only when either programme's goals change and the
-  signal comes back. Each new episode is one new pair: one mail, and for a goal conflict one `goals.conflict` ask.
+  until either programme ends, or until it has gone unseen for 14 days with no open run on either side and nobody ruled
+  it. A ruled one opens a new episode only when either programme's goals change and the signal comes back after the
+  ruling. Each new episode is one new pair: one mail, and for a goal conflict one `goals.conflict` ask.
 - **The operator answered question 1** (item 357): three choices, both stand, A goes first, or B goes first. The door's
   choice list is one table, `GOAL_CONFLICT_CHOICES`, holding those three rows.
 - **The relay's check ships in PR A,** with that table, so relay A needs only overlaps A. No ruling can exist before PR
-  B's door, so the ruled arms wait unreachable until then.
+  B's door, so the ruled arms wait unreachable until then. The refusal itself is reachable only after
+  `overlord-route-v1`, which lands after overlaps B and the home's ruling control, so a refused relay always has a door
+  that can lift it.
 - **The overlaps arm is live at PR A's merge** (question 20): it records pairs from its first pass and sends nothing, so
-  no running session sees a change. At PR B's merge the operator can rule pairs on the home, a designated Overlord gets
-  the pair mail, and `goals.conflict` is asked only while the operator has its row in shadow or armed.
+  no running session sees a change. At PR B's merge the operator can rule pairs on the home, signed in or not, a
+  designated Overlord gets the pair mail, and `goals.conflict` is asked only while the operator has its row in shadow
+  or armed.
 
 ## Open questions
 
@@ -129,7 +140,10 @@ otherwise.
      gate).
    - Question 20: the overlaps arm and the ruling door describe programmes, not the Overlord's authority, so neither
      waits for `overlord-route-v1`. The overlaps arm is live at PR A's merge: it records pairs from its first pass. The
-     door works from PR B's merge.
+     door works from PR B's merge. The relay's `goal-conflict-open` refusal is the Overlord's act, so it is reachable only
+     after `overlord-route-v1` (the index's question 24: last of all; until then every Overlord door refuses
+     `capability-missing`). That order puts overlaps B's door and the home's ruling control before any refusal, and it
+     lets the firing rate (question 5) be measured first.
    - Question 23: PR A reads nothing W1 has not merged, so it is built now.
    - Question 19 (the act ceilings) does not touch this piece: the ruling door is the operator's, and the arm writes no
      act row.
@@ -137,83 +151,123 @@ otherwise.
    `goal-conflict-shown-on-the-home`). The board is served only to the Overlord. The operator sees a standing pair on
    the home's portfolio strip and on the Requests rows it blocks, and rules from the pair's row there. This plan ships
    the server half: the standing pairs on `GET /api/portfolio` (question 12) and the one predicate `pairBlocks` that
-   says which requests a pair blocks (Task 2). The controls are home requests B's (lane F).
+   says which requests a pair blocks (Task 2). The predicate stays server-side (the coordinator's ruling on the review's
+   F8): the console imports nothing from `server/src`, so the operator's requests read computes a per-request
+   `blockedBy` on the wire with `blockingPairs` (Task 2), and the home renders that list. The relay asks the same
+   function, so the two cannot disagree. The controls are home requests B's (lane F).
 4. **A refused claim is recorded** (slug `claim-collisions-recorded`). §5.5 says "the tree already measures overlap:
    path claims and their conflicts (`ClaimConflict`)". The tree computes them only to answer a refused `POST
    /api/claims` with 409, and keeps nothing (What exists today). Live claims never overlap each other, because the
    claim decider refuses any overlap, so the arm cannot find one by reading the claims afterwards.
-   **Recommendation:** `claimAttempt`'s conflict arm records each collision, one row per conflicting path and holder,
-   in `claim_collisions`, inside the claim's own transaction. The record can never change the claim's answer: a throw
-   from it is caught, warned once a process, and the 409 is sent as today. The rows are pruned on write after 48 hours.
-   The fact is the claims' own ("this attempt was refused because of that claim"), so its one writer sits beside the
-   claim decider, and the overlaps arm only reads it.
+   **Recommendation:** when `claimAttempt`'s transaction has committed a refusal, the store records each collision, one
+   row per conflicting path and holder, in `claim_collisions`, in a second transaction of its own (the review's F5).
+   SQLite can roll a whole transaction back on its own (a full disk, an `I/O` error), and a record inside the claim's
+   transaction would then turn the claim's 409 into a 500. In its own transaction it cannot: the claim's answer is
+   already decided and committed, a throw from the record is caught, warned once a process, and the 409 is sent as
+   today. The prune and the inserts are one transaction, so a failed record writes nothing. The rows are pruned on write
+   after 48 hours. The fact is the claims' own ("this attempt was refused because of that claim"), so its one writer
+   sits beside the claim decider, and the overlaps arm only reads it.
 5. **"Files changed" is the claims history** (slug `goal-signal-reads-claim-history`). §5.6's signal is "files changed by
    one programme, then another, then the first again, within 14 days". The server keeps no record of the files a pull
    request changed (What exists today). It does keep every claim: its paths, its run, and when it was taken, and the
-   worker and coordinator skills require a claim before an edit. **Recommendation:** a goal-conflict sighting is three
-   claims in one project, by programmes A, B and A, in that order of `createdAt`, whose paths overlap pairwise
-   (`claims.ts#pathsOverlap`), with the third no more than 14 days after the first. A claim's programme is its run's
-   (`claims.runId` to `runs.program`). A claim with no run is `unattributed`: counted, never guessed. A re-chained row
-   (`chainedFrom` set) continues an earlier claim and is not a new change. The evidence names the three claim ids.
+   worker and coordinator skills require a claim before an edit.
+
+   One A, B, A triple is routine on a hot file: every wave is a new run with a new claim, so two pieces that each touch
+   `server/src/coord/store.ts` make one within a day (the review's F3 measured 58 commits to that file in two weeks).
+   **The coordinator's ruling on F3:** a stricter signal, recorded from merge and refused on only after measurement.
+   - **A triple** is three claims in one project, by programmes A, B and A, in that order of `createdAt`, whose
+     non-hot paths overlap pairwise (`claims.ts#pathsOverlap`), with the third no more than 14 days after the first.
+   - **A hot path** is an exact claimed path that claims of three or more distinct programmes named in the 14-day
+     window. Its claims keep their other paths, and a claim left with none drops out. An `unattributed` claim adds no
+     programme to the count, so a hot path can only be missed, which shows in the firing rate.
+   - **A sighting** needs two triples of the same A and B, the second starting at or after the first one's closing
+     claim: A then B then A, then B then A again (the two may share that A claim). One round trip is not a conflict.
+   - A claim's programme is its run's (`claims.runId` to `runs.program`). A claim with no run is `unattributed`:
+     counted, never guessed. A re-chained row (`chainedFrom` set) continues an earlier claim and is not a new change.
+   - The evidence names the claim ids of the two triples, their non-hot overlapping paths and the hot paths set aside.
+   - **Recording first.** The arm records these sightings from PR A's merge. `GET /api/portfolio` shows how many
+     episodes of each kind opened in each of the last four weeks (Task 7). The relay's refusal reads only goal-conflict
+     rows whose evidence shows two triples (`pairBlocks`), and it is reachable only after `overlord-route-v1`, last of
+     all (question 2), so the rate is measured before any relay is refused. Overlaps, from claim collisions and the
+     radar, are unchanged.
 6. **The revert signal needs a read on the fleet box** (slug `revert-signal-waits-for-a-fleet-read`). The spec's second
    signal is "a revert of another programme's commit". The server sees no commit message, and a pull request's title is
    text from GitHub that a session wrote, which the spec never matches against (§5.3). Only git on the fleet box can say
    that a landed commit reverts another's, and W2 changes no ccd code. **Recommendation:** W2 ships the claims signal
-   alone. A follow-up piece in lane P, after overlaps A, adds the revert signal: the landing radar, which already runs
+   alone. A follow-up piece after overlaps A adds the revert signal: the landing radar, which already runs
    git on the fleet box each minute (`ccd/ccd-land-probe`'s `git_ro`), reports the reverts it finds on the base since its
    last pass, and the arm matches each reverted commit to a landed entry of another programme (`landing_entries`). Until
-   then the arm finds fewer goal conflicts, never false ones, and the relay refuses less. That piece breaks the index's
-   "W2 changes no ccd code", so the coordinator decides whether it is a W2 piece or a W3 one.
+   then the arm finds fewer goal conflicts, never false ones, and the relay refuses less. **Ruled:** a W3 follow-up,
+   because W2 changes no ccd code.
 7. **What "deepens" means** (slug `deepens-is-a-path-overlap`). The spec never defines it. **Recommendation:** a relay
    to programme T deepens a goal-conflict pair when T is one of the pair, and the request's `expectedPaths` are empty,
    or meet one of the pair's evidence paths, or the pair's evidence paths were cut. Empty paths deepen because the
-   relay cannot show they do not: the Overlord narrows a request by naming its paths. The same predicate,
-   `pairBlocks`, marks the Requests rows a pair blocks, so the home and the relay always agree.
+   relay cannot show they do not: the Overlord narrows a request by naming its paths. The same server-side function,
+   `blockingPairs` over `pairBlocks`, gives the relay its rows and the requests read its `blockedBy` (question 3), so the
+   home and the relay always agree.
 8. **Episodes, and when a pair stops standing** (slug `pairs-have-episodes`). The spec gives a pair one row and says a
    pair is new while the table holds none. Two programmes that overlap in March and again in June would then never be
    told about June. **Recommendation:** a pair key (`<kind>:<a>:<b>`) has numbered episodes, and at most one stands.
-   - An overlap episode stands while it is seen, and closes `lapsed` after 24 hours unseen.
-   - A goal-conflict episode never lapses on time. It closes `programme-ended` when either programme's plan has ended
-     (`CoordStore#programmeLive` reads false). A ruled episode closes `goals-changed` when a new sighting arrives and
-     either programme's goals stamp differs from the one recorded when it opened, and the sighting opens the next
-     episode.
-   - A sighting with no standing episode opens episode n + 1. A new episode is a new pair: one mail, one ask.
-   - A fact the arm cannot read (a goals stamp, a programme's plan end) moves nothing for that pair this pass.
+   - An overlap episode stands while it is seen, and closes `lapsed` 24 hours after its newest evidence.
+   - A goal-conflict episode closes `programme-ended` when either programme's plan has ended
+     (`CoordStore#programmeLive` reads false).
+   - An unruled goal-conflict episode closes `lapsed` when its newest evidence is 14 days old and neither programme has
+     an open run (the coordinator's ruling on the review's F6). A plan that finished without a `plan close` would
+     otherwise hold its pair, and block relays to the live side, for good. A ruled episode stays as ruled.
+   - A ruled episode closes `goals-changed` when a sighting newer than the ruling arrives and either programme's goals
+     stamp differs from the row's, and that sighting opens the next episode. The row's stamps are the goals the operator
+     ruled on: an unruled episode's stamps follow each sighting, and the ruling stamps them again in its own
+     transaction (the review's F2), so a goals change made before the ruling never undoes it.
+   - The goals stamp covers what the operator rules on: `inShortAt`, the stored `doneWhen`, and each modification's id,
+     `ruling` and `merged` flag (the review's F11 d).
+   - A sighting with no standing episode opens episode n + 1, unless either programme reads not live. A new episode is a
+     new pair: one mail, one ask.
+   - A fact the arm cannot read (a goals stamp, a programme's plan end, an open run) moves nothing for that pair this
+     pass.
 9. **The pair mail's sender** (slug `pair-notice-sender-server`). The Overlord's pair mail carries measured facts and no
    one's words. Today's system senders are `coordinator`, `operator` and `timer`. The stall watch and the landing
    notices send as `operator` ("raised by the watcher on their behalf"), but to the Overlord a mail from `operator`
    would sit beside the operator's own mail, whose words carry authority (§3.8). The timers piece gave the Overlord's
    timer mail its own sender for the same reason. **Recommendation:** a fourth role sender, `server`, glossed as "the
    server's own measured notice: facts only, no one's words". Like `timer`, no session can send as it, and it starts no
-   park notice and tags no push. Request ids B adds `overlord` to the same map, so PR B lands after it and merges `main`
-   once.
+   park notice. **Ruled (the review's F7):** pair mail is the Overlord's, so for the operator it is a record, never a
+   push, as timer mail is. Today `FleetWatcher#pushNewMail` makes timer mail record-only by naming `TIMER_MAIL_SENDER`.
+   PR B replaces that name test with one predicate beside the map, `isRecordOnlySystemSender`, derived from a
+   `SYSTEM_MAIL_SENDER_PUSH` table that gives every sender a word, so a new sender is a compile error until it has one.
+   Request ids B adds `overlord` to the same map, so PR B lands after it and merges `main` once.
 10. **Pairs that stood before an Overlord was designated** (slug `pair-mail-once-per-episode`). **Recommendation:** each
     standing episode is mailed once, `mailedAt` stamped in the mail's transaction. The arm mails only while a
     designation is measured and bound, and never while `mail-disabled` stands. When an Overlord is designated, the
     episodes that still stand are mailed, oldest first, at most five a pass. An episode that closed before it was mailed
     is never mailed. A rebind moves the outstanding mail with the role (designation B).
-11. **The ruling door's gate** (slug `ruling-door-refuses-dark`). A ruling lets relays through, so it confers what the
-    Overlord may then do. **Recommendation:** the door calls the account gate (`deps.gate`, no capability, no step-up),
-    which refuses `auth-off` while sign-in is dark, as the ratify door does, and records the gate's actor. It is not the
-    Overlord's door, so it needs no `OVERLORD_DOORS` row and no capability word. Adopting the `CallerIdentity` port is
-    gates A's work, as for the portfolio's doors.
+11. **The ruling door works dark** (slug `ruling-door-works-dark`). **Ruled (the review's F10):** ruling a pair is an
+    operator outcome that only lifts a hold, so the door works while sign-in is dark and records `flag-off` then, as the
+    rank door and the answer-mark door do (`ledgersRoutes.ts`, slug `rank-works-dark`). Armed, the auth gate sits in
+    front of it like every other session-gated door, and it records the session's device actor. A door that refused
+    dark would leave a dark console no way to lift a refusal. It is not the Overlord's door, so it needs no
+    `OVERLORD_DOORS` row and no capability word, and it is not in `auth-gate.test.ts`'s `FLAG_AWARE`. Adopting the
+    `CallerIdentity` port is gates A's work, as for the portfolio's doors.
 12. **The operator's read of the pairs** (slug `pairs-ride-the-portfolio-read`). **Recommendation:** `GET
     /api/portfolio`, which the home's portfolio strip already reads, answers `pairs` beside `portfolio`: every standing
-    episode, goal conflicts first and unruled first, each with its evidence and ruling. An older console ignores the
-    field. No new read door and no census row.
+    episode, goal conflicts first and unruled first, each with its evidence and ruling. Beside it, `pairRate` counts
+    the episodes of each kind opened in each of the last four weeks, the measured firing rate question 5 asks for. An
+    older console ignores both fields. No new read door and no census row.
 13. **The ruling names its episode** (slug `ruling-names-its-episode`). **Recommendation:** the door's body is `{
     episode, choice }`. An episode that is no longer the standing one is refused `pair-changed` with the current
     episode, so the operator never rules a pair they were not shown, as the ratify door refuses `goals-changed`. A
     re-rule of the same episode overwrites the choice and answers the previous one.
 14. **"A's next landing"** (slug `next-landing-is-a-closed-work-run`). The `a-first` and `b-first` rows wait for the first
     programme's next landing. **Recommendation:** a work run of that programme reaching `done` after `ruledAt`, read
-    by one store read, `programmeLandedSince(program, at)`. The done-tests piece's `run-closed` predicate asks a
-    narrower question (the runs a request links), so the two stay apart, and that piece may reuse this read.
+    by one store read, `programmeLandedSince(program, at)`, which Task 3 builds beside `standingPairs`. Relay A calls
+    `standingPairs`, then `relayConflictVerdict` with `programmeLandedSince` as its landing fact. The done-tests piece's
+    `run-closed` predicate asks a narrower question (the runs a request links), so the two stay apart, and that piece
+    may reuse this read.
 15. **Which programmes a session belongs to, for the radar** (slug `radar-sides-read-bindings`). A radar conflict names
     two sessions, not runs. **Recommendation:** a session's programmes are those of its open runs as worker and as
     coordinator (`CoordStore#bindingsOf`'s `worker()` and `claimant()`). Two sides whose sets share a programme are one
     programme's own overlap and make no pair. A side with no open run is `unattributed`. A side whose bindings cannot be
-    read is `unread`, and makes no pair that pass.
+    read is `unread`, and makes no pair that pass. A project whose radar probe failed this minute is unread too: its
+    landings are missing from the radar's map, so no overlap lapses that pass (the review's F11 b).
 
 ## What exists today
 
@@ -260,14 +314,23 @@ Measured on `main` at `9cf263d44` (2026-11-16).
   the caller's transaction. `overlord` is not yet a recipient: W1's Overlord timers plan (its question 4) makes it one,
   with the timer lane as its one writer, and gives `insertSystemMailTx` a `deliverTo` that names the bound session. The
   timer lane (`server/src/continuity/timerLane.ts`) is the precedent for mail in one transaction with its row's move,
-  held while `mail-disabled` stands (`shared/switches.ts#MAIL_DISABLED_MARKER`).
+  held while `mail-disabled` stands (`shared/switches.ts#MAIL_DISABLED_MARKER`). The operator's push,
+  `FleetWatcher#pushNewMail`, makes timer mail record-only by the name test `m.fromId === TIMER_MAIL_SENDER`, pinned by
+  `server/test/push-copy.test.ts` and `server/test/push-outbox-characterization.test.ts`. `server/test/run-last-move.test.ts`
+  pins the role list `['coordinator', 'operator', 'timer']`.
+- **The radar's failures.** `FleetWatcher#sweepRadar` drops a project whose probe read failed from its map, and keeps
+  the reason only in a private log throttle (`radarSaid`), so a reader of `currentLandings` cannot tell "no conflict"
+  from "not read".
+- **Runs.** `runs` carries `program`, `kind` (`work` or `review`), `state` and `closedAt`. A run is open while its
+  `state` is outside `shared/api.ts#TERMINAL_RUN_STATES`.
 - **A read-and-record lane.** `server/src/coord/casesLane.ts#casesPass` (L4) gathers rows, asks its L1 decider and
   records, sending nothing. `FleetWatcher#sweepCases` runs it through `runLane('cases', …)`, on its
   `server/src/laneSchedule.ts#LANE_SCHEDULE` row. Its store members are declared in `server/src/coord/ports.ts`'s
   `WatcherCoordPort`.
 - **The operator's doors beside which the ruling door goes.** `registerLedgerOperatorRoutes`
   (`server/src/coord/ledgersRoutes.ts`) holds `GET /api/portfolio` (answering `{ ok, portfolio }`) and `POST
-  /api/portfolio/rank`. The ratify door's refusal of a dark console is portfolio B's (`w1-portfolio.md`, question 4).
+  /api/portfolio/rank`. The rank door calls no account gate and works while sign-in is dark, recording `flag-off` then
+  (`deps.authEnabled ? deviceActor(…) : 'flag-off'`), and so does `POST /api/answer-marks`.
   Their census is `LEDGER_OPERATOR_DOORS` in `server/test/box-token-census.test.ts`, checked against the file in both
   directions and, through `SESSION_ONLY_ALL`, against `CLAUDE.md`'s box-token bullet. Their refusal words are
   `shared/refusal.ts#LEDGER_ROUTE_REFUSALS`.
@@ -293,23 +356,31 @@ Measured on `main` at `9cf263d44` (2026-11-16).
   - The ruling door is L4 in `ledgersRoutes.ts`: parse, gate, one store call, answer.
   - No repository and no async wrapper over `CoordStore`. `CoordStore` gains one-line delegates only.
 - **One writer each.**
-  - `claim_collisions`: `claimCollisions.ts#recordCollisionsInTx`, called only from `CoordStore#claimAttempt`'s conflict
-    arm. Its prune is the same function's.
+  - `claim_collisions`: `claimCollisions.ts#recordCollisions`, called only from `CoordStore#claimAttempt` after its
+    transaction committed a refusal, in a transaction of its own. Its prune is the same function's.
   - `programme_pairs`' rows and their sighting columns: `programmePairsStore.ts#applyPairMoves`, called only by the
     overlaps arm.
+  - `programme_pairs.goalsA` and `goalsB`: `programmePairsStore.ts#stampPairGoalsInTx`, called by `applyPairMoves` (an
+    open, and an unruled refresh) and by `rulePair` (the ruling's own stamp), each inside its own transaction. One
+    function writes the columns, so the two callers cannot disagree on how a stamp is written.
   - `programme_pairs.mailedAt`: `markPairMailedInTx`, called only by the arm's mail step, in the mail's transaction.
   - `programme_pairs.ruled`, `ruledAt` and `ruledBy`: `rulePair`, called only by the ruling door.
   - The episode moves are `pairMoves`' only. The store applies them and decides nothing.
 - **Consolidate, don't duplicate.** Paths overlap by `claims.ts#pathsOverlap`, never a second rule. A programme ends by
   `CoordStore#programmeLive`. A session's programmes come from `CoordStore#bindingsOf`. Mail goes through
-  `insertSystemMailTx`. The relay and the home ask one predicate, `pairBlocks`.
+  `insertSystemMailTx`. The relay and the requests read ask one server-side function, `blockingPairs` over
+  `pairBlocks`, and the console reads its answer off the wire. Record-only senders come from one predicate beside
+  `SYSTEM_MAIL_SENDER_MAP`, never a second name test.
 - **Failure contracts. Unread is never "no pair".**
   - A read the arm cannot make (collisions, history, standing pairs) records nothing that pass, warns once with the
     reader's detail, and answers `unread` with its name.
   - A side it cannot attribute is counted `unattributed`. A side whose bindings fail is counted `unread`. Neither makes a
     pair, and neither closes one.
-  - A `programmeLive` or goals read that throws moves no episode of that programme this pass.
-  - A history read past `CLAIM_HISTORY_ROWS_MAX` answers `cut: true`, and the pass warns: a cut can only miss pairs.
+  - A `programmeLive`, open-run or goals read that throws moves no episode of that programme this pass.
+  - A history read past `CLAIM_HISTORY_ROWS_MAX` answers `cut: true`, and the pass warns. It reads newest first, so a
+    cut drops the oldest rows and a new conflict stays visible; a cut can only miss pairs.
+  - The goal-conflict decider stops after `GOAL_CONFLICT_STEPS_MAX` path comparisons and answers `cut: true`, and the
+    pass warns: the same "can only miss pairs" (Task 1).
   - A stored `kind`, `closedWhy` or `ruled` word outside its vocabulary reads as unreadable, never as a known word. An
     unreadable ruling refuses the relay (fail closed), and the read shows it as `ruled: 'unreadable'`.
   - The collision record never changes a claim's answer (question 4).
@@ -318,10 +389,12 @@ Measured on `main` at `9cf263d44` (2026-11-16).
 - **What a merge arms.**
   - PR A: the overlaps arm is live at merge (question 20). It records pairs from its first pass and sends nothing. The
     relay's check exists for relay A to call. No session sees anything new.
-  - PR B: the operator can rule pairs (the home's controls come with home requests B). A designated Overlord gets one mail
-    per standing episode, through `insertSystemMailTx` with `deliverTo`, never `POST /api/mail`. `goals.conflict` is
-    asked only while the operator has its row in shadow or armed; every row ships off, so nothing is asked at merge.
-    Its answer changes nothing.
+  - PR B: the operator can rule pairs, signed in or dark (the home's controls come with home requests B). A designated
+    Overlord gets one mail per standing episode, through `insertSystemMailTx` with `deliverTo`, never `POST /api/mail`,
+    and the operator gets it as a record, never a push. `goals.conflict` is asked only while the operator has its row in
+    shadow or armed; every row ships off, so nothing is asked at merge. Its answer changes nothing.
+  - Neither PR refuses a relay. Relay A's `goal-conflict-open` is reachable only after `overlord-route-v1`, last of
+    all, which lands after PR B and the home's ruling control.
 - **SAFETY (`CLAUDE.md`).** No ccd verb, no fleet act and no live `~/.ccrc`. Tests build `coord.db` in memory or in a
   fixture directory under the per-run temp root. A watcher a test builds goes through
   `quietAtTestEnd(new FleetWatcher(...))` (`server/test/laneQuiet.ts`).
@@ -334,8 +407,8 @@ Measured on `main` at `9cf263d44` (2026-11-16).
   the shared constants, and run both suites in every task that adds a table or a duration.
 - **Growth check.** Every growth-checked file stays within 40 net lines in each pull request, with no waiver (the PR
   split has the estimates). Re-measure each file's cap on `main` before the pull request.
-- **Mutation floors.** `overlapSightings`, `goalConflictSightings`, `pairMoves`, `relayConflictVerdict`, `pairBlocks` and
-  `pairNoticeBody` each join `MUTANT_SETS` (`server/test/sim/mutation-floors.test.ts`) and
+- **Mutation floors.** `overlapSightings`, `goalConflictSightings`, `pairMoves`, `relayConflictVerdict`, `pairBlocks`,
+  `blockingPairs` and `pairNoticeBody` each join `MUTANT_SETS` (`server/test/sim/mutation-floors.test.ts`) and
   `server/test/sim/mutation-floors.json` in the pull request that creates them. Each first-match decider ships with
   exhaustive tests and a monotonicity property (Table 11.7b).
 - **Censuses** are named in each task. Every guard ships with the test that goes red without it.
@@ -347,14 +420,18 @@ Measured on `main` at `9cf263d44` (2026-11-16).
 1. **An overlap is measured, never guessed.** Each pair comes from a recorded refusal or a radar conflict whose two sides
    belong to different programmes. A side the arm cannot attribute makes no pair, and nothing folds "unread" into
    "no overlap".
-2. **The claim path is untouched.** The collision record runs in the claim's transaction and cannot change its answer,
-   its timing or its 409 body. A characterization test pins today's answer first.
-3. **One predicate, two readers.** The relay and the home ask `pairBlocks`, so a request the home shows as blocked is one
-   the relay refuses, and the other way round.
+2. **The claim path is untouched.** The collision record runs after the claim's transaction commits, in its own, and
+   cannot change its answer or its 409 body, even when SQLite rolls the record's transaction back by itself. A
+   characterization test pins today's answer first.
+3. **One predicate, two readers, one side of the wire.** The relay and the requests read ask `blockingPairs` on the
+   server, so a request the home shows as blocked is one the relay refuses, and the other way round.
 4. **The operator's ruling is the only thing that lifts `goal-conflict-open`.** No flag, no model answer and no session
-   write moves `ruled`. The door refuses a dark console and a pair the operator was not shown.
+   write moves `ruled`. The door refuses a pair the operator was not shown, and a goals change made before the ruling
+   never undoes it.
 5. **One mail per episode, and only facts in it.** The mail carries slugs, paths, claim ids and pull request numbers, and
    never a claim's `intent`, a title or anyone's words.
+6. **The table has no loops.** No pass sequence opens and closes the same pair over and over: every row of Table 2 is
+   tested over three or more passes.
 
 ## The PR split
 
@@ -388,8 +465,8 @@ dashed edge changes no row.*
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
-| A | 1 to 4 | The pair vocabulary and choice table; the five deciders; `claim_collisions` and `programme_pairs` in one migration; the collision record in `claimAttempt`; the pairs store; the overlaps arm and its lane row | nothing: **ready to build** | `schema.ts` +34 (one migration, two tables and three indexes in SQL); `store.ts` +10 (the record call and its catch, six delegates, one import); `watch.ts` +9 (`sweepOverlaps`, its tick dispatch, one import) |
-| B | 5 to 7 | The `server` sender; one mail per new episode; `goals.conflict` in shadow; the ruling door; `pairs` on the portfolio read; the two refusal words | PR A; designation A; the Overlord's timers (W1); request ids B; decision model A (question 1 answered, item 357) | `store.ts` +4 (delegates); `watch.ts` +4 (the mail step's and the ask's deps) |
+| A | 1 to 4 | The pair vocabulary and choice table; the five deciders and `blockingPairs`; `claim_collisions` and `programme_pairs` in one migration; the collision record after `claimAttempt` commits; the pairs store with `standingPairs` and `programmeLandedSince`; the overlaps arm and its lane row | nothing: **ready to build** | `schema.ts` +34 (one migration, two tables and three indexes in SQL); `store.ts` +13 (the record call after the commit and its catch, eight delegates, one import); `watch.ts` +12 (`sweepOverlaps`, its tick dispatch, the radar's unread projects, one import) |
+| B | 5 to 7 | The `server` sender, record-only for the operator; one mail per new episode; `goals.conflict` in shadow; the ruling door; `pairs` and `pairRate` on the portfolio read; the two refusal words | PR A; designation A; the Overlord's timers (W1); request ids B; decision model A (question 1 answered, item 357) | `store.ts` +5 (delegates); `watch.ts` +5 (the mail step's and the ask's deps, and `pushNewMail`'s test moved onto the predicate) |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 
@@ -398,13 +475,13 @@ For scale, the files that are not growth-checked change by about this much:
 | File | PR A | PR B |
 |---|---|---|
 | `shared/programmeFacts.ts` | +170, new or a new section | +15 |
-| `server/src/coord/overlaps.ts` | +280, new | +40 (`pairNoticeBody`) |
+| `server/src/coord/overlaps.ts` | +340, new | +40 (`pairNoticeBody`) |
 | `server/src/coord/claimCollisions.ts` | +80, new | |
-| `server/src/coord/programmePairsStore.ts` | +220, new | +80 |
+| `server/src/coord/programmePairsStore.ts` | +260, new | +100 |
 | `server/src/coord/overlapsLane.ts` | +180, new | +110 |
 | `server/src/coord/ports.ts` | +3 | +2 |
 | `server/src/laneSchedule.ts` | +6 | |
-| `server/src/coord/rundefs.ts` | | +10 |
+| `server/src/coord/rundefs.ts` | | +16 (the sender and the push table) |
 | `server/src/coord/ledgersRoutes.ts` | | +70 |
 | `shared/refusal.ts` | +2 (only if the W2 vocabulary has not landed) | +4 |
 | `pwa/src/lib/refusalWords.ts` | | +4 |
@@ -420,21 +497,36 @@ The index (#2917) should carry these. The coordinator passes them to the index's
     only";
   - B ships "the `server` sender and one mail per new episode; `goals.conflict` in shadow; the ruling door; the standing
     pairs on `GET /api/portfolio` (question 17)";
-  - the goal-conflict signal is "the claims history, A then B then A within 14 days"; the revert signal moves to a
-    follow-up (question 6);
+  - the goal-conflict signal is "the claims history: two A, B, A triples within 14 days, hot paths (three or more
+    programmes) set aside, recorded from merge, its firing rate on the portfolio read"; the revert signal is a W3
+    follow-up (question 6), not "the coordinator decides";
   - B's "needs first" gains "the Overlord's timers (W1)", which makes `overlord` a mail recipient. Request ids B stays:
-    both edit `SYSTEM_MAIL_SENDER_MAP`.
+    both edit `SYSTEM_MAIL_SENDER_MAP` and `MAIL_ROLE_IDS`, and `run-last-move.test.ts`'s pinned role list gains
+    `server`;
+  - B's growth-checked files gain `server/src/watch.ts#pushNewMail` (pair mail is record-only for the operator, the
+    review's F7).
 - **Figure W2:** an edge `OT --> OVB`. The edge `OVA --> RLA` now carries the relay's whole check, not only the table.
-- **The relay row:** relay A calls `relayConflictVerdict` and passes `programmeLandedSince` as its landing fact. It does
-  not read `programme_pairs` itself.
-- **Home requests B:** the Requests rows ask `pairBlocks` for each standing pair, and the strip's ruling control reads
-  `GET /api/portfolio`'s `pairs` and writes `POST /api/programme-pairs/:key/rule` with `{ episode, choice }`, rendering
-  the choices from `GOAL_CONFLICT_CHOICES`. Its `pwa/src/lib/api.ts` call reads a 404 as "this server rules no pairs".
+- **The relay row:** relay A calls `programmePairsStore.ts#standingPairs` (through its `CoordStore` delegate), then
+  `relayConflictVerdict` with `programmeLandedSince` as its landing fact; both reads are the overlaps piece's (Task 3).
+  It reads no `programme_pairs` column itself. Its refusal is reachable only after `overlord-route-v1`, last of all,
+  which lands after overlaps B's door and the home's ruling control (the review's F10).
+- **The operator's request doors** (`GET /api/requests`): each request row gains `blockedBy`, the `{ key, episode }` of
+  every standing pair `blockingPairs` says it deepens, computed on the server from `standingPairs`. A pairs read that
+  fails answers `blockedBy: 'unreadable'` on every row, never an empty list.
+- **Home requests B:** the Requests rows render the read's `blockedBy`; the console never evaluates a pair itself. The
+  strip's ruling control reads `GET /api/portfolio`'s `pairs` and writes `POST /api/programme-pairs/:key/rule` with
+  `{ episode, choice }`, rendering the choices from `GOAL_CONFLICT_CHOICES`, signed in or dark. Its `pwa/src/lib/api.ts`
+  call reads a 404 as "this server rules no pairs".
 - **The board's W2 parts:** Overlaps and Goal conflicts read `programmePairsStore.ts#standingPairs`.
 - **The label queue:** the `goals.conflict` row's `operator-answer` label is a ruling, read through the choice table's
   `conflict` column (Task 6). A choice whose column is null gives no label.
-- **A follow-up piece, "Revert signal"** (lane P, after overlaps A), or a W3 item: the radar's revert read and the arm's
-  match (question 6). It is W2's one ccd change if it stays in W2.
+- **A W3 follow-up, "Revert signal"** (after overlaps A): the radar's revert read and the arm's match (question 6). W2
+  changes no ccd code.
+- **`overlord-route-v1`'s row:** it lands after overlaps B and home requests B's ruling control, and before it the
+  relay's `goal-conflict-open` is unreachable. The pairs' firing rate on the portfolio read is the measurement read
+  before arming it.
+- **The done-tests piece:** its `run-closed` read stays apart from `programmeLandedSince`, as question 14 says, and may
+  reuse it.
 - **Lane P's file list** gains `server/src/coord/overlaps.ts`, `claimCollisions.ts`, `programmePairsStore.ts`,
   `overlapsLane.ts`, and the ruling door in `ledgersRoutes.ts`' operator registration.
 - **"Where lanes meet":**
@@ -447,11 +539,12 @@ The index (#2917) should carry these. The coordinator passes them to the index's
   - `LANE_SCHEDULE`: the overlaps arm's row is named `overlaps`.
   - `toId: 'overlord'` writers: the timer lane (W1) and the overlaps arm (overlaps B). The timers piece's census of that
     writer widens to two.
-- **Question 7's table:** the ruling door's gate is "session, the account gate, refuses `auth-off`; no step-up".
+- **Question 7's table:** the ruling door's gate is "session; works dark and records `flag-off`, as the rank door;
+  no step-up".
 - **The spec-fixes list gains:**
   - §5.5's "path claims and their conflicts" are not recorded on `main`; PR A records them (question 4);
-  - §5.6's "files changed" is measured as claimed paths (question 5), and its revert signal needs a fleet read
-    (question 6);
+  - §5.6's "files changed" is measured as claimed paths, two triples, hot paths aside (question 5), and its revert
+    signal needs a fleet read (question 6, W3);
   - Table 11.1a's `programme_pairs` row gains its columns (episode, evidence, last seen, closed, mailed, ruled at and
     by), and a new row for `claim_collisions` (writer: the claim attempt's conflict arm);
   - §5.3 never defines "deepens" (question 7);
@@ -491,7 +584,11 @@ export const OVERLAP_LAPSE_HOURS = 24;        // question 8
 export const COLLISION_KEEP_HOURS = 48;       // question 4
 export const PAIR_PATHS_MAX = 20;             // evidence paths kept on a row
 export const PAIR_MAILS_PER_PASS = 5;         // question 10
-export const CLAIM_HISTORY_ROWS_MAX = 5000;   // one pass's history read
+export const CLAIM_HISTORY_ROWS_MAX = 5000;   // one pass's history read, newest first
+export const GOAL_CONFLICT_TRIPLES_MIN = 2;   // question 5: two A, B, A triples (the coordinator's F3 ruling)
+export const HOT_PATH_PROGRAMMES = 3;         // question 5: a path this many programmes claimed is set aside
+export const GOAL_CONFLICT_STEPS_MAX = 2_000_000; // path comparisons one pass may make before it answers cut
+export const PAIR_RATE_WEEKS = 4;             // question 12: the firing rate's weeks
 
 export const PAIR_SOURCE_MAP = { 'claim-collision': true, radar: true, 'claim-history': true } as const;
 export type PairSource = keyof typeof PAIR_SOURCE_MAP;
@@ -501,10 +598,15 @@ export interface PairEvidence {
   readonly pathsCut: boolean;                // more paths were seen, or a radar path was cut
   readonly claimIds: readonly number[];      // sorted, distinct, at most PAIR_PATHS_MAX
   readonly prs: readonly number[];           // sorted, distinct
+  readonly triples: number;                  // goal-conflict: disjoint-in-time triples found (2 when it sights); 0 for overlap
+  readonly hotPaths: readonly string[];      // goal-conflict: the hot paths set aside, sorted, at most PAIR_PATHS_MAX
 }
 
 export const PAIR_CLOSED_MAP = { lapsed: true, 'programme-ended': true, 'goals-changed': true } as const;
 export type PairClosedWhy = keyof typeof PAIR_CLOSED_MAP;
+
+/** Question 12: episodes opened per kind in each of the last PAIR_RATE_WEEKS weeks, newest week first. */
+export interface PairRateWire { readonly weekEndsAt: number; readonly opened: Readonly<Record<PairKind, number>> }
 
 /** Question 1, answered by item 357: these three rows. `waits`: whose deepening relays wait for the other's landing. */
 export const GOAL_CONFLICT_WAITS_MAP = { none: true, a: true, b: true } as const;
@@ -553,13 +655,15 @@ export interface RadarConflictFact { project: string; prA: number; prB: number; 
 export interface ClaimHistoryRow { claimId: number; project: string; program: string | null; createdAt: number;
   paths: readonly string[] }
 
-export interface PairSighting { key: string; kind: PairKind; a: string; b: string; evidence: PairEvidence }
+/** `newestAt`: the newest evidence time (a collision's `at`, a triple's last `createdAt`, `now` for the radar). */
+export interface PairSighting { key: string; kind: PairKind; a: string; b: string; evidence: PairEvidence;
+  newestAt: number }
 export interface SightingCounts { unattributed: number; unread: number }
 
-export function overlapSightings(collisions: readonly CollisionFact[], radar: readonly RadarConflictFact[]):
-  { sightings: readonly PairSighting[]; counts: SightingCounts };
+export function overlapSightings(collisions: readonly CollisionFact[], radar: readonly RadarConflictFact[],
+  now: number): { sightings: readonly PairSighting[]; counts: SightingCounts };
 export function goalConflictSightings(history: readonly ClaimHistoryRow[], now: number):
-  { sightings: readonly PairSighting[]; counts: SightingCounts };
+  { sightings: readonly PairSighting[]; counts: SightingCounts; cut: boolean };
 ```
 
 **The rules.**
@@ -570,14 +674,35 @@ export function goalConflictSightings(history: readonly ClaimHistoryRow[], now: 
 
   Sightings of one key merge their evidence: sources, paths (sorted, at most `PAIR_PATHS_MAX`, `pathsCut` when more were
   seen or a radar fact says cut), claim ids and pull request numbers. A collision adds `path` and `claimedPath`, the
-  holder's claim id and the source `claim-collision`. A radar fact adds its paths, both pull request numbers and the
-  source `radar`.
-- `goalConflictSightings` (question 5): a row whose `program` is null counts `unattributed`. Within one project, a
-  sighting of `pairKeyOf('goal-conflict', A, B)` is any three rows r1, r2, r3 with `r1.createdAt < r2.createdAt <
-  r3.createdAt`, `r1.program = r3.program = A`, `r2.program = B ≠ A`, `r3.createdAt − r1.createdAt` at most
-  `GOAL_CONFLICT_WINDOW_DAYS` days, and every two of the three sharing a pair of overlapping paths. Only rows with
-  `createdAt` in the window before `now` count. The evidence keeps the overlapping paths (bounded as above), the claim
-  ids of every triple found, and the source `claim-history`.
+  holder's claim id and the source `claim-collision`, and its `at` to `newestAt`. A radar fact adds its paths, both pull
+  request numbers and the source `radar`, and `now` to `newestAt`. `triples` is 0 and `hotPaths` empty.
+- `goalConflictSightings` (question 5, the coordinator's ruling on F3). Only rows with `createdAt` in the window before
+  `now` count, and a row whose `program` is null counts `unattributed` and is left out.
+  - **A triple** of `(A, B)` is rows r1, r2, r3 in one project with `r1.createdAt < r2.createdAt < r3.createdAt`,
+    `r1.program = r3.program = A`, `r2.program = B ≠ A`, `r3.createdAt − r1.createdAt` at most
+    `GOAL_CONFLICT_WINDOW_DAYS` days, and every two of the three sharing a pair of overlapping non-hot paths.
+  - **A hot path** of a project is an exact path that rows of `HOT_PATH_PROGRAMMES` or more distinct programmes name.
+  - **A sighting** of `pairKeyOf('goal-conflict', A, B)` is two triples of the same `(A, B)`, T1 and T2, with T2's r1
+    at or after T1's r3 (they may share that row). The pair key orders A and B, so B, A, B, A, B sights the same key.
+  - The evidence keeps the non-hot overlapping paths and the claim ids of the two triples (bounded as above), `triples:
+    2`, the hot paths set aside, and the source `claim-history`; `newestAt` is T2's r3 `createdAt`.
+
+  **The algorithm and its bound** (the review's F4). Input `n ≤ CLAIM_HISTORY_ROWS_MAX` rows, newest first.
+  1. Group by project, then by programme. Pairs never cross a project.
+  2. Per project, count programmes per exact path in one pass, strip the hot paths from every row, and drop rows left
+     with none. `O(n · p)`, `p` the paths of a row.
+  3. Index each remaining path and each of its ancestor directories to the rows holding it, so a row finds the rows
+     whose paths overlap its own (exact, ancestor or descendant) without comparing every pair: `O(n · p · d)`, `d` the
+     path depth.
+  4. For each row b of programme B, and each programme A ≠ B among b's overlapping rows: L, the A rows before b, and R,
+     the A rows after b, both by `createdAt`. A triple `(a1, b, a3)` needs `a1` in L, `a3` in R, inside the window, and
+     `a1` overlapping `a3`.
+  5. Per `(A, B)`, the earliest-closing triple T1 (smallest r3 `createdAt`) and then any triple whose r1 is at or after
+     T1's r3. Greedy on the earliest close is exact for "two triples in sequence", so one scan of L and R per b finds
+     both.
+  6. Every `pathsOverlap` call counts one step. At `GOAL_CONFLICT_STEPS_MAX` steps the decider stops, keeps what it
+     found, and answers `cut: true`. That bounds a pass however the history is shaped; a realistic history (the cap is
+     not reached today) costs far less, and the time-budget case below measures the worst.
 
 - [ ] **Step 1: Failing tests** (`test/overlaps-sightings.test.ts`):
   - `pairKeyOf` orders the slugs, and `parsePairKey` reads back every key it makes, refusing a bad kind, a missing part,
@@ -590,15 +715,26 @@ export function goalConflictSightings(history: readonly ClaimHistoryRow[], now: 
   - an `unattributed` side and an `unread` side each sight nothing and count once;
   - a radar fact sights its pair with both pull requests, and a cut path list sets `pathsCut`;
   - 25 colliding paths keep 20, sorted, with `pathsCut`;
-  - claims history: A, B, A on `server/src/x.ts` within 14 days sights `goal-conflict:prog-a:prog-b`;
-  - A, B, A with the third 14 days and one millisecond after the first sights nothing;
-  - A, A, B sights nothing (A never returns), and B, A, B sights the same key, `goal-conflict:prog-a:prog-b`;
+  - claims history: one A, B, A on `server/src/x.ts` within 14 days sights nothing (one round trip);
+  - A, B, A, B, A on `server/src/x.ts` sights `goal-conflict:prog-a:prog-b`, with `triples: 2` and the five claim ids;
+  - A, B, A, then a week later A, B, A on the same path sights it; A, B, B, A and A, B, A, A sight nothing (the second
+    triple would start before the first one closes);
+  - A, B, A, B, A whose second triple ends 14 days and one millisecond after its own first row sights nothing;
+  - A, A, B sights nothing (A never returns), and B, A, B, A, B sights the same key, `goal-conflict:prog-a:prog-b`;
+  - a path that `prog-c` also claimed in the window is hot: A, B, A, B, A on it alone sights nothing, and the same
+    sequence whose claims also name a shared non-hot path sights it with the hot path under `hotPaths`;
+  - a path named only by unattributed rows besides A and B stays non-hot;
   - directory containment counts (`server/src` against `server/src/x.ts`), and `server/src-old` does not;
   - rows in two projects never combine;
-  - a row with no programme counts `unattributed`.
+  - a row with no programme counts `unattributed`;
+  - **the time budget:** 5,000 generated rows in one project, two programmes alternating on one path (the worst case:
+    no path is hot) and a mixed case of 40 programmes over 300 paths, each finish within 2 seconds on the test slice,
+    and the first answers `cut: true` once it reaches `GOAL_CONFLICT_STEPS_MAX`;
+  - `newestAt` is the second triple's last claim time, and a collision's `at`.
 - [ ] **Step 2: Property tests.** The tree has no property library, so each is a seeded loop over generated inputs (a
   fixed seed, a few hundred cases), failing with the case it found:
-  - adding a history row never removes a sighting;
+  - adding a history row whose paths are not hot, and that makes no path hot, never removes a sighting;
+  - adding a third programme's row on a path can only remove sightings on that path, never add one;
   - shuffling the input order changes no sighting;
   - every sighting's key parses, and its `a` and `b` are its two programmes.
 - [ ] **Step 3: Run.** Red.
@@ -612,12 +748,15 @@ export function goalConflictSightings(history: readonly ClaimHistoryRow[], now: 
   - Drop the "programme sets share a slug" rule.
   - Compare `createdAt` with `<=` in the window test.
   - Replace `pathsOverlap` with string equality.
+  - Sight on one triple (`GOAL_CONFLICT_TRIPLES_MIN` read as 1).
+  - Set the hot threshold to four programmes.
+  - Drop the step count, so the worst case runs past its budget.
 - [ ] **Step 8: Commit.** `feat(overlaps): the pair vocabulary, the goal-conflict choice table and the two sighting deciders (Overlord W2)`
 
 ### Task 2: The episode moves, the relay's verdict and `pairBlocks` (L1)
 
 **Files:**
-- Modify: `server/src/coord/overlaps.ts` (`pairMoves`, `relayConflictVerdict`, `pairBlocks`)
+- Modify: `server/src/coord/overlaps.ts` (`pairMoves`, `relayConflictVerdict`, `pairBlocks`, `blockingPairs`)
 - Modify: `shared/refusal.ts` and `pwa/src/lib/refusalWords.ts`, only if the W2 vocabulary piece has not added
   `goal-conflict-open` (question 2), with `server/test/single-definition/refusal-table.data.json`'s row
 - Create: `server/test/overlaps-moves.test.ts`, `server/test/overlaps-relay.test.ts`
@@ -631,20 +770,23 @@ export function goalConflictSightings(history: readonly ClaimHistoryRow[], now: 
 export interface StandingPairRow {
   id: number; key: string; kind: PairKind; a: string; b: string; episode: number;
   firstSeenAt: number; lastSeenAt: number; evidence: PairEvidence | 'unreadable';
-  goalsA: string | null; goalsB: string | null;   // goal-conflict: the stamps when the episode opened
+  goalsA: string | null; goalsB: string | null;   // goal-conflict: the stamps of the goals last seen, or ruled on
   ruled: { choice: GoalConflictChoice; at: number; by: string } | 'unreadable' | null;
 }
 export type Fact<T> = T | 'unmeasured';
 export interface MoveFacts {
   now: number;
   live: (slug: string) => Fact<boolean>;         // CoordStore#programmeLive
-  goalsStamp: (slug: string) => Fact<string>;    // `${inShortAt ?? 'none'}:${newest modification id ?? 0}`
-  /** False when a source of overlap sightings (collisions or radar sides) failed this pass: no overlap lapses then. */
+  openRun: (slug: string) => Fact<boolean>;      // CoordStore#programmeHasOpenRun
+  goalsStamp: (slug: string) => Fact<string>;    // programmePairsStore.ts#goalsStamp: a digest of what is ruled on
+  /** False when a source of overlap sightings (collisions, a radar project, radar sides) failed: no overlap lapses then. */
   overlapSourcesRead: boolean;
+  /** False when the claims history read failed: no goal conflict lapses then. */
+  goalHistoryRead: boolean;
 }
 export interface PairMoves {
   open: readonly { sighting: PairSighting; episode: number; goalsA: string | null; goalsB: string | null }[];
-  refresh: readonly { id: number; lastSeenAt: number; evidence: PairEvidence }[];
+  refresh: readonly { id: number; lastSeenAt: number; evidence: PairEvidence; goalsA?: string; goalsB?: string }[];
   close: readonly { id: number; why: PairClosedWhy }[];
 }
 export function pairMoves(standing: readonly StandingPairRow[], sightings: readonly PairSighting[],
@@ -652,6 +794,8 @@ export function pairMoves(standing: readonly StandingPairRow[], sightings: reado
 
 export interface RelayFacts { target: string; expectedPaths: readonly string[] }
 export function pairBlocks(pair: StandingPairRow, relay: RelayFacts): boolean;
+/** The one reader of pairBlocks: the relay's verdict and the requests read's `blockedBy` both go through it. */
+export function blockingPairs(standing: readonly StandingPairRow[], relay: RelayFacts): readonly StandingPairRow[];
 
 export type RelayConflictVerdict = { ok: true }
   | { ok: false; word: 'goal-conflict-open'; key: string; episode: number;
@@ -663,27 +807,40 @@ export function relayConflictVerdict(standing: readonly StandingPairRow[], relay
 **`pairMoves`, first match per key** (question 8). `newestEpisode` is the highest episode the table holds for each key,
 closed ones included.
 
+A goal-conflict key's two programmes are read for every key, with or without a standing row, so rules 1 and 3 cover
+the no-row case too (the review's F1).
+
 | # | The key's standing row | This pass | Move |
 |---|---|---|---|
-| 1 | any, goal-conflict | `live` of either programme is `unmeasured` | nothing |
-| 2 | any, goal-conflict | either programme reads not live | close `programme-ended` (no open) |
-| 3 | none | a sighting; goal-conflict with either stamp `unmeasured` | nothing |
-| 4 | none | a sighting | open `newestEpisode + 1` (1 when none), stamps for a goal conflict, null for an overlap |
-| 5 | ruled goal-conflict | a sighting; either stamp `unmeasured` | nothing |
-| 6 | ruled goal-conflict | a sighting; a stamp differs from the row's | close `goals-changed`, and open the next episode |
-| 7 | standing (any other) | a sighting | refresh `lastSeenAt` to `now` and the evidence (merged, bounded) |
-| 8 | overlap | no sighting; `overlapSourcesRead`; `now − lastSeenAt` at least `OVERLAP_LAPSE_HOURS` | close `lapsed` |
-| 9 | any | anything else | nothing |
+| 1 | any or none, goal-conflict | `live` of either programme is `unmeasured` | nothing |
+| 2 | standing goal-conflict | either programme reads not live | close `programme-ended` |
+| 3 | none, goal-conflict | either programme reads not live (a sighting or not) | nothing: an ended programme opens no pair |
+| 4 | none, goal-conflict | a sighting; either stamp `unmeasured` | nothing |
+| 5 | none | a sighting | open `newestEpisode + 1` (1 when none), `lastSeenAt` the sighting's `newestAt`, stamps for a goal conflict, null for an overlap |
+| 6 | ruled goal-conflict | a sighting with `newestAt` after `ruledAt`; either stamp `unmeasured` | nothing |
+| 7 | ruled goal-conflict | a sighting with `newestAt` after `ruledAt`; a stamp differs from the row's | close `goals-changed`, and open the next episode |
+| 8 | unruled goal-conflict | a sighting; either stamp `unmeasured` | refresh `lastSeenAt` and the evidence, keep the stamps |
+| 9 | unruled goal-conflict | a sighting | refresh `lastSeenAt`, the evidence and both stamps |
+| 10 | standing (overlap, or ruled goal-conflict) | a sighting | refresh `lastSeenAt` and the evidence |
+| 11 | overlap | no sighting; `overlapSourcesRead`; `now − lastSeenAt` at least `OVERLAP_LAPSE_HOURS` | close `lapsed` |
+| 12 | unruled goal-conflict | no sighting; `goalHistoryRead`; `now − lastSeenAt` at least `GOAL_CONFLICT_WINDOW_DAYS` days; `openRun` reads false for both | close `lapsed` |
+| 13 | any or none | anything else | nothing |
 
-*Table 2. The episode moves. A goal-conflict episode never lapses on time. Rule 6 is "raises nothing new until either
-programme's goals change" (question 1, item 357).*
+*Table 2. The episode moves. A refresh sets `lastSeenAt` to the larger of the row's and the sighting's `newestAt`, never
+to `now` (the review's F11 a), and merges the evidence, bounded. Rule 7 is "raises nothing new until either programme's
+goals change" (question 1, item 357): the stamps it compares are the ones the ruling wrote, and a sighting no newer than
+the ruling cannot reopen it (the review's F2). Rule 12 is the coordinator's ruling on F6: a ruled episode never lapses.
+An `openRun` read that is `unmeasured` falls to rule 13.*
 
-**`pairBlocks`** (question 7): the pair is a `goal-conflict`, the relay's target is `a` or `b`, and either
-`expectedPaths` is empty, or the evidence is `unreadable` or `pathsCut`, or some expected path overlaps some evidence path
-(`pathsOverlap`).
+**`pairBlocks`** (question 7): the pair is a `goal-conflict`, the relay's target is `a` or `b`, the evidence is
+`unreadable` (fail closed) or shows `triples` at least `GOAL_CONFLICT_TRIPLES_MIN` (question 5: the refusal reads only
+pairs that pass the stricter signal, whatever build wrote the row), and either `expectedPaths` is empty, or the evidence
+is `unreadable` or `pathsCut`, or some expected path overlaps some evidence path (`pathsOverlap`).
 
-**`relayConflictVerdict`, over the standing goal-conflict rows the relay deepens (`pairBlocks`), in key order, first
-refusal wins:**
+**`blockingPairs`** filters the standing rows by `pairBlocks`, in key order. It is the only caller of `pairBlocks`
+outside the tests.
+
+**`relayConflictVerdict`, over `blockingPairs(standing, relay)`, first refusal wins:**
 
 | The row's ruling | Answer |
 |---|---|
@@ -696,20 +853,33 @@ refusal wins:**
 *Table 3. The relay's verdict. A pair the relay does not deepen is never consulted. Only the `waits` column of the choice
 table is read here (question 1).*
 
-- [ ] **Step 1: Failing tests** (`test/overlaps-moves.test.ts`), one or more per row of Table 2:
+- [ ] **Step 1: Failing tests** (`test/overlaps-moves.test.ts`), one or more per row of Table 2. Each case runs
+  `pairMoves` over **three or more passes**, applying each pass's moves to the rows the next pass reads (a small
+  in-test applier), and asserts every pass's moves, so a loop shows as a repeated open (the review's F1):
   - a first sighting opens episode 1; a sighting after a closed episode 2 opens episode 3;
-  - an overlap seen again refreshes, keeping `firstSeenAt`;
-  - an overlap unseen for 24 hours closes `lapsed`, one unseen for 23 hours 59 minutes does not, and none closes when
-    `overlapSourcesRead` is false;
-  - a goal conflict unseen for 30 days stays;
-  - a ruled goal conflict seen again with the same stamps refreshes and stays ruled;
-  - a ruled goal conflict seen with a changed stamp closes `goals-changed` and opens the next, unruled;
-  - an unruled goal conflict seen with a changed stamp refreshes (rule 7, not rule 6);
-  - an ended programme closes its goal conflicts `programme-ended` and opens none for them;
+  - an overlap seen again refreshes, keeping `firstSeenAt`, and its `lastSeenAt` is the evidence's time, not `now`;
+  - an overlap whose newest evidence is 24 hours old closes `lapsed`, one at 23 hours 59 minutes does not, and none
+    closes when `overlapSourcesRead` is false;
+  - **the F1 loop:** a goal-conflict sighting that stays in the window while one programme reads not live closes the
+    standing episode on pass 1, and passes 2, 3 and 4 open nothing; the same with `live` `unmeasured` and no row moves
+    nothing on any pass;
+  - **the F2 trace:** open with stamps S0; the goals change to S1; a pass refreshes the stamps to S1 (rule 9); the
+    operator rules (the test applies `rulePair`'s stamp, S1); the next pass, with the same sighting, leaves it ruled
+    (rule 10); a sighting newer than the ruling with stamps still S1 leaves it ruled; only a newer sighting with S2
+    closes `goals-changed` and opens the next, unruled;
+  - a ruled goal conflict seen again with a changed stamp but no sighting newer than the ruling stays ruled;
+  - an unruled goal conflict seen with a changed stamp refreshes its stamps (rule 9, not rule 7), and with a stamp
+    `unmeasured` refreshes and keeps them (rule 8);
+  - **F6:** an unruled goal conflict unseen for 14 days with no open run on either side closes `lapsed`; with an open run
+    on one side, with `openRun` `unmeasured`, at 13 days 23 hours, or with `goalHistoryRead` false, it stays; a ruled one
+    unseen for 30 days with no open run stays;
+  - an ended programme closes its goal conflicts `programme-ended` and opens none for them on later passes;
   - an `unmeasured` live or stamp read moves nothing for that key, and moves the other keys.
 - [ ] **Step 2: Failing tests** (`test/overlaps-relay.test.ts`):
   - `pairBlocks`: an overlap never blocks; a target outside the pair never blocks; empty paths block; a disjoint path
-    list does not; a contained path does; a cut or unreadable evidence blocks;
+    list does not; a contained path does; a cut or unreadable evidence blocks; a goal conflict whose evidence shows one
+    triple never blocks (question 5);
+  - `blockingPairs` answers exactly the rows `pairBlocks` passes, in key order;
   - `relayConflictVerdict`, one case per row of Table 3, for `a-first` and `b-first` from each side (question 1);
   - two blocking rows, the first passing and the second unruled, refuse with the second's key;
   - no standing pair passes.
@@ -722,29 +892,35 @@ table is read here (question 1).*
   sentence and its refusal-table row (question 2).
 - [ ] **Step 6: Run** both suites, `test/single-definition/*.test.ts`, `test/rings/*.test.ts`, both server `tsc` runs
   and pwa's `tsc`. Green.
-- [ ] **Step 7: Mutation step.** Add `pairMoves`, `relayConflictVerdict` and `pairBlocks` to `MUTANT_SETS`, run the
-  mutation tool on `overlaps.ts`, and record the floors.
+- [ ] **Step 7: Mutation step.** Add `pairMoves`, `relayConflictVerdict`, `pairBlocks` and `blockingPairs` to
+  `MUTANT_SETS`, run the mutation tool on `overlaps.ts`, and record the floors.
 - [ ] **Step 8: Red check.** Each reds a case. Revert each.
   - Let an overlap lapse at 23 hours.
   - Make an unreadable ruling pass.
   - Make empty `expectedPaths` not block.
   - Skip rule 2 for a ruled pair.
+  - Drop rule 3, so a no-row sighting of an ended programme opens (the multi-pass case reds).
+  - Drop rule 7's "newer than `ruledAt`" (the F2 trace reds).
+  - Let rule 12 lapse a ruled episode, or one with an open run.
+  - Let `pairBlocks` pass a one-triple goal conflict.
 - [ ] **Step 9: Commit.** `feat(overlaps): the episode moves, the relay's goal-conflict verdict and pairBlocks (Overlord W2)`
 
 ### Task 3: One migration, the collision record and the pairs store (L3)
 
 **Files:**
 - Modify: `server/src/coord/schema.ts` (one migration: `claim_collisions` and `programme_pairs`)
-- Create: `server/src/coord/claimCollisions.ts` (`recordCollisionsInTx`, `collisionsSince`)
-- Create: `server/src/coord/programmePairsStore.ts` (`applyPairMoves`, `standingPairs`, `newestEpisodes`,
-  `claimHistory`, `goalsStamp`)
-- Modify: `server/src/coord/store.ts` (`claimAttempt`'s conflict arm calls the record; one-line delegates
-  `collisionsSince`, `applyPairMoves`, `standingPairs`, `newestEpisodes`, `claimHistory`, `goalsStamp`; one import)
+- Create: `server/src/coord/claimCollisions.ts` (`recordCollisions`, `collisionsSince`)
+- Create: `server/src/coord/programmePairsStore.ts` (`applyPairMoves`, `stampPairGoalsInTx`, `standingPairs`,
+  `newestEpisodes`, `claimHistory`, `goalsStamp`, `programmeHasOpenRun`, `programmeLandedSince`)
+- Modify: `server/src/coord/store.ts` (`claimAttempt` calls the record after its transaction commits a refusal;
+  one-line delegates `collisionsSince`, `applyPairMoves`, `standingPairs`, `newestEpisodes`, `claimHistory`,
+  `goalsStamp`, `programmeHasOpenRun`, `programmeLandedSince`; one import)
 - Modify: `server/test/coord-db.test.ts` (82 to the new count), `server/test/run-close-switch.test.ts` (its drop list
   gains both tables, and its count word moves by one)
 - Modify: `server/test/single-definition/writers-map.test.ts` (`TABLES` gains `claim_collisions`, written only by
-  `claimCollisions.ts#recordCollisionsInTx`, and `programme_pairs`, written only by `programmePairsStore.ts`; a column case
-  for `mailedAt` and `ruled` is added in Tasks 5 and 7)
+  `claimCollisions.ts#recordCollisions`, and `programme_pairs`, written only by `programmePairsStore.ts#applyPairMoves`
+  and `programmePairsStore.ts#stampPairGoalsInTx`, each named as `file#function`, never as a file alone (the review's
+  F11 f); the column cases for `mailedAt` and `ruled` are added in Tasks 5 and 7)
 - Modify: `server/test/single-definition/time-ports.test.ts` (`TIME_PORT_FILES` gains both new store files)
 - Create: `server/test/claim-collisions.test.ts`, `server/test/programme-pairs-store.test.ts`
 - Test: `server/test/claims-store.test.ts`, `server/test/claims-routes.test.ts`, `server/test/claims-rechain.test.ts`
@@ -790,29 +966,46 @@ The migration's comment states the slot to re-measure, as every migration does. 
 existing table, so an older build takes rule 3 and ignores them (Table 11.1a: "Ignores it"). Every column PR B writes is
 in this migration, so PR B adds none.
 
-**The collision record** (question 4). `recordCollisionsInTx(db, input, conflicts, now)` runs inside `claimAttempt`'s
-transaction, in its conflict arm, before the arm returns:
+**The collision record** (question 4, the review's F5). `CoordStore#claimAttempt` keeps its transaction exactly as
+today. When that transaction has committed and its answer is `{ ok: false, why: 'conflict' }`, the method calls
+`recordCollisions(db, input, conflicts, now)`, which runs one transaction of its own:
 1. it deletes rows with `at` older than `COLLISION_KEEP_HOURS` (prune on write);
 2. it inserts one row per conflict (`path`, `claimedPath`, `claimId` as `holderClaimId`), with the requester's
    `sessionId` and `runId`.
 
-The call is wrapped: a throw is caught, `console.warn('ccrc-server: claims: a collision record failed: …')` once a
-process, and the arm returns its answer unchanged. `collisionsSince(db, since)` answers `{ ok: true, rows }` with each
+The prune and the inserts commit together or not at all. The call is wrapped: any throw, a statement error or a
+rollback SQLite made by itself (a full disk, an I/O error, which leaves `db.isTransaction` false and makes the
+`COMMIT` throw), is caught, `console.warn('ccrc-server: claims: a collision record failed: …')` once a process, and if
+`db.isTransaction` still reads true the catch rolls it back. The method then returns the answer its own transaction
+already decided, so the route's 409 cannot become a 500. A refusal and its record are two commits: a crash between
+them loses one record, which the arm can only miss. `collisionsSince(db, since)` answers `{ ok: true, rows }` with each
 row's holder `heldBy` and `runId` joined from `claims`, and both runs' `program` joined from `runs`, or `{ ok: false,
 detail }`.
 
 **The pairs store.**
 - `applyPairMoves(db, moves, now)` runs one transaction: each close sets `closedAt` and `closedWhy` on a standing row;
-  each refresh sets `lastSeenAt` and `evidence`; each open inserts its row with `firstSeenAt = lastSeenAt = now`. A
-  close of a row that no longer stands, or an open that the standing index refuses, throws and rolls the pass back.
-  Closes run before opens, so rule 6's close and open land together. It answers the ids it opened.
+  each refresh sets `lastSeenAt` and `evidence`, and its stamps through `stampPairGoalsInTx` when the move carries them
+  (rule 9); each open inserts its row with `firstSeenAt = now`, `lastSeenAt` the sighting's `newestAt`, and its stamps
+  through `stampPairGoalsInTx`. A close of a row that no longer stands, or an open that the standing index refuses,
+  throws and rolls the pass back. Closes run before opens, so rule 7's close and open land together. It answers the ids
+  it opened.
+- `stampPairGoalsInTx(db, id, goalsA, goalsB)` is the one writer of the two stamp columns, called inside its caller's
+  transaction by `applyPairMoves` and by `rulePair` (Task 7).
 - `standingPairs(db)` answers `{ ok: true, rows: StandingPairRow[] }` in `pairKey` order, every word re-read through its
   guard (`isPairKind`, `isGoalConflictChoice`, a JSON parse and shape check of `evidence`), or `{ ok: false, detail }`.
 - `newestEpisodes(db)` answers the highest episode per key.
 - `claimHistory(db, since, cap)` answers the claims created at or after `since` that are not re-chained (`chainedFrom
-  IS NULL`), each with its paths and its run's `program` (NULL with no run), oldest first, at most `cap`, with `cut`.
-- `goalsStamp(db, slug)` answers `${inShortAt ?? 'none'}:${newest modification id ?? 0}` from `programs` and
-  `programme_modifications`, or throws.
+  IS NULL`), each with its paths and its run's `program` (NULL with no run), **newest first**, at most `cap`, with
+  `cut`. A cut drops the oldest rows, so a conflict completed today is never the one left out (the review's F4).
+- `goalsStamp(db, slug)` answers a SHA-256 digest, cut to 16 hex characters, of the canonical JSON `[inShortAt,
+  doneWhen, [[id, ruling, merged] for each modification, by id]]`, read as `CoordStore#goalsFor` reads them, or throws.
+  It covers every goals fact the operator rules on, so a definition of done changed or a modification ruled or merged
+  is a goals change (the review's F11 d).
+- `programmeHasOpenRun(db, slug)` answers whether any run of the programme has a `state` outside
+  `TERMINAL_RUN_STATES` (rule 12), or throws.
+- `programmeLandedSince(db, slug, at)` answers whether a `work` run of the programme reached `done` with `closedAt`
+  after `at` (question 14), as `Fact<boolean>`: a read that throws answers `unmeasured`. Relay A calls it, with
+  `standingPairs` (the review's F9).
 
 - [ ] **Step 1: Characterize the claim path** before touching it (`test/claim-collisions.test.ts`, first block, green on
   `main`): a refused `claimAttempt` answers exactly `{ ok: false, why: 'conflict', conflicts }`, with every conflicting
@@ -821,20 +1014,29 @@ detail }`.
   - `claim-collisions.test.ts`: a refused attempt writes one collision row per conflict, with the requester's run; a
     granted or renewing attempt writes none; a row 49 hours old is pruned by the next refused attempt; a record whose
     insert throws (the table dropped by the test) leaves the answer equal to the characterized one and warns once;
+    **a forced rollback** (a `BEFORE INSERT` trigger on `claim_collisions` that runs `SELECT RAISE(ROLLBACK, 'forced')`)
+    leaves the answer equal to the characterized one, `db.isTransaction` false, no collision row and no pruned row, and
+    the next `claimAttempt` works; through `POST /api/claims` the same trigger answers 409 `claim-conflict`, never 500;
     `collisionsSince` joins both programmes, and NULL for a claim with no run.
   - `programme-pairs-store.test.ts`: a fresh database has both tables and no row; an open, a refresh and a close each
     land; two standing rows for one key are refused by the index; a close and an open of the same key in one call land
     together; `standingPairs` reads back every field, and a hand-written `kind` of `merge` or `ruled` of `stop-both` reads
-    `unreadable` (standing in for a newer build); `claimHistory` leaves out re-chained rows and rows before `since`, and
-    says `cut` past the cap; `goalsStamp` changes when a modification is added.
+    `unreadable` (standing in for a newer build); `claimHistory` leaves out re-chained rows and rows before `since`,
+    reads newest first, and past the cap says `cut` and keeps the newest; `goalsStamp` changes when a modification is
+    added, ruled or merged, when `doneWhen` changes and when the pin is re-pinned, and not when nothing changed;
+    `programmeHasOpenRun` is true with a `working` run and false with only `done` and `failed` ones;
+    `programmeLandedSince` is true for a `work` run closed `done` after `at`, false for one closed before, for a review
+    run, or for a `failed` one; `stampPairGoalsInTx` writes both stamps and nothing else.
 - [ ] **Step 3: Run.** Red (Step 1's block green).
 - [ ] **Step 4: Implement** the migration, both store files, the call in `claimAttempt` and the delegates.
 - [ ] **Step 5: Run** both suites, `test/claims-store.test.ts`, `test/claims-routes.test.ts`,
   `test/claims-rechain.test.ts`, `test/coord-db.test.ts`, `test/run-close-switch.test.ts`,
   `test/single-definition/*.test.ts`, `test/rings/*.test.ts` and both server `tsc` runs. Green.
 - [ ] **Step 6: Red check.** Each reds a case. Revert each.
-  - Let the record's throw escape the conflict arm.
+  - Let the record's throw escape `claimAttempt`.
+  - Move the record back inside the claim's transaction (the forced-rollback case reds with a 500).
   - Drop the prune.
+  - Read the history oldest first (the cut case reds).
   - Add a second `INSERT INTO programme_pairs` in another file: `writers-map.test.ts` reds.
   - Read `kind` with a cast instead of `isPairKind`.
 - [ ] **Step 7: Commit.** `feat(overlaps): claim_collisions and programme_pairs, the collision record and the pairs store (Overlord W2)`
@@ -844,7 +1046,8 @@ detail }`.
 **Files:**
 - Create: `server/src/coord/overlapsLane.ts` (`overlapsPass`)
 - Modify: `server/src/laneSchedule.ts` (`LaneName` and `LANE_SCHEDULE` gain `overlaps`)
-- Modify: `server/src/watch.ts` (`FleetWatcher#sweepOverlaps` and its dispatch in the tick, beside `sweepCases`)
+- Modify: `server/src/watch.ts` (`FleetWatcher#sweepOverlaps` and its dispatch in the tick, beside `sweepCases`;
+  `FleetWatcher#radarUnread`, the projects whose last radar read failed)
 - Modify: `server/src/coord/ports.ts` (`WatcherCoordMember` gains the store members the pass reaches)
 - Create: `server/test/overlaps-lane.test.ts`
 - Modify: the lane schedule census in `server/test/consolidationCensus.ts` if it lists rows by name
@@ -854,18 +1057,20 @@ detail }`.
 
 ```ts
 export type OverlapsCoord = Pick<WatcherCoordPort, 'collisionsSince' | 'claimHistory' | 'standingPairs'
-  | 'newestEpisodes' | 'applyPairMoves' | 'programmeLive' | 'goalsStamp' | 'bindingsOf'>;
+  | 'newestEpisodes' | 'applyPairMoves' | 'programmeLive' | 'programmeHasOpenRun' | 'goalsStamp' | 'bindingsOf'>;
 export interface OverlapsPassDeps {
   readonly coord: OverlapsCoord;
   readonly now: () => number;
   /** The radar's map and the tick's registry rows (id to project). */
   readonly landings: () => ReadonlyMap<string, SessionLanding>;
   readonly projectOf: (id: string) => string | null;
+  /** The projects whose last radar read failed, or 'listing' when the radar could not list at all (F11 b). */
+  readonly radarUnread: () => ReadonlySet<string> | 'listing';
 }
 export interface OverlapsPassResult {
   readonly opened: number; readonly refreshed: number; readonly closed: number;
-  readonly unattributed: number; readonly unread: 'collisions' | 'history' | 'pairs' | 'sides' | null;
-  readonly historyCut: boolean;
+  readonly unattributed: number; readonly unread: 'collisions' | 'history' | 'pairs' | 'sides' | 'radar' | null;
+  readonly historyCut: boolean; readonly signalCut: boolean;
 }
 export async function overlapsPass(deps: OverlapsPassDeps): Promise<OverlapsPassResult>;
 ```
@@ -879,16 +1084,23 @@ export async function overlapsPass(deps: OverlapsPassDeps): Promise<OverlapsPass
    conflict out, counted `unattributed`. Each pair of pull requests is taken once. Each side's programmes come from
    `bindingsOf(id)`'s `worker()` and `claimant()` (question 15): a failure is `unread`, and no open run is
    `unattributed`.
-4. Read the claims history of the last `GOAL_CONFLICT_WINDOW_DAYS` days, at most `CLAIM_HISTORY_ROWS_MAX` rows. A
-   failure answers `unread: 'history'` and skips the goal-conflict sightings, so rule 8 never closes on a pass that did
-   not look.
-5. Ask `overlapSightings` and `goalConflictSightings`.
-6. Ask `pairMoves`, with `programmeLive` and `goalsStamp` wrapped so that a throw answers `unmeasured`.
-7. Apply the moves with `applyPairMoves`. Warn once per pass on any `unread` or `historyCut`, with its detail
-   (`ccrc-server: overlaps: …`).
+4. Read the claims history of the last `GOAL_CONFLICT_WINDOW_DAYS` days, newest first, at most
+   `CLAIM_HISTORY_ROWS_MAX` rows. A failure answers `unread: 'history'`, skips the goal-conflict sightings and sets
+   `goalHistoryRead` false, so rule 12 never lapses a goal conflict on a pass that did not look.
+5. Ask `overlapSightings` and `goalConflictSightings`. A decider `cut` sets `signalCut`.
+6. Ask `pairMoves`, with `programmeLive`, `programmeHasOpenRun` and `goalsStamp` wrapped so that a throw answers
+   `unmeasured`.
+7. Apply the moves with `applyPairMoves`. Warn once per pass on any `unread`, `historyCut` or `signalCut`, with its
+   detail (`ccrc-server: overlaps: …`).
 
-A pass whose collisions read failed, or whose radar sides counted any `unread`, sets `overlapSourcesRead` false, so rule
-8 closes nothing that pass: an unseen pair is only unseen when every source was read.
+A pass whose collisions read failed, whose radar sides counted any `unread`, or whose `radarUnread()` is `'listing'`
+or names any project, sets `overlapSourcesRead` false (`unread: 'radar'` for the last two), so rule 11 closes nothing
+that pass: an unseen pair is only unseen when every source was read.
+
+**`FleetWatcher#radarUnread`** answers the projects whose last radar read failed with a reason other than `absent`, and
+`'listing'` when its last listing failed. `sweepRadar` is its one writer: it sets a private `radarUnreadNow` beside
+`this.landings`, at each place it assigns the map, never read back from the log throttle `radarSaid`. It decides
+nothing: the reasons are the radar's own words, and the arm reads them as "not read".
 
 **The lane row:** `{ name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs:
 5 * 60_000, warnKey: 'ccrc-server: the overlaps arm failed', derivedFrom: { name: 'landingRadar', reason: 'the arm reads
@@ -897,7 +1109,7 @@ the radar\'s map, which changes no faster than the radar lane writes it' } }`. I
 **`FleetWatcher#sweepOverlaps`:** a no-op without a coordination database; else `this.runLane('overlaps', () =>
 overlapsPass({ coord, now: () => this.deps.time.clock.wall(), landings: () => this.currentLandings(), projectOf }))`,
 where `projectOf` reads the tick's registry listing the radar lane used. The tick dispatches it with `void`, after
-`sweepRadar`, as `sweepCases` is dispatched.
+`sweepRadar`, as `sweepCases` is dispatched. Its deps pass `radarUnread: () => this.radarUnread()`.
 
 - [ ] **Step 1: Failing tests** (`test/overlaps-lane.test.ts`, a fake `OverlapsCoord` and fake landings):
   - a collision between `prog-a` and `prog-b` runs opens `overlap:prog-a:prog-b` episode 1; the next pass refreshes it;
@@ -905,9 +1117,13 @@ where `projectOf` reads the tick's registry listing the radar lane used. The tic
     one overlap with both pull requests;
   - the same pull request number in `project-a` and `project-b` never pairs across projects;
   - a session with no open run is counted `unattributed`, and a failing `bindingsOf` answers `unread: 'sides'`;
-  - claims history A, B, A opens `goal-conflict:prog-a:prog-b` with the two goals stamps;
+  - claims history A, B, A, B, A opens `goal-conflict:prog-a:prog-b` with the two goals stamps, and A, B, A alone opens
+    nothing;
   - a pass whose collisions read fails closes no overlap that would otherwise lapse;
-  - a failing history read answers `unread: 'history'` and closes no goal conflict;
+  - a pass whose `radarUnread()` names `project-a`, or answers `'listing'`, answers `unread: 'radar'` and closes no
+    overlap that would otherwise lapse;
+  - a failing history read answers `unread: 'history'` and lapses no goal conflict that would otherwise lapse;
+  - a history at the cap answers `historyCut`, and a decider cut answers `signalCut`, each with one warning;
   - a throwing `goalsStamp` moves nothing for that key and still opens an overlap elsewhere;
   - the pass sends no mail and writes nothing but `applyPairMoves`.
 - [ ] **Step 2: Failing test** of the wiring: a `FleetWatcher` built through `quietAtTestEnd` with an in-memory store
@@ -919,6 +1135,7 @@ where `projectOf` reads the tick's registry listing the radar lane used. The tic
   (`GROWTH_CHECK=1`) for `watch.ts`, `store.ts` and `schema.ts`. Green.
 - [ ] **Step 6: Red check.** Each reds a case. Revert each.
   - Let a pass with a failed collisions read close a lapsed overlap.
+  - Ignore `radarUnread()`.
   - Match the other radar side by pull request number alone, across projects.
   - Count a failing `bindingsOf` as `unattributed`.
 - [ ] **Step 7: Commit.** `feat(overlaps): the overlaps arm records pairs from claims and the radar (Overlord W2)`
@@ -928,22 +1145,42 @@ where `projectOf` reads the tick's registry listing the radar lane used. The tic
 ### Task 5: The `server` sender and one mail per new episode (PR B)
 
 **Files:**
-- Modify: `server/src/coord/rundefs.ts` (`SYSTEM_MAIL_SENDER_MAP` gains `server`, question 9)
+- Modify: `server/src/coord/rundefs.ts` (`SYSTEM_MAIL_SENDER_MAP` gains `server`, question 9; beside it,
+  `SYSTEM_MAIL_SENDER_PUSH` and `isRecordOnlySystemSender`)
 - Modify: `server/src/coord/overlaps.ts` (`pairNoticeBody`, `pairNoticeSubject`)
 - Modify: `server/src/coord/programmePairsStore.ts` (`markPairMailedInTx`, `unmailedPairs`)
 - Modify: `server/src/coord/overlapsLane.ts` (the mail step)
 - Modify: `server/src/coord/store.ts` and `server/src/coord/ports.ts` (delegates and members)
-- Modify: `server/src/watch.ts` (the pass's designation read and switches read)
+- Modify: `server/src/watch.ts` (the pass's designation read and switches read; `FleetWatcher#pushNewMail`'s
+  `m.fromId === TIMER_MAIL_SENDER` becomes `isRecordOnlySystemSender(m.fromId)`)
 - Modify: the census that the Overlord's timers piece adds for `toId: 'overlord'` writers (it gains the overlaps arm),
   and `server/test/single-definition/writers-map.test.ts` (a column case: `mailedAt` written only by
   `markPairMailedInTx`)
-- Modify: each test that pins `SYSTEM_MAIL_SENDER_MAP`'s keys or its readers
+- Modify: each test that pins `SYSTEM_MAIL_SENDER_MAP`'s keys or its readers, `server/test/run-last-move.test.ts`'s
+  role list among them (it gains `server`)
+- Modify: `server/test/push-copy.test.ts` and `server/test/push-outbox-characterization.test.ts` (a pair mail from
+  `server` is record-only, beside timer mail's case)
 - Create: `server/test/overlaps-mail.test.ts`
 
 **The sender.** `server: 'the server\'s own measured notice: facts only, no one\'s words'`. Like `timer`: no session can
-send as it (`POST /api/mail` finds no registry row), the mail starts no park notice and tags no push, and
-`runLastMoves` never counts it. Each reader of `MAIL_ROLE_IDS` is checked against the `timer` row's treatment, and a test
-pins each.
+send as it (`POST /api/mail` finds no registry row), the mail starts no park notice, and `runLastMoves` never counts it.
+Each reader of `MAIL_ROLE_IDS` is checked against the `timer` row's treatment, and a test pins each.
+
+**Record-only, from one predicate** (question 9, the coordinator's ruling on F7). Beside the map:
+
+```ts
+const SYSTEM_MAIL_SENDER_PUSH = {
+  coordinator: 'push', operator: 'push', [TIMER_MAIL_SENDER]: 'record-only', server: 'record-only',
+} as const satisfies Record<SystemMailSender, 'push' | 'record-only'>;
+export const isRecordOnlySystemSender = (id: string): boolean =>
+  Object.hasOwn(SYSTEM_MAIL_SENDER_PUSH, id) && SYSTEM_MAIL_SENDER_PUSH[id as SystemMailSender] === 'record-only';
+```
+
+`push` means only that the sender does not make the mail record-only; `pushNewMail`'s other tests still apply. The
+`satisfies` makes a sender added to the map without a push word a compile error, so request ids B's `overlord` row
+needs one too (which word is request ids B's call). `pushNewMail` asks the predicate in place of the timer name test,
+so the timer's behaviour is unchanged, and the operator sees a standing pair on the home's portfolio strip
+(question 3), never as a push.
 
 **The mail step**, after the moves, in the same pass:
 1. It runs only when the designation reads bound to a live session (designation A's one reader) and the switches read
@@ -968,17 +1205,24 @@ either programme". It quotes no claim `intent`, no title and no operator word. T
   - an episode closed before the step is never mailed;
   - a throw from `markPairMailedInTx` leaves no mail row for that episode;
   - the body holds both slugs, the paths and the ids, and no field of a claim's `intent` (seeded with a marker string);
-  - `POST /api/mail` with `fromId: 'server'` is refused `unknown-sender`.
+  - `POST /api/mail` with `fromId: 'server'` is refused `unknown-sender`;
+  - `isRecordOnlySystemSender` is true for `timer` and `server` and false for `coordinator`, `operator` and a session
+    id; `pushNewMail` records a pair mail and pushes nothing (`push-copy`, `push-outbox-characterization`), and timer
+    mail's pinned case is unchanged;
+  - `run-last-move.test.ts`'s role list gains `server`, in the map's order.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** this suite, the mail suites that read the sender map (`test/mail-routes.test.ts`,
-  `test/mail-hardening.test.ts`), the timers piece's census, `test/single-definition/*.test.ts`, `test/rings/*.test.ts`
-  and both server `tsc` runs. Green.
+  `test/mail-hardening.test.ts`), `test/push-copy.test.ts`, `test/push-outbox-characterization.test.ts`,
+  `test/run-last-move.test.ts`, the timers piece's census, `test/single-definition/*.test.ts`, `test/rings/*.test.ts`,
+  both server `tsc` runs, and the growth check armed for `watch.ts` and `store.ts`. Green.
 - [ ] **Step 5: Mutation step.** `pairNoticeBody` joins `MUTANT_SETS` and its floor.
 - [ ] **Step 6: Red check.** Each reds a case. Revert each.
   - Stamp `mailedAt` outside the mail's transaction.
   - Send while `mail-disabled` stands.
   - Put the claim's intent in the body.
+  - Map `server` to `push` (the pair-mail push case reds).
+  - Put the timer name test back in `pushNewMail` in place of the predicate (the pair-mail push case reds).
 - [ ] **Step 7: Commit.** `feat(overlaps): one mail to the Overlord per new pair, from the server sender (Overlord W2)`
 
 ### Task 6: `goals.conflict` in shadow (PR B)
@@ -1000,6 +1244,11 @@ cannot be read, the arm makes no call and writes no record. The call carries:
 The caller owns everything else: the 2 s deadline and its one retry, the records, and the hosted rule (`goals.conflict` holds no private state, Table 3.7b). The arm awaits the call, and its
 answer changes no row: a pair stands on its code signal whatever the model says ("No flag proves nothing", fail open).
 A rejected or timed-out call is warned once a pass and changes nothing.
+
+The ask is keyed to "opened this pass", so a restart between `applyPairMoves` and the ask loses that episode's ask for
+good (the review's F11 c). That is acceptable: the ask is shadow, its answer changes nothing, and a lost shadow record
+costs one sample of the row's measurement, never a pair or a ruling. The arm does not re-ask an episode it did not
+open itself.
 
 **The label.** Table 3.7b's `operator-answer` label for this row is the operator's ruling (Task 7), read through the
 choice table's `conflict` column: `both-stand` labels "no", `a-first` and `b-first` label "yes". The label queue piece
@@ -1033,18 +1282,23 @@ reads it from `programme_pairs` (What the index should change).
   `server/test/single-definition/refusal-table.data.json` (their rows, as code-only until the spec-fixes run adds Table
   11.6's)
 - Modify: `server/test/box-token-census.test.ts` (`LEDGER_OPERATOR_DOORS` gains `/api/programme-pairs/:key/rule`),
-  `CLAUDE.md`'s box-token bullet (the programme ledgers' operator doors' sentence names it),
-  `server/test/auth-gate.test.ts` (`scanRoutes('coord/ledgersRoutes.ts')`'s count, the prose counts, and `FLAG_AWARE`,
-  because the door refuses dark), `server/src/auth/gate.ts`' header count, the README's auth paragraph if it counts these
-  doors
+  `CLAUDE.md`'s box-token bullet (the programme ledgers' operator doors' sentence names it, beside the rank door, as
+  working while sign-in is dark and recording `flag-off` then), `server/test/auth-gate.test.ts`
+  (`scanRoutes('coord/ledgersRoutes.ts')`'s count and the prose counts; the door works dark, so it is not in
+  `FLAG_AWARE`, and its comment says so as the rank door's does), `server/src/auth/gate.ts`' header count, the README's
+  auth paragraph if it counts these doors
 - Modify: `server/test/single-definition/writers-map.test.ts` (a column case: `ruled`, `ruledAt` and `ruledBy` written
-  only by `rulePair`)
+  only by `programmePairsStore.ts#rulePair`; `goalsA` and `goalsB` only by `programmePairsStore.ts#stampPairGoalsInTx`)
+- Modify: `server/src/coord/programmePairsStore.ts` (`pairRate`, the firing rate), its `CoordStore` delegate
 - Create: `server/test/programme-pairs-rule.test.ts`
 - Test: `server/test/ledgers-operator-routes.test.ts`, `server/test/mail-routes.test.ts` (its kebab-token census)
 
-**The door.** `POST /api/programme-pairs/:key/rule`, body `{ episode, choice }`:
+**The door.** `POST /api/programme-pairs/:key/rule`, body `{ episode, choice }`, in the rank door's order (question 11,
+the coordinator's ruling on F10). Armed, the auth gate (`server/src/auth/gate.ts`) has already refused a request with
+no session before the handler runs, so no unauthenticated caller reaches step 1 (the review's F11 e).
 1. No coordination database: `not-configured`.
-2. The account gate, `deps.gate(req, reply, { cap: null, stepUp: false })` (question 11). Dark, it refuses `auth-off`.
+2. The actor: `deps.authEnabled ? deviceActor(deps.sessionAuth(req).device) : 'flag-off'`, as the rank door. No account
+   gate and no step-up: a ruling only lifts a hold.
 3. `parsePairKey(key)` fails, `episode` is not a positive safe integer, or `choice` is not `isGoalConflictChoice`:
    `bad-request` with its detail (question 1).
 4. `rulePair(db, key, episode, choice, actor, now)`, one transaction:
@@ -1052,36 +1306,53 @@ reads it from `programme_pairs` (What the index should change).
    - the standing episode is not `episode`, or none stands: `pair-changed`, with the standing episode or null
      (question 13);
    - the standing row is an overlap: `pair-not-rulable`;
-   - else it writes `ruled`, `ruledAt` and `ruledBy`, and answers the previous ruling or null.
+   - else it reads both programmes' `goalsStamp`, writes them through `stampPairGoalsInTx` (the review's F2: the stamps
+     are the goals the operator ruled on), writes `ruled`, `ruledAt` and `ruledBy`, and answers the previous ruling or
+     null. A stamp read that throws rolls the ruling back, and the door answers `runs-unreadable` with its detail, so
+     a ruling is never stored against goals it could not read.
 5. It answers `{ ok: true, pair: StandingPairWire, previous }`.
 
 It needs no `OVERLORD_DOORS` row, no capability word and no `ccrc-api` row: it is the operator's door, and no session
-has a path to it while sign-in is armed (question 11).
+has a path to it while sign-in is armed. Dark, any local process that reaches the server can call it, as for the rank
+and answer-mark doors; every such ruling records `flag-off`, so it is told apart.
 
-**The read.** `GET /api/portfolio` answers `{ ok: true, portfolio, pairs }`, `pairs` being `standingPairs` through
-`standingPairWire`, goal conflicts before overlaps, unruled before ruled, then by `firstSeenAt`. A failing pairs read
-answers `pairs: 'unreadable'` beside a good portfolio, never an empty list and never a failed portfolio.
+**The read.** `GET /api/portfolio` answers `{ ok: true, portfolio, pairs, pairRate }`.
+- `pairs` is `standingPairs` through `standingPairWire`, goal conflicts before overlaps, unruled before ruled, then by
+  `firstSeenAt`.
+- `pairRate` is `pairRate(db, now)`: `PAIR_RATE_WEEKS` rows of `PairRateWire`, newest week first, each counting the
+  episodes of each kind whose `firstSeenAt` falls in that week (closed ones included). It is the measured firing rate
+  question 5 reads before `overlord-route-v1` arms the relay's refusal. An episode's week is its whole days of age
+  divided by seven, so no seven-day millisecond value is spelled anywhere: `token-shared.test.ts` allows exactly one in
+  the shipped roots, the token rotation's, and this task runs it.
+- A failing pairs or rate read answers that field `'unreadable'` beside a good portfolio, never an empty list, a zero
+  and never a failed portfolio.
 
 - [ ] **Step 1: Failing tests** (`test/programme-pairs-rule.test.ts`, the routes built as `ledgers-operator-routes.test.ts`
   builds them):
   - signed in, a ruling of the standing episode with `a-first` stores the choice, the actor and the time, and answers the
     pair (question 1);
   - a second ruling of the same episode with `both-stand` overwrites it and answers the first as `previous`;
-  - dark, the door answers `auth-off` and writes nothing;
+  - dark, the door stores the ruling with `ruledBy: 'flag-off'`; signed in, with the session's device actor;
+  - the ruling stamps both programmes' current goals; a goals change made before the ruling, then a pass with the same
+    sighting, leaves it ruled (the F2 trace end to end over the store and `pairMoves`);
+  - a `goalsStamp` read that throws answers `runs-unreadable` and stores no ruling;
   - an old episode answers `pair-changed` with the standing one; a closed pair answers `pair-changed` with null;
   - an overlap answers `pair-not-rulable`; an unknown key `not-found`; a bad key, episode or choice `bad-request`;
   - `GET /api/portfolio` lists an unruled goal conflict before a ruled one and both before an overlap, and a failing
     pairs read answers `pairs: 'unreadable'` with the portfolio intact;
+  - `pairRate` counts episodes opened in each of the last four weeks by kind, a closed one included, one opened five
+    weeks ago in none, and a failing read answers `pairRate: 'unreadable'`;
   - after the ruling, `relayConflictVerdict` over the stored rows passes a relay it refused before (an end-to-end case
     over Tasks 2 and 3).
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement** the door, the store writer, the read's field, the words and every census site above.
 - [ ] **Step 4: Run** this suite, `test/ledgers-operator-routes.test.ts`, `test/box-token-census.test.ts`,
-  `test/auth-gate.test.ts`, `test/mail-routes.test.ts`, `test/single-definition/*.test.ts`, `test/rings/*.test.ts`, both
-  server `tsc` runs and pwa's `tsc`. Green.
+  `test/auth-gate.test.ts`, `test/mail-routes.test.ts`, `test/token-shared.test.ts`, `test/single-definition/*.test.ts`,
+  `test/rings/*.test.ts`, both server `tsc` runs and pwa's `tsc`. Green.
 - [ ] **Step 5: Red check.** Each reds a case. Revert each.
   - Skip the episode check.
-  - Let the door work dark.
+  - Make the door refuse dark (the dark case reds).
+  - Drop the ruling's stamp (the F2 end-to-end case reds).
   - Remove the door from `LEDGER_OPERATOR_DOORS`: the census reds.
   - Spell `pair-changed` as a literal in `ledgersRoutes.ts`: the kebab-token census reds.
 - [ ] **Step 6: Commit.** `feat(overlaps): the operator's goal-conflict ruling door and the pairs on the portfolio read (Overlord W2)`
@@ -1093,22 +1364,24 @@ request.
 
 ```mermaid
 stateDiagram-v2
-  [*] --> Standing: a sighting with no standing episode opens episode n plus 1
-  Standing --> Standing: a sighting refreshes last seen and the evidence
+  [*] --> Standing: a sighting with no standing episode and both programmes live opens episode n plus 1
+  Standing --> Standing: a sighting refreshes last seen, the evidence and an unruled conflict's goals stamps
   Standing --> Closed: an overlap unseen for 24 hours closes lapsed
-  Standing --> Ruled: the operator rules a goal conflict
-  Ruled --> Ruled: a sighting with the same goals stamps, or a re-rule
-  Ruled --> Closed: a sighting after either programme's goals changed closes goals-changed
+  Standing --> Closed: an unruled conflict unseen for 14 days with no open run closes lapsed
+  Standing --> Ruled: the operator rules a goal conflict, stamping the goals it ruled on
+  Ruled --> Ruled: a sighting no newer than the ruling, or with the same goals stamps, or a re-rule
+  Ruled --> Closed: a sighting newer than the ruling after either programme's goals changed closes goals-changed
   Standing --> Closed: either programme's plan ended
   Ruled --> Closed: either programme's plan ended
   Closed --> [*]
 ```
 *Figure 2. One episode of a pair key. A closed episode is never reopened: the next sighting opens the next episode, which
-is a new pair and gets its own mail. Only goal conflicts are ruled, and only the operator's door rules one.*
+is a new pair and gets its own mail, unless either programme has ended. Only goal conflicts are ruled, only the
+operator's door rules one, and a ruled one never lapses on time.*
 
 ```mermaid
 flowchart TD
-  R["a relay to programme T"] --> B{"a standing goal conflict holds T and pairBlocks says yes"}
+  R["a relay to programme T, after overlord-route-v1"] --> B{"blockingPairs names a standing goal conflict of two triples"}
   B -- no --> OK["this check passes"]
   B -- yes --> U{"the operator's ruling"}
   U -- none --> REF["goal-conflict-open"]
@@ -1126,18 +1399,27 @@ the first refusal wins. The choice's `waits` column is all the check reads of qu
 Each entry is a departure from the spec's text, by slug. The coordinator mints numbers.
 
 - **`claim-collisions-recorded`**: §5.5 says the tree measures claim conflicts. It answers them in a 409 and keeps none.
-  PR A records each refused claim's collisions in the claim's transaction (question 4).
+  PR A records each refused claim's collisions after the claim commits, in a transaction of its own (question 4).
 - **`goal-signal-reads-claim-history`**: §5.6's "files changed" is read as claimed paths, the one durable record of what
-  each programme set out to change (question 5).
+  each programme set out to change, and a sighting needs two A, B, A triples on paths at most two programmes claimed
+  (question 5).
+- **`goal-signal-records-before-it-refuses`**: §5.6 has the relay refuse from the first conflict. The arm records goal
+  conflicts from PR A's merge, the portfolio read shows their weekly firing rate, and the refusal is reachable only
+  after `overlord-route-v1`, last of all (questions 2 and 5).
 - **`revert-signal-waits-for-a-fleet-read`**: §5.6's revert signal needs git on the fleet box. W2 ships without it, and a
-  follow-up piece adds it (question 6).
+  W3 follow-up adds it (question 6).
 - **`deepens-is-a-path-overlap`**: §5.3 does not define "deepens". It is `pairBlocks` (question 7).
 - **`pairs-have-episodes`**: Table 11.1a gives a pair one row. A pair key holds numbered episodes, and a new episode is a
   new pair (question 8).
+- **`unruled-goal-conflict-lapses`**: §5.6 has a conflict stand until the operator rules. An unruled one closes
+  `lapsed` after 14 days unseen with no open run on either side; a ruled one stays (question 8).
+- **`pair-mail-record-only`**: the pair mail reaches the operator as a record, never a push, as timer mail does
+  (question 9).
 - **`pair-notice-sender-server`**: §5.5 names no sender for the pair mail. It is a new role, `server` (question 9).
 - **`pair-mail-once-per-episode`**: an episode that stood before an Overlord was designated is mailed once, at most five a
   pass (question 10).
-- **`ruling-door-refuses-dark`**: the ruling door calls the account gate and refuses `auth-off` (question 11).
+- **`ruling-door-works-dark`**: the ruling door works while sign-in is dark and records `flag-off`, as the rank door
+  does (question 11).
 - **`pairs-ride-the-portfolio-read`**: the operator reads pairs on `GET /api/portfolio`, not on the board (questions 3 and
   12).
 - **`ruling-names-its-episode`**: the door's body names the episode, and a stale one is refused `pair-changed` (question
@@ -1156,15 +1438,21 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   the rows of the door's one choice table.
 - The overlaps arm is live at PR A's merge (question 20). Pair mail goes through `insertSystemMailTx` with `deliverTo`,
   and `goals.conflict` is asked only while its row is in shadow or armed (the index review's F7).
+- The coordinator's rulings on review 2267: the stricter, recording-first goal-conflict signal (F3, question 5); an
+  unruled goal conflict lapses after 14 days unseen with no open run (F6, question 8); pair mail is record-only for the
+  operator, from one predicate (F7, question 9); `blockedBy` computed on the server (F8, question 3); the ruling door
+  works dark and records `flag-off`, and the relay's refusal waits for `overlord-route-v1` (F10, questions 2 and 11);
+  the revert signal is a W3 follow-up (question 6).
 
 **Waiting on the operator:** nothing.
 
 **Waiting on the coordinator:**
-- Questions 4 to 15 above, each with a recommendation. Question 6 (where the revert signal goes) changes the index's
-  "W2 changes no ccd code".
+- Questions 4, 7, 10, 12 to 15 above, each with a recommendation.
 - The index changes listed under "What the index should change".
 
 **Later:**
-- The revert signal (question 6), as a follow-up piece or in W3.
+- The revert signal (question 6), a W3 follow-up.
+- Arming the relay's `goal-conflict-open` with `overlord-route-v1`, last of all, once the firing rate on the portfolio
+  read has been measured.
 - From W3, a new goal-conflict pair raises one O3 item (§5.6), reading `programme_pairs` and its episodes.
 - The board's Overlaps and Goal conflicts parts (lane F), and the home's controls (home requests B).
