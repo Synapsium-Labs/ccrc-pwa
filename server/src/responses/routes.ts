@@ -6,7 +6,7 @@
 // only add a receipt to a row that exists, which moves that row among `opened`, `not-opened` and `unmeasured` at its seal,
 // never an act, an answer or authority. Its answer is counts only, so it names no row and no id.
 import type { FastifyInstance } from 'fastify';
-import { parseReceiptBody } from '../../../shared/responses.js';
+import { parseReceiptBody, type ReceiptDrop } from '../../../shared/responses.js';
 import { receiptVerdict } from '../responses.js';
 import { refuseRoute } from '../refuse.js';
 import type { CoordStore } from '../coord/store.js';
@@ -28,7 +28,7 @@ export function registerResponseRoutes(app: FastifyInstance, opts: ResponseRoute
     const out = coord.receiveReceipts(body.receipts, opts.time.clock.wall(), receiptVerdict);
     if (!out.ok) return refuseRoute(reply, 'unavailable', { detail: out.detail });
     let kept = 0;
-    const dropped: Record<string, number> = {};
+    const dropped: Partial<Record<ReceiptDrop, number>> = {};
     for (const a of out.answers) {
       if (a.kept) kept += 1;
       else dropped[a.why] = (dropped[a.why] ?? 0) + 1;

@@ -5,8 +5,10 @@
 // KEYED ON THE DIFF, never on a branch name: CI runs `pull_request` on a detached merge commit and `merge_group` on a
 // `gh-readonly-queue/*` ref, and nothing reads `GITHUB_HEAD_REF`. Over `git diff --name-only $(git merge-base
 // origin/main HEAD) HEAD`, a diff that touches any `pwa/` path is red when it also touches a file W1a alone owns
-// (`shared/switches.ts`, `server/src/notice.ts`) or when a commit in the same range cites one of the W1a plan's own
-// numbers (D-5855 to D-5860). A diff that touches only one side passes.
+// (`shared/switches.ts`) or when a commit in the same range cites one of the W1a plan's own numbers (D-5855 to D-5860).
+// A diff that touches only one side passes. `server/src/notice.ts` left the owned list once W7 landed (C7a to C7p on
+// main): it is the push funnel other streams now edit beside `pwa/` (the push outbox, the response record), so the
+// guard no longer stops them (slug path-guard-releases-notice).
 //
 // The owned list is deliberately NOT the shared hot files W1a's tasks also edit (`server.ts`, `watch.ts`,
 // `coord/routes.ts`, `coord/db.ts`, `coord/schema.ts`, `coord/store.ts` and the lane definers): the skins, Settings
@@ -27,8 +29,8 @@ import { describe, expect, it } from 'vitest';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-/** The files W1a creates and no other stream edits (path-guard-owned-narrowed). */
-const W1A_OWNED: readonly string[] = ['shared/switches.ts', 'server/src/notice.ts'];
+/** The files W1a creates and no other stream edits (path-guard-owned-narrowed, path-guard-releases-notice). */
+const W1A_OWNED: readonly string[] = ['shared/switches.ts'];
 
 /** A W1a commit cites one of the W1a plan's numbers, D-5855 to D-5860, and not a longer number that starts with one. */
 const W1A_NUMBER = /\bD-(?:585[5-9]|5860)(?!\d)/;
@@ -85,7 +87,10 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
   it('CONTROL (fixture): an owned file and a pwa/ path together are red; either side alone, or neither, passes', () => {
     expect(pathGuard(['shared/switches.ts', 'pwa/src/app.tsx'])).toEqual(
       { owned: ['shared/switches.ts'], w1aCommits: 0, pwa: ['pwa/src/app.tsx'], red: true });
-    expect(pathGuard(['server/src/notice.ts', 'pwa/src/app.tsx']).red).toBe(true);
+    expect(pathGuard(['shared/switches.ts', 'pwa/public/push-sw.js']).red).toBe(true);
+    // path-guard-releases-notice: the push funnel beside a `pwa/` path is green, with no W1a commit.
+    expect(pathGuard(['server/src/notice.ts', 'pwa/public/push-sw.js'])).toEqual(
+      { owned: [], w1aCommits: 0, pwa: ['pwa/public/push-sw.js'], red: false });
     expect(pathGuard(['server/src/coord/rundefs.ts', 'server/test/switches.test.ts']).red).toBe(false);
     expect(pathGuard(['pwa/src/app.tsx', 'pwa/src/shell.css', 'server/test/single-definition.test.ts']).red).toBe(false);
     expect(pathGuard(['docs/x.md']).red).toBe(false);

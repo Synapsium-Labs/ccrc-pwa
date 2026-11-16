@@ -45,6 +45,16 @@ ledger. The brief named this note `w1-responses-a.md`; the plan's Global Constra
   the object, never the field, since the key is the sender's text.
 - **digest-kinds-as-typed-map**. `DigestRowKind` is imported by type; `DIGEST_KEY_ROW_KINDS` is a map typed by it, and
   `responses-vocab.test.ts` pins it equal to `shared/api.ts#DIGEST_ROW_KINDS`.
+- **path-guard-releases-notice**. `server/test/consolidation-path-guard.test.ts` (D-5855) reds a diff that touches
+  `pwa/` beside a file consolidation W1a owned, and its list named `server/src/notice.ts`. This PR edits both (Task 3
+  gives a funnel push its label and stamp in `notice.ts`; Task 4's worker is `pwa/public/push-sw.js`). Consolidation W7
+  is on `main`, so the guard's window is over, and `notice.ts` is the push funnel other streams edit. On the
+  coordinator's ruling the owned list keeps `shared/switches.ts` and the commit check, and drops `notice.ts`; its fixture
+  controls moved onto `switches.ts` and pin `notice.ts` beside `pwa/` as green (both mutations measured red).
+- **receipt-drop-words-in-l0**. The receipts door's drop words (`receiptVerdict`'s five, and `repeat`) cross the wire as
+  the answer's `dropped` keys, so they are declared once in `shared/responses.ts` (`RECEIPT_DROPS`, `isReceiptDrop`), and
+  `mail-routes.test.ts`'s kebab census admits them through that guard. The push row's delivery word is the typed
+  constant `PUSH_RESPONSE_DELIVERY`, bound as a parameter, not a literal in the store's SQL.
 
 ## Measured
 

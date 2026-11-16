@@ -1,6 +1,6 @@
 import {
   RECEIPTS_PER_PUSH_MAX,
-  type ReceiptIn, type ResponseKind, type ResponseRowState,
+  type ReceiptDrop, type ReceiptIn, type ResponseKind, type ResponseRowState,
 } from '../../shared/responses.js';
 
 /**
@@ -18,7 +18,7 @@ export interface ReceiptFacts {
 }
 export type ReceiptVerdict =
   | { readonly keep: true }
-  | { readonly keep: false; readonly why: 'no-row' | 'sealed' | 'wrong-source' | 'not-accepted' | 'full' };
+  | { readonly keep: false; readonly why: Exclude<ReceiptDrop, 'repeat'> };
 
 const refuse = (why: Extract<ReceiptVerdict, { keep: false }>['why']): ReceiptVerdict => ({ keep: false, why });
 

@@ -27,6 +27,17 @@ export const RECEIPT_SOURCES = Object.keys(RECEIPT_SOURCE_MAP) as ReceiptSource[
 const RESPONSE_DELIVERY_MAP: Record<ResponseDelivery, true> = { 'at-once': true, 'in-batch': true };
 export type ResponseDelivery = 'at-once' | 'in-batch';
 export const RESPONSE_DELIVERIES = Object.keys(RESPONSE_DELIVERY_MAP) as ResponseDelivery[];
+/** The delivery every W1 push row is written with (`insertPushResponseInTx`): one typed word, bound as a parameter. */
+export const PUSH_RESPONSE_DELIVERY: ResponseDelivery = 'at-once';
+
+/** Why the receipts door drops a receipt, the keys of its answer's `dropped` counts: `receiptVerdict`'s five words, and
+ *  `repeat` for a kept one the unique index already holds (slug a-repeat-receipt-is-dropped-as-repeat). */
+const RECEIPT_DROP_MAP: Record<ReceiptDrop, true> = {
+  'no-row': true, sealed: true, 'wrong-source': true, 'not-accepted': true, full: true, repeat: true,
+};
+export type ReceiptDrop = 'no-row' | 'sealed' | 'wrong-source' | 'not-accepted' | 'full' | 'repeat';
+export const RECEIPT_DROPS = Object.keys(RECEIPT_DROP_MAP) as ReceiptDrop[];
+export const isReceiptDrop = (w: string): w is ReceiptDrop => (RECEIPT_DROPS as readonly string[]).includes(w);
 
 const RESPONSE_ROW_STATE_MAP: Record<ResponseRowState, true> = { pending: true, delivered: true, sealed: true };
 export type ResponseRowState = 'pending' | 'delivered' | 'sealed';

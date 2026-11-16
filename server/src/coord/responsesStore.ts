@@ -13,8 +13,8 @@
 // another table.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
-  PUSH_WINDOW_MS, RECEIPT_KINDS, RESPONSE_KINDS, RESPONSE_ROW_STATES,
-  type ReceiptIn, type ReceiptKind, type ResponseKind, type ResponseRef, type ResponseRowState, type ResponseStamp,
+  PUSH_RESPONSE_DELIVERY, PUSH_WINDOW_MS, RECEIPT_KINDS, RESPONSE_KINDS, RESPONSE_ROW_STATES,
+  type ReceiptDrop, type ReceiptIn, type ReceiptKind, type ResponseKind, type ResponseRef, type ResponseRowState, type ResponseStamp,
 } from '../../../shared/responses.js';
 import type { OutboxSource } from '../../../shared/push-outbox.js';
 import type { ReceiptFacts, ReceiptVerdict } from '../responses.js';
@@ -50,9 +50,9 @@ export function insertPushResponseInTx(db: DatabaseSync, r: PushResponseInsert):
   const restore = r.stamp.restore.kind === 'measured' ? { m: 1, v: r.stamp.restore.n } : { m: 0, v: null };
   const res = stmt(db, 'INSERT INTO operator_responses (kind, label, pushId, carriesKind, carriesId, hasActions, tag, delivery, '
     + "state, bootMeasured, bootEpoch, restoreMeasured, restoreGeneration, insertedAt) VALUES ('push', ?, ?, ?, ?, ?, ?, "
-    + "'at-once', 'pending', ?, ?, ?, ?, ?) ON CONFLICT(pushId) DO NOTHING")
+    + "?, 'pending', ?, ?, ?, ?, ?) ON CONFLICT(pushId) DO NOTHING")
     .run(r.label, r.pushId, r.carries?.kind ?? null, r.carries?.id ?? null, r.hasActions ? 1 : 0, r.tag,
-      boot.m, boot.v, restore.m, restore.v, r.at);
+      PUSH_RESPONSE_DELIVERY, boot.m, boot.v, restore.m, restore.v, r.at);
   return { inserted: Number(res.changes) > 0 };
 }
 
@@ -173,7 +173,7 @@ export function insertReceipt(db: DatabaseSync, responseId: number, r: ReceiptIn
  *  already kept (`repeat`). */
 export type ReceiptAnswer =
   | { readonly kept: true }
-  | { readonly kept: false; readonly why: Extract<ReceiptVerdict, { keep: false }>['why'] | 'repeat' };
+  | { readonly kept: false; readonly why: ReceiptDrop };
 
 /** A read inside the door's transaction that failed: thrown to roll the whole body back. */
 class ReceiptReadFailed extends Error {}
