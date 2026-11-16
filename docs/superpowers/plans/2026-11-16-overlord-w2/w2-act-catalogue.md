@@ -432,7 +432,8 @@ and `operator-only`. The rest is built and tested with synthetic facts, and wait
 that it fills nothing else (question 27); W3 replaces it.
 
 **The policy port.** After the decider allows and the egress check passes (§11.2, "After the gates"), the door asks
-`OverlordPolicy.check({ act, effect, verbClass, target, actor })`. It answers `{ ok: true }` or `{ ok: false, why }`,
+`OverlordPolicy.check({ allow, verbClass, target, actor })`, where `allow` is the decider's `MayActAllow` (it names
+the act and its effect). It answers `{ ok: true }` or `{ ok: false, why }`,
 synchronously, from what the adapter holds: it makes no I/O inside the call, because the door is inside its
 transaction. It can never widen: its only input is an allowed act, and its only other answer is a refusal, which the
 door sends as `policy-refused` (question 7). `allowAllPolicy` answers `{ ok: true }` for every call.
