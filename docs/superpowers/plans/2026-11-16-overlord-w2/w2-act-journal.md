@@ -28,7 +28,8 @@
 - **What the reader must check.** Twelve open questions (§2), each with a recommendation, none for the operator. Three
   need the coordinator's eye: the epoch's act term counts the whole file, so the authority journal's Confirm record needs
   no new field (question 5); W1's witness parser is strict, so authority journal B should accept W2's tuple shape now
-  (question 6); and appending re-verifies the whole file, which grows with every act (question 10).
+  (question 6); and appending re-verifies the whole file, which grows with every act, so the verified-head cache ships
+  with PR A (question 10).
 
 ## 1. Goal, scope and the rulings this plan builds on
 
@@ -65,6 +66,7 @@ its file adapter (`server/src/chainedJournalFile.ts`, K).
 | The brief | The act journal's head joins the witness, and the reconciliation pass is this piece's PR B (from W1's authority-journal plan) |
 | Index "Where lanes meet" | The witness files are authority journal B's, and this piece widens them additively after B. Confirm is authority journal C's, and this piece adds the reconciliation pass as one row of `restoreStricter`'s table after C |
 | Index question 28 | Nothing raises an item before W3, so no ask or item is held in W2 |
+| This plan's review (run 2275), as the coordinator ruled | Confirm adopts the act journal's verified head whenever the file verifies (F3). Reconciliation writes run in journal-sequence order, updates before inserts (F6). The writer takes the apply through its port (F12). The request id floor reaches `nextRequestId` as its second argument (F5). The verified-head cache ships unconditionally (F16) |
 
 **Out of scope:** the act row and its writer (act rows A), which this journal serves through `ActJournalPort`; the act
 read and the Log's gap (act reads); the privacy journal (the private store); the digest's Overlord section (W6); grants,
@@ -86,10 +88,12 @@ operator.
    count settle records, so a one-step act counts once, and the file grows by one line, not two, for most acts.
 3. **What a record holds** (slug `act-records-rebuild-a-row`). §7.6 says no journal holds the operator's words, and the
    reconciliation pass must write a lost act's row. **Recommendation:** each `act-settle` carries what rebuilds the row
-   but its text: the act id, the act kind, the operation key, `from` and `to`, the natural key, the targets with their
-   revisions, and the request id. `act-intent` carries the same less `from` and `to`. `act-open-request` carries the
-   request id, the act id that opened it, and the operation key. No record carries `summary`, `why` or any answer text:
-   a rebuilt row's text reads empty, and its `divergedAt` says why.
+   but its text: the act id, the act kind, the effect, the operation key, `from` and `to`, the natural key, the targets
+   with their revisions, the request id, and the non-text fields the act read projects: `authority` (a word and an id,
+   Table 10.1a), the fence's `term` and `generationId`, and the actor's kind and subject, its identity strength and its
+   isolation word (review 2275, F14). `act-intent` carries the same less `from` and `to`. `act-open-request` carries the
+   request id, the act id that opened it, and the operation key. No record carries `summary`, `why`, `dissent`, the
+   model's name or any answer text: a rebuilt row's text reads empty, and its `divergedAt` says why.
 4. **When `act-open-request` is appended** (slug `open-request-after-its-row`). The request id comes from the request
    row's insert, and §7.6 appends "before the row". **Recommendation:** the open door inserts the request row first, then
    calls act rows A's writer with `opens: <request id>`, which appends `act-settle`, then `act-open-request`, then writes
@@ -130,12 +134,15 @@ operator.
    `unreadable`, naming Confirm the restore as the remedy. It runs on `server` and `both` boxes and skips elsewhere.
    Task A4's first step measures that the shipped tree carries `server/dist/` beside `deploy/`; if not, the helper moves
    into `server/scripts/` and is shipped with the server.
-10. **The cost of an append** (slug `act-append-cost-is-measured`). `chainedJournalFile.ts#chainedJournalFileAt`'s
+10. **The cost of an append** (slug `act-journal-ships-the-head-cache`). `chainedJournalFile.ts#chainedJournalFileAt`'s
     `appendNext` re-reads and verifies the whole file on every call (the authority plan's ruling X1), and the act journal
     grows with every act. The authority plan left a verified-head cache (keyed on device, inode, size and digest) as a
-    "Later" line. **Recommendation:** Task A2 measures one append at 10,000 and 100,000 records. If the second takes more
-    than 50 ms, the cache ships in the adapter, before PR A merges, as its own small pull request in lane C, owned by the
-    adapter's plan. The journal is not rotated or pruned in W2.
+    "Later" line. The whole-file verify runs inside `BEGIN IMMEDIATE` and blocks the event loop, and the head read, the
+    head-signing lane and the boot pass verify the whole file too. **Recommendation** (the coordinator's word on review
+    2275, F16): the cache ships unconditionally, in the adapter, before PR A's writer, as its own small pull request in
+    lane C, owned by the adapter's plan. A hit re-verifies only the bytes after the cached head. Task A2 still measures
+    one append and one head read at 10,000 and 100,000 records, with and without the cache, and writes the figures into
+    the PR. The journal is not rotated or pruned in W2.
 11. **Two head checks** (slug `signed-head-and-witness-are-apart`). PR A's console check (the next signed head extends
     the one kept) and PR B's witness (the tuple's act head) both compare heads. **Recommendation:** keep both, as
     legitimately different. The signed head lets the operator see that the server's key vouched for an append-only
@@ -197,18 +204,21 @@ checked.
 
 | Kind | Fields besides `kind` and `opKey` |
 |---|---|
-| `act-intent` | `actId`, `act` (a kind of `OVERLORD_ACT_KINDS`), `natural` (`{ kind: 'row', target, id, revision }` or `{ kind: 'start', requestId }`, one start per request), `targets` (each `{ kind, id, revision }`, sorted), `requestId` (a count or null) |
+| `act-intent` | `actId`, `act` (a kind of `OVERLORD_ACT_KINDS`), `effect` (an effect word or null), `natural` (`{ kind: 'row', target, id, revision }` or `{ kind: 'start', requestId }`, one start per request), `targets` (each `{ kind, id, revision }`, sorted), `requestId` (a count or null), `authority` (Table 10.1a's word and id), `term`, `generationId`, `actor` (`{ kind, subject }`, ids only), `identityStrength`, `isolation` |
 | `act-settle` | the same, and `from` (`pending`, `unknown`, or null for a one-step act) and `to` (an act state of `ACT_STATES`) |
 | `act-open-request` | `requestId`, `actId` |
 
-*Table 1. The act journal's grammar. `opKey` is 32 lowercase hex characters (act rows A, question 6).*
+*Table 1. The act journal's grammar. `opKey` is 32 lowercase hex characters (act rows A, question 6). `actId` is the id
+act rows A's writer reserved inside the transaction before the append, and the row is inserted with it (review 2275,
+F7).*
 
 ```ts
 // server/src/coord/overlordActRecords.ts (L1)
 export const OVERLORD_ACTS_BASENAME = 'overlord-acts.jsonl';
 export const OVERLORD_ACTS_TORN_DIR = 'overlord-acts-torn';
 export const OVERLORD_ACT_RECORD_KINDS = { 'act-intent': true, 'act-settle': true, 'act-open-request': true } as const;
-export type OverlordActRecord = /* the union of Table 1's rows */;
+/** Act rows A's `ActJournalRecord` (`overlordActs.ts`, L1), the one record type: an alias, never a second shape (F7). */
+export type OverlordActRecord = ActJournalRecord;
 export class OverlordActRecordError extends Error { readonly code: string }
 export const OVERLORD_ACTS_FORMAT: ChainedJournalFormat<OverlordActRecord, OverlordActRecordError>;
 /** The canonical form a writer appends: targets sorted, ids as numbers, nothing optional left undefined. */
@@ -235,7 +245,10 @@ export function overlordActsFileAt(ccrcDir: string, ops?: AppendOnlyFsOps): Chai
 /** Implements act rows A's ActJournalPort. One instance per server process: the file's one writer. */
 export class OverlordActJournal implements ActJournalPort {
   constructor(file: ChainedJournalFile<OverlordActRecord>, time: { clock: Clock }, guard: AuthorityGuardPort);
-  appendInTx(db: DatabaseSync, record: OverlordActRecord): ActJournalAppend;
+  /** Appends `records` in order, writes the head row, then runs `apply` (the act row and its line), on
+   *  `appendThenApply`. A throw from `apply` answers `journal-append` and calls `writerFailed('trailing', 'acts')`. */
+  appendInTx(db: DatabaseSync, records: readonly OverlordActRecord[], apply: () => void): ActJournalAppend;
+  adoptHeadInTx(db: DatabaseSync, head: ActFileHead | 'empty'): ActAdopt;   // Confirm's only (§6.3)
   readVerified(): ActFileRead;          // the whole file, verified: boot coherence, the fold, Confirm
   readHeadRow(db: DatabaseSync): ActHeadRowRead;
   healTornTail(db: DatabaseSync): ActHeal;   // through this.file.cutAside, into OVERLORD_ACTS_TORN_DIR
@@ -251,7 +264,7 @@ export class OverlordActJournal implements ActJournalPort {
 | 3 | `rolled-back` | any | `authority-rolled-back` |
 | 4 | `coherent` | unreadable | `authority-unmeasured`, and `writerFailed('unreadable', 'acts')` |
 | 5 | `coherent` | they disagree, or `from` disagrees with the fold | `authority-rolled-back`, and `writerFailed(verdict, 'acts')` |
-| 6 | `coherent` | they agree | append, then the head row: `ok`; on a failure at or after the append, `journal-append` and `writerFailed('trailing', 'acts')` |
+| 6 | `coherent` | they agree | append, then the head row, then the caller's `apply`: `ok`; on a failure at or after the append, a throw from `apply` included, `journal-append` and `writerFailed('trailing', 'acts')` at once (F12) |
 
 *Table 2. The act writer's decision. Unlike the authority journal, no act is a narrowing, so nothing is written
 row-only: an act over an incoherent journal is refused, and the door answers `authority-rolled-back` (503) or
@@ -262,10 +275,11 @@ then.*
 
 ```sql
 CREATE TABLE overlord_act_journal_head (id INTEGER PRIMARY KEY CHECK (id = 1), sequence INTEGER NOT NULL,
-  journalId TEXT NOT NULL, digest TEXT NOT NULL, at INTEGER NOT NULL);
+  journalId TEXT NOT NULL, digest TEXT NOT NULL, at INTEGER NOT NULL, requestFloor INTEGER NOT NULL DEFAULT 0);
 ```
 
-- **One writer of the head row:** `appendInTx`, and in PR B `adoptHeadInTx`, which only Confirm calls (§6.3).
+- **One writer of the head row:** `appendInTx`, and in PR B `adoptHeadInTx`, which only Confirm calls, on every Confirm
+  whose act file verifies (§6.3, F3).
 - **The heal.** At boot, `healTornTail` cuts a torn tail by the kernel's plan, only when the complete records verify and
   the head row equals the last record, into `~/.ccrc/overlord-acts-torn/` through `this.file.cutAside`: a new row of
   `CUT_CALLS`. The file is bound once, so `CHAINED_BINDERS` gains this module.
@@ -284,7 +298,7 @@ flowchart LR
     ROW --> SEQ["the act line"]
   end
   SEQ --> COMMIT["commit"]
-  APP -. "a failure after this" .-> TR["trailing: the guard fences"]
+  APP -. "a failure after this, apply's throw included" .-> TR["trailing: the guard fences at once"]
 ```
 
 *Figure 1. Where the record sits. The file is fsynced before the commit, so the journal is never behind `coord.db`, and
@@ -390,31 +404,53 @@ export interface ActReconcileFacts {
   openRequests: readonly number[]; openAsks: readonly number[]; openItems: readonly number[];
 }
 export type ActReconcilePlan = {
-  write: readonly { actId: number; record: OverlordActRecord }[];   // rows to write with divergedAt
+  /** Rows to write with divergedAt, in journal-sequence order, every update before every insert (F6). */
+  write: readonly { actId: number; how: 'update' | 'insert'; record: OverlordActRecord; sequence: number }[];
   requestsToNeedsYou: readonly number[]; asksAndItems: readonly { kind: 'ask' | 'item'; id: number }[];
   wholeVolume: boolean;                            // the journal is no further on than the database
   floors: { act: number; request: number };
+  adoptHead: ActFileHead | 'empty';                // the verified file's head, adopted on every Confirm (F3)
 };
 export function actReconcile(f: ActReconcileFacts): ActReconcilePlan;
 ```
 
 - **An act the journal holds and the table lacks, or holds in an earlier state** than the journal's last record: a row
-  in the journal's state, written by act rows A's store through `writeDivergedActInTx` (its one writer of `divergedAt`),
-  so its natural key stays taken. Its targets name the asks, items and requests it touched.
+  in the journal's state, written by act rows A's store through `writeDivergedActInTx` (its one writer of `divergedAt`).
+  The row holds its natural key as its state does, by the same partial index as any row: taken unless the journal's
+  state is `refused` (review 2275, F18). Its targets name the asks, items and requests it touched.
+- **The order of the writes** (F6). `actReconcile` lists them in journal-sequence order, every update of an existing row
+  before every insert, so a restored row on key K that the journal moved to `refused` frees K before the journal's later
+  act on K is inserted. `writeDivergedActInTx(db, write)` answers `{ ok: true }` or
+  `{ ok: false, error: 'natural-key-taken' | 'bad-row' | 'unmeasured', detail }` and never throws. Confirm reads the
+  answer: any `ok: false` aborts Confirm's one transaction, which rolls back whole, and Confirm's door answers 500 with
+  the writer's error, the act id and the detail, logged as one `ccrc-server:` line: a programming error, as act rows A's
+  `allow-mismatch` is, so no refusal word is added. The guard stays `rolled-back`, the doors stay fenced,
+  and nothing is half-written; the operator's next Confirm runs the pass again. A failure that repeats is a bug the
+  answer names, never a state Confirm steps over.
 - **The requests** move to `needs-you` through the request record's one move writer, with the reason `restore`.
 - **The asks and items** go to the operator. In W2 the Overlord holds none (index question 28), so the plan lists them in
   Confirm's answer and the console names them; W3's holds release them through this list.
 - **The whole volume came back** (a witness holds an act head the journal lacks, or the file was set aside as
   `malformed`): no record says which rows were acted on, so every open request moves to `needs-you` and every open ask
   and item is listed.
+- **The head row** (review 2275, F3). Whenever the act file verifies, Confirm sets `overlord_act_journal_head` to the
+  file's verified head through `adoptHeadInTx`, after the pass's writes, so a head row restored behind the file, or a
+  file with a record past its head row (`trailing`), agrees with the file after Confirm, and the next act appends. The
+  authority journal's head moves through its own Confirm record; the act journal has none (question 5), so this is its
+  one move. An absent file adopts `empty`.
 - **A malformed act journal.** Confirm sets the whole file aside under `~/.ccrc/overlord-acts-torn/`, through
-  `cutAside`, and the next act starts a new chain at sequence 1. The act journal's head row is set to the new chain's
-  head by `adoptHeadInTx` (absent until the first act).
+  `cutAside`, and the next act starts a new chain at sequence 1. The act journal's head row is set to `empty` by
+  `adoptHeadInTx`, and the first act's append writes it.
 - **Ids above the highest** (§7.6, "No id is used twice across a restore"). The act floor is the highest of the fold's
   `highestActId`, every witness's `highestIds.act` and the table's own maximum, and for a malformed file also the file's
-  line count above that. The request floor is the same over `act-open-request` records and `highestIds.request`. Each
-  floor is written to `sqlite_sequence` by its table's own writer: act rows A's store for `overlord_acts`, and the
-  request record's store for `overlord_requests` (What the index should change).
+  line count above that. The request floor is the same over `act-open-request` records and `highestIds.request`. The act
+  floor is written to `sqlite_sequence` by act rows A's store (`raiseActIdFloorInTx`), whose writer reserves each next id
+  from it (act rows A, F7). The request table is never `AUTOINCREMENT` (the request record plan, RQ10), so its floor is
+  no row of `sqlite_sequence`. Confirm keeps the part no later read can recompute (the witnesses' and the set-aside
+  file's) in `overlord_act_journal_head.requestFloor`, written by `adoptHeadInTx`. The journal's reader
+  `requestIdFloor(db)` answers the larger of that and the fold's `highestRequestId`, and the request record's open door
+  passes it as `nextRequestId(storeHighest, journalHighest)`'s second argument, as that plan's seam row says (review
+  2275, F5).
 
 ```mermaid
 flowchart TD
@@ -427,7 +463,9 @@ flowchart TD
   P --> R["requests to needs-you"]
   P --> L["asks and items listed"]
   P --> FL["act and request id floors"]
+  P --> AH["adopt the verified head"]
   D --> DONE["commit, then the guard is told"]
+  AH --> DONE
   R --> DONE
   L --> DONE
   FL --> DONE
@@ -444,9 +482,9 @@ Confirm record, as every other row of `restoreStricter`'s table does.*
 | `writeActInTx`'s `opens` and `writeDivergedActInTx` | act rows A | The open door's request id (question 4); the restore pass's rows. If act rows A has merged, PR B adds `writeDivergedActInTx` to its store |
 | The authority guard and its port | authority journal A (merged) | `writerFailed(cause, journal?)` and `bootVerdict(verdict, journal?)`, additive (question 12) |
 | The witness tuple and its parsers | authority journal B | The widened shape (question 6) |
-| `restoreStricter`, Confirm, `appendConfirmInTx` | authority journal C | One row; Confirm calls `actReconcile` after its record |
+| `restoreStricter`, Confirm, `appendConfirmInTx` | authority journal C | One row; Confirm calls `actReconcile` after its record, applies its writes in order, adopts the act head on every Confirm, and rolls back whole on a writer's `ok: false` (F3, F6) |
 | The isolation word | the isolation piece (W1) | `actHeadSignVerdict`'s input |
-| The request move writer and the request id floor | request record A | `restore` as a move reason, and `raiseRequestIdFloorInTx` |
+| The request move writer and the request id floor | request record A | `restore` as a move reason; the floor as `nextRequestId`'s second argument (F5) |
 | The open door | request record B | Calls the writer with `opens` |
 | The Log's gap | act reads | Reads the fold's gaps from the head read |
 | The digest | the digest (C6) | One optional field, `actHead` |
@@ -456,7 +494,7 @@ Confirm record, as every other row of `restoreStricter`'s table does.*
 - **Rings.** The grammar, the fold, the coherence arm, the signing verdict and `actReconcile` are L1, pure. `headExtends`
   is L0 and imports nothing. The writer and the head store are L3. The lane, the boot step and the head read are L4.
 - **One writer per fact.** The file has one writer process and one writer object. `overlord_act_journal_head` has
-  `appendInTx` and `adoptHeadInTx` (Confirm's only); `overlord_act_heads` has `recordActHeadInTx`. Each is named in
+  `appendInTx` and `adoptHeadInTx` (Confirm's only, on every Confirm); `overlord_act_heads` has `recordActHeadInTx`. Each is named in
   `writers-map.test.ts`.
 - **Consolidate.** The journal reuses the kernel, the file adapter, the guard, the authority writer's decide, append,
   apply, and Table 7.6a's decider. The signer gains a typed method, not a second key. One doctor check covers both
@@ -474,7 +512,7 @@ Confirm record, as every other row of `restoreStricter`'s table does.*
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
-| A, the journal | A1 to A4 | The grammar, its fold and its census rows; the writer, its head row, the heal and the snapshot pin; the daily signed head, its table, its lane, the digest line, the head read and the console's line; the doctor check over both journals | act rows A, authority journal A (#2895, merged) | `server/src/coord/schema.ts` about +8 (one migration, two tables); `server/src/server.ts` about +3 (the head read's mask entry and deps); `server/src/watch.ts` about +5 (the lane's beat); `pwa/src/lib/api.ts` about +4; `ccd/ccrc-doctor-checks` about +30 (one check and its array entry) |
+| A, the journal | A1 to A4 | The grammar, its fold and its census rows; the writer, its head row, the heal and the snapshot pin; the daily signed head, its table, its lane, the digest line, the head read and the console's line; the doctor check over both journals | act rows A, authority journal A (#2895, merged), the adapter's verified-head cache | `server/src/coord/schema.ts` about +6 code lines (one migration, two tables of three and two lines and the backticks; comments are not counted), and the PR states its measured figure (F15); `server/src/server.ts` about +3 (the head read's mask entry and deps); `server/src/watch.ts` about +5 (the lane's beat); `pwa/src/lib/api.ts` about +4; `ccd/ccrc-doctor-checks` about +30 (one check and its array entry) |
 | B, the restore | B1 to B4 | The act term and the tuple's widening; the act arm of boot coherence; the reconciliation pass in Confirm; the id floors | PR A, authority journal B and C, request record A | `server/src/coord/schema.ts` 0; `server/src/server.ts` about +2; `server/src/coord/store.ts` 0 |
 
 *Table 5. The PR split.*
@@ -521,14 +559,17 @@ Confirm record, as every other row of `restoreStricter`'s table does.*
   `server/test/coord-db.test.ts`, `server/test/run-close-switch.test.ts`
 - Test: `server/test/overlord-act-journal.test.ts` (new)
 
-- [ ] **Step 1: Measure** one append at 10,000 and 100,000 records on a fixture directory (question 10), and write the
-  figures into the PR. Over 50 ms at 100,000: stop and report to the coordinator before Step 2.
+- [ ] **Step 1: Measure** one append and one head read at 10,000 and 100,000 records on a fixture directory, with and
+  without the verified-head cache (question 10), and write the figures into the PR. The cache's own pull request merges
+  first; this step measures it, and gates nothing (F16).
 - [ ] **Step 2: Failing tests** (fixture `DatabaseSync`, fixture directory, a guard double):
   - every row of Table 2;
   - two records in a row chain, and the second re-reads the file;
   - a settle whose `from` is not the fold's last state for its act refuses and tells the guard `diverged`;
   - an `AppendOnlyFsOps` double that fails at each step answers `journal-append`, never throws, and calls
     `writerFailed('trailing', 'acts')`;
+  - an `apply` that throws after the append answers `journal-append` and calls `writerFailed('trailing', 'acts')` in the
+    same call, before the transaction rolls back (F12); an `apply` that returns runs after the head row;
   - the heal cuts only a torn tail behind a sound prefix, into `overlord-acts-torn`, and refuses otherwise;
   - the snapshot pin: neither the file nor the directory is copied or listed by any backup path;
   - the guard: a `journal: 'acts'` failure fences, and its detail names the journal; an older call with no journal
@@ -621,22 +662,32 @@ Confirm record, as every other row of `restoreStricter`'s table does.*
   (`adoptHeadInTx`)
 - Test: `server/test/overlord-act-reconcile.test.ts` (new), authority journal C's Confirm suite
 
-- [ ] **Step 1: Failing tests:** an act the journal holds and the table lacks gets a row with `divergedAt`, its key
-  taken; an act in an earlier state is brought to the journal's; its requests move to `needs-you`; its asks and items
-  are listed; a whole-volume restore moves every open request; a malformed act journal is set aside whole and the next
-  act starts sequence 1; the pass runs after the Confirm record.
-- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Mutation.** The set is `actReconcile`.
+- [ ] **Step 1: Failing tests:**
+  - an act the journal holds and the table lacks gets a row with `divergedAt`, its key taken (a `done` one) or free (a
+    `refused` one); an act in an earlier state is brought to the journal's; its requests move to `needs-you`; its asks
+    and items are listed; a whole-volume restore moves every open request; a malformed act journal is set aside whole
+    and the next act starts sequence 1; the pass runs after the Confirm record;
+  - the head row (F3): a head row restored behind the file, then Confirm, then an act append succeeds; a file with one
+    trailing record past its head row, then Confirm, then an act append succeeds; boot coherence then reads `coherent`;
+  - the order (F6): a restored table with B `pending` on key K and a journal with B `refused` then A `done` on K: the
+    pass moves B before it inserts A, and Confirm commits; a writer that answers `ok: false` rolls Confirm back whole,
+    Confirm's door answers 500 naming the act, and the guard stays `rolled-back`.
+- [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Mutation.** The set is `actReconcile`. By hand: adopt the
+  head only for a malformed file; insert before updating; commit past a writer's `ok: false`.
 - [ ] **Step 5: Run.** Green. **Step 6: Commit.** `feat(coord): Confirm the restore reconciles the act rows with the act journal (Overlord W2, §7.6)`
 
 ### Task B4: Act and request ids above the highest after Confirm (PR B)
 
 **Files:**
-- Modify: `server/src/coord/overlordActsStore.ts` (`raiseActIdFloorInTx`), the request record's store
-  (`raiseRequestIdFloorInTx`), the Confirm transaction
+- Modify: `server/src/coord/overlordActsStore.ts` (`raiseActIdFloorInTx`, over `sqlite_sequence`),
+  `server/src/coord/overlordActJournal.ts` (`requestFloor` through `adoptHeadInTx`, and `requestIdFloor`), the Confirm
+  transaction, and the request record's open door (the floor passed as `nextRequestId`'s second argument, F5)
 - Test: `server/test/overlord-act-reconcile.test.ts`
 
 - [ ] **Step 1: Failing tests:** after Confirm, the next act id and request id are above the journal's, every witness's
-  and the table's highest; over a malformed file, above that plus the line count; a floor never lowers.
+  and the table's highest; over a malformed file, above that plus the line count; a floor never lowers; the next act
+  row's id equals its record's `actId` after the floor is raised (act rows A, F7); `nextRequestId` receives the floor as
+  its second argument, and no `sqlite_sequence` row is written for `overlord_requests`.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
 - [ ] **Step 5: Commit.** `feat(coord): no act or request id is used twice across a restore (Overlord W2, §7.6)`
 
@@ -664,7 +715,15 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   whether PR B needs a reader-widening first.
 - **Authority journal C** exposes Confirm's transaction so that `restoreStricter`'s table takes rows from later pieces,
   as its plan says (question 16 there), and calls them after its record.
-- **Request record A** gives `restore` as a reason of its move to `needs-you`, and owns `raiseRequestIdFloorInTx`.
+- **Request record A** gives `restore` as a reason of its move to `needs-you`. It has no `raiseRequestIdFloorInTx`: its
+  open door passes act journal B's `requestIdFloor(db)` as `nextRequestId`'s second argument (review 2275, F5).
+- **Authority journal C (Confirm):** on every Confirm, adopt the act journal's verified head through `adoptHeadInTx`
+  (F3); apply the reconciliation's rows in journal-sequence order, updates before inserts, and roll back whole on a
+  writer's `ok: false` (F6). The coordinator carries F3 into C's brief.
+- **The chained file adapter:** the verified-head cache ships unconditionally, as its own pull request in lane C, before
+  act journal A's writer (F16).
+- **Act rows A:** the one record type (`ActJournalRecord`, aliased here as `OverlordActRecord`), the act id reserved
+  before the append, and the port's apply callback (F7, F12).
 - **Act rows A** carries `opens` on `ActWrite` (its plan, §4.3) and leaves `writeDivergedActInTx` and
   `raiseActIdFloorInTx` to this plan's PR B, in its store.
 - **Table W2's act journal row** names the console's line (`pwa/src/overlord/ActHeadLine.tsx`) and the head read
@@ -684,6 +743,9 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 **Agreed:**
 - The journal follows the authority journal's rules (#2895) and the brief's Q4 and F16, and its head joins the witness
   in PR B.
+- The coordinator's rulings on this plan's review (run 2275): Confirm adopts the verified head on every Confirm (F3);
+  the reconciliation's order and its failure (F6); the request floor through `nextRequestId` (F5); the port's apply (F12);
+  the records' non-text fields (F14); and the cache shipped unconditionally (F16).
 
 **Waiting on the coordinator:**
 - The twelve open questions (§2), each with a recommendation. Questions 5, 6 and 10 change what other pieces build or
@@ -692,5 +754,5 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 **Waiting on the operator:** nothing.
 
 **Later:**
-- A verified-head cache if the append measurement calls for it (question 10); the journal's rotation; W3's record kinds;
+- The journal's rotation; W3's record kinds;
   W6's digest section, which takes the head line over.

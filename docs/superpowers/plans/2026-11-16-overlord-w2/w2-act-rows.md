@@ -15,7 +15,7 @@
   line of the sequence, in one transaction. The natural key is unique among rows not settled `refused`. The operation
   key rides `x-ccrc-op-key`: the door process mints one per write tool call, and gates B's runner looks it up after the
   step-7 fence and before step 7a. A hit returns the stored row and outcome, consumes no witness and counts toward no
-  latch. A repeat with another body refuses `op-key-reused`, a new word with its Table 11.6 row. The writer takes act
+  latch. A repeat with another door, target or body refuses `op-key-reused`, a new word with its Table 11.6 row. The writer takes act
   catalogue B's `MayActAllow`, asserts it at runtime, consumes it once and checks it against the row it writes, and
   re-runs the ceilings for the act's group and the effect's group inside its own synchronous write: the gate's step 10
   is only the early refusal (the coordinator's ruling on the act catalogue's review).
@@ -60,7 +60,7 @@ effect has an act row", and §12's M32 counts "acts left in the act state `pendi
 
 | Ruling | What it binds here |
 |---|---|
-| Index question 3, amended (F2) | `x-ccrc-op-key`, a fresh random key the door process mints for each write tool call and sends again unchanged on a retry. Looked up in gates B's runner after the step-7 fence and before step 7a, scoped to the session and the generation. A hit returns the stored row and outcome, consumes no witness and counts toward no latch. Stored with its door, act kind, natural key and a canonical body hash. A repeat whose hash differs refuses `op-key-reused`, which this piece adds to `OVERLORD_REFUSALS` with its Table 11.6 row |
+| Index question 3, amended (F2) | `x-ccrc-op-key`, a fresh random key the door process mints for each write tool call and sends again unchanged on a retry. Looked up in gates B's runner after the step-7 fence and before step 7a, scoped to the session and the generation. A hit returns the stored row and outcome, consumes no witness and counts toward no latch. Stored with its door, act kind, natural key and a canonical hash of the call. A repeat whose hash differs refuses `op-key-reused`, which this piece adds to `OVERLORD_REFUSALS` with its Table 11.6 row |
 | Index question 8, amended (F4) | `widens` and the widened programme are columns of `overlord_acts`, in this piece's one migration. Relay A writes them, and request ids A's `goals modify` check reads them |
 | Index question 18 | A timer is no act kind and writes no act row. The three timer doors keep `act: null` |
 | Index question 19 | Act catalogue A's ceiling check is a pure decider that takes counts. This piece wires the counts from `overlord_acts` |
@@ -74,6 +74,10 @@ effect has an act row", and §12's M32 counts "acts left in the act state `pendi
 | The same review, F10 | A start's natural key is its request alone: one start per request. The natural key is the owner of "a request authorises at most one start", and relay A owns "one relay per owner" |
 | The same review, F4 | A `proposal` cell mints a staged allow, which the writer maps to a proposal row. An `armed` allow says shadow or live |
 | The same review, F8 | `escalate-request` is a catalogue act kind (class none, in the `request` ceiling group), which request record B's escalate door writes through this writer |
+| This plan's review (run 2275), as the coordinator ruled, F1 | The row stores the allow's `effect` in W2. `widens` is required exactly when `allow.effect === 'widen-scope'`, with `widenedProgramme` equal to the allow's target programme. Both join the `allow-mismatch` comparison, and the ceiling count sees a widening relay |
+| The same review, F8 | `op-key-taken` answers the holder as a replay. `natural-key-taken` answers a new word, `act-key-taken` (409), with its Table 11.6 row in PR A |
+| The same review, F10 | The act row carries a push-sent stamp, `pushedAt`, and `settleVerdict` resends the `unknown` push while it is unset: at least once, with no outbox insert inside the settle's transaction |
+| The same review, F7, F12 and F4 | The act id is reserved inside `BEGIN IMMEDIATE` before the append. The journal's port takes an apply callback, as `appendThenApply` does. The operation key's hash binds the door, its path parameters and the body |
 
 **Out of scope:** the act catalogue and `overlordMayAct` (act catalogue A and B); the act journal's file, head and
 witness (the act journal plan); the act read, Seen and overturn (act reads); every door that performs an act other than
@@ -88,7 +92,7 @@ None needs the operator: each is implementation detail under the rulings above.
 
 1. **Where the operation key is stored** (slug `op-key-on-the-act-row`). Question 3 stores the key "with its door, act
    kind, natural key and a hash of the canonical body", and names no table. **Recommendation:** five columns of
-   `overlord_acts` (`opKey`, `opDoor`, `opBodySha256`, `opSessionId`, `opGenerationId`) and one partial unique index on
+   `overlord_acts` (`opKey`, `opDoor`, `opCallSha256`, `opSessionId`, `opGenerationId`) and one partial unique index on
    `(opSessionId, opGenerationId, opKey) WHERE opKey IS NOT NULL`. A key exists only where a row exists, so a refusal at
    the gate stores none (§10.1), and a row settled `refused` keeps its key, so a repeat returns that row. A table of its
    own would be a second writer of the same fact.
@@ -112,7 +116,9 @@ None needs the operator: each is implementation detail under the rulings above.
    to 11), it stored no key, so its retry misses the lookup and meets a `used` witness, which reads `unwitnessed` and
    counts toward the ladder's latch. **Recommendation:** the witness check row records the operation key it was
    consumed under, and a `used` witness whose consuming check carried the same operation key reads
-   `{ unwitnessed, why: 'retried' }`, which refuses as `unwitnessed` and is never counted. The Overlord then calls
+   `{ unwitnessed, why: 'retried' }`, which refuses as `unwitnessed` and is not counted the first time. A second
+   `retried` on the same witness is counted, as any `unwitnessed` is (review 2275, F17): a transport retry happens once
+   (question 5), so a witness and its key presented again and again are a replay, not a retry. The Overlord then calls
    again, with a new tool call, a new key and a new witness. Door process B owns the check row
    (`continuity_witness_checks`). If B has landed when PR A builds, PR A's migration adds the nullable column and the
    arm; otherwise the index asks B to ship both (What the index should change).
@@ -135,7 +141,9 @@ None needs the operator: each is implementation detail under the rulings above.
    sends the question of an `unknown` act, and of a `refused` answer, to the operator. In W2 the Overlord holds nothing
    and answers nothing (questions 27 and 28), and its one two-step act is `acknowledge`. **Recommendation:** an act that
    settles `unknown` sends the operator one push through the push outbox's one sender, as an unbound row keyed
-   `act-unknown:<id>`, naming the act and what could not be measured. A `refused` settle of a kind that is not an answer
+   `act-unknown:<id>`, naming the act and what could not be measured. The row's `pushedAt` records the send, and
+   while it is unset the lane sends again, so the push is at least once (the coordinator's ruling on review 2275, F10).
+   A `refused` settle of a kind that is not an answer
    sends nothing: no effect happened, and its subject stays with whoever held it (for `acknowledge`, the message stays in
    the Overlord's inbox). The answer arm is a row of the settle decider's table that W3 fills.
 9. **What `dependsSince` reads in W2** (slug `depends-since-reads-dispatch-and-prs`). Table 10.1a: "The first dispatch,
@@ -174,7 +182,7 @@ Measured on `main` at `b779a9c20`. Nothing of this piece exists; these are the p
   minted by the door through `Entropy`.
 - **Canonical hashing.** `server/src/canonical.ts#rfc8785Json` and `#sha256HexOfText` are the journals' encoder and
   hash. `shared/api.ts#canonicalJson` is the approvals' integer-only encoder, apart by its own header's argument. The
-  body hash uses the first pair.
+  call hash uses the first pair.
 - **Refusal words.** `shared/refusal.ts#OVERLORD_REFUSALS` holds the Overlord's words with their statuses, spread into
   `REFUSAL_STATUS`. `server/test/single-definition/refusal-table.test.ts` pins the group's exact map (`W1_GROUP`) and
   checks spec Table 11.6 against the code both ways. `op-key-reused` is in neither, nor on the wave map
@@ -229,17 +237,17 @@ One migration creates `overlord_acts` with every column of Table 10.1a, nullable
 
 | Columns | Notes |
 |---|---|
-| `id INTEGER PRIMARY KEY AUTOINCREMENT`, `at`, `sequence` | `AUTOINCREMENT`, so Confirm the restore can raise the floor (the act journal plan). `sequence` is the line stamped at insert |
-| `kind`, `effect`, `class`, `effectiveClass`, `evidenceClass` | `effect` and the classes are W3's answers, NULL in W2 |
+| `id INTEGER PRIMARY KEY AUTOINCREMENT`, `at`, `sequence` | `AUTOINCREMENT`, so Confirm the restore can raise the floor (the act journal plan). The writer reserves the id before the append and inserts it explicitly (§4.3, F7). `sequence` is the line stamped at insert |
+| `kind`, `effect`, `class`, `effectiveClass`, `evidenceClass` | `effect` is the allow's effect, from W2 on (F1), and NULL for an act with none. The classes are W3's answers, NULL in W2 |
 | `requestId`, `targets`, `naturalKey`, `naturalKind`, `naturalId`, `naturalRevision` | `targets` is canonical JSON text. `naturalKey` is `actNaturalKey`'s text, and its three parts are kept beside it for reads |
-| `widens`, `widenedProgramme` | Question 8 of the index. `widens INTEGER NOT NULL DEFAULT 0 CHECK (widens IN (0, 1))`, and `widenedProgramme` is NULL unless `widens` is 1 |
+| `widens`, `widenedProgramme` | Question 8 of the index. `widens INTEGER NOT NULL DEFAULT 0 CHECK (widens IN (0, 1))`, and `widenedProgramme` is NULL unless `widens` is 1. `widens` is 1 exactly when the allow's effect is `widen-scope`, and `widenedProgramme` is then the allow's target programme (F1) |
 | `summary`, `why` | The Overlord's words, cut whole at 200 and 600 characters (Table 11.5b), after `redactCommand` |
 | `authority`, `dissent`, `reversibility` | `reversibility` copied from the catalogue row at insert |
 | `state`, `outcome`, `overturnedAt`, `overturnNote` | `state` checked against `ACT_STATES` by the writer and by a `CHECK` |
-| `seenAt`, `dependsSince`, `divergedAt` | Writers: the Seen door, the settling lane, the restore pass |
+| `seenAt`, `dependsSince`, `divergedAt`, `pushedAt` | Writers: the Seen door, the settling lane, the restore pass, and the settling lane again for `pushedAt`, the `unknown` push's sent stamp (F10) |
 | `term`, `generationId`, `model`, `lane` | The fence's stamps (§3.3.11) |
 | `actorKind`, `actorSubject`, `actorIssuer`, `identityStrength`, `isolation` | `CallerIdentity`'s answer and the `server-isolation` word |
-| `opKey`, `opDoor`, `opBodySha256`, `opSessionId`, `opGenerationId` | Question 1 |
+| `opKey`, `opDoor`, `opCallSha256`, `opSessionId`, `opGenerationId` | Question 1 |
 | `options`, `chosen`, `recommended`, `citedIds`, `probability` | W3's answer fields |
 | `checks` | The decision-model answers, canonical JSON: per question its id, answer, band, model and time, or `skipped` with its reason (index question 9 and the decision-model piece) |
 | `stagedUntil`, `stagedOutcome`, `performerSession`, `performedAt` | W3 |
@@ -248,7 +256,8 @@ One migration creates `overlord_acts` with every column of Table 10.1a, nullable
 
 Two indexes:
 - `overlord_acts_natural`: `UNIQUE (naturalKey) WHERE state <> 'refused'`. A row settled `refused` frees its key
-  (§10.1), and a row the restore pass writes with `divergedAt` keeps it taken (§7.6).
+  (§10.1). A row the restore pass writes with `divergedAt` holds the key as its journal state does: taken in `pending`,
+  `unknown` or `done`, free in `refused`, the same rule as any row (§7.6, review 2275's F18).
 - `overlord_acts_op_key`: `UNIQUE (opSessionId, opGenerationId, opKey) WHERE opKey IS NOT NULL`.
 
 And one plain index for the lane and the counts: `(state)` and `(kind, at)`.
@@ -262,24 +271,30 @@ two functions, each inside the caller's `tx()`, each never throwing:
 // server/src/coord/overlordActsStore.ts (L3)
 /** L2, declared here by its consumer. The act journal implements it (the act journal plan). */
 export interface ActJournalPort {
-  /** Appends one record inside the caller's tx(), before the row. Never throws. */
-  appendInTx(db: DatabaseSync, record: ActJournalRecord): ActJournalAppend;
+  /** Appends the records inside the caller's tx(), then runs `apply` (the row and the act line), as
+   *  `journalKernel.ts#appendThenApply` does. A throw from `apply` after the append is reported to the guard as
+   *  `trailing` at once and answered `journal-append`. Never throws (F12). */
+  appendInTx(db: DatabaseSync, records: readonly ActJournalRecord[], apply: () => void): ActJournalAppend;
 }
 export type ActJournalAppend =
   | { ok: true; sequence: number }
   | { ok: false; error: 'not-in-transaction' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append';
       detail: string };
+// server/src/coord/overlordActs.ts (L1): the one record type (F7). The act journal's grammar validates this type and
+// names it `OverlordActRecord`, an alias, never a second shape.
+export type ActJournalRecord = /* the act journal plan's Table 1: act-intent, act-settle, act-open-request */;
 
 export interface ActWrite {
   /** Act catalogue B's allow for this act: checked, consumed once, and compared with the row (F5). */
   allow: MayActAllow;
   kind: OverlordActKind; state: 'pending' | 'done'; target: ActTarget; targets: readonly ActTargetRef[];
-  requestId: number | null; widens: { programme: string } | null;
+  requestId: number | null;
+  widens: { programme: string } | null;   // set exactly when allow.effect is 'widen-scope', naming its target (F1)
   opens: number | null;          // the open door's new request id: an act-open-request record follows the settle
   summary: string; why: string; authority: string;
   actor: RecordedActor; identityStrength: CallerStrength; isolation: IsolationWord;
   fence: { term: number; generationId: number; model: string | null; lane: string | null };
-  op: { key: string; door: string; bodySha256: string; sessionId: string };
+  op: { key: string; door: string; callSha256: string; sessionId: string };
   checks: readonly DecisionCheck[];
 }
 export type ActWritten =
@@ -293,13 +308,13 @@ export type ActWritten =
  *  effect is in the group, since a time, in all and for one programme (F6). */
 export function actCountReaderInTx(db: DatabaseSync): ActCountReader;
 /** Decide, append, apply: `actWriteVerdict` first (the allow, the ceilings, natural key and operation key free, the
- *  state an entering one);
- *  then the journal's record (`act-settle` with `from: null` for `done`, `act-intent` for `pending`, and
- *  `act-open-request` after it when `opens` is set); then the row; then the `act` line through
- *  `stampSequenceInTx`. A refusal before the append writes nothing. */
+ *  state an entering one); then the act id reserved; then the journal's records (`act-settle` with `from: null` for
+ *  `done`, `act-intent` for `pending`, and `act-open-request` after it when `opens` is set), each carrying that id;
+ *  then, as the port's apply, the row inserted with that id and the `act` line through `stampSequenceInTx`. A refusal
+ *  before the append writes nothing. */
 export function writeActInTx(db: DatabaseSync, journal: ActJournalPort, w: ActWrite, at: number): ActWritten;
 /** The second step and the lane's settle: `ACT_TRANSITIONS` checked against the row read in this tx, then the
- *  journal's `act-settle` record carrying that `from`, then the row, then the `act` line. */
+ *  journal's `act-settle` record carrying that `from`, then, as the apply, the row and the `act` line. */
 export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: number,
   to: 'done' | 'refused' | 'unknown', by: 'door' | 'lane' | 'boot', at: number): ActSettled;
 ```
@@ -307,7 +322,10 @@ export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: num
 - **The allow** (F5). `isMayActAllow(allow)` is asserted at runtime: an object the catalogue did not mint answers
   `allow-forged`, whatever its static type, so a spread or a cast is caught. The allow is consumed once, through act
   catalogue B's consume step, and a second use answers `allow-spent`. Its act, effect, target (programme id and
-  incarnation), natural key, cell and generation must equal the row's, or the writer answers `allow-mismatch`. None of
+  incarnation), natural key, cell and generation must equal the row's, or the writer answers `allow-mismatch`. So must
+  the widening (the coordinator's ruling on review 2275, F1): `w.widens` is set exactly when `allow.effect` is
+  `widen-scope`, and then names the allow's target programme. The row stores the allow's `effect`, so a widening relay
+  counts in `o3-effect`'s group as well as in its kind's. None of
   the three is a refusal word: each is a programming error, which the door answers 500 and logs, and a census test reds
   a door that writes an act row without passing the allow it got.
 - **The cell** (F4). `ALLOW_CELL_WRITES` (L1) maps the allow's cell to what is written: `allow` writes the act row as
@@ -325,7 +343,16 @@ export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: num
   this `BEGIN IMMEDIATE`.
   So the insert can never meet a unique-index failure after its record, which would leave the record trailing and fence
   every Overlord door (§7.6). A failure after the append is still possible (the disk), and it reads as the journal
-  plan's `trailing`, as the authority writer's does.
+  plan's `trailing`, as the authority writer's does. The request record's open door keeps the same order: it inserts
+  its request row first, decided before any append, and then calls this writer with `opens` (`w2-requests.md`, RQ18,
+  insert-first).
+- **The act id before the append** (review 2275, F7). The records carry the act's id, so the writer reserves it inside
+  the `BEGIN IMMEDIATE`: the larger of `sqlite_sequence.seq` for `overlord_acts` and the table's `MAX(id)`, plus one.
+  The row is inserted with that explicit id, which also moves `sqlite_sequence`. `MAX(id) + 1` alone would reuse an id
+  after Confirm raises the floor above the table's maximum (the act journal plan's PR B).
+- **The apply runs inside the journal's call** (F12). The row insert and the `act` line are the port's `apply`, so a
+  throw after the append is caught by the journal, told to the guard as `trailing` at once (§7.6, "fences at once"),
+  and answered `journal-append`. The writer never throws, and the door answers `journal-append` as a 503.
 - **The journal before the row** (§7.6, "Each record is appended inside the store's transaction, before the row"). Until
   the act journal lands, no production caller exists (every act door waits on act journal A), and the tests bind the
   port to a double.
@@ -375,17 +402,17 @@ a child that exits 3, the door process sends the call once more after one second
 readonly opKey: (sessionId: string, generationId: number, presented: string | null) => OpKeyRead;
 export type OpKeyRead =
   | { kind: 'none' }                                    // no header, or no row under it
-  | { kind: 'hit'; act: ActAnswer; door: string; bodySha256: string }
+  | { kind: 'hit'; act: ActAnswer; door: string; callSha256: string }
   | { kind: 'unmeasured'; why: string };
 // server/src/coord/overlordGate.ts (gates B's), GateFacts gains
-readonly opKey: { read: OpKeyRead; door: string; bodySha256: string } | 'no-act';   // 'no-act': a read, or a row with act: null
+readonly opKey: { read: OpKeyRead; door: string; callSha256: string } | 'no-act';   // 'no-act': a read, or a row with act: null
 // GateVerdict gains
 | { readonly kind: 'replay'; readonly act: ActAnswer }
 ```
 
 `opKeyVerdict` (L1, in `overlordGate.ts`) runs right after step 7 passes and before step 7a:
 
-| # | The read | The stored door and body hash against this call's | Answer |
+| # | The read | The stored door and call hash against this call's | Answer |
 |---|---|---|---|
 | 1 | `no-act` | n/a | continue to 7a |
 | 2 | `none` | n/a | continue to 7a |
@@ -398,10 +425,13 @@ counter that never moved would let a forked copy reuse it.*
 
 - **Scope.** The key is looked up under the session and the generation the fence has just proven, so a key from an
   ended generation never matches: its call is refused at step 7.
-- **The body hash.** `sha256HexOfText(rfc8785Json(body))` over the parsed body, from `server/src/canonical.ts`. The body
+- **The call hash** (review 2275, F4). `sha256HexOfText(rfc8785Json({ door, params, body }))`, from
+  `server/src/canonical.ts`: the door's key in `OVERLORD_DOORS`, the route's path parameters (the `:id` of
+  `acknowledge` and of the request doors) and the parsed body. The body
   carries the caller's id and uuid, which a retry repeats unchanged.
-- **What the comparison binds.** The door's key in `OVERLORD_DOORS` and the body hash. The act kind follows from the
-  door, and the natural key from the door and the body, so both are stored and read back but not compared.
+- **What the comparison binds.** The door, its target and its body, through the call hash: one key sent again to
+  another `:id` hashes differently and refuses `op-key-reused`, though its body is equal. The act kind follows from the
+  door, and the natural key from the door and the target, so both are stored and read back but not compared apart.
 - **The replay answer.** The runner answers `{ ok: true, replayed: true, act }` and the door is never entered (question
   3). `GateRun` gains `{ kind: 'replay' }` so a door that calls the runner returns at once.
 - **Doors with no act.** The three timer rows (`act: null`, index question 18) and the reads read `no-act`. A key they
@@ -421,19 +451,31 @@ sequenceDiagram
   G--xP: the answer is lost
   P->>G: retry, op key K, counter c plus 1
   G->>G: steps 1 to 7 pass
-  G->>G: lookup K reads hit, same body
+  G->>G: lookup K reads hit, same call hash
   G-->>P: replayed true, the stored act
 ```
 
 *Figure 2. A retry after a lost answer. The second call passes the fence with its new counter, finds its key, and gets
 the first call's row back. It meets no witness, so it can never read as unwitnessed.*
 
-**The new word.** `op-key-reused` (409) joins `OVERLORD_REFUSALS` and `W1_GROUP`'s pin is widened by one. Its Table 11.6
+**The new word.** `op-key-reused` (409) joins `OVERLORD_REFUSALS` and `W1_GROUP`'s pin is widened by one (by two, with
+`act-key-taken` below). Its Table 11.6
 row, added to the spec in PR A:
 
 | Word | Door or lane | Meaning | Call |
 |---|---|---|---|
-| `op-key-reused` | Every Overlord door that writes an act row | The call's operation key already names an act of this session and generation, made by another door or with another body. Nothing is done | H24 |
+| `op-key-reused` | Every Overlord door that writes an act row | The call's operation key already names an act of this session and generation, made by another door, on another target or with another body. Nothing is done | H24 |
+
+**What the door answers for a taken key** (the coordinator's ruling on review 2275, F8). The writer's two `holder`
+answers reach the door only in a race the gate's lookup could not see (two calls inside one window):
+- **`op-key-taken`** answers the holder as a replay, `{ ok: true, replayed: true, act }`, as Table 3's row 4 does.
+- **`natural-key-taken`** refuses a new word, `act-key-taken` (409), naming the holder's act id. It joins
+  `OVERLORD_REFUSALS` beside `op-key-reused`, and its Table 11.6 row is added to the spec in PR A, on a commit that
+  carries a `Ledger-Edit` trailer:
+
+| Word | Door or lane | Meaning | Call |
+|---|---|---|---|
+| `act-key-taken` | Every Overlord door that writes an act row | Another act already holds this act's natural key (its target at this revision) and is not settled `refused`. Nothing is done | H24 |
 
 The console's sentence joins `pwa/src/lib/refusalWords.ts` with the door that first shows it (act reads); this piece's
 words reach only the Overlord, whose door process prints the raw word.
@@ -448,9 +490,14 @@ has no row. In W2 it has one row:
 
 | Act kind | Measures | `done` when | `refused` when | `unknown` when |
 |---|---|---|---|---|
-| `acknowledge` | the message's state in the private store | the message reads `settled` | it reads any state but `settled` | the store cannot be read |
+| `acknowledge` | the message's state, `settledBy` and `settledAt` in the private store, through `messageFactsById` | the message reads `settled` with `settledBy` `acknowledge` and `settledAt` at or after the act's `at` | it reads `unsettled`, or `settled` or `spent` by another actor or before the act (settled by another) | the store cannot be read, or the message is `absent` |
 
-*Table 4. `ACT_SETTLE_MAP` in W2. W3 adds the answers (a key press measured in the pane's transcript) and W5 the start.*
+*Table 4. `ACT_SETTLE_MAP` in W2. W3 adds the answers (a key press measured in the pane's transcript) and W5 the start.
+`acknowledge`'s row reads who settled the message and when (review 2275, F11): a crash can leave the row `pending`
+while `mark`, `cite` or the I8 boot pass settles the message, and `done` would then claim an effect `acknowledge` did
+not make. `messageFactsById` is the inbox's text-free reader, widened by `settledBy` and `settledAt` (What the index
+should change). A message `acknowledge` settled and a citing door then spent reads `spent`, `settledBy` still
+`acknowledge`, and measures `done`.*
 
 **`settleVerdict`** (L1): from the row, its measurement and the time, first match.
 
@@ -459,11 +506,14 @@ has no row. In W2 it has one row:
 | 1 | not `pending` or `unknown` | any | nothing |
 | 2 | any open | `done` | settle `done` |
 | 3 | any open | `refused` | settle `refused`; an answer's question to the operator (W3's row) |
-| 4 | `pending` | `unmeasured` | settle `unknown`, and one push |
-| 5 | `unknown` | `unmeasured` | nothing: it waits for a measurement |
+| 4 | `pending` | `unmeasured` | settle `unknown`, and the push |
+| 5 | `unknown`, `pushedAt` unset | `unmeasured` | the push again |
+| 6 | `unknown`, `pushedAt` set | `unmeasured` | nothing: it waits for a measurement |
 
-*Table 5. `settleVerdict`. `unknown` leaves only by a measurement (Table 10.1b), and a second `unmeasured` sends no
-second push.*
+*Table 5. `settleVerdict`. `unknown` leaves only by a measurement (Table 10.1b). The push is at least once: row 5 sends
+it again while `pushedAt` is unset, so a crash between the settle's commit and the send loses nothing, and the outbox's
+unbound insert stays outside the transaction, as `insertUnboundRow` requires (the coordinator's ruling on review 2275,
+F10). Once sent, a second `unmeasured` sends no second push.*
 
 **The lane.** `actSettle`, a `LANE_SCHEDULE` row: `cadenceMs` 60,000, `clock: 'mono'`, `flight: 'skip'`, `staleAfterMs`
 twice the cadence, `warnKey: 'ccrc-server: the act settling lane failed'`. Each pass (L4,
@@ -472,7 +522,9 @@ twice the cadence, `warnKey: 'ccrc-server: the act settling lane failed'`. Each 
 2. Reads `openActs`. `unmeasured`: one warn line, nothing written.
 3. For each row, asks its measurer, then `settleVerdict`, and writes through `settleActInTx` in a transaction of its
    own, so one row's failure never holds another.
-4. Sends the `unknown` push through the push sender, keyed `act-unknown:<id>`, after its settle commits.
+4. Sends the `unknown` push through the push sender, keyed `act-unknown:<id>`, after its settle commits, then stamps
+   `pushedAt` through the writer's `stampPushedInTx`, its one writer of that column. A send that fails leaves it unset,
+   and the next pass sends again (Table 5, row 5).
 5. Stamps `dependsSince` on `done` rows that lack it, from `dependsSinceOf` (L1) over `ActDependsFacts` (question 9),
    through the writer's `stampDependsSinceInTx`, its one writer of that column.
 
@@ -490,6 +542,10 @@ keeps the figure for the act read (the act reads piece serves it).
    it first), and in the same transaction the `message` line the inbox stamps today (its question 19), so both lines sit
    in the act's settle transaction.
 4. A throw or a crash between 1 and 3 leaves the row `pending`, and the lane settles it by reading the message.
+
+Steps 1 to 3 run with no `await` between them (review 2275, F13). The private store's move is synchronous in W2, so the
+lane, which runs between event-loop turns, never sees the row `pending` while the move is in flight. A test pins it:
+the handler's steps 1 to 3 are one synchronous stretch.
 
 The door answers as W1's does, with the `act` field added (question 3).
 
@@ -532,10 +588,10 @@ the gatherer in one synchronous read.
   `settleVerdict`, `dependsSinceOf`, I3's predicate) take facts and answer words, with no fs, no clock and no
   randomness. The store is L3, the lane and the boot pass L4, and `index.ts` composes.
 - **One writer per fact.** `overlord_acts` has two writer functions in one module, `writeActInTx` and `settleActInTx`,
-  plus `stampDependsSinceInTx` for its one column; later columns get their writers from their pieces (Seen, overturn,
+  plus `stampDependsSinceInTx` and `stampPushedInTx` for their one column each; later columns get their writers from their pieces (Seen, overturn,
   the restore pass), each named in `writers-map.test.ts`.
 - **No overloaded null.** Every reader tells `unmeasured` from empty, and the lookup tells `none` from `unmeasured`.
-- **Consolidate.** The body hash reuses the journals' canonical encoder. The key reuses the authority journal's `opKey`
+- **Consolidate.** The call hash reuses the journals' canonical encoder. The key reuses the authority journal's `opKey`
   vocabulary. The lane follows the push outbox's boot-and-lane shape. The operation key is legitimately different from
   the witness key (the W1 door-process plan, F20): one dedupes the transport, the other proves a model turn.
 - **Time.** Every module under `server/src/coord/overlord*` is in `time-ports.test.ts`'s family and takes its clock
@@ -550,7 +606,7 @@ the gatherer in one synchronous read.
 
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate |
 |---|---|---|---|---|
-| A, the row and the key | A1 to A6 | The act states and `ACT_TRANSITIONS`; `overlord_acts` and its store; the natural key and its index; the `act` sequence kind; the operation key end to end, `op-key-reused` and its Table 11.6 row; the `retried` witness arm; the allow, the cell and the ceilings inside the write | act catalogue A and B, sequence A, door process A2, gates B (door process B for the witness arm, else the index's request) | `server/src/coord/schema.ts` about +24 (one migration, columns grouped several to a line; question 11); `server/src/server.ts` about +6 (the runner's two ports bound); `server/src/coord/store.ts` 0; `shared/api.ts` 0 |
+| A, the row and the key | A1 to A6 | The act states and `ACT_TRANSITIONS`; `overlord_acts` and its store; the natural key and its index; the `act` sequence kind; the operation key end to end, `op-key-reused` and its Table 11.6 row; the `retried` witness arm; the allow, the cell and the ceilings inside the write | act catalogue A and B, sequence A, door process A2, gates B (door process B for the witness arm, else the index's request) | `server/src/coord/schema.ts` about +23 code lines, measured against migration 82 (30 code lines for 41 columns, three tables and five indexes; `growthCheck.ts#codeLines` counts no comment line): about 58 columns at six to a line, four `CHECK`s, four indexes and the backticks, plus one line for the witness column if door process B has landed (question 11). The PR states its measured figure (review 2275, F15); `server/src/server.ts` about +6 (the runner's two ports bound); `server/src/coord/store.ts` 0; `shared/api.ts` 0 |
 | B, settling | B1 to B3 | The settle decider and its table; the lane, its `LANE_SCHEDULE` row and the boot pass; `dependsSince`; `acknowledge` in two steps; I3's predicate and M32's figure | PR A, act journal A, the inbox, sequence B | `server/src/watch.ts` about +6 (the lane's `runLane` line and its deps); `server/src/server.ts` about +2; `server/src/coord/schema.ts` 0 |
 
 *Table 6. The PR split. `ccd/ccrc-api` and `ccd/door-process.mjs` are not growth-checked.*
@@ -596,8 +652,11 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
     line, in that order (the double and the sequence read back);
   - of `pending`, one `act-intent` record;
   - a journal double that refuses: nothing is written, and the writer answers the journal's word;
-  - a journal double that answers `ok` and an apply that throws after it: the transaction rolls back, and the double saw
-    the record (the `trailing` case the journal reports to its guard);
+  - an apply that throws after the append (the row's insert, forced to fail): the port's double runs the apply inside
+    its own call, as the journal does, and answers `journal-append`; the writer answers that word and never throws, and
+    the transaction rolls back (F12; the journal's own suite proves it tells the guard `trailing`);
+  - every record's `actId` equals the row's id; after `sqlite_sequence` is raised above the table's maximum (the
+    restore's floor), the next record's `actId` and the row's id are both above the floor (F7);
   - `settleActInTx` reads the row's state in the transaction and passes it as `from`; a move not in `ACT_TRANSITIONS`
     refuses `bad-row`;
   - `summary` of 201 characters and `why` of 601 are cut whole, after `redactCommand`;
@@ -606,7 +665,8 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
 - [ ] **Step 3: Implement** the migration and the store, re-measuring the slot (`git show
   origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`) and the pins.
 - [ ] **Step 4: Mutation.** The set is `actWriteVerdict`. By hand, each of these reds a case, then is reverted: append
-  after the row; skip the transaction check; stamp before the append; write the row when the journal refused.
+  after the row; skip the transaction check; stamp before the append; write the row when the journal refused; reserve
+  the id as `MAX(id) + 1` alone.
 - [ ] **Step 5: Run** the test, `test/coord-db.test.ts`, `test/run-close-switch.test.ts`,
   `test/single-definition/*.test.ts`, `test/rings/*.test.ts` and `test/sim/mutation-floors.test.ts`. Green.
 - [ ] **Step 6: Commit.** `feat(coord): overlord_acts, its one writer and its readers (Overlord W2, C25, H24)`
@@ -622,10 +682,11 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
 - Modify: `server/test/sim/overlordActsSets.ts` and `mutation-floors.json`
 
 - [ ] **Step 1: Failing tests:**
-  - `actNaturalKey`: kind, target kind, id and revision each change the key; a start's key from request and name; the
-    text is canonical (key order cannot change it);
+  - `actNaturalKey`: kind, target kind, id and revision each change the key; a start's key from its request alone, so
+    two starts on one request share it (F9); the text is canonical (key order cannot change it);
   - two `done` writes under one key: the second answers `natural-key-taken` with the holder, before any append;
-  - a `refused` row frees its key; a row with `divergedAt` keeps it;
+  - a `refused` row frees its key; a row with `divergedAt` in `done` keeps it taken, and one in `refused` frees it
+    (F18);
   - the `act` kind's states are `ACT_STATES` by identity.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.**
 - [ ] **Step 4: Mutation.** The set is `actNaturalKey`. By hand: drop the kind from the key; drop the index's `WHERE`.
@@ -636,13 +697,13 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
 
 **Files:**
 - Modify: `server/src/coord/overlordGate.ts` (gates B's: `GateFacts.opKey`, `opKeyVerdict`, `GateVerdict`'s `replay`)
-- Modify: `server/src/coord/overlordGateRun.ts` (gates B's: the `opKey` port, the body hash, the replay answer,
+- Modify: `server/src/coord/overlordGateRun.ts` (gates B's: the `opKey` port, the call hash, the replay answer,
   `GateRun`'s `replay`)
 - Modify: `server/src/server.ts` (the port bound to `actByOpKey`)
-- Modify: `shared/refusal.ts` (`op-key-reused`: 409), `server/test/single-definition/refusal-table.test.ts`
+- Modify: `shared/refusal.ts` (`op-key-reused` and `act-key-taken`: 409), `server/test/single-definition/refusal-table.test.ts`
   (`W1_GROUP`)
-- Modify: `docs/superpowers/specs/2026-11-09-overlord-design.md` (Table 11.6's row; §11.2's "After the gates" gains the
-  lookup's place)
+- Modify: `docs/superpowers/specs/2026-11-09-overlord-design.md` (Table 11.6's two rows; §11.2's "After the gates" gains
+  the lookup's place), on a commit that carries a `Ledger-Edit` trailer
 - Test: `server/test/overlord-gate.test.ts` (gates B's: Table 3's rows), `server/test/overlord-op-key.test.ts` (new,
   through the runner)
 
@@ -651,13 +712,16 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
     reaches 7a (the witness port double sees no call);
   - a replay advances the counter, and a replay whose counter is not above refuses at step 7;
   - a different body under one key refuses `op-key-reused` and writes nothing; a different door under one key too;
+  - one key, an equal body and another `:id` (an `acknowledge` of a second message) refuses `op-key-reused` (F4);
   - a key from another session, or the same session's earlier generation, reads `none`;
   - `unmeasured` refuses 502 and records no fence refusal and no witness;
+  - in a race past the lookup, the writer's `op-key-taken` answers the holder as a replay, and `natural-key-taken`
+    refuses `act-key-taken` (409) naming the holder (F8);
   - a door with `act: null` reads `no-act`, and a timer write sent a key acts as today;
   - the refusal table is green both ways with the new row.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.**
 - [ ] **Step 4: Mutation.** Gates B's set gains Table 3's cases. By hand: move the lookup before step 7; let a replay
-  consume the witness; compare the body hash only; skip the generation in the scope.
+  consume the witness; hash the body without the path parameters; skip the generation in the scope.
 - [ ] **Step 5: Run** the tests, `test/single-definition/refusal-table.test.ts`, `test/sim/mutation-floors.test.ts` and
   both `tsc` runs. Green.
 - [ ] **Step 6: Commit.** `feat(coord): the operation key's lookup after the fence, and op-key-reused (Overlord W2, §10.1)`
@@ -699,6 +763,10 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
     answers `allow-forged` and writes nothing; a second use of one allow answers `allow-spent`;
   - each of the allow's act, effect, programme id, incarnation, natural key, cell and generation, changed alone, answers
     `allow-mismatch`;
+  - the widening (F1): `widens` set under an allow whose effect is not `widen-scope`, `widens` null under one whose
+    effect is, and `widens` naming another programme than the allow's target each answer `allow-mismatch`; the row
+    stores the allow's `effect`; a stored widening relay raises the `o3-effect` group's count, so a second one past
+    the cap answers `act-ceiling`;
   - every row of `ALLOW_CELL_WRITES`; under a `proposal` allow no act row is ever written;
   - the reader counts rows not `refused` whose kind or effect is in the group, in all and for one programme, inside the
     window and not before it; overturned rows count (§10.3); a carrier whose effect is in a second group counts in both;
@@ -708,7 +776,8 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
   - the census: every `writeActInTx(` call in `server/src` passes the allow its door's `overlordMayAct` call answered.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.**
 - [ ] **Step 4: Mutation.** `actWriteVerdict`'s set gains the allow, cell and ceiling arms. By hand: skip the runtime
-  assert; count by kind only; check the ceiling after the append; write the act row under a `proposal` allow.
+  assert; count by kind only; check the ceiling after the append; write the act row under a `proposal` allow; store a
+  NULL effect; drop `widens` from the comparison.
 - [ ] **Step 5: Run** the tests and `test/sim/mutation-floors.test.ts`. Green.
 - [ ] **Step 6: Commit.** `feat(coord): the act writer checks and consumes its allow and re-runs the ceilings inside the write (Overlord W2)`
 
@@ -727,12 +796,14 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
   - every row of Table 5; a census reds a kind written `pending` with no `ACT_SETTLE_MAP` row;
   - a pass over a guard that is not `coherent` writes nothing;
   - one row whose settle throws leaves the others settled;
-  - a second `unmeasured` on an `unknown` row sends no second push, and the push is keyed `act-unknown:<id>`;
+  - a second `unmeasured` on an `unknown` row whose `pushedAt` is set sends no second push, and the push is keyed
+    `act-unknown:<id>`; a crash after the settle's commit and before the send (the sender double throws) leaves
+    `pushedAt` unset, and the next pass sends it (F10);
   - the boot pass runs before the HTTP server (`index.ts`'s order), and its count is M32's figure;
   - `dependsSinceOf`: the first dispatch or pull request after `at`, none before it, `unmeasured` kept apart from none.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.**
 - [ ] **Step 4: Mutation.** The sets are `settleVerdict` and `dependsSinceOf`. By hand: settle while rolled back; let
-  `unknown` leave on `unmeasured`.
+  `unknown` leave on `unmeasured`; stamp `pushedAt` before the send.
 - [ ] **Step 5: Run** the tests, `test/lane-schedule.test.ts`, `test/consolidation-census.test.ts` and
   `test/sim/mutation-floors.test.ts`. Green.
 - [ ] **Step 6: Commit.** `feat(coord): the act settling lane and its boot pass (Overlord W2, H24, M32)`
@@ -742,14 +813,17 @@ then the client's), then A6, once act catalogue B's allow has merged. **Inside P
 **Files:**
 - Modify: `server/src/coord/overlordRoutes.ts` (the inbox's `acknowledge` handler)
 - Modify: `server/src/coord/overlordActSettle.ts` (`acknowledge`'s measurer row) and `server/src/server.ts` (its port
-  bound to the private store's message reader)
+  bound to the private store's `messageFactsById`, widened by `settledBy` and `settledAt` if the inbox has not)
 - Modify: `server/test/sequence-stamp-census.test.ts` if the `message` line's stamper moves into the settle
 - Test: the inbox's `acknowledge` suite
 
 - [ ] **Step 1: Failing tests:** a settled message answers `changed: false` and writes no row; a settle writes
   `pending`, moves the message, then `done`, with the `message` and `act` lines in the second transaction; a race that
   answers `changed: false` settles `refused` and frees the key; a throw after the move leaves `pending`, and the lane
-  settles it `done`; the answer carries `act`.
+  settles it `done`; the answer carries `act`. The measurer (F11): a message settled by `mark`, by `cite` or by the I8
+  boot pass while the row was `pending` measures `refused` (settled by another); one settled by `acknowledge` before the
+  act's `at` measures `refused`; one `acknowledge` settled and a citing door then spent measures `done`; `absent`
+  measures `unknown`. Steps 1 to 3 are one synchronous stretch: the handler holds no `await` between them (F13).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run.** Green.
 - [ ] **Step 5: Commit.** `feat(coord): acknowledge writes its act row in two steps (Overlord W2, Table 11.1e)`
 
@@ -789,6 +863,13 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   and a `refused` act that is not an answer sends nothing (question 8).
 - **`depends-since-reads-dispatch-and-prs`**: `dependsSince` reads dispatches and pull requests, not bare commits, in
   W2 (question 9).
+- **`act-key-taken`**: §10.1 refuses a second effect under one natural key and names no word. A door answers
+  `act-key-taken` (409), a new row of Table 11.6, and an `op-key-taken` in the writer answers as a replay (the
+  coordinator's ruling on review 2275, F8).
+- **`unknown-push-at-least-once`**: Table 10.1a has no push-sent column. `pushedAt` lets the lane send the `unknown` push
+  again until it is sent (the coordinator's ruling on review 2275, F10).
+- **`acknowledge-measures-who-settled`**: Table 11.1e's two-step `acknowledge` measures `done` only when the message was
+  settled by `acknowledge` at or after the act (review 2275, F11).
 - **`start-keyed-on-its-request`**: §8.2 keys a start by its request and its name. The coordinator ruled the request
   alone, one start per request (the act catalogue's review, F10).
 - **`ceilings-rechecked-in-the-write`**: §11.2 places the act ceiling at step 10 only. The writer re-runs it inside the
@@ -810,6 +891,16 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   spec-fixes run need not.
 - **Table W2's act rows row:** PR B needs the private store's message reader (private store B) through the inbox. The
   row already names the inbox.
+- **Table W2's act rows row, from review 2275:** the allow binds `effect` and `widens`, and the row stores the allow's
+  effect from W2 (F1). `acknowledge`'s measurer needs the inbox's `messageFactsById` widened, text-free, by `settledBy`
+  and `settledAt` (F11): an inbox edit, which the inbox's builder ships if it builds after this plan is accepted, and
+  act rows B otherwise.
+- **Gates B:** the runner's operation-key comparison hashes `{ door, path params, body }` (F4).
+- **Door process B:** a second `retried` on the same witness is counted (F17).
+- **Table 11.6 and the spec-fixes run:** `act-key-taken` (409) is added by act rows A's PR, on a `Ledger-Edit` commit
+  (F8), so the spec-fixes run need not.
+- **Request record:** RQ18's insert-first order is cross-referenced from act rows A's writer (§4.3), and act journal B
+  feeds the request id floor as `nextRequestId`'s second argument (the act journal plan, F5).
 
 ## States W3 may read
 
@@ -818,7 +909,12 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 - **`ACT_SETTLE_MAP`**, to which W3 adds the answers' measurer (the key press in the pane's transcript), and
   `settleVerdict`'s answer arm of `refused`.
 - **The operation key**, which W3's answer doors use unchanged, and the natural key, which W5's start uses with its
-  request-and-name arm.
+  request arm: one start per request (F9).
+- **No `await` inside a two-step act's first three steps** (F13). W2's one two-step act, `acknowledge`, runs its intent,
+  its effect and its settle in one synchronous stretch. W3's key press is asynchronous, so W3 adds an in-flight
+  exclusion before it adds that row to `ACT_SETTLE_MAP`: the lane must not settle a row `refused`, which frees its
+  natural key, while the press it measures has not landed.
+- **`pushedAt`**, which W3's answer arm of `refused` reuses for its question to the operator.
 
 ## Where things stand
 
@@ -829,6 +925,9 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   `MayActAllow`; it re-runs the ceilings for the act's and the effect's groups inside its write, counting by effect as
   well as by kind; a start keys on its request alone; the allow's cell decides what is written; `escalate-request` is a
   catalogue kind.
+- The coordinator's rulings on this plan's review (run 2275): the row stores the allow's effect and `widens` is bound to
+  it (F1); `op-key-taken` replays and `natural-key-taken` refuses `act-key-taken` (F8); `pushedAt` makes the `unknown`
+  push at least once (F10); and the fixes F4, F7, F9, F11 to F13, F15, F17 and F18.
 
 **Waiting on the coordinator:**
 - The eleven open questions (§2), each with a recommendation. Questions 2, 4 and 8 change what other pieces build.
