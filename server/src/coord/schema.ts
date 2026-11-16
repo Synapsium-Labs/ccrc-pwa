@@ -3249,15 +3249,59 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 79: user_version 78 -> 79 ─────────────────────────────────────────────
+  // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
+  // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
+  // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
+  // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a try of one
+  // renewal (an episode: a generation that went back to active may renew again), inserted BEFORE the call (a crash then
+  // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
+  // the soft budget's count across generations.
+  //
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 78` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names any of them, and boots. Every earlier entry is frozen.
+  // The push outbox (#2838) took 75, the portfolio (#2842) 76, the replay quiz (#2839) 77 and the loads report (#2847) 78,
+  // so this entry is 79, the next free slot, pinned to the entry before it (the coordinator's word at landing).
+  // RE-MEASURE the slot before the PR and before merge (it must print 78 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_checkpoints (
+    generationId INTEGER PRIMARY KEY,   -- the generation the checkpoint was assembled for (continuity_generations.id)
+    notes        TEXT NOT NULL,         -- JSON array: the identity's live notes as stored
+    rulings      TEXT NOT NULL,         -- JSON array: a coordinator's last ten rulings, newest first; [] for any other role
+    handover     TEXT,                  -- JSON: the handover note (with its generation and dropped count), or NULL
+    at           INTEGER NOT NULL       -- wall ms the lane stored it
+  );
+  CREATE TABLE continuity_renew_calls (
+    generationId INTEGER NOT NULL,
+    episode      INTEGER NOT NULL,      -- the renewal: wall ms its generation entered clearing (set once on entry)
+    try          INTEGER NOT NULL,      -- the try within the renewal (1-based)
+    at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
+    answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
+    PRIMARY KEY (generationId, episode, try)
+  );
+  CREATE TABLE continuity_soft_renewals (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,
+    term         INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,      -- the generation whose soft due was fed
+    observedMs   INTEGER NOT NULL       -- the identity's accumulator when it was fed
+  );
+  CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
+  `,
+
+  // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
   // The response record (Overlord spec §4.3 C66, C67; W1, plan `w1-responses.md` Task 2): `operator_responses`, one row per
   // message ccrc put in front of the operator, sealed once by the response lane; `response_receipts`, what a device reported
   // of it, written only by the receipts door; `response_boots`, one row per boot of this server (question 17). One writer
   // for each fact, named in `responsesStore.ts` and `writers-map.test.ts`. Each kind's reference is one partial unique index
   // over columns its own CHECKs make non-null, and every insert names its conflict, so a repeat is nothing and a CHECK throws.
-  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 79` takes rule 3, never names
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3, never names
   // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too (the renewal act and answer marks A are
-  // queued); whoever lands later renumbers on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it
-  // must print 78 before this entry is counted):
+  // queued); the renewal act (#2852) took 79, so this is 80 (the coordinator's word, 2026-11-16); whoever lands later
+  // renumbers on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it
+  // must print 79 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

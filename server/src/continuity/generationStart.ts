@@ -222,14 +222,15 @@ export function startVerdict(f: StartFacts): StartVerdict {
 }
 
 /** The outcome written on the generation a start ends (slug outcome-from-the-start): `renewed` for the start a renewal
- *  asked for (the generation was `clearing`); otherwise `unmeasured` when either account is not known (a swap cannot be
+ *  asked for (the generation was `clearing` and the start is a fresh conversation's `startup`: a resume of the old one, as
+ *  exit 7's put-back or a concurrent wake reports, is never the renewal's, review 2149 F2); otherwise `unmeasured` when either account is not known (a swap cannot be
  *  ruled out, review 2003 F4), `swapped` when the account changed; on the same row incarnation, `cleared` for a `clear` (a
  *  `/clear` is not a crash: review 2006, slug clear-is-not-a-crash) and `crashed` for any other start while the generation
  *  was `active`; and `woken` for the rest. With no live generation nothing is ended, and the answer is not written. */
 export function startOutcome(f: Pick<StartFacts, 'source' | 'registry' | 'live' | 'rowIncarnation'>): GenerationOutcome {
   const old = f.live;
   if (old === null) return 'woken';
-  if (old.state === 'clearing') return 'renewed';
+  if (old.state === 'clearing' && f.source === 'startup') return 'renewed';
   const lane = f.registry.kind === 'row' ? f.registry.lane : null;
   if (lane === null || old.lane === null) return 'unmeasured';
   if (lane !== old.lane) return 'swapped';

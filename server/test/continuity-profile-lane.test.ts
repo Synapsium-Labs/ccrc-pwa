@@ -207,7 +207,7 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.usageAsked).toEqual([]);
   });
 
-  it('with continuity live (its gate opened as the renewal act will), a coordinator gets compact and compactwindow from its window', async () => {
+  it('with continuity live (the gate opened, as the renewal act has done), a coordinator gets compact and compactwindow from its window', async () => {
     const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, openGate: true, coordinators: ['lane-a-project-a', 'lane-a-project-b'],
       windows: { 'lane-a-project-a': 200_000 } });
     const r = await profilePass(h.deps, [row('lane-a-project-a', null), row('lane-a-project-b', null), row('lane-a-project-c', null)]);
@@ -220,11 +220,11 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(r.continuityLive).toBe(true);
   });
 
-  it('continuity stored live while its gate stands is not live: no compaction field (review 2006 N1)', async () => {
+  it('the renewal act lifted the continuity row\'s gate: stored live is live with the real gate, so the compaction fields are written (review 2006 N1)', async () => {
     const h = harness({ lanes: { ...LIVE, continuity: armed('live') }, coordinators: ['lane-a-project-a'], windows: { 'lane-a-project-a': 200_000 } });
     const r = await profilePass(h.deps, [row('lane-a-project-a', null)]);
-    expect(r.continuityLive).toBe(false);
-    expect(h.sent.map(sets)).toEqual([['profile=coordinator', 'automem=off']]);
+    expect(r.continuityLive).toBe(true);
+    expect(h.sent.map(sets)).toEqual([['compact=60', 'profile=coordinator', 'automem=off', 'compactwindow=154000']]);
   });
 
   it('a session carrying the history W3 steer marker, or whose marker cannot be read, is left alone; the others are written', async () => {

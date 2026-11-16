@@ -6,6 +6,8 @@ import { fakeTime, type FakeTime } from '../fakeTime.js';
 
 /** How many microtask turns settle() waits at most for the promises scheduled calls returned. */
 const SETTLE_TURNS = 10_000;
+/** How many microtask turns `runSteps` gives the in-flight promises after each step. */
+const STEP_TURNS = 200;
 
 /** The time-ports fake, plus what it has not: a crash that drops the server's timers and boots it again as a world
  *  event, and a skew between the server's wall clock and the host's. Mono starts at 0 and runs on across a crash. */
@@ -77,6 +79,19 @@ export class SimWorld {
     const n = this.unsettled.size;
     if (n > 0) {
       throw new Error(`SimWorld.settle: ${n} promise${n === 1 ? '' : 's'} a scheduled call returned still pending after SETTLE_TURNS (${SETTLE_TURNS}) microtask turns`);
+    }
+  }
+
+  /** `runUntil`, in steps, letting the microtasks of an in-flight async call run between steps: a lane that awaits (a port
+   *  call, a timer-resolved promise) is then interleaved with the timers at the step's grain, not run after the last one.
+   *  A step is `busyMs` while a scheduled call's promise is unsettled and `idleMs` otherwise; after each step the
+   *  microtask queue is turned over a bounded number of times, so the order is deterministic per seed. A call whose
+   *  continuation needs more turns than the bound resumes after the next step. */
+  async runSteps(untilMono: number, step: { readonly idleMs: number; readonly busyMs: number }): Promise<void> {
+    while (this.time.ports.clock.mono() < untilMono) {
+      const by = this.unsettled.size > 0 ? step.busyMs : step.idleMs;
+      this.runUntil(Math.min(untilMono, this.time.ports.clock.mono() + by));
+      for (let turn = 0; this.unsettled.size > 0 && turn < STEP_TURNS; turn++) await Promise.resolve();
     }
   }
 

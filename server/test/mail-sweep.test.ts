@@ -4504,3 +4504,88 @@ describe('sweepMail: a live recipient\'s mail PARKS, never rejects (D-5838)', ()
     } finally { warn.mockRestore(); coord.parkedDeliveries = read; }
   }, 10_000);
 });
+
+// Overlord W1a, the renewal act (Task 4; Review Focus 3 and 4, slug gate-reads-state-only): while the recipient's generation's
+// `state` column is renewing (`draining` to `probing`) the sweep gates its deliveries `renewing` before any attempt is counted,
+// except the handover ask; a shadow walk (`shadowState`) holds nothing; a delivery delivered and unacked when the drain began
+// is held while the word stands and replayed once after, by the existing replay, with no row written on entering `draining`.
+describe('sweepMail: the renewal act holds a renewing session\'s mail (W1a)', () => {
+  const seedGeneration = (coord: CoordStore, state: string, shadowState: string | null = null): number => {
+    const st = coord.insertStart({ sessionId: ID, reportId: 'r-gen', uuid: UUID, source: 'startup', model: null, rowIncarnation: null, reportedAt: 1, receivedAt: 1 });
+    if (!st.ok) throw new Error('start not recorded');
+    const r = coord.db.prepare('INSERT INTO continuity_generations (identity, sessionId, role, term, n, state, shadowState, walk, enteredAt, resumed, '
+      + "startId, startReportedAt, observed, mintedObservedMs) VALUES (?, ?, 'coordinator', 1, 1, ?, ?, ?, 1, 0, ?, 1, ?, 0)")
+      .run(ID, ID, state, shadowState, state === 'active' && shadowState === null ? null : shadowState === null ? 'live' : 'shadow',
+        st.id, JSON.stringify({ ms: 0, mono: 0, proc: 'p' }));
+    return Number(r.lastInsertRowid);
+  };
+  const setState = (coord: CoordStore, id: number, state: string): void => {
+    coord.db.prepare('UPDATE continuity_generations SET state = ?, walk = ? WHERE id = ?').run(state, state === 'active' ? null : 'live', id);
+  };
+
+  for (const state of ['draining', 'checkpointed', 'clearing', 'carded', 'probing']) {
+    it(`a queued delivery to a session whose generation is ${state} is gated renewing, spends no attempt and types nothing`, async () => {
+      const h = harness({ panes: HAPPY_PANES });
+      const coord = store(h.home);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+      seedGeneration(coord, state);
+      const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([]);
+      expect(deliveryRow(coord, id)).toMatchObject({ state: 'queued', attempts: 0, lastGate: 'renewing' });
+    });
+  }
+
+  it('the handover ask (the operator\'s mail with subject handover) passes the gate; the same subject from a peer does not', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    seedGeneration(coord, 'checkpointed');
+    const peer = coord.insertMail({ fromId: FROM_ID, fromUuid: FROM_UUID, toId: ID, runId: null, kind: 'status', subject: 'handover', body: 'x', artifacts: [] });
+    const peerD = coord.queueDelivery(peer.id, ID, 'x');
+    const ask = coord.insertMail({ fromId: 'operator', fromUuid: 'operator', toId: ID, runId: null, kind: 'status', subject: 'handover', body: 'y', artifacts: [] });
+    const askD = coord.queueDelivery(ask.id, ID, 'y');
+    await w.sweepMail();
+    expect(deliveryRow(coord, peerD.id)).toMatchObject({ state: 'queued', lastGate: 'renewing' });
+    expect(deliveryRow(coord, askD.id).lastGate).not.toBe('renewing');
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+  });
+
+  it('a shadow walk holds nothing: shadowState draining with state active delivers as today', async () => {
+    const h = harness({ panes: HAPPY_PANES });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    seedGeneration(coord, 'active', 'draining');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id).state).toBe('delivered');
+  });
+
+  it('a delivery delivered and unacked when draining begins is not typed again while the word stands, and is replayed once after (A3)', async () => {
+    const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+    const coord = store(h.home);
+    const { w } = await primedWatcher(h, coord);
+    seedRegistry(h.home, ID); seedHookState(h.home, ID); seedLiveState(h.home);
+    const gen = seedGeneration(coord, 'active');
+    const { id } = queueTestDelivery(coord, ID, ENVELOPE);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    const delivered = deliveryRow(coord, id);
+    expect(delivered.state).toBe('delivered');
+
+    setState(coord, gen, 'draining');
+    advance(MAIL_REPLAY_MS + 1_000);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE]);
+    expect(deliveryRow(coord, id)).toMatchObject({ state: 'delivered', attempts: delivered.attempts, lastGate: 'renewing' });
+
+    setState(coord, gen, 'active');
+    advance(MAIL_SWEEP_MS + MAIL_COOLDOWN_MS);
+    await w.sweepMail();
+    expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+  });
+});

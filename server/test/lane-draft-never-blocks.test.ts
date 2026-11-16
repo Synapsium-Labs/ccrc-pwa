@@ -248,6 +248,7 @@ const CALL_SITES: readonly Site[] = [
   { file: 'server.ts', fn: 'POST /api/sessions/:id/prompt', policy: 'refuse-or-replace' },   // the PWA's human send
   { file: 'watch.ts', fn: 'idleNudgeOne', policy: 'stash' },                     // the idle compact nudge
   { file: 'watch.ts', fn: 'mailPass', policy: 'stash' },                        // every mail
+  { file: 'continuity/renewalWiring.ts', fn: 'renewalActsOf', policy: 'stash' }, // the renewal's first prompt (Overlord W1a)
 ];
 
 const FN_RE = /^ {2}(?:private |public |protected )?(?:static )?(?:async )?(?!(?:if|for|while|switch|catch|return|await)\b)([A-Za-z_]\w*)\s*\(|^(?:export )?(?:async )?function\s+([A-Za-z_]\w*)|app\.(get|post|put|patch|delete)\('([^']+)'/;

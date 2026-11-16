@@ -13,11 +13,20 @@ const SUBJECT_TITLE_MAX = 80;
 
 const bytesOf = (s: string): number => Buffer.byteLength(s, 'utf8');
 
+/** What every tick mail's subject starts with, before the item's id: the one spelling, read by `itemMailSubject` and by
+ *  `isTickMailSubject`. */
+const TICK_SUBJECT_HEAD = 'done: item ';
+
+/** Is this subject a tick mail's (`itemMailSubject`'s shape: the head, a positive item id, a colon and a space)? The
+ *  checkpoint's reader of an operator's rulings selects tick mail by it (Overlord W1a, the renewal act). */
+export const isTickMailSubject = (subject: string): boolean =>
+  subject.startsWith(TICK_SUBJECT_HEAD) && /^[1-9][0-9]*: /.test(subject.slice(TICK_SUBJECT_HEAD.length));
+
 /** The subject names the item, so the coordinator's inbox reads it and the newest tick mail of an item is found by it.
  *  `done: item <id>: <title>`: the title is cut to 80 characters and then, if the subject is still past
  *  `MAIL_SUBJECT_MAX_BYTES`, to fewer, always on a code-point boundary (never half of a surrogate pair). */
 export function itemMailSubject(item: Pick<ItemRow, 'id' | 'title'>): string {
-  const head = `done: item ${item.id}: `;
+  const head = `${TICK_SUBJECT_HEAD}${item.id}: `;
   let title = [...item.title].slice(0, SUBJECT_TITLE_MAX);
   while (title.length > 0 && bytesOf(head + title.join('')) > MAIL_SUBJECT_MAX_BYTES) title = title.slice(0, -1);
   return head + title.join('');

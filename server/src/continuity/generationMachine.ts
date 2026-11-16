@@ -17,12 +17,14 @@ export type GenEvent =
   | { readonly kind: 'handover' }                               // the handover note arrived
   | { readonly kind: 'host-ended' }                             // the receipt's first half: the old conversation ended
   | { readonly kind: 'host-failed'; readonly afterEnd: boolean }
+  | { readonly kind: 'host-gave-up' }                           // after the first half, and no retry can help (ccd's wake-failed)
   | { readonly kind: 'started'; readonly resumed: boolean }     // a SessionStart that is not a compaction
   | { readonly kind: 'card-read'; readonly hashMatches: boolean }
   | { readonly kind: 'probes'; readonly passed: boolean }
   | { readonly kind: 'nudge-due' }                              // carded's nudge point passed (set once on entry)
   | { readonly kind: 'deadline' }                               // the state's stored deadline passed (set once on entry)
-  | { readonly kind: 'renew-now' };
+  | { readonly kind: 'renew-now' }
+  | { readonly kind: 'disarmed' };                              // the row was switched off while this live walk was in flight
 
 export interface GenView {
   readonly state: GenerationState;
@@ -77,6 +79,10 @@ const back = (g: GenView): Move => (g.proven
   ? to(GEN_ACTIVE, 'active', ['release-deliveries', 'set-hold-off'])
   : degrade(g));
 
+/** A live walk whose row was switched off ends at once (review 2149 F13): before the receipt's first half it goes back as
+ *  a failure before it does, and after it (or once a fresh conversation was minted, never proven) it degrades. */
+const disarm = (g: GenView): Move => (g.hostEnded ? degrade(g) : back(g));
+
 /** Into `clearing`: the host ends the conversation and starts a fresh one; this is the try's one `renew`. */
 const clear = (g: GenView): Move => to(g, 'clearing', ['renew'], { tries: 1, hostEnded: false });
 
@@ -91,6 +97,7 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Mo
     return same(g);
   },
   draining: (g, e) => {
+    if (e.kind === 'disarmed') return disarm(g);
     if (e.kind === 'drained') {
       return g.cls === 'hard' ? clear(g) : to(g, 'checkpointed', ['assemble-checkpoint', 'ask-handover']);
     }
@@ -99,12 +106,16 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Mo
     return same(g);
   },
   checkpointed: (g, e) => {
+    if (e.kind === 'disarmed') return disarm(g);
     if (e.kind === 'handover' || e.kind === 'deadline') return clear(g);
     if (e.kind === 'started') return startedHere(g);
     return same(g);
   },
   clearing: (g, e) => {
+    if (e.kind === 'disarmed') return disarm(g);
     if (e.kind === 'host-ended') return to(g, 'clearing', [], { hostEnded: true });
+    // ccd put the old conversation back to sleep and a retry would find no pane (review 2149 F5): degraded at once.
+    if (e.kind === 'host-gave-up') return degrade({ ...g, hostEnded: true });
     if (e.kind === 'host-failed') {
       if (!g.hostEnded && !e.afterEnd) return back(g);
       return to(g, 'clearing', ['renew'], { tries: g.tries + 1, hostEnded: true });
@@ -114,6 +125,7 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Mo
     return same(g);
   },
   carded: (g, e) => {
+    if (e.kind === 'disarmed') return disarm(g);
     if (e.kind === 'card-read' && e.hashMatches) return to(g, 'probing', ['start-probes'], { probeRounds: 0 });
     if (e.kind === 'nudge-due' && !g.renudged) return to(g, 'carded', ['renudge-card'], { renudged: true });
     if (e.kind === 'deadline') return degrade(g);
@@ -124,6 +136,7 @@ const HANDLERS: Readonly<Record<GenerationState, (g: GenView, e: GenEvent) => Mo
   // `card-read` in `probing` is ignored, so round two can pass without one being seen; the card matched on entry
   // (review 1912, F17).
   probing: (g, e) => {
+    if (e.kind === 'disarmed') return disarm(g);
     if (e.kind === 'probes') {
       if (e.passed) return to(GEN_ACTIVE, 'active', ['release-deliveries']);
       return g.probeRounds >= 1 ? degrade(g) : to(g, 'probing', ['renudge-card', 'start-probes'], { probeRounds: 1 });

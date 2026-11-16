@@ -310,7 +310,8 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
+  'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
+  'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads',
   'operator_responses', 'response_receipts', 'response_boots'] as const;
 
@@ -384,6 +385,10 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      // The renewal act (Overlord W1a): the generations lane's checkpoint, and its one claim-then-answer record of a renew call.
+      continuity_checkpoints: ['server/src/continuity/continuityStore.ts#putCheckpoint'],
+      continuity_renew_calls: ['answerRenewCall', 'claimRenewCall'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_soft_renewals: ['server/src/continuity/continuityStore.ts#recordSoftRenewal'],
       continuity_start_loads: ['server/src/continuity/continuityStore.ts#insertStartLoads'],
       // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
       push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
