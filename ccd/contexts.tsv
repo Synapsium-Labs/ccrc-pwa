@@ -320,6 +320,11 @@ _id_wrapper	C1
 _home_for	C1
 _home_measured_to	C1
 _avail	C1
+_org_cur	C1
+_org_tie	C1
+_org_note	C1
+_org_near_say	C1
+_orgnear_cut	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1

@@ -177,10 +177,14 @@ describe('orgnear: the near miss, asked for by the rescue sites only', () => {
 
   it('no line when the landing is `same`, or when nothing `same` lost', () => {
     labels({ 'claude-a': 'org-a', 'claude-b': 'org-a', 'claude-d': 'org-b' });
-    blockedAway(); limits('claude-b', 40, 40); limits('claude-d', 20, 20);
-    expect(target('claude-a', 'claude', '1', '1')).toBe('claude-d rc=0');
+    blockedAway(); limits('claude-b', 20, 20); limits('claude-d', 40, 40);
+    expect(target('claude-a', 'claude', '1', '1')).toBe('claude-b rc=0');
+    limits('claude-b', 40, 40); limits('claude-d', 20, 20);
     labels({ 'claude-a': 'org-a', 'claude-b': 'org-b', 'claude-d': 'org-b' });
     expect(target('claude-a', 'claude', '1', '1')).toBe('claude-d rc=0');
+    // and the near miss itself, for contrast: `claude-b` at 40 relates `same` and lost to `other` at 20
+    labels({ 'claude-a': 'org-a', 'claude-b': 'org-a', 'claude-d': 'org-b' });
+    expect(target('claude-a', 'claude', '1', '1')).toBe('claude-d|orgnear=40 rc=0');
   });
 
   it('no line when the losing candidate is only unlabelled: an unknown organization is no near miss', () => {
@@ -241,7 +245,8 @@ describe('the rescue tick carries the near miss into the dispatch', () => {
 });
 
 // The act's record: `cmd_swap`'s `swap` row carries `meas.org` (the landing's relation to the account it left) and
-// `meas.orgnear` (what the decision carried in, empty when nothing did).
+// `meas.orgnear` (what the decision carried in). `_lc_emit`, the one writer, drops an empty value, so a move with no near
+// miss carries no `orgnear` at all.
 // `ccd-crosspool.test.ts`'s stubs: no pane stands, so the swap moves a stopped session and types nothing.
 const NO_PANE = 'case "${1:-}" in has-session) echo "can\'t find session: x" >&2; return 1 ;; esac;';
 const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };'
@@ -265,17 +270,21 @@ describe('the swap record carries meas.org and meas.orgnear', () => {
     expect(measOf(rows[0]!)).toMatchObject({ from: 'claude-a', wrapper: 'claude-b', org: 'other', orgnear: '40' });
   });
 
-  it('a move within one organization, and an unlabelled one, with no near miss', () => {
+  it('a move within one organization, with no near miss', () => {
     labels({ 'claude-a': 'org-a', 'claude-b': 'org-a' });
     seed('claude-a', 'claude-a'); plantTranscript();
     h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-b`, ENV);
-    expect(measOf(eventsOf(h.home, 'swap')[0]!)).toMatchObject({ org: 'same', orgnear: '' });
+    const m = measOf(eventsOf(h.home, 'swap')[0]!);
+    expect(m).toMatchObject({ org: 'same' });
+    expect(m['orgnear']).toBeUndefined();
   });
 
   it('an unlabelled landing reads `unknown`, never `same`', () => {
     labels({ 'claude-a': 'org-a' });
     seed('claude-a', 'claude-a'); plantTranscript();
     h.sh(`${SWAP_STUBS} cmd_swap ${ID} claude-b`, ENV);
-    expect(measOf(eventsOf(h.home, 'swap')[0]!)).toMatchObject({ org: 'unknown', orgnear: '' });
+    const m = measOf(eventsOf(h.home, 'swap')[0]!);
+    expect(m).toMatchObject({ org: 'unknown' });
+    expect(m['orgnear']).toBeUndefined();
   });
 });
