@@ -20147,8 +20147,8 @@ _org_tie() {   # cand best -> rc 0 when cand relates `same` to the current accou
 _org_note() {   # var cand score -> lowers var to score when asked and cand relates `same`
   [[ -n "${CCD_ORGNEAR_ASK:-}" && "$3" -lt "${!1}" ]] && _org_cur && [[ "$(_org_rel "$cur" "$2")" == same ]] \
     && printf -v "$1" '%s' "$3"; return 0; }
-_org_near_say() {   # winner its-score bracket-same-min -> prints `orgnear=<n>` when asked and an `other` winner beat a `same` loser
-  [[ -n "${CCD_ORGNEAR_ASK:-}" && "$3" -lt 999 ]] && _org_cur && [[ "$(_org_rel "$cur" "$1")" == other ]] \
+_org_near_say() {   # winner its-score bracket-same-min -> prints `orgnear=<n>` when an `other` winner beat a `same` loser (the min stays 999 unasked)
+  [[ "$3" -lt 999 ]] && _org_cur && [[ "$(_org_rel "$cur" "$1")" == other ]] \
     && printf 'orgnear=%s\n' "$3"; return 0; }
 _orgnear_cut() {   # target-var orgnear-var -> splits the asked-for `orgnear=` line off the destination
   local __oc=${!1}; printf -v "$2" '%s' ""; [[ "$__oc" == *$'\n'orgnear=* ]] || return 0

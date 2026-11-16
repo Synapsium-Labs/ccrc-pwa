@@ -187,6 +187,12 @@ describe('orgnear: the near miss, asked for by the rescue sites only', () => {
     expect(target('claude-a', 'claude', '1', '1')).toBe('claude-d|orgnear=40 rc=0');
   });
 
+  it('no line when an unlabelled winner beat a `same` loser: only an `other` landing is a near miss', () => {
+    labels({ 'claude-a': 'org-a', 'claude-d': 'org-a' });   // claude-b unlabelled
+    blockedAway(); limits('claude-b', 20, 20); limits('claude-d', 40, 40);
+    expect(target('claude-a', 'claude', '1', '1')).toBe('claude-b rc=0');
+  });
+
   it('no line when the losing candidate is only unlabelled: an unknown organization is no near miss', () => {
     labels({ 'claude-a': 'org-a', 'claude-b': 'org-b' });   // claude-d unlabelled
     blockedAway(); limits('claude-b', 20, 20); limits('claude-d', 40, 40);
@@ -241,6 +247,22 @@ describe('the rescue tick carries the near miss into the dispatch', () => {
     blockedAway(); limits('claude-b', 30, 30); limits('claude-d', 30, 30);
     h.sh(`${BLOCKED} _auto_swap_check ${ID}`, ENV);
     expect(swapLog()).toMatch(new RegExp(`dispatch ${ID} -> claude-d arm=rescue orgnear=$`, 'm'));
+  });
+});
+
+// The dispatch composes the near miss into the unit's environment beside the decision's other values (D-5240).
+describe('the dispatch carries orgnear into the unit', () => {
+  const DETACHED = `_svc_run_detached() { printf '%s\\n' "$3" >> "$HOME/detached"; return 0; };`;
+  const detached = (): string => fs.readFileSync(path.join(h.home, 'detached'), 'utf8');
+
+  it('as CCD_SWAP_ORGNEAR, and empty when the caller passed none', () => {
+    seedAccountsSh(h.home); seed('claude-a', 'claude');
+    h.sh(`${DETACHED} _dispatch_swap ${ID} claude-b rescue 1 2 '' '' '' '' 40`, ENV);
+    expect(detached()).toContain('CCD_SWAP_ORGNEAR=40 ');
+    fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.dispatching`), { force: true });
+    fs.rmSync(path.join(h.home, 'detached'));
+    h.sh(`${DETACHED} _dispatch_swap ${ID} claude-b rescue 1 2`, ENV);
+    expect(detached()).toContain("CCD_SWAP_ORGNEAR='' ");
   });
 });
 
