@@ -1,10 +1,11 @@
 // Overlord W1, the response record (Task 4: plan docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md): the
 // receipts door, `POST /api/responses/receipts`. It reads the row a receipt names, asks `receiptVerdict`, and writes the
 // kept ones with the server's clock; its answer is counts only. Session-gated when armed, no box token. Fixture homes only.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
+import { UNAVAILABLE_DETAIL } from '../src/responses/routes.js';
 import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { insertPushResponseInTx, landPushVerdictInTx } from '../src/coord/responsesStore.js';
@@ -12,7 +13,7 @@ import { RECEIPTS_MAX_PER_BODY, type ReceiptIn } from '../../shared/responses.js
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
-afterEach(removeTmpFixtures);
+afterEach(() => { vi.restoreAllMocks(); removeTmpFixtures(); });
 
 const PID = 'a'.repeat(32);
 const PENDING = 'b'.repeat(32);
@@ -83,12 +84,15 @@ describe('POST /api/responses/receipts', () => {
     await app.close();
   });
 
-  it('a failed read is unavailable, with nothing written', async () => {
+  it('a failed read is unavailable, with nothing written; the answer is one fixed sentence, the cause only in the log', async () => {
     const { app, coord } = await open();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     coord.db.prepare("UPDATE operator_responses SET state = 'weighed' WHERE pushId = ?").run(PENDING);
     const res = await post(app, [worker(PID, HASH('a')), worker(PENDING, HASH('a'))]);
     expect(res.statusCode).toBe(503);
-    expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+    expect(res.json()).toMatchObject({ ok: false, error: 'unavailable', detail: UNAVAILABLE_DETAIL });
+    expect(res.body).not.toMatch(/weighed|row \d/);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toEqual([expect.stringMatching(/^ccrc-server: operator_responses row \d+ is unreadable by this build: state weighed/)]);
     expect(stored(coord)).toEqual([]);
     await app.close();
   });

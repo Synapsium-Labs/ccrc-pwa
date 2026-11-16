@@ -125,16 +125,23 @@ describe('the verdict lands on the push row (landPushVerdictInTx)', () => {
       windowCapAt: NOW + 1 + PUSH_WINDOW_MS });
   });
 
-  it('a never-delivered row: removed with its receipts on a terminal, answered move; kept on retrying or unknown', () => {
+  it('a never-delivered row: removed on a terminal, answered move; kept on retrying or unknown', () => {
     const s = store();
     tx(s.db, () => insertPushResponseInTx(s.db, push()));
-    insertReceipt(s.db, Number(rows(s)[0]!.id), shown(HASH('d')), NOW);
     expect(land(s, [], false, true)).toEqual({ changed: false, removed: false });   // retrying
     expect(land(s, [], true, false)).toEqual({ changed: false, removed: false });   // unknown: no-answer
     expect(rows(s)[0]).toMatchObject({ state: 'pending' });
-    expect(land(s, [], true, true)).toEqual({ changed: true, removed: true });     // failed, unsent
+    expect(land(s, [], true, true)).toEqual({ changed: true, removed: true });     // failed, unsent, silent
     expect(rows(s)).toHaveLength(0);
-    expect(receipts(s)).toHaveLength(0);
+  });
+
+  it('a never-delivered row holding a receipt is never removed: it keeps its receipt (review 2214 F2)', () => {
+    const s = store();
+    tx(s.db, () => insertPushResponseInTx(s.db, push()));
+    insertReceipt(s.db, Number(rows(s)[0]!.id), shown(HASH('d')), NOW);
+    expect(land(s, [], true, true)).toEqual({ changed: false, removed: false });
+    expect(rows(s)).toEqual([expect.objectContaining({ state: 'pending' })]);
+    expect(receipts(s)).toHaveLength(1);
   });
 
   it('the same terminal, answered, unaccepted landing on a delivered row removes nothing', () => {

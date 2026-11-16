@@ -174,7 +174,7 @@ export function senderFor(deps: SenderDeps): PushSender {
     try {
       const due = pushDue({ event: 'claim', service: push !== undefined, source: row.source ?? 'none', blocking: src.blocking,
         viewing: false, settled: src.settled, superseded: row.source === null && port.supersededUnbound(row.id), payload: true });
-      if (due.due === 'silent') { port.silenceOutboxRow(row.id, due.why, at); return Promise.resolve(); }
+      if (due.due === 'silent') { warnResponse(port.silenceOutboxRow(row.id, due.why, at).responseDetail); return Promise.resolve(); }
       claim = port.claimOutboxRow(row.id, at, row.source === null ? undefined
         : responseOf(row.source, { kind: row.source, id: row.sourceId }));   // a bound push's label is its source (question 18)
     } catch (e) {

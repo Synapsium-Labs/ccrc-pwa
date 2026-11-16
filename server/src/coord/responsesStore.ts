@@ -79,10 +79,13 @@ function stateOf(text: unknown): ResponseRowState {
 /** The sender's verdict, inside `markOutboxVerdict`'s transaction, after the outbox move it rides and only when that move
  *  changed. `accepted` hashes join the row's set (sorted, unique) and `sends` adds one per accepted landing;
  *  `deliveredAt`, `admittedAt` and `windowCapAt` are set at the first acceptance. THE DELETER BY THE PUSH'S VERDICT
- *  (question 14): a row never delivered, with none accepted, on a move that is `terminal` and `answered`, is removed with
- *  its receipts. Everything else removes nothing: a `retrying` move keeps the row `pending` for the retry; an `unknown`
- *  move keeps it `pending`; a delivered row is never removed. A sealed row (a re-arm after its window): only `sends`
- *  moves. A row whose stored state or set this build cannot read throws, and the caller logs it. */
+ *  (question 14): a row never delivered, with none accepted, on a move that is `terminal` and `answered`, is removed.
+ *  Everything else removes nothing: a `retrying` move keeps the row `pending` for the retry; an `unknown` move keeps it
+ *  `pending`; a delivered row is never removed; and a row that holds ANY receipt is never removed (review 2214 F2, slug
+ *  a-receipt-keeps-its-row): a receipt is evidence the push reached a device (an `unknown` attempt the device showed,
+ *  then a re-arm that failed), so the row takes the terminal move unchanged and keeps its receipts. The removal is one
+ *  statement, so no receipt is ever gone while its row is kept (F5). A sealed row (a re-arm after its window): only
+ *  `sends` moves. A row whose stored state or set this build cannot read throws, and the caller logs it. */
 export function landPushVerdictInTx(db: DatabaseSync, pushId: string, v: PushVerdictLanding, at: number):
   { readonly changed: boolean; readonly removed: boolean } {
   const row = stmt(db, "SELECT id, state, acceptedSubs FROM operator_responses WHERE kind = 'push' AND pushId = ?").get(pushId) as
@@ -101,9 +104,9 @@ export function landPushVerdictInTx(db: DatabaseSync, pushId: string, v: PushVer
     return { changed: true, removed: false };
   }
   if (state !== 'pending' || !v.terminal || !v.answered) return { changed: false, removed: false };
-  stmt(db, 'DELETE FROM response_receipts WHERE responseId = ?').run(row.id);
-  stmt(db, "DELETE FROM operator_responses WHERE id = ? AND state = 'pending'").run(row.id);
-  return { changed: true, removed: true };
+  const gone = stmt(db, "DELETE FROM operator_responses WHERE id = ? AND state = 'pending' "
+    + 'AND NOT EXISTS (SELECT 1 FROM response_receipts WHERE responseId = ?)').run(row.id, row.id);
+  return Number(gone.changes) > 0 ? { changed: true, removed: true } : { changed: false, removed: false };
 }
 
 /** One boot of this server (question 17), from `index.ts` once, right after the store opens: `{ ok: true, epoch }`, or
@@ -141,7 +144,11 @@ function rowByRef(db: DatabaseSync, ref: ResponseRef): Record<string, unknown> |
 
 export function responseRowForRef(db: DatabaseSync, ref: ResponseRef): ResponseRowRead {
   let r: Record<string, unknown> | undefined;
-  try { r = rowByRef(db, ref); } catch (e) { return { ok: false, detail: `operator_responses read failed: ${message(e)}` }; }
+  try { r = rowByRef(db, ref); } catch (e) {
+    const detail = `operator_responses read failed: ${message(e)}`;
+    console.warn(`ccrc-server: ${detail}`);
+    return { ok: false, detail };
+  }
   if (r === undefined) return { ok: true, row: null };
   const id = Number(r.id);
   try {
@@ -201,6 +208,9 @@ export function receiveReceipts(db: DatabaseSync, receipts: readonly ReceiptIn[]
   try {
     return { ok: true, answers: tx(db, () => receipts.map(one)) };
   } catch (e) {
-    return { ok: false, detail: e instanceof ReceiptReadFailed ? e.message : `response_receipts write failed: ${message(e)}` };
+    if (e instanceof ReceiptReadFailed) return { ok: false, detail: e.message };    // the read logged it already
+    const detail = `response_receipts write failed: ${message(e)}`;
+    console.warn(`ccrc-server: ${detail}`);
+    return { ok: false, detail };
   }
 }

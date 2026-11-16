@@ -401,9 +401,10 @@ describe(TABLES_PIN, () => {
       // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
       answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
       // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
-      // push's verdict (a never-delivered row with its receipts); the receipts door's one insert; the boot's record.
+      // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
+      // nothing deletes a receipt; the boot's record.
       operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
-      response_receipts: ['insertReceipt', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_receipts: ['server/src/coord/responsesStore.ts#insertReceipt'],
       response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
     });
   });

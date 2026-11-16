@@ -10,6 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { tx } from '../src/coord/tx.js';
 import { armBoundRowInTx, insertBoundRowInTx, type OutboxPayload } from '../src/coord/pushOutboxStore.js';
 import * as responsesStore from '../src/coord/responsesStore.js';
+import { receiptVerdict } from '../src/responses.js';
 import { SHAPE_ONLY_MASKER, SecretMasker, fingerprintGeneration, fingerprintRow } from '../src/accounts/mask.js';
 import { notify, notifyPushOnly } from '../src/notice.js';
 import { bootPushOutbox, senderFor, type SenderDeps, type SettledOf } from '../src/pushSender.js';
@@ -178,6 +179,54 @@ describe('a bound push', () => {
     bootPushOutbox(r.coord, r.ft.ports.clock);
     expect(outbox(r.coord).map((x) => x.state)).toEqual(['failed', 'unknown']);
     expect(responses(r.coord)).toEqual([expect.objectContaining({ carriesId: 2, state: 'pending' })]);
+  });
+
+  it('a retrying push its source then settles (retrying -> silent) removes its never-delivered row (review 2214 F1)', async () => {
+    const r = rig();
+    let settled = false;
+    const settledOf: SettledOf = () => ({ settled, blocking: true });
+    const sender = senderFor(deps(r, double(REFUSED).push));
+    bound(r);
+    await sender.drain(r.now(), settledOf);
+    expect(outbox(r.coord)[0]).toMatchObject({ state: 'retrying' });
+    expect(responses(r.coord)).toEqual([expect.objectContaining({ state: 'pending', sends: 0 })]);
+    settled = true;                                            // the operator answered the item
+    r.ft.advance(30_000);
+    await sender.drain(r.now(), settledOf);
+    expect(outbox(r.coord)[0]).toMatchObject({ state: 'silent' });
+    expect(responses(r.coord)).toHaveLength(0);
+  });
+
+  // Review 2214 F2: attempt 1 ends `unknown` and the device really showed it (a kept receipt); the item is re-armed and
+  // attempt 2 ends failed, unsent or stale at boot. The receipt is evidence the push reached the device, so the row and
+  // its receipt stand (slug a-receipt-keeps-its-row).
+  it.each([
+    ['failed (refused to the horizon)', 'failed'],
+    ['unsent (no subscription)', 'unsent'],
+    ['a boot seal of a stale row', 'boot'],
+  ] as const)('unknown, a real shown, a re-arm, then %s: the row and its receipt stand', async (_name, ending) => {
+    const r = rig();
+    const sender = senderFor(deps(r, double(NO_ANSWER, ending === 'unsent' ? NO_SUB : REFUSED).push));
+    const id = bound(r);
+    sender.sendRow({ id, source: 'item', sourceId: 1 }, OPEN);
+    await sender.idle();
+    expect(outbox(r.coord)[0]).toMatchObject({ state: 'unknown' });
+    const pushId = String(responses(r.coord)[0]!.pushId);
+    const shown = { ref: { kind: 'push', pushId }, receipt: 'shown', from: { source: 'worker', version: 1, endpointHash: HASH('d') } } as const;
+    expect(r.coord.receiveReceipts([shown], r.now(), receiptVerdict)).toMatchObject({ ok: true, answers: [{ kept: true }] });
+    tx(r.coord.db, () => armBoundRowInTx(r.coord.db, 'item', 1, { pushId: 'unused', payload: PAYLOAD, at: r.now() }));
+    if (ending === 'boot') {
+      r.ft.advance(OUTBOX_RETRY_HORIZON_MS + 1);
+      bootPushOutbox(r.coord, r.ft.ports.clock);
+    } else {
+      if (ending === 'failed') r.ft.advance(OUTBOX_RETRY_HORIZON_MS - 10_000);
+      sender.sendRow({ id, source: 'item', sourceId: 1 }, OPEN);
+      await sender.idle();
+    }
+    expect(outbox(r.coord)[0]).toMatchObject({ state: ending === 'unsent' ? 'unsent' : 'failed' });
+    expect(responses(r.coord)).toEqual([expect.objectContaining({ pushId, state: 'pending', sends: 0 })]);
+    expect(r.coord.db.prepare('SELECT receipt, endpointHash FROM response_receipts').all())
+      .toEqual([{ receipt: 'shown', endpointHash: HASH('d') }]);
   });
 
   it('a claim reached inside an open transaction writes the claim and the row inline and does not throw', () => {

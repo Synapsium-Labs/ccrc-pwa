@@ -315,12 +315,21 @@ export function claimOutboxRow(db: DatabaseSync, id: number, at: number, respons
   });
 }
 
-/** A bound row its source re-read settled, or `pushDue` silenced: `pending` or `retrying` to `silent`, its payload nulled. */
-export function silenceOutboxRow(db: DatabaseSync, id: number, why: PushSilentWhy, at: number): { changed: boolean } {
+/** A bound row its source re-read settled, or `pushDue` silenced: `pending` or `retrying` to `silent`, its payload nulled.
+ *  THE THIRD LANDER (review 2214 F1, slug silence-lands-on-the-response-row): a `retrying` row was claimed, so its push row
+ *  stands `pending`; the silence is terminal and answered, so a never-delivered row goes, in the same transaction. A
+ *  `pending` row was never claimed and has no push row, so the landing finds none. */
+export function silenceOutboxRow(db: DatabaseSync, id: number, why: PushSilentWhy, at: number):
+  { readonly changed: boolean; readonly responseDetail?: string } {
   mustMove('pending', 'silent', 'sender', 'silenceOutboxRow');
   mustMove('retrying', 'silent', 'sender', 'silenceOutboxRow');
-  return changedOf(stmt(db, "UPDATE push_outbox SET state = 'silent', silentWhy = ?, payload = NULL, settledAt = ? "
-    + "WHERE id = ? AND state IN ('pending', 'retrying')").run(why, at, id));
+  return inTx(db, () => {
+    const r = stmt(db, "UPDATE push_outbox SET state = 'silent', silentWhy = ?, payload = NULL, settledAt = ? "
+      + "WHERE id = ? AND state IN ('pending', 'retrying') RETURNING pushId").get(why, at, id) as { pushId: unknown } | undefined;
+    if (r === undefined) return { changed: false };
+    const responseDetail = landResponse(db, String(r.pushId), null, 'silent', at);
+    return responseDetail === undefined ? { changed: true } : { changed: true, responseDetail };
+  });
 }
 
 /** Where one attempt's verdict moves its row: `sent` and `retrying` always carry the verdict that decided them, and a

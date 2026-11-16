@@ -4,13 +4,17 @@
 // nothing. Session-gated like every route not in the gate's `EXEMPT` table, and open while sign-in is dark, as every door
 // is. It reads no box token and writes no coordination state. A receipt is attribution from the operator's device: it can
 // only add a receipt to a row that exists, which moves that row among `opened`, `not-opened` and `unmeasured` at its seal,
-// never an act, an answer or authority. Its answer is counts only, so it names no row and no id.
+// never an act, an answer or authority. Its answer is counts only, so it names no row and no id: a failed read or write
+// answers `UNAVAILABLE_DETAIL`, and its cause (a row id, a stored word) goes to the server's log only (review 2214 F4).
 import type { FastifyInstance } from 'fastify';
 import { parseReceiptBody, type ReceiptDrop } from '../../../shared/responses.js';
 import { receiptVerdict } from '../responses.js';
 import { refuseRoute } from '../refuse.js';
 import type { CoordStore } from '../coord/store.js';
 import type { TimePorts } from '../time/ports.js';
+
+/** The one sentence a failed read or write answers; the store logged the cause. */
+export const UNAVAILABLE_DETAIL = 'the response record could not be read or written; nothing was kept';
 
 export interface ResponseRouteOpts {
   /** The coordination store; undefined (a test, a script): `not-configured`. */
@@ -26,7 +30,7 @@ export function registerResponseRoutes(app: FastifyInstance, opts: ResponseRoute
     const body = parseReceiptBody(req.body);
     if (!body.ok) return refuseRoute(reply, 'bad-request', { detail: body.detail });
     const out = coord.receiveReceipts(body.receipts, opts.time.clock.wall(), receiptVerdict);
-    if (!out.ok) return refuseRoute(reply, 'unavailable', { detail: out.detail });
+    if (!out.ok) return refuseRoute(reply, 'unavailable', { detail: UNAVAILABLE_DETAIL });
     let kept = 0;
     const dropped: Partial<Record<ReceiptDrop, number>> = {};
     for (const a of out.answers) {

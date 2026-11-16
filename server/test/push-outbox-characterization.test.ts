@@ -84,6 +84,11 @@ const see = (e: Env, id: string): void => { if (e.visible) e.viewers.setVisible(
 interface Site {
   readonly n: string;
   readonly name: string;
+  /** Whether the site's pushes have a response row, so carry their outbox push id (Overlord W1 responses A, C67; review
+   *  2214 F3), which `strict` asserts both ways. True where the rig hands the sender a store, a clock and the stamp, as
+   *  `index.ts` does. False for the `notifyPushOnly` sites (28, 29: no label, so no row in production either) and for a
+   *  rig with no coordination store (1, 10, 12, and the project-suffix cases), whose push is sent as before the record. */
+  readonly row: boolean;
   readonly drive: (e: Env) => Promise<Record<string, number>>;
   readonly sent: (ids: Record<string, number>) => PushPayload[];
   /** What the double receives with the site's session visible: nothing, unless the site is sessionless or gate-free. */
@@ -98,11 +103,11 @@ afterEach(async () => {
   removeTmpFixtures();
 });
 
-/** Each payload as it was, and one named field more (Overlord W1 responses A, C67): `pushId`, the outbox row's id, on a
- *  push whose response row was written, as 32 lowercase hex. Nothing else of a payload changes. */
-const strict = (got: readonly PushPayload[], want: readonly PushPayload[]): void => {
-  for (const p of got) if ('pushId' in p) expect(p.pushId).toMatch(/^[0-9a-f]{32}$/);
-  expect(got.map(({ pushId: _id, ...p }) => p)).toStrictEqual([...want]);
+/** Each payload as it was, and one named field more (Overlord W1 responses A, C67): where the push has a response row
+ *  (`row`), `pushId`, the outbox row's id, as 32 lowercase hex; where it has none, no `pushId` at all. Nothing else of a
+ *  payload changes. */
+const strict = (got: readonly PushPayload[], want: readonly PushPayload[], row: boolean): void => {
+  expect(got).toStrictEqual(want.map((p) => (row ? { ...p, pushId: expect.stringMatching(/^[0-9a-f]{32}$/) } : p)));
 };
 /** Every rig's deps carry the response record's stamp, as `index.ts` sets it, so a push with a store and a clock gets its
  *  response row and its push id (the seam itself is unchanged for the other suites that install it). */
@@ -310,7 +315,7 @@ const captureSite = async (e: Env): Promise<Record<string, number>> => {
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
   const transport: BuildCaptureTransport = { capture: async (job) => failCapture(job) };
-  const deps = installPush({ coord, notifyLog, viewers: e.viewers, buildCapture: transport }, e.seam);
+  const deps = installPush({ coord, notifyLog, viewers: e.viewers, buildCapture: transport, time: testDeps(home).time }, e.seam);
   const lane = new BuildCaptureLane(() => deps as never, () => 1_000_000_000_000);
   await lane.sweep(['2.1.321']);
   return {};
@@ -872,7 +877,7 @@ function driftRig(e: Env) {
   const db = openCoordDb(path.join(home, '.ccrc', 'coord.db'));
   const coord = new CoordStore(db);
   e.coord = coord;
-  const notice = noticeSink({ coord, viewers: e.viewers, ...pushDeps(e.seam) });
+  const notice = noticeSink({ coord, viewers: e.viewers, ...pushDeps(e.seam), time: testDeps(home).time, responseStamp: (): ResponseStamp => STAMP });
   const deps = (names: readonly string[] | null): DriftLaneDeps => ({
     coord, names, childMarks: null, measure: () => Promise.resolve(alive), notice, warn: () => {},
   });
@@ -918,7 +923,7 @@ const landedSite = (mergedAgoMs: number) => async (e: Env): Promise<Record<strin
   e.coord = coord;
   const notifyLog = new NotifyLog(path.join(home, '.ccrc', 'notify.json'));
   await notifyLog.load();
-  const notice = noticeSink({ notifyLog, coord, viewers: e.viewers, ...pushDeps(e.seam) });
+  const notice = noticeSink({ notifyLog, coord, viewers: e.viewers, ...pushDeps(e.seam), time: testDeps(home).time, responseStamp: (): ResponseStamp => STAMP });
   const deps: LandedLaneDeps = {
     coord, notice, memory: new Map(), now: () => L_BASE_TIME, warn: () => {},
     runCcd: async (argv) => ran(landedLine(Number(argv[argv.indexOf('--pr') + 1]), isoZ(L_BASE_TIME - mergedAgoMs))),
@@ -989,80 +994,80 @@ const askLanePayload = (id: string): PushPayload => askPayload(id, { actions: AS
 const WITH_COORDINATOR = askPayload(SID, { body: `With coordinator ${PARENT}` });
 
 const SITES: Site[] = [
-  { n: '1', name: 'FleetWatcher.tick busy-to-idle edge (done, push)', drive: (e) => doneEdge(e, [`${PROJECT}/${SID}`]), sent: () => [DONE] },
-  { n: '2', name: 'pushNewMail (mail, record-always)', drive: mailSite,
+  { n: '1', row: false, name: 'FleetWatcher.tick busy-to-idle edge (done, push)', drive: (e) => doneEdge(e, [`${PROJECT}/${SID}`]), sent: () => [DONE] },
+  { n: '2', row: true, name: 'pushNewMail (mail, record-always)', drive: mailSite,
     sent: (i) => [{ title: `✉ finding › ${SID}`, body: 'first', sessionId: SID, tag: `mail-${SID}-${i['mail']}` }], sentVisible: () => [] },
-  { n: '3', name: 'pushNewRuns (run, record-always)', drive: runSite,
+  { n: '3', row: true, name: 'pushNewRuns (run, record-always)', drive: runSite,
     sent: (i) => [{ title: `▸ dispatched › ${PROJECT}`, body: 'program:prog-a wave 1/3', sessionId: SID, tag: `run-${i['run']}-dispatched` }], sentVisible: () => [] },
-  { n: '4a', name: 'pushSenderNotice, blocked (mail, record-always)', drive: senderNotice('blocked', BLOCKED_WHY, 'mail-blocked-7'),
+  { n: '4a', row: true, name: 'pushSenderNotice, blocked (mail, record-always)', drive: senderNotice('blocked', BLOCKED_WHY, 'mail-blocked-7'),
     sent: () => [{ title: `✉ blocked › ${SID}`, body: `wave brief: ${BLOCKED_WHY}`, sessionId: SID_B, tag: 'mail-blocked-7' }], sentVisible: () => [] },
-  { n: '4b', name: 'pushSenderNotice, revived (mail, record-always)', drive: senderNotice('revived', REVIVED_WHY, `mail-revived-5`),
+  { n: '4b', row: true, name: 'pushSenderNotice, revived (mail, record-always)', drive: senderNotice('revived', REVIVED_WHY, `mail-revived-5`),
     sent: () => [{ title: `✉ revived › ${SID}`, body: `wave brief: ${REVIVED_WHY}`, sessionId: SID_B, tag: 'mail-revived-5' }], sentVisible: () => [] },
-  { n: '5a', name: 'escalatePark, a session sent the mail (through pushSenderNotice)', drive: parkEscalation(false),
+  { n: '5a', row: true, name: 'escalatePark, a session sent the mail (through pushSenderNotice)', drive: parkEscalation(false),
     sent: () => [{ title: `✉ blocked › ${SID}`, body: `wave brief: ${PARK_WHY}`, sessionId: SID_B, tag: 'mail-parked-9' }], sentVisible: () => [] },
-  { n: '5b', name: 'escalatePark, a role sent the mail (tagged with the recipient)', drive: parkEscalation(true),
+  { n: '5b', row: true, name: 'escalatePark, a role sent the mail (tagged with the recipient)', drive: parkEscalation(true),
     sent: () => [{ title: `✉ blocked › ${SID}`, body: `operator mail: ${PARK_WHY}`, sessionId: SID, tag: 'mail-parked-9' }], sentVisible: () => [] },
-  { n: '6', name: 'sweepBriefs, brief not taken (mail, record-always)', drive: briefNotTaken,
+  { n: '6', row: true, name: 'sweepBriefs, brief not taken (mail, record-always)', drive: briefNotTaken,
     sent: (i) => [{ title: `✉ brief not taken › ${SID}`, body: `brief not taken by ${SID}, run ${i['run']}: not yet attempted`, sessionId: SID, tag: `brief-not-taken-${i['run']}` }], sentVisible: () => [] },
-  { n: '7', name: 'applyStall, the operator rung r3 (run, record-always)', drive: stallOperatorRung,
+  { n: '7', row: true, name: 'applyStall, the operator rung r3 (run, record-always)', drive: stallOperatorRung,
     sent: (i) => [{ title: `⚠ stalled › ${S_WORKER}-ws`, body: 'run 1 — prog-a wave 9/9: no mail from worker lane-a-project-a since 2026-09-28T21:17Z (3h 38m). Its coordinator lane-b-project-a measures dead, so no report went to it. Reclaim the run: POST /api/runs/1/reclaim.', sessionId: S_WORKER, tag: `stall-${i['run']}-quiet-3-${KEY}` }], sentVisible: () => [] },
-  { n: '8', name: 'applyStallSession with a run, dialog-cap (record-always)', drive: stallDialogCap,
+  { n: '8', row: true, name: 'applyStallSession with a run, dialog-cap (record-always)', drive: stallDialogCap,
     sent: (i) => [{ title: `⚠ stalled › ${S_WORKER}-ws (dialog)`, body: 'run 1 — prog-a wave 9/9: worker lane-a-project-a shows a dialog with no question behind it; its live status has read waiting since 2026-09-28T21:56Z (2h 0m). Mail to the worker, its coordinator\'s included, cannot land while the dialog shows: answer or dismiss it on the pane.', sessionId: S_WORKER, tag: `stall-${i['run']}-dialog-cap-1-${IDLE_AT}` }], sentVisible: () => [] },
-  { n: '9', name: 'applyStallSession run-less, orphan D (record-always)', drive: stallRunless,
+  { n: '9', row: true, name: 'applyStallSession run-less, orphan D (record-always)', drive: stallRunless,
     sent: () => [{ title: '⚠ orphaned › lane-c-project-a', body: 'session lane-c-project-a: 2 background task(s) (shell, subagent) did not survive the 2026-09-28T22:30Z restart. Its orphan notice #1, queued at 2026-09-28T22:46Z (0h 30m ago), is not delivered.', sessionId: ORPHAN, tag: `orphaned-${ORPHAN}-${RESTART_AT}` }], sentVisible: () => [] },
-  { n: '10', name: 'announceMerged (merged, push)', drive: mergedSite,
+  { n: '10', row: false, name: 'announceMerged (merged, push)', drive: mergedSite,
     sent: () => [{ title: '✓ merged › quiet-basin', body: 'PR #42 merged; nothing archived.', sessionId: MERGED_ID, tag: `merged-${MERGED_ID}#42` }], sentVisible: () => [] },
-  { n: '11', name: 'sweepLanding deliver step (queue, record-always)', drive: queueSite,
+  { n: '11', row: true, name: 'sweepLanding deliver step (queue, record-always)', drive: queueSite,
     sent: () => [{ title: '⤺ dequeued › quiet-basin', body: 'PR #42 left the merge queue without landing (removed 2026-09-23T11:30:00Z); GitHub does not re-enqueue it. Mailed coordinator lane-b-demo.', sessionId: Q_ID, tag: `queue-${Q_ID}#42:dequeued@${Q_T1}` }], sentVisible: () => [] },
-  { n: '12', name: 'detectDialogs raise (ask, push)', drive: (e) => askRaise(e), sent: () => [askLanePayload(SID)], sentVisible: () => [] },
-  { n: '13', name: 'detectDialogs held amendment, the with-coordinator replacement (ask, push)',
+  { n: '12', row: false, name: 'detectDialogs raise (ask, push)', drive: (e) => askRaise(e), sent: () => [askLanePayload(SID)], sentVisible: () => [] },
+  { n: '13', row: true, name: 'detectDialogs held amendment, the with-coordinator replacement (ask, push)',
     drive: async (e) => { const r = await heldRig(e, { envelope: 'amended', parentRow: true }); return { run: r.runId }; },
     sent: () => [askPayload(SID), WITH_COORDINATOR], sentVisible: () => [] },
-  { n: '14', name: 'pushRaised, an ask minted released (ask, push)',
+  { n: '14', row: true, name: 'pushRaised, an ask minted released (ask, push)',
     drive: async (e) => { const r = await heldRig(e, { envelope: 'at-first-sighting', parentRow: false }); return { run: r.runId }; },
     sent: () => [askLanePayload(SID)], sentVisible: () => [] },
-  { n: '15a', name: 'question doors: the release door after declineAsk (ask, push)', drive: doorsAsk('release'),
+  { n: '15a', row: true, name: 'question doors: the release door after declineAsk (ask, push)', drive: doorsAsk('release'),
     sent: () => [askPayloadOf(AF_CHILD, true)], sentVisible: () => [] },
-  { n: '15b', name: 'question doors: answeredLate replaces the lapse push (ask, push)', drive: doorsAsk('lapse-then-answer'),
+  { n: '15b', row: true, name: 'question doors: answeredLate replaces the lapse push (ask, push)', drive: doorsAsk('lapse-then-answer'),
     sent: () => [askPayloadOf(AF_CHILD, true), askPayloadOf(AF_CHILD, false, `Answered by ${AF_PARENT}`)], sentVisible: () => [] },
-  { n: '15c', name: 'question doors: approvalReleased (ask, push)', drive: doorsApprovalReleased,
+  { n: '15c', row: true, name: 'question doors: approvalReleased (ask, push)', drive: doorsApprovalReleased,
     sent: () => [{ title: '❓ Question · project-a', body: 'Bash — permission requested', sessionId: AF_CHILD, tag: `ask-${AF_CHILD}` }], sentVisible: () => [] },
-  { n: '15d', name: 'question doors: approvalRuled, through the watcher\'s door sink (ask, push)', drive: doorsApprovalRuled,
+  { n: '15d', row: true, name: 'question doors: approvalRuled, through the watcher\'s door sink (ask, push)', drive: doorsApprovalRuled,
     sent: () => [{ title: '❓ Question · project-a', body: 'Allowed by project-a-calm-mesa', sessionId: AF_CHILD, tag: `ask-${AF_CHILD}` }], sentVisible: () => [] },
-  { n: '16', name: 'questions.lapseAsks, push-and-drop after releaseAsk wins (ask, push)', drive: askLapse,
+  { n: '16', row: true, name: 'questions.lapseAsks, push-and-drop after releaseAsk wins (ask, push)', drive: askLapse,
     sent: () => [askLanePayload(SID)], sentVisible: () => [] },
-  { n: '17', name: 'questions.lapseApprovals, the deferred push (ask, push)', drive: approvalLapse,
+  { n: '17', row: true, name: 'questions.lapseApprovals, the deferred push (ask, push)', drive: approvalLapse,
     sent: () => [{ title: '❓ Question · project-a', body: 'Bash — permission requested', sessionId: AF_CHILD, tag: `ask-${AF_CHILD}` }], sentVisible: () => [] },
-  { n: '18', name: 'digestBeat (coord, record-always)', drive: digestSite, sent: () => [DIGEST], sentVisible: () => [DIGEST] },
-  { n: '19', name: 'DiskAlarmLane.raiseNotice (coord, push)',
+  { n: '18', row: true, name: 'digestBeat (coord, record-always)', drive: digestSite, sent: () => [DIGEST], sentVisible: () => [DIGEST] },
+  { n: '19', row: true, name: 'DiskAlarmLane.raiseNotice (coord, push)',
     drive: async (e) => { const r = await diskRig(e, [reading(40), reading(40), reading(86), reading(86)]); for (let i = 0; i < 4; i += 1) await r.sweep(); return {}; },
     sent: () => [DISK_WARN], sentVisible: () => [DISK_WARN] },
-  { n: '20', name: 'BuildCaptureLane.raiseFailure (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
-  { n: '21a', name: 'pushBlocking from the raise route (neededBy blocking)',
+  { n: '20', row: true, name: 'BuildCaptureLane.raiseFailure (coord, push)', drive: captureSite, sent: () => [CAPTURE], sentVisible: () => [CAPTURE] },
+  { n: '21a', row: true, name: 'pushBlocking from the raise route (neededBy blocking)',
     drive: async (e) => { const r = await ledgerRig(e); e.coord = r.coord; return { item: await itemRaise(r, { neededBy: 'blocking', soonLabel: null, runId: r.runA }) }; },
     sent: (i) => [waitingPayload(i['item']!)], sentVisible: (i) => [waitingPayload(i['item']!)] },
-  { n: '21b', name: 'pushBlocking from POST /api/items/:id/blocking',
+  { n: '21b', row: true, name: 'pushBlocking from POST /api/items/:id/blocking',
     drive: async (e) => { const r = await ledgerRig(e); e.coord = r.coord; const id = await itemRaise(r); expect((await lanePost(r, `/api/items/${id}/blocking`, { ...AS_LANE_A, blocking: true })).statusCode).toBe(200); return { item: id }; },
     sent: (i) => [waitingPayload(i['item']!)], sentVisible: (i) => [waitingPayload(i['item']!)] },
-  { n: '22', name: 'run-open route review-cap refusal (run, push)', drive: reviewCapSite,
+  { n: '22', row: true, name: 'run-open route review-cap refusal (run, push)', drive: reviewCapSite,
     sent: (i) => [{ title: `Review cap reached on run ${i['work']}`, body: `Run ${i['work']} has had 3 review rounds (cap 3), so a further review was refused. No review has reported yet. Lift the cap for this run to allow another round.`, sessionId: '', tag: `review-cap-${i['work']}` }],
     sentVisible: (i) => [{ title: `Review cap reached on run ${i['work']}`, body: `Run ${i['work']} has had 3 review rounds (cap 3), so a further review was refused. No review has reported yet. Lift the cap for this run to allow another round.`, sessionId: '', tag: `review-cap-${i['work']}` }] },
-  { n: '23', name: 'advance route landing ejection (run, record-always)', drive: ejectionSite,
+  { n: '23', row: true, name: 'advance route landing ejection (run, record-always)', drive: ejectionSite,
     sent: (i) => [{ title: `Landing: ${L_PROJECT} #7 ejected twice`,
       body: `run ${i['run']}, ${L_PROJECT} #7: ejected from the landing line a second time (new-head against base ${'b'.repeat(12)}). The line holds nothing back; you decide whether it lands again, is fixed by hand or is withdrawn.`, sessionId: L_SID, tag: `landing-ejected-${L_PROJECT}-7` }], sentVisible: () => [] },
-  { n: '24', name: 'driftLane summary (coord, push)', drive: driftSummary,
+  { n: '24', row: true, name: 'driftLane summary (coord, push)', drive: driftSummary,
     sent: () => [DRIFT_SUMMARY], sentVisible: () => [DRIFT_SUMMARY] },
-  { n: '25', name: 'driftLane item (coord, record-always)', drive: driftItem,
+  { n: '25', row: true, name: 'driftLane item (coord, record-always)', drive: driftItem,
     sent: (i) => [DRIFT_SUMMARY, driftItemPayload(i['run']!)], sentVisible: (i) => [DRIFT_SUMMARY, driftItemPayload(i['run']!)] },
-  { n: '26', name: 'landedLane.raiseLandedNotice, a fresh merge (merged, record-always)', drive: landedSite(60_000),
+  { n: '26', row: true, name: 'landedLane.raiseLandedNotice, a fresh merge (merged, record-always)', drive: landedSite(60_000),
     sent: () => [{ title: '✓ merged › lane-a-ws1', body: 'PR #302 merged; nothing archived.', sessionId: 'lane-a-ws1', tag: 'merged-lane-a-ws1#302' }], sentVisible: () => [] },
-  { n: '27', name: 'delegation adoption sink, an attention item (coord, push)', drive: delegationSite,
+  { n: '27', row: true, name: 'delegation adoption sink, an attention item (coord, push)', drive: delegationSite,
     sent: () => [{ title: 'delegation adoption suspended', body: 'Adoption is suspended: nothing waits yet, because several delegated parents died at once or the registry did not read. It resumes when the breaker clears.', sessionId: '', tag: 'coord-' }],
     sentVisible: () => [{ title: 'delegation adoption suspended', body: 'Adoption is suspended: nothing waits yet, because several delegated parents died at once or the registry did not read. It resumes when the breaker clears.', sessionId: '', tag: 'coord-' }] },
-  { n: '28', name: 'FleetWatcher.pushRelease (notifyPushOnly)',
+  { n: '28', row: false, name: 'FleetWatcher.pushRelease (notifyPushOnly)',
     drive: async (e) => { const r = await releaseRig(e); r.w.pushRelease(REL_T); return {}; },
     sent: () => [RELEASE], sentVisible: () => [RELEASE] },
-  { n: '29', name: 'POST /api/notify push:true (notifyPushOnly)', drive: (e) => notifySite(e),
+  { n: '29', row: false, name: 'POST /api/notify push:true (notifyPushOnly)', drive: (e) => notifySite(e),
     sent: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }],
     sentVisible: () => [{ title: 'Model classes', body: MOVED, tag: 'models-advance:lane-a:opus', url: '/accounts' }] },
 ];
@@ -1088,13 +1093,13 @@ describe.each(SITES)('#$n $name', (site) => {
   it('sends exactly these payloads, in this order', async () => {
     const seam = pushSeam();
     const ids = await site.drive(envOf(seam, false));
-    strict(seenBy(site, seam), site.sent(ids));
+    strict(seenBy(site, seam), site.sent(ids), site.row);
   });
 
   it('with the session visible it sends what the gate lets through', async () => {
     const seam = pushSeam();
     const ids = await site.drive(envOf(seam, true));
-    strict(seenBy(site, seam), (site.sentVisible ?? (() => []))(ids));
+    strict(seenBy(site, seam), (site.sentVisible ?? (() => []))(ids), site.row);
   });
 
   it('with no push service nothing throws, and the notify log and the source rows are what a run with one leaves', async () => {
@@ -1109,19 +1114,19 @@ describe('the project suffix (FleetWatcher.pushOne)', () => {
   it('an ask with TWO active projects names the project', async () => {
     const seam = pushSeam();
     await askRaise(envOf(seam, false), [`${PROJECT}/${SID}`, 'project-b/lane-a-project-b']);
-    strict(noDisk(seam.sent), [{ ...askLanePayload(SID), title: '❓ Question · project-a' }]);
+    strict(noDisk(seam.sent), [{ ...askLanePayload(SID), title: '❓ Question · project-a' }], false);
   });
 
   it('an ask with ONE project (two sessions of it) has no suffix', async () => {
     const seam = pushSeam();
     await askRaise(envOf(seam, false), [`${PROJECT}/${SID}`, `${PROJECT}/${SID_B}`]);
-    strict(noDisk(seam.sent), [askLanePayload(SID)]);
+    strict(noDisk(seam.sent), [askLanePayload(SID)], false);
   });
 
   it('a done push with TWO active projects names the project too', async () => {
     const seam = pushSeam();
     await doneEdge(envOf(seam, false), [`${PROJECT}/${SID}`, 'project-b/lane-a-project-b']);
-    strict(noDisk(seam.sent), [{ ...DONE, title: '✓ Finished · project-a' }]);
+    strict(noDisk(seam.sent), [{ ...DONE, title: '✓ Finished · project-a' }], false);
   });
 });
 
@@ -1174,7 +1179,7 @@ describe('the source row after the push', () => {
     expect(seam.sent).toStrictEqual([]);
     expect((await lanePost(r, `/api/items/${id}/blocking`, { ...AS_LANE_A, blocking: true })).statusCode).toBe(200);
     expect(itemRow(r, id)).toStrictEqual(OPEN_BLOCKING);
-    strict(seam.sent, [waitingPayload(id)]);
+    strict(seam.sent, [waitingPayload(id)], true);
     // already blocking: no second push; lowering never pushes
     expect((await lanePost(r, `/api/items/${id}/blocking`, { ...AS_LANE_A, blocking: true })).statusCode).toBe(200);
     expect((await lanePost(r, `/api/items/${id}/blocking`, { ...AS_LANE_A, blocking: false })).statusCode).toBe(200);

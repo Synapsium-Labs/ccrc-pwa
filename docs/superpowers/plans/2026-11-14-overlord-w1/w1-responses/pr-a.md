@@ -27,15 +27,20 @@ ledger. The brief named this note `w1-responses-a.md`; the plan's Global Constra
   in the door's counts as `dropped.repeat`, beside the verdict's own words, so `kept` counts only rows written.
 - **response-warnings-name-no-push-id**. A response write that throws is logged once per cause through the sender's
   latch; the detail names the cause and never the push id, so a standing failure logs once, not once per push.
-- **characterization-strips-the-push-id**. The characterization rigs now carry the stamp (a local `installPush` that adds
-  `responseStamp`, so `pushSeam.ts` and the other suites that install it are unchanged). `strict` asserts each payload's
-  `pushId`, where present, is 32 lowercase hex, and compares the rest unchanged; whether a push has a row is asserted per
-  case in `responses-sender.test.ts` (row and id together, no row and no id together).
+- **characterization-pins-the-push-id-per-site** (retires `characterization-strips-the-push-id`, review 2214 F3). Each
+  row of the characterization table carries a `row` flag, and `strict` asserts both ways: `pushId` as 32 lowercase hex on
+  a site with a response row, and no `pushId` on one without. The rigs now carry the stamp (a local `installPush` adds
+  `responseStamp`, so `pushSeam.ts` and the other suites that install it are unchanged), and the lane rigs of sites 20 and
+  24 to 26 gain the clock and stamp `index.ts` gives every sink, so their pushes go through the outbox as in production.
+  Measured, the sites with no row are the two `notifyPushOnly` ones (28, 29: no label) and three whose rigs have no
+  coordination store (1, 10 and 12, and the project-suffix cases on the same rig), whose push is sent as before the
+  record. Flipping site 2 to no-row, or site 28 to row, each goes red.
 - **adoption-sink-pinned-by-scan**. The plan asks for a test that drives the delegation adoption sink through the
   watcher's own path. That path needs the whole delegation lane (a durable journal, a census, a registry listing) to
   reach `notice`. The sink's one field is pinned instead by a scan of `server/src` for hand-built funnel deps literals
   that carry `push:` (`responses-sender.test.ts`), which reds when the field is dropped (measured), and the funnel case
-  beside it proves a notice through those deps writes its row.
+  beside it proves a notice through those deps writes its row. Its limit (review 2214 F6): the scan reads one line at a
+  time, so a funnel deps literal split across lines, or one whose `push:` comes on a later line, escapes it.
 - **pwa-c6-glob-waits-for-pr-b**. Task 1 adds `responses/**` to the C6 row's PWA half, but `rings/totality` refuses a
   glob that matches no file, and PR A adds no console file. PR B adds the PWA half with its first console file.
 - **mutation-run-is-python-only**. `mutation-run.py` mutates Python modules. `receiptVerdict`'s floor (1, 15 of 15
@@ -51,6 +56,24 @@ ledger. The brief named this note `w1-responses-a.md`; the plan's Global Constra
   is on `main`, so the guard's window is over, and `notice.ts` is the push funnel other streams edit. On the
   coordinator's ruling the owned list keeps `shared/switches.ts` and the commit check, and drops `notice.ts`; its fixture
   controls moved onto `switches.ts` and pin `notice.ts` beside `pwa/` as green (both mutations measured red).
+- **silence-lands-on-the-response-row** (review 2214 F1). The plan names two landers of a push's verdict on its response
+  row, `markOutboxVerdict` and `sealAtBoot`. There is a third terminal move: `silenceOutboxRow`, `retrying -> silent`,
+  when the source re-read says settled. That row was claimed, so its response row stands `pending`. `silenceOutboxRow`
+  now runs in `inTx` and lands `{ accepted: [], terminal: true, answered: true }` through `landResponse`, which removes
+  the never-delivered row. A `pending -> silent` row was never claimed and has no response row. `responses-sender.test.ts`
+  drives `retrying -> silent`, and goes red without the landing.
+- **a-receipt-keeps-its-row** (review 2214 F2, the coordinator's ruling). A row that holds any receipt is never removed:
+  a receipt is evidence the push reached a device, so removing it would make the record say the push never existed. The
+  removal applies only to a never-delivered, terminal, answered row with no receipt. A row with a receipt takes its
+  terminal move unchanged and keeps its receipts. `responses-sender.test.ts` drives the reviewer's sequence (`unknown`, a
+  real `shown`, a re-arm, then `failed`, `unsent` or a boot seal), and each ending goes red without the guard.
+- **removal-is-one-statement** (review 2214 F5). The ruling asked for a SAVEPOINT around the removal's two DELETEs. Once a
+  row holding a receipt is never removed, the receipts DELETE has nothing left to delete, so the removal is one statement
+  (`DELETE … WHERE … AND NOT EXISTS (SELECT 1 FROM response_receipts …)`). One statement cannot leave receipts gone with
+  the row kept, and nothing deletes a receipt any more, so `writers-map` names only `insertReceipt` for `response_receipts`.
+- **unavailable-answers-a-fixed-sentence** (review 2214 F4). The door's `unavailable` answer is one fixed sentence
+  (`responses/routes.ts#UNAVAILABLE_DETAIL`). The cause, a row id or a stored word, goes to the server's log only, once:
+  the reader logs a failed or unreadable read, and the store logs a failed write.
 - **receipt-drop-words-in-l0**. The receipts door's drop words (`receiptVerdict`'s five, and `repeat`) cross the wire as
   the answer's `dropped` keys, so they are declared once in `shared/responses.ts` (`RECEIPT_DROPS`, `isReceiptDrop`), and
   `mail-routes.test.ts`'s kebab census admits them through that guard. The push row's delivery word is the typed
