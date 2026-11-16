@@ -3782,23 +3782,34 @@ and no-plan mockups in the folder beside it. The build plan is `docs/superpowers
   and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
   2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
   862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale.
-- **Decided.** A Work card below Goals: "N of M done" with a bar, then phases in plan order and tasks with one line
-  each. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
-  `GET /api/programmes/:slug/plan`. A programme with no stored plan shows its work runs so far, under a note that what
-  remains is not known. The Runs card stays for the acts. On desktop, Waiting on you moves to the top of the right
-  column. The card replaces the Linear hierarchy plan's Task 5.2.
-- **The builder check** (a fresh reader of the spec) found two gaps in the plan model that would make "N of M" wrong:
-  a run opened with no ticket mints its own, so the declared task stays "not started" forever, and nothing can mark a
-  declared task done except its own run. The design closes both: `runs open` refuses `ticket-required` while the
-  phase has an open declared task, and a coordinator's `plan ticket-done` records a finished task with its pull request.
-- **For the operator.** Three questions, raised as Waiting on you items: should live programmes declare their plans
-  (Q1), what order the card uses (Q2), and its words, phase and task (Q3).
-- **The build** is five tasks, WM0 to WM4, one PR each. Only WM3 touches claim 4522's files (`ProgrammeScreen.tsx` and
+  A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
+  many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
+- **Decided.** The plan has two axes: the work (epics and tickets) and the sequence (phases, a new level, each ticket
+  naming one). Epics lose their wave ranges, so they can run in parallel inside a phase. The Work card sits below Goals:
+  "N of M done" with a bar and a strip of each epic's count, then phases in order, each ticket inside with its epic as a
+  tag. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
+  runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
+  you moves to the top of the right column. The card replaces the Linear hierarchy plan's Task 5.2.
+- **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
+  with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
+  ticket done except its own run. `runs open` now refuses `ticket-required` while the run's epic has an open declared
+  ticket, and a coordinator's `plan ticket-done` records a finished ticket with its pull request.
+- **For the operator.** Three questions, raised as Waiting on you items: should live programmes declare their plans now
+  (Q1), which axis leads the card (Q2), and the word for a stage (Q3).
+- **The build** is six tasks, WM0 to WM5, one PR each. Only WM4 touches claim 4522's files (`ProgrammeScreen.tsx` and
   `pwa/src/lib/api.ts`), so it waits for that claim. The others touch none of them.
 
+**Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
+words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
+wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." The spec now keeps
+the two axes apart, adds phases to the plan model and frees epics of wave ranges (spec §3, D13 and D14). Items 349 to
+351 are replaced by three new ones on the corrected model.
+
 - **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
-  stored plan as the one source of its work list, with a status decided once on the server, and falls back to the
-  programme's runs. It replaces the Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan:
+  stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work
+  (epics and tickets), with a status decided once on the server, and falls back to the programme's runs. It replaces the
+  Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan: `phase-is-not-epic`,
   `hierarchy-5-2-replaced`, `waiting-card-moves-right` and `ticket-required-and-done`.
 
 **Acceptance.** The spec, its mockups and the build plan are on `main`. A fresh builder read the spec before the PR.

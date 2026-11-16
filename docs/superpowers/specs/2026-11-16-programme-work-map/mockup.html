@@ -60,6 +60,10 @@ a { color: var(--text); }
 .fold { font: 12px var(--mono); color: var(--dim); padding: 4px 0 4px 2px; }
 .donephase .phase-name { color: var(--dim); }
 .note { border: 1px dashed var(--line); border-radius: 4px; padding: 8px 10px; font-size: 13px; color: var(--dim); margin: 6px 0 10px; }
+.tag { display: inline-block; font: 11px var(--mono); color: var(--dim); border: 1px solid var(--line); border-radius: 3px; padding: 0 5px; margin-left: 6px; white-space: nowrap; vertical-align: 1px; }
+.strip { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.chip { font: 12px var(--mono); border: 1px solid var(--line); border-radius: 12px; padding: 2px 9px; color: var(--text); }
+.chip em { font-style: normal; color: var(--dim); margin-left: 4px; }
 /* Runs card, as today */
 .run { font: 13px var(--mono); color: var(--dim); padding: 4px 0; }
 .run b { color: var(--text); font-weight: 500; }
@@ -94,33 +98,35 @@ function row(st, cls, desc, meta) {
   return `<div class="row"><span class="st ${cls}">${st}</span><span class="desc">${desc}</span><span class="meta">${meta || ''}</span></div>`;
 }
 
+const tag = (t) => `<span class="tag">${t}</span>`;
 const workPlan = `
 <section class="card" aria-label="Work">
   <h2 class="h">Work</h2>
-  <div class="sum"><b>14 of 22 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting'], [C.todo, '4 not started']])}</div>
-  ${bar([[14, C.done], [3, C.prog], [1, C.wait], [4, C.todo]], 22)}
-  <div class="source">From the programme's plan · 4 phases · read 1 min ago</div>
+  <div class="sum"><b>11 of 20 done</b>${legend([[C.prog, '3 in progress'], [C.wait, '1 waiting'], [C.todo, '5 not started']])}</div>
+  ${bar([[11, C.done], [3, C.prog], [1, C.wait], [5, C.todo]], 20)}
+  <div class="strip"><span class="chip">The switch <em>5 of 9</em></span><span class="chip">The list screen <em>6 of 9</em></span><span class="chip">The operator's guide <em>0 of 2</em></span></div>
+  <div class="source">From the programme's plan · 3 phases · 3 epics · read 1 min ago</div>
 
   <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">1 · Foundations</span><span class="phase-count">6 of 6 done · finished 2026-11-02</span></div></div>
-  <div class="phase donephase"><div class="phase-line"><span class="chev">▸</span><span class="phase-name">2 · The store</span><span class="phase-count">5 of 5 done · finished 2026-11-09</span></div></div>
 
   <div class="phase">
-    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">3 · The console</span><span class="phase-count">3 of 6 done · 2 of 3 checkpoints met</span><span class="linear">Open in Linear</span></div>
-    <div class="phase-sum">The list screen, the switch's Settings row and the item controls, at every width.</div>
-    ${row('● working', 'prog', 'The switch\'s Settings row, with its confirm sheet', '<a href="#">run 412</a> · moved 12m ago')}
-    ${row('● in review', 'prog', 'The list screen at phone width', '<a href="#">run 415</a> · review round 1')}
-    ${row('◆ waiting on you', 'wait', 'The item controls: which order the list opens in', '<a href="#">1 item</a> · needed soon')}
-    <div class="fold">▸ 3 done</div>
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">2 · Build</span><span class="phase-count">5 of 8 done</span></div>
+    <div class="phase-sum">The switch's Settings row and the list screen, at every width.</div>
+    ${row('● working', 'prog', 'The switch\'s Settings row, with its confirm sheet ' + tag('The switch'), '<a href="#">run 412</a> · moved 12m ago')}
+    ${row('● in review', 'prog', 'The list screen at phone width ' + tag('The list screen'), '<a href="#">run 415</a> · review round 1')}
+    ${row('◆ waiting on you', 'wait', 'Which order the list opens in ' + tag('The list screen'), '<a href="#">1 item</a> · needed soon')}
+    <div class="fold">▸ 5 done</div>
   </div>
 
   <div class="phase">
-    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">4 · Rollout</span><span class="phase-count">0 of 5 done · 0 of 2 checkpoints met</span></div>
-    <div class="phase-sum">A shadow week, the switch turned on, and the old path removed.</div>
-    ${row('● working', 'prog', 'The shadow week, measured and recorded', '<a href="#">run 418</a> · moved 2h ago')}
-    ${row('○ not started', 'todo', 'Turn the switch on for every project', '')}
-    ${row('○ not started', 'todo', 'Remove the old path and its readers', '')}
-    ${row('○ not started', 'todo', 'The README and the operator\'s guide', '')}
-    ${row('○ not started', 'todo', 'The closing review of the whole programme', '')}
+    <div class="phase-line"><span class="chev">▾</span><span class="phase-name">3 · Rollout</span><span class="phase-count">0 of 6 done</span></div>
+    <div class="phase-sum">A shadow week, the switch turned on, the old path removed, and the guide.</div>
+    ${row('● working', 'prog', 'The shadow week, measured and recorded ' + tag('The switch'), '<a href="#">run 418</a> · moved 2h ago')}
+    ${row('○ not started', 'todo', 'Turn the switch on for every project ' + tag('The switch'), '')}
+    ${row('○ not started', 'todo', 'Remove the old path and its readers ' + tag('The switch'), '')}
+    ${row('○ not started', 'todo', 'The operator\'s guide ' + tag('The operator\'s guide'), '')}
+    ${row('○ not started', 'todo', 'The README section ' + tag('The operator\'s guide'), '')}
+    ${row('○ not started', 'todo', 'The list screen\'s closing review ' + tag('The list screen'), '')}
   </div>
 </section>`;
 
