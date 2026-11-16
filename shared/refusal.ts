@@ -436,7 +436,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // for what the operator can retype (a secret's bytes, the typed confirm, the stated account), 409 for a lane the box's
   // state refuses to act on now, and 503 for a provider that did not answer the probe (`unreachable`'s status: a retry
   // may help, and nothing was saved).
-  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400,
+  'key-charset': 400, 'confirm-mismatch': 400, 'bad-stated': 400, 'org-looks-like-an-id': 400,
   'not-discardable': 409, 'lane-exists': 409, 'config-dir-exists': 409, 'live-sessions': 409, 'sleeping-sessions': 409,
   'upstream': 409, 'last-home-able': 409, 'auth-in-progress': 409, 'not-a-token-lane': 409, 'duplicate-id': 409,
   'token-unverified': 503,
