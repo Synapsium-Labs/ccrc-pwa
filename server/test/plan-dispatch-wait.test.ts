@@ -268,6 +268,19 @@ describe('final-review fixes (D-8182)', () => {
     expect(ops(r).filter((o) => o === 'issueCreate')).toHaveLength(1);   // the first tick's, never another
   });
 
+  it('A7/A12: a dispatch while the programme is held by a failure backoff starts no pass and answers at once', async () => {
+    const r = await rig();
+    r.respond.current = () => ({ ok: false, word: 'unreachable', maybeSent: false });
+    await tick(r);
+    const held = (r.db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ?').get(SLUG) as { dueAt: number }).dueAt;
+    expect(held).toBeGreaterThan(r.t.now);
+    const n = r.asks.length;
+    expect(await r.sync.ensureTicketBound(r.runs[0]!, 5_000)).toEqual({ identifier: null });
+    expect(await r.sync.dispatchSlug(r.runs[0]!, undefined)).toBeUndefined();
+    expect(r.asks).toHaveLength(n);
+    expect((r.db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ?').get(SLUG) as { dueAt: number }).dueAt).toBe(held);
+  });
+
   it('M-5: ensureTicketBound answers at once for a ticket already bound with an identifier, sending nothing', async () => {
     const r = await rig();
     await tick(r);

@@ -8,7 +8,7 @@ import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  NO_PLAN_CHANGES, applyPlanChanges, attachTicketInTx, closePlan, dueSyncs, insertTicket, markCheckpointMet, markSyncDue,
+  NO_PLAN_CHANGES, applyPlanChanges, attachTicketInTx, clearSyncDue, closePlan, deferSync, dueSyncs, heldSyncUntil, insertTicket, markCheckpointMet, markSyncDue,
   markSyncDueInTx, onRunAdvancedInTx, planEndOf, planOf, planOwnerOf, planStorePort, settleEpicInTx, ticketById, updateTicket,
   type NewTicket, type PlanChanges,
 } from '../src/coord/planStore.js';
@@ -273,6 +273,26 @@ describe('the queue and the plan end', () => {
     markSyncDue(db, 'prog-a', 50);
     markSyncDue(db, 'prog-a', 200);
     expect(db.prepare("SELECT dueAt FROM plan_sync_due WHERE program = 'prog-a'").get()).toEqual({ dueAt: 50 });
+  });
+
+  it('A7/A12: a row deferred for a failure keeps its dueAt against markSyncDue; an ordinary wait does not', () => {
+    const dueOf = (): unknown => db.prepare("SELECT dueAt FROM plan_sync_due WHERE program = 'prog-a'").get();
+    markSyncDue(db, 'prog-a', 100);
+    deferSync(db, 'prog-a', 30_100, 'failure');
+    markSyncDue(db, 'prog-a', 200);                       // a plan write, a run transition, an attach
+    tx(db, () => markSyncDueInTx(db, 'prog-a', 300));
+    expect(dueOf()).toEqual({ dueAt: 30_100 });
+    expect(heldSyncUntil(db, 'prog-a', 300)).toBe(30_100);
+    expect(heldSyncUntil(db, 'prog-a', 30_100)).toBeNull();       // the backoff has passed: nothing holds it
+    deferSync(db, 'prog-a', 40_000, 'wait');               // a directory wait: an ordinary deferral
+    markSyncDue(db, 'prog-a', 400);
+    expect(dueOf()).toEqual({ dueAt: 400 });
+    expect(heldSyncUntil(db, 'prog-a', 300)).toBeNull();
+    deferSync(db, 'prog-a', 50_000, 'failure');
+    clearSyncDue(db, 'prog-a');                            // settled: the next mark is an ordinary one
+    markSyncDue(db, 'prog-a', 500);
+    expect(dueOf()).toEqual({ dueAt: 500 });
+    expect(heldSyncUntil(db, 'prog-b', 0)).toBeNull();
   });
 
   it('the reserved programme is never queued', () => {

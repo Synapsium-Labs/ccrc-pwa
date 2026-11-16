@@ -521,6 +521,34 @@ describe('every outcome has one handling', () => {
   });
 });
 
+describe('A7/A12: a deferring failure holds its backoff', () => {
+  it('a plan write, a run transition or an attach never pulls a programme deferred for a failure back to now', async () => {
+    const r = await rig();
+    r.respond.current = () => fail('unreachable');
+    await r.sync.tick(afterDebounce(r));
+    const held = dueAt(r)!;
+    expect(held).toBeGreaterThanOrEqual(r.t.now + PLAN_SYNC_BACKOFF_MS[0]);
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [], update: [{ id: r.plan.planOf(SLUG).epics[0]!.id, title: 'Renamed epic' }], drop: [] } }), OWNER, r.t.now, null);
+    r.plan.markSyncDue(SLUG, r.t.now);                     // what a run transition, an attach or ensureTicketBound writes
+    expect(dueAt(r)).toBe(held);
+    const n = r.asks.length;
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.asks).toHaveLength(n);                        // no pass inside the backoff
+    r.respond.current = defaultRespond;
+    r.t.now = held + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    expect(bindingOfKind(r, 'epic')?.state).toBe('bound');
+  });
+
+  it('an ordinary deferral (a directory wait) is pulled to now by the next mark', async () => {
+    const r = await rig({ directory: null });
+    await r.sync.tick(afterDebounce(r));
+    expect(dueAt(r)).toBeGreaterThan(r.t.now);
+    r.plan.markSyncDue(SLUG, r.t.now);
+    expect(dueAt(r)).toBe(r.t.now);
+  });
+});
+
 describe('a failed binding is not terminal', () => {
   it('returns to pending when a plan put changes its inputs', async () => {
     const r = await rig({ mode: 'public', epicTitle: 'Fix AAA-123 now' });

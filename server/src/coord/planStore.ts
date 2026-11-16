@@ -99,11 +99,16 @@ const dueKeyOf = (e: { program: string | null; project: string }): string =>
 
 // ── The queue ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`. Opens no transaction. */
+/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`, except that a row deferred for a FAILURE keeps
+ *  its own (A7/A12: a plan write, a run transition or an attach never pulls a backoff back to now). Opens no transaction.
+ *
+ *  The row's `attempts` column (migration 59, read nowhere before) is the failure mark: `deferSync` counts a failure
+ *  deferral there and sets it to 0 for an ordinary one; `clearSyncDue` deletes the row. No migration (D-8673). */
 export function markSyncDueInTx(db: DatabaseSync, program: string, at: number): void {
   if (program === LINEAR_SYNC_PROGRAMME) return;
   db.prepare(
-    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET dueAt = MIN(dueAt, excluded.dueAt)',
+    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET '
+    + 'dueAt = CASE WHEN attempts > 0 THEN dueAt ELSE MIN(dueAt, excluded.dueAt) END',
   ).run(program, at);
 }
 export function markSyncDue(db: DatabaseSync, program: string, at: number): void { markSyncDueInTx(db, program, at); }
@@ -114,8 +119,17 @@ export function dueSyncs(db: DatabaseSync, now: number): string[] {
 export function clearSyncDue(db: DatabaseSync, program: string): void {
   db.prepare('DELETE FROM plan_sync_due WHERE program = ?').run(program);
 }
-export function deferSync(db: DatabaseSync, program: string, until: number): void {
-  db.prepare('UPDATE plan_sync_due SET dueAt = ?, attempts = attempts + 1 WHERE program = ?').run(until, program);
+/** Why a due row is deferred: a `failure`'s backoff (the next mark must not shorten it, A7/A12) or an ordinary `wait`. */
+export type SyncDeferral = 'failure' | 'wait';
+/** Defer a due row to `until`, for a `failure` or a `wait` ({@link SyncDeferral}). */
+export function deferSync(db: DatabaseSync, program: string, until: number, why: SyncDeferral): void {
+  db.prepare('UPDATE plan_sync_due SET dueAt = ?, attempts = CASE WHEN ? THEN attempts + 1 ELSE 0 END WHERE program = ?')
+    .run(until, why === 'failure' ? 1 : 0, program);
+}
+/** The `dueAt` of a row deferred for a failure whose backoff has not passed at `now`; null when none holds the programme. */
+export function heldSyncUntil(db: DatabaseSync, program: string, now: number): number | null {
+  const r = db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ? AND attempts > 0 AND dueAt > ?').get(program, now) as Raw | undefined;
+  return r === undefined ? null : (r.dueAt as number);
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -558,7 +572,7 @@ export function coordinatorIdsOf(db: DatabaseSync): string[] {
 const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
-  bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
+  bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
