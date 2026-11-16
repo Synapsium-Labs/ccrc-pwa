@@ -64,3 +64,22 @@ The console (Task 9):
   copy.
 - **handled-refusal-sentence**. A refused mark rolls back to the button and shows one line, "Could not mark this. Try
   again.", beside it.
+
+## Measured
+
+- Growth (`server/test/growthCheck.ts#netGrowth`, against the merge base with `origin/main`): `server/src/coord/schema.ts`
+  +5 (the plan's measured +5), `server/src/coord/store.ts` +16 (the plan's estimate about +14: eleven delegates, the
+  stamp on `reachHeldItem`, and `claimDigestDay`'s transaction and callback), `server/src/watch.ts` +10,
+  `server/src/server.ts` 0 (the registration line gains the gate, the notice sink and the actor), `pwa/src/lib/api.ts` +6.
+  `growth-check.test.ts` armed: green.
+- Mutation floors (the in-tree runner, `server/test/sim/mutate.ts`): `responseOutcome` 1 (32 of 32), `responseWindowEnd`
+  1 (9 of 9), `responseSealDue` 1 (7 of 7), `responsesFor` 1 (13 of 13), `retentionChangeGate` 1 (4 of 4). One
+  equivalent mutant (a digest line's window ends at its cap whatever its owner) was removed with the redundant line.
+- Hand mutations, each red then restored from a saved copy: Task 6's three (a row on every reach call, which needed the
+  case of an item reached with no stamp source and armed later, since the unique index also holds a repeat; `armInTx`'s
+  insert dropped; the digest rows written on a lost claim); Task 7's three (`sealedAt IS NULL` dropped, which needed a
+  direct store case, since the lane never re-reads a sealed row; an unreadable setting falling back to the default; the
+  deleter in two transactions); Task 8's three (the handled door writing `outcome`, the bounds dropped, the gate compared
+  the wrong way).
+- The auth gate's counts move past responses A's: 249 routes, 246 HTTP, 151 gated, and `gate.ts`'s docstring names 246.
+  Portfolio B lands first at 246 / 243, so the landing merge adds its one route to each.
