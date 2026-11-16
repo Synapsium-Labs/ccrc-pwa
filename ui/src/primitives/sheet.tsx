@@ -4,7 +4,7 @@
 // it is a centred dialog instead (D-5933): the same Root, re-placed by CSS.
 import { Drawer } from 'vaul';
 import { useCallback, useEffect, useRef } from 'react';
-import type { ReactNode, RefObject } from 'react';
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
 import { EYEBROW } from '../lib/text';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
@@ -86,12 +86,50 @@ const DESK_PANEL =
   + ' min-[900px]:data-[state=closed]:[animation-name:sheet-pop-out]!';
 
 
+/** The input types that raise no keyboard when focused: a radio or a checkbox gets the focus back on every pointer (Task
+ *  C38, D-8670: a switch card's radio is the opener its confirm gives the focus back to). */
+const NO_KEYBOARD_INPUTS: ReadonlySet<string> = new Set(['checkbox', 'radio', 'button', 'submit', 'reset', 'range', 'color', 'file', 'image']);
+
 /** A field that raises a phone's keyboard when focused. */
 const isTextField = (el: HTMLElement): boolean =>
-  el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement || el.isContentEditable;
+  el instanceof HTMLTextAreaElement || (el instanceof HTMLInputElement && !NO_KEYBOARD_INPUTS.has(el.type)) || el.isContentEditable;
 
 /** A mouse or a trackpad, where focusing a field raises no on-screen keyboard. */
 const finePointer = (): boolean => window.matchMedia?.('(pointer: fine)').matches === true;
+
+/** The element that last took the focus anywhere on the page, kept by one capturing `focusin` listener that the first
+ *  Sheet to mount installs (Task C38, D-8670). Read only by `droppedOpener`. */
+let lastFocused: HTMLElement | null = null;
+let trackingFocus = false;
+function trackFocus(): void {
+  if (trackingFocus || typeof document === 'undefined') return;
+  trackingFocus = true;
+  document.addEventListener('focusin', (event) => {
+    if (event.target instanceof HTMLElement) lastFocused = event.target;
+  }, true);
+}
+
+/** THE OPENER A DISABLE DROPPED (Task C38, D-8670; review 1703). A switch card disables its fieldset while its write waits
+ *  or while its confirm is open, and Chrome drops the focus of a control that becomes disabled to the page, moving it
+ *  nowhere: the sheet then opens with the body focused. The control that held the focus last is the opener when it is
+ *  still in the page and now disabled, because then it lost the focus to that, not to the operator going elsewhere. An
+ *  enabled one is never taken back. */
+function droppedOpener(): HTMLElement | null {
+  const el = lastFocused;
+  return el !== null && el.isConnected && el.matches(':disabled') ? el : null;
+}
+
+/** WHERE A RADIO OPENER TAKES THE FOCUS BACK (Task C38, D-8670). A switch card's confirm opens from the radio of the choice
+ *  the operator picked, and a sheet closed without a write leaves the group on its reading, so that radio stays unchecked.
+ *  The focus goes back to the group's checked radio, where a keyboard enters a radio group: on the tapped one, a card's
+ *  keyboard preview would describe the choice declined, and Space would open the confirm again. A group with no enabled
+ *  checked radio (an unmeasured reading) gives it back to the opener. */
+function radioHome(el: HTMLElement): HTMLElement {
+  if (!(el instanceof HTMLInputElement) || el.type !== 'radio' || el.checked || el.name === '') return el;
+  const checked = [...document.querySelectorAll<HTMLInputElement>('input[type="radio"]')]
+    .find((r) => r.name === el.name && r.form === el.form && r.checked && !r.disabled);
+  return checked ?? el;
+}
 
 /** THE SHEET OWNS FOCUS (D-5931, spec §2.4 (b)). In on open, trapped while open (Radix's modal scope), back to the
  *  opener on close. One owner: no caller moves the focus into or out of a sheet.
@@ -128,6 +166,7 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
     const want = target.current?.current ?? null;
     (want !== null && el.contains(want) ? want : el).focus({ preventScroll: true });
   }, []);
+  useEffect(() => { trackFocus(); }, []);
   useEffect(() => {
     if (!open) return undefined;
     const el = panel.current;
@@ -136,7 +175,7 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
       if (!el.contains(document.activeElement)) focusIn(el);
     } else {
       const active = document.activeElement;
-      opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+      opener.current = active instanceof HTMLElement && active !== document.body ? active : droppedOpener();
     }
     const from = opener;
     return () => {
@@ -144,13 +183,65 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
       from.current = null;
       if (back === null || !back.isConnected) return;
       if (isTextField(back) && !finePointer()) return;
-      back.focus({ preventScroll: true });
+      radioHome(back).focus({ preventScroll: true });
     };
   }, [open, focusIn]);
   return useCallback((el: HTMLElement | null): void => {
     panel.current = el;
     if (el !== null && isOpen.current) focusIn(el);
   }, [focusIn]);
+}
+
+/** THE PAGE'S HIDING FOLLOWS `open` (Task C38, D-8670; PR10b's reviews). Radix hides everything outside a modal's content
+ *  (`hideOthers`: `aria-hidden` plus its `data-aria-hidden` mark) from the content's mount to its unmount, and the content
+ *  stays mounted through the exit animation, so a refusal's live region, or a focus a row places as the sheet leaves, sat in
+ *  a hidden page and might not be announced. Radix's trap already follows `open` (`trapFocus={open}`); this makes the hiding
+ *  follow it too. As the sheet turns closed with its panel still mounted, the marks Radix made are lifted, unless another
+ *  modal is still open, and a reopen during the exit, where Radix hides nothing again, puts them back. An element the page
+ *  hid itself before the sheet opened is left as it was, and so are Radix's focus guards. Radix's own undo at the unmount
+ *  then removes what is left. */
+function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
+  const panel = useRef<HTMLElement | null>(null);
+  const lifted = useRef<Element[]>([]);
+  // What the page hid itself, read as the sheet opens, before Radix marks anything.
+  const own = useRef<ReadonlySet<Element>>(new Set());
+  useEffect(() => {
+    const el = panel.current;
+    if (open) {
+      // Only a reopen DURING the exit puts back what this sheet lifted: Radix's hiding is still in place then, and hides
+      // nothing again. Once the panel has gone Radix hides afresh, and a node put back before it would read as hidden by
+      // the page itself, which Radix's undo never clears.
+      if (el !== null && el.isConnected) {
+        for (const node of lifted.current) if (node.isConnected) node.setAttribute('aria-hidden', 'true');
+      } else {
+        own.current = new Set(document.querySelectorAll('[aria-hidden="true"]:not([data-aria-hidden])'));
+      }
+      lifted.current = [];
+      return;
+    }
+    if (el === null || !el.isConnected) return;
+    const otherOpen = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].some((d) => d !== el);
+    if (otherOpen) return;
+    const marked = [...document.querySelectorAll('[data-aria-hidden="true"][aria-hidden="true"]')]
+      .filter((node) => !own.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el));
+    for (const node of marked) node.removeAttribute('aria-hidden');
+    lifted.current = marked;
+  }, [open]);
+  return useCallback((el: HTMLElement | null): void => { panel.current = el; }, []);
+}
+
+/** SHIFT+TAB PRESSED FIRST STAYS IN THE SHEET (Task C38, D-8670; PR10b's reviews). The Sheet focuses its panel before
+ *  Radix's trap listens, so the trap has no last focus to pull a stray one back to, and its own keydown wraps only from the
+ *  first tabbable: from the panel itself the browser's Shift+Tab left the dialog for the page. From the panel, Shift+Tab
+ *  goes to the last tabbable inside it; Tab already goes to the first by document order. */
+const TABBABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]), select:not([disabled]), '
+  + 'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+function onPanelKeyDown(event: ReactKeyboardEvent<HTMLElement>): void {
+  if (event.key !== 'Tab' || !event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+  if (event.target !== event.currentTarget) return;
+  const inside = [...event.currentTarget.querySelectorAll<HTMLElement>(TABBABLE)].filter((el) => el.closest('[hidden], [inert]') === null);
+  event.preventDefault();
+  inside.at(-1)?.focus();
 }
 
 export function Sheet({
@@ -167,7 +258,9 @@ export function Sheet({
   size = 'md',
   titleScroll = true,
 }: SheetProps): ReactNode {
-  const panelRef = useSheetFocus(open, initialFocus);
+  const focusRef = useSheetFocus(open, initialFocus);
+  const hidingRef = useHidingFollowsOpen(open);
+  const panelRef = useCallback((el: HTMLElement | null): void => { focusRef(el); hidingRef(el); }, [focusRef, hidingRef]);
   // THE ARM IS CHOSEN BY WIDTH, NEVER BY SKIN (D-5933; the skins spec §5.3). One reading turns the grabber and the
   // drag off and draws the ✕; the layout is CSS's. Nothing is keyed on it, so a crossing keeps every child's state.
   // The full variant (the terminal drawer) is the same at every width.
@@ -240,6 +333,7 @@ export function Sheet({
           tabIndex={-1}
           aria-describedby={undefined}
           onEscapeKeyDown={onEscapeKeyDown}
+          onKeyDown={onPanelKeyDown}
           // Radix's own open focus stays off; the focus is `useSheetFocus`'s, never this event's (D-5931).
           onOpenAutoFocus={(event) => { event.preventDefault(); }}
           className={cn(
