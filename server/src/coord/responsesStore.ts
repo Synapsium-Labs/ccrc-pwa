@@ -6,19 +6,31 @@
 //   - a push row's accepted subscriptions, `deliveredAt`, `sends`, and its removal when never delivered:
 //     `landPushVerdictInTx`, the sender's, inside `markOutboxVerdict`'s transaction (the deleter by the push's verdict);
 //   - a receipt: `insertReceipt`, the receipts door's, through `receiveReceipts`;
-//   - a boot: `recordResponseBoot`, once a boot, from `index.ts`.
-// Nothing here decides: `receiptVerdict` (`server/src/responses.ts`) does, handed in by the door. Every insert names its
+//   - a boot: `recordResponseBoot`, once a boot, from `index.ts`;
+//   - a Waiting on you row's insert: `insertWaitingResponseInTx`, inside the move that stamps the reach (PR B);
+//   - a digest line's insert: `insertDigestResponsesInTx`, inside the digest's claim (PR B);
+//   - the seal (`shownAt`, `openedAt`, `actedAt`, `outcome`, `how`, `why`, `sealedAt`): `sealResponse`, the lane's (PR B);
+//   - `handledAt`: `markResponseHandled`, the handled door's (PR B);
+//   - the retention setting: `setResponseRetention`, the retention door's (PR B);
+//   - deletes by time, of rows, receipts and older boots: `deleteResponsesThroughInTx` (PR B), the deleter by time.
+// Nothing here decides: `receiptVerdict` and the seal's deciders (`server/src/responses.ts`) do, asked by the door and the
+// lane. Every insert names its
 // conflict (`INSERT … ON CONFLICT(<key>) DO NOTHING`), never `INSERT OR IGNORE`, so a repeat is nothing and a `CHECK`
 // violation throws. SQL never reads the clock. A response is never an answer and never authority: nothing here touches
 // another table.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
-  PUSH_RESPONSE_DELIVERY, PUSH_WINDOW_MS, RECEIPT_KINDS, RESPONSE_KINDS, RESPONSE_ROW_STATES,
-  type ReceiptDrop, type ReceiptIn, type ReceiptKind, type ResponseKind, type ResponseRef, type ResponseRowState, type ResponseStamp,
+  PUSH_RESPONSE_DELIVERY, PUSH_WINDOW_MS, RECEIPT_KINDS, RECEIPT_SOURCES, RESPONSE_KINDS,
+  RESPONSE_OUTCOMES, RESPONSE_RETENTION_MAX_DAYS, RESPONSE_RETENTION_MIN_DAYS, RESPONSE_ROW_STATES,
+  WAITING_WINDOW_MS, digestLineKey,
+  type ReceiptDrop, type ReceiptIn, type ReceiptKind, type ReceiptSource, type ResponseKind, type ResponseRef, type ResponseRowState,
+  type ResponseRowBrief, type ResponseStamp,
 } from '../../../shared/responses.js';
+import type { DigestRowKind } from '../../../shared/api.js';
 import type { OutboxSource } from '../../../shared/push-outbox.js';
-import type { ReceiptFacts, ReceiptVerdict } from '../responses.js';
+import type { ReceiptFacts, ReceiptVerdict, SealOutcome, SealReceipt, SealRow } from '../responses.js';
 import { tx } from './tx.js';
+import { changeLatch } from '../changeLatch.js';
 
 const PREPARED = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 function stmt(db: DatabaseSync, sql: string): StatementSync {
@@ -210,6 +222,219 @@ export function receiveReceipts(db: DatabaseSync, receipts: readonly ReceiptIn[]
   } catch (e) {
     if (e instanceof ReceiptReadFailed) return { ok: false, detail: e.message };    // the read logged it already
     const detail = `response_receipts write failed: ${message(e)}`;
+    console.warn(`ccrc-server: ${detail}`);
+    return { ok: false, detail };
+  }
+}
+
+// ── PR B: the Waiting on you rows and the digest lines (Task 6) ───────────────────────────────────────────────────────────
+
+const stampCols = (stamp: ResponseStamp): [number, number | null, number, number | null] => [
+  stamp.boot.kind === 'measured' ? 1 : 0, stamp.boot.kind === 'measured' ? stamp.boot.epoch : null,
+  stamp.restore.kind === 'measured' ? 1 : 0, stamp.restore.kind === 'measured' ? stamp.restore.n : null,
+];
+
+/** A Waiting on you row (Table 4.3a), inside the move that stamped its source's reach and only when that stamp is new,
+ *  so a source has at most one; the partial unique index holds that too, by `INSERT … ON CONFLICT(refKind, refId) WHERE
+ *  kind = 'waiting' DO NOTHING`, and a broken row throws. It is `delivered` at once, at the reach, with its window
+ *  seven days on and its source as its label. */
+export function insertWaitingResponseInTx(db: DatabaseSync, w: {
+  readonly source: OutboxSource; readonly id: number; readonly stamp: ResponseStamp; readonly at: number;
+}): { readonly inserted: boolean } {
+  const res = stmt(db, 'INSERT INTO operator_responses (kind, label, refKind, refId, delivery, state, bootMeasured, bootEpoch, '
+    + "restoreMeasured, restoreGeneration, insertedAt, admittedAt, deliveredAt, windowCapAt) VALUES ('waiting', ?, ?, ?, ?, "
+    + "'delivered', ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(refKind, refId) WHERE kind = 'waiting' DO NOTHING")
+    .run(w.source, w.source, w.id, PUSH_RESPONSE_DELIVERY, ...stampCols(w.stamp), w.at, w.at, w.at, w.at + WAITING_WINDOW_MS);
+  return { inserted: Number(res.changes) > 0 };
+}
+
+/** The digest's decision lines (question 8), inside the claim's transaction, only when the claim won: one row each,
+ *  keyed `<day>:<rowKind>:<id>`, labelled by its row kind, `delivered` at the claim, its window ending at the next
+ *  digest. By `INSERT … ON CONFLICT(refKey) WHERE kind = 'digest' DO NOTHING`. Answers how many it wrote. */
+export function insertDigestResponsesInTx(db: DatabaseSync, d: {
+  readonly day: string; readonly lines: readonly { readonly rowKind: DigestRowKind; readonly id: number }[];
+  readonly stamp: ResponseStamp; readonly at: number; readonly windowCapAt: number;
+}): { readonly inserted: number } {
+  const st = stmt(db, 'INSERT INTO operator_responses (kind, label, refKey, delivery, state, bootMeasured, bootEpoch, restoreMeasured, '
+    + "restoreGeneration, insertedAt, admittedAt, deliveredAt, windowCapAt) VALUES ('digest', ?, ?, ?, 'delivered', ?, ?, ?, ?, ?, ?, "
+    + "?, ?) ON CONFLICT(refKey) WHERE kind = 'digest' DO NOTHING");
+  let inserted = 0;
+  for (const l of d.lines) {
+    const res = st.run(l.rowKind, digestLineKey(d.day, l.rowKind, l.id), PUSH_RESPONSE_DELIVERY, ...stampCols(d.stamp), d.at, d.at, d.at, d.windowCapAt);
+    inserted += Number(res.changes);
+  }
+  return { inserted };
+}
+
+/** Logs a response write that failed inside a move it must never cost, once per cause through a change latch (the cause
+ *  names no id), so a standing failure logs once, not once per move. */
+const writeLatch = changeLatch();
+export function warnResponseWrite(cause: string, line: string): void {
+  if (writeLatch.changed(cause)) console.warn(`ccrc-server: response record: ${line}`);
+}
+
+// ── PR B: the lane's reads and writes (Task 7) ───────────────────────────────────────────────────────────────────────────
+
+/** An open row as the lane reads it: the seal's columns, and what it is about. */
+export interface OpenResponseRow extends SealRow {
+  readonly refKind: OutboxSource | null; readonly refId: number | null; readonly refKey: string | null; readonly tag: string | null;
+}
+export type OpenRowsRead =
+  | { readonly ok: true; readonly rows: readonly OpenResponseRow[]; readonly unreadable: readonly { readonly id: number; readonly detail: string }[] }
+  | { readonly ok: false; readonly detail: string };
+
+const OPEN_COLS = 'id, kind, label, state, carriesKind, carriesId, hasActions, acceptedSubs, bootMeasured, bootEpoch, restoreMeasured, '
+  + 'restoreGeneration, insertedAt, deliveredAt, windowCapAt, refKind, refId, refKey, tag';
+const sourceOf = (x: unknown, col: string): OutboxSource | null => {
+  if (x === null) return null;
+  if (x === 'ask' || x === 'item') return x;
+  throw new Error(`${col} ${String(x)} is not known`);
+};
+const numOrNull = (x: unknown): number | null => (x === null ? null : Number(x));
+
+function openRowOf(r: Record<string, unknown>): OpenResponseRow {
+  const kind = String(r.kind) as ResponseKind;
+  if (!RESPONSE_KINDS.includes(kind)) throw new Error(`kind ${String(r.kind)} is not known`);
+  const carriesKind = sourceOf(r.carriesKind, 'carriesKind');
+  return {
+    id: Number(r.id), kind, label: String(r.label), state: stateOf(r.state),
+    carries: carriesKind === null ? null : { kind: carriesKind, id: Number(r.carriesId) },
+    hasActions: Number(r.hasActions) === 1, acceptedSubs: subsOf(r.acceptedSubs),
+    boot: Number(r.bootMeasured) === 1 ? { kind: 'measured', epoch: Number(r.bootEpoch) } : { kind: 'unmeasured' },
+    restore: Number(r.restoreMeasured) === 1 ? { kind: 'measured', n: Number(r.restoreGeneration) } : { kind: 'unmeasured' },
+    insertedAt: Number(r.insertedAt), deliveredAt: numOrNull(r.deliveredAt), windowCapAt: numOrNull(r.windowCapAt),
+    refKind: sourceOf(r.refKind, 'refKind'), refId: numOrNull(r.refId), refKey: r.refKey === null ? null : String(r.refKey),
+    tag: r.tag === null ? null : String(r.tag),
+  };
+}
+
+/** Every row not yet sealed, oldest first. A row this build cannot read is answered beside the rest, never folded into a
+ *  known row and never hiding them (the push outbox's one-unreadable-row-never-blinds-the-drain). */
+export function openResponseRows(db: DatabaseSync): OpenRowsRead {
+  let raw: Record<string, unknown>[];
+  try {
+    raw = stmt(db, `SELECT ${OPEN_COLS} FROM operator_responses WHERE sealedAt IS NULL ORDER BY id`).all() as Record<string, unknown>[];
+  } catch (e) {
+    return { ok: false, detail: `operator_responses read failed: ${message(e)}` };
+  }
+  const rows: OpenResponseRow[] = [];
+  const unreadable: { id: number; detail: string }[] = [];
+  for (const r of raw) {
+    try { rows.push(openRowOf(r)); } catch (e) { unreadable.push({ id: Number(r.id), detail: message(e) }); }
+  }
+  return { ok: true, rows, unreadable };
+}
+
+/** A row's receipts, as the seal reads them. A stored word this build does not know throws, and the lane defers. */
+export function receiptsOf(db: DatabaseSync, responseId: number): SealReceipt[] {
+  const raw = stmt(db, 'SELECT receipt, source, endpointHash, at FROM response_receipts WHERE responseId = ? ORDER BY id').all(responseId) as
+    { receipt: string; source: string; endpointHash: string; at: number }[];
+  return raw.map((r) => {
+    if (!(RECEIPT_KINDS as readonly string[]).includes(r.receipt)) throw new Error(`receipt ${r.receipt} is not known`);
+    if (!(RECEIPT_SOURCES as readonly string[]).includes(r.source)) throw new Error(`source ${r.source} is not known`);
+    return { receipt: r.receipt as ReceiptKind, source: r.source as ReceiptSource, endpointHash: String(r.endpointHash), at: Number(r.at) };
+  });
+}
+
+/** The accepted subscriptions of `row` on which a later push under the same tag, another push id, was delivered inside
+ *  its window: there a `shown` could have been replaced, so its absence proves nothing (§4.3, I18). */
+export function replacedOnOf(db: DatabaseSync, row: { readonly id: number; readonly tag: string | null; readonly deliveredAt: number | null;
+  readonly acceptedSubs: readonly string[] }, windowEnd: number): string[] {
+  if (row.tag === null || row.deliveredAt === null || row.acceptedSubs.length === 0) return [];
+  const later = stmt(db, "SELECT acceptedSubs FROM operator_responses WHERE kind = 'push' AND tag = ? AND id != ? "
+    + 'AND deliveredAt > ? AND deliveredAt <= ?').all(row.tag, row.id, row.deliveredAt, windowEnd) as { acceptedSubs: unknown }[];
+  const mine = new Set(row.acceptedSubs);
+  const out = new Set<string>();
+  for (const l of later) for (const s of subsOf(l.acceptedSubs)) if (mine.has(s)) out.add(s);
+  return [...out].sort();
+}
+
+/** How many boots of this server fell after `after` and at or before `through` (question 17). */
+export function bootsInWindowOf(db: DatabaseSync, after: number, through: number): number {
+  const r = stmt(db, 'SELECT COUNT(*) AS n FROM response_boots WHERE bootedAt > ? AND bootedAt <= ?').get(after, through) as { n: number };
+  return Number(r.n);
+}
+
+/** THE SEAL, the lane's one write of a row's outcome: once (`WHERE sealedAt IS NULL`), with what `responseSealDue`
+ *  answered. A second seal changes nothing. */
+export function sealResponse(db: DatabaseSync, id: number, d: SealOutcome, at: number): { readonly changed: boolean } {
+  const res = stmt(db, "UPDATE operator_responses SET state = 'sealed', outcome = ?, how = ?, why = ?, actedAt = ?, shownAt = ?, "
+    + 'openedAt = ?, sealedAt = ? WHERE id = ? AND sealedAt IS NULL')
+    .run(d.outcome, d.how, d.why, d.actedAt, d.shownAt, d.openedAt, at, id);
+  return { changed: Number(res.changes) > 0 };
+}
+
+/** THE DELETER BY TIME (question 14): inside its caller's transaction, every receipt of a row inserted at or before `at`,
+ *  then those rows, then every `response_boots` row booted at or before `at` except the newest. Its callers: the
+ *  retention pass, through `deleteResponsesThrough`; later W4's wipe and its replay, which call this form inside their own
+ *  transactions. The other deleter is the sender's removal of a never-delivered push in `landPushVerdictInTx`. */
+export function deleteResponsesThroughInTx(db: DatabaseSync, at: number):
+  { readonly rows: number; readonly receipts: number; readonly boots: number } {
+  const receipts = stmt(db, 'DELETE FROM response_receipts WHERE responseId IN (SELECT id FROM operator_responses WHERE insertedAt <= ?)').run(at);
+  const rows = stmt(db, 'DELETE FROM operator_responses WHERE insertedAt <= ?').run(at);
+  const boots = stmt(db, 'DELETE FROM response_boots WHERE bootedAt <= ? AND epoch < (SELECT MAX(epoch) FROM response_boots)').run(at);
+  return { rows: Number(rows.changes), receipts: Number(receipts.changes), boots: Number(boots.changes) };
+}
+/** `deleteResponsesThroughInTx` in a transaction of its own (`coord/tx.ts#tx` does not nest), for the retention pass. */
+export function deleteResponsesThrough(db: DatabaseSync, at: number): ReturnType<typeof deleteResponsesThroughInTx> {
+  return tx(db, () => deleteResponsesThroughInTx(db, at));
+}
+
+// ── PR B: the retention setting and the doors' reads and writes (Task 8) ───────────────────────────────────────────────
+
+export type RetentionRead = { readonly ok: true; readonly days: number } | { readonly ok: false; readonly detail: string };
+/** The operator's retention, in days. A missing row, a failed read, or a value outside the bounds is `ok: false`, never
+ *  the default (slug retention-unreadable-deletes-nothing). */
+export function responseRetention(db: DatabaseSync): RetentionRead {
+  try {
+    const r = stmt(db, 'SELECT retentionDays FROM response_settings WHERE id = 1').get() as { retentionDays: unknown } | undefined;
+    if (r === undefined) return { ok: false, detail: 'response_settings has no row' };
+    const days = r.retentionDays;
+    if (typeof days !== 'number' || !Number.isSafeInteger(days) || days < RESPONSE_RETENTION_MIN_DAYS || days > RESPONSE_RETENTION_MAX_DAYS) {
+      return { ok: false, detail: 'response_settings.retentionDays is outside its bounds' };
+    }
+    return { ok: true, days };
+  } catch (e) {
+    return { ok: false, detail: `response_settings read failed: ${message(e)}` };
+  }
+}
+/** The retention door's one write. The door has bounded `days` and asked its gate. */
+export function setResponseRetention(db: DatabaseSync, days: number, at: number): { readonly changed: boolean } {
+  const res = stmt(db, 'UPDATE response_settings SET retentionDays = ?, updatedAt = ? WHERE id = 1 AND retentionDays IS NOT ?').run(days, at, days);
+  return { changed: Number(res.changes) > 0 };
+}
+
+/** "I handled this elsewhere" (C69), the handled door's one write: `handledAt` once (`WHERE handledAt IS NULL`), and
+ *  nothing else: no seal, no item, ask, mail or outbox row. Answers the row's stored `handledAt`, or null for no row. */
+export function markResponseHandled(db: DatabaseSync, id: number, at: number):
+  { readonly row: { readonly id: number; readonly handledAt: number } | null; readonly changed: boolean } {
+  return tx(db, () => {
+    const res = stmt(db, 'UPDATE operator_responses SET handledAt = ? WHERE id = ? AND handledAt IS NULL').run(at, id);
+    const r = stmt(db, 'SELECT id, handledAt FROM operator_responses WHERE id = ?').get(id) as { id: number; handledAt: number | null } | undefined;
+    return { row: r === undefined || r.handledAt === null ? null : { id: Number(r.id), handledAt: Number(r.handledAt) }, changed: Number(res.changes) > 0 };
+  });
+}
+
+export type ResponseRowsRead = { readonly ok: true; readonly rows: readonly ResponseRowBrief[] } | { readonly ok: false; readonly detail: string };
+
+/** The rows about one item (its Waiting on you row and every push that carried it) or one digest line. A stored word this
+ *  build cannot read makes the whole read `ok: false`, never a shorter list. */
+export function responsesForRef(db: DatabaseSync, ref: { readonly kind: 'item'; readonly id: number } | { readonly kind: 'digest'; readonly key: string }): ResponseRowsRead {
+  try {
+    const raw = (ref.kind === 'item'
+      ? stmt(db, "SELECT id, kind, label, state, outcome, handledAt FROM operator_responses WHERE (kind = 'waiting' AND refKind = 'item' AND refId = ?) "
+        + "OR (kind = 'push' AND carriesKind = 'item' AND carriesId = ?) ORDER BY id").all(ref.id, ref.id)
+      : stmt(db, "SELECT id, kind, label, state, outcome, handledAt FROM operator_responses WHERE kind = 'digest' AND refKey = ? ORDER BY id").all(ref.key)
+    ) as Record<string, unknown>[];
+    return { ok: true, rows: raw.map((r) => {
+      const kind = String(r.kind) as ResponseKind;
+      if (!RESPONSE_KINDS.includes(kind)) throw new Error(`row ${String(r.id)} kind is not known`);
+      const outcome = r.outcome === null ? null : String(r.outcome) as ResponseRowBrief['outcome'];
+      if (outcome !== null && !RESPONSE_OUTCOMES.includes(outcome)) throw new Error(`row ${String(r.id)} outcome is not known`);
+      return { id: Number(r.id), kind, label: String(r.label), state: stateOf(r.state), outcome, handledAt: numOrNull(r.handledAt) };
+    }) };
+  } catch (e) {
+    const detail = `operator_responses read failed: ${message(e)}`;
     console.warn(`ccrc-server: ${detail}`);
     return { ok: false, detail };
   }

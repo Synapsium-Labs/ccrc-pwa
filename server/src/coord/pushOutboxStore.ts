@@ -14,7 +14,8 @@ import { NEEDED_BY_LEVELS, type NeededBy } from '../../../shared/ledgers.js';
 import type { PushPayload } from '../push.js';
 import { asSendVerdict, type PreparedPush, type PushDue } from '../pushOutbox.js';
 import { operatorWasShown } from './ledgersStore.js';
-import { insertPushResponseInTx, landPushVerdictInTx, type PushResponseOf } from './responsesStore.js';
+import { insertPushResponseInTx, insertWaitingResponseInTx, landPushVerdictInTx, warnResponseWrite, type PushResponseOf } from './responsesStore.js';
+import type { ResponseStamp } from '../../../shared/responses.js';
 import { tx } from './tx.js';
 
 /** The payload the outbox stores: a `PushPayload` with its collapse key, so every row written with a payload has a tag,
@@ -185,7 +186,12 @@ export function insertBoundRowInTx(db: DatabaseSync, row: BoundRowWrite, actor: 
  *  the presence answer `pushDue` was asked with, all read once, before the move's transaction (slug presence-read-once).
  *  `viewing` is its own fact, never read back from `due`: with no push service `due` says `no-service` first, and the
  *  funnel's record gate still needs presence (review 2150 F1). */
-export interface BoundWrite { readonly prepared: PreparedPush; readonly due: PushDue; readonly viewing: boolean }
+export interface BoundWrite {
+  readonly prepared: PreparedPush; readonly due: PushDue; readonly viewing: boolean;
+  /** The response record's stamp (`Deps.responseStamp`, Overlord W1 responses B): with it, a new reach also writes the
+   *  source's Waiting on you row; without it (a narrow caller) none is written. */
+  readonly stamp?: ResponseStamp | undefined;
+}
 /** An item's bound write, built from its id (the tag `item-<id>` needs it; slug bound-row-callback). */
 export type BoundOf = (id: number) => BoundWrite;
 /** An item raiser's bound write for one item, from its copy and its level (`pushSender.ts#itemBoundOf` builds it): what
@@ -202,7 +208,7 @@ export function reachInTx(db: DatabaseSync, source: OutboxSource, sourceId: numb
   const p = b.prepared.payload;
   if (p !== null && typeof p.tag !== 'string') throw new Error(`reachInTx: the ${source} ${sourceId} payload has no tag`);
   const payload = p as OutboxPayload | null;
-  stampReach(db, source, sourceId, at);
+  waitingRowOnReach(db, source, sourceId, b.stamp, at, stampReach(db, source, sourceId, at));
   const base = { source, sourceId, pushId: b.prepared.pushId, at };
   if (b.due.due === 'now') {
     if (payload === null) throw new Error(`reachInTx: the ${source} ${sourceId} push is due with no payload`);
@@ -216,7 +222,9 @@ export function reachInTx(db: DatabaseSync, source: OutboxSource, sourceId: numb
  *  service) a row is written `silent` only when none exists, and an existing row is left as it is, so the toggle still
  *  leaves exactly one row (I2). */
 export function armInTx(db: DatabaseSync, source: OutboxSource, sourceId: number, b: BoundWrite, at: number): BoundRowRef {
-  stampReach(db, source, sourceId, at);
+  // A held item toggled to blocking is armed while still held and stamped here, so the held drain skips it later: this is
+  // its Waiting on you row's only chance (review 2184 F7).
+  waitingRowOnReach(db, source, sourceId, b.stamp, at, stampReach(db, source, sourceId, at));
   const payload = b.prepared.payload as OutboxPayload | null;
   const idOf = (): number | undefined =>
     (stmt(db, 'SELECT id FROM push_outbox WHERE sourceKind = ? AND sourceId = ?').get(source, sourceId) as { id: number } | undefined)?.id;
@@ -227,6 +235,17 @@ export function armInTx(db: DatabaseSync, source: OutboxSource, sourceId: number
     insertBoundRowInTx(db, { source, sourceId, pushId: b.prepared.pushId, state: 'silent', silentWhy: b.due.why, payload, at });
   }
   return { id: Number(idOf()), due: b.due, viewing: b.viewing };
+}
+
+/** A new reach's Waiting on you row (Overlord W1 responses B, Table 4.3a), inside the move that stamped it, only when the
+ *  stamp is new and a stamp source is given. A throw from the insert is caught here and logged once per cause, so a
+ *  failed response write never rolls back the move it rides (Global Constraints: fail closed toward the operator). */
+function waitingRowOnReach(db: DatabaseSync, source: OutboxSource, sourceId: number, stamp: ResponseStamp | undefined, at: number,
+  reached: { readonly changed: boolean }): void {
+  if (!reached.changed || stamp === undefined) return;
+  try { insertWaitingResponseInTx(db, { source, id: sourceId, stamp, at }); } catch (e) {
+    warnResponseWrite(`waiting:${message(e)}`, `a Waiting on you row was not written (${message(e)}); the move it rode stands`);
+  }
 }
 
 /** THE ONE WRITER of `reachedOperatorAt` (C31): a row is stamped at most once (`WHERE reachedOperatorAt IS NULL`). It
@@ -433,11 +452,14 @@ export function firstBootAt(db: DatabaseSync): number | null {
 }
 
 /** The held drain's write for one held item that reached the operator (slug item-held-until-is-a-hold), in its own
- *  transaction: the reach stamp and, only when the stamp changed, one `silent` row written by the sender (review 2119
+ *  transaction: the reach stamp and, only when the stamp changed, its Waiting on you row (with a stamp) and one `silent` row written by the sender (review 2119
  *  F6: `{ null -> silent, sender }`), with no payload, so the drain never sends it (slug held-drain-is-silent). */
-export function reachHeldItem(db: DatabaseSync, id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } {
+export function reachHeldItem(db: DatabaseSync, id: number, pushId: string, why: PushSilentWhy, at: number, stamp?: ResponseStamp):
+  { changed: boolean } {
   return tx(db, () => {
-    if (!stampReach(db, 'item', id, at).changed) return { changed: false };
+    const reached = stampReach(db, 'item', id, at);
+    if (!reached.changed) return { changed: false };
+    waitingRowOnReach(db, 'item', id, stamp, at, reached);
     insertBoundRowInTx(db, { source: 'item', sourceId: id, pushId, state: 'silent', silentWhy: why, payload: null, at }, 'sender');
     return { changed: true };
   });

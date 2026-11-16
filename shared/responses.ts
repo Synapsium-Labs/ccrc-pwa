@@ -101,6 +101,18 @@ export const RESPONSE_RETENTION_DEFAULT_DAYS = 180;
 export const RESPONSE_RETENTION_MIN_DAYS = 14;
 export const RESPONSE_RETENTION_MAX_DAYS = 3_650;
 
+/** One row of `GET /api/responses?ref=` (the console's "I handled this elsewhere", C69): ids, kinds, labels, states,
+ *  outcomes and handled times only. `handledAt` is null while the operator has not marked it. */
+export interface ResponseRowBrief {
+  readonly id: number; readonly kind: ResponseKind; readonly label: string; readonly state: ResponseRowState;
+  readonly outcome: ResponseOutcome | null; readonly handledAt: number | null;
+}
+/** `GET`/`POST /api/responses/retention`'s answer: the days, or `days: null` with `unreadable` when the setting cannot be
+ *  read, beside the default and the bounds. */
+export type ResponseRetentionView =
+  | { readonly ok: true; readonly days: number; readonly default: number; readonly min: number; readonly max: number }
+  | { readonly ok: true; readonly days: null; readonly unreadable: true; readonly default: number; readonly min: number; readonly max: number };
+
 /** The digest row kinds, spelled as a map typed by `DigestRowKind`, so a new kind is a compile error here; a test pins
  *  the list equal to `DIGEST_ROW_KINDS` (a value import of `api.ts` would make this file carry its weight). */
 const DIGEST_KEY_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true, call: true };
@@ -122,7 +134,8 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PUSH_ID = /^[0-9a-f]{32}$/;
 const ENDPOINT_HASH = /^[0-9a-f]{64}$/;
 
-function digestKeyOk(key: string): boolean {
+/** Whether `key` is a key `digestLineKey` could have produced. */
+export function isDigestLineKey(key: string): boolean {
   const parts = key.split(':');
   if (parts.length !== 3) return false;
   const [day, rowKind, id] = parts as [string, string, string];
@@ -149,7 +162,7 @@ function parseRef(x: unknown, at: string): Parsed<ResponseRef> {
     const s = strayKey(x, ['kind', 'key']);
     if (s !== null) return bad(`${at} holds a field a digest ref has not`);
     const key = x['key'];
-    return typeof key === 'string' && digestKeyOk(key) ? { ok: true, value: { kind, key } } : bad(`${at}.key is not a digest line key`);
+    return typeof key === 'string' && isDigestLineKey(key) ? { ok: true, value: { kind, key } } : bad(`${at}.key is not a digest line key`);
   }
   return bad(`${at}.kind is not a ref kind`);
 }

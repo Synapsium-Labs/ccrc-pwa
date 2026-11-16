@@ -5474,12 +5474,25 @@ export class CoordStore {
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
   markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
   firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
-  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at); }
+  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number, stamp?: Parameters<typeof outbox.reachHeldItem>[5]): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at, stamp); }
   /** Overlord W1 (the response record, `responsesStore.ts`): the boot's record and the receipts door's one transaction. The
    *  push row's writers run inside the outbox's transactions, so they take the handle and have no delegate. */
   recordResponseBoot(buildSha: string | null, at: number): ReturnType<typeof responses.recordResponseBoot> { return responses.recordResponseBoot(this.db, buildSha, at); }
   receiveReceipts(receipts: Parameters<typeof responses.receiveReceipts>[1], at: number, verdictOf: Parameters<typeof responses.receiveReceipts>[3]):
     ReturnType<typeof responses.receiveReceipts> { return responses.receiveReceipts(this.db, receipts, at, verdictOf); }
+  /** Responses B: the digest lines (inside `claimDigestDay`'s callback, so in its transaction), the lane's reads and seal, the
+   *  deleter by time in a transaction of its own, and the handled and retention doors' reads and writes. */
+  insertDigestResponses(d: Parameters<typeof responses.insertDigestResponsesInTx>[1]): { readonly inserted: number } { return responses.insertDigestResponsesInTx(this.db, d); }
+  openResponseRows(): responses.OpenRowsRead { return responses.openResponseRows(this.db); }
+  responseReceipts(id: number): ReturnType<typeof responses.receiptsOf> { return responses.receiptsOf(this.db, id); }
+  responseReplacedOn(row: Parameters<typeof responses.replacedOnOf>[1], windowEnd: number): string[] { return responses.replacedOnOf(this.db, row, windowEnd); }
+  responseBootsInWindow(after: number, through: number): number { return responses.bootsInWindowOf(this.db, after, through); }
+  sealResponse(id: number, d: Parameters<typeof responses.sealResponse>[2], at: number): { readonly changed: boolean } { return responses.sealResponse(this.db, id, d, at); }
+  deleteResponsesThrough(at: number): ReturnType<typeof responses.deleteResponsesThrough> { return responses.deleteResponsesThrough(this.db, at); }
+  responseRetention(): responses.RetentionRead { return responses.responseRetention(this.db); }
+  setResponseRetention(days: number, at: number): { readonly changed: boolean } { return responses.setResponseRetention(this.db, days, at); }
+  markResponseHandled(id: number, at: number): ReturnType<typeof responses.markResponseHandled> { return responses.markResponseHandled(this.db, id, at); }
+  responsesForRef(ref: Parameters<typeof responses.responsesForRef>[1]): responses.ResponseRowsRead { return responses.responsesForRef(this.db, ref); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -9914,10 +9927,17 @@ export class CoordStore {
   }
 
   /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
-   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
-  claimDigestDay(day: string, sentAt: number, count: number): boolean {
-    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
-    return Number(res.changes) > 0;
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). With
+   *  `onClaim` (the digest lines' response rows, W1 responses B), the claim and the callback share one transaction and the
+   *  callback runs only when the claim won; a throw from it is logged and never costs the claim. */
+  claimDigestDay(day: string, sentAt: number, count: number, onClaim?: () => unknown): boolean {
+    return tx(this.db, () => {
+      const won = Number(this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count).changes) > 0;
+      if (won && onClaim !== undefined) {
+        try { onClaim(); } catch (e) { responses.warnResponseWrite(`digest:${e instanceof Error ? e.message : String(e)}`, `the digest's response rows were not written (${e instanceof Error ? e.message : String(e)}); the claim stands`); }
+      }
+      return won;
+    });
   }
 
   // ── pool edges ────────────────────────────────────────────────────────

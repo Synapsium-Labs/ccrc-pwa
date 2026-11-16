@@ -736,9 +736,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a)
     // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1)
     // and MIGRATIONS[80] (overlord_authority_head, the Overlord authority journal's head row, Overlord W1)
-    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, the response record, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(82);
-    expect(MIGRATIONS.length).toBe(82);
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, the response record, Overlord W1)
+    // and MIGRATIONS[82] (response_settings, the response record's retention, Overlord W1 responses B).
+    expect(COORD_SCHEMA_VERSION).toBe(83);
+    expect(MIGRATIONS.length).toBe(83);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -845,8 +846,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a)
     // and MIGRATIONS[79] (answer_marks, Overlord W1)
     // and MIGRATIONS[80] (overlord_authority_head, Overlord W1)
-    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, Overlord W1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(82);
+    // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, Overlord W1)
+    // and MIGRATIONS[82] (response_settings, Overlord W1 responses B); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(83);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
