@@ -36,9 +36,9 @@ the numbers. The plan as merged governs; where the shipped code differed, the co
 - **`a-sighting-can-add-only-a-goals-changed-close`**: Task 2's property "adding a sighting never adds a close" cannot hold
   literally, because rule 7's `goals-changed` close needs a sighting. The property asserts no `lapsed` or
   `programme-ended` close is added.
-- **`migration-slot-positional`**: the migration is the next slot on the `main` this branch merged once (83 entries
-  there), so it is 84, and `coord-db.test.ts` and `run-close-switch.test.ts` pin 84. Other open PRs hold 84 too; the second
-  to land renumbers at landing, on the coordinator's word.
+- **`migration-slot-positional`**: the migration is the next slot on the `main` this branch last merged (84 entries there,
+  responses B's the newest), so it is 85, and `coord-db.test.ts` and `run-close-switch.test.ts` pin 85. Other open PRs hold
+  85 too; the second to land renumbers at landing, on the coordinator's word.
 
 - **`open-run-fact-is-hasOpenRun`**: the plan's `MoveFacts.openRun` is `hasOpenRun` here. `run-binding.test.ts`'s one-writer
   scan names any `.openRun(` call outside the run lifecycle as a writer of the binding, and a fact of that name is a read.
@@ -48,7 +48,7 @@ the numbers. The plan as merged governs; where the shipped code differed, the co
 
 ## Hidden pins met (not in the plan's file list)
 
-- `server/test/lane-schedule.test.ts`: the monotonic row count (46 to 47) and a row case for `overlaps`.
+- `server/test/lane-schedule.test.ts`: the monotonic row count (one more than `main`'s, 48 after the second merge) and a row case for `overlaps`.
 - `server/test/single-definition/core-vocab.test.ts`: `HANDLE_HOLDERS` gains `claimCollisions.ts` and
   `programmePairsStore.ts`.
 - `server/test/rings/watcher-store-port.test.ts`: `WatcherCoordMember` stays sorted.
