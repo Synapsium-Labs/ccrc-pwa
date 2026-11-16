@@ -2522,6 +2522,35 @@ Suites for the round, through `ccrc test`, in the foreground, at `04e954dc2` (th
 | server | `topology-clean` | not run in round 1; review run 2204 ran it at `02b7bc2ac`: 61 passed |
 | public scan | the round's added lines, its six commit messages and the PR body | no private name |
 
+### Review run 2204 and fix round 2 (W5b-2)
+
+Review run 2204 read `c16276de2..02b7bc2ac`, with three lenses on `claude-opus-5-5` and eleven refuters on `claude-sonnet-5-5`. Every round-1 fix was in place, every RF1 row went red, and no executable `pwa/src` line had changed. It found one important finding, F-N1, which is spec text only, and four advisory ones, F-N2 to F-N5. The coordinator sent the run back for fix round 2 on 2026-11-16 (round 2 of 3), with no merge of `main`. The coordinator ruled F-N1 residue of the first close (Task 21's sentence search, the family of F2), not a failure of fix round 1, which met every item. This round changes no source, test or row.
+
+- **F-N1 (important).** The rich-docs row M8.22 said "`navigate` never produces an `at=` URL". On a version page a frame `navigate` to a doc goes through `docLinkTarget` and inherits the page's `at`, as refinement (o) asks. The row now says that a frame `navigate` carries `at` only by inheriting the page's, and that of the frame's ops only `version` changes it. D-8654, version-navigate-inherits-at, is defined from the reserve. The coordinator asked for a search of both specs for any other sentence the version view now contradicts (`at=`, `history.state`, `navigate`, `latest`). It found two: base §2 (d) and §4.5 say Open committed version is offered iff the row opens the draft, but a version page offers none. Both are amended under D-8651 (refinement (q)), and its definition and (q)'s departs line now name them. The other hits already agree with the version view. They are the amended rows and sentences (G6, A14, R-d, RD19, the Later item, the `version` op, §0's `http` row, §3.1, §2 (e), the failure table, §4.3, §4.5's banners and truth line, §4.11, §3.11), the `navigate` op and M8.7 (whose "query dropped" is the link's own), M9.11, and the W5b-before-W5 note, which records an option not taken.
+- **F-N2.** Refinement (p) names three base §4.3 sentences. D-8650 says Task 21 amended §2 (e), the failure table and item 2, and the Task 22 fix wave (`5f89a4df7`) amended items 1 and 5.
+- **F-N3.** Round 1's 442-test row names its six files, which leave out `docs-api`.
+- **F-N4.** Row W5B-RF1-M1's `spec` field names refinements (o) and (n) and the completion plan's Task 4.
+- **F-N5.** Round 1's suites record its public scan, and that it ran no `topology-clean`. Review run 2204 ran `topology-clean` at `02b7bc2ac`: 61 passed. This round's runs are below.
+
+| Item | Commit |
+|---|---|
+| F-N1 M8.22, D-8654; Open committed version under D-8651 | `c0756a951` |
+| F-N2 to F-N5 the plan text | `46bf47b17` |
+| these Results | the head commit |
+
+Checks for the round, through `ccrc test`, in the foreground, one file at a time, at `46bf47b17`, after `git fetch -q origin main` (`origin/main` at `649ac3f13`):
+
+| Package | Run | Result |
+|---|---|---|
+| server | `deviation-refs` | 31 passed |
+| server | `dtbd` | 1 passed |
+| server | `citations` | 4 passed |
+| server | `topology-clean` | 61 passed |
+| server | `docs-url` | 107 passed |
+| plan | `git diff c08b8d4b1` of this plan | every heading once; D-8648 to D-8654 one definition each |
+| public scan | the round's added lines, its commit messages and the PR body | no private name |
+| pwa | not run: the round changes no pwa file | — |
+
 ### Carried, not fixed (W5b-2)
 
 - **A local ref's Share link can 404 in one race (m9).** On the local side, `githubPermalink` judges the listing's `relation` while `onRef` is measured by the later read. A commit made locally after the listing said `equal`, opened by a typed `at=`, reads `contains` and gets a permalink to a commit origin lacks. The proposed fix (link a local version only at the listing's commit) would also drop the specified local-equal case. For W8b or Later: let the read carry the tip it measured against.
