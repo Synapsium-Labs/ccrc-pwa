@@ -350,6 +350,13 @@ const runsWorktreePrune = (t: string): boolean => {
   return !modeledQuotes(t) || PRUNE_ANCHOR.test(quoteAware(t, 1, true)) || pruneReading(quoteAware(t, 1));
 };
 
+/** A segment whose program is the account verb's script (`deploy/account-op.mjs`), bare or after a runtime, by any path:
+ *  the roster's other writer, which the session hook's account arm refuses the same way (`AOPRUN`). A read of the script
+ *  (`grep x deploy/account-op.mjs`) is not a run. The roster files themselves are already `a registry path`. */
+const ACCOUNT_OP_RUN = new RegExp(String.raw`^\s*(?:[(\x60{]\s*){0,4}(?:(?:then|do|else|if|while|!)\s+){0,2}(?:[A-Za-z_]\w*=\S*\s+){0,8}`
+  + String.raw`(?:(?:exec|env|time|nohup|command)\s+){0,2}(?:(?:\S*/)?(?:node|nodejs|bun|deno)\s+(?:-\S*\s+){0,8})?(?:\S*/)?account-op\.mjs(?![\w.-])`);
+const runsAccountOp = (t: string): boolean => /account-op/.test(t) && t.replace(/['"]/g, '').split(/[\n;&|]/).some((s) => ACCOUNT_OP_RUN.test(s));
+
 /** Every forbidden shape, matched anywhere in a Bash command's text (spec §6.5 "forbidden"). Each test is linear in
  *  the text's length (D-5299). */
 export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test: (text: string) => boolean }[] = [
@@ -365,6 +372,7 @@ export const FORBIDDEN_PATTERNS: readonly { readonly why: string; readonly test:
     return { why: `ccd ${v}`, test: (t: string) => headBeforeTail(t, /[;&|]/, head, tail) };
   }),
   { why: 'git worktree prune', test: runsWorktreePrune },
+  { why: 'a direct run of the account verb script', test: runsAccountOp },
   ...[
     { why: 'tmux', re: new RegExp(`${WB}tmux(?=$|[\\s;&|)'"])`) },
     { why: 'a registry path', re: /\/\.(?:cc-sessions|cc-limits|ccrc)(?![\w.-])/ },

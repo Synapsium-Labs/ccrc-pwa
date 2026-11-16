@@ -3213,9 +3213,10 @@ _ver_newer() {
 # `single-definition` is pointed at that pair.) It answers with a return code
 # per CONDITION, because the callers do different things about each:
 #
-#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version)
+#   0  the stamp parsed  -> BOX_BUILD=(sha ref builtAt true|false version ccdCaps)
 #                           (version = "" when the stamp carries none — the
-#                           additive fifth field, stage 4 Task 1)
+#                           additive fifth field, stage 4 Task 1; ccdCaps is
+#                           `<absent>`, `<malformed>` or the space-joined list)
 #   3  no stamp at all   -> a dev checkout, or a box no deploy has touched
 #   4  the path is there but is not a regular file (a directory, say)
 #   5  jq is not on PATH — a MISSING DEPENDENCY, never a corrupt stamp
@@ -3225,7 +3226,7 @@ _ver_newer() {
 # an operator acts on completely differently (`apt install jq` vs. redeploy)
 # must not share one signal.
 #
-# The output is SIX lines — the five fields (version as `""` when absent) and
+# The output is SEVEN lines — the six fields (version as `""` when absent) and
 # an `END` sentinel — and both
 # are checked. `$( )` strips trailing newlines, so a sentinel-less form would lose
 # an empty last field silently; the sentinel makes any truncation loud. A field
@@ -3285,6 +3286,11 @@ _box_build_fields() {
   # about a well-formed stamp would have this verb printing one the server
   # refuses to serve). It travels as a fifth line, `""` for absent, so the END
   # sentinel keeps its truncation duty at index 5.
+  # `ccdCaps` (the Overlord W1 pool set, plan Task 8, slug `ccdcaps-field-level-answer`) is a FIELD-LEVEL answer on a
+  # sixth line, `BOX_BUILD[5]`: `<absent>`, `<malformed>` (not an array of capability tokens), or the tokens joined by
+  # one space (empty for `[]`). Its expression cannot throw and never empties the output, so whatever `ccdCaps` holds the
+  # stamp parses as it did before (`shared/buildinfo.ts#parseBuildInfo` ignores the key too); the sentinels hold `<`,
+  # outside the token grammar, so no list spells them. `_upd_cap_floor_check` is its one reader; END moves to index 6.
   out="$(jq -r '
     try (
       if (type == "object")
@@ -3294,15 +3300,16 @@ _box_build_fields() {
          and (.dirty | type == "boolean")
          and ((has("version") | not)
               or ((.version | type == "string") and (.version | length > 0)))
-      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\nEND"
+      then "\(.sha)\n\(.ref)\n\(.builtAt)\n\(.dirty)\n\(.version // "")\n\(if has("ccdCaps") | not then "<absent>"
+        elif (.ccdCaps | type == "array") and (.ccdCaps | all(type == "string" and test("^[a-z][a-z0-9-]*\\z"))) then .ccdCaps | join(" ") else "<malformed>" end)\nEND"
       else empty
       end
     ) catch empty
   ' -- "$stamp" 2>/dev/null)"
   [[ -n "$out" ]] || return 6
   mapfile -t BOX_BUILD <<< "$out"
-  [[ "${#BOX_BUILD[@]}" -eq 6 && "${BOX_BUILD[5]}" == END ]] || { BOX_BUILD=(); return 6; }
-  unset 'BOX_BUILD[5]'
+  [[ "${#BOX_BUILD[@]}" -eq 7 && "${BOX_BUILD[6]}" == END ]] || { BOX_BUILD=(); return 6; }
+  unset 'BOX_BUILD[6]'
   local f
   for f in "${BOX_BUILD[@]}"; do
     [[ "$f" =~ [[:cntrl:]] ]] && { BOX_BUILD=(); return 6; }
@@ -8558,7 +8565,7 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -8574,7 +8581,13 @@ _acct_set() {
       --stated=*) _acct_refuse 2 stated-not-stdin "the flag --stated takes exactly \"-\" and reads the words from stdin: on an argv they would be readable by every process on this box. Nothing was written." ;;
       --placement=overflow|--placement=full) placement="${1#*=}" ;;
       --placement) { [ "${2:-}" = overflow ] || [ "${2:-}" = full ]; } || _acct_refuse 2 bad-value "the flag --placement takes overflow or full. Nothing was written."; placement="$2"; shift ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full and --method setup-token|login|openai-login --attempt <attemptId>" ;;
+      --fable-billing=included|--fable-billing=credits) billing="${1#*=}" ;;
+      --fable-billing) { [ "${2:-}" = included ] || [ "${2:-}" = credits ]; } || _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written."; billing="$2"; shift ;;
+      --fable-billing=*) _acct_refuse 2 bad-value "the flag --fable-billing takes included or credits. Nothing was written." ;;
+      --continuity=on|--continuity=off) continuity="${1#*=}" ;;
+      --continuity) { [ "${2:-}" = on ] || [ "${2:-}" = off ]; } || _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written."; continuity="$2"; shift ;;
+      --continuity=*) _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written." ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -8582,13 +8595,13 @@ _acct_set() {
   if [ -n "$method" ] || [ -n "$attempt" ]; then
     { [ -n "$method" ] && [ -n "$attempt" ]; } \
       || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
-    { [ "$stated" -eq 0 ] && [ -z "$placement" ]; } \
-      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated or --placement beside it. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing or --continuity beside it. Nothing was written."
     _acct_set_method "$id" "$method" "$attempt"
     return 0
   fi
-  [ "$stated" -eq 1 ] || [ -n "$placement" ] \
-    || _acct_refuse 2 missing-value "ccrc account set needs --stated - or --placement overflow|full. Nothing was written."
+  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits or --continuity on|off. Nothing was written."
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8616,7 +8629,14 @@ _acct_set() {
       fi
     fi
     _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
+    done_note="${done_note}The placement was recorded. "
     _acct_projection "The roster records lane $id's placement as $placement."
+  fi
+  if [ -n "$billing$continuity" ]; then   # the serviceability facts (H16), under the same marker lock as the placement write
+    [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
+    _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
+      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} --recorded-at now
+    _acct_projection "The roster records lane $id's ${billing:+billing }${billing:+${continuity:+and }}${continuity:+continuity }fact${billing:+${continuity:+s}}."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"
@@ -21143,7 +21163,7 @@ cmd_update() {
     # would refuse without --downgrade, and until now `--check` answered it
     # `behind`, so rollout's preflight moved one box and then failed at the
     # other. A current box keeps `current`: it has nothing to move.
-    local chk_floor chk_caps="" w
+    local chk_floor chk_caps="" w chk_needs=unmeasured
     chk_floor="$(_upd_floor_word)"
     # m5's unversioned+broken-projection case (above; text fixed fix round 1
     # item 0 / batch A rereview N4) sets UPD_VERSION to the literal `none`
@@ -21157,6 +21177,7 @@ cmd_update() {
       state="below-floor"
     fi
     while IFS= read -r w; do chk_caps="$chk_caps${chk_caps:+,}$w"; done < <(_ccrc_cap_words)
+    _cap_floor_standing && chk_needs="${CAP_FLOOR_NEEDS:-none}"   # the ccd words a standing fact needs (the capability floor)
     # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
     # caps=, floor= AND projection= (item 22 / your Q8, fix round 1) sit
     # BEFORE state= (plan D-3232): rollout reads state as everything after
@@ -21166,7 +21187,7 @@ cmd_update() {
     # `_upd_intent_state` word (ok|none|not-configured|unreadable|stale|
     # malformed) — read via `_rollout_field "$line" projection`, the same
     # grammar `caps=`/`floor=` already use.
-    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor projection=$chk_projection state=$state"
+    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor needs=$chk_needs projection=$chk_projection state=$state"
     case "$chk_floor" in
       unreadable|malformed) echo "this box's floor (~/.ccrc/floor) is $chk_floor — 'ccrc update' refuses until it is fixed by hand" ;;
     esac
@@ -21352,6 +21373,10 @@ cmd_update() {
   # still reads `ccrc update` as a no-op rather than a `failed` report it
   # never earned.
   [ "$floor_checked" -eq 1 ] || _upd_floor_check "$UPD_TARGET_VIA" "$downgrade" "$UPD_FROM"
+  # The capability floor (Overlord W1 pool set, Task 8's call site (a)): the staged stamp's `ccdCaps`, inside the
+  # reporting window and before anything is installed. It covers the rollout's per-box update, a rollback's fall-through
+  # and restore arm 2's child (`--from restore`, which warns and proceeds).
+  _upd_cap_floor_check "$UPD_TREE/build.json" "$UPD_FROM"
   _upd_phase backing-up
   _upd_backup
   # THE BASELINE (design §10): written after the backup and BEFORE the staged
@@ -21974,6 +21999,10 @@ cmd_rollback() {
     usage >&2
     exit 2
   fi
+  # `--from watchdog` warns past the capability floor, so it is the unattended watchdog's word alone: `cmd_watchdog` names
+  # its own pid in CCRC_WATCHDOG_CALLER, and the launcher execs, so it is this run's parent. It never detaches, and no
+  # caller passes rollback `--from restore` (the restore runs `update`). Typed by hand, both refuse before anything moves.
+  case "$from" in restore|watchdog) [[ "$from" == watchdog && "$detach" -eq 0 && "${CCRC_WATCHDOG_CALLER:-}" == "$PPID" ]] || { echo "$PROG: rollback: --from $from is the unattended watchdog's own word, refused when typed by hand; nothing on this box was changed — to return this box to a kept version: ccrc rollback --to <tag>" >&2; exit 2; } ;; esac
   # Before the target is resolved and before any request: Task 3's ONE
   # spelling of the refusal (`_upd_detach` repeats it as its step 0).
   [ "$detach" -eq 1 ] && _upd_detach_os_check
@@ -22192,6 +22221,9 @@ cmd_rollback() {
     UPD_VERSION="$to"
     UPD_REPORT_TARGET="$to"
     UPD_REPORTING=1
+    # The capability floor's call site (b), AFTER the reporting window opens so a refused console tap gets its `failed`
+    # row, and before `_ver_flip_back` changes anything: the kept tree's stamp copy (`--from watchdog` warns and proceeds).
+    _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$to/$VER_STAMP_COPY" "$run_from"
     # A belt: the resume at the top of this verb already ran, so this one is
     # masked by it — it exists for a crash made in the migration's window
     # between the two by a lockless plain install (final review F11).
@@ -23054,7 +23086,7 @@ cmd_watchdog() {
   # measurement §10 cites). `env -u` so an ambient marker can never make the
   # rollback skip acquiring it.
   _upd_unlock
-  env -u CCRC_UPDATE_LOCK_HELD "$HOME/.local/bin/ccrc" rollback --from watchdog || rrc=$?
+  env -u CCRC_UPDATE_LOCK_HELD CCRC_WATCHDOG_CALLER="$BASHPID" "$HOME/.local/bin/ccrc" rollback --from watchdog || rrc=$?
   if [ "$rrc" -ne 0 ]; then
     echo "watchdog: ccrc rollback --from watchdog exited $rrc"
     # Recorded only when the rollback wrote nothing of its own (the report's
@@ -24746,6 +24778,49 @@ _upd_floor_check() {
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of)$raised — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
+# ── THE CAPABILITY FLOOR (the Overlord W1 pool set, plan Task 8, Table 2) ─────────────────────────────────────────────
+# A standing fact on this box that only a build advertising a `ccd caps` word honours: while it stands, no update or
+# rollback takes the box to a build without the word. DATA, one row per word, `fact|word|remedy`, and every reader reads
+# every row (this check, the doctor's `cap-floor`, and PR B2's override and push), so a later piece adds a row and no
+# code. The fact is a registry suffix: any entry `~/.cc-sessions/<id>.<fact>` stands, a link, a directory and a FIFO
+# included, because the newer ccd fails closed on each and an older one ignores it (slug
+# `standing-set-is-a-poolset-entry`). The word is read from the target stamp's `ccdCaps` (`BOX_BUILD[5]`). The remedy
+# leads the refusal, because the update control plane keeps only a report detail's first 200 characters. It names only a
+# way out that exists: today the operator clears the set from their own shell (`ccd route` refuses inside a session), and
+# PR B2 adds `--below-cap`. The designation piece rewrites the `poolset` remedy when its Settings doors land.
+CAP_FLOOR_ROWS=(
+  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
+)
+_cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable
+  local LC_ALL=C IFS=' ' reg="$_SVC_REG" row e n ids
+  CAP_FLOOR_STANDING=(); CAP_FLOOR_NEEDS=""
+  [[ -e "$reg" || -L "$reg" ]] || return 0
+  [[ -d "$reg" && -r "$reg" && -x "$reg" ]] || return 1
+  for row in "${CAP_FLOOR_ROWS[@]}"; do   # an id may start with a dot, so the second glob
+    ids=""; for e in "$reg"/*."${row%%|*}" "$reg"/.*."${row%%|*}"; do [[ -e "$e" || -L "$e" ]] && n="${e##*/}" && ids+=" ${n%."${row%%|*}"}"; done
+    [[ -z "$ids" ]] || { CAP_FLOOR_STANDING+=("$row|$ids"); n="${row#*|}"; CAP_FLOOR_NEEDS+="${CAP_FLOOR_NEEDS:+,}${n%%|*}"; }
+  done
+}
+_upd_cap_floor_check() {   # <target-stamp|-> <from> -> 0 proceed; else the refusal (exit 1, nothing changed), or a WARN for restore/watchdog
+  local stamp="$1" from="$2" row fact word say ids why msg="" caps="" brc=-
+  _cap_floor_standing || msg="make ~/.cc-sessions listable: it could not be listed, so nobody knows whether a fact stands that needs a capability"
+  # The stamp is read once, in a subshell, so the caller's BOX_BUILD is never touched; `-` (restore arm 3) has none.
+  [[ "$stamp" == - ]] || { caps="$(_box_build_fields "$stamp" && printf '%s' "${BOX_BUILD[5]}")"; brc=$?; }
+  for row in "${CAP_FLOOR_STANDING[@]}"; do
+    IFS='|' read -r fact word say ids <<<"$row"
+    if [[ "$brc" == - ]]; then why="the restored build's capabilities could not be read"
+    elif (( brc != 0 )); then why="the target's stamp could not be read (rc $brc)"
+    elif [[ "$caps" == "<absent>" ]]; then why="builds before ccdCaps predate $word"
+    elif [[ "$caps" == "<malformed>" ]]; then why="the target's ccdCaps cannot be read"
+    elif [[ " $caps " == *" $word "* ]]; then continue
+    else why="the target build lacks $word"; fi
+    msg+="${msg:+ | }$say: $why; a $fact stands for$ids"
+  done
+  [[ -n "$msg" ]] || return 0
+  case "$from" in restore|watchdog) echo "update: WARN: $msg - proceeding because this run is --from $from"; return 0 ;; esac
+  _ccrc_die "$msg. Nothing on this box was changed"
+}
+
 # ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
 # Reads ~/.ccrc/floor with EXACTLY `_upd_floor_check`'s four tests, in its
 # order, so a check line never answers a floor the install path would read
@@ -25215,6 +25290,7 @@ _upd_restore_arm3() {
   # no sameness and reads the same way. `old_completed` is passed through
   # from `_upd_restore` (round 1 stopped one call short of doing so).
   local same_build=0 same_tag=0
+  _upd_cap_floor_check - restore   # the backup keeps no build.json: no capability to read, so it warns while a fact stands
   if [ -n "$old_version" ] && [ "$old_version" = "$UPD_VERSION" ] \
      && [ -n "$UPD_STAGED_SHA" ] && [ -n "$old_sha" ] && [ "$UPD_STAGED_SHA" = "$old_sha" ]; then
     if [ "$old_completed" -eq 1 ]; then
@@ -25598,6 +25674,7 @@ _upd_restore_arm1() {   # <role> <reason> <old_version> <old_completed>
     done_as="flipped back to $UPD_PREV_TAG"
     echo "update: arm 1: $UPD_PREV_TAG is kept at \$HOME/ccrc-versions/$UPD_PREV_TAG — flipping back to it (no download)"
   fi
+  _upd_cap_floor_check "$BOX_VERSIONS_ROOT/$UPD_PREV_TAG/$VER_STAMP_COPY" restore   # health first: warns, never refuses
   _ver_flip_back "$UPD_PREV_TAG" "$role" update || frc=$?
   local spine_rc="$VER_SPINE_RC"
   case "$frc" in
@@ -26788,7 +26865,7 @@ cmd_rollout() {
   # installed/new-enough question is asked only of a box that exited 0 with no check line; 255 is ssh's own failure, and 127
   # the remote shell's command-not-found, each in its own words.
   local i out first line state box sha caps floor allcurrent=1 crc cwhy
-  local -a states=() capss=() floors=()
+  local -a states=() capss=() floors=() needss=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
     crc=0; out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || crc=$?
@@ -26816,7 +26893,7 @@ cmd_rollout() {
     # NOTE, not a refusal: a refusal here would block the very first rollout
     # onto this wave, at the box that most needs it.
     [ -n "$floor" ] || echo "rollout: ${labels[$i]}: its check line lists no floor= (a ccrc older than W4 prints none) — its floor is checked at its own install"
-    states+=("$state"); capss+=("$caps"); floors+=("$floor")
+    states+=("$state"); capss+=("$caps"); floors+=("$floor"); needss+=("$(_rollout_field "$line" needs)")
     [ "$state" = current ] || allcurrent=0
   done
   if [ "$check" -eq 1 ]; then
@@ -26875,6 +26952,9 @@ cmd_rollout() {
           exit 2
         fi ;;
     esac
+    # The capability floor (pool set B1): a box's own update reads the target's ccdCaps, which no check line carries, so a
+    # box whose standing fact needs a word (or could not say) may only go FIRST; after another box moved it is too late.
+    [ "$i" -eq 0 ] || [ "${needss[$i]:-none}" = none ] || { echo "$PROG: rollout: the ${labels[$i]} box has a standing fact that needs ccd's ${needss[$i]}, which its own update checks against the target only after ${labels[0]} has moved — run it first (drop --server-first), or clear the fact there; nothing was touched" >&2; exit 2; }
     if [[ "${floors[$i]}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && _ver_newer "${floors[$i]}" "$ROLLOUT_VERSION" \
        && [ "$downgrade" -eq 0 ]; then
       echo "$PROG: rollout: the ${labels[$i]} box's floor is ${floors[$i]:-unstated}, above $ROLLOUT_VERSION — pass --downgrade to move it down; nothing was touched" >&2

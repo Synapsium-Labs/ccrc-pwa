@@ -181,6 +181,29 @@ describe('the account arm denies on every session (D-6202)', () => {
     expect(fire(id, 'Edit', { file_path: `${home}/.ccrc/operator-secrets/prog-a/x.json`, old_string: 'a', new_string: '' }, extra)).not.toBeNull();
   });
 
+  it.each(CALLERS)('%s: a write of the roster or its mirror and a direct run of the verb script are refused; reads of all three stay open (F2)', (_c, id, extra) => {
+    for (const command of [
+      'echo x > ~/.ccrc/accounts.json', 'echo x >> "$HOME/.ccrc/accounts.sh"', 'sed -i s/a/b/ ~/.ccrc/accounts.json', 'tee ~/.ccrc/accounts.json < /tmp/x',
+      'cp /tmp/x ~/.ccrc/accounts.json', 'mv /tmp/x /srv/home/.ccrc/accounts.sh', "echo x > ~/.ccrc/'accounts'.json", 'cd x && rm ~/.ccrc/accounts.sh',
+      'node deploy/account-op.mjs set-facts --file f --id lane-a --continuity on', 'node ./deploy/account-op.mjs roster --file f',
+      './deploy/account-op.mjs roster', 'node /srv/home/ccrc/deploy/account-op.mjs set-facts --file f', 'node "$T/deploy/account-op.mjs" set-facts',
+      'cd x && FOO=1 node account-op.mjs set-facts', 'node --no-warnings ~/ccrc/deploy/account-op.mjs set-facts', 'exec node account-op.mjs set-facts',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Write', { file_path: '~/.ccrc/accounts.json', content: '{}' }], ['Edit', { file_path: `${home}/.ccrc/accounts.sh`, old_string: 'a', new_string: 'b' }],
+      ['MultiEdit', { file_path: '~/.ccrc/./accounts.json', edits: [] }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+    for (const command of [
+      'cat ~/.ccrc/accounts.json', 'grep lane-a ~/.ccrc/accounts.sh', 'jq . ~/.ccrc/accounts.json > /tmp/x', 'grep x deploy/account-op.mjs',
+      'cat deploy/account-op.mjs', 'head -n 5 ./deploy/account-op.mjs', 'git diff -- deploy/account-op.mjs', 'ls ~/.ccrc/accounts.json.bak',
+      'cd server && ./node_modules/.bin/vitest run test/account-op-set-facts.test.ts', 'echo x > ~/.ccrc/accounts.json.bak',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: '~/.ccrc/accounts.json' }], ['Grep', { pattern: 'x', path: '~/.ccrc/accounts.sh' }], ['Read', { file_path: `${CWD}/deploy/account-op.mjs` }],
+      ['Edit', { file_path: `${CWD}/deploy/account-op.mjs`, old_string: 'a', new_string: 'b' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).toBeNull();
+  });
+
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {
     for (const command of ['cat ~/.ccrc/operator-secrets-notes.md', 'grep -n writeOperatorSecret server/src/coord/ledgersSecrets.ts']) {
       expect(fire(id, 'Bash', { command }, extra), command).toBeNull();

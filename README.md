@@ -1667,7 +1667,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1677,7 +1677,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -1767,6 +1767,8 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
 | `exec.bridge` | `CODEX_BRIDGE_MODES` on a `codex` lane, absent reading its first word, `litellm`; rendered into `lane.json` | `CODEX_BRIDGE_MODES` | “a codex lane with an unknown exec.bridge” |
 | `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
+| `fableBilling` | `FABLE_BILLINGS` (included or credits), optional; a written `null` is refused; emitted into accounts.sh | `FABLE_BILLINGS` | “a fableBilling outside the set” |
+| `continuity` | an object whose one key is `recordedAt`, non-negative integer epoch seconds, optional; a written `null` is refused; emitted into accounts.sh | `recordedAt` | “a continuity with an extra key” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
@@ -1980,7 +1982,7 @@ ccrc account seed --id <id>                # the first-run seed on its own: onbo
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
-ccrc account set --id <id> [--stated -] [--placement overflow|full]   # a token lane's stated account; placement
+ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off]   # a token lane's stated account; placement; its billing and continuity facts
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
     [--keep-codex-auth | --delete-codex-auth]
 ```

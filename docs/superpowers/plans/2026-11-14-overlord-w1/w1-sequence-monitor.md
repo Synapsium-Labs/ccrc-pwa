@@ -878,8 +878,9 @@ export function invariantVerdict(name: InvariantName, input: InvariantInput): In
 `SequenceLine` in production is `SequenceWireLine` (Task 1), so the simulator's lines gain `actorKind` and `known`. The
 simulator's `SimSequence.append` fills them (`server` for a lane's line, `known: true`), in the move commit, which
 changes no scenario's outcome. Every row of Table 11.7a is in the map, with its `says` in the table's own words,
-shortened, and the test checks the names against the spec's table in both directions (the spec file joins the
-test-selection map's untraced inputs for this test, as index question 23 does for the refusal list).
+shortened, and the test checks the names against the spec's table in both directions (a test that reads the spec
+goes under `server/test/single-definition/`, which the fast plan runs as a guard, and `select-tests.mjs` is not edited,
+as index question 23 rules for the refusal list).
 
 - [ ] **Step 1: Failing tests** (`invariants.test.ts`): every name of Table 11.7a is in `INVARIANT_MAP` and nothing
   else; I9 answers `simulator-only` for every input; a row with no predicate answers `not-applicable` with its

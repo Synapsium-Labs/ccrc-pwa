@@ -518,6 +518,14 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
     const bodyCode = body![1]!.split('\n').filter((l) => !l.trim().startsWith('#'));
     expect(bodyCode.filter((l) => l.includes('jq -r')).length,
       'a second jq parse of the stamp has appeared inside _box_build_fields').toBe(1);
+    // The Overlord W1 pool set (plan Task 8): the same one parse answers `ccdCaps` on a sixth line, field-level, so the
+    // output is seven lines with the END sentinel at index 6. A second read of `ccdCaps` would be a second parse.
+    expect(bodyCode.join('\n'), 'the stamp parse no longer carries its ccdCaps line before END')
+      .toContain('[[ "${#BOX_BUILD[@]}" -eq 7 && "${BOX_BUILD[6]}" == END ]]');
+    const readsCaps = (l: string): boolean => !l.trim().startsWith('#') && /has\("ccdCaps"\)|\.ccdCaps\b/.test(l);
+    expect(bodyCode.filter(readsCaps).length, 'the stamp parse no longer reads ccdCaps').toBeGreaterThan(0);
+    expect(src.split('\n').filter(readsCaps).length, 'a jq read of ccdCaps outside the one stamp parse')
+      .toBe(bodyCode.filter(readsCaps).length);
   });
 
   it('both verbs reach the stamp through that one reader, not around it', () => {

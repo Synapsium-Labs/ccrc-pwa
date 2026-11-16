@@ -332,7 +332,7 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
     expect(r.code).toBe(1);
     expect(checkLine(r.stdout)).toBe(
-      `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 projection=not-configured state=below-floor`);
+      `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 needs=none projection=not-configured state=below-floor`);
     expect(r.stdout).toMatch(/^this box: v3\.0\.0 \(oldsha[0-9a-f]*\) · target: v2\.0\.0 — below this box's floor v3\.0\.0; update refuses it without --downgrade$/m);
     // A measurement: the refusal's own voice is absent, nothing fetched past
     // SHA256SUMS, nothing backed up, the floor untouched. Fix round 1 item
@@ -3444,6 +3444,9 @@ describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
       TMPDIR: join(home, 'tmp'),
       CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
       CCRC_UPDATE_HEALTH_S: '0',
+      // `--from watchdog` is the unattended watchdog's word (pool set B1, F1): it names its own pid, the run's parent,
+      // and this process is the parent of the ccrc spawned below.
+      ...(args.includes('watchdog') ? { CCRC_WATCHDOG_CALLER: String(process.pid) } : {}),
       ...extraEnv,
     };
     delete env['CCRC_UPDATE_LOCK_HELD'];
@@ -4366,7 +4369,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(r.code, `${role}: ${r.stderr}`).toBe(1);
       expect(r.stderr, role).toBe('');
       expect(checkLine(r.stdout), role).toBe(
-        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=unreadable state=incomplete`);
+        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none needs=none projection=unreadable state=incomplete`);
       expect(r.stdout, role).toMatch(new RegExp(
         `^update: ~/\\.ccrc/update-intent is unreadable \\(absent\\) — ${esc(SERVER_REMEDY)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
       expect(localUrls(home), role).toEqual([]);
@@ -4390,7 +4393,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(r.code, `${role}: ${r.stderr}`).toBe(1);
       expect(r.stderr, role).toBe('');
       expect(checkLine(r.stdout), role).toBe(
-        `check: box=unversioned sha=none target=none caps=${CAPS_NOW} floor=none projection=unreadable state=unversioned`);
+        `check: box=unversioned sha=none target=none caps=${CAPS_NOW} floor=none needs=none projection=unreadable state=unversioned`);
       // Review fix round 1, M10: the GENERIC broken-projection sentence
       // ("--check compares this box against itself") is untrue here — an
       // unversioned box has nothing to compare — overridden with the SAME
@@ -4485,7 +4488,7 @@ describe('ccrc update: the projection (role-aware reader, --channel)', () => {
       expect(r.code, `${role}: ${r.stderr}`).toBe(1);
       expect(r.stderr, role).toBe('');
       expect(checkLine(r.stdout), role).toBe(
-        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none projection=stale state=incomplete`);
+        `check: box=v1.0.0 sha=${OLD_SHA} target=v1.0.0 caps=${CAPS_NOW} floor=none needs=none projection=stale state=incomplete`);
       expect(r.stdout, role).toMatch(new RegExp(
         `^update: the control plane's projection \\(~/\\.ccrc/update-intent\\) is stale — its lease ended 300s ago; ${esc(remedy)}; --check compares this box against itself instead of a target it cannot resolve — 'ccrc update' itself still refuses$`, 'm'));
       expect(r.stdout, role).toMatch(

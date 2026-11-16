@@ -57,6 +57,7 @@ const DECLARATIONS: readonly string[] = [
 /** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
+  "import type { RosterFactsWire } from './rosterFacts.js';",
   "import type { AccountPoolWire } from './poolrule.js';",
   "import type { BuildInfo } from './buildinfo.js';",
   "import type { BoxTokenView } from './box-token.js';",

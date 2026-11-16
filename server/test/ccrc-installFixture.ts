@@ -1842,7 +1842,8 @@ export const PROVISIONED_BOX_TOKEN =
  *  (a fresh box's ccrc.env sets none of ccrc's settings). Landing order wave 3b added `land-probe`: SKIP at every stage
  *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. D-8047 added
  *  `playwright`: SKIP at every stage (a fresh box caches no browser build), re-measured the same way. Launch profiles PR B (Overlord W1a) added `auto-memory`: PASS at every stage (a fresh box's
- *  rostered config dirs hold no memory directory), re-measured from both box-token cases' own failing diff. */
+ *  rostered config dirs hold no memory directory), re-measured from both box-token cases' own failing diff. The Overlord
+ *  W1 pool set B1 added `cap-floor`: PASS at every stage (no fact stands on a fresh box), re-measured the same way. */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1863,6 +1864,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "carry-copies": "PASS",
   "caddy": "SKIP",
   "caddyfile": "SKIP",
+  // The Overlord W1 pool set B1 (plan Task 8): PASS at every stage, re-measured from both box-token cases' own failing
+  // diff: a fresh box's registry holds no `<id>.poolset`, so no fact stands that needs a capability.
+  "cap-floor": "PASS",
   "cert": "SKIP",
   "codex": "SKIP",
   "config": "PASS",

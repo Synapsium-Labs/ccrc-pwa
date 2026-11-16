@@ -98,8 +98,12 @@
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
   "shared/poolset.ts#parsePoolSet": 1,
+  "server/src/poolrule.ts#parsePoolAnswer": 1,
   "server/src/chainedJournal.ts#decodeChainedLine": 1,
   "server/src/chainedJournal.ts#ChainVerifier": 1,
   "server/src/chainedJournal.ts#chainedTailHealPlan": 1,
-  "server/src/responses.ts#receiptVerdict": 1
+  "server/src/responses.ts#receiptVerdict": 1,
+  "shared/serviceability.ts#serviceability": 1,
+  "shared/serviceability.ts#askingOf": 1,
+  "shared/rosterFacts.ts#factsChangeWidens": 1
 }

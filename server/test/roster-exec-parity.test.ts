@@ -196,3 +196,73 @@ describe('CODEX_BRIDGE_MODES and CODEX_UPSTREAMS parity between the parser and i
     expect(Object.prototype.hasOwnProperty.call(up, 'upstream')).toBe(false);
   });
 });
+
+/** The two Overlord facts (H16): `fableBilling` and `continuity`. `roster-json.mjs` may not be laxer than
+ *  `parseRoster` on either, and returns both because `generateAccountsSh` emits them. */
+describe('fableBilling and continuity: both parsers decide alike', () => {
+  const rosterWith = (over: Record<string, unknown>) => ({
+    version: 1,
+    accounts: [{ id: 'lane-a', label: 'lane-a', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+      homeAble: true, hue: 'cyan', telemetry: 'anthropic', ...over }],
+  });
+  const refused: [string, Record<string, unknown>, string][] = [
+    ['a written null fableBilling', { fableBilling: null }, 'fableBilling'],
+    ['a billing word outside the set', { fableBilling: 'free' }, 'fableBilling'],
+    ['an inherited-name billing word', { fableBilling: 'toString' }, 'fableBilling'],
+    ['a non-string billing', { fableBilling: 1 }, 'fableBilling'],
+    ['a written null continuity', { continuity: null }, 'continuity'],
+    ['a continuity that is a number', { continuity: 5 }, 'continuity'],
+    ['a continuity that is an array', { continuity: [] }, 'continuity'],
+    ['a continuity with no recordedAt', { continuity: {} }, 'continuity'],
+    ['a continuity with an extra key', { continuity: { recordedAt: 1, by: 'x' } }, 'continuity'],
+    ['a float recordedAt', { continuity: { recordedAt: 1.5 } }, 'continuity'],
+    ['a negative recordedAt', { continuity: { recordedAt: -1 } }, 'continuity'],
+    ['a string recordedAt', { continuity: { recordedAt: '1' } }, 'continuity'],
+    ['an unsafe-integer recordedAt', { continuity: { recordedAt: 2 ** 60 } }, 'continuity'],
+  ];
+
+  it.each(refused)('%s is refused by both, naming the field', async (_why, over, field) => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      let caught: unknown;
+      try { parse(rosterWith(over)); } catch (e) { caught = e; }
+      expect((caught as { remedy?: string } | undefined)?.remedy, parse.name).toContain(`"${field}"`);
+    }
+  });
+
+  it.each([
+    ['neither fact', {}, null, null],
+    ['billing included', { fableBilling: 'included' }, 'included', null],
+    ['billing credits and a record', { fableBilling: 'credits', continuity: { recordedAt: 1760000000 } }, 'credits', { recordedAt: 1760000000 }],
+    ['a record at zero', { continuity: { recordedAt: 0 } }, null, { recordedAt: 0 }],
+  ] as const)('%s is accepted by both, with the same values', async (_why, over, billing, cont) => {
+    const { parseRoster } = await import('../../shared/roster.js');
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const ts = parseRoster(rosterWith(over)).byId.get('lane-a')!;
+    const mjs = rosterFromJson(rosterWith(over)).accounts[0]!;
+    expect({ b: ts.fableBilling, c: ts.continuity }).toEqual({ b: billing, c: cont });
+    expect({ b: mjs.fableBilling, c: mjs.continuity }).toEqual({ b: billing, c: cont });
+  });
+
+  /** The word list is spelled in `roster-json.mjs` again (it cannot import TypeScript), pinned here to the definition. */
+  it('the mirror spells FABLE_BILLINGS exactly as shared/rosterFacts.ts does, in order', async () => {
+    const { FABLE_BILLINGS } = await import('../../shared/rosterFacts.js');
+    const words = (f: string): string[] => {
+      const m = readFileSync(path.join(root, f), 'utf8').match(/FABLE_BILLINGS[^=]*=\s*(?:Object\.freeze\()?\[([^\]]*)\]/);
+      if (m === null) throw new Error(`no FABLE_BILLINGS declaration in ${f}`);
+      return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+    };
+    expect(words('shared/roster-json.mjs')).toEqual([...FABLE_BILLINGS]);
+    expect(words('shared/rosterFacts.ts')).toEqual([...FABLE_BILLINGS]);
+  });
+
+  /** `shared/generate.mjs` spells the two words a third time, as the closed set an `accounts.sh` arm may echo (F7). */
+  it('the generator\'s billing filter admits exactly FABLE_BILLINGS, in order', async () => {
+    const { FABLE_BILLINGS } = await import('../../shared/rosterFacts.js');
+    const src = readFileSync(path.join(root, 'shared/generate.mjs'), 'utf8');
+    const m = src.match(/\.filter\(\(a\) => (a\.fableBilling === '[a-z]+'(?: \|\| a\.fableBilling === '[a-z]+')*)\)/);
+    if (m === null) throw new Error('no fableBilling filter in shared/generate.mjs');
+    expect([...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!)).toEqual([...FABLE_BILLINGS]);
+  });
+});

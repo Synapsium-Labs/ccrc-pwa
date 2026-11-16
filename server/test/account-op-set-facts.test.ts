@@ -1,0 +1,99 @@
+// `account-op.mjs set-facts` (the serviceability plan's Task 3, F11), the one writer of a lane's `fableBilling` and
+// `continuity`, which the account set verb's `--fable-billing` and `--continuity` flags reach. The op itself, with no
+// verb around it: each flag writes its field, `off` removes the key, `on` over a standing record keeps its time, a call
+// that changes nothing writes no byte, and a value off its vocabulary writes nothing. It prints nothing on success.
+import { describe, expect, it } from 'vitest';
+import { spawnSync } from 'node:child_process';
+import { readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { mkTmp } from './tmpHelpers.js';
+import { REPO } from './laneStateFixture.js';
+
+const OP = path.join(REPO, 'deploy', 'account-op.mjs');
+
+const ROSTER = {
+  version: 1,
+  accounts: [
+    { id: 'lane-a', label: 'lane-a', configDirSuffix: '.lane-a', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'lane-b', label: 'lane-b', configDirSuffix: '.lane-b', exec: { kind: 'generated' }, homeAble: true, hue: 'amber', telemetry: 'anthropic' },
+  ],
+};
+
+const rosterFile = (): string => {
+  const file = path.join(mkTmp('account-op-facts-'), 'accounts.json');
+  writeFileSync(file, `${JSON.stringify(ROSTER, null, 2)}\n`, { mode: 0o600 });
+  return file;
+};
+const op = (file: string, id: string, ...flags: string[]): { code: number | null; stdout: string } => {
+  const r = spawnSync(process.execPath, [OP, 'set-facts', '--file', file, '--id', id, ...flags], { encoding: 'utf8' });
+  return { code: r.status, stdout: r.stdout };
+};
+const entry = (file: string, id: string): Record<string, unknown> =>
+  (JSON.parse(readFileSync(file, 'utf8')) as typeof ROSTER).accounts.find((a) => a.id === id) as unknown as Record<string, unknown>;
+
+describe('set-facts writes the two account facts and nothing else (F11)', () => {
+  it('each billing word is written, silently', () => {
+    const file = rosterFile();
+    expect(op(file, 'lane-a', '--fable-billing', 'credits', '--recorded-at', 'now')).toEqual({ code: 0, stdout: '' });
+    expect(entry(file, 'lane-a')['fableBilling']).toBe('credits');
+    expect(op(file, 'lane-a', '--fable-billing', 'included', '--recorded-at', 'now')).toEqual({ code: 0, stdout: '' });
+    expect(entry(file, 'lane-a')['fableBilling']).toBe('included');
+    expect(entry(file, 'lane-b')).toEqual(ROSTER.accounts[1]);
+    expect(entry(file, 'lane-a')['continuity']).toBeUndefined();
+  });
+
+  it('on writes the given time; off removes the key, never a null', () => {
+    const file = rosterFile();
+    expect(op(file, 'lane-a', '--continuity', 'on', '--recorded-at', '1794000000').code).toBe(0);
+    expect(entry(file, 'lane-a')['continuity']).toEqual({ recordedAt: 1794000000 });
+    expect(op(file, 'lane-a', '--continuity', 'off', '--recorded-at', 'now')).toEqual({ code: 0, stdout: '' });
+    expect(Object.hasOwn(entry(file, 'lane-a'), 'continuity')).toBe(false);
+    expect(readFileSync(file, 'utf8')).not.toContain('null');
+  });
+
+  it('on over a standing record keeps its time; off then on writes the new one', () => {
+    const file = rosterFile();
+    op(file, 'lane-a', '--continuity', 'on', '--recorded-at', '1794000000');
+    expect(op(file, 'lane-a', '--continuity', 'on', '--recorded-at', '1794999999').code).toBe(0);
+    expect(entry(file, 'lane-a')['continuity']).toEqual({ recordedAt: 1794000000 });
+    op(file, 'lane-a', '--continuity', 'off', '--recorded-at', '1794999999');
+    op(file, 'lane-a', '--continuity', 'on', '--recorded-at', '1794999999');
+    expect(entry(file, 'lane-a')['continuity']).toEqual({ recordedAt: 1794999999 });
+  });
+
+  it('now stamps this process clock in whole seconds', () => {
+    const file = rosterFile();
+    const before = Math.floor(Date.now() / 1000);
+    op(file, 'lane-a', '--continuity', 'on', '--recorded-at', 'now');
+    const at = (entry(file, 'lane-a')['continuity'] as { recordedAt: number }).recordedAt;
+    expect(Number.isInteger(at)).toBe(true);
+    expect(at).toBeGreaterThanOrEqual(before);
+    expect(at).toBeLessThanOrEqual(before + 60);
+  });
+
+  it('a second identical call changes no byte and prints nothing', () => {
+    const file = rosterFile();
+    expect(op(file, 'lane-a', '--fable-billing', 'included', '--continuity', 'on', '--recorded-at', '1794000000').code).toBe(0);
+    const bytes = readFileSync(file, 'utf8');
+    utimesSync(file, 1_700_000_000, 1_700_000_000);
+    const mtime = statSync(file).mtimeMs;
+    expect(op(file, 'lane-a', '--fable-billing', 'included', '--continuity', 'on', '--recorded-at', '1795000000')).toEqual({ code: 0, stdout: '' });
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+    expect(statSync(file).mtimeMs).toBe(mtime);
+  });
+
+  it('a value off its vocabulary, a bad time and an unknown id write nothing', () => {
+    const file = rosterFile();
+    const before = readFileSync(file, 'utf8');
+    for (const flags of [['--fable-billing', 'free'], ['--continuity', 'maybe'], ['--continuity', 'on', '--recorded-at', '-3'],
+      ['--continuity', 'on', '--recorded-at', 'soon'], ['--continuity', 'on', '--recorded-at', '1.5']]) {
+      const bad = op(file, 'lane-a', ...flags);
+      expect(bad.code, flags.join(' ')).toBe(2);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'bad-argv' });
+    }
+    const unknown = op(file, 'lane-z', '--continuity', 'on', '--recorded-at', 'now');
+    expect(unknown.code).toBe(1);
+    expect(JSON.parse(unknown.stdout)).toMatchObject({ ok: false, error: 'unknown-id' });
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+});

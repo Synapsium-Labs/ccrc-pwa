@@ -12,6 +12,8 @@
 // (§5.4: "ccd does not degrade on a fabricated fact"); `skipped` is `class:
 // default` — the lane's own settings decide and the clause does not apply.
 import { CLASSES, type ModelClass } from './models.js';
+import type { SessionPoolSide } from './poolrule.js';
+import type { FableBilling } from './rosterFacts.js';
 
 /** The Fable share ceiling, in percent of the account's PRICED weekly usage —
  *  the sweep's `fableShare.estimate` (a proxy, labelled as one wherever it is
@@ -47,13 +49,32 @@ export interface LaneFacts {
   anthropic: boolean;
   seven: number | null;
   share: ShareReading | null;
+  /** The roster's billing fact, `unset` (nobody set it), or `unread` (a projection that predates the fact: bash only). */
+  fableBilling: FableBilling | 'unset' | 'unread';
+  /** The roster's continuity record: `recorded`, `none`, or `unread` (a projection that predates it: bash only). */
+  continuity: 'recorded' | 'none' | 'unread';
+}
+
+/** Whose question: a session whose side is a set, or an undecidable set, gets the Overlord's arms (plan question 5). */
+export type Asking = 'set-side' | 'other';
+const ASKING_MAP: Record<Asking, true> = { 'set-side': true, other: true };
+/** Every `Asking` word, derived from its map (wire totality, D-6048). */
+export const ASKINGS: readonly Asking[] = Object.keys(ASKING_MAP) as Asking[];
+
+/** The one reader of "is this asker a set-side session": a set and both undecidable-set words; every project word is `other`. */
+export function askingOf(side: SessionPoolSide): Asking {
+  switch (side.state) {
+    case 'set': case 'set-unreadable': case 'set-malformed': return 'set-side';
+    case 'tagged': case 'untagged': case 'unreadable': case 'malformed': return 'other';
+    default: { const unreachable: never = side; return unreachable; }
+  }
 }
 
 export type Serviceability =
   | { kind: 'skipped' }
   | { kind: 'servable'; figurePct: number }
   | { kind: 'unservable'; why: 'ceiling'; figurePct: number; ceilingPct: number }
-  | { kind: 'unservable'; why: 'backend' }
+  | { kind: 'unservable'; why: 'backend' | 'credits' | 'billing-unset' | 'billing-unread' | 'no-continuity' | 'continuity-unread' }
   | { kind: 'unmeasured'; why: 'no-figure' | 'stale' };
 
 /** One rung DOWN the ladder (§3 "the class ladder"): the predecessor of `cls`
@@ -68,7 +89,16 @@ export function classBelow(cls: ModelClass): ModelClass | null {
   return i > 0 ? CLASSES[i - 1]! : null;
 }
 
-export function serviceability(cls: ModelClass | 'default', lane: LaneFacts, nowS: number): Serviceability {
+/** F8 + F1: a set-side asker is held to the continuity record whatever its class, `default` included, but ON TOP of the base
+ *  answer: a set-side session never gets less protection than a plain one, so an unservable base (backend, billing, ceiling)
+ *  keeps its own word and the continuity word replaces only a skipped, servable or unmeasured one. */
+export function serviceability(cls: ModelClass | 'default', lane: LaneFacts, asking: Asking, nowS: number): Serviceability {
+  const base = baseServiceability(cls, lane, asking, nowS);
+  if (asking !== 'set-side' || lane.continuity === 'recorded' || base.kind === 'unservable') return base;
+  return { kind: 'unservable', why: lane.continuity === 'unread' ? 'continuity-unread' : 'no-continuity' };
+}
+
+function baseServiceability(cls: ModelClass | 'default', lane: LaneFacts, asking: Asking, nowS: number): Serviceability {
   if (cls === 'default') return { kind: 'skipped' };
   if (cls === 'fable') {
     // A backend that is not Anthropic has no Fable to serve. That is a fact of
@@ -78,6 +108,10 @@ export function serviceability(cls: ModelClass | 'default', lane: LaneFacts, now
     // and reading that as servable would place a Fable session where Fable
     // does not exist.
     if (!lane.anthropic) return { kind: 'unservable', why: 'backend' };
+    // Billing is Fable's alone, after the backend word. Unset and unread refuse as credits would (H16: fail closed).
+    if (asking === 'set-side' && lane.fableBilling !== 'included') {
+      return { kind: 'unservable', why: lane.fableBilling === 'credits' ? 'credits' : lane.fableBilling === 'unread' ? 'billing-unread' : 'billing-unset' };
+    }
     if (lane.share === null || lane.share.estimatePct === null) return { kind: 'unmeasured', why: 'no-figure' };
     if (nowS - lane.share.finishedAtS > SHARE_FRESH_S) return { kind: 'unmeasured', why: 'stale' };
     return lane.share.estimatePct >= FABLE_SHARE_CEILING_PCT

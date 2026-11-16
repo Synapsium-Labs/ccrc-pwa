@@ -273,6 +273,11 @@ describe('poolUndecidable and poolRostered', () => {
 // That import is the whole point (the rule and its one adapter are spelled
 // once), so the assertion below pins it EXACTLY: one value import statement,
 // and it must be that one, naming only symbols from the L0 module.
+// The pool set's `parsePoolAnswer` (Overlord W1 pool set, plan Task 6) adds two
+// more, each from an L0 module that imports nothing outside `shared/`: the
+// `ccd pool-answer` line's words and the set's one parser from `poolset.js`,
+// and the account-id and pool-name patterns from `roster.js`. The pin lists all
+// three exactly, so a fourth value import still reds it.
 describe('poolrule.ts is the pure L1 module its own docstring says it is', () => {
   const SRC = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'poolrule.ts'),
@@ -307,11 +312,15 @@ describe('poolrule.ts is the pure L1 module its own docstring says it is', () =>
       .not.toMatch(/CoordStore|\bstore\s*\.|FleetIO/);
   });
 
-  it('takes exactly ONE value import statement, and it is L0 poolrule.js', () => {
+  it('takes exactly its three L0 value import statements: the rule, the pool answer\'s words, the two patterns', () => {
     const imports = [...code().matchAll(/^\s*import\b[^\n]*/gm)].map((m) => m[0]!.trim());
     expect(imports.length, 'no imports found — the scan is over nothing').toBeGreaterThan(0);
     const values = imports.filter((l) => !/^import\s+type\b/.test(l));
     expect(values, 'poolrule.ts takes a value import that is not the L0 module')
-      .toEqual(["import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';"]);
+      .toEqual([
+        "import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';",
+        "import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';",
+        "import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';",
+      ]);
   });
 });
