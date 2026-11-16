@@ -732,9 +732,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, the portfolio, Overlord W1)
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
-    // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox).
-    expect(COORD_SCHEMA_VERSION).toBe(78);
-    expect(MIGRATIONS.length).toBe(78);
+    // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (operator_responses, response_receipts and response_boots, the response record, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(79);
+    expect(MIGRATIONS.length).toBe(79);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -837,8 +838,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, Overlord W1)
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
-    // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(78);
+    // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (operator_responses, response_receipts and response_boots, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(79);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

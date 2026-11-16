@@ -311,7 +311,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
   'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
-  'continuity_start_loads'] as const;
+  'continuity_start_loads',
+  'operator_responses', 'response_receipts', 'response_boots'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -392,6 +393,11 @@ describe(TABLES_PIN, () => {
       // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
       portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
       portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
+      // push's verdict (a never-delivered row with its receipts); the receipts door's one insert; the boot's record.
+      operator_responses: ['insertPushResponseInTx', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_receipts: ['insertReceipt', 'landPushVerdictInTx'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
+      response_boots: ['server/src/coord/responsesStore.ts#recordResponseBoot'],
     });
   });
 
