@@ -3717,6 +3717,13 @@ plans, plus the four that C33b converts. It was red first on this plan's 112 ent
 in the hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in
 `c33.md`.
 
+**Follow-up C33b.** The four entries C33 left in the hyphen form, D-8344, D-8345, D-8354 and D-8381, now open with
+the em dash, because the task notes `c27.md` to `c30.md` hold citations on `main` and each number has one definition.
+D-7253's line in Task S5c now opens `- **D-7253** — the task's own number.`, which the ledger reads. The guard's shape
+also reads the dot form, `- **D-N.** subject`, which `DEFINITION` does not read either, and `UNREAD_BASELINE` holds
+today's 161 such lines in 17 plans: 335 lines in 30 plans in all. Records, corrections to C33's notes and the
+measurements are in `c33.md`. Under D-8656, with no number of its own.
+
 - **D-8656** — `hyphen-entries-unread`: Task C33, issued on 2026-11-16. This plan's 112 hyphen entries were invisible to
   the ledger. 108 now use the em dash, and C33b converts the last four after this PR merges. A guard reds on any new
   definition-shaped line the ledger cannot read. Four task-note lines that defined the same numbers became citations.
