@@ -604,14 +604,15 @@ under "Attention, notifications and answering" below.
 summary line; it exits 1 when anything FAILs (a WARN does not), which is the exit code `ccrc install`
 ends with. A `server`-role box SKIPs the checks that measure per-account or per-session state — `wrappers`,
 `skills`, `accounts`, `pools`, `memory`, `routing`, `codex`, `graphify`, `graphify-path` (D-3111), `playwright`,
-`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, and `jq_regex` (no session hook
-runs there).
+`timeout`, `model-default`, `history`, `transcripts`, `transcript_work`, `auto-memory`, `model-advance-held-back`,
+`model-held-behind`, `model-sessions-behind`, `model-advance-blocked`, and `jq_regex` (no session hook runs there).
 
 | checks | what they measure |
 |---|---|
 | `node`, `tmux`, `git`, `gh`, `jq`, `python3`, `flock` | on `PATH`; `node` also against the `engines.node` floor |
 | `timeout` | `timeout` or `gtimeout` on `PATH`: the session hook and the status line bound their one `tmux` call with it and skip the call without it — the hook then does nothing at all, and the status line writes no usage sidecar |
 | `model-default` | each Anthropic lane's `settings.json` default model (`env.ANTHROPIC_MODEL`, else `model`, else `env.ANTHROPIC_DEFAULT_MODEL`), read as Claude Code reads it — trimmed, any case, `[1m]` in any case: a WARN when it is Fable (`fable`, `fable[1m]`, `best` — Fable where the account is entitled to it — an id carrying `-fable-`, or an alias the lane's own `env.ANTHROPIC_DEFAULT_<ALIAS>_MODEL` points at such an id), because a session there with no routing record, or class `default`, starts on Fable; a file it cannot read or parse, a reader (node) that fails, or a lane with no config dir is a WARN, unmeasured (never a FAIL, no `--fix`: ccrc does not own the key). Not measured: the remap of the account's implicit default when no key names a model |
+| `model-advance-held-back`, `model-held-behind`, `model-sessions-behind`, `model-advance-blocked` | the automatic model advance ("Classes follow new releases", under `ccrc models`), read through `deploy/models-op.mjs advance-health`, which writes nothing and never takes or opens a lane's lock: a class whose last advance failed its canary or its move (it clears on a later advance, when the candidate leaves the catalogue, or when the class is held); a held class with a newer model in its family, or whose pin has left the catalogue; a running session that still renders a model a move replaced a day or more ago, in a turn begun after the move, named with the time of its last reply, the time its turn began and how long ago the move was (a running session does not always pick up a re-pin by itself: once it is idle, `ccd stop <id>` then `ccd start <id>` relaunches it and resumes its conversation, though one with no class in its routing record may come back on its old model), with a count, on the same line, of the sessions it could not measure and why (a session on a lane whose registry or advance file cannot be read among them); and a lane or class that cannot advance, by cause, with one remedy per cause: its advance file, registry, catalogue or windows file present and unreadable (the advance file's remedy is a repair, never `rm`: removing it loses its holds and history, and the next hourly refresh refills every emptied class), a pin outside `<vendor>-<version>-<family>`, two classes on one family, a lane that is not `exec.kind: "codex"`, or a lane-files lock path or lock directory this account cannot use (a symlink, a FIFO or anything else standing where the lock belongs, a lock file it cannot write, or a lock directory another account owns). Each is a WARN, never a FAIL; each SKIPs on a `server`-role box, without `jq`, when the op gives no answer within `CCRC_DOCTOR_GH_TIMEOUT`, and when no lane has a model registry |
 | `tmux_skew` | the tmux client on disk against the running tmux server (a WARN: restart that server at a quiet moment) |
 | `jq_regex` | jq's regex engine can match a lookbehind, which the session hook's merge deny needs to read a command (a jq without Oniguruma leaves the deny failing open); a SKIP with no jq on `PATH`, which `jq`'s own row owns |
 | `gh_auth`, `git_email` | `gh` logged in with the `repo` scope; a commit identity |
@@ -2217,8 +2218,11 @@ models. A windows file that cannot be read counts as no measured windows: refres
 carry on under the default rule (a measured key left in `settings.json` shows as drift until the next materialise
 replaces or removes it), `show` names the reason, and both verbs refuse until the file is fixed or deleted.
 `show` reports each measured window, the effective window, the rule that chose it and the models still unmeasured;
-`rm` reaps the file with the rest. A new window reaches sessions started after it; whether a session already running
-re-reads `settings.json` has not been measured.
+`rm` reaps the file with the rest. A stale catalogue's advertised windows are not read, so on a lane where one class
+model has a measured window and another has none, the key falls to Claude Code's own default window whenever that is
+below the smallest measured one; `show`, `lanes` and doctor's `models` check name that lane, with a refresh
+(`ccrc models refresh <id>`) or a `set-window` for the unmeasured model as the remedies. A new window reaches sessions
+started after it; whether a session already running re-reads `settings.json` has not been measured.
 A rollback to a ccrc from before measured windows is safe on a lane whose catalogue is fresh: its next successful
 refresh materialises and writes the default. With a stale or absent catalogue a measured key stays until the next
 successful probe, so before rolling back across this change on a lane with windows set, run
@@ -2375,8 +2379,9 @@ row has `exec.kind: "codex"`, `exec.provider: "openai"`, an `exec.authDir` and t
 fleet box's roster, which a later roster answer from the fleet box replaces wholesale.
 
 A running session may keep the old model until it picks the new one up by itself or is relaunched, and nothing is typed
-into one. A planned `ccrc doctor` check, `model-sessions-behind`, will name a live session still on the old model a day
-after the move; this build has no such check.
+into one. `ccrc doctor`'s `model-sessions-behind` WARNs on a running session still on the old model a day after the
+move, in a turn begun after it; once the session is idle, relaunch it with `ccd stop <id>` then `ccd start <id>`, which
+resumes its conversation.
 
 ### A ChatGPT/Codex lane: `exec.kind: "codex"` and `ccrc codex`
 
