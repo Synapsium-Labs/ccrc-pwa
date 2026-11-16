@@ -26,6 +26,11 @@ export const LINEAR_CCRC_JOURNAL_OPS = [
 ] as const;
 export type LinearCcrcJournalOp = (typeof LINEAR_CCRC_JOURNAL_OPS)[number];
 
+/** The status values an initiative takes (R6, D-8674: FX2's answer 2). A finished programme is `Completed`, an
+ *  abandoned one `Canceled`; spelled once, here. */
+export const LINEAR_INITIATIVE_STATUSES = ['Proposed', 'Planned', 'Active', 'Completed', 'Canceled'] as const;
+export type LinearInitiativeStatus = (typeof LINEAR_INITIATIVE_STATUSES)[number];
+
 /** The closed record a row's `variables` reads: ids are lowercase UUIDs, texts already through `linear-egress`. */
 export type CcrcOpInput = Readonly<Record<string, string | number | boolean | null | readonly string[]>>;
 export type CcrcShaped =
