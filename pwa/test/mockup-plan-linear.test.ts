@@ -29,19 +29,31 @@ const ref = (raw: string, basePath: MockupRef['basePath'] = 'specs/m.html', dept
 };
 const png = (path: string): DocsEntry => entry('specs', path, { committed: { kind: 'file', blob: '1'.repeat(40), size: 10 } });
 
-/** A committed page's context over `listing` more entries, whose `entries` counts every whole-listing pass. */
-function countedCtx(listing: number): { ctx: MockupContext; passes: () => number } {
+/** Every array method that walks a listing, and iteration (fix round 2, review run 2281 F4: `findIndex`, `indexOf`,
+ *  `includes`, `map`, `reduce` and `every` were invisible to the first counter). */
+const WALKERS: ReadonlySet<PropertyKey> = new Set<PropertyKey>([
+  'find', 'findIndex', 'findLast', 'findLastIndex', 'filter', 'some', 'every', 'forEach', 'map', 'flatMap', 'reduce',
+  'reduceRight', 'indexOf', 'lastIndexOf', 'includes', 'entries', 'keys', 'values', 'slice', 'concat', 'join', 'at',
+  Symbol.iterator,
+]);
+
+/** A committed page's context over `listing` more entries, whose `entries` counts every whole-listing pass (a walking
+ *  method or iteration) and every element read (a numeric index or `length`, which every walk, a native one included,
+ *  makes through the proxy, and which an indexed loop makes alone). */
+function countedCtx(listing: number): { ctx: MockupContext; passes: () => number; reads: () => number } {
   const entries = [entry('specs', PAGE), ...Array.from({ length: listing }, (_, i) => png(`p${i}.png`))];
   let passes = 0;
+  let reads = 0;
   const counted = new Proxy(entries, {
     get(t, k, r) {
-      if (k === 'find' || k === 'filter' || k === 'some' || k === 'forEach' || k === Symbol.iterator) passes += 1;
+      if (WALKERS.has(k)) passes += 1;
+      else if (k === 'length' || (typeof k === 'string' && /^\d+$/.test(k))) reads += 1;
       return Reflect.get(t, k, r);
     },
   });
   const tree = treeOk({ entries: counted, drafts: holder() });
   const pin: DocPin = { kind: 'committed', commit: COMMIT_A, servedRef: SERVED, section: 'specs', path: PAGE };
-  return { ctx: { project: 'demo', pin, tree }, passes: () => passes };
+  return { ctx: { project: 'demo', pin, tree }, passes: () => passes, reads: () => reads };
 }
 
 describe('planning is linear in the references (fix round 1, F1)', () => {
@@ -86,5 +98,8 @@ describe('planning is linear in the references (fix round 1, F1)', () => {
     for (let s = 0; s < 20; s += 1) plan = extendMockupAssetPlan(plan, [ref(`p${s}.png`, 'specs/s.css', 1)]);
     expect(big.passes()).toBe(base);
     expect(base).toBeLessThanOrEqual(4);
+    // An indexed loop or a native walk reads elements through the proxy: the reads are constant per plan too.
+    expect(big.reads()).toBe(one.reads());
+    expect(one.reads()).toBeLessThanOrEqual(4 * (101 + 1));
   });
 });
