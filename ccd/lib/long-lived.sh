@@ -128,3 +128,58 @@ _fresh_crossing_end() {   # id — a proven renewal ends a set-side crossing (sp
   echo "$(date '+%F %T') crosspool-ended $1: renewal" >> "$REG/swap.log"
   return 0
 }
+# THE FRESH PICK (spec §3.4 C56 and C57, Table 3.4a; plan w1-ccd-arms Task 6): the account a renewal's fresh start lands on,
+# from the ordered list on the route record (`acctorder`), the designation's and the renewal lane's, never ccd's to write.
+# The soft line: step 1 and step 2 take an account only while its load (`_limit_score`, the larger window) is UNDER it.
+# The fallback class is Table 3.4a's Opus, never `_class_below`: an Opus-designated Overlord never falls back to Sonnet.
+FRESH_PICK_SOFT_PCT=70
+FRESH_PICK_FALLBACK_CLASS=opus
+_fresh_pick_ok() {   # account side -> rc 0 the account may take this session at all; rc 1 and FRESH_PICK_FAIL = the first failed check
+  # A roster id (pool set Q9: the list is checked for shape only), enabled, not auth-dead, under the ceiling, served by the
+  # session's pool side (`_pool_ok` rc 0: a crossing does not count, since a proven renewal ends it), and an Anthropic lane
+  # (slug fresh-pick-anthropic-only-in-w1: C56 admits another provider's lane only if the operator lists it, which nothing
+  # records yet, so the piece that records it widens the server's list and this check together). Writes nothing.
+  FRESH_PICK_FAIL=unknown; _is_valid_wrapper "$1" || return 1; FRESH_PICK_FAIL=disabled; _account_ok "$1" || return 1
+  FRESH_PICK_FAIL=authdead; ! _authdead "$1" || return 1; FRESH_PICK_FAIL=at-ceiling; _avail "$1" || return 1
+  FRESH_PICK_FAIL=pool; _pool_ok "$1" "$2" || return 1; FRESH_PICK_FAIL=backend; _is_anthropic_backend "$1" || return 1; FRESH_PICK_FAIL=''
+}
+_fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, at most cap (a NUL reads as a newline) | 1 no entry
+  # | 2 a link, not a regular file, not readable, or the read failed. Bounded in size and in time (`_plat_timeout 2`), so a
+  # FIFO swapped in after the type test cannot block, as `_role_long_lived` reads `profile`; never `_route_get`, whose read is not.
+  local LC_ALL=C IFS=' ' f="$REG/$2.$3" v; printf -v "$1" ''
+  [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
+  v=$( { _plat_timeout 2 head -c "$4" -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${v%x}"
+}
+_fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|none; rc 1, var empty, FRESH_PICK_WHY = the cause
+  # CALLED BY NOTHING YET (PR C1): PR C2 adds step 3 and `stay` and calls it last in the fresh start's re-measure. It
+  # WRITES NOTHING: no registry field, no stamp, no route row, no log line (the hold-down is read through its decider,
+  # `_route_holddown_holds`, which writes nothing either). No `acctorder` entry is today's behaviour: the current account.
+  # UNDECIDABLE IS A REFUSAL, NEVER A PICK (Review Focus 2): a list that is not a regular readable file, or not one
+  # `_acctorder_valid` accepts (read at the cap + 1 bytes, so a longer one fails), a set side that cannot be read or parsed,
+  # and a class that cannot be read or is off the route's vocabulary (slug fresh-pick-refuses-an-unreadable-class) each
+  # answer rc 1 with the sentence naming the remedy. Step 1 is skipped while a degraded stamp stands and the hold-down holds
+  # (rc 0, or 3 for a stamp later than ccd's clock). One pass over the list asks each account's hard filter, its load and
+  # the class gate on the class (step 1, returning at once) and on the fallback (step 2, the first kept); an account that
+  # passes neither leaves one clause, its first failed check in one word (`_fresh_pick_ok`'s, `load` or `class`). A class of
+  # `default` or none has no step 2 and no hold, and its gate still asks `_serviceable` with the id (main's signature,
+  # serviceability A's seam), which answers servable unless a set side's account has no continuity record.
+  local LC_ALL=C IFS=' ' list side cls fb='' hold='' a s p2='' why='' rc
+  printf -v "$1" ''; FRESH_PICK_STEP=none; FRESH_PICK_WHY=''
+  _fresh_pick_field_to list "$2" acctorder $((ROUTE_LIST_MAX_BYTES + 1)); rc=$?
+  (( rc == 1 )) && { printf -v "$1" '%s' "$3"; return 0; }
+  (( rc == 0 )) && _acctorder_valid "$list" || { FRESH_PICK_WHY="the ordered account list on $REG/$2.acctorder cannot be read; the server writes it again at its next sweep"; return 1; }
+  side=$(_session_pool_side "$2"); [[ "$side" == set-unreadable || "$side" == set-malformed ]] && { FRESH_PICK_WHY=$(_pool_set_undecidable_why "${side#set-}" "$2"); return 1; }
+  _fresh_pick_field_to cls "$2" class 65; rc=$?
+  (( rc == 1 )) || { (( rc == 0 )) && _route_valid class "$cls"; } || { FRESH_PICK_WHY="the class on $REG/$2.class cannot be read; the designation writes it again"; return 1; }
+  [[ "$cls" == default ]] && cls=''; [[ "$cls" == fable ]] && fb=$FRESH_PICK_FALLBACK_CLASS
+  [[ -n "$cls" ]] && [[ -e "$REG/$2.degraded" || -L "$REG/$2.degraded" ]] && { _route_holddown_holds "$2"; (( $? != 1 )) && hold=1; }
+  for a in ${list//,/ }; do
+    _fresh_pick_ok "$a" "$side" || { why+="; $a $FRESH_PICK_FAIL"; continue; }
+    s=$(_limit_score "$a"); [[ "$s" =~ ^[0-9]{1,3}$ ]] && (( 10#$s < FRESH_PICK_SOFT_PCT )) || { why+="; $a load"; continue; }
+    [[ -z "$hold" ]] && _class_gate "$a" "$cls" "$2" && { printf -v "$1" '%s' "$a"; FRESH_PICK_STEP=1; return 0; }
+    [[ -n "$fb" && -z "$p2" ]] && _class_gate "$a" "$fb" "$2" && { p2=$a; continue; }
+    why+="; $a class"
+  done
+  [[ -n "$p2" ]] && { printf -v "$1" '%s' "$p2"; FRESH_PICK_STEP=2; return 0; }
+  FRESH_PICK_WHY="no account on the ordered list can take it: ${why#; }"; return 1
+}
