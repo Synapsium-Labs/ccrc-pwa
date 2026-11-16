@@ -695,6 +695,8 @@ function unreadDefinitionShapes(
     for (let i = 0; i < lines.length; i++) {
       const m = DEFINITION_SHAPE.exec(lines[i]!);
       if (!m) continue;
+      // A shortcut, not a rule: the probe below gives a readable line the same answer,
+      // but it re-reads the whole file, and most shaped lines are readable.
       if (definitionsIn([{ path: f.path, text: lines[i]! }]).length > 0) continue;
       const n = Number(m[1]);
       const count = (text: string): number =>
@@ -782,5 +784,10 @@ describe('every definition-shaped line is one the ledger reads (Task C33)', () =
     expect(one(`- **D-${n} sweep:** a bolded citation`)).toEqual([]);
     expect(one(['```', `- **D-${n}** - quoted inside a fence`, '```'].join('\n'))).toEqual([]);
     expect(one(['```', '```', `- **D-${n}** - after a closed fence`].join('\n'))).toEqual([n]);
+    // A number unreadable on two lines counts twice, so a baseline that lists it once
+    // still reds on the second line.
+    expect(one([`- **D-${n}** - one`, `- **D-${n}** - two`].join('\n'))).toEqual([n, n]);
+    expect(multisetLess([n, n], [n])).toEqual([n]);
+    expect(multisetLess([n], [n, n])).toEqual([]);
   });
 });

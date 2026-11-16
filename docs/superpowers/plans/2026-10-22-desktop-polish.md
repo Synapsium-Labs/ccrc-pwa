@@ -3651,6 +3651,34 @@ before and after and the brief's one misquoted line ending are in `c25.md`.
 **Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
 red on the fix with the mutant in place. **Rollback.** A plain revert.
 
+### Task C33: this plan's 112 hyphen entries are written so the ledger reads them, and a guard keeps that form out (D-8656) — now
+
+Placed after C25's section, before the acceptance matrix. Found by review 1938 F7; the operator made it a goal of this
+programme. No product behaviour changes.
+
+**Why.** `DEFINITION` (`server/src/coord/ledger.ts`) reads a `- **D-N**` entry only when an em dash, a parenthesis or a
+colon follows the bold number. This plan wrote 112 of its entries as `- **D-N** - `, with a hyphen, and no other plan
+did. The deviation-refs cross-tree scan and the server's reconcile sweep could not see those numbers, so none of them
+could land and a second definition of one would not have been caught.
+
+**What was done.** The 112 entries now use the em dash, `- **D-N** — `, and nothing else on those lines changed.
+`DEFINITION`'s grammar is unchanged. Before the conversion every number was measured: the allocator issued all 112, and
+no other programme's plan defines any of them. Four of them, D-8344, D-8345, D-8354 and D-8381, were also defined in
+this programme's own task notes (`c27.md` to `c30.md`), so after the conversion each would have had two definitions. On
+the coordinator's ruling, each note's line was reworded into a citation, with only its opening changed, and the plan's
+entry stays the one definition. A new describe in `deviation-refs.test.ts` fails on any `- **D-N**` line at column 0
+that `DEFINITION` does not read, outside fenced blocks. Lines other plans hold today stay as `UNREAD_BASELINE`: 175
+lines in 14 plans, which may only shrink. It was red first on this plan's 112 entries. With one entry put back in the
+hyphen form, it reds naming that entry alone. The measurements, the baseline and the mutation runs are in `c33.md`.
+
+- **D-8656** — `hyphen-entries-unread`: Task C33, issued on 2026-11-16. This plan's 112 hyphen entries were invisible to
+  the ledger. They now use the em dash, and a guard reds on any new definition-shaped line the ledger cannot read. Four
+  task-note lines that defined the same numbers became citations. Departures are named by slug in `c33.md`.
+
+**Acceptance.** `deviation-refs.test.ts` passes at the PR's tip, with each of the 112 numbers defined once across the
+two trees. The guard reds with one hyphen entry put back. **Rollback.** A plain revert. The guard and the conversion
+revert together, because the guard is red on the hyphen form.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
