@@ -19,7 +19,6 @@
 // `roll` and `claude` are no verb of the body yet (D-8667): their real-body rows here pass with either spelling, so they
 // cannot go red until the body has those verbs. Their pin is the launcher rows in `ccd-ws-lease-mark-reach.test.ts`.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -62,10 +61,14 @@ const UNKNOWN_VERB = 'usage: ccd {start|';
 const FOLDING = { BASHOPTS: 'nocasematch', LC_ALL: 'C.UTF-8' };
 const DOTTED = 'ws-archİve';
 
-/** Whether this box's Bash, under FOLDING's locale, folds `DOTTED` into `ws-archive` at all: where the locale is missing
- *  (or folds nothing), the non-ASCII row cannot test the fold, so it is skipped with that reason, never passed. */
-const BASH_FOLDS_DOTTED = spawnSync('bash', ['-c', 'shopt -s nocasematch; case "$1" in ws-archive) exit 0 ;; esac; exit 1', '_', DOTTED],
-  { env: { PATH: process.env['PATH'] ?? '', LC_ALL: FOLDING.LC_ALL }, encoding: 'utf8' }).status === 0;
+/** Whether this box's Bash, under FOLDING's locale, folds `DOTTED` into `ws-archive` at all. Asked inside the test, through
+ *  the harness's containment like every bash spawn in a ccd test file: where the locale is missing (or folds nothing), the
+ *  non-ASCII row cannot test the fold, so it skips with that reason as its note, never passes. */
+const bashFoldsDotted = (): boolean => spawnSyncGroup('bash',
+  ['-c', 'shopt -s nocasematch; case "$1" in ws-archive) exit 0 ;; esac; exit 1', '_', DOTTED], {
+    encoding: 'utf8', timeout: 30_000,
+    env: ghContainedEnv(h.home, { ...cleanEnv(), HOME: h.home, LC_ALL: FOLDING.LC_ALL }, { systemd: true, tmux: true }),
+  }).status === 0;
 
 /** Every entry under HOME by its relative path: a file by its bytes' digest, a link by its target, a directory as such. */
 const snapshot = (): Map<string, string> => {
@@ -144,10 +147,13 @@ describe('the forbidden verbs through the installed direct entry, on the real bo
     it(`${argv.join(' ')} under an inherited nocasematch reaches no verb (${verb})${what}`, () => refusedUnknown(argv), 60_000);
   }
 
-  it.skipIf(!BASH_FOLDS_DOTTED)(
-    `${DOTTED} --session ${LIVE} (U+0130) under an inherited nocasematch reaches no verb (ws-archive)`
-      + (BASH_FOLDS_DOTTED ? '' : ` — SKIPPED: this box's Bash does not fold U+0130 under LC_ALL=${FOLDING.LC_ALL} (the locale is missing or folds nothing)`),
-    () => refusedUnknown([DOTTED, '--session', LIVE]), 60_000);
+  it(`${DOTTED} --session ${LIVE} (U+0130) under an inherited nocasematch reaches no verb (ws-archive); skipped, with its`
+    + ` reason, where this box's Bash does not fold U+0130 under LC_ALL=${FOLDING.LC_ALL}`, (ctx) => {
+    if (!bashFoldsDotted()) {
+      ctx.skip(`this box's Bash does not fold U+0130 under LC_ALL=${FOLDING.LC_ALL} (the locale is missing or folds nothing)`);
+    }
+    refusedUnknown([DOTTED, '--session', LIVE]);
+  }, 60_000);
 
   it('the exact spellings still reach their verbs through the launcher', () => {
     de = installDirectEntry(h.home);

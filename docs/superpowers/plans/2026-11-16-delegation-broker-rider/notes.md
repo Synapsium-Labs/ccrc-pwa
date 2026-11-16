@@ -102,6 +102,14 @@ The block's own controls repeat the deletion for every one of the 16 heads, and 
 - A7: the `entry` class's body half in `ccd-ws-lease-mark-reach.test.ts` runs the real body through `spawnSyncGroup`, as
   the sibling file does.
 
+### Fix round 2 (the merge queue's `test (server)`, at be23d08e7)
+
+`ccd-workspaces.test.ts`'s containment scan ("routes EVERY bash call site in every ccd test file through ALL THREE
+poisons") refused A3's fold probe, which spawned a bare `bash -c` at module load. The probe now runs inside the U+0130 row,
+through `spawnSyncGroup` and `ghContainedEnv` with systemd and tmux contained, and the row skips at run time with the
+reason as its note (`ctx.skip(note)`). Measured: with the locale forced to a name that does not exist, the row reports
+skipped with that note; against `main`'s entry it is still red.
+
 ## T4. README
 
 - "The switch's card: Settings › Automation › Worktrees left behind": the sentence owed since PR8d (`pr8d.md`, "Owed to
