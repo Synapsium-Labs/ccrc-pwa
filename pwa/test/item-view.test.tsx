@@ -588,4 +588,16 @@ describe('the answer marks on an item\'s page (Overlord W1)', () => {
     show(itemView({ kind: 'value', answerMarks: MARKS }), { current: false });
     for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
   });
+  // Answer marks C (#2900): a task's page draws one box, worded for a task, open and cleared.
+  it('a do item draws one box, "The Overlord could handle this", open and done, and none for unsure', () => {
+    for (const o of [{}, { state: 'done' as const, closedAt: NOW - MIN }]) {
+      show(itemView({ kind: 'do', ...o, answerMarks: { couldAnswer: MARKS.couldAnswer } }));
+      const panel = screen.getByRole('region', { name: 'Your move' });
+      const boxes = within(panel).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => [b.checked, b.disabled])).toEqual([[true, false]]);
+      expect(within(panel).getByLabelText('The Overlord could handle this')).toBe(boxes[0]);
+      expect(within(panel).queryByLabelText("I'm not sure of my answer")).toBeNull();
+      cleanup();
+    }
+  });
 });
