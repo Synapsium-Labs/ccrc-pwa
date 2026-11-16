@@ -24924,7 +24924,8 @@ _upd_backup() {
   fi
   # The private store, by the same script, beside coord.db; the manifest names it, and a restore puts both back as one set.
   # Never ~/.ccrc/privacy-journal.log: a restore leaves it in place, so a restored store never reissues a message id.
-  if [ -f "$HOME/.ccrc/operator-model.db" ]; then
+  # Gated as `capture` gates it (lstat): any entry at the path, a dangling link included, is snapshotted or refuses here.
+  if [ -e "$HOME/.ccrc/operator-model.db" ] || [ -L "$HOME/.ccrc/operator-model.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/operator-model.db" "$UPD_BACKUP_DIR/operator-model.db" \
       || _ccrc_die "the private store (operator-model.db) snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"

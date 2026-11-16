@@ -9,6 +9,7 @@
 //   Task 3, by the store's open, which re-anchors it).
 // No transaction spans `coord.db` and this file: a caller that also writes `coord.db` commits here first.
 import type { DatabaseSync } from 'node:sqlite';
+import os from 'node:os';
 import path from 'node:path';
 import { isMintedActor, type AccountActor } from '../accounts/audit.js';
 import { tx } from '../coord/tx.js';
@@ -18,7 +19,7 @@ import {
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadLine,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
-import { chainedTailHealPlan } from '../chainedJournal.js';
+import { chainedTailHealPlan, type ChainedTail } from '../chainedJournal.js';
 import { chainedJournalFileAt, type ChainedFileSeen, type ChainedJournalFile } from '../chainedJournalFile.js';
 import { openOperatorModelDb } from './db.js';
 import {
@@ -149,6 +150,7 @@ export class OperatorModelStore {
    *  id is refused. `changed` is false when the move was accepted and wrote no new value. */
   moveMessage(id: number, event: MessageEvent, actor: MessageActor, at: number):
     StoreWrite<{ readonly changed: boolean; readonly state: MessageState }> {
+    if (!isCount(at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
     try {
       return tx(this.db, () => {
@@ -316,23 +318,42 @@ const seenOf = (r: ReturnType<ChainedJournalFile<PrivacyJournalEntry>['read']>):
 const highestSeen = (seen: ChainedFileSeen<PrivacyJournalEntry>): number | null =>
   seen.kind === 'records' ? privacyHighestId(seen.records) : null;
 
+const tornOf = (t: ChainedTail): string => `the privacy journal ends in a torn tail of ${t.bytes.length} bytes at ${t.offset}`;
+
 /** The issuer over the bound journal: each issue re-reads and verifies the whole file (`appendNext`), takes the journal's
  *  highest from THAT read, asks `nextMessageId` with the store's highest, and appends the `privacy-message-issued` record,
- *  so the id and the append come from one read and no snapshot is held across records. */
+ *  so the id and the append come from one read and no snapshot is held across records. A torn tail a failed append left
+ *  while the server runs is healed here as the open heals it (the authority journal's `healTornTail`): cut aside through
+ *  the adapter's one cut, its bytes kept under `privacy-journal.torn/`, and the append retried once. The tail's record
+ *  failed, so its insert rolled back and no row holds its id. A tail that cannot be cut answers as torn, never malformed. */
 export function privacyIssuerOf(file: ChainedJournalFile<PrivacyJournalEntry>): PrivacyIssuer {
+  const once = (storeHighest: number | null, at: number) => file.appendNext<'malformed' | ChainedTail>((seen) => {
+    if (seen.kind === 'malformed') return { stop: 'malformed' };
+    if (seen.kind === 'records' && seen.tail !== null) return { stop: seen.tail };
+    const id = nextMessageId(storeHighest, highestSeen(seen));
+    return { go: { entry: { kind: 'privacy-message-issued', id, at }, acceptedAt: iso(at) } };
+  });
   return {
     kind: 'ready',
     issue(storeHighest, at) {
-      const r = file.appendNext<'malformed'>((seen) => {
-        if (seen.kind === 'malformed') return { stop: 'malformed' };
-        const id = nextMessageId(storeHighest, highestSeen(seen));
-        return { go: { entry: { kind: 'privacy-message-issued', id, at }, acceptedAt: iso(at) } };
-      });
+      let r = once(storeHighest, at);
+      if (!r.ok && 'stopped' in r && r.stopped !== 'malformed') {
+        const plan = chainedTailHealPlan(r.stopped, true);
+        const cut = plan === null ? null : file.cutAside({ kind: 'tail', plan }, PRIVACY_JOURNAL_TORN_DIR);
+        if (plan === null || cut === null || !cut.ok) {
+          const why = cut === null || cut.ok ? 'no plan' : cut.error;
+          return { ok: false, error: 'journal-unreadable', detail: `${tornOf(r.stopped)}; cutting it aside answered ${why}` };
+        }
+        console.warn(`ccrc-server: the privacy journal's torn tail was cut aside while the server ran, kept as ${plan.name}`);
+        r = once(storeHighest, at);
+      }
       if (r.ok) {
         const e = r.record.entry;
         return e.kind === 'privacy-message-issued' ? { ok: true, id: e.id } : { ok: false, error: 'journal-unwritable', detail: 'not an issued record' };
       }
-      if ('stopped' in r) return { ok: false, error: 'journal-unreadable', detail: 'the privacy journal is malformed' };
+      if ('stopped' in r) {
+        return { ok: false, error: 'journal-unreadable', detail: r.stopped === 'malformed' ? 'the privacy journal is malformed' : `${tornOf(r.stopped)} after one cut` };
+      }
       if (r.error === 'malformed' || r.error === 'unreadable') {
         return { ok: false, error: 'journal-unreadable', detail: `the privacy journal is ${r.error}` };
       }
@@ -364,16 +385,18 @@ export function openOperatorModelStore(dbPath: string, journalDir: string, at: n
   const file = chainedJournalFileAt(PRIVACY_JOURNAL_FORMAT, journalDir, PRIVACY_JOURNAL_BASENAME);
   const journalPath = path.join(journalDir, PRIVACY_JOURNAL_BASENAME);
   let healed: string | null = null;
+  let cutFailed = '';
   let first = file.read();
   if (first.kind === 'records' && first.tail !== null) {
     const plan = chainedTailHealPlan(first.tail, true);
     if (plan !== null) {
       const cut = file.cutAside({ kind: 'tail', plan }, PRIVACY_JOURNAL_TORN_DIR);
-      if (cut.ok) { healed = plan.name; first = file.read(); }
+      if (cut.ok) { healed = plan.name; first = file.read(); } else cutFailed = `; cutting it aside answered ${cut.error}`;
     }
   }
   const storeHighest = (db.prepare('SELECT max(id) AS m FROM operator_messages').get() as { m: number | null }).m;
-  const verdict = privacyCoherence(seenOf(first), storeHighest);
+  const seen = seenOf(first);
+  const verdict = privacyCoherence(seen.kind === 'refused' ? { ...seen, detail: seen.detail + cutFailed } : seen, storeHighest);
   const done = (privacy: PrivacyOpenReport, issuer: PrivacyIssuer): OperatorModelOpen =>
     ({ store: new OperatorModelStore(db, issuer), db, journalPath, healed, privacy });
   if (verdict.verdict === 'refuse') {
@@ -387,4 +410,33 @@ export function openOperatorModelStore(dbPath: string, journalDir: string, at: n
   const detail = anchored.ok ? 'appended' : 'stopped' in anchored ? 'the journal is malformed' : `the append answered ${anchored.error}`;
   const report: PrivacyOpenReport = { verdict: 're-anchor', reason: verdict.reason, highestId: verdict.highestId, appended, detail };
   return done(report, appended ? privacyIssuerOf(file) : { kind: 'refused', code: 'anchor-failed', detail });
+}
+
+/**
+ * The open's boot lines, for the composition root to print one by one (each after `ccrc-server: `): a torn tail cut aside,
+ * a re-anchor, a refusal by its cause, and a home that is not the process's own. An `unmeasured` read is the one refusal
+ * whose remedy is not a move: the journal may hold a lead the store needs, so it is fixed in place and the server
+ * restarted. `CCRC_HOME` moves the store and its journal off the `~`-anchored deny rules, which name the process home.
+ */
+export function operatorModelBootLines(o: Pick<OperatorModelOpen, 'healed' | 'privacy' | 'journalPath'>, home: string,
+  processHome: string = os.homedir()): string[] {
+  const lines: string[] = [];
+  if (o.healed !== null) lines.push(`the privacy journal's torn tail was cut aside, kept as ${o.healed}`);
+  const p = o.privacy;
+  if (p.verdict === 're-anchor') {
+    lines.push(`the privacy journal was ${p.reason === 'missing' ? 'missing' : 'behind the private store'}; `
+      + `re-anchored at message ${p.highestId} (${p.detail}), so no id at or below it is issued again`);
+  } else if (p.verdict === 'refuse' && p.code === 'unmeasured') {
+    lines.push(`${o.journalPath} could not be read (${p.detail}): no operator message is recorded until it can be. Fix its `
+      + 'access and restart the server; do not move it aside, which would lose a lead the store may need.');
+  } else if (p.verdict === 'refuse') {
+    lines.push(`${o.journalPath} cannot be trusted (${p.code}: ${p.detail}): no operator message is recorded until it is moved `
+      + 'aside and the server restarted, which re-anchors it. Keep the moved file until the boot after that reads clean: a '
+      + 'journal that was ahead of the store loses its lead when it is moved.');
+  }
+  if (path.resolve(home) !== path.resolve(processHome)) {
+    lines.push(`the private store and its privacy journal live under ${home}, not the process's home: the sessions' deny `
+      + 'rules name ~/.ccrc, so they do not cover them there');
+  }
+  return lines;
 }

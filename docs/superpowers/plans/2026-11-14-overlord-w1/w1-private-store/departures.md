@@ -34,8 +34,11 @@ and the store's snapshot, restore set and deny path. Each departure from the pla
   note key.
 - **`index-wiring-rides-task-3`.** `index.ts` opens the store in Task 3's work (with the journal), not Task 2's: the open is one
   call, `openOperatorModelStore(path, ccrcDir, now)`, and its boot lines are the journal's verdicts.
-- **`operator-model-path-has-no-env-override`.** `CcrcConfig.operatorModelDbPath` is built once from the home, with no
-  environment override beside `CCRC_COORD_DB`'s; nothing needs one yet.
+- **`operator-model-path-has-no-env-override`** (reworded in fix round 1, review 2251 F6). `CcrcConfig.operatorModelDbPath`
+  has no override of its own beside `CCRC_COORD_DB`'s, but it is built from the configured home (`CCRC_HOME`, else the
+  process home), so `CCRC_HOME` still moves the store and its journal, and the sessions' deny rules name `~/.ccrc` in the
+  process home. Nothing in `deploy/` or `ccd/ccrc` sets `CCRC_HOME`, and it is the server's own environment, not a
+  session's. The boot warns when the two homes differ (`operatorModelBootLines`).
 - **`tasks-2-3-one-commit`.** Tasks 2 and 3 are one commit: `store.ts` carries both (the one writer, and the journal's open),
   and the session cannot split a file's hunks interactively.
 - **`journal-census-cut-call`.** `journal-file-callers.test.ts`'s `CUT_CALLS` names the store's open
@@ -50,6 +53,49 @@ and the store's snapshot, restore set and deny path. Each departure from the pla
   `mkdir -p`, not `mkdir -m`, because `agent/test/deploy-verify.test.ts` anchors on the literal `mkdir -p ~/ccrc-backups/$TS`.
 - **`backup-result-line-names-the-store`.** `_upd_backup`'s result line reads "coord.db snapshot, the private store's snapshot
   when it exists, coordination sidecars and manifest, …"; `ccrc-update-flip-backups.test.ts`'s pin of the line moves with it.
+
+## Fix round 1 (review 2251, the coordinator's rulings)
+
+- **`issuer-heals-a-torn-tail-in-process`** (F1). The issuer heals a torn tail that a failed append left while the server
+  runs, as the open heals one at boot. It cuts the tail aside through `cutAside` (its bytes kept under
+  `privacy-journal.torn/`) and retries the append once, as the authority journal's `healTornTail` does. The tail's record
+  failed, so its insert rolled back and no row holds its id. A tail that cannot be cut is answered as a torn tail, never as
+  `malformed`.
+- **`unmeasured-journal-is-fixed-in-place`** (F2). `operatorModelBootLines` gives an `unmeasured` read its own sentence:
+  fix the journal's access and restart the server, and do not move the journal aside, since it may hold a lead the store
+  needs. A failed cut at the open carries its error into the refusal's detail. The boot lines left `index.ts` for one
+  tested function, so the composition root only prints them.
+- **`store-deny-has-cd-and-glob-arms`** (F4, ruled: more than parity with the account guard). The session hook's account
+  arm (`apmatch`) refuses three further shapes:
+  - a `cd` into `~/.ccrc` followed by the store's or the journal's name;
+  - a glob under `~/.ccrc/` that can match the store, its sidecars or the journal (a bare `ls` excepted);
+  - a copier, archiver or recursive reader (`cp`, `rsync`, `tar`, `zip`, `scp`, `grep`, `rg`) given `~/.ccrc` itself.
+
+  The account prefilter now admits any Bash payload naming `.ccrc`. `must-allow.json` is unchanged, and none of its
+  entries matches. These are accident guards, like the rest of the arm: `bash -c` with an assembled string, a script file,
+  another interpreter, a glob outside `~/.ccrc/`, a copy of the whole home and a `cd` followed by a glob all run past them
+  (CLAUDE.md's residuals).
+- **`store-created-under-a-temporary-name`** (F5). With `createMode`, the shared opener creates and migrates a new file as
+  `<file>.creating` and links it into place only once every migration has committed, so a crash before then leaves no
+  0-byte file at the real name for the next boot to refuse. A leftover of a crashed create is removed: it never held a row.
+  The temporary name is covered by the store's deny entry, `~/.ccrc/operator-model.db*`.
+- **`coord-db-keeps-its-create-window`** (F5). `coord.db` passes no `createMode`, so it keeps today's create at its real
+  name, and with it the 0-byte window after a crash. That is out of scope here and left as it is.
+- **`backup-gate-is-lstat`** (F7). `_upd_backup` snapshots the store when anything stands at its path (`-e || -L`), as
+  `capture` measures it with `lstat`. A dangling link then refuses at the snapshot instead of being skipped, which would
+  have refused later as `store-snapshot-missing`.
+- **`deploy-sh-store-gate-left-as-f`** (F7). `deploy.sh`'s server lane, the fallback path, keeps its `-f` test. A dangling
+  link there is skipped and then refused by the lane's own `capture`, so the lane fails closed. No test drives that lane.
+- **`account-secret-paths-is-three-lines`** (F8). The plan says to edit `ACCOUNT_SECRET_PATHS` "on its one line". The six
+  store paths sit on two lines of their own under a comment, so the list now spans three lines. The JSDoc's count is
+  corrected.
+- **`capture-reads-no-store-user-version`** (F8). Task 4 says capture checks the store's `user_version`. `inspectDb`
+  reads none, for the store as for `coord.db`: capture checks that the snapshot is a whole SQLite file it can read, and
+  the server's opener decides the schema on the next boot.
+- **`move-message-validates-at`** (F9). `moveMessage` refuses an `at` that is not a non-negative safe integer, as
+  `recordMessage` does.
+- **`tx-ring-left-for-a-tidy-up`** (F10). `sqliteFile.ts` (K) imports `coord/tx.ts` (C5), as the old `openCoordDb` did.
+  The ring tests check direction, not context. Moving `tx.ts` to K is a later tidy-up.
 
 ## Measured
 

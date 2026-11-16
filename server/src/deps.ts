@@ -159,10 +159,10 @@ export interface Deps {
    *  `notifyLog`: absent means the coord routes answer 501 and the mail lane
    *  never runs, which is what a box with no coordination configured should
    *  do. */
+  coord?: CoordStore;
   /** The Overlord's private store (`operator-model.db`, context C11), opened at the root after `coord`. Absent in a test
    *  that builds no store; nothing in PR A reads it. */
   operatorModel?: OperatorModelStore;
-  coord?: CoordStore;
   /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
    *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
    *  `coord`, not inside a route: `CoordStore.setAccountPools` calls

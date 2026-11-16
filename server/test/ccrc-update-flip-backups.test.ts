@@ -3819,6 +3819,17 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     expect(r.code).not.toBe(0);
     expect(`${r.stdout}${r.stderr}`).toContain('the private store (operator-model.db) snapshot failed');
   });
+  it('private store A: a dangling link at the store\'s path refuses at the snapshot, as capture does, never skips it (F7)', () => {
+    const home = freshUpdateBox('ccrc-fx-store-dangling-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    symlinkSync(join(home, '.ccrc', 'no-such-store.db'), join(home, '.ccrc', 'operator-model.db'));
+    const r = runBackup(home);
+    expect(r.code).not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toContain('the private store (operator-model.db) snapshot failed');
+    expect(`${r.stdout}${r.stderr}`).not.toContain('store-snapshot-missing');
+  });
 });
 
 describe('ccrc update: the codex steps ride the staged spine (Plan 2b-2 Task 10)', () => {

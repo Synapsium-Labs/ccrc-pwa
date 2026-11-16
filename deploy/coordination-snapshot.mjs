@@ -26,7 +26,7 @@
 // inside a complete record, a chain break: all are corruption, not a crash artefact, and refuse capture exactly as before. A differential
 // row in `coordination-snapshot.test.ts` feeds both sides the same files.
 //
-// WHAT IT NEVER DOES. It never opens `coord.db` for writing, never follows a symlink for a member or a marker, and never touches a
+// WHAT IT NEVER DOES. It never opens `coord.db` or the private store (`operator-model.db`) for writing, never follows a symlink for a member or a marker, and never touches a
 // service: restore asks whether the server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable.
 // It writes only the directory it is given (capture), `~/.ccrc` (restore and recover) and, for `thin`, each backup directory it is told to thin.
 // What it deletes: capture, on failure, only files that run created (its partials, the members it placed and its own manifest); restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
@@ -66,7 +66,7 @@ const STORE_NAMES = Object.freeze([`${OPERATOR_MODEL_FILE}-wal`, `${OPERATOR_MOD
 export const MANIFEST_FILE = 'coordination-snapshot.json';
 /** The record a thinning writes BEFORE it deletes the snapshot files below (D-6348): it says the data set was dropped by design. */
 export const THINNED_FILE = 'coordination-thinned.json';
-/** The five names a thinning may remove. Also the order in which a leftover is named. */
+/** The six names a thinning may remove. Also the order in which a leftover is named. */
 export const SNAPSHOT_NAMES = Object.freeze([MANIFEST_FILE, JOURNAL_FILE, CHECKPOINT_FILE, DB_FILE, CARRIED_FILE, OPERATOR_MODEL_FILE]);
 /** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists, and so does the server's boot (it exits 1 before opening coord.db). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
@@ -1691,7 +1691,8 @@ function requireInactive(probe) {
 }
 
 /**
- * Replaces the live coordination set (journal, checkpoint, coord.db, its WAL and SHM) with a validated snapshot, as one unit.
+ * Replaces the live coordination set (journal, checkpoint, coord.db, its WAL and SHM, and the private store with its WAL and SHM
+ * by the manifest's `operatorModel` rule) with a validated snapshot, as one unit.
  * Order: validate the source; require the service measured inactive; stage the new files beside the live ones; publish the
  * restore marker (from here delegation recovery refuses to run), probe the service again; set the old files aside and place the new; verify what was placed;
  * make `committed` durable; clean up and remove the marker. A failure before `committed` puts the old set back; one after

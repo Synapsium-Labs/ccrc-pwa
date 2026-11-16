@@ -282,4 +282,33 @@ describe('openMigratedSqlite, its own caller\'s spec', () => {
     expect(versionOf(db)).toBe(1);
     db.close();
   });
+
+  it('createMode: the created file is migrated under a temporary name and appears at its real name only once migrated (F5)', () => {
+    const p = fileIn('atomic.db');
+    const seen: boolean[] = [];
+    const migrations = new Proxy(['CREATE TABLE a (x)', 'CREATE TABLE b (y)'], {
+      get(target, key, receiver) {
+        if (key === '0' || key === '1') seen.push(existsSync(p));
+        return Reflect.get(target, key, receiver) as unknown;
+      },
+    });
+    const db = openMigratedSqlite(p, fixtureSpec(migrations, 0o600));
+    expect(seen).toEqual([false, false]);   // a crash during either migration leaves nothing at the real name
+    expect(versionOf(db)).toBe(2);
+    expect(existsSync(`${p}.creating`)).toBe(false);
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+    db.close();
+  });
+
+  it('createMode: what a crashed create left under the temporary name is removed, and the next open creates the file (F5)', () => {
+    const p = fileIn('crashed.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    writeFileSync(`${p}.creating`, '');
+    writeFileSync(`${p}.creating-journal`, 'partial');
+    const db = openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)'], 0o600));
+    expect(versionOf(db)).toBe(1);
+    expect(existsSync(`${p}.creating`)).toBe(false);
+    expect(existsSync(`${p}.creating-journal`)).toBe(false);
+    db.close();
+  });
 });

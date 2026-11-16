@@ -244,6 +244,17 @@ describe('moveMessage: the one writer, by Table 1', () => {
     }
   });
 
+  it('refuses a time that is not a non-negative safe integer, as recordMessage does, and writes nothing (F9)', () => {
+    const f = fixture();
+    const id = idOf(record(f));
+    const before = rawRow(f, id);
+    for (const at of [Number.NaN, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(f.store.moveMessage(id, 'queue', 'route', at), String(at))
+        .toEqual({ ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' });
+    }
+    expect(rawRow(f, id)).toEqual(before);
+  });
+
   it('settle after unsettle stamps both settlement columns again', () => {
     const f = fixture();
     const id = rowIn(f, 'settled');

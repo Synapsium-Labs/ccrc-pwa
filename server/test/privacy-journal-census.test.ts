@@ -10,6 +10,19 @@ import { PRIVACY_JOURNAL_BASENAME, PRIVACY_JOURNAL_TORN_DIR } from '../src/opera
 
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
 const read = (rel: string): string => readFileSync(path.join(REPO_ROOT, rel), 'utf8');
+/** A bash text with every comment line blanked, so prose that names the journal (to say it is left out) never reads as a copy. */
+const code = (bash: string): string => bash.split('\n').map((l) => (/^\s*#/.test(l) ? '' : l)).join('\n');
+/** The names a copy of the journal would spell; any one of them in a backup's code is a red. */
+const journalNamed = (body: string): boolean =>
+  [PRIVACY_JOURNAL_BASENAME, PRIVACY_JOURNAL_TORN_DIR, 'privacy-journal'].some((n) => body.includes(n));
+/** `deploy.sh`'s server-lane backup block: from the served bundle's backup comment to its coordination-snapshot capture. */
+function deployServerBackup(text: string): string {
+  const a = text.indexOf('# Back up the served bundle before rsync --delete replaces it.');
+  expect(a, 'deploy.sh\'s server-lane backup block is gone: a moved block must turn this red').toBeGreaterThan(-1);
+  const b = text.indexOf('coordination-snapshot.mjs capture --dir', a);
+  expect(b, 'deploy.sh\'s server-lane capture is gone').toBeGreaterThan(a);
+  return text.slice(a, b);
+}
 /** The body of one bash function of `ccd/ccrc`, from its definition to its closing brace at column 0. */
 function bashFn(text: string, name: string): string {
   const a = text.indexOf(`\n${name}() {`);
@@ -36,6 +49,14 @@ describe('the privacy journal is left in place by every backup and restore', () 
       expect(body, name).not.toContain(PRIVACY_JOURNAL_TORN_DIR);
       expect(body, name).not.toContain('privacy-journal');
     }
+    // `_upd_backup` (which snapshots the store) and `deploy.sh`'s server-lane block (which does too), comments blanked (F3).
+    const backup = bashFn(ccrc, '_upd_backup');
+    expect(backup).toContain('operator-model.db');
+    const lane = deployServerBackup(read('deploy/deploy.sh'));
+    expect(lane).toContain('operator-model.db');
+    for (const [name, body] of [['_upd_backup', backup], ['deploy.sh server lane', lane]] as const) {
+      expect(journalNamed(code(body)), name).toBe(false);
+    }
     for (const f of ['deploy/backup-coord.mjs', 'deploy/coordination-snapshot.mjs']) {
       expect(existsSync(path.join(REPO_ROOT, f)), `${f} is gone: a moved file must turn this red`).toBe(true);
       expect(read(f), f).not.toContain('privacy-journal');
@@ -46,5 +67,18 @@ describe('the privacy journal is left in place by every backup and restore', () 
     const readme = flat(read('README.md'));
     expect(readme).toContain('operator-model.db');
     expect(readme).toContain('no backup copies `~/.ccrc/privacy-journal.log`');
+  });
+
+  it('the scan of _upd_backup and deploy.sh\'s server lane sees a planted copy and ignores the journal named in a comment (control)', () => {
+    const ccrc = read('ccd/ccrc');
+    const backup = bashFn(ccrc, '_upd_backup');
+    const planted = backup.replace('  _upd_backup_set\n', '  cp -a "$HOME/.ccrc/privacy-journal.log" "$UPD_BACKUP_DIR/"\n  _upd_backup_set\n');
+    expect(planted).not.toBe(backup);
+    expect(journalNamed(code(planted))).toBe(true);
+    expect(journalNamed(code(`${backup}\n  # the privacy-journal.log stays in place\n`))).toBe(false);
+    const lane = deployServerBackup(read('deploy/deploy.sh'));
+    const plantedLane = lane.replace('~/ccrc-backups/$TS/operator-model.db;', '~/ccrc-backups/$TS/operator-model.db; cp ~/.ccrc/privacy-journal.log ~/ccrc-backups/$TS/;');
+    expect(plantedLane).not.toBe(lane);
+    expect(journalNamed(code(plantedLane))).toBe(true);
   });
 });

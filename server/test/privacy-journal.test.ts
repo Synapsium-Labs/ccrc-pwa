@@ -12,7 +12,7 @@ import {
   PRIVACY_JOURNAL_BASENAME, PRIVACY_JOURNAL_FORMAT, PRIVACY_JOURNAL_TORN_DIR, PrivacyJournalError, privacyJournalEntry,
 } from '../src/operatorModel/privacyJournal.js';
 import { OPERATOR_MODEL_DB_BASENAME } from '../src/operatorModel/db.js';
-import { openOperatorModelStore, type OperatorModelOpen } from '../src/operatorModel/store.js';
+import { openOperatorModelStore, operatorModelBootLines, type OperatorModelOpen } from '../src/operatorModel/store.js';
 import { privacyCoherenceCases } from './sim/operatorModelSets.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -137,6 +137,55 @@ describe('the store records through the privacy journal', () => {
     expect(idOf(record(again))).toBe(2);
   });
 
+  it('a torn tail written while the server runs is cut aside in-process, kept, and the append retried once (F1)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dir = dirIn();
+    const o = open(dir);
+    expect(idOf(record(o))).toBe(1);
+    const p = path.join(dir, PRIVACY_JOURNAL_BASENAME);
+    const before = readFileSync(p);
+    writeFileSync(p, Buffer.concat([before, Buffer.from('{"v":1,"seq')]));   // a partial append that failed
+    expect(idOf(record(o))).toBe(2);
+    expect(journalLines(dir).map((e) => e.id)).toEqual([1, 2]);
+    const torn = path.join(dir, PRIVACY_JOURNAL_TORN_DIR);
+    expect(readdirSync(torn)).toHaveLength(1);
+    expect(readFileSync(path.join(torn, readdirSync(torn)[0]!), 'utf8')).toBe('{"v":1,"seq');
+    expect(warn.mock.calls.flat().join('\n')).toContain('torn tail was cut aside while the server ran');
+    warn.mockRestore();
+    o.db.close();
+    expect(open(dir).privacy).toEqual({ verdict: 'coherent' });
+  });
+
+  it('a torn tail that cannot be cut aside answers as torn, never malformed, and writes no row (F1)', () => {
+    const dir = dirIn();
+    const o = open(dir);
+    record(o);
+    writeFileSync(path.join(dir, PRIVACY_JOURNAL_TORN_DIR), 'not a directory');
+    const p = path.join(dir, PRIVACY_JOURNAL_BASENAME);
+    writeFileSync(p, Buffer.concat([readFileSync(p), Buffer.from('{"v":1,"seq')]));
+    const r = record(o);
+    expect(r).toMatchObject({ ok: false, error: 'journal-unreadable' });
+    const detail = r.ok ? '' : r.detail;
+    expect(detail).toContain('ends in a torn tail of 11 bytes');
+    expect(detail).toContain('cutting it aside answered');
+    expect(detail).not.toContain('malformed');
+    expect(o.store.highestMessageId()).toEqual({ kind: 'measured', value: 1 });
+  });
+
+  it('a failed cut at the open carries its error into the refusal (F2)', () => {
+    const dir = dirIn();
+    const o = open(dir);
+    record(o);
+    o.db.close();
+    writeFileSync(path.join(dir, PRIVACY_JOURNAL_TORN_DIR), 'not a directory');
+    const p = path.join(dir, PRIVACY_JOURNAL_BASENAME);
+    writeFileSync(p, Buffer.concat([readFileSync(p), Buffer.from('{"v":1,"seq')]));
+    const again = open(dir);
+    expect(again.healed).toBeNull();
+    expect(again.privacy).toMatchObject({ verdict: 'refuse', code: 'torn-tail' });
+    expect(again.privacy.verdict === 'refuse' ? again.privacy.detail : '').toMatch(/^a torn tail of 11 bytes at \d+; cutting it aside answered \w+$/);
+  });
+
   it('a record changed in the middle reads malformed: recordMessage answers journal-unreadable while recordRead and every reader still work', () => {
     const dir = dirIn();
     const o = open(dir);
@@ -203,5 +252,45 @@ describe('the store records through the privacy journal', () => {
     const read = chainedJournalFileAt(PRIVACY_JOURNAL_FORMAT, dir, PRIVACY_JOURNAL_BASENAME).read();
     const last = read.kind === 'records' ? read.records.at(-1)! : null;
     expect(o.store.privacyJournalHead()).toEqual({ kind: 'measured', value: { digest: last!.digest, sequence: 2, highestId: 2 } });
+  });
+});
+
+describe('the open\'s boot lines (F2, F6)', () => {
+  const HOME = '/fixture-home';
+  const at = (privacy: OperatorModelOpen['privacy'], healed: string | null = null) =>
+    operatorModelBootLines({ healed, privacy, journalPath: '/fixture-home/.ccrc/privacy-journal.log' }, HOME, HOME);
+
+  it('says nothing for a coherent or fresh journal in the process home', () => {
+    expect(at({ verdict: 'coherent' })).toEqual([]);
+    expect(at({ verdict: 'fresh' })).toEqual([]);
+  });
+
+  it('an unmeasured read is told to fix access and restart, never to move the journal aside', () => {
+    const [line, ...rest] = at({ verdict: 'refuse', code: 'unmeasured', detail: 'the journal could not be read (unreadable)' });
+    expect(rest).toEqual([]);
+    expect(line).toContain('could not be read (the journal could not be read (unreadable))');
+    expect(line).toContain('Fix its access and restart the server; do not move it aside');
+    expect(line).not.toContain('moved aside and the server restarted');
+  });
+
+  it('a journal the open cannot trust is told to be moved aside, with its code and detail', () => {
+    const [line] = at({ verdict: 'refuse', code: 'torn-tail', detail: 'a torn tail of 11 bytes at 0; cutting it aside answered unwritable' });
+    expect(line).toContain('cannot be trusted (torn-tail: a torn tail of 11 bytes at 0; cutting it aside answered unwritable)');
+    expect(line).toContain('moved aside and the server restarted, which re-anchors it');
+  });
+
+  it('names a heal and a re-anchor', () => {
+    expect(at({ verdict: 're-anchor', reason: 'missing', highestId: 4, appended: true, detail: 'appended' }, '0-ab.tail')).toEqual([
+      'the privacy journal\'s torn tail was cut aside, kept as 0-ab.tail',
+      'the privacy journal was missing; re-anchored at message 4 (appended), so no id at or below it is issued again',
+    ]);
+  });
+
+  it('warns when the configured home is not the process home, since the deny rules name ~/.ccrc', () => {
+    const lines = operatorModelBootLines({ healed: null, privacy: { verdict: 'coherent' }, journalPath: '/elsewhere/.ccrc/privacy-journal.log' },
+      '/elsewhere', HOME);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('live under /elsewhere, not the process\'s home');
+    expect(operatorModelBootLines({ healed: null, privacy: { verdict: 'coherent' }, journalPath: 'x' }, `${HOME}/`, HOME)).toEqual([]);
   });
 });

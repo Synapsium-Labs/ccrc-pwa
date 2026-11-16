@@ -4,7 +4,7 @@
 // caller does not hand it. The caller keeps its own refusal sentences (`zeroByte`, `migrationFailed`) and its own error
 // class (`fail`), so a sentence a test pins where it stands never moves here.
 import { DatabaseSync } from 'node:sqlite';
-import { closeSync, existsSync, fchmodSync, mkdirSync, openSync, statSync, unlinkSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, linkSync, mkdirSync, openSync, rmSync, statSync, unlinkSync } from 'node:fs';
 import path from 'node:path';
 import { tx } from './coord/tx.js';
 
@@ -18,8 +18,10 @@ export interface MigratedSqliteSpec {
   readonly migrationFailed: (dbPath: string, version: number, err: unknown, dataStatus: string) => string;
   /** The caller's error class: `CoordDbUnmigratable`, `PrivateStoreUnmigratable`. */
   readonly fail: (message: string) => Error;
-  /** A file this call creates is created at exactly this mode before SQLite opens it (the private store: 0o600).
-   *  Absent, SQLite creates it at the umask's mode, as `coord.db` always has been. */
+  /** A file this call creates is created at exactly this mode before SQLite opens it (the private store: 0o600), and
+   *  under the temporary name `<file>.creating` until every migration has committed, so a crash before then leaves no
+   *  0-byte file at the real name for the next boot to refuse. Absent, SQLite creates it at the umask's mode at its real
+   *  name, as `coord.db` always has been (slug `coord-db-keeps-its-create-window`). */
   readonly createMode?: number;
 }
 
@@ -75,16 +77,26 @@ export function openMigratedSqlite(dbPath: string, spec: MigratedSqliteSpec): Da
   // `cp`/`rsync --inplace`, a stray `> coord.db` — is indistinguishable from a genuinely fresh install once
   // `new DatabaseSync` has run. This guard runs BEFORE that call, so at THIS instant a 0-byte file can only mean
   // "predates this process" — provided nothing this process does leaves a 0-byte file behind, which the cleanup beside
-  // the migration-failure throw below guarantees (`new DatabaseSync`, and `createMode`'s create, make the file at 0
-  // bytes before any migration writes a byte).
+  // the migration-failure cleanup in `migrateFrom` guarantees (`new DatabaseSync` makes the file at 0 bytes before any
+  // migration writes a byte; `createMode`'s create does that under its temporary name).
   const existedBefore = existsSync(dbPath);
   if (existedBefore && statSync(dbPath).size === 0) throw spec.fail(spec.zeroByte(dbPath));
 
   if (!existedBefore && spec.createMode !== undefined) {
-    // Created empty, exclusively, then set to the exact mode through its descriptor, so the umask cannot widen it.
-    // SQLite gives the `-wal` and `-shm` sidecars the main file's mode.
-    const fd = openSync(dbPath, 'wx', spec.createMode);
+    // Created empty, exclusively, then set to the exact mode through its descriptor, so the umask cannot widen it, and
+    // migrated under its temporary name. A leftover of a crashed create never held a row (rows are written only after
+    // this open returns), so it is removed. The link fails rather than replace a file that appeared meanwhile. SQLite
+    // gives the `-wal` and `-shm` sidecars the main file's mode.
+    const tmp = `${dbPath}.creating`;
+    rmSync(tmp, { force: true });
+    rmSync(`${tmp}-journal`, { force: true });
+    const fd = openSync(tmp, 'wx', spec.createMode);
     try { fchmodSync(fd, spec.createMode); } finally { closeSync(fd); }
+    const fresh = new DatabaseSync(tmp);
+    migrateFrom(fresh, tmp, false, 0, spec, dbPath);
+    fresh.close();
+    linkSync(tmp, dbPath);
+    unlinkSync(tmp);
   }
 
   const db = new DatabaseSync(dbPath);
@@ -110,6 +122,16 @@ export function openMigratedSqlite(dbPath: string, spec: MigratedSqliteSpec): Da
     return finishOpen();
   }
 
+  migrateFrom(db, dbPath, existedBefore, current, spec, dbPath);
+  return finishOpen();
+}
+
+/** Rule 1's loop, from `current` to the spec's version, on the open handle `db` of `file`; on a failure it closes `db`,
+ *  removes `file` only when this call created it and it is still 0 bytes, and throws the caller's sentence naming
+ *  `reportPath` (the real name, also while the file is migrated under its temporary one). */
+function migrateFrom(db: DatabaseSync, file: string, existedBefore: boolean, current: number, spec: MigratedSqliteSpec,
+  reportPath: string): void {
+  const version = spec.migrations.length;
   for (let v = current; v < version; v++) {
     try {
       tx(db, () => {
@@ -121,18 +143,17 @@ export function openMigratedSqlite(dbPath: string, spec: MigratedSqliteSpec): Da
     } catch (err) {
       db.close();
       // A file THIS call created whose migration never got far enough to commit would still be sitting at 0 bytes,
-      // and the NEXT boot would meet it at the guard above and refuse forever over a failure that may already be
+      // and the NEXT boot would meet it at the 0-byte guard and refuse forever over a failure that may already be
       // fixed. Best-effort: the throw below is what reports the failure, and a failed unlink must not replace it.
       try {
-        const sizeNow = existsSync(dbPath) ? statSync(dbPath).size : null;
+        const sizeNow = existsSync(file) ? statSync(file).size : null;
         if (sizeNow !== null && shouldRemoveMigrationFailureArtifact(existedBefore, sizeNow)) {
-          unlinkSync(dbPath);
+          unlinkSync(file);
         }
       } catch { /* the caller's refusal below is the real signal */ }
       // Earlier iterations of THIS loop may already have committed, each in its own transaction, so "nothing was
       // changed" would be a lie; the caller's sentence carries the measured progress.
-      throw spec.fail(spec.migrationFailed(dbPath, v, err, describeMigrationProgress(current, v)));
+      throw spec.fail(spec.migrationFailed(reportPath, v, err, describeMigrationProgress(current, v)));
     }
   }
-  return finishOpen();
 }

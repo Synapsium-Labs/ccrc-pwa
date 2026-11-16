@@ -226,6 +226,34 @@ describe('the account arm denies on every session (D-6202)', () => {
     expect(fire(id, 'Read', { file_path: '~/ccrc-backups/20261115-120000/coord.db' }, extra)).toBeNull();
   });
 
+  // Review 2251 F4 (the coordinator's ruling): the operator's words get two arms beyond the account guard's parity. Both are
+  // accident guards, as CLAUDE.md says of the whole arm: `bash -c` with an assembled string, a script file or another
+  // interpreter still runs past them.
+  it.each(CALLERS)('%s: a cd into ~/.ccrc followed by the store\'s or the journal\'s name is refused (F4)', (_c, id, extra) => {
+    for (const command of [
+      'cd ~/.ccrc && sqlite3 operator-model.db', 'cd "$HOME/.ccrc"; cat privacy-journal.log', 'cd ~/.ccrc/ && cp operator-model.db-wal /tmp/x',
+      'cd ${HOME}/.ccrc && ls privacy-journal.torn', 'cd ~/.ccrc\nsqlite3 ./operator-model.db .dump',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/after a cd into ~\/\.ccrc/);
+    for (const command of ['cd ~/.ccrc && sqlite3 coord.db', 'cd ~/.ccrc && ls', 'cd ~/.ccrc && cat privacy-journal.log.md', 'cd server && cat operator-model.db']) {
+      expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    }
+  });
+
+  it.each(CALLERS)('%s: a reader or copier given a glob under ~/.ccrc that can match the store or the journal, or ~/.ccrc whole, is refused (F4)', (_c, id, extra) => {
+    for (const command of [
+      'sqlite3 ~/.ccrc/*.db', 'cat "$HOME"/.ccrc/*.log', 'cp ~/.ccrc/* /tmp/x', 'cat ~/.ccrc/operator-*', 'sqlite3 ~/.ccrc/{coord,operator-model}.db',
+      'cat ~/.ccrc/priv?cy-journal.log', 'cp ~/.ccrc/*.db-wal /tmp/x', 'grep -l x ~/.ccrc/[op]*',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a glob under ~\/\.ccrc/);
+    for (const command of [
+      'cp -r ~/.ccrc /tmp/x', 'tar czf /tmp/x.tgz ~/.ccrc', 'tar czf /tmp/x.tgz -C ~ .ccrc', 'rsync -a ~/.ccrc/ /tmp/x', 'grep -r token ~/.ccrc',
+      'cp -a "$HOME/.ccrc/." /tmp/x', 'zip -r /tmp/x.zip ~/.ccrc',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toMatch(/a copy or recursive read of ~\/\.ccrc/);
+    for (const command of [
+      'ls ~/.ccrc', 'ls ~/.ccrc/*.db', 'cat ~/.ccrc/*.json', 'sqlite3 ~/.ccrc/coord.db', 'cp ~/.ccrc/coord.db /tmp/x', 'cat ~/.ccrc/coord.db*',
+      'grep -r token server/src', 'cp -r ~/.ccrc-old /tmp/x', 'ls ~/.ccrc/update-*.json',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+  });
+
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {
     for (const command of ['cat ~/.ccrc/operator-secrets-notes.md', 'grep -n writeOperatorSecret server/src/coord/ledgersSecrets.ts']) {
       expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
