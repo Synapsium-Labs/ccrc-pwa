@@ -734,9 +734,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
     // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox)
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a)
-    // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(80);
-    expect(MIGRATIONS.length).toBe(80);
+    // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1)
+    // and MIGRATIONS[80] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(81);
+    expect(MIGRATIONS.length).toBe(81);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -841,8 +842,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
     // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox)
     // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a)
-    // and MIGRATIONS[79] (answer_marks, Overlord W1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(80);
+    // and MIGRATIONS[79] (answer_marks, Overlord W1)
+    // and MIGRATIONS[80] (the goals versions' ratification columns, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(81);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2979,6 +2981,38 @@ describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9
   it('refuses a value other than 0 or 1', () => {
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     expect(() => db.prepare("INSERT INTO answer_marks (kind, rowId, mark, value, at, actor) VALUES ('item', 1, 'unsure', 2, 1, 'op-a')").run()).toThrow(/CHECK/);
+    db.close();
+  });
+});
+
+describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; §3.8, Table 11.1a)', () => {
+  /** Found by its DDL, never hard-coded. Provisional: renumbered 83 at landing, after authority A (81) and responses A (82). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;')) + 1;
+  it('FIVE NULLABLE COLUMNS on existing tables and nothing else, the entry after the answer marks\'', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE answer_marks (')) + 2);
+    expect(SLOT).toBe(81);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean)).toEqual([
+      'ALTER TABLE programs ADD COLUMN ratifiedBy TEXT', 'ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER',
+      'ALTER TABLE programs ADD COLUMN doneWhenBy TEXT', 'ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT',
+      'ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER',
+    ]);
+  });
+
+  it('reaches a database ALREADY at the version before it: every pin and modification keeps its row and reads NULL', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+    raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+    raw.exec("INSERT INTO programs (slug, title, createdAt, state, inShort, inShortAt) VALUES ('prog-a', 'A', 1, 'active', 'x', 2)");
+    raw.exec("INSERT INTO programme_modifications (program, at, text) VALUES ('prog-a', 3, 'y')");
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT inShort, ratifiedBy, ratifiedAt, doneWhenBy FROM programs WHERE slug = 'prog-a'").all())
+      .toEqual([{ inShort: 'x', ratifiedBy: null, ratifiedAt: null, doneWhenBy: null }]);
+    expect(db.prepare('SELECT text, ratifiedBy, ratifiedAt FROM programme_modifications').all())
+      .toEqual([{ text: 'y', ratifiedBy: null, ratifiedAt: null }]);
     db.close();
   });
 });

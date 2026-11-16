@@ -3,9 +3,9 @@
 // "Changed since approval". The link is built through `docsPageUrl(docsLocation(...))` and only from a path that
 // passes `isSpecPath` in a project that passes the project grammar (plan Review Focus 5, PWA side): an unchecked
 // path never becomes a link. Placeholders only: programme `prog-a`, project `project-a`.
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import type { GoalsView } from '../../shared/ledgers';
+import type { GoalsView, Ratification } from '../../shared/ledgers';
 import { docsPageUrl } from '../../shared/docs';
 import { docsLocation } from '../src/docs/docsLinks';
 import { GoalsPanel } from '../src/ledgers/GoalsPanel';
@@ -165,5 +165,47 @@ describe('Goals: a change that came from an item (PL5b)', () => {
     cleanup();
     render(<GoalsPanel goals={goals({ modifications: [mod(2, { itemId: 7 })] })} homeProject="project-a" />);
     expect(screen.queryByRole('link', { name: 'Open the item' })).toBeNull();
+  });
+});
+
+describe('Goals: ratification verdicts and the Ratify button', () => {
+  const no = (why: Extract<Ratification, { ratified: false }>['why'], source: Ratification['source'] = null): Ratification => ({ ratified: false, why, source });
+  const byOperator: Ratification = { ratified: true, source: { kind: 'operator' } };
+  const byCoordinator: Ratification = { ratified: true, source: { kind: 'coordinator' } };
+
+  it('the pin and a modification each show their verdict in words (a coordinator-written version is ratified: question 1)', () => {
+    render(<GoalsPanel goals={goals({ pinRatification: byCoordinator, modifications: [mod(1, { ratification: byOperator }), mod(2, { itemId: 7, ratification: no('item-not-answered', { kind: 'item' }) })] })} homeProject="project-a" />);
+    expect(screen.getByText('Ratified by the coordinator')).toBeTruthy();
+    expect(screen.getByText('Ratified by you')).toBeTruthy();
+    expect(screen.getByText('Not ratified: item 7 has not been answered')).toBeTruthy();
+  });
+
+  it('a version an older server sends no verdict for reads "Not recorded"', () => {
+    render(<GoalsPanel goals={goals({ modifications: [mod(1)] })} homeProject="project-a" />);
+    expect(screen.getAllByText('Not recorded')).toHaveLength(2);
+  });
+
+  it('draws no Ratify button without onRatify', () => {
+    render(<GoalsPanel goals={goals({ pinRatification: no('unrecorded'), modifications: [mod(1, { ratification: no('unrecorded') })] })} homeProject="project-a" />);
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
+  });
+
+  it('with onRatify, the pin\'s button hands back the stamp the panel rendered, and a modification\'s hands back its id', () => {
+    const onRatify = vi.fn();
+    render(<GoalsPanel goals={goals({ pinRatification: no('unrecorded'), modifications: [mod(4, { ratification: no('unreadable') })] })} homeProject="project-a" onRatify={onRatify} />);
+    const buttons = screen.getAllByRole('button', { name: 'Ratify' });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[0]!);
+    expect(onRatify).toHaveBeenLastCalledWith({ pin: { inShortAt: T0 } });
+    fireEvent.click(buttons[1]!);
+    expect(onRatify).toHaveBeenLastCalledWith({ modification: 4 });
+  });
+
+  it('no button on a ratified version, an absent verdict, or a pin with no stamp', () => {
+    render(<GoalsPanel goals={goals({ pinRatification: byOperator, modifications: [mod(1, { ratification: byCoordinator }), mod(2)] })} homeProject="project-a" onRatify={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
+    cleanup();
+    render(<GoalsPanel goals={goals({ inShort: null, inShortAt: null, pinRatification: no('unrecorded') })} homeProject="project-a" onRatify={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
   });
 });

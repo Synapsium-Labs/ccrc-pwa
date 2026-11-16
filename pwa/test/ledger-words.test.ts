@@ -6,6 +6,8 @@ import {
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
   type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
 } from '../src/ledgers/ledgerWords';
+import { RATIFY_UNAVAILABLE_TEXT, ratificationWords, ratifyFailureOf } from '../src/ledgers/ledgerWords';
+import type { Ratification, RatificationWhy } from '../../shared/ledgers';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import type { AskMarkRow } from '../../shared/answerMarks';
 import { isWaitingView } from '../src/ledgers/waitingView';
@@ -404,5 +406,42 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
 
   it('an item\'s number is its id after a #', () => {
     expect(itemNumber(itemView({ id: 129 }))).toBe('#129');
+  });
+});
+
+describe('ratificationWords', () => {
+  it('words both ratified sources', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'operator' } }, null)).toBe('Ratified by you');
+    expect(ratificationWords({ ratified: true, source: { kind: 'coordinator' } }, null)).toBe('Ratified by the coordinator');
+  });
+  it('words every reason a version is not ratified, naming the item where there is one', () => {
+    const words: Record<RatificationWhy, string> = {
+      'source-does-not-ratify': 'Not ratified: written by the coordinator',
+      'effect-unmeasured': "Not ratified: rests on item 9's answer, which does not ratify goals yet",
+      'item-not-answered': 'Not ratified: item 9 has not been answered',
+      unreadable: 'Not ratified: what it rests on could not be read',
+      unrecorded: 'Not recorded',
+      absent: 'Not recorded',
+    };
+    for (const [why, text] of Object.entries(words)) {
+      const r: Ratification = { ratified: false, why: why as RatificationWhy, source: null };
+      expect(ratificationWords(r, 9), why).toBe(text);
+    }
+  });
+});
+
+describe('ratifyFailureOf: what a failed ratify means to the Goals card', () => {
+  it('a 404 (an older server), not-configured and auth-off take the button away, each with its words', () => {
+    expect(ratifyFailureOf(404, { ok: false, error: 'not-found' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-found'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'not-configured' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-configured'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'auth-off' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['auth-off'] });
+  });
+  it('goals-changed reads again; anything else is only said', () => {
+    expect(ratifyFailureOf(409, { ok: false, error: 'goals-changed' })).toEqual({ kind: 'changed' });
+    expect(ratifyFailureOf(400, { ok: false, error: 'bad-request' })).toEqual({ kind: 'other' });
+    expect(ratifyFailureOf(null, null)).toEqual({ kind: 'other' });
+  });
+  it('a version resting on an item\'s answer, ratified (from W3), has its own words', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'item' } }, 4)).toBe('Ratified by the answer to the item it cites');
   });
 });

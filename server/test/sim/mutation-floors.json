@@ -81,6 +81,8 @@
   "server/src/coord/portfolio.ts#portfolioOrder": 1,
   "server/src/coord/portfolio.ts#itemWaitMs": 1,
   "server/src/coord/portfolio.ts#portfolioFor": 1,
+  "shared/ledgers.ts#goalRatification": 1,
+  "shared/ledgers.ts#itemAnswered": 1,
   "shared/overlordHistory.ts#readOverlordHistoryRequest": 1,
   "shared/overlordHistory.ts#readOverlordHistoryAnswer": 1,
   "ccd/history/lib.mjs#decideScope": 1,

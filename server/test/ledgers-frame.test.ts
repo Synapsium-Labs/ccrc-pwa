@@ -109,6 +109,14 @@ describe('the waiting frame (plan PL4)', () => {
     expect(FLEET_PROTO).toBe(1);
   });
 
+  it('carries each pinned programme\'s verdicts (Overlord W1, portfolio B; question 1: a coordinator pin reads ratified)', async () => {
+    const r = await rig();
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
+    const g = (await connect(r.port).waitingFrame(1)).waiting.goals.find((x) => x.program === 'prog-a')!;
+    expect(g.pinRatification).toEqual({ ratified: true, source: { kind: 'coordinator' } });
+    expect(g.doneWhenRatification).toEqual({ ratified: true, source: { kind: 'coordinator' } });
+  });
+
   it('is sent again after a raise, and again after the operator\'s tick', async () => {
     const r = await rig();
     const sock = connect(r.port);

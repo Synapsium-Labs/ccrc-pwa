@@ -623,7 +623,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
   and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
   and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
-  which work while sign-in is dark and record `flag-off` then), consult no box token
+  which work while sign-in is dark and record `flag-off` then), and `POST /api/programmes/:slug/goals/ratify` (Overlord W1
+  portfolio B: the operator ratifies one goals version, behind the account gate, so it refuses while sign-in is dark), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read

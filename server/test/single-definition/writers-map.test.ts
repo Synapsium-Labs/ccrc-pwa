@@ -670,3 +670,72 @@ describe('coordinator_calls: one writer per column, every write in coordCallsSto
     });
   });
 });
+
+// Overlord W1, portfolio B (plan `w1-portfolio.md` Task 4; Table 11.1a, "`ratifiedBy` on each goals version"): the goals
+// versions' ratification columns have the writers the plan names and no other. `ratifiedBy` and `ratifiedAt` are written
+// by `setSpecPin` (a re-pin records its own source) and the operator's `ratifyGoalsVersion` on `programs`, and by
+// `addModification` and `ratifyGoalsVersion` on `programme_modifications`; `doneWhenBy` only in the statements that write
+// `doneWhen` (`setSpecPin`, `setDoneWhen`). MAY ONLY SHRINK. KNOWN WIDTH: a statement split from its verb across string
+// pieces is not seen, as in the census above.
+describe('the goals versions\' ratification columns: every write in ledgersStore.ts, by the plan\'s writers', () => {
+  const COLS = /\b(ratifiedBy|ratifiedAt|doneWhenBy)\b/g;
+  const writes = (files: readonly string[]): Record<string, string[]> => {
+    const out: Record<string, Set<string>> = {};
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!/ratifiedBy|ratifiedAt|doneWhenBy/.test(text)) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+        const lit = m[0];
+        if (!/\b(?:UPDATE|INSERT)\b/.test(lit)) continue;
+        const at = m.index!;
+        const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        for (const c of lit.matchAll(COLS)) (out[c[1]!] ??= new Set()).add(`${rel(f)}#${inner?.name ?? '(module)'}`);
+      }
+    }
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()]));
+  };
+  const STORE = 'server/src/coord/ledgersStore.ts';
+  const F = `${STORE}#`;
+  // `addModification.insert` is the insert closure inside `addModification` (the row and a new list are one act there).
+  const EXPECTED = {
+    doneWhenBy: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    ratifiedAt: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    ratifiedBy: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+  };
+
+  it('CONTROL: an UPDATE and an INSERT naming a column are found by their function; a SELECT and a comment are not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        "export function upd(): void { db.prepare(\"UPDATE programs SET doneWhenBy = 'pin' WHERE slug = ?\"); }",
+        'export function ins(): void { db.prepare(`INSERT INTO programme_modifications (ratifiedBy) VALUES (?)`); }',
+        "export function sel(): void { db.prepare('SELECT ratifiedAt FROM programs'); }",
+        "// UPDATE programs SET ratifiedAt = 1",
+      ].join('\n'));
+      const w = writes([f]);
+      expect(w).toEqual({ doneWhenBy: [`${rel(f)}#upd`], ratifiedBy: [`${rel(f)}#ins`] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('CONTROL: a planted fifth writer in ledgersStore.ts is a further entry', async () => {
+    const real = readFileSync(path.join(ccrcRoot, STORE), 'utf8');
+    const planted = `${real}\nexport function plantedWriter(db: DatabaseSync): void { db.prepare("UPDATE programs SET ratifiedBy = 'operator' WHERE slug = ?").run('x'); }\n`;
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-plant-'));
+    try {
+      const f = path.join(d, 'ledgersStore.ts');
+      writeFileSync(f, planted);
+      expect(writes([f])['ratifiedBy']).toContain(`${rel(f)}#plantedWriter`);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each column\'s writers, by name, under server/src', () => {
+    const files = ALL.filter((f) => rel(f).startsWith('server/src/'));
+    expect(writes(files)).toEqual(EXPECTED);
+  });
+});

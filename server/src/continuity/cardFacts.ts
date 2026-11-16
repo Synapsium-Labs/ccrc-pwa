@@ -29,6 +29,7 @@ import {
   type CardNote, type CardProgramme, type CardRenderer, type CardRun, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
 import { noteKeyText } from '../../../shared/continuity.js';
+import { ratificationOf } from '../../../shared/ledgers.js';
 import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { roleFactsOf } from '../roleOf.js';
@@ -178,8 +179,10 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
       }
       return read([...slugs].sort().map((slug): CardProgramme => {
         const g = coord.goalsFor(slug);
-        // No goals version carries `ratifiedBy` yet, so every goal is rendered as not ratified (slug goals-unratified).
-        const goals = [...(g.inShort === null ? [] : [g.inShort]), ...(g.doneWhen ?? [])].map((text) => ({ text, ratified: false }));
+        // Each goal's `ratified` is its version's verdict (Overlord W1, portfolio B): the In short goal's is the pin's, each
+        // definition-of-done line's the version that wrote the list (`doneWhenBy`), read through `ratificationOf`.
+        const pinR = ratificationOf(g.pinRatification).ratified, doneR = ratificationOf(g.doneWhenRatification).ratified;
+        const goals = [...(g.inShort === null ? [] : [{ text: g.inShort, ratified: pinR }]), ...(g.doneWhen ?? []).map((text) => ({ text, ratified: doneR }))];
         const decisions = g.modifications.map((m) => ({ at: m.at, text: m.ruling === null ? m.text : `${m.text} (ruling: ${m.ruling})` }));
         return { slug, goals, decisions, openItems: openItems.value.filter((i) => i.programme === slug) };
       }));
