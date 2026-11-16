@@ -70,9 +70,12 @@ export const CANARY = ['zq', 'canary', 'x7'].join('-');
 /** The modes, enumerated once. */
 export const MODES = /** @type {const} */ (['part', 'exact', 'run', 'words']);
 
-/** @param {string} text @returns {string} 32 lower-case hex */
-export function hashEntry(text) {
-  return createHmac('sha256', PRIVATE_NAME_SALT).update(text).digest('hex').slice(0, 32);
+/** The key is the public salt unless a caller passes its own: the committed list and every scan of this tree keep the
+ *  salt, and the egress check passes the server's key, which reaches every hash on the build and the scan path, so a
+ *  list built under one key is never scanned under another (Overlord W2, `the-key-threads-through-every-hash`).
+ *  @param {string} text @param {string} [key] @returns {string} 32 lower-case hex */
+export function hashEntry(text, key = PRIVATE_NAME_SALT) {
+  return createHmac('sha256', key).update(text).digest('hex').slice(0, 32);
 }
 
 /** Joiners as small codes, the order of the `Joiner` type: 1-5 join a run. */
@@ -231,24 +234,24 @@ export function tokens(line) {
 /** The split-form entry of a name: its tokens hashed joined by `-` (by the
  *  listed joiners for `exact` and `run`), its first token's own hash (the
  *  matcher's index key) and its token count.
- *  @param {string} text @param {Mode} mode @returns {Entry} */
-export function entryOf(text, mode) {
+ *  @param {string} text @param {Mode} mode @param {string} [key] @returns {Entry} */
+export function entryOf(text, mode, key = PRIVATE_NAME_SALT) {
   const { s } = foldMapped(text);
-  return entryFromStream(s, tokenize(s), mode);
+  return entryFromStream(s, tokenize(s), mode, T, key);
 }
 
-function entryFromStream(s, n, mode, A = T) {
+function entryFromStream(s, n, mode, A = T, key = PRIVATE_NAME_SALT) {
   const ts = [], seps = [];
   for (let k = 0; k < n; k++) { ts.push(textAt(s, k, A)); seps.push(JOINER_TEXT[A.join[k]] ?? '-'); }
-  return entryFrom(ts, mode, seps);
+  return entryFrom(ts, mode, seps, key);
 }
 
 /** `seps[k]` is what joins token k to the one before it. */
-function entryFrom(ts, mode, seps) {
+function entryFrom(ts, mode, seps, key = PRIVATE_NAME_SALT) {
   if (ts.length === 0) throw new Error('an entry needs at least one [a-z0-9] token');
   const keepsJoiners = mode === 'exact' || mode === 'run';
   const text = keepsJoiners ? ts.map((t, k) => (k === 0 ? t : seps[k] + t)).join('') : ts.join('-');
-  return { h: hashEntry(text), f: hashEntry(ts[0]), n: ts.length, mode };
+  return { h: hashEntry(text, key), f: hashEntry(ts[0], key), n: ts.length, mode };
 }
 
 /** Every entry a list row commits: split, camelCase merged, and run together
@@ -256,8 +259,8 @@ function entryFrom(ts, mode, seps) {
  *  joiners and spaces are what those modes are about). Distinct by all four
  *  fields, so a form that shares a hash with another but not its token count is
  *  still committed.
- *  @param {string} text @param {Mode} mode @returns {Entry[]} */
-export function entriesOf(text, mode) {
+ *  @param {string} text @param {Mode} mode @param {string} [key] @returns {Entry[]} */
+export function entriesOf(text, mode, key = PRIVATE_NAME_SALT) {
   const { s } = foldMapped(text);
   const out = [];
   const add = (e) => {
@@ -266,18 +269,26 @@ export function entriesOf(text, mode) {
   const n = tokenize(s);
   const split = [];
   for (let k = 0; k < n; k++) split.push(textAt(s, k));
-  add(entryFromStream(s, n, mode));
-  add(entryFromStream(s, mergeCase(s, n), mode, M));
-  if (split.length > 1) add(entryFrom([split.join('')], mode === 'run' ? 'run' : 'part', ['']));
+  add(entryFromStream(s, n, mode, T, key));
+  add(entryFromStream(s, mergeCase(s, n), mode, M, key));
+  if (split.length > 1) add(entryFrom([split.join('')], mode === 'run' ? 'run' : 'part', [''], key));
   return out;
 }
 
-/** One keyed hash per unique string per process. */
+/** One salted hash per unique string per process, for the bounded tree scan. A hash under any other key is computed
+ *  each time and never kept: under the server this cache would hold the plain tokens of every outgoing text without
+ *  bound (Overlord W2, `keyed-tokens-are-not-cached`). */
 const HASHES = new Map();
-function hashOf(text) {
+function hashOf(text, key) {
+  if (key !== PRIVATE_NAME_SALT) return hashEntry(text, key);
   let v = HASHES.get(text);
   if (v === undefined) { v = hashEntry(text); HASHES.set(text, v); }
   return v;
+}
+
+/** How many salted hashes the cache holds. Test-only: it shows that a keyed scan adds none. */
+export function hashCacheSize() {
+  return HASHES.size;
 }
 
 /** Per entries array: the entries each first-token hash starts, and a cache from
@@ -290,8 +301,11 @@ function hashOf(text) {
 const INDEXES = new WeakMap();
 /** The token cache never grows past this many slots; at the bound it is emptied and refilled (answers stay exact: it is a cache). */
 const MAX_SLOTS = 1 << 20;
-function indexOf(entries) {
-  let ix = INDEXES.get(entries);
+function indexOf(entries, key = PRIVATE_NAME_SALT) {
+  // One index per entries array AND key: its token cache holds candidates found by hashing under that key.
+  let perKey = INDEXES.get(entries);
+  if (!perKey) { perKey = new Map(); INDEXES.set(entries, perKey); }
+  let ix = perKey.get(key);
   if (!ix) {
     const byF = new Map();
     for (const en of entries) {
@@ -300,8 +314,8 @@ function indexOf(entries) {
     }
     const words = entries.filter((en) => en.mode === 'words');
     ix = { byF, words, maxN: Math.max(1, ...entries.map((en) => en.n)),
-      wordsN: Math.max(0, ...words.map((en) => en.n)), size: 0, ...slots(1 << 17) };
-    INDEXES.set(entries, ix);
+      wordsN: Math.max(0, ...words.map((en) => en.n)), key, size: 0, ...slots(1 << 17) };
+    perKey.set(key, ix);
   }
   return ix;
 }
@@ -323,7 +337,7 @@ function lookup(ix, h1, h2, len, text) {
   for (let at = h1 & ix.mask; ix.used[at]; at = (at + 1) & ix.mask) {
     if (ix.k1[at] === h1 && ix.k2[at] === h2 && ix.k3[at] === len) return ix.cands[at];
   }
-  const cands = ix.byF.get(hashEntry(text())) ?? null;
+  const cands = ix.byF.get(hashEntry(text(), ix.key)) ?? null;
   if (++ix.size * 2 > ix.mask && ix.mask + 1 >= MAX_SLOTS) {
     // bound: a long-running server sees unbounded distinct tokens (ids, SHAs); start the cache over rather than grow it
     Object.assign(ix, slots(1 << 17), { size: 1 });
@@ -341,16 +355,16 @@ const candidatesAt = (ix, s, A, k) => lookup(ix, A.h1[k], A.h2[k], A.end[k] - A.
 /** Every hit on a line, with its span in the folded line and in the line as
  *  written — positions are for the exemptions and for masking, never for
  *  printing text.
- *  @param {string} line @param {Entry[]} entries @returns {Hit[]} */
-export function hitsAt(line, entries) {
-  const ix = indexOf(entries);
+ *  @param {string} line @param {Entry[]} entries @param {string} [key] @returns {Hit[]} */
+export function hitsAt(line, entries, key = PRIVATE_NAME_SALT) {
+  const ix = indexOf(entries, key);
   const { s, map } = foldMapped(line);
   cur = null; curS = s; curMap = map;
   const n = tokenize(s);
   windows(ix, s, T, n);
   // Whether a phrase could start in this line's last tokens and run on to the
   // next line: `pairHits` reads it rather than tokenizing the line again.
-  lastLine = line; lastEntries = entries; lastStarts = false;
+  lastLine = line; lastEntries = entries; lastKey = key; lastStarts = false;
   for (let k = Math.max(0, n - ix.wordsN + 1); k < n && !lastStarts; k++) {
     const cands = candidatesAt(ix, s, T, k);
     lastStarts = cands !== null && cands.some((en) => en.mode === 'words');
@@ -367,7 +381,7 @@ export function hitsAt(line, entries) {
 /** The line being read: its hits so far (null until the first), folded text and
  *  offset map. Module state rather than a closure per line: there are 1.9M lines. */
 let cur = null, curS = '', curMap = null;
-let lastLine = null, lastEntries = null, lastStarts = false;
+let lastLine = null, lastEntries = null, lastKey = PRIVATE_NAME_SALT, lastStarts = false;
 function push(en, start, end) {
   if (cur === null) cur = [];
   else if (cur.some((x) => x.start === start && x.end === end)) return;
@@ -393,7 +407,7 @@ function windows(ix, s, A, n) {
         const keepsJoiners = en.mode === 'exact' || en.mode === 'run';
         let text = textAt(s, i, A);
         for (let k = i + 1; k <= last; k++) text += (keepsJoiners ? JOINER_TEXT[A.join[k]] : '-') + textAt(s, k, A);
-        if (hashOf(text) !== en.h) continue;
+        if (hashOf(text, ix.key) !== en.h) continue;
       }
       push(en, A.start[i], A.end[last]);
     }
@@ -468,9 +482,9 @@ export const EXEMPTIONS = [
 const exempt = (file) => (hit) => !EXEMPTIONS.some((x) => x.applies(file, hit));
 
 /** What the class and the scan report for a line of `file`: matchLine, less
- *  the exempt hits. @param {string} line @param {string} file @param {Entry[]} entries */
-export function hitsIn(line, file, entries) {
-  const hits = hitsAt(line, entries);
+ *  the exempt hits. @param {string} line @param {string} file @param {Entry[]} entries @param {string} [key] */
+export function hitsIn(line, file, entries, key = PRIVATE_NAME_SALT) {
+  const hits = hitsAt(line, entries, key);
   return hits.length === 0 ? [] : [...new Set(hits.filter(exempt(file)).map((x) => x.h8))];
 }
 
@@ -481,14 +495,15 @@ const CONTINUATION = new RegExp(`^[\\s${IGNORABLE}]*(?:\\/\\/+|\\*+|#+|>+|--|;+)
 
 /** A `words` phrase broken across a line break: the hits in the facing ends of
  *  two adjacent lines that neither line holds alone. Reported against the
- *  first line. @param {string} prev @param {string} line @param {string} file @param {Entry[]} entries */
-export function pairHits(prev, line, file, entries) {
-  const { words } = indexOf(entries);
+ *  first line, under `key` throughout: the `words` sub-index and the pair cache are per key.
+ *  @param {string} prev @param {string} line @param {string} file @param {Entry[]} entries @param {string} [key] */
+export function pairHits(prev, line, file, entries, key = PRIVATE_NAME_SALT) {
+  const { words } = indexOf(entries, key);
   if (words.length === 0 || !prev || !line) return [];
   // A phrase broken here starts in the previous line's last few tokens: unless
   // one of them can start a phrase there is nothing to read. `hitsAt` measured
   // that when it read the previous line, which is the usual order of calls.
-  if (prev !== lastLine || entries !== lastEntries) hitsAt(prev, entries);
+  if (prev !== lastLine || entries !== lastEntries || key !== lastKey) hitsAt(prev, entries, key);
   if (!lastStarts) return [];
   // Only whitespace may sit between a phrase's words, so the previous line must
   // end on a letter or digit (trailing blanks and invisibles aside) and this one
@@ -498,8 +513,8 @@ export function pairHits(prev, line, file, entries) {
   const tail = prev.replace(TRAILING_BLANKS, '').slice(-80);
   const head = line.replace(CONTINUATION, '').slice(0, 80);
   if (!/[\p{L}\p{N}]$/u.test(foldMapped(tail).s) || !/^[\p{L}\p{N}]/u.test(foldMapped(head).s)) return [];
-  const alone = new Set([...hitsIn(tail, file, words), ...hitsIn(head, file, words)]);
-  return hitsIn(`${tail}\n${head}`, file, words).filter((h) => !alone.has(h));
+  const alone = new Set([...hitsIn(tail, file, words, key), ...hitsIn(head, file, words, key)]);
+  return hitsIn(`${tail}\n${head}`, file, words, key).filter((h) => !alone.has(h));
 }
 
 /** `text` with every hit replaced by its `#h8` — how a path is printed, since a
