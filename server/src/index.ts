@@ -13,6 +13,7 @@ import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
 import { installShutdownSeal } from './shutdownseal.js';
 import { connectFleet, type FleetClient } from './remote/client.js';
+import { bootPushOutbox } from './pushSender.js';
 import { PerfRecorder } from './perf/recorder.js';
 import { makeRefreshCaps } from './refreshcaps.js';
 import { recordCcdVerbs } from './fleetstate.js';
@@ -41,6 +42,8 @@ import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
+import { quizLanePortOf } from './continuity/quizStore.js';
+import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
@@ -103,6 +106,10 @@ if (restoreRefusal !== null) {
 // ccrc.service` (added this build) is what turns it into a failed deploy with
 // the journal tail attached, rather than a green deploy in front of a
 // three-second crash loop.
+// The process's ONE set of time ports (Overlord spec §11.5): both modes and every consumer get the same object, through
+// `Deps.time`. Nothing else builds the system adapters (`single-definition/time-ports.test.ts`). Built before the store,
+// whose boot pass below reads its clock; it takes no argument and reads nothing the store builds.
+const time = systemTimePorts();
 const coordDb = openCoordDb(cfg.coordDbPath);
 // Landing order wave 5f (shared contract §6): the store owns ONE authority journal, `landing.log` inside `cfg.ccrcDir`
 // (made here, because the adapter never creates a directory), and its landing entrances start fenced. The replay below
@@ -119,6 +126,10 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
+// connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
+// belongs to a process that died.
+bootPushOutbox(coord, time.clock);
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
@@ -170,10 +181,6 @@ const collectLane: CollectLaneDeps = {
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
 // call only against itself.
 const queue = new KeyedQueue();
-// The process's ONE set of time ports (Overlord spec §11.5), built here beside the queue for the same reason: both
-// modes and every consumer get the same object, through `Deps.time`. Nothing else builds the system adapters
-// (`single-definition/time-ports.test.ts`).
-const time = systemTimePorts();
 
 // The one agent connection, hoisted out of the remote arm so the `ready`
 // hook below can reach it once the watcher exists. Null in local mode.
@@ -335,6 +342,8 @@ const linearJournal = new LinearJournal(coord.db);
 deps.linearJournal = linearJournal;
 // The plan tables through their port (D-8181), built once beside the journal: the plan routes' only door to them.
 deps.plan = planStorePort(coord.db);
+// The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
+deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 deps.linearPolicy = allowAll;
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

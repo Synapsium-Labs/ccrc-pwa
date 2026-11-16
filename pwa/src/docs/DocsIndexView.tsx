@@ -7,7 +7,7 @@ import { formatAge } from '../fleet/formatReset';
 import { navigate } from '../lib/router';
 import { docsLocation } from './docsLinks';
 import { DOCS_VIEW_TEXT, fillSentence, pluralS, shortCommit } from './docsText';
-import { sectionCountsText } from './docsTree';
+import { presentSectionCounts, sectionCountsText } from './docsTree';
 import { DocsPageLink } from './DocsTreeView';
 
 /** A non-ready state in words (spec 4.4). `linked-worktree` and `shared-repo` are "part of <owner>" instead. */
@@ -29,7 +29,7 @@ function byName(a: DocsIndexRow, b: DocsIndexRow): number {
 /** Whether a row has docs to show: a ready repository with any section count other than 0 (`null`, unknown, counts
  *  as maybe), or a plain folder with a section on disk. Every other state is shown in words, docs or not. */
 function hasDocs(row: DocsIndexRow): boolean {
-  if (row.state === 'ready') return row.sections === undefined || Object.values(row.sections).some((n) => n !== 0);
+  if (row.state === 'ready') return row.sections === undefined || presentSectionCounts(row.sections).some(([, n]) => n !== 0);
   if (row.state === 'not-a-git-repo') return (row.sectionsOnDisk?.length ?? 0) > 0;
   return true;
 }

@@ -108,7 +108,8 @@ record() {
   # build.json in build-release.sh's exact one-line shape (its printf).
   rc=0; json="$(tar -xzOf "$tarball" ./build.json)" || rc=$?
   [ "$rc" -eq 0 ] || die "could not read build.json from $name, or it is not the builder's one-line shape"
-  re='^\{"sha":"([0-9a-f]{40})","ref":"[^"]*","builtAt":"[^"]*","dirty":false,"version":"([^"]*)"\}$'
+  # `ccdCaps` (the Overlord W1 pool set, Task 7): the built tree's `ccd caps` tokens, never empty, each on the token grammar.
+  re='^\{"sha":"([0-9a-f]{40})","ref":"[^"]*","builtAt":"[^"]*","dirty":false,"version":"([^"]*)","ccdCaps":\["[a-z][a-z0-9-]*"(,"[a-z][a-z0-9-]*")*\]\}$'
   if [[ "$json" == *$'\n'* ]] || ! [[ "$json" =~ $re ]]; then
     die "could not read build.json from $name, or it is not the builder's one-line shape"
   fi

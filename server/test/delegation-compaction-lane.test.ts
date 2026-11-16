@@ -10,8 +10,10 @@ import { DELEGATION_PASS_BUDGET_MS, FleetWatcher } from '../src/watch.js';
 import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import {
-  DELEGATION_CHECKPOINT_FILE, DelegationDurability, encodeDelegationCheckpoint,
+  DELEGATION_CHECKPOINT_FILE,
+  encodeDelegationCheckpoint,
 } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE, DELEGATION_CARRIED_FILE, DELEGATION_RETENTION_FLOOR_MS, buildDelegationJournalRecord, encodeDelegationJournalRecord, parseDelegationJournal } from '../src/coord/delegation-journal.js';
 import { DELEGATION_EVENTS_CAP, DELEGATION_HOUR_NEVER_CLOSED, delegationSha256Hex, type DelegationJournalRecordV1 } from '../src/coord/delegation-model.js';
 import { oldRuleCheckpoint } from './delegationOldRuleFixture.js';

@@ -101,3 +101,74 @@ _pool_set_mismatch_why() {   # account-id account-state spelling -> the rc-1 cla
   [[ "$2" == untagged ]] && { echo "$1 is in no pool and the session's pool set '$3' does not admit untagged accounts"; return 0; }
   echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch) and that pool is not in the session's pool set '$3'"
 }
+# ── THE USERS KEYED BY A SESSION (PR A3: Table 3.4d, the plan's Tasks 4 and 5) ───────────────────────────────────────
+# Every ccd user of the pool decision keyed by a session reads `_session_pool_side`, and these helpers give a side word
+# its token, its crossing field, its undecided word and its sentences. None decides membership: that is `_pool_ok`'s.
+_pool_side_is_set() { local LC_ALL=C IFS=' '; [[ "$1" == "set "* || "$1" == set-unreadable || "$1" == set-malformed ]]; }   # side word -> 0 iff a set side
+_pool_set_sid() { _pool_side_is_set "$1" && printf '%s' "$2"; return 0; }   # side id -> the id iff a set side (`_pool_undecidable_why`'s fifth)
+_pool_side_token() {   # side word -> one log token, which is also the crossing marker's pool field: `<n>`, `set:<spelling>`, else the word
+  # A set side never prints as a pool name ("set pool-b"), and a named side prints exactly what it printed before A3.
+  local LC_ALL=C IFS=' '
+  case "$1" in "named "*) printf '%s\n' "${1#named }" ;; "set "*) printf 'set:%s\n' "${1#set }" ;; *) printf '%s\n' "$1" ;; esac
+}
+_pool_cross_match() {   # side-word marker-field -> 0 iff a crossing marker's pool field names this decided side
+  # A `set:` field holds only while the side reads that same spelling, so a crossing lapses when the set changes and not
+  # when the operator only reorders it (the spelling is sorted). A named field holds only while the project reads it.
+  # The field is the marker file's bytes, so the comparison runs in the C locale, as every reader of a set does.
+  local LC_ALL=C IFS=' '
+  [[ "$1" == "named "* && "$2" == "${1#named }" ]] || [[ "$1" == "set "* && "$2" == "set:${1#set }" ]]
+}
+_pool_cross_lapse_why() {   # decided side word -> `crosspool-ended`'s reason when the side no longer matches the marker
+  if [[ "$1" == "set "* ]]; then echo "account set is now ${1#set }"; else echo "project pool is now $1"; fi
+}
+_pool_undecided_rc() {   # POOL_OK_SIDE -> `_swap_target`'s undecided rc: 4 the project, 7 the account (projection), 8 the set
+  case "$1" in account) return 7 ;; set) return 8 ;; *) return 4 ;; esac
+}
+_pool_undecided_word() {   # `_swap_target`'s rc, or POOL_OK_SIDE -> the `_undecidable_cause` word for that side
+  case "$1" in 7|account) echo projection ;; 8|set) echo set ;; *) echo pool ;; esac
+}
+_pool_undecidable_cause() {   # word id -> `_undecidable_cause`'s sentence for `projection` or `set`
+  # `projection` is every session's, not only a set session's (slug `projection-word-fleet-wide`): an undecidable account
+  # side names the projection and its remedy, never the project's tag. A set session's says the set decided (A2 F1).
+  if [[ "$1" == set ]]; then
+    printf '%s' "the account set on the route record could not be read or parsed ($REG/$2.poolset), so no destination could be computed; the server writes it again at its next sweep, or the operator saves the set again"
+    return 0
+  fi
+  local tail="not the project tag"; _pool_side_is_set "$(_session_pool_side "$2")" && tail="the session pool set decided, and the project tag is not involved"
+  printf '%s' "the pool projection could not be read ($REG/pool-epoch), so no destination could be computed; the remedy is the pool sync and the control-plane link, $tail"
+}
+_pool_set_start_warn() {   # id wrapper prc side state project pps -> `cmd_start`'s warning for an existing row its set does not serve
+  # An existing row is never refused (slug `existing-row-warns-the-tick-relocates`): a mismatch warns, and the tick moves it
+  # back at its next idle boundary; an undecidable set warns too, naming the file, where a project-side rc 2 is silent.
+  if (( $3 == 1 )); then echo "ccd: warn: $1 lives on $2: $(_pool_mismatch_why "$2" "$5" "$6" "$7") — the auto-swapper relocates it at the next idle boundary"
+  else echo "ccd: warn: $1 lives on $2 and its pool could not be decided: $(_pool_undecidable_why "$4" "$5" "$6" "$2" "$1") — nothing moves until it can"; fi
+}
+# ── `ccd pool-answer --session <id>` (PR B1: the plan's Task 6) ───────────────────────────────────────────────────────
+# The read-only pool answer for the account a session runs on, one line on stdout, read by the renewal rows piece and the
+# designation piece's door through `server/src/poolrule.ts#parsePoolAnswer` (its words: `shared/poolset.ts`):
+#   pool-answer side=<side> verdict=<serve|mismatch|undecidable> pool-side=<project|account|set> pool-state=<state> crossing=<valid|none|unreadable> account=<id>
+# A value with a space in ccd's own words carries `:` for it (`set:pool-a,pool-b`, `named:pool-a`). It asks the rule and
+# the marker's predicate and decides nothing itself (Review Focus 3): the side from `_session_pool_side`, the verdict and
+# its side and state from `_pool_ok` (called bare, snapshotted at once), the crossing from `_crosspool_valid`. Exit codes:
+# 0 the line; 1 no such session (no uuid field); 2 usage (any other argv, or an id `_reg_id_ok` refuses); 3 the session's
+# uuid, wrapper or project field could not be read (a missing wrapper names no account), a reason on stderr, no line.
+# A project field that is absent reads as the empty project, as `_swap_target` reads it. It writes nothing.
+cmd_pool_answer() {
+  local LC_ALL=C IFS=' ' id w p rc side verdict ps st x
+  [[ $# -eq 2 && "$1" == --session ]] && _reg_id_ok "$2" || { echo "usage: ccd pool-answer --session <id>" >&2; return 2; }
+  id="$2"
+  _reg_read_to w "$id" uuid; rc=$?
+  (( rc == 1 )) && { echo "ccd: pool-answer: no such session: $id" >&2; return 1; }
+  (( rc == 0 )) || { echo "ccd: pool-answer: $id: its registry fields cannot be read ($REG)" >&2; return 3; }
+  _reg_read_to w "$id" wrapper; rc=$?
+  (( rc == 0 )) && [[ -n "$w" ]] || { echo "ccd: pool-answer: $id: its wrapper field could not be read" >&2; return 3; }
+  _reg_read_to p "$id" project; rc=$?
+  (( rc != 2 )) || { echo "ccd: pool-answer: $id: its project field could not be read" >&2; return 3; }
+  side=$(_session_pool_side "$id" "$p")
+  _pool_ok "$w" "$side"; rc=$?; ps=$POOL_OK_SIDE; st=$POOL_OK_STATE
+  case "$rc" in 0) verdict=serve ;; 1) verdict=mismatch ;; *) verdict=undecidable ;; esac
+  _crosspool_valid "$id" "$side" "$w"; rc=$?
+  case "$rc" in 0) x=valid ;; 1) x=none ;; *) x=unreadable ;; esac
+  printf 'pool-answer side=%s verdict=%s pool-side=%s pool-state=%s crossing=%s account=%s\n' \
+    "${side// /:}" "$verdict" "$ps" "${st// /:}" "$x" "$w"
+}

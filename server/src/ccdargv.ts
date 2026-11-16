@@ -99,8 +99,8 @@ const holdOkFlags = (text: string | null): string[] => (text === null ? [] : ['-
 export type HibernateMode = 'sleep' | 'roll' | 'fresh';
 /** The flags each mode sends. NO CAPABILITY DECISION HERE: a caller sends `fresh` only where
  *  `capSupported(state, HIBERNATE_FRESH_CAP)` answered yes for the box (the word `hibernate-fresh`, Table 11.1d), as `roll`
- *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act, the first caller, adds that constant and
- *  its gate with its call. The server is the only caller by contract. */
+ *  is sent only behind `capSupported(state, HIBERNATE_ROLL_CAP)`; the renewal act's ccd adapter (`ccdSessionHost.ts`) is the
+ *  first caller and holds that gate in the same function as its call. The server is the only caller by contract. */
 const HIBERNATE_MODE_FLAGS: Readonly<Record<HibernateMode, readonly string[]>> = {
   sleep: [],
   roll: ['--roll'],
@@ -970,6 +970,15 @@ export const CCD_ARGV = {
   winSize: (id: string, mode: 'smallest' | 'canonical') =>
              argv(['win-size', '--session', id, '--mode', mode]),
 
+  /** The read-only pool answer for a session's current account (the pool-set plan's Task 6): `ccd pool-answer
+   *  --session <id>`, granted as `['pool-answer','--session']` and enrolled in the agent's `REQUIRED_VERB_FLAG`, so no
+   *  wider argv is grantable. The id is refused here unless `isRegistryId` admits it; ccd re-checks it. Asked only behind
+   *  `ccdCan(state, 'poolAnswer')`, and read through `server/src/poolrule.ts#parsePoolAnswer`, `ran` first. */
+  poolAnswer: (id: string) => {
+    if (!isRegistryId(id)) throw new Error('CCD_ARGV.poolAnswer: the session id is not a registry id');
+    return argv(['pool-answer', '--session', id]);
+  },
+
   /** NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): one builder per
    *  argv shape of the four read verbs `docs-v1` names. The verb comes first and
    *  the flag the agent grants second (`--all` here, `--project` for the other
@@ -1013,6 +1022,12 @@ export const CCD_ARGV = {
    *  (`docsBranchFlags`). */
   docsFetch: (project: string, branch: string | null) =>
                argv(['docs-fetch', '--project', project, ...docsBranchFlags(branch)]),
+
+  /** One doc's history (rich-docs spec 2026-10-12 G4, W5b): the commits from `commit` back that changed
+   *  `section/path`, newest first, at most 100. 8 tokens after the verb, under its own grant
+   *  `['docs-log','--project']`, behind `DOCS_LOG_CAP`. The path is a value read by fixed index, never a pathspec. */
+  docsLog: (project: string, commit: string, section: DocSectionSlug, path: string) =>
+             argv(['docs-log', '--project', project, '--commit', commit, '--section', section, '--path', path]),
 } as const;
 
 /**
@@ -1092,6 +1107,11 @@ export const ACCOUNT_POOLS_CAP = 'account-pools';
  *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo`s and
  *  `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings,
  *  held equal by that test's `toContain` lines. */
+/** The `ccd caps` word that says this box has all of the pool set (the pool-set plan's Task 7, Table 11.1d): the set
+ *  side read by `_session_pool_side`, the route fields `poolset` and `acctorder`, and `ccd pool-answer`. Added last
+ *  among them, so no build that lacks a part advertises it. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s
+ *  reason; ccd's `echo pool-set` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other spellings. */
+export const POOL_SET_CAP = 'pool-set';
 export const POOL_SYNC_INSTALLED_CAP = 'pool-sync-installed';
 export const POOL_SYNC_ABSENT_CAP = 'pool-sync-absent';
 
@@ -1286,6 +1306,19 @@ export const ARCHIVE_IF_NO_PANE_CAP = 'archive-if-no-pane-v1';
  *  alone folds the first into the second, and the two have different remedies. */
 export const DOCS_CAP = 'docs-v1';
 
+/** The `ccd caps` token that says this box's ccd serves the sections `vision` and `promise` (rich-docs spec 2026-10-12
+ *  G1, W5b): ccd's `SECTIONS` holds them, so `docs-show` and `docs-log` accept them and `docs-tree` and `docs-index`
+ *  list them. Spelled ONCE in `server/src`; ccd's `echo docs-sections-v2` and `ccdCapTokens.ts` are the other two
+ *  spellings, held equal by `ccd-archive.test.ts`'s `toContain`. READ IT WITH `capSupported`, after the docs gate's
+ *  tri-state has measured a list (`docs/ccdsource.ts#readDocs`): an older ccd answers `bad-section` for either slug, a
+ *  failure word for a request a new server should never have sent. */
+export const DOCS_SECTIONS_CAP = 'docs-sections-v2';
+
+/** The `ccd caps` token that says this box's ccd has `docs-log` at exactly the argv `docsLog` builds (rich-docs spec
+ *  G4, W5b). Spelled ONCE in `server/src`; ccd's `echo docs-log-v1` and `ccdCapTokens.ts` are the other two spellings.
+ *  Read through `ccdCan`'s `docsLog` row (refuses on no evidence), inside the docs gate's tri-state. */
+export const DOCS_LOG_CAP = 'docs-log-v1';
+
 /** The `ccd caps` token that says this box has the child temp-root collector (child reclamation spec 2026-09-22 §5.10,
  *  §8's wave 7): `ws-audit --collect`, `ws-collect`, the `collect` journal act and the quarantine record — one ccd
  *  inode. Spelled ONCE in `server/src`; ccd's `echo collect-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS`
@@ -1374,6 +1407,12 @@ export const HIBERNATE_HOLD_OK_CAP = 'hibernate-hold-ok';
  *  nothing (`capSupported`, false on no evidence). ccd's `echo hibernate-roll` and `server/test/ccdCapTokens.ts` are
  *  the other two spellings. */
 export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
+
+/** The `ccd caps` token that says this box's `cmd_hibernate` takes `--roll --fresh` (spec 2026-11-09 §3.3.11 H13): the
+ *  roll whose wake starts a new conversation under the same session id. It gates the renewal act (the ccd adapter of
+ *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
+ *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
@@ -1531,9 +1570,11 @@ export const CCD_CAN = {
   projectAddClone: verbRow('project-add'), projectAddEmpty: verbRow('project-add'),
   route: capRow(ROUTE_CAP), routeApply: capRow(ROUTE_APPLY_CAP), routeSet: capRow(ROUTE_CAP),
   winSize: capRow(WIN_SIZE_CAP),
+  poolAnswer: capRow(POOL_SET_CAP),
   docsIndex: capRow(DOCS_CAP), docsTree: capRow(DOCS_CAP), docsShowCommitted: capRow(DOCS_CAP),
   docsShowDraft: capRow(DOCS_CAP),
   docsFetch: capRow(DOCS_CAP),
+  docsLog: capRow(DOCS_LOG_CAP),
 } as const satisfies Record<keyof typeof CCD_ARGV, CanRow>;
 
 /** A `CCD_ARGV` row name: what `ccdCan` is asked about. */

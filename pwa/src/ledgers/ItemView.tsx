@@ -49,6 +49,7 @@ import { ApiError } from '../lib/apiError';
 import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
+import { AnswerMarkBoxes } from './AnswerMarkBox';
 import { SECRET_INPUT } from '../lib/secretInput';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
@@ -505,6 +506,8 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
       )}
       {refusal !== null && <p className="wi-refusal" role="alert">{refusal}</p>}
       {notCurrent && <p className="wi-hint" data-current="false">{NOT_CURRENT_ACTS_WORD}</p>}
+      {/* The operator's two answer marks (Overlord W1), before and after the answer; off on a saved copy. */}
+      <AnswerMarkBoxes item={item} current={current} />
       <div className="wi-actions">
         {acting && <ItemControls item={item} runs={runs} acts={acts} enabled={current} />}
         {mayTick && (

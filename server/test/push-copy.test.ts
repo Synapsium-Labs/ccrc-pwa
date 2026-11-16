@@ -1288,7 +1288,9 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
 // A fleet-level push with no session (D-3296): decided by the pure `releaseToNotify`
 // (Task 2), marked in `releases.notifiedAt` BEFORE the send is started (D-3295), and
 // sent through `notifyPushOnly` — never through `pushOne`, whose presence gate and feed record are about a
-// session. Each case calls the watcher's public `pushRelease` directly unless it is about a lane's wiring.
+// session. Since the push outbox (Overlord W1) it is shown at most once: a rejected send is not retried, and a send every
+// subscription refused is retried inside its ten minutes (slug release-push-shown-at-most-once). Each case calls the
+// watcher's public `pushRelease` directly unless it is about a lane's wiring.
 describe('the release push — once per tag, across restarts, sessionless (design 2026-09-20 §13)', () => {
   afterEach(() => { vi.restoreAllMocks(); });
 

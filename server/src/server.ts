@@ -8,7 +8,6 @@ import fastifyRateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { pwaStaticOptions } from './pwaStatic.js';
 import { configDirFor, fleetRebootTarget } from './config.js';
-import type { BuildInfo } from './buildinfo.js';
 import type { Deps } from './deps.js';
 import { assembleFleet, dropStaleLandings, fleetNow } from './fleet.js';
 import { liveStateReaderOver, readLiveState } from './livestate.js';
@@ -23,10 +22,11 @@ import {
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
+import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
-import { buildAgreement, defaultCachePath, derivedBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
+import { buildAgreement, defaultCachePath, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -70,7 +70,8 @@ import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRout
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
-import { createQuestions, type OperatorDoorDeps } from './coord/questions.js';
+import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/questions.js';
+import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
@@ -86,6 +87,8 @@ import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
+import { compactRefusal } from './continuity/compactOwner.js';
+import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
@@ -107,9 +110,8 @@ import type { ProjectAddAnswer } from '../../shared/projectAdd.js';
 import { classifyTitleFailure, planRetitle } from './workspaceTitle.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { buildDigest, correctDigestRow, digestDayFor, digestWindow, parseDigestCorrectBody, parseDigestDay, readDigestHour } from './coord/digest.js';
-import { toRunSummary, type CoordStore, type NodeRow } from './coord/store.js';
+import { toRunSummary, type CoordStore } from './coord/store.js';
 import { incarnationsOfSessions, withChildIds, withLastMoves, withVerdicts, withWorkerSeen } from './coord/runWire.js';
-import { buildInfoOfRow } from './update/inventory.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -139,7 +141,7 @@ import {
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
 import { refuseRoute } from './refuse.js';
 import { DrawerInterruptThrottle, drawerInterruptSource, recordInterrupt } from './interruptlog.js';
-import { noticeBanner, noticeSink, notifyPushOnly } from './notice.js';
+import { noticeBanner, noticeSink, notifyPushOnly, questionOutboxOf } from './notice.js';
 import type { Dialog, DigestAnswer, DigestCorrectAnswer } from '../../shared/api.js';
 import {
   busyReadFailsClosed, decideArchive, decideStopClaims, frameRowVerdict, stopFlags, worktreeOf, type ArchiveMeasure,
@@ -258,6 +260,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
+  // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
+  '/api/portfolio',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -346,34 +350,6 @@ function findPwaRoot(): string | null {
     dir = up;
   }
   return null;
-}
-
-/**
- * The `{own, fleet}` pair of stamps `buildAgreement` decides `FleetHealth.build`
- * from, derived from the inventory rows (design 2026-09-20 §14): each live
- * row's role and its five `current*` columns as one `BuildInfo`
- * (`buildInfoOfRow`, update/inventory.ts), paired by `derivedBuilds`. The pair
- * is only this input now — the `FleetHealth.builds` wire field that once
- * carried it was retired in wave 33. Composition only — which row is which
- * side is decided there.
- *
- * A THROWING `nodes()` (a corrupt or locked coord.db) answers null on both
- * sides, the way `readPoolEpoch` (pools.ts) degrades its own read: before W2
- * nothing in the health route's remote arm touched coord.db, and the banner
- * route must not gain a new way to 500. It deliberately does NOT fall back to
- * `fleetState.build` — spec §8: the handshake sample is never read as the
- * current build where an inventory is wired. The fold of "unreadable" into
- * "no rows yet" is honest for the one word decided from it (`unknown`);
- * `GET /api/updates` is where the distinction is shown.
- */
-function inventoryBuilds(coord: Pick<CoordStore, 'nodes'>): { own: BuildInfo | null; fleet: BuildInfo | null } {
-  let rows: NodeRow[];
-  try {
-    rows = coord.nodes();
-  } catch {
-    return { own: null, fleet: null };
-  }
-  return derivedBuilds(rows.map((r) => ({ role: r.role, build: buildInfoOfRow(r) })));
 }
 
 export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWatcher): Promise<FastifyInstance> {
@@ -1513,7 +1489,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const rosterWireOf = (accountEdges: ReturnType<typeof readAccountPoolEdges>): RosterWire[] =>
     deps.cfg.roster.accounts.map((a) => ({
       id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
-      pool: a.pool,
+      pool: a.pool, ...rosterFactsWireOf(a),
       ...rosterKindOf(a),
       // T7-R2 (D-3076): the RESOLVED membership (central
       // beats declared beats untagged, design §5.6) — `pool` above is the
@@ -2092,7 +2068,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // it, which the archive door below runs its `{programme:'end'}` on.
   // D-7026: this server's ONE owner of question state, the watcher's own when it is given one (`index.ts` hands it
   // one, so production has exactly one instance), and its own otherwise; never module scope.
-  const questions = watcher?.questions ?? createQuestions(deps);
+  const questions: Questions = watcher?.questions // its own instance writes an ask's push outbox row (Overlord W1)
+    ?? createQuestions(deps, { heldFor, outbox: questionOutboxOf(deps, () => questions) });
   // W3 Q3f (D-7030): what the operator's core reads (`questions.answer`), built ONCE and handed to the family's
   // `POST /api/questions/:id/answer` in `coord/routes.ts` (the old operator doors that read it too were retired in W7
   // C7p, D-7194): the presses over this server's `askDeps` and `sendDeps`, the answered frame's emit, and the child's
@@ -2634,6 +2611,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return refuseRoute(reply, 'unsupported');
     }
     const [field, value] = Object.entries(parsed.route)[0] as [string, string];
+    // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11).
+    const owned = compactRefusal(field, (lane) => deps.coord !== undefined && laneArmRowViewOf(lane, deps.coord.laneArmSetting(lane)).live);
+    if (owned !== null) return refuseRoute(reply, 'bad-request', { detail: owned });
     return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 
@@ -2675,6 +2655,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
+    liveAsk: (childId) => (watcher === undefined ? { kind: 'unmeasured' } : watcher.liveAskKey(childId)),
   });
 
   /**

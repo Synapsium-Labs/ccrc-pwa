@@ -32,12 +32,13 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import { openPracticeCase, practiceCaseNewest, type PracticeCaseNewestRead, type PracticeCaseOpen } from './practiceCasesStore.js';
 import type { CaseDue } from './practiceCases.js';
 import {
-  advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
-  insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
-  startsOf, startsSince, stepGeneration,
+  advanceCursor, advanceObserved, answerRenewCall, appendNote, cardReadOfStart, checkpointBefore, claimRenewCall, clearShadowWalk,
+  generationsCursor, handoverBefore, handoverOf, insertCardRead, insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById,
+  putCheckpoint, putHandover, renewCallsOf, rulingRowsOf, setGenerationDue, recordSoftRenewal, setHoldOff, softRenewalsOf, startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
-  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
+  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
+  type CheckpointInsert, type CheckpointRead, type RenewCallKey, type RenewCallsRead, type RulingsRead,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
@@ -54,6 +55,8 @@ import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTarge
 import { runsPage as runsPageQuery, type RunsPage } from './runsPage.js';
 import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './runFind.js';
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
+import * as portfolio from './portfolioStore.js';
+import * as answerMarks from './answerMarkStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -1919,6 +1922,16 @@ export interface LifecycleBirthEvent {
 /** D-5860: the stored form of a notice's once-only key (`feed_events.dedupe_key`): SHA-256 hex, so a key carrying a
  *  token-shaped run (a compaction uuid) is neither archived in the clear nor masked into a collision. */
 const feedDedupeHash = (key: string): string => createHash('sha256').update(key).digest('hex');
+
+/** One ask row to mint (`CoordStore.insertAsk`). */
+type AskMint = {
+  childId: string; parentId: string; runId: number | null; askKey: string;
+  askAt: number; dialogId: string; question: string; options: string[]; now: number;
+  /** D-5290: present, the row is minted `released` at `now` with this reason,
+   *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
+   *  `parent-project-mismatch` is read-only and never written again. */
+  releaseReason?: AskMintReleaseReason;
+};
 
 /**
  * Every read and every write of the coordination database, in one class, and
@@ -4184,6 +4197,10 @@ export class CoordStore {
     });
   }
 
+  setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
+  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk); }
+  recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
+  answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   /** `runs({includeClosed:true})` as one page (console speed S2): the query is `runsPage.ts`'s. */
   runsPage(opts: { limit: number; before?: number; pinned: readonly number[] }): RunsPage {
     return runsPageQuery(this.db, opts, { columns: RUN_ROW_COLUMNS, terminalStatesSql: TERMINAL_RUN_STATES_SQL },
@@ -5383,6 +5400,8 @@ export class CoordStore {
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
+  insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
+  startLoadsOfNewestStart(sessionId: string): NewestStartLoadsRead { return startLoadsOfNewestStart(this.db, sessionId); }
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
@@ -5418,6 +5437,16 @@ export class CoordStore {
   noteById(id: number): NoteByIdRead { return noteById(this.db, id); }
   putHandover(h: { generationId: number; note: HandoverNote; dropped: number; at: number }): { ok: true; fresh: boolean; dropped: number } | { ok: false } { return putHandover(this.db, h); }
   handoverBefore(identity: string, liveGenerationId: number): HandoverRead { return handoverBefore(this.db, identity, liveGenerationId); }
+  handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
+  softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
+  recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
+  /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
+  putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
+  checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
+  claimRenewCall(k: RenewCallKey, at: number): ReturnType<typeof claimRenewCall> { return claimRenewCall(this.db, k, at); }
+  answerRenewCall(k: RenewCallKey, answer: string): ReturnType<typeof answerRenewCall> { return answerRenewCall(this.db, k, answer); }
+  renewCallsOf(generationId: number, episode: number): RenewCallsRead { return renewCallsOf(this.db, generationId, episode); }
+  rulingRowsOf(sessionId: string, limit: number): RulingsRead { return rulingRowsOf(this.db, sessionId, limit); }
   /** Overlord §3.3.5 C41 (the probes piece, `continuityStore.ts`): the lane's round writer, the probe door's answer writer, the
    *  card and note GETs' read stamp, and the reads. */
   openRound(r: probes.RoundInsert): ReturnType<typeof probes.openRound> { return probes.openRound(this.db, r); }
@@ -5433,12 +5462,16 @@ export class CoordStore {
   insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
   claimOutboxRow(id: number, at: number): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at); }
   silenceOutboxRow(id: number, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.silenceOutboxRow(this.db, id, why, at); }
+  supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
   markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
   dueOutboxRows(now: number): outbox.OutboxRead { return outbox.dueOutboxRows(this.db, now); }
   openOutboxRows(): outbox.OutboxRead { return outbox.openOutboxRows(this.db); }
   sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): { changed: boolean } { return outbox.sealAtBoot(this.db, id, to, at); }
   heldItemsReached(now: number, firstBootAt: number): outbox.ItemsRead { return outbox.heldItemsReached(this.db, now, firstBootAt); }
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
+  markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
+  firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
+  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -9219,14 +9252,10 @@ export class CoordStore {
    *  `null` IS LEGAL and stays legal: an ask minted for a child with no open
    *  run carries none. Only a NON-NULL value outside the domain is refused —
    *  refused, never coerced. */
-  insertAsk(a: {
-    childId: string; parentId: string; runId: number | null; askKey: string;
-    askAt: number; dialogId: string; question: string; options: string[]; now: number;
-    /** D-5290: present, the row is minted `released` at `now` with this reason,
-     *  never `held`. D-5530: one of the fail-closed words (`AskMintReleaseReason`);
-     *  `parent-project-mismatch` is read-only and never written again. */
-    releaseReason?: AskMintReleaseReason;
-  }): number {
+  /** With the push outbox's bound write (Overlord W1): a row minted released reaches the operator, its stamp and bound row in this tx (I2). */
+  insertAsk(a: AskMint & { bound: outbox.BoundWrite }): { id: number; row: outbox.BoundRowRef | null };
+  insertAsk(a: AskMint): number;
+  insertAsk(a: AskMint & { bound?: outbox.BoundWrite }): number | { id: number; row: outbox.BoundRowRef | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       // The COLUMN and nothing else — the offending value never leaves here.
       throw new Error('insertAsk: ask runId is not a positive safe integer');
@@ -9247,7 +9276,9 @@ export class CoordStore {
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertAsk: generated ask id is not a positive safe integer');
       }
-      return Number(exactId);
+      const id = Number(exactId);
+      if (a.bound === undefined) return id;
+      return { id, row: reason === null ? null : outbox.reachInTx(this.db, 'ask', id, a.bound, a.now) };
     });
   }
 
@@ -9475,11 +9506,13 @@ export class CoordStore {
    *  sweep can tell "I released it" (push may proceed) from "someone beat
    *  me" (a principal already took the row; the sweep must not push a stale
    *  payload out from under an in-flight answer). */
-  releaseAsk(id: number, now: number): boolean {
-    const res = this.db.prepare(
-      "UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'",
-    ).run(now, id);
-    return Number(res.changes) > 0;
+  releaseAsk(id: number, now: number): boolean;
+  /** With the push outbox's bound write (Overlord W1): the CAS, the reach stamp and the bound row in ONE tx; `false` lost. */
+  releaseAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
+  releaseAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
+    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const move = (): boolean => Number(cas.run(now, id).changes) > 0;
+    return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
 
   /** held -> declined, CAS (D-5289). The parent's OWN release (`POST
@@ -9489,11 +9522,12 @@ export class CoordStore {
    *  a lapsed row stays answerable until a principal acts. Same "did THIS call
    *  move it" return as `releaseAsk`, and the same `releasedAt` column: the
    *  instant the operator's push was released. */
-  declineAsk(id: number, now: number): boolean {
-    const res = this.db.prepare(
-      "UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'",
-    ).run(now, id);
-    return Number(res.changes) > 0;
+  declineAsk(id: number, now: number): boolean;
+  declineAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
+  declineAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
+    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const move = (): boolean => Number(cas.run(now, id).changes) > 0;
+    return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
 
   /** held OR answering -> stale, CAS, keyed by the pane's own identity
@@ -11143,6 +11177,12 @@ export class CoordStore {
 
   /** The coordinator raises an item (open, with its `raise` event). Returns the new id. */
   raiseItem(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number { return ledgers.raiseItem(this.db, input, now, actor); }
+  /** `raiseItem` with the push outbox's bound write (Overlord W1): an item shown at its raise gets its stamp and one row in the raise's tx. */
+  raiseItemReached(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', bound: outbox.BoundOf): { id: number; row: outbox.BoundRowRef | null } {
+    let row: outbox.BoundRowRef | null = null;
+    const id = ledgers.raiseItem(this.db, input, now, actor, (itemId) => { row = outbox.reachInTx(this.db, 'item', itemId, bound(itemId), now); });
+    return { id, row };
+  }
   itemById(id: number): ItemRow | null { return ledgers.itemById(this.db, id); }
   /** The items still waiting and those cleared inside the 7-day window; `program === null` means every programme. */
   itemsFor(program: string | null, now: number): { open: ItemRow[]; cleared: ItemRow[] } { return ledgers.itemsFor(this.db, program, now); }
@@ -11151,7 +11191,9 @@ export class CoordStore {
   /** The operator's tick and its mail in ONE transaction (the pattern of `correctWithMail`): a throw from `queue` rolls the move back, and `queue` must open no transaction (`tx` does not nest). */
   tickWithMail<T>(id: number, answer: string | null, now: number, queue: (item: ItemRow) => T) { return ledgers.tickWithMail(this.db, id, answer, now, queue); }
   /** A raise and its mail in ONE transaction; `queue` gets the new id and inserts the system mail (it opens no transaction). Returns the id. */
-  raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T): number { return ledgers.raiseItemWithMail(this.db, input, now, actor, queue).id; }
+  raiseItemWithMail<T>(input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T, bound?: outbox.BoundOf): number {
+    return ledgers.raiseItemWithMail(this.db, input, now, actor, queue, bound && ((itemId) => { outbox.reachInTx(this.db, 'item', itemId, bound(itemId), now); })).id;
+  }
   /** One move and its mail in ONE transaction (the withdraw and decline of an end request tell the asker, A22). */
   moveItemWithMail<T>(id: number, act: ItemAct, actor: ItemActor, fields: { answer?: string | null; note?: string | null }, now: number, ctx: { programmeHasOpenRun: boolean }, queue: (item: ItemRow) => T) { return ledgers.moveItemWithMail(this.db, id, act, actor, fields, now, ctx, queue); }
   /** Open end-request items whose run has closed move `settle`, with `note`: the mend for a death between the operator's act and its item. Returns how many moved. */
@@ -11170,7 +11212,12 @@ export class CoordStore {
   reviewChildReleased(reviewRunId: number): boolean { return ledgers.reviewChildReleased(this.db, reviewRunId); }
   /** The sessions of the review runs of a run: the workers who may ask to end the run they review. */
   reviewWorkersOf(runId: number): string[] { return ledgers.reviewWorkersOf(this.db, runId); }
-  setBlocking(id: number, blocking: boolean, now: number) { return ledgers.setBlocking(this.db, id, blocking, now); }
+  /** With `bound`, a move to blocking arms the item's one outbox row in the same tx (Overlord W1, slug rearm-is-an-upsert); `row` is that row. */
+  setBlocking(id: number, blocking: boolean, now: number, bound?: outbox.BoundOf) {
+    let row: outbox.BoundRowRef | null = null;
+    const res = ledgers.setBlocking(this.db, id, blocking, now, bound && ((itemId) => { row = outbox.armInTx(this.db, 'item', itemId, bound(itemId), now); }));
+    return bound === undefined ? res : { ...res, row: row as outbox.BoundRowRef | null };
+  }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
   setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
   setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }

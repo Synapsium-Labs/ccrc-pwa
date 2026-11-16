@@ -157,6 +157,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the docs fetch verb granted without --project',
     codes: ['TS2322'],
   },
+  // NATIVE DOCS READER wave 5b, g18's shape for the history verb: read-only, enrolled on `--project`, so the narrowed
+  // grant is a compile error.
+  'g28-docs-log-without-project.ts': {
+    what: 'the docs history verb granted without --project',
+    codes: ['TS2322'],
+  },
   // CHILD RECLAMATION wave 7, g13's and g15's shape for the temp-root collector: enrolled on its confirmation token, so
   // the narrowed grant is a compile error.
   'g20-ws-collect-without-expect.ts': {
@@ -216,6 +222,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
   // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g27-pane-scope-stop-without-state.ts': {
     what: 'the pane-scope stop switch verb granted without --state',
+    codes: ['TS2322'],
+  },
+  // THE POOL ANSWER (Overlord W1 pool set, plan Task 6), g15's shape: enrolled on `--session`, its whole argument surface,
+  // so the narrowed grant is a compile error.
+  'g29-pool-answer-without-session.ts': {
+    what: 'the pool answer verb granted without --session',
     codes: ['TS2322'],
   },
 };
@@ -482,6 +494,16 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
       .toEqual([['delegation-adopt', '--state']]);
   });
 
+  it('throws on a pool-answer without --session, and grants exactly the one prefix (Overlord W1 pool set)', () => {
+    expect(() => auditExecWhitelist(withCcd([['pool-answer']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['pool-answer', '--all']])))
+      .toThrow(/only grantable with '--session'/);
+    expect(() => auditExecWhitelist(withCcd([['pool-answer', '--session']]))).not.toThrow();
+    expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pool-answer'), 'one pool-answer grant, on --session')
+      .toEqual([['pool-answer', '--session']]);
+  });
+
   it('throws on a ws-shed-deps without --session, and grants exactly the one prefix (D-7278)', () => {
     expect(() => auditExecWhitelist(withCcd([['ws-shed-deps']])))
       .toThrow(/only grantable with '--session'/);
@@ -550,6 +572,7 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
       [['docs-tree'], '--project'],
       [['docs-show', '--all'], '--project'],
       [['docs-fetch'], '--project'],
+      [['docs-log'], '--project'],
       [['docs-show', '--ref', '--project'], '--project'],
     ];
     for (const [prefix, flag] of REFUSED) {
@@ -558,6 +581,7 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
     }
     const LAWFUL: readonly (readonly string[])[] = [
       ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
     ];
     for (const prefix of LAWFUL) {
       expect(() => auditExecWhitelist(withCcd([prefix])), prefix.join(' ')).not.toThrow();

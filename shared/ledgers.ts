@@ -14,6 +14,7 @@ import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, is
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
+import type { AnswerMarksView } from './answerMarks.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -41,6 +42,12 @@ const ITEM_ACT_MAP: Record<ItemAct, true> = {
   tick: true, confirm: true, return: true, withdraw: true, dismiss: true, act: true, decline: true, settle: true,
 };
 export const ITEM_ACTS = Object.keys(ITEM_ACT_MAP) as readonly ItemAct[];
+/** The acts an item event records besides an `ItemAct`: a raise and a blocking change, which do not move the item. An
+ *  event's act is an `ItemEventAct`; `isItemNonMove` reads this one map (Overlord W1, portfolio). */
+export type ItemNonMove = 'raise' | 'block' | 'unblock';
+export type ItemEventAct = ItemAct | ItemNonMove;
+const ITEM_NON_MOVE_MAP: Record<ItemNonMove, true> = { raise: true, block: true, unblock: true };
+export const isItemNonMove = (act: string): act is ItemNonMove => Object.prototype.hasOwnProperty.call(ITEM_NON_MOVE_MAP, act);
 const ITEM_ACTOR_MAP: Record<ItemActor, true> = { operator: true, coordinator: true, ccrc: true };
 export const ITEM_ACTORS = Object.keys(ITEM_ACTOR_MAP) as readonly ItemActor[];
 
@@ -261,6 +268,10 @@ export interface ItemView {
   /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run`, `close-refused` or `release-review` (D-8293). `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
+  /** The operator's two answer marks (Overlord W1, spec §9.2.1, C70), on a `decide` or `value` item they were shown while it is
+   *  listed. ABSENT means this server cannot mark this row (an older server, or a row with no box), never "never marked"
+   *  (plan question 14): a reader goes through the console's one reader, `answerMarkWords.ts#answerMarksOf`. */
+  answerMarks?: AnswerMarksView;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
 }
 
@@ -492,6 +503,15 @@ export function doneWhenOf(raw: unknown): { ok: true; doneWhen: string[] } | { o
 /** "Recently cleared" keeps the last 48 hours (D-8194; was seven days, spec D13): the server's list and the console's trail both
  *  read this one window, so neither shows what the other has dropped. */
 export const CLEARED_WINDOW_MS = 48 * 3600 * 1000;
+
+/** The hold rule (A21, D-8194), once: when the operator was first shown an item. Its `heldUntil`, or its `raisedAt` when it
+ *  was never held; null when its coordinator settled it inside the hold (closed before `heldUntil`), so it was never shown.
+ *  `ledgersStore.ts#operatorWasShown(row, now)` is `shownAt !== null && shownAt <= now`, and the portfolio's operator wait
+ *  starts here (Overlord W1, portfolio: moved from `ledgersStore.ts`). */
+export function operatorShownAt(row: { raisedAt: number; heldUntil: number | null; closedAt: number | null }): number | null {
+  if (row.heldUntil === null) return row.raisedAt;
+  return row.closedAt !== null && row.closedAt < row.heldUntil ? null : row.heldUntil;
+}
 /** How long a tick's mail may stay not acknowledged before the item says "ticked; coordinator not responding" (plan PL4). A
  *  label only: no push and no stall arm hang off it (spec §3.3, D19). */
 export const TICK_UNANSWERED_MS = 30 * 60 * 1000;

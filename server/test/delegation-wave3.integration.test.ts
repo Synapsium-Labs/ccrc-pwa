@@ -31,7 +31,8 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { buildServer } from '../src/server.js';
 import { type DelegationCensusPass, type ParentIncarnation, type WorktreeCensus } from '../src/coord/gitref.js';
-import { DELEGATION_CHECKPOINT_FILE, type DelegationDurability, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { DELEGATION_CHECKPOINT_FILE, decodeDelegationCheckpoint, encodeDelegationCheckpoint, validateDelegationCheckpoint } from '../src/coord/delegation-checkpoint.js';
+import { type DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE } from '../src/coord/delegation-journal.js';
 import { parseDelegationSpoolLine } from '../src/coord/delegation-ingest.js';
 import { correlateDelegation, DELEGATION_DROPPED_UNMEASURED } from '../src/coord/delegation-correlation.js';
@@ -1846,7 +1847,7 @@ describe('8. the closed scope census', () => {
       // wave 4 (PR1 Task 1.3): `sweep` answers whether a pass ran, so the watcher projects only after one
       'if (this.deps.coord === undefined) return false;',
       // wave 5 (PR7 Task 5.7.3): the adoption step's notice sinks, the feed archive and the lease notices' mail (`queueRunlessNotice`)
-      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };',
+      'const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker };',
       'notice: (title, body, mode) => { notify(sink, { kind: \'coord\', sessionId: \'\', runId: null, title, body }, mode, { degraded: `delegation adoption ${title}, feed archive degraded` }); },',
     ]);
     expect(lane).toMatch(/private readonly dropped = new Map/);

@@ -176,6 +176,10 @@ export const LEDGER_ROUTE_REFUSALS = {
   badDoneWhen: 'bad-done-when', doneWhenNeedsRuling: 'done-when-needs-ruling',
   // The Seen door (D-8126): a call that is not a big one has nothing to be Seen.
   notBig: 'not-big',
+  // The portfolio's rank door (Overlord W1, question 8): a write based on a revision that is no longer current.
+  rankChanged: 'rank-changed',
+  // The answer-mark door (Overlord W1, §9.2.1 C70): the row exists and carries no box, or is not on the operator's list.
+  notMarkable: 'not-markable',
 } as const;
 export type LedgerRouteRefusal = (typeof LEDGER_ROUTE_REFUSALS)[keyof typeof LEDGER_ROUTE_REFUSALS];
 
@@ -200,6 +204,10 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The loads door's own word (Overlord W1 sandbox, Task 5): a report whose `reportId` names no start the server has recorded
+ *  for that session yet. 404, and the hook keeps the report and resends it, as it does for the start report's door. */
+export const START_LOADS_REFUSALS = { unknownStart: 'unknown-start' } as const;
+export type StartLoadsRefusal = (typeof START_LOADS_REFUSALS)[keyof typeof START_LOADS_REFUSALS];
 /** The note door's own words (Overlord W1a, the notes piece; spec Table 13.2): a key that names no live row of the caller's,
  *  a cap of live notes reached, a field over its length cap, a handover thread whose reference names no live row of the
  *  caller's, and a handover sent while no handover was asked. A key the door could not read is the generic `unmeasured`
@@ -300,6 +308,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The loads door (Overlord W1 sandbox): its one word of its own.
+  | StartLoadsRefusal
   // The note door (Overlord W1a): its five words of its own.
   | NoteRefusal
   // The probe door (Overlord W1a, the probes piece): its two words of its own.
@@ -328,8 +338,9 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | LinkingRefusal
   // The plan verbs' and the hierarchy routes' words (Linear hierarchy design, D-8181): declared once, `plan.ts#PLAN_REFUSALS`.
   | PlanRefusal
-  // The Shadow lanes card's own word (review 2003 F3): Live refused while a row's gate stands, `lane-arm.ts#LANE_ARM_REFUSALS`.
-  | Extract<LaneArmRefusal, 'lane-gated'>;
+  // The Shadow lanes card's own words, `lane-arm.ts#LANE_ARM_REFUSALS`: Live refused while a row's gate stands (review 2003
+  // F3), and Live on a W1a row before the replay quiz's baseline is recorded (Overlord W1a, W0-28).
+  | Extract<LaneArmRefusal, 'lane-gated' | 'baseline-missing'>;
 
 /** The landing family's statuses, declared once (wave 5f, shared contract §5): every infrastructure word is 503, a
  *  missing thing 404, a refused graph or identity 409, an unreadable dependency 503. Spread into `REFUSAL_STATUS` and
@@ -382,7 +393,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-waiting': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
   'sweep-stopped': 409, 'floor': 409, 'no-effort-rungs': 409, 'unrouteable-record': 409, 'marker-still-controls': 409, 'conflict': 409,
-  'incarnation-changed': 409, 'fable-operator-only': 409, 'lane-gated': 409,
+  'incarnation-changed': 409, 'fable-operator-only': 409, 'lane-gated': 409, 'baseline-missing': 409,
   [SWAP_REFUSALS.sessionBusy]: 409, [SWAP_REFUSALS.statusUnknown]: 409, [SWAP_REFUSALS.hibernated]: 409,
   // 413, 415, 429
   'oversize': 413, 'too-large': 413,
@@ -512,6 +523,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
+  // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
+  [START_LOADS_REFUSALS.unknownStart]: 404,
   // The note door (Overlord W1a): CHOSEN, not measured. 403 for a key that is not a live row of the caller's (as `not-owner`);
   // 409 for a cap held and for a handover nobody asked (a state of the world, not a fault in the body); 400 for a field over
   // its cap and for a handover thread naming no live row (the caller's text to fix).
@@ -529,6 +543,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,
   // The Seen door (D-8126): CHOSEN, not measured. 409 as `not-open`: the row is there, in a state this door does not act on.
   [LEDGER_ROUTE_REFUSALS.notBig]: 409,
+  [LEDGER_ROUTE_REFUSALS.rankChanged]: 409,
+  [LEDGER_ROUTE_REFUSALS.notMarkable]: 409,
   // The Linear proxy (#1444, spec §6.8): CHOSEN, not measured — new words, the statuses the spec's table gives them. 400
   // for a body or query field the caller can fix; 404 for a team, a workspace or a name no slot or directory holds; 409
   // for a call that names more than one, or names an issue that now lives in another team; 403 for the policy point's

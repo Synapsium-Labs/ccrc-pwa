@@ -46,6 +46,11 @@ export const INJECTED_PROMPTS = Object.freeze({
   'effort-ultracode': Object.freeze({ text: '/effort ultracode', match: 'exact', typer: 'ccd' }),
   // `_route_type_model`'s picker.
   model: Object.freeze({ text: '/model', match: 'exact', typer: 'ccd' }),
+  // The renewal act's first turn of a fresh conversation, and `carded`'s re-nudge (Overlord W1a, the renewal act:
+  // `renewalWiring.ts`'s `sendPrompt` through `SessionHost.deliver`).
+  'renewal-first-prompt': Object.freeze({
+    text: 'Read your card with `ccrc-api card`, then answer your probes with `ccrc-api probe`.', match: 'exact', typer: 'server',
+  }),
 });
 
 /** The rows' keys, in the list's order. */

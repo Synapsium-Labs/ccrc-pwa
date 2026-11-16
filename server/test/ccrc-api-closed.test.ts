@@ -417,8 +417,9 @@ describe('the client stays closed', () => {
     // piece) to seventy-eight: the three POSTs take the `calls.record` fill's rule, pinned below. The three `timer` rows (the
     // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
     // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
-    // rule) to eighty-three.
-    expect(routeKeys().size).toBe(83);
+    // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
+    // no splice and no fill) to eighty-four.
+    expect(routeKeys().size).toBe(84);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

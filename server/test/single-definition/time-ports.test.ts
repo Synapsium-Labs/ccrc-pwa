@@ -26,6 +26,15 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/fleetRoles.ts',
   'server/src/pushOutbox.ts',
   'server/src/coord/pushOutboxStore.ts',
+  'server/src/pushSender.ts',
+  // Overlord W1, portfolio: the class vocabulary, the pure decider and the store take `now` as an argument.
+  'shared/portfolio.ts',
+  'server/src/coord/portfolio.ts',
+  'server/src/coord/portfolioStore.ts',
+  // Overlord W1, answer marks: the vocabulary, the pure deciders and the store take `now` as an argument.
+  'shared/answerMarks.ts',
+  'server/src/coord/answerMarks.ts',
+  'server/src/coord/answerMarkStore.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

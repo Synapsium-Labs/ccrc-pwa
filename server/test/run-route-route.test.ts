@@ -16,6 +16,8 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField } from './ioDoubles.js';
 import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { legacyOpens } from './helpers/plan.js';
+import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE } from '../../shared/lane-arm.js';
+import { COMPACT_OWNED_DETAIL } from '../src/continuity/compactOwner.js';
 import { ROUTE_LANE_ONLY_FIELDS } from '../../shared/api.js';
 const LANE_ONLY_VALUE: Record<string, string> = { profile: 'coordinator', automem: 'off', compactwindow: '350000', precompact: 'refuse' };
 
@@ -837,7 +839,7 @@ describe('POST /api/runs/:id/route', () => {
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
     const { id } = await dispatchedRun(w.app, 'demo-w13');
 
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(6);   // the launch profile's three, the compaction piece's precompact and the pool set's poolset and acctorder (Overlord W1)
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(7);   // the launch profile's three, the compaction piece's precompact, the pool set's poolset and acctorder (Overlord W1) and the W1 sandbox's profiledigest
     for (const target of ['worker', 'coordinator']) {
       for (const field of ROUTE_LANE_ONLY_FIELDS) {
         const res = await postRoute(w.app, id, { target, why: 'operator judgement', field, value: LANE_ONLY_VALUE[field] });
@@ -848,5 +850,30 @@ describe('POST /api/runs/:id/route', () => {
       expect(demote.statusCode, `${target} demote`).toBe(400);
     }
     expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+  });
+
+  // Overlord W1a renewal act (review 2024 F3, slug compact-refused-at-the-route-doors): while `continuity` and
+  // `launch-profile` are both live the launch-profile lane owns `compact`, so the manual arm refuses it with the reason and
+  // never reaches ccd; with either row in shadow it writes it as before (review 2149 F11).
+  it('400s a manual compact while continuity and launch-profile are live, naming why, and writes it while either is shadow', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w14'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w14');
+    seed(home, sid, { compact: '70' });
+
+    const shadow = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: '60' });
+    expect(shadow.statusCode).toBe(200);
+    w.coord.setLaneArm(CONTINUITY_LANE, 'live', 1);
+    const half = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: '55' });
+    expect(half.statusCode).toBe(200);
+    const before = calls.filter((c) => c[0] === 'route').length;
+    expect(before).toBe(2);
+
+    w.coord.setLaneArm(LAUNCH_PROFILE_LANE, 'live', 2);
+    const live = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: '50' });
+    expect(live.statusCode).toBe(400);
+    expect(live.json()).toMatchObject({ ok: false, error: 'bad-request', detail: COMPACT_OWNED_DETAIL });
+    expect(calls.filter((c) => c[0] === 'route')).toHaveLength(before);
   });
 });

@@ -18,11 +18,11 @@ import type { FleetWatcher } from '../src/watch.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  DelegationDurability,
   assertDelegationCheckpointProjectable,
   validateDelegationCheckpoint,
   type DelegationProjectionPort,
 } from '../src/coord/delegation-checkpoint.js';
+import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { DELEGATION_JOURNAL_FILE, parseDelegationJournal, type DelegationFileHandle, type DelegationFilePort } from '../src/coord/delegation-journal.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {

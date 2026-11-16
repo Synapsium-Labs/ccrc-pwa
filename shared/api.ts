@@ -9,6 +9,7 @@
 // the parallel reason: this file carries their shapes but does not redefine
 // them.
 import type { Hue, RosterKindWire } from './roster.js';
+import type { RosterFactsWire } from './rosterFacts.js';
 import type { AccountPoolWire } from './poolrule.js';
 import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
@@ -4242,7 +4243,7 @@ export type ProjectPlacement =
  * owns the actual colours and resolves each hue per theme, so shipping a hex
  * here would freeze one theme's palette into the wire.
  */
-export interface RosterWire extends RosterKindWire {
+export interface RosterWire extends RosterKindWire, RosterFactsWire {
   id: Wrapper;
   /** Jargon-free, for a human — the one place a wrapper name is translated
    *  (plan: "Move to another account", never "swap wrapper"). */
@@ -6491,10 +6492,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `shared/poolset.ts`'s spelling, and the Overlord's ordered account list, account ids joined by `,`. Their writers are
  * the designation's doors and the renewal lane, through `CCD_ARGV.routeSet`, so both are lane-only; ccd refuses either on
  * a `--route` at the mint (`_route_argv_check`), so only `ccd route --session` writes them, and an empty value clears them.
+ * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
+ * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
+ * is its one recorded second writer), and an empty value clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's three, the generations lane's `precompact`, and the pool set's two (W1), written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
+ *  written by the designation's doors.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
@@ -6823,7 +6828,10 @@ export type MailGate =
   | 'parked'
   // D-5912: the send's `onDraft: 'stash'` refused — a stash already held (`stash-occupied`), or the box did not
   // empty after `C-s` (`stash-failed`). Recorded after the send, beside its `lastError`.
-  | 'stash-failed' | 'stash-occupied';
+  | 'stash-failed' | 'stash-occupied'
+  // Overlord W1a, the renewal act: the recipient's generation is renewing (`draining` to `probing`), so its mail waits
+  // until it is proven again (`renewalHoldsMail`); the handover ask alone passes.
+  | 'renewing';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6834,7 +6842,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true, 'wake-pressure': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
-  'stash-failed': true, 'stash-occupied': true,
+  'stash-failed': true, 'stash-occupied': true, renewing: true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 
@@ -12325,7 +12333,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1';
+  | 'timers-v1' | 'push-outbox-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12385,6 +12393,13 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
   /** W1a: the timer doors, the timers lane and `ccrc-api timer` (Overlord timers piece). `ccrc-api timer` refuses
    *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the client. */
   'timers-v1': true,
+  /** Overlord W1, the push outbox (H18; Table 11.1d): every push sent through deps that carry the store and the time ports
+   *  has a `push_outbox` row, or is logged as unwritable; an ask released by one of its three moves (the mint, the lapse,
+   *  the decline), or an item shown at its raise, its toggle to blocking or the held drain, carries `reachedOperatorAt` and
+   *  one row written in that move's transaction, with or without a push service. The lapse's `push-and-drop` and the
+   *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
+   *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
+  'push-outbox-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -13894,6 +13909,12 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+/** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
+ *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
+export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];
+/** The direct runs of the verb's script (`deploy/account-op.mjs`) a bare prefix rule can name; the hook's account arm
+ *  matches the script's name in any path-qualified, installed-tree or `$VAR` form, which a prefix rule cannot. */
+export const ACCOUNT_OP_RUNS: readonly string[] = ['node deploy/account-op.mjs', 'node ./deploy/account-op.mjs', './deploy/account-op.mjs'];
 
 /** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
  *  and the server's proxy, never a sign-in of a session's own. `mcp__claude_ai_Linear` is the claude.ai Linear connector's
@@ -13917,6 +13938,8 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   'Bash(ccd account-pane:*)',
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+  ...ACCOUNT_ROSTER_FILES.map((p) => `Edit(${p})`),
+  ...ACCOUNT_OP_RUNS.map((r) => `Bash(${r}:*)`),
   ...LINEAR_MCP_DENY,
 ];
 

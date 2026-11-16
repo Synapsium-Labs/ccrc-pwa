@@ -2,6 +2,9 @@ import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
 import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
+import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
+import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';
+import type { PoolAnswer } from '../../shared/poolset.js';
 
 /**
  * THE SERVER'S MIRROR of the pool rule (spec §5.6), ring L1: pure decisions,
@@ -193,3 +196,61 @@ export function poolRostered(roster: Roster, name: string): boolean {
 /** Re-exported so a reader who looks for the placement type beside the rule
  *  finds it. DECLARED in `shared/api.ts`, because the PWA renders it. */
 export type { ProjectPlacement };
+
+/** What one `ccd pool-answer` call answered, read `ran` first (the pool-set plan's Task 6, review 2085 F16). */
+export type PoolAnswerRead =
+  | { readonly kind: 'answer'; readonly answer: PoolAnswer }
+  | { readonly kind: 'not-run' }
+  | { readonly kind: 'refused'; readonly code: number }
+  | { readonly kind: 'unparsed'; readonly why: string };
+
+/** The `pool-state` words each side can print: `_project_pool_state`'s, `_acct_pool_state`'s and `_pool_ok_set`'s. */
+const POOL_ANSWER_STATES: Readonly<Record<PoolAnswer['poolSide'], readonly string[]>> = {
+  project: ['untagged', 'unreadable', 'malformed'],
+  account: ['untagged', 'unreadable', 'stale', 'malformed'],
+  set: ['unreadable', 'malformed', 'unrecognised'],
+};
+/** The `side` words that carry no name: `_session_pool_side`'s project words and its two bad-set words. */
+const POOL_ANSWER_BARE_SIDES: readonly string[] = ['untagged', 'unreadable', 'malformed', 'set-unreadable', 'set-malformed'];
+
+const isWordOf = <T extends string>(words: readonly T[], w: string): w is T => (words as readonly string[]).includes(w);
+const namedPool = (w: string): boolean => w.startsWith('named:') && POOL_NAME_RE.test(w.slice('named:'.length));
+
+/**
+ * The runner's result for one `ccd pool-answer --session <id>` call (`CCD_ARGV.poolAnswer`), read `ran` FIRST: `ran:
+ * false` (an older agent's `forbidden`, a spawn failure) is a read that did not happen, never rc 1's "no such session";
+ * `ran: true` with a non-zero code is ccd's refusal; only code 0 with ONE line that parses is an answer. The line is
+ * exact: the head word, then the six keys of `POOL_ANSWER_KEYS` once each in that order, each value a word of its
+ * vocabulary. An unknown key, a missing or repeated key, a word outside its vocabulary, a second line or an empty line
+ * is `unparsed`. Pure: no clock, no I/O.
+ */
+export function parsePoolAnswer(r: { readonly ran: boolean; readonly code: number; readonly stdout: string }): PoolAnswerRead {
+  if (!r.ran) return { kind: 'not-run' };
+  if (r.code !== 0) return { kind: 'refused', code: r.code };
+  const line = r.stdout.endsWith('\n') ? r.stdout.slice(0, -1) : r.stdout;
+  if (line.includes('\n')) return { kind: 'unparsed', why: 'more than one line' };
+  const tokens = line.split(' ');
+  if (tokens[0] !== 'pool-answer') return { kind: 'unparsed', why: 'not a pool-answer line' };
+  if (tokens.length !== POOL_ANSWER_KEYS.length + 1) return { kind: 'unparsed', why: `${tokens.length - 1} keys, not ${POOL_ANSWER_KEYS.length}` };
+  const v: Record<string, string> = {};
+  for (let i = 0; i < POOL_ANSWER_KEYS.length; i++) {
+    const key = POOL_ANSWER_KEYS[i]!;
+    const t = tokens[i + 1]!;
+    if (!t.startsWith(`${key}=`)) return { kind: 'unparsed', why: `token ${i + 1} is not ${key}=` };
+    v[key] = t.slice(key.length + 1);
+  }
+  const side = v['side']!, verdict = v['verdict']!, poolSide = v['pool-side']!, poolState = v['pool-state']!;
+  const crossing = v['crossing']!, account = v['account']!;
+  if (!(POOL_ANSWER_BARE_SIDES.includes(side) || namedPool(side)
+        || (side.startsWith('set:') && parsePoolSet(side.slice('set:'.length)).ok))) {
+    return { kind: 'unparsed', why: 'side' };
+  }
+  if (!isWordOf(POOL_ANSWER_VERDICTS, verdict)) return { kind: 'unparsed', why: 'verdict' };
+  if (!isWordOf(POOL_ANSWER_POOL_SIDES, poolSide)) return { kind: 'unparsed', why: 'pool-side' };
+  if (!(isWordOf(POOL_ANSWER_STATES[poolSide], poolState) || (poolSide === 'account' && namedPool(poolState)))) {
+    return { kind: 'unparsed', why: 'pool-state' };
+  }
+  if (!isWordOf(POOL_ANSWER_CROSSINGS, crossing)) return { kind: 'unparsed', why: 'crossing' };
+  if (!ACCOUNT_ID_RE.test(account)) return { kind: 'unparsed', why: 'account' };
+  return { kind: 'answer', answer: { side, verdict, poolSide, poolState, crossing, account } };
+}

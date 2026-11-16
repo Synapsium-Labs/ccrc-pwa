@@ -588,7 +588,7 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
   | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
-  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'not-configured', string
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'not-markable' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -616,6 +616,10 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'unknown-item': 'The server has no such item any more. The list will update.',
   // The Seen door (D-8126): only a big call can be marked Seen.
   'not-big': 'That call is not a big one, so there is nothing to mark as seen. The list will update.',
+  // The portfolio's rank door (Overlord W1): the rank changed since this screen read it, in another tab or window.
+  'rank-changed': 'The order of the programmes changed since this screen read it, so your order was not saved. Read it again and reorder.',
+  // The answer-mark door (Overlord W1): the row left the operator's list, or carries no box.
+  'not-markable': 'This row has left your list, so it cannot be marked any more. The list will update.',
   'not-configured': 'This box has no coordination database, so there is no Waiting on you list here.',
 };
 

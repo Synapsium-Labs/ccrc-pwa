@@ -18,10 +18,10 @@ import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
-import type { CcdResult, WatcherCoordPort } from './coord/ports.js';
+import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
-import { defaultCachePath, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
+import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, EXPIRE_CHILD_CAP, RECLAIM_PAUSE_CAP, capSupported, ccdCan, sweepDec } from './ccdargv.js';
 import {
@@ -41,7 +41,7 @@ import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
   type CompactionTail, type IdleNudgeRowFacts,
 } from './idlenudge.js';
-import { askActions } from './askkey.js';
+import { askActions, askKey } from './askkey.js';
 // The ask lane's two WINDOWS moved out of this file (whole-branch review
 // F2(b)): `fleet.ts`'s chip is their second reader and cannot import this
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
@@ -101,7 +101,7 @@ import { TestboxLane } from './testboxLane.js';
 import { BuildCaptureLane } from './buildCaptureLane.js';
 import type { HostPressureHealth } from '../../shared/pressure.js';
 import type { DiskHealth } from '../../shared/disk.js';
-import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-checkpoint.js';
+import { DelegationDurability, type DelegationDurableBatch } from './coord/delegation-durability.js';
 import { planNativeRemoved } from './coord/delegation-lease-state.js';
 import { delegationCarrierHealthShown } from './coord/delegation-carrier.js';
 import { applyCarrierJournalStep, emptyCarrierLaneMemory, markLeaseCarrier, noteCarrierMark, planCarrierPass } from './coord/delegationCarrierMark.js';
@@ -172,7 +172,10 @@ import { runStuckPass } from './coord/runStuckPass.js';
 import { isUntoldNotice, untoldPass } from './coord/untold.js';
 import { casesPass } from './coord/casesLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
+import { renewalHoldsMail } from './continuity/renewalFeed.js';
+import { renewalActsOf } from './continuity/renewalWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
+import { runQuizLane } from './continuity/quizLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
@@ -186,7 +189,9 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
-import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
+import { itemBoundOf, outboxSettledOf, senderFor, type SettledOf } from './pushSender.js';
+import type { ItemReachOf } from './coord/pushOutboxStore.js';
 import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
 import { landedPass } from './coord/landedLane.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
@@ -252,7 +257,7 @@ import {
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
-import { createQuestions, type Questions, type RaiseVerdict } from './coord/questions.js';
+import { createQuestions, type QuestionOutbox, type Questions, type RaiseVerdict } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, printableDetail, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -1449,11 +1454,18 @@ export class FleetWatcher {
   /** D-7026: this watcher's ONE owner of question state (`coord/questions.ts#createQuestions`), made here and read by
    *  `buildServer` (`watcher.questions`), so the routes and the watcher reach the same instance. Never module scope. */
   readonly questions: Questions;
+  /** The push outbox's view for asks and items (Overlord W1, Task 5): an ask's record and send go through `pushOne`. */
+  private readonly outboxSettled: SettledOf;
+  private readonly askOutbox: QuestionOutbox;
+  private readonly itemReach: ItemReachOf = (item) => itemBoundOf(this.deps, item, 'reach');
 
   constructor(private deps: WatcherDeps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     // W3 Q3f (D-7030): the doors' sink, this watcher's: the door cores push through `pushOne` as the lapse sinks do, and
     // read the two pane-edge facts a door-in needs (the painted dialog, the child's project) at the call, never copied.
-    this.questions = createQuestions(deps, { heldFor, doors: {
+    this.outboxSettled = outboxSettledOf({ askSettled: (id) => this.questions.askSettled(id) }, deps.coord);
+    this.askOutbox = questionOutboxOf(deps, () => this.questions, () => this.activeProjects,
+      (ev, bound) => { this.pushOne({ ...ev, bound }, this.activeProjects); });
+    this.questions = createQuestions(deps, { heldFor, outbox: this.askOutbox, doors: {
       push: (ev) => this.pushOne(ev, this.activeProjects),
       paintedDialogOf: (childId) => this.dialogIds.get(childId),
       projectOf: (childId) => this.lastFleet?.find((f) => f.id === childId)?.project ?? '',
@@ -1822,6 +1834,9 @@ export class FleetWatcher {
    * The send starts only AFTER the mark committed, is `void`ed and is never retried
    * (D-3295): at most once, because a repeated "vX is out" is the noise the persisted
    * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
+   * Since the push outbox (Overlord W1) "at most once" reads "shown at most once": a rejected send is `unknown` and
+   * not retried, and a send that every subscription refused is retried inside its ten minutes, since no device took it.
+   * (slug release-push-shown-at-most-once)
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
    * `pushOne` is about a session and this is about the fleet. So it goes through `notifyPushOnly`, the funnel's
@@ -1875,7 +1890,7 @@ export class FleetWatcher {
     const copy = releasePushCopy(n, summary);
     const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
     const tag = n.tag;
-    notifyPushOnly({ push: sender }, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
+    notifyPushOnly(this.deps, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
     return { did: 'pushed', tag, payload };
   }
 
@@ -1997,7 +2012,7 @@ export class FleetWatcher {
   private readonly generationsCompactions: CompactionsMemo = new Map();
   private generationsProc: string | undefined;
   /** The starts this process held for a failed read, and each generation's empty probe try (`GenerationsDeps.retried`, `.emptyTries`). */
-  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map();
+  private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
   private delegationLane(): DelegationLane {
@@ -2166,6 +2181,12 @@ export class FleetWatcher {
    *  immediately. Same reasoning as currentPending(). */
   currentHookStates(): Map<string, HookState> {
     return new Map(this.hookStates);
+  }
+  /** `LiveAskRead`'s adapter (Overlord W1, portfolio): the `askKey` of the ask this child's newest hookstate is `waiting` on,
+   *  `null` when it shows none, `unmeasured` when no hookstate was read for it in this process. A pure read; stores nothing. */
+  liveAskKey(childId: string): LiveAskAnswer {
+    const hs = this.hookStates.get(childId);
+    return hs === undefined ? { kind: 'unmeasured' } : { kind: 'read', key: hs.state === 'waiting' ? askKey(hs.ask) : null };
   }
 
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means
@@ -2799,6 +2820,9 @@ export class FleetWatcher {
       void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
+      void this.sweepQuiz().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -3597,6 +3621,8 @@ export class FleetWatcher {
     url?: string;
     /** D-5860: the notice's once-only key, archived beside its row for `CoordStore.hasNotice`. It decides nothing here. */
     dedupeKey?: string;
+    /** The push outbox (Overlord W1): an ask's bound row, written by its move; the funnel sends that row. */
+    bound?: NoticeOpts['bound'];
   } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
@@ -3614,6 +3640,7 @@ export class FleetWatcher {
         ...(e.actions ? { actions: e.actions } : {}),
         ...(e.url !== undefined ? { url: e.url } : {}),
         ...(e.dedupeKey !== undefined ? { dedupeKey: e.dedupeKey } : {}),
+        ...(e.bound !== undefined ? { bound: e.bound } : {}),
       });
   }
 
@@ -4808,7 +4835,7 @@ export class FleetWatcher {
     }
     this.childReclaimJudged = judged;
     // D-8293: a review child past its ceiling is a Waiting on you item whose Release is the operator's (`coord/reviewRelease.ts`).
-    routeReviewReleases({ coord }, staleReviews, judged, now);
+    routeReviewReleases({ coord, itemReach: this.itemReach }, staleReviews, judged, now);
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
     // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
     for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
@@ -6036,6 +6063,7 @@ export class FleetWatcher {
       childMark: (sid) => this.childMarkFor(sid),
       branchOpenPr: (project, branch) => readBranchOpenPr({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState }, project, branch),
       abandonRefusal: (runId) => abandonRefusal(coord, runId),
+      itemReach: this.itemReach,
       serial: this.deadCoordinatorSerial,
     }));
   }
@@ -6082,9 +6110,9 @@ export class FleetWatcher {
     } catch { return { kind: 'unreadable' }; }
   }
 
-  /** The generations lane (Overlord §3.3.11, W1a), in shadow: the fleet reads first, then one synchronous pass that mints,
-   *  ends and records through the store. It acts on no session; the pass logs what it skipped, held and could not read
-   *  (review 2003 F5). */
+  /** The generations lane (Overlord §3.3.11, W1a): the fleet reads first, then one synchronous pass that mints, ends, walks
+   *  and records through the store, then, only while `continuity` is live, the acts it planned (`renewalActsOf`); in shadow
+   *  it acts on no session. The pass logs what it skipped, held and could not read (review 2003 F5). */
   async sweepGenerations(records: readonly SessionRecord[], listedAt: number): Promise<void> {
     const coord = this.deps.coord;
     if (!coord) return;
@@ -6092,6 +6120,7 @@ export class FleetWatcher {
       const { io, cfg } = this.deps;
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
+      const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
@@ -6100,16 +6129,19 @@ export class FleetWatcher {
         turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
         release: () => this.nodeRelease(),
+        drainOf: acts.drainOf,
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
-      generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
+      const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
         log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
           lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
         listedAt,
         readings,
+        canRenew: acts.canRenew,
       });
+      if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
     });
   }
 
@@ -6132,6 +6164,8 @@ export class FleetWatcher {
           declaredIntent: async (id) => declaredIntentOf(
             await childReclaimGenerationRead(io, cfg.registryDir, id).catch((): ChildReclaimGeneration => ({ kind: 'unreadable' })),
             (sid, inc) => intentOfCheckpoint(this.delegationCheckpointIfReady(), sid, inc), id),
+          // Whether the fleet node runs this server's build, from the node inventory (W1 sandbox: `profiledigest` waits for it).
+          buildAgreement: () => inventoryBuildAgreement(coord),
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });
@@ -6145,6 +6179,19 @@ export class FleetWatcher {
     if (!coord) return;
     await this.runLane('timers', () => runTimersLane({ coord, clock: this.deps.time.clock, io: this.deps.io,
       registryDir: this.deps.cfg.registryDir, log: (line) => console.warn(line) }, timerListingOf(records, listedIds, listedAt, names)));
+  }
+
+  /** The weekly replay quiz lane (Overlord §3.3.9 C52, W1a; `continuity/quizLane.ts`): one read-and-raise pass on the wall clock. */
+  async sweepQuiz(): Promise<void> {
+    const port = this.deps.quiz;
+    if (!port) return;
+    await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
+  }
+
+  /** The push outbox lane (Overlord W1, `pushSender.ts`): the held items' reach, every due row sent once per claim, the purge. */
+  async sweepPushOutbox(): Promise<void> {
+    if (!this.deps.coord) return;
+    await this.runLane('pushOutbox', () => senderFor(this.deps).drain(this.deps.time.clock.wall(), this.outboxSettled));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
@@ -8126,6 +8173,10 @@ export class FleetWatcher {
     // matching how `uuidByToId` and `sessionProjects` are built from `records`
     // — the store returns rows, the sweep shapes them into what it will ask.
     const coordinators = new Set(store.openCoordinatorIds());
+    // The renewal act's hold (Overlord W1a): each session's live generation by its `state` column, read once a sweep (a
+    // failed read holds nothing, as before the act existed); `renewalHoldsMail` decides, before any attempt is counted.
+    const gens = store.liveGenerations();
+    const genState = new Map(gens.ok ? gens.rows.map((g) => [g.sessionId, g.state]) : []);
     // D-792's ONE WRITER. Every ordinary gate below calls this and then
     // `continue`s; nothing reads it back. It records WHAT refused the row and
     // for how long, and changes nothing about whether, when or how often the
@@ -8152,6 +8203,7 @@ export class FleetWatcher {
       // and never leaves a session claimed across sweeps.
       this.mailInFlight.add(d.toId);
       try {
+        if (genState.has(d.toId) && renewalHoldsMail(genState.get(d.toId), store.mailOrigin(d.mailId))) { gated(d, 'renewing'); continue; }
         // The recipient's registry record, looked up once and gated on below
         // (the registry ladder); found here, before the cooldown, only because
         // the pace reads its `.child` mark. A lookup, not a gate.
@@ -9419,6 +9471,7 @@ export class FleetWatcher {
     // The hold's answer, sent here: `raise` answers what to send now and never pushes (W3 Q3d, D-7028).
     const pushRaised = (v: RaiseVerdict): RaiseVerdict => {
       if (v.kind === 'held') this.pushOne(v.record, this.activeProjects);
+      else if (v.kind === 'released' && v.bound !== null) this.askOutbox.sent(v.push, v.bound.askId, v.bound.row);
       else if (v.kind === 'released') this.pushOne(v.push, this.activeProjects);
       return v;
     };
@@ -9710,7 +9763,9 @@ export class FleetWatcher {
     // rather than as license to keep holding new asks. The switch comes from the tick's listing (D-5864): it gates
     // the hold on later ticks, so nothing here acts on it at once. The instance holds it (W3 Q3d, D-7028).
     this.questions.noteAsksSwitch((await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear');
-    this.questions.lapseAsks(now, (ev) => this.pushOne(ev, this.activeProjects));
+    this.questions.lapseAsks(now, (ev, bound) => {
+      if (bound === undefined) this.pushOne(ev, this.activeProjects); else this.askOutbox.sent(ev, bound.askId, bound.row);
+    });
   }
 
   /**
@@ -11326,7 +11381,7 @@ class DelegationLane {
           }
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
-            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker };
             const before = this.adoptMemory.watch;                       // review 1622 F1: replaced only when the decider ran
             try {                                                         // PR7b: a throw here never skips PR6's carrier step
               await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,

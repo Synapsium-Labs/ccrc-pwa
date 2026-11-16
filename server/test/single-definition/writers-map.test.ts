@@ -17,7 +17,7 @@ import { describe, it, expect } from 'vitest';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
-import { parseFile } from '../scan/parse.js';
+import { parseFile, ts } from '../scan/parse.js';
 import { CCD_LIB_FILES, ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -310,7 +310,9 @@ describe('section 2.2\'s facts each map to the writers pins that hold them (#236
 const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_events', 'lifecycle_generations',
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
-  'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items'] as const;
+  'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
+  'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
+  'continuity_start_loads', 'answer_marks'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -382,12 +384,140 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      // The renewal act (Overlord W1a): the generations lane's checkpoint, and its one claim-then-answer record of a renew call.
+      continuity_checkpoints: ['server/src/continuity/continuityStore.ts#putCheckpoint'],
+      continuity_renew_calls: ['answerRenewCall', 'claimRenewCall'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
+      continuity_soft_renewals: ['server/src/continuity/continuityStore.ts#recordSoftRenewal'],
+      continuity_start_loads: ['server/src/continuity/continuityStore.ts#insertStartLoads'],
       // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
       push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
         'sealAtBoot', 'silenceOutboxRow'].map((f) => `server/src/coord/pushOutboxStore.ts#${f}`),
       // The item ledger's raise, its one state move and the level toggle, measured at the push outbox's build; and the reach stamp.
       operator_items: [...['moveItemInTx', 'raiseItemInTx', 'setBlocking'].map((f) => `server/src/coord/ledgersStore.ts#${f}`), OUTBOX_REACH],
+      // The portfolio (Overlord W1): the operator's order and its revision, one writer for both, reached from the rank door.
+      portfolio_rank: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      portfolio_rank_revision: ['server/src/coord/portfolioStore.ts#setPortfolioRank'],
+      // The answer marks (Overlord W1): append-only, one writer, reached only from the operator's answer-mark door.
+      answer_marks: ['server/src/coord/answerMarkStore.ts#recordAnswerMark'],
     });
+  });
+
+  // The portfolio's one writer is reached only from the rank door (Overlord W1, plan w1-portfolio.md Task 2; review 2130, F2):
+  // every call under `server/src` is listed, never deduplicated, by its innermost enclosing symbol and, inside a route's
+  // registration call, by that route. Fastify handlers are anonymous arrows, so the route is what tells a second call in
+  // another handler of the same registration function (the box-token goals read among them) from the rank door's own.
+  const ROUTE_VERB = /^(get|post|put|delete|patch)$/;
+  // The answer marks' one writer is pinned the same way (Overlord W1, plan w1-delegation-marks.md Task 2), so `callSitesOf`
+  // takes the callee's name.
+  const callSitesOf = (target: string) => (files: readonly string[]): string[] => {
+    const out: string[] = [];
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8');
+      if (!text.includes(`${target}(`)) continue;
+      const sf = ts.createSourceFile(f, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+      const syms = parseFile(f).symbols;
+      const visit = (node: ts.Node, route: string | null): void => {
+        let here = route;
+        if (ts.isCallExpression(node)) {
+          const callee = node.expression;
+          const first = node.arguments[0];
+          if (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'app' &&
+            ROUTE_VERB.test(callee.name.text) && first !== undefined && ts.isStringLiteral(first)) {
+            here = `${callee.name.text.toUpperCase()} ${first.text}`;
+          }
+          const name = ts.isPropertyAccessExpression(callee) ? callee.name.text : ts.isIdentifier(callee) ? callee.text : null;
+          if (name === target) {
+            const at = node.getStart(sf);
+            const inner = syms.filter((x) => x.start <= at && at < x.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+            out.push(`${rel(f)}#${inner?.name ?? '(module)'}${here === null ? '' : ` @ ${here}`}`);
+          }
+        }
+        ts.forEachChild(node, (c) => visit(c, here));
+      };
+      visit(sf, null);
+    }
+    return out.sort();
+  };
+  const rankCallSites = callSitesOf('setPortfolioRank');
+  const markCallSites = callSitesOf('recordAnswerMark');
+  const RANK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/portfolio/rank', `${S}setPortfolioRank`,
+  ];
+  const plant = async (name: string, text: string, check: (f: string) => void): Promise<void> => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-map-rank-'));
+    try {
+      const f = path.join(d, name);
+      writeFileSync(f, text);
+      check(f);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  };
+  it('CONTROL: a call to setPortfolioRank in a function is named by it; its definition is not a call', async () => {
+    await plant('a.ts', ['export function setPortfolioRank(): void {}', 'export function door(): void { setPortfolioRank(); }'].join('\n'),
+      (f) => expect(rankCallSites([f]).map((s) => s.replace(/^.*#/, ''))).toEqual(['door']));
+  });
+  it('CONTROL: a second call in the goals read\'s handler, in the same registration function, is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = '    return reply.code(200).send({ ok: true, ...goalsReadOf(';
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `    coord.setPortfolioRank({ basedOn: 0, seen: [], order: [] }, 'x', 0);\n${anchor}`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = rankCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual([
+        'registerLedgerOperatorRoutes @ GET /api/programmes/:slug/goals', 'registerLedgerOperatorRoutes @ POST /api/portfolio/rank',
+      ]);
+      expect(sites).not.toEqual([RANK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('setPortfolioRank is called exactly once outside the store, inside the POST /api/portfolio/rank handler', () => {
+    expect(rankCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(RANK_CALLS);
+  });
+  const MARK_CALLS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes @ POST /api/answer-marks', `${S}recordAnswerMark`,
+  ];
+  it('CONTROL: a second recordAnswerMark call in the tick door\'s handler is a second entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "  app.post('/api/items/:id/tick', (req, reply) => {\n";
+    expect(routes.split(anchor)).toHaveLength(2);
+    const planted = routes.replace(anchor, `${anchor}    deps.coord?.recordAnswerMark({ kind: 'item', id: 1, mark: 'unsure', value: true }, 'x', 0);\n`);
+    await plant('ledgersRoutes.ts', planted, (f) => {
+      const sites = markCallSites([f]).map((s) => s.replace(/^.*#/, ''));
+      expect(sites).toEqual(['registerLedgerOperatorRoutes @ POST /api/answer-marks', 'registerLedgerOperatorRoutes @ POST /api/items/:id/tick']);
+      expect(sites).not.toEqual([MARK_CALLS[0]!.replace(/^.*#/, '')]);
+    });
+  });
+  it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
+    expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
+  });
+  // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
+  // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
+  const markReadSites = callSitesOf('answerMarksOf');
+  const MARK_READS = [
+    'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes.operatorView', 'server/src/coord/ledgersRoutes.ts#waitingViewOf',
+    `${S}answerMarksOf`,
+  ];
+  it('CONTROL: an answerMarksOf call in the coordinator\'s box-token items read is a further entry', async () => {
+    const routes = readFileSync(path.join(ccrcRoot, 'server/src/coord/ledgersRoutes.ts'), 'utf8');
+    const anchor = "deps.presenceOf, deps.secretOf, 'none')) });";
+    expect(routes.split(anchor)).toHaveLength(2);
+    await plant('ledgersRoutes.ts', routes.replace(anchor, "deps.presenceOf, deps.secretOf, coord.answerMarksOf('item', []))) });"), (f) => {
+      const sites = markReadSites([f]).map((x) => x.replace(/^.*#/, ''));
+      expect(sites).toContain('registerLedgerCoordinatorRoutes @ GET /api/programmes/:slug/items');
+      expect(sites).not.toEqual(MARK_READS.slice(0, 2).map((x) => x.replace(/^.*#/, '')));
+    });
+  });
+  it('answerMarksOf is called only by the two operator views (the item view and the waiting view)', () => {
+    expect(markReadSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_READS);
+  });
+  const tableReaders = (files: readonly string[]): string[] => files.filter((f) => /\bFROM\s+answer_marks\b/.test(
+    readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, ''))).map(rel).sort();
+  it('CONTROL: a FROM answer_marks outside a comment is found, and one in a comment is not', async () => {
+    await plant('a.ts', "// SELECT x FROM answer_marks\nexport const q = 'SELECT value FROM answer_marks';\n", (f) => expect(tableReaders([f])).toHaveLength(1));
+    await plant('b.ts', '// SELECT x FROM answer_marks\nexport const q = 1;\n', (f) => expect(tableReaders([f])).toEqual([]));
+  });
+  it('FROM answer_marks is spelled in answerMarkStore.ts alone', () => {
+    expect(tableReaders(ALL.filter((f) => !rel(f).startsWith('pwa/')))).toEqual(['server/src/coord/answerMarkStore.ts']);
   });
 });
 

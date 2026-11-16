@@ -301,7 +301,8 @@ function watchdogBox(prefix: string, o: { gateFails?: true } = {}): WatchdogBox 
 function runWatchdogRollback(box: WatchdogBox): { ran: true, code: number; stdout: string; stderr: string; writes: Array<Record<string, unknown>> } {
   writeFileSync(join(box.home, '.ccrc', 'update.json'),
     `{"target":"${X}","phase":"installing","startedAt":1,"updatedAt":1,"detail":null,"from":"pwa","pid":999999}\n`);
-  const r = spawnSync(BASH, [CCRC_SRC, 'rollback', '--from', 'watchdog'], { env: box.env, encoding: 'utf8' });
+  // The watchdog's word (pool set B1, F1): it names its own pid, and this process is the spawned ccrc's parent.
+  const r = spawnSync(BASH, [CCRC_SRC, 'rollback', '--from', 'watchdog'], { env: { ...box.env, CCRC_WATCHDOG_CALLER: String(process.pid) }, encoding: 'utf8' });
   const wf = join(box.home, 'update-json-writes');
   const writes = existsSync(wf)
     ? readFileSync(wf, 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as Record<string, unknown>)

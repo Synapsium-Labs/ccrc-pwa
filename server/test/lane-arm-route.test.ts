@@ -12,8 +12,13 @@ import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { Bus } from '../src/bus.js';
 import { NO_SESSION, type GateDecision } from '../src/auth/gate.js';
-import { decideLaneArmBody, decideLaneArmImport, laneArmConfirmKey, laneArmRowViewOf, rosterCardFieldOf } from '../src/coord/laneArm.js';
-import { LANE_ARM_FEED_TITLE, LANE_ARM_REFUSALS, ROSTER_CARD_SHADOW_LOG, RUNS_ROSTER_CARD_FIELD, laneArmGate } from '../../shared/lane-arm.js';
+import { decideLaneArmBody, decideLaneArmImport, decideLaneArmPost, laneArmConfirmKey, laneArmRowViewOf, rosterCardFieldOf } from '../src/coord/laneArm.js';
+import { W1A_ARM_ROWS } from '../src/continuity/quiz.js';
+import { insertQuizRun } from '../src/continuity/quizStore.js';
+import {
+  LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_REFUSALS, LANE_ARM_TEXT, ROSTER_CARD_SHADOW_LOG, RUNS_ROSTER_CARD_FIELD, laneArmGate,
+  type LaneArmLane,
+} from '../../shared/lane-arm.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches.js';
 import { testDeps } from './helpers.js';
@@ -172,31 +177,36 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(LANE_ARM_REFUSALS).toContain('sign-in-unarmed');
   });
 
-  it('the continuity row\'s gate: Live is refused 409 lane-gated with its reason, signed in, with a key or without, and Shadow is not (review 2003 F3)', async () => {
+  it('the renewal act lifted the continuity row\'s gate: its Live asks for the confirm key like any row, and no row is gated (review 2003 F3)', async () => {
     const { app, coord } = await setup();
-    for (const payload of [{ lane: 'continuity', choice: 'live' }, { lane: 'continuity', choice: 'live', confirm: 'continuity:shadow:0' }]) {
-      const res = await post(app, payload);
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated', detail: laneArmGate('continuity') });
-    }
+    // The replay quiz's baseline (W0-28) stands first, so what answers here is the row's own gate, not the baseline guard.
+    expect(insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
+      measuredAt: 1, reportSha: 'c'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    } }, (lane) => coord.laneArmSetting(lane))).toMatchObject({ ok: true, baseline: true });
+    const first = await post(app, { lane: 'continuity', choice: 'live' });
+    expect(first.statusCode).toBe(409);
+    expect(first.json()).toMatchObject({ ok: false, error: 'confirm-required', lane: 'continuity' });
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
+    const confirmed = await post(app, { lane: 'continuity', choice: 'live', confirm: (first.json() as { confirmKey: string }).confirmKey });
+    expect(confirmed.statusCode).toBe(200);
+    expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
-    // The gate is words a person reads, and only the continuity row has one.
-    expect(laneArmGate('continuity')).toMatch(/renewal act/);
-    expect(laneArmGate('roster-card')).toBeNull();
+    // The gate mechanism stays for a row that needs one; today no row has one.
+    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot'] as const) expect(laneArmGate(lane)).toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
   });
 
-  it('a Live already stored on the gated continuity row reads shadow in the view, and the roster card\'s Live stays live (review 2006 N1)', async () => {
+  it('a Live stored on the continuity row reads live in the view, as the roster card\'s does; a gate, where one stands, keeps a stored Live shadow (review 2006 N1)', async () => {
     const { app, coord } = await setup();
     coord.setLaneArm('continuity', 'live', 1);
     coord.setLaneArm('roster-card', 'live', 1);
     const res = await get(app);
     const lanes = (res.json() as { lanes: { lane: string; stored: string; live: boolean }[] }).lanes;
-    expect(lanes.find((l) => l.lane === 'continuity')).toMatchObject({ stored: 'live', live: false });
+    expect(lanes.find((l) => l.lane === 'continuity')).toMatchObject({ stored: 'live', live: true });
     expect(lanes.find((l) => l.lane === 'roster-card')).toMatchObject({ stored: 'live', live: true });
-    expect(laneArmRowViewOf('continuity', { kind: 'row', choice: 'live', updatedAt: 1, importedAt: null, imported: null }).live).toBe(false);
+    expect(laneArmRowViewOf('continuity', { kind: 'row', choice: 'live', updatedAt: 1, importedAt: null, imported: null }, 'a gate').live).toBe(false);
   });
 
   it('refuses any other body with bad-request before anything else, and writes nothing', async () => {
@@ -257,5 +267,88 @@ describe('the L1 rules (D-8274)', () => {
     const v = laneArmRowViewOf('roster-card', { kind: 'row', choice: 'shadow', updatedAt: 0, importedAt: null, imported: null });
     expect(laneArmConfirmKey(v)).toBe('roster-card:shadow:0');
     expect(decideLaneArmBody({ lane: 'roster-card', choice: 'live', confirm: '' }).ok).toBe(false);
+  });
+});
+
+// The replay quiz piece (Overlord W1a, plan `w1a-replay-quiz.md` Task 2; W0-28 ruled B): a W1a lane-arm row goes live only
+// after the replay quiz's baseline row exists (`baseline-missing`), so "taken before any W1a arm is armed" is a mechanism.
+describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
+  const view = (lane: LaneArmLane, choice: unknown = 'shadow') =>
+    laneArmRowViewOf(lane, { kind: 'row', choice, updatedAt: 0, importedAt: null, imported: null }, null);
+  const decide = (lane: LaneArmLane, choice: 'live' | 'shadow', baseline: { ok: true; exists: boolean } | { ok: false; detail: string },
+    confirm?: string) => decideLaneArmPost({
+    request: { lane, choice, ...(confirm === undefined ? {} : { confirm }) }, row: view(lane), signedIn: true, baseline, gate: null,
+  });
+  const MISSING = { ok: true, exists: false } as const;
+  const EXISTS = { ok: true, exists: true } as const;
+
+  it('each W1a row: Live is refused baseline-missing before a baseline, and goes on to its confirm key after', () => {
+    for (const lane of W1A_ARM_ROWS) {
+      expect(decide(lane, 'live', MISSING), lane).toEqual({ kind: 'baseline-missing' });
+      expect(decide(lane, 'live', MISSING, `${lane}:shadow:0`), `${lane} with its key`).toEqual({ kind: 'baseline-missing' });
+      expect(decide(lane, 'live', EXISTS), lane).toMatchObject({ kind: 'confirm' });
+      expect(decide(lane, 'live', EXISTS, `${lane}:shadow:0`), lane).toEqual({ kind: 'write', lane, choice: 'live' });
+    }
+  });
+
+  it('a baseline that cannot be read refuses a W1a Live as unreadable: doubt never arms one', () => {
+    for (const lane of W1A_ARM_ROWS) {
+      expect(decide(lane, 'live', { ok: false, detail: 'no table' }, `${lane}:shadow:0`), lane)
+        .toEqual({ kind: 'unreadable', detail: expect.stringContaining('no table') });
+    }
+  });
+
+  it('Shadow is never refused, baseline or not', () => {
+    for (const lane of LANE_ARM_LANES) {
+      for (const b of [MISSING, EXISTS, { ok: false, detail: 'x' } as const]) {
+        expect(decide(lane, 'shadow', b), lane).toEqual({ kind: 'write', lane, choice: 'shadow' });
+      }
+    }
+  });
+
+  it('a lane that is not a W1a row (roster-card) is unaffected', () => {
+    expect(W1A_ARM_ROWS).not.toContain('roster-card');
+    for (const b of [MISSING, { ok: false, detail: 'x' } as const]) {
+      expect(decide('roster-card', 'live', b)).toMatchObject({ kind: 'confirm' });
+      expect(decide('roster-card', 'live', b, 'roster-card:shadow:0')).toEqual({ kind: 'write', lane: 'roster-card', choice: 'live' });
+    }
+  });
+
+  it('a standing gate still answers first: the baseline is asked of a row that can go live', () => {
+    expect(decideLaneArmPost({ request: { lane: 'continuity', choice: 'live' }, row: view('continuity'), signedIn: true, baseline: MISSING, gate: 'g' }))
+      .toEqual({ kind: 'gated', reason: 'g' });
+  });
+
+  it('the route: a W1a Live is 409 baseline-missing naming why, writes nothing, and passes once a baseline row exists', async () => {
+    const { app, coord } = await setup();
+    const res = await post(app, { lane: 'anchor-slot', choice: 'live', confirm: 'anchor-slot:shadow:0' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'baseline-missing', detail: LANE_ARM_TEXT.baselineMissing });
+    expect(coord.laneArmSetting('anchor-slot')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
+    expect(LANE_ARM_REFUSALS).toContain('baseline-missing');
+    expect(REFUSAL_STATUS['baseline-missing']).toBe(409);
+    const recorded = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
+      measuredAt: 1, reportSha: 'a'.repeat(64), questionsSha: 'b'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    } }, (lane) => coord.laneArmSetting(lane));
+    expect(recorded).toMatchObject({ ok: true, baseline: true });
+    const ok = await post(app, { lane: 'anchor-slot', choice: 'live', confirm: 'anchor-slot:shadow:0' });
+    expect(ok.statusCode).toBe(200);
+    expect(coord.laneArmSetting('anchor-slot')).toMatchObject({ choice: 'live' });
+  });
+
+  it('the route: an unreadable quiz table refuses a W1a Live 503 state-unreadable, and Shadow still writes', async () => {
+    const { app, coord } = await setup();
+    coord.db.exec('DROP TABLE continuity_quiz_runs');
+    const res = await post(app, { lane: 'launch-profile', choice: 'live', confirm: 'launch-profile:shadow:0' });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ ok: false, error: 'state-unreadable' });
+    expect((await post(app, { lane: 'launch-profile', choice: 'shadow' })).statusCode).toBe(200);
+  });
+
+  it('the route: roster-card goes live with no baseline', async () => {
+    const { app, coord } = await setup();
+    expect((await post(app, { lane: 'roster-card', choice: 'live', confirm: 'roster-card:shadow:0' })).statusCode).toBe(200);
+    expect(coord.laneArmSetting('roster-card')).toMatchObject({ choice: 'live' });
   });
 });

@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 50 id-taking calls across 16 files.
+// THE CLAIM: 51 id-taking calls across 17 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -71,7 +71,12 @@ const ID_BUILDERS = {
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', delegationAdopt: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
-  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
+  // The Overlord W1 pool set (plan Task 6): `poolAnswer`'s one id is refused by the builder itself unless `isRegistryId`
+  // admits it, as `leaseMark`'s are, so the census's dash-led probe cannot reach it and the row is `no-id`. Nothing makes
+  // a later `server/src` caller (the renewal rows piece, the designation door) enter this census: the builder's own
+  // refusal is the guard for every caller.
+  poolAnswer: 'no-id',
+  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {
@@ -307,6 +312,8 @@ const GATES = {
   'registry-refused': { file: 'registry.ts', scope: 'readRegistryMeasured', re: /\bisRegistryId\(/ },
   /** The launch-profile lane refuses a row whose id is not a registry id before it composes any argv (Overlord W1a). */
   'profile-lane-id': { file: 'continuity/profileLane.ts', scope: 'profilePass', re: /if \(!isRegistryId\(r\.id\)\) \{ routeUnread \+= 1; continue; \}/ },
+  /** The renewal act's ccd adapter refuses an id that is not a registry id before it composes any argv (Overlord W1a). */
+  'renew-id': { file: 'continuity/ccdSessionHost.ts', scope: 'renew', re: /if \(!isRegistryId\(sessionId\)\) return \{ kind: 'refused'/ },
   /** `POST /api/runs` checks `claimedBy`, then `sessionId`, as given: two gates of its decider's table (D-5384), right
    *  after the shape gate, so a refusal comes before any registry read. */
   'run-open-checks': {
@@ -500,6 +507,9 @@ const CENSUS: readonly CensusRow[] = [
   // continuity/profileLane.ts (Overlord W1a launch profiles PR B): the lane's rows are the watcher's listing, and the pass
   // refuses a non-registry id itself before `routeSet` composes an argv.
   { file: 'continuity/profileLane.ts', scope: 'profilePass', builder: 'routeSet', id: 'r.id', origin: ['registry'], gate: ['profile-lane-id'] },
+  // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): the id is a stored generation row's, and `renew` refuses a
+  // non-registry id itself before `hibernate` composes an argv.
+  { file: 'continuity/ccdSessionHost.ts', scope: 'renew', builder: 'hibernate', id: 'sessionId', origin: ['stored'], gate: ['renew-id'] },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -514,6 +524,8 @@ const GATE_FILES = [
   'orphanTreeLane.ts',
   // continuity/profileLane.ts (Overlord W1a launch profiles PR B): each row's id is vetted by the predicate before `routeSet`.
   'continuity/profileLane.ts',
+  // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): `renew` vets its id with the predicate before `hibernate`.
+  'continuity/ccdSessionHost.ts',
   // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate
   // inside the builder, which throws before any argv is built (W5-G6b).
   'ccdargv.ts',

@@ -103,8 +103,9 @@ export interface LaneArmConfirmRequired {
 }
 
 /** The words the POST refuses with (each a word of `REFUSAL_STATUS`), spelled once for the PWA's reader. `lane-gated` is the
- *  card's own (review 2003 F3): Live refused while the row's gate stands (`laneArmGate`). */
-export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable', 'lane-gated'] as const;
+ *  card's own (review 2003 F3): Live refused while the row's gate stands (`laneArmGate`). `baseline-missing` is the replay
+ *  quiz's (W1a, W0-28): Live refused on a W1a row until the quiz's baseline is recorded. */
+export const LANE_ARM_REFUSALS = ['bad-request', 'not-configured', 'sign-in-unarmed', 'state-unreadable', 'lane-gated', 'baseline-missing'] as const;
 export type LaneArmRefusal = (typeof LANE_ARM_REFUSALS)[number];
 export function isLaneArmRefusal(v: unknown): v is LaneArmRefusal {
   return typeof v === 'string' && (LANE_ARM_REFUSALS as readonly string[]).includes(v);
@@ -144,10 +145,10 @@ export const LANE_ARM_TEXT = {
       legend: 'Renew long-lived sessions',
       shadowNote: 'Each start of a coordinator mints a generation and every pass records whether a renewal would be due; '
         + 'nothing is held, refused or renewed.',
-      liveNote: 'A coordinator\'s generations move through the renewal states; until the renewal act ships, this changes '
-        + 'nothing a session sees.',
-      gate: 'Live waits for the renewal act: until it ships, nothing moves a generation on from its start, so a live walk '
-        + 'would stand still and fire every deadline at once when it arrives. Live is refused until then.',
+      liveNote: 'A coordinator that is due renews: its mail is held, it writes a handover note, ccd starts it fresh in the '
+        + 'same session, and it reads its card and answers its probes before its mail is released. One that cannot is '
+        + 'left working and raises an item.',
+      gate: null,
     },
     [LAUNCH_PROFILE_LANE]: {
       legend: 'Launch profiles',
@@ -187,4 +188,7 @@ export const LANE_ARM_TEXT = {
   refused: 'The server refused the change',
   unanswered: 'The server did not answer; the change may or may not have been made',
   signInUnarmed: 'Going live needs a signed-in operator, and sign-in is not armed on this server.',
+  baselineMissing: 'This lane goes live only after the replay quiz\'s baseline is recorded, so a later change can be compared '
+    + 'with it; the baseline is the first quiz run recorded while every one of these lanes is in shadow.',
+  baselineUnreadable: 'The server could not read whether the replay quiz\'s baseline is recorded',
 } as const;

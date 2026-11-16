@@ -12,8 +12,9 @@ import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
   CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
-  RELEASE_REVIEW_VERB, nextItemState, parseItemAction, recommendationOf,
-  type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemKind, type ItemMoveRefusal, type ItemState, type NeededBy,
+  RELEASE_REVIEW_VERB, nextItemState, operatorShownAt, parseItemAction, recommendationOf,
+  type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemEventAct, type ItemKind, type ItemMoveRefusal, type ItemState,
+  type NeededBy,
 } from '../../../shared/ledgers.js';
 import { tx } from './tx.js';
 
@@ -31,7 +32,7 @@ export interface ItemRow {
 }
 /** One move of one item. `act` is an `ItemAct` or `raise`, `block`, `unblock`. */
 export interface ItemEventRow {
-  id: number; itemId: number; at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; actor: ItemActor; note: string | null;
+  id: number; itemId: number; at: number; act: ItemEventAct; actor: ItemActor; note: string | null;
 }
 /** `moveItem`'s answer: the moved item, or the refusal word (`nextItemState`'s three, or `unknown-item`). */
 export type ItemMoveResult =
@@ -90,10 +91,17 @@ function writeItemEvent(db: DatabaseSync, itemId: number, at: number, act: ItemE
  *  (`recommendationOf`) can read (plan PL9): no caller can store a decide row the view would show without one. Returns the
  *  new id. `actor` is who the `raise` event names: the coordinator for its own item, `ccrc` for one the server wrote on
  *  another session's behalf (A18). */
-export function raiseItem(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator'): number {
+export function raiseItem(
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc' = 'coordinator', reach?: ItemReach,
+): number {
   checkRaise(input);
-  return tx(db, () => raiseItemInTx(db, input, now, actor));
+  return tx(db, () => raiseItemInTx(db, input, now, actor, reach));
 }
+
+/** The push outbox's write beside a raise (Overlord W1, `pushOutboxStore.ts#reachInTx`), handed in by `CoordStore` so this
+ *  file imports no outbox code: called inside the raise's transaction, with the new id, only for an item the operator is
+ *  shown at its raise (`operatorWasShown`, the hold's one rule); a held item's reach is the held drain's (I2). */
+export type ItemReach = (id: number) => void;
 
 /** `raiseItem`'s vocabulary checks, thrown before any transaction opens. */
 function checkRaise(input: RaiseItemInput): void {
@@ -105,7 +113,7 @@ function checkRaise(input: RaiseItemInput): void {
 }
 
 /** The insert and its `raise` event, inside a transaction the CALLER holds (`tx` does not nest). */
-function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc'): number {
+function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', reach?: ItemReach): number {
   const res = db.prepare(
     'INSERT INTO operator_items (program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, ' +
     "secretSlot, state, raisedAt, recommended, recommendedWhy, action, heldUntil) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?)",
@@ -115,16 +123,17 @@ function raiseItemInTx(db: DatabaseSync, input: RaiseItemInput, now: number, act
     input.action === undefined || input.action === null ? null : JSON.stringify(input.action), input.heldUntil ?? null);
   const id = Number(res.lastInsertRowid);
   writeItemEvent(db, id, now, 'raise', actor, null);
+  if (reach !== undefined && operatorWasShown({ heldUntil: input.heldUntil ?? null, closedAt: null, raisedAt: now }, now)) reach(id);
   return id;
 }
 
 /** `raiseItem` and a mail in ONE transaction (the pattern of `tickWithMail`): `queue` gets the new id and inserts the system
  *  mail; a throw from it rolls the item back. `queue` must open no transaction of its own. */
 export function raiseItemWithMail<T>(
-  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T,
+  db: DatabaseSync, input: RaiseItemInput, now: number, actor: 'coordinator' | 'ccrc', queue: (id: number) => T, reach?: ItemReach,
 ): { id: number; mail: T } {
   checkRaise(input);
-  return tx(db, () => { const id = raiseItemInTx(db, input, now, actor); return { id, mail: queue(id) }; });
+  return tx(db, () => { const id = raiseItemInTx(db, input, now, actor, reach); return { id, mail: queue(id) }; });
 }
 
 export function itemById(db: DatabaseSync, id: number): ItemRow | null {
@@ -152,10 +161,11 @@ export function itemsFor(db: DatabaseSync, program: string | null, now: number):
 
 /** Whether the operator was ever shown an item (D-8194), the hold rule `itemsFor` filters by, for one row read by its id: an
  *  item still held (`heldUntil` in the future) is not, nor is one its coordinator settled inside the hold (closed before
- *  `heldUntil`); every other item is, whatever its state and however long ago it closed. */
-export function operatorWasShown(row: Pick<ItemRow, 'heldUntil' | 'closedAt'>, now: number): boolean {
-  if (row.heldUntil === null) return true;
-  return row.closedAt === null ? row.heldUntil <= now : row.closedAt >= row.heldUntil;
+ *  `heldUntil`); every other item is, whatever its state and however long ago it closed. The rule is
+ *  `shared/ledgers.ts#operatorShownAt`'s, which the portfolio reads too. */
+export function operatorWasShown(row: Pick<ItemRow, 'raisedAt' | 'heldUntil' | 'closedAt'>, now: number): boolean {
+  const shownAt = operatorShownAt(row);
+  return shownAt !== null && shownAt <= now;
 }
 
 /** One move, inside a transaction the CALLER holds. The decider is `nextItemState`; this reads the row, asks it, and
@@ -263,6 +273,14 @@ export function releaseReviewItemRaised(db: DatabaseSync, reviewRunId: number): 
   return db.prepare(`SELECT 1 AS x ${RELEASE_REVIEW_OF} LIMIT 1`).get(RELEASE_REVIEW_VERB, reviewRunId) !== undefined;
 }
 
+/** Has an item with this exact title ever been raised on this programme by this raiser, in any state? The weekly replay quiz
+ *  lane (Overlord W1a, `continuity/quizLane.ts`) raises one item a week, named by its week, and never again that week: an item
+ *  the operator dismissed or ticked is not raised a second time. */
+export function itemRaisedWithTitle(db: DatabaseSync, program: string, raisedBy: string, title: string): boolean {
+  return db.prepare('SELECT 1 AS x FROM operator_items WHERE program = ? AND raisedBy = ? AND title = ? LIMIT 1')
+    .get(program, raisedBy, title) !== undefined;
+}
+
 /** D-8293: has the operator released this review run's report? True only for a release-review item of it that the operator's
  *  `act` moved to `done` (`moveItemInTx`, the one writer, records the act's event); an item ccrc settled is no release. This is
  *  the one read of the fact: the child reclaim sweep stops keeping the review's workspace for the run it reviewed. */
@@ -335,7 +353,7 @@ export function settleEndRequestsOfClosedRuns(db: DatabaseSync, note: string, no
  *  as the `block` event's note; lowering restores that level, and an item that was RAISED blocking (no earlier level on
  *  record) falls back to `soon` when it carries a label and `later` when it does not. A repeat of the level it already
  *  has writes nothing and answers `changed: false`: the one place that says whether the level moved. It writes `neededBy` and an event and never `state`. */
-export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now: number):
+export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now: number, arm?: ItemReach):
   { ok: true; changed: boolean } | { ok: false; why: Extract<ItemMoveRefusal, 'unknown-item' | 'not-open'> } {
   return tx(db, () => {
     const row = itemById(db, id);
@@ -351,6 +369,8 @@ export function setBlocking(db: DatabaseSync, id: number, blocking: boolean, now
     }
     db.prepare('UPDATE operator_items SET neededBy = ? WHERE id = ?').run(next, id);
     writeItemEvent(db, id, now, blocking ? 'block' : 'unblock', 'coordinator', blocking ? row.neededBy : null);
+    // The push outbox's arm (slug rearm-is-an-upsert): a move to blocking arms the item's one row in this transaction.
+    if (blocking) arm?.(id);
     return { ok: true, changed: true } as const;
   });
 }

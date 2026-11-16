@@ -6,8 +6,12 @@
 // deciders (`hardCapTokens`); `single-definition/` holds it to that one definition.
 import { describe, it } from 'vitest';
 import * as launchProfileModule from '../src/continuity/launchProfile.js';
-import { compactThresholdCases } from './sim/launchProfileSets.js';
+import { compactThresholdCases, launchRowCases } from './sim/launchProfileSets.js';
 
 describe('compactThresholdFor (C39)', () => {
   for (const [name, run] of Object.entries(compactThresholdCases(launchProfileModule))) it(name, run);
+});
+
+describe('launchRowOf and launchDigestOf: the one projection ccd reads (Overlord W1 sandbox, Task 2; Review Focus 4)', () => {
+  for (const [name, run] of Object.entries(launchRowCases(launchProfileModule))) it(name, run);
 });

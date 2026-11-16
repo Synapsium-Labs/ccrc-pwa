@@ -3152,6 +3152,170 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE asks ADD COLUMN reachedOperatorAt INTEGER;
   ALTER TABLE operator_items ADD COLUMN reachedOperatorAt INTEGER;
   `,
+
+  // ── 76: user_version 75 -> 76 ─────────────────────────────────────────────
+  // The portfolio (Overlord spec §5.6 H38; W1, plan `w1-portfolio.md` Task 2): `portfolio_rank`, the operator's order, one row
+  // per ranked programme, and `portfolio_rank_revision`, one row whose counter only rises. ONE writer for both,
+  // `portfolioStore.ts#setPortfolioRank`, reached only from the rank door; no row exists until the operator writes one.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 76` takes rule 3 and boots.
+  // The anchor took 74 and the push outbox 75, so this entry is 76 (the coordinator's word at landing). RE-MEASURE the slot
+  // before the PR and before merge (it must print 75 before this entry is counted; renumber on the coordinator's word):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE portfolio_rank (
+    program   TEXT PRIMARY KEY,   -- a programs.slug; the writer checks it exists
+    position  INTEGER NOT NULL,   -- the place inside its class band, 1 first
+    cls       TEXT NOT NULL,      -- ServiceClass; read through isServiceClass, never a cast
+    fixedDate TEXT,               -- YYYY-MM-DD, only on fixed-date
+    setAt     INTEGER NOT NULL,   -- wall ms of the write that last placed this row
+    setBy     TEXT NOT NULL       -- that write's actor: the session's device actor, or flag-off
+  );
+  CREATE TABLE portfolio_rank_revision (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    revision INTEGER NOT NULL,    -- only rises; 0 is "never written", which no row stores
+    setAt    INTEGER NOT NULL,
+    setBy    TEXT NOT NULL
+  );
+  `,
+
+  // ── 77: user_version 76 -> 77 ─────────────────────────────────────────────
+  // The replay quiz (Overlord spec §3.3.9 C52, §12 M13; W1a, plan `w1a-replay-quiz.md` Task 1; W0-28 ruled B):
+  // `continuity_quiz_runs`, one row per replay quiz run the operator ran by hand and recorded. ONE writer,
+  // `continuity/quizStore.ts#insertQuizRun`, which sets `baseline` by `continuity/quiz.ts#quizBaseline` in its own
+  // transaction. A row holds the score and its interval only, never a PASS or a benefit. `reportSha` is unique, so a resend
+  // is one row. The anchor took 74, the push outbox 75 and the portfolio 76, so this entry is 77 (the coordinator's
+  // word at landing).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 77` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 76 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_quiz_runs (
+    id            INTEGER PRIMARY KEY,
+    measuredAt    INTEGER NOT NULL,     -- wall ms the quiz was measured (the report's)
+    recordedAt    INTEGER NOT NULL,     -- wall ms the row was written
+    recordedBy    TEXT NOT NULL,        -- who recorded it (attribution, not authentication)
+    reportSha     TEXT NOT NULL UNIQUE, -- the report's sha256
+    questionsSha  TEXT NOT NULL,        -- the frozen question list's sha256
+    questions     INTEGER NOT NULL,
+    families      INTEGER NOT NULL,
+    score         REAL NOT NULL,
+    lo            REAL NOT NULL,        -- the score's interval
+    hi            REAL NOT NULL,
+    judgeModel    TEXT NOT NULL,
+    ccrcRelease   TEXT NOT NULL,
+    claudeBuilds  TEXT NOT NULL,        -- the Claude Code builds, a JSON list
+    steerArmed    TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    agentsOnArmed TEXT NOT NULL,        -- yes | no | partial | unmeasured (QuizArmed)
+    baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
+  );
+  `,
+
+  // ── 78: user_version 77 -> 78 ─────────────────────────────────────────────
+  // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
+  // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
+  // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
+  // body changes nothing, and a second body that differs sets `conflicted`, which every reader reads as every property
+  // unmeasured. No verdict is stored: every reader computes one from the newest start's row and the server's own profile.
+  // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
+  // resume-carries-its-own-start).
+  //
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 78` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
+  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, the portfolio (#2842) 76
+  // and the replay quiz (#2839) 77, so this is 78 (the coordinator's word at landing, 2026-11-15). RE-MEASURE the slot
+  // before the PR and before merge (it must print 77 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_start_loads (
+    startId        INTEGER PRIMARY KEY REFERENCES continuity_starts(id),
+    profileRole    TEXT,               -- from CCRC_LAUNCH_PROFILE, or NULL when the session had none
+    profileDigest  TEXT,               -- 64 lowercase hex, or NULL
+    launchRc       TEXT,               -- CCRC_LAUNCH_RC: on | off, or NULL
+    claudeVersion  TEXT,               -- the build, or NULL
+    permissionMode TEXT,               -- the hook payload's word, or NULL
+    cwdInWorkspace INTEGER,            -- 1 | 0, or NULL when unmeasured
+    loaded         TEXT NOT NULL,      -- JSON: per known kind, its sorted list or "unmeasured"
+    carriedFrom    TEXT,               -- the reportId a resume carried from, or NULL
+    bodySha256     TEXT NOT NULL,      -- the first report's narrowed body, reportedAt left out
+    conflicted     INTEGER NOT NULL DEFAULT 0,  -- 1 once a second, different body arrived for this start
+    reportedAt     INTEGER NOT NULL,   -- the hook's clock, ms
+    receivedAt     INTEGER NOT NULL    -- the server's clock, ms
+  );
+  `,
+
+  // ── 79: user_version 78 -> 79 ─────────────────────────────────────────────
+  // The renewal act (Overlord spec §3.3.2 C37 and §3.3.11 H12; W1a, plan `w1a-renewal-act.md` Task 3): two tables of the
+  // generations lane, which is their only writer. `continuity_checkpoints` holds the checkpoint the lane assembles for a
+  // generation before it renews it: the identity's live notes and, for a coordinator, its last ten rulings (each a JSON
+  // array), and the handover note's JSON or NULL (a hard trigger carries none). The card reads the row of the generation
+  // that ended last. `continuity_renew_calls` holds one row per `SessionHost.renew` call the lane makes for a try of one
+  // renewal (an episode: a generation that went back to active may renew again), inserted BEFORE the call (a crash then
+  // never repeats a try) and given its answer word after. `continuity_soft_renewals` holds one row per soft due the lane fed,
+  // the soft budget's count across generations.
+  //
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 78` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names any of them, and boots. Every earlier entry is frozen.
+  // The push outbox (#2838) took 75, the portfolio (#2842) 76, the replay quiz (#2839) 77 and the loads report (#2847) 78,
+  // so this entry is 79, the next free slot, pinned to the entry before it (the coordinator's word at landing).
+  // RE-MEASURE the slot before the PR and before merge (it must print 78 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_checkpoints (
+    generationId INTEGER PRIMARY KEY,   -- the generation the checkpoint was assembled for (continuity_generations.id)
+    notes        TEXT NOT NULL,         -- JSON array: the identity's live notes as stored
+    rulings      TEXT NOT NULL,         -- JSON array: a coordinator's last ten rulings, newest first; [] for any other role
+    handover     TEXT,                  -- JSON: the handover note (with its generation and dropped count), or NULL
+    at           INTEGER NOT NULL       -- wall ms the lane stored it
+  );
+  CREATE TABLE continuity_renew_calls (
+    generationId INTEGER NOT NULL,
+    episode      INTEGER NOT NULL,      -- the renewal: wall ms its generation entered clearing (set once on entry)
+    try          INTEGER NOT NULL,      -- the try within the renewal (1-based)
+    at           INTEGER NOT NULL,      -- wall ms the call was claimed, before it was made
+    answer       TEXT,                  -- the RenewResult word, or NULL while the call is in flight or its answer was lost
+    PRIMARY KEY (generationId, episode, try)
+  );
+  CREATE TABLE continuity_soft_renewals (
+    id           INTEGER PRIMARY KEY,
+    identity     TEXT NOT NULL,
+    term         INTEGER NOT NULL,
+    generationId INTEGER NOT NULL,      -- the generation whose soft due was fed
+    observedMs   INTEGER NOT NULL       -- the identity's accumulator when it was fed
+  );
+  CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals(identity, term);
+  `,
+
+  // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
+  // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
+  // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
+  // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
+  // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
+  // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
+  // Sandbox A took 78 and the renewal act (#2852) 79, so this entry is 80, the next free slot (the coordinator's word).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 79 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE answer_marks (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,                       -- AnswerMarkKind; read through isAnswerMarkKind, never a cast
+    rowId  INTEGER NOT NULL,                    -- operator_items.id or asks.id, by kind; no copy of either row
+    mark   TEXT NOT NULL,                       -- AnswerMarkName; read through isAnswerMarkName, never a cast
+    value  INTEGER NOT NULL CHECK (value IN (0, 1)),
+    at     INTEGER NOT NULL,                    -- wall ms of the change
+    actor  TEXT NOT NULL                        -- the session's device actor, or flag-off
+  );
+  CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -86,18 +86,17 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 
-  it('the continuity row says why it cannot go live yet, and a Live tap the server refuses lane-gated says the server\'s reason (review 2003 F3)', async () => {
-    const C = T.rows.continuity;
-    const gate = laneArmGate('continuity')!;
-    expect(gate).toBe(C.gate);
+  it('the continuity row carries no gate since the renewal act: its Live is enabled, and a lane-gated refusal from a server still says the server\'s reason (review 2003 F3)', async () => {
+    expect(laneArmGate('continuity')).toBeNull();
+    expect(T.rows.continuity.gate).toBeNull();
+    const words = 'a gate the server still holds';
     const read = vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', marker: null })] });
-    vi.spyOn(api, 'setLaneArm').mockRejectedValue(new ApiError(409, { ok: false, error: 'lane-gated', detail: gate }));
+    vi.spyOn(api, 'setLaneArm').mockRejectedValue(new ApiError(409, { ok: false, error: 'lane-gated', detail: words }));
     mount();
     await waitFor(() => expect(radio(T.shadow).checked).toBe(true));
-    expect(screen.getByText(gate)).toBeInTheDocument();
-    expect(laneArmLines(row(), ROSTER_CARD_SHADOW_LOG).map((l) => l.text)).not.toContain(gate);
+    expect(radio(T.live).disabled).toBe(false);
     fireEvent.click(radio(T.live));
-    expect(await screen.findByText(`${T.refused} (${gate})`)).toBeInTheDocument();
+    expect(await screen.findByText(`${T.refused} (${words})`)).toBeInTheDocument();
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
     expect(radio(T.shadow).checked).toBe(true);
   });
@@ -165,13 +164,11 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
   });
 
-  it('a Live the continuity row\'s gate holds checks neither radio, under the gate\'s words (review 2006 N1)', async () => {
-    const gate = laneArmGate('continuity')!;
-    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', stored: 'live', live: false, marker: null })] });
+  it('a Live stored on the continuity row checks Live, now that no gate holds it (review 2006 N1)', async () => {
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row({ lane: 'continuity', stored: 'live', live: true, marker: null })] });
     mount();
-    expect(await screen.findByText(gate)).toBeInTheDocument();
+    await waitFor(() => expect(radio(T.live).checked).toBe(true));
     expect(radio(T.shadow).checked).toBe(false);
-    expect(radio(T.live).checked).toBe(false);
   });
 
   it('a marker imported at the upgrade is said on the row; a token this build does not know checks neither radio', async () => {

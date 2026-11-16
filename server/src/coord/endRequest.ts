@@ -20,6 +20,7 @@ import type { CoordStore, RunRow } from './store.js';
 import { coordinatorOfRun, workerOfRun } from './bindingReads.js';
 import { endRequestAskMail } from './ledgersMail.js';
 import { insertSystemMailTx } from './rundefsTx.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 
 /** A repeat from the same asker is refused for this long after a decline or a withdraw, unless the stuck reason changed (A24). */
 export const END_REQUEST_REPEAT_MS = 24 * 60 * 60_000;
@@ -89,6 +90,8 @@ export interface EndRequestDeps {
   readonly now: () => number;
   /** The stuck verdict's reading for this run: its reason and whether its coordinator reads gone. Null when the reader holds none. */
   readonly verdictOf: (runId: number) => { readonly reason: StuckReason | null; readonly coordinatorGone: boolean } | null;
+  /** The push outbox (Overlord W1): an item shown at its raise gets its reach stamp and one `silent` row in the raise's tx. */
+  readonly itemReach?: ItemReachOf | undefined;
 }
 
 export type EndRequestOutcome =
@@ -140,7 +143,7 @@ export function endRequestRun(deps: EndRequestDeps, runId: number, askerId: stri
     if (mailTo === null) return null;
     const mail = endRequestAskMail({ itemId, runId, runName: endRequestRunName(run), askerId, why, graceSeconds: askGraceSeconds() });
     return insertSystemMailTx(deps.coord, null, { fromId: 'operator', toId: mailTo, runId: null, kind: 'status', subject: mail.subject, body: mail.body });
-  });
+  }, deps.itemReach?.(input));
   return { ok: true, id, line: decision.line, heldUntil: decision.heldUntil };
 }
 

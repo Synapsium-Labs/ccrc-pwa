@@ -330,6 +330,7 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsTree(call.project, call.ref === null ? null : docsRefText(call.ref))),', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(call.pin.kind === \'committed\'', nth: 1, arm: 'carried' },
   { file: 'server/src/docs/ccdsource.ts', text: 'return { ok: true, res: await deps.runCcd(CCD_ARGV.docsFetch(project, branch)) };', nth: 1, arm: 'carried' },
+  { file: 'server/src/docs/ccdsource.ts', text: 'res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),', nth: 1, arm: 'carried' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 1, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'const res = await deps.runCcd(argv);', nth: 2, arm: 'ok-only' },
   { file: 'server/src/server.ts', text: 'return late !== null ? { refused: late } : { ran: await deps.runCcd(argv) };', nth: 1, arm: 'explicit' },
@@ -342,6 +343,9 @@ export const RAN_TABLE: readonly RanTableRow[] = [
   { file: 'server/src/server.ts', text: 'const res = await sendDeps.queue.run(id, () => deps.runCcd(argv));', nth: 2, arm: 'explicit' },
   { file: 'server/src/watch.ts', text: 'const res = await this.deps.queue.run(r.id, () => this.deps.runCcd(', nth: 1, arm: 'ok-only' },
   { file: 'server/src/watch.ts', text: 'const res = await this.deps.runCcd(CCD_ARGV.ensure(d.toId));', nth: 1, arm: 'ok-only' },
+  // The renewal act's adapter (Overlord W1a): its call runs inside the serialiser's wrapper, then reads `res.ran === false`
+  // before any word of the runner's (`unreachable`, never a ccd answer).
+  { file: 'server/src/continuity/ccdSessionHost.ts', text: 'try { res = await (deps.around === undefined ? deps.runCcd(argv) : deps.around(sessionId, () => deps.runCcd(argv))); }', nth: 1, arm: 'explicit' },
 ];
 
 /** One `runCcd(` site and how it answers the not-ran arm; `null` when nothing accounts for it. */

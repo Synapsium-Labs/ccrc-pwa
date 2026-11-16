@@ -10,6 +10,7 @@ import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type 
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
+import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
 import { RENEWAL_MUTANT_SETS } from './renewalDeciderSets.js';
 import { GENERATION_START_MUTANT_SETS } from './generationStartSets.js';
@@ -18,11 +19,17 @@ import { PROBE_DOOR_MUTANT_SETS } from './probeDoorSets.js';
 import { NOTES_MUTANT_SETS } from './notesMutants.js';
 import { TIMER_MUTANT_SETS } from './timerSets.js';
 import { ANCHOR_MUTANT_SETS } from './anchorSets.js';
+import { CHECKPOINT_MUTANT_SETS } from './checkpointSets.js';
+import { RENEWAL_ACT_MUTANT_SETS } from './renewalActSets.js';
+import { QUIZ_MUTANT_SETS } from './quizSets.js';
+import { PORTFOLIO_MUTANT_SETS } from './portfolioSets.js';
 import { OVERLORD_HISTORY_MUTANT_SETS } from './overlordHistorySets.js';
 import { PUSH_OUTBOX_MUTANT_SETS } from './pushOutboxSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
+import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
+import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -154,17 +161,24 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...MAIL_PACE_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
+  ...START_LOADS_MUTANT_SETS,
   ...COMPACTION_MUTANT_SETS,
   ...PROBE_MUTANT_SETS,
   ...PROBE_DOOR_MUTANT_SETS,
   ...NOTES_MUTANT_SETS,
   ...TIMER_MUTANT_SETS,
   ...ANCHOR_MUTANT_SETS,
+  ...CHECKPOINT_MUTANT_SETS,
+  ...RENEWAL_ACT_MUTANT_SETS,
+  ...QUIZ_MUTANT_SETS,
+  ...PORTFOLIO_MUTANT_SETS,
   ...OVERLORD_HISTORY_MUTANT_SETS,
   ...PUSH_OUTBOX_MUTANT_SETS,
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
+  ...ANSWER_MARK_MUTANT_SETS,
+  ...SERVICEABILITY_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

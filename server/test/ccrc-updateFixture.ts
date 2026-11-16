@@ -1522,6 +1522,9 @@ export function rollbackRun(home: string, args: string[] = [], extraEnv: NodeJS.
     TMPDIR: join(home, 'tmp'),
     CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
     CCRC_UPDATE_HEALTH_S: '0',
+    // `--from watchdog` is the unattended watchdog's word (pool set B1, F1): it names its own pid, the run's parent,
+    // and this process is the parent of the ccrc spawned below.
+    ...(args.includes('watchdog') ? { CCRC_WATCHDOG_CALLER: String(process.pid) } : {}),
     ...extraEnv,
   };
   delete env['CCRC_UPDATE_LOCK_HELD'];

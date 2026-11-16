@@ -729,9 +729,14 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, the note door, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, the probe door, Overlord W1a)
     // and MIGRATIONS[73] (the anchor-slot lane-arm row, the anchor, Overlord W1a)
-    // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(75);
-    expect(MIGRATIONS.length).toBe(75);
+    // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1)
+    // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, the portfolio, Overlord W1)
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a)
+    // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(80);
+    expect(MIGRATIONS.length).toBe(80);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -831,8 +836,13 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[71] (continuity_notes and continuity_handovers, Overlord W1a)
     // and MIGRATIONS[72] (continuity_probes and continuity_reads, Overlord W1a)
     // and MIGRATIONS[73] (the anchor-slot lane-arm row, Overlord W1a)
-    // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(75);
+    // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1)
+    // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, Overlord W1)
+    // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
+    // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a)
+    // and MIGRATIONS[79] (answer_marks, Overlord W1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(80);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -871,6 +881,36 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_start_loads, the loads report (Overlord W1 sandbox, Task 5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule): a sibling that lands first moves this entry up. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads')) + 1;
+  it('a NEW TABLE and nothing else, keyed by its start', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_start_loads').toBeGreaterThanOrEqual(78);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE continuity_start_loads \([^;]*\);$/);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const pk = db.prepare("SELECT name FROM pragma_table_info('continuity_start_loads') WHERE pk = 1").all() as { name: string }[];
+    expect(pk).toEqual([{ name: 'startId' }]);
+    db.close();
+  });
+  it('reaches a database ALREADY at the version before it and leaves every existing start as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) VALUES ('lane-a-project-a', 'r-00000001', 'u', 'startup', NULL, NULL, 1, 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_start_loads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT reportId FROM continuity_starts').get()).toEqual({ reportId: 'r-00000001' });
     db.close();
   });
 });
@@ -2800,6 +2840,145 @@ describe('coord.db: push_outbox and the reach stamps, the push outbox (Overlord 
     expect(db.prepare('SELECT count(*) AS n FROM push_outbox').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT count(*) AS n FROM push_outbox_meta').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT state, releasedAt, reachedOperatorAt FROM asks').get()).toEqual({ state: 'released', releasedAt: 8, reachedOperatorAt: null });
+    db.close();
+  });
+});
+
+describe('coord.db: portfolio_rank and portfolio_rank_revision, the operator\'s order (Overlord W1, portfolio; H38)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE portfolio_rank (')) + 1;
+  const ENTRY = /^CREATE TABLE portfolio_rank \([^;]*\);\s*CREATE TABLE portfolio_rank_revision \([^;]*\);$/;
+  it('NEW TABLES, nothing on an existing table, the entry after the push outbox\'s (the coordinator\'s word at landing)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE push_outbox (')) + 2);
+    expect(SLOT).toBe(76);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM portfolio_rank').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM portfolio_rank_revision').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    expect(db.prepare("SELECT choice FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow' });
+    db.close();
+  });
+
+  it('the revision row is one row: a second id is refused', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    db.exec("INSERT INTO portfolio_rank_revision (id, revision, setAt, setBy) VALUES (1, 1, 5, 'flag-off')");
+    expect(() => db.exec("INSERT INTO portfolio_rank_revision (id, revision, setAt, setBy) VALUES (2, 1, 5, 'flag-off')")).toThrow(/CHECK/);
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_quiz_runs, the replay quiz (Overlord W1a; C52, M13)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_quiz_runs (')) + 1;
+  const ENTRY = /^CREATE TABLE continuity_quiz_runs \([^;]*\);$/;
+  it('ONE NEW TABLE, nothing on an existing table, the entry after the portfolio\'s (the coordinator\'s word at landing)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE portfolio_rank (')) + 2);
+    expect(SLOT).toBe(77);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_quiz_runs').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    expect(db.prepare("SELECT choice FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow' });
+    db.close();
+  });
+});
+
+describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the renewal act; C37, H12)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_checkpoints')) + 1;
+  const columns = (db: DatabaseSync, table: string): string[] =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number; pk: number }[])
+      .map((c) => `${c.name}${c.notnull === 1 ? '!' : ''}${c.pk > 0 ? `#${c.pk}` : ''}`);
+
+  it('THREE NEW TABLES and an index in one entry, the one after the loads report\'s, and nothing on an existing table', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads (')) + 2);
+    expect(SLOT).toBe(79);
+    expect(MIGRATIONS[SLOT - 1]).toContain('CREATE TABLE continuity_renew_calls');
+    const sql = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
+    expect(sql.match(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b[^;(]*/g)!.map((x) => x.trim())).toEqual([
+      'CREATE TABLE continuity_checkpoints', 'CREATE TABLE continuity_renew_calls', 'CREATE TABLE continuity_soft_renewals',
+      'CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals']);
+  });
+
+  it('reaches a database ALREADY at the version before it (78): the tables land, empty, and an existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(columns(db, 'continuity_checkpoints')).toEqual(['generationId#1', 'notes!', 'rulings!', 'handover', 'at!']);
+    expect(columns(db, 'continuity_renew_calls')).toEqual(['generationId!#1', 'episode!#2', 'try!#3', 'at!', 'answer']);
+    expect(columns(db, 'continuity_soft_renewals')).toEqual(['id#1', 'identity!', 'term!', 'generationId!', 'observedMs!']);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_checkpoints').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_renew_calls').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: answer_marks, the operator\'s answer marks (Overlord W1; §9.2.1, C70)', () => {
+  /** Found by its DDL, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE answer_marks (')) + 1;
+  const ENTRY = /^CREATE TABLE answer_marks \([^;]*\);\s*CREATE INDEX answer_marks_row ON answer_marks \(kind, rowId, mark, id\);$/;
+  it('ONE NEW TABLE and its index, nothing on an existing table, the entry after the renewal act\'s', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_checkpoints')) + 2);
+    expect(SLOT).toBe(80);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the table lands empty and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_reads (sessionId, door, at) VALUES ('lane-a-project-a', 'card', 5)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM answer_marks').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+
+  it('refuses a value other than 0 or 1', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    expect(() => db.prepare("INSERT INTO answer_marks (kind, rowId, mark, value, at, actor) VALUES ('item', 1, 'unsure', 2, 1, 'op-a')").run()).toThrow(/CHECK/);
     db.close();
   });
 });

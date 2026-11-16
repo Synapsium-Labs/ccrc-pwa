@@ -15,6 +15,10 @@
 
 import { RENEWAL_LANE_PERIOD_MS } from '../../shared/continuity.js';
 import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
+import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
+
+/** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
+export const OUTBOX_LANE_PERIOD_MS = 30_000;
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -22,6 +26,10 @@ import { TIMER_LANE_PERIOD_MS } from '../../shared/continuity-timers.js';
  *  a 304 still spends one, so every 30 minutes is 2 scheduled polls an hour, leaving the rest of the budget to
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
+
+/** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
+ *  key (the ISO week), so a day only bounds how late in a week the item appears. */
+export const QUIZ_LANE_PERIOD_MS = 86_400_000;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -186,10 +194,10 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers';
+  | 'launchProfile' | 'timers' | 'quiz';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -269,6 +277,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The prune's failure is caught by `sweepApprovals`' own try (its sentence names the whole sweep), so no warnKey.
   { name: 'approvalPrune', cadenceMs: APPROVAL_PRUNE_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   { name: 'digestBeat', cadenceMs: DIGEST_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null, startsDue: true },
+  // The push outbox (Overlord §6.7, Table 11.1c; W1): the held items' reach, every due row sent once per claim, and the purge.
+  // One pass at a time; a pass older than two send deadlines is abandoned, since each send has its own deadline timer.
+  { name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed' },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
   // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
   // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
@@ -359,6 +371,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The timers lane (Overlord spec §3.3.12, Table 11.1c; W1a): one pass at a time, once a minute. It cleans up, fires each due
   // timer with its one mail in one transaction and purges; a thrown pass is caught here.
   { name: 'timers', cadenceMs: TIMER_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null },
+  // The weekly replay quiz lane (Overlord spec §3.3.9 C52, Table 11.1c; W1a, plan `w1a-replay-quiz.md` Task 4): it looks once a
+  // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
+  // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
+  { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
 ];
 
 export function laneRow(name: string): LaneRow {

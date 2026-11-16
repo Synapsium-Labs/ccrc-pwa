@@ -57,7 +57,7 @@ function repo(home: string): { root: string; head: string; parent: string } {
 
 /** build.json in build-release.sh's one-line shape. */
 function buildJson(sha: string, version: string): string {
-  return `{"sha":"${sha}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false,"version":"${version}"}\n`;
+  return `{"sha":"${sha}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false,"version":"${version}","ccdCaps":["start","pool-set"]}\n`;
 }
 
 let made = 0;
@@ -209,6 +209,14 @@ describe('release-artifact.sh: record, in the build job', () => {
     ['a tarball with no ./build.json', (_head: string): string | null => null],
     ['a build.json with its keys reordered', (head: string): string | null =>
       `{"version":"${TAG}","sha":"${head}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false}\n`],
+    // The Overlord W1 pool set (Task 7): the builder always names its ccd caps, so a stamp without them, with none, or
+    // with a token off the grammar is not the builder's shape.
+    ['a build.json with no ccdCaps', (head: string): string | null =>
+      `{"sha":"${head}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false,"version":"${TAG}"}\n`],
+    ['a build.json with an empty ccdCaps', (head: string): string | null =>
+      `{"sha":"${head}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false,"version":"${TAG}","ccdCaps":[]}\n`],
+    ['a build.json whose ccdCaps holds a capital', (head: string): string | null =>
+      `{"sha":"${head}","ref":"main","builtAt":"2026-10-23T00:00:00Z","dirty":false,"version":"${TAG}","ccdCaps":["Pool-set"]}\n`],
   ])('W26-A9: %s is refused', (_label, json) => {
     const home = mkTmp('ccrc-relart-');
     const { root, head } = repo(home);

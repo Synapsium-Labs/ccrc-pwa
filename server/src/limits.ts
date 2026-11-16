@@ -6,7 +6,7 @@ import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
-import { serviceability, type ShareReading } from '../../shared/serviceability.js';
+import { serviceability, type LaneFacts, type ShareReading } from '../../shared/serviceability.js';
 import type { ModelClass } from '../../shared/models.js';
 import { shareFor, type SharesRead } from './shares.js';
 import { LANE_STATE_DIR_NAME } from '../../shared/agent-protocol.js';
@@ -185,6 +185,14 @@ function reportsLimits(t: AccountDef['telemetry']): boolean {
   }
 }
 
+/** One lane's facts for `serviceability()`: the roster's two operator facts are read as `unset`/`none` when absent. */
+function laneFactsOf(a: AccountDef, limits: Record<string, AccountLimits>, shares: SharesRead): LaneFacts {
+  return {
+    anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id),
+    fableBilling: a.fableBilling ?? 'unset', continuity: a.continuity !== null ? 'recorded' : 'none',
+  };
+}
+
 /**
  * The account a new workspace would land on, and its pressure score.
  *
@@ -333,7 +341,7 @@ export function projectHome(
   const live = cls === 'default' ? eligible : eligible.filter((a) =>
     // `anthropic` is `telemetry === 'anthropic'`: an `openrouter` lane and a `none` compatible lane (D-5521)
     // are not Anthropic backends, so `fable` is `unservable` (`backend`) there.
-    serviceability(cls, { anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id) }, nowS)
+    serviceability(cls, laneFactsOf(a, limits, shares), 'other', nowS)
       .kind !== 'unservable');
   // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
   // the deferred minor that named this line). A class-emptied pool and an

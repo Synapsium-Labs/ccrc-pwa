@@ -149,6 +149,8 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // TERMINAL DRAWER wave 2. The mode is part of the argv, not a parameter the
   // route may omit: `cmd_win_size` asserts exactly four tokens.
   winSize: ['demo-quiet-basin', 'smallest'],
+  // Overlord W1 pool set (plan Task 6): the read-only pool answer, its id refused by the builder unless a registry id.
+  poolAnswer: ['demo-quiet-basin'],
   // NATIVE DOCS READER wave 2. Read-only verbs, one grant each; the two
   // `docs-show` builders share `['docs-show','--project']`. The `null` tails
   // are the samples, so `whitelist-subset.test.ts`'s layer 2c pins the shortest argv of `docsTree` and
@@ -158,4 +160,6 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   docsShowCommitted: ['demo', 'a'.repeat(40), 'refs/remotes/origin/main', 'specs', 'a.md', 2097152],
   docsShowDraft: ['demo', 'main', 'b'.repeat(40), 'plans', 'b.md', 'c'.repeat(64), 2097152],
   docsFetch: ['demo', null],
+  // NATIVE DOCS READER W5b-1: one doc's history, its own grant `['docs-log','--project']`.
+  docsLog: ['demo', 'a'.repeat(40), 'specs', 'a.md'],
 };

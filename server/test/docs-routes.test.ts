@@ -1,4 +1,4 @@
-// `server/src/docs/routes.ts`, part 1: the three docs reads (design 2026-10-01, section 3.4, section 3.6, section
+// `server/src/docs/routes.ts`, part 1: the docs reads (design 2026-10-01, section 3.4, section 3.6, section
 // 6.3-6.5; W3 refinements (c), (d), (f), (i), (j) and (k)). Task 6 drives `composeDocs` and
 // `registerDocsReadRoutes` over W2's REAL adapter and a scripted `CcdRunner` (`docsRouteHelpers.ts`), through
 // Fastify's REAL query parser (`app.inject` with a raw URL; W2's review carry), and every case counts the argv the
@@ -14,7 +14,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { DOCS_CAP } from '../src/ccdargv.js';
+import { DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
 import {
@@ -1050,10 +1050,10 @@ describe('T7: the index micro-cache is dropped by a refresh, when its fetch sett
 /** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
 const REAL_PASSPHRASE = 'correct horse battery staple';
 const REAL_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** The four docs routes as `METHOD path` keys (section 3.4). */
+/** The five docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4). */
 const DOCS_KEYS = [
   'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
-  'POST /api/docs/:project/refresh',
+  'GET /api/docs/:project/history', 'POST /api/docs/:project/refresh',
 ] as const;
 /** The bytes every fixture show answers, and the two pins the corpus reads them through, as `docsApi` writes them. */
 const REAL_MD = new TextEncoder().encode('# a\n');
@@ -1066,7 +1066,10 @@ const REAL_DRAFT: DocPin = {
 
 /** A handshaken fleet state carrying the docs cap: a NEW object each call, so a case can swap one in. */
 function readyFleet(): FleetState {
-  return { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+  return {
+    connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP], rosterFp: null,
+    build: null,
+  };
 }
 
 /** A measured, clean exit of the runner (`ExecResult`), so the adapter's check 1 reads both halves as measured. */
@@ -1074,13 +1077,17 @@ function realOk(stdout: string): ExecResult {
   return { ran: true, code: 0, stdout, stderr: '', killed: false, signal: null };
 }
 
-/** The fixture fleet: ok answers for the four docs verbs (a show answers the pin its argv names); any other ccd argv
- *  exits 1 with nothing on stdout. */
+/** The fixture fleet: ok answers for the five docs verbs (a show answers the pin its argv names, a log the commit, section
+ *  and path its argv names); any other ccd argv exits 1 with nothing on stdout. */
 function realAnswer(args: string[]): ExecResult {
   if (args[0] === 'docs-index') return realOk(line(indexOk()));
   if (args[0] === 'docs-tree') return realOk(line(treeOk()));
   if (args[0] === 'docs-show') return realOk(showLine(args.includes('--commit') ? REAL_COMMITTED : REAL_DRAFT, REAL_MD));
   if (args[0] === 'docs-fetch') return realOk(line(fetchOk()));
+  if (args[0] === 'docs-log') {
+    const value = (flag: string): string => args[args.indexOf(flag) + 1] ?? '';
+    return realOk(line(logAnswer({ commit: value('--commit'), section: value('--section'), path: value('--path') })));
+  }
   return { ran: true, code: 1, stdout: '', stderr: 'usage', killed: false, signal: null };
 }
 
@@ -1090,13 +1097,13 @@ function realAnswer(args: string[]): ExecResult {
  * builds none; each case sets the one it needs, AFTER `buildServer`, which is the point of the getter). Closed after
  * the case with the module's other apps.
  */
-async function realServer(o: { auth?: boolean } = {}): Promise<{
+async function realServer(o: { auth?: boolean; answer?: (args: string[]) => ExecResult | Promise<ExecResult> } = {}): Promise<{
   app: FastifyInstance; deps: Deps; ccd: () => string[][];
 }> {
   const calls: string[][] = [];
   const run: Runner = async (cmd, args) => {
     calls.push([cmd, ...args]);
-    return realAnswer(args);
+    return (o.answer ?? realAnswer)(args);
   };
   const home = mkTmp('ccrc-docs-w3-');
   const base = testDeps(home, run);
@@ -1126,9 +1133,19 @@ function eachDocsRoute(app: FastifyInstance, headers: Record<string, string> = {
     app.inject({ method: 'GET', url: docsApi.projects(), headers }),
     app.inject({ method: 'GET', url: docsApi.tree('demo', null), headers }),
     app.inject({ method: 'GET', url: docsApi.file('demo', REAL_COMMITTED), headers }),
+    app.inject({ method: 'GET', url: docsApi.history('demo', REAL_LOG_ASK), headers }),
     app.inject({ method: 'POST', url: docsApi.refresh('demo'), headers }),
   ];
 }
+
+/** The history ask every case below makes, and ccd's ok line for it (one valid entry), with `over` replacing top-level
+ *  fields. */
+const REAL_LOG_ASK = { commit: FIXTURE_COMMIT, section: 'specs', path: 'a.md' } as const;
+const logAnswer = (over: Record<string, unknown> = {}) => ({
+  v: 1, verb: 'docs-log', ok: true, elapsedMs: 3, ...REAL_LOG_ASK,
+  entries: [{ sha: FIXTURE_COMMIT, parent: null, date: '2026-11-01T10:00:00+00:00', author: 'demo', subject: 'add a' }],
+  truncated: false, ...over,
+});
 
 describe('T9: the real server — the composition reads deps.fleetState through a getter (refinement (i); W2 carry)', () => {
   it('no fleet state: caps-unknown; a state SWAPPED in after buildServer is read; the same object mutated in place is read', async () => {
@@ -1542,5 +1559,132 @@ describe('FR1 review F5: a read whose every requester left is taken from Fastify
     } finally {
       process.off('unhandledRejection', onUnhandled);
     }
+  });
+});
+
+describe('W5b-1 review: a history GET whose client left while it queued is dequeued and its socket ended (the F5 shape)', () => {
+  it('a queued history GET whose response closes unfinished is dequeued, its reply hijacked and its raw response destroyed, and no hook runs for it', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (e: unknown): void => { unhandled.push(e); };
+    process.on('unhandledRejection', onUnhandled);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const b = blocker<CcdResult>();
+      const rec = scripted(() => b.exec());
+      const late: string[] = [];
+      let captured: import('fastify').FastifyReply | undefined;
+      const { app, docs } = await open({
+        run: rec.run,
+        verbs: ['caps', DOCS_CAP, DOCS_LOG_CAP],
+        root: (root) => {
+          root.addHook('onRequest', async (req, reply) => {
+            if (req.headers['x-test-capture'] !== undefined) captured = reply;
+          });
+          root.addHook('onSend', async (req, _reply, payload) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onSend');
+            return payload;
+          });
+          root.addHook('onResponse', async (req) => {
+            if (req.headers['x-test-capture'] !== undefined) late.push('onResponse');
+          });
+        },
+      });
+      const lane = nodeLanes(docs).read;
+      const at = (p: string): string => docsApi.history('demo', { ...REAL_LOG_ASK, path: p });
+      const held = ['a.md', 'b.md'].map((p) => app.inject({ url: at(p), headers: PWA_HEADERS }));
+      await until(() => rec.calls.length === 2, 'two docs-log execs');
+      const third = app.inject({ url: at('c.md'), headers: { ...PWA_HEADERS, 'x-test-capture': '1' } });
+      third.then(() => undefined, () => undefined);
+      await until(() => lane.load().queued === 1 && captured !== undefined, 'the third read queued');
+      const reply = captured as import('fastify').FastifyReply;
+      expect(reply.sent).toBe(false);
+      expect(reply.raw.destroyed).toBe(false);
+      // The client's response closes unfinished while its socket is still open: the requester has gone.
+      reply.raw.emit('close');
+      await until(() => lane.load().queued === 0, 'the read dequeued');
+      await until(() => reply.sent, 'the reply taken from Fastify');
+      expect(reply.raw.destroyed).toBe(true);
+      b.release(0, faultRes());
+      b.release(1, faultRes());
+      await Promise.all(held);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(rec.calls).toHaveLength(2);
+      expect(rec.calls.map((argv) => argv[0])).toEqual(['docs-log', 'docs-log']);
+      expect(late).toEqual([]);
+      expect(unhandled).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
+
+describe('W5b-1 T10: GET /api/docs/:project/history (rich-docs spec G4, M9.8)', () => {
+  const url = docsApi.history('demo', REAL_LOG_ASK);
+  const logs = (ccd: () => string[][]) => verb(ccd(), 'docs-log');
+
+  it('history answers 200 {ok, log} and execs one docs-log through the agent whitelist', async () => {
+    const { app, deps, ccd } = await realServer({ answer: () => realOk(line(logAnswer())) });
+    deps.fleetState = readyFleet();
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toStrictEqual({ ok: true, log: logAnswer() });
+    expect(logs(ccd)).toEqual([['docs-log', '--project', 'demo', '--commit', FIXTURE_COMMIT, '--section', 'specs',
+      '--path', 'a.md']]);
+    expect(ccd()).toHaveLength(1);
+  });
+
+  it('a refused query is 400 with zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ answer: () => realOk(line(logAnswer())) });
+    deps.fleetState = readyFleet();
+    const res = await app.inject({ url: `${url}&commit=x`, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().ok).toBe(false);
+    expect(ccd()).toEqual([]);
+  });
+
+  it('two joiners share one flight', async () => {
+    let release: (r: ExecResult) => void = () => undefined;
+    const held = new Promise<ExecResult>((resolve) => { release = resolve; });
+    const { app, deps, ccd } = await realServer({ answer: () => held });
+    deps.fleetState = readyFleet();
+    const both = Promise.all([1, 2].map(() => app.inject({ url, headers: PWA_HEADERS })));
+    await until(() => logs(ccd).length === 1, 'the one docs-log exec');
+    // Let the second request pass the gate and join the held flight before it settles.
+    for (let turn = 0; turn < 50; turn++) await new Promise<void>((resolve) => setImmediate(resolve));
+    release(realOk(line(logAnswer())));
+    const answers = await both;
+    expect(answers.map((r) => r.statusCode)).toEqual([200, 200]);
+    expect(answers[1].json()).toStrictEqual(answers[0].json());
+    expect(logs(ccd)).toHaveLength(1);
+  });
+
+  it('a log answer that fails its shape is 502 malformed-answer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const bad = logAnswer({ entries: [{ sha: 'not-a-sha', parent: null, date: 'x', author: 'demo', subject: 's' }] });
+    const { app, deps } = await realServer({ answer: () => realOk(line(bad)) });
+    deps.fleetState = readyFleet();
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, failure: 'malformed-answer' });
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs log answer failed its shape check');
+  });
+
+  it('over a fleet without docs-log-v1 it is 501 unsupported with zero execs', async () => {
+    const { app, deps, ccd } = await realServer({ answer: () => realOk(line(logAnswer())) });
+    deps.fleetState = { ...readyFleet(), ccdVerbs: ['caps', DOCS_CAP] };
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toStrictEqual(word('unsupported'));
+    expect(ccd()).toEqual([]);
+  });
+
+  it('the answer is no-store', async () => {
+    const { app, deps } = await realServer({ answer: () => realOk(line(logAnswer())) });
+    deps.fleetState = readyFleet();
+    const res = await app.inject({ url, headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
   });
 });

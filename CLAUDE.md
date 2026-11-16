@@ -154,7 +154,10 @@ real values: `deploy/reference-fleet.md` (gitignored).
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
-  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. **Switching
+  accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
+  layers refuse a write of the roster `~/.ccrc/accounts.json` or its mirror `~/.ccrc/accounts.sh` and a direct run of
+  `deploy/account-op.mjs` (matched by the script's name, in any path; reads of all three stay open), because they carry the
+  billing and continuity facts that relax a serviceability gate; it is an accident guard there too. **Switching
   accounts and the auto-swap are never refused** (the operator's ruling of 2026-10-19): `ccd swap-self`, `ccd prefer`,
   `ccd swap` in every form, `POST /api/sessions/:id/swap`, `ccrc account roster`, `printenv <NAME>` and the reads
   around a move stay open (`server/test/fixtures/account-deny/must-allow.json`).
@@ -615,7 +618,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
   the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
-  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), consult no box token
+  `GET /api/programmes/:slug/secrets` and `DELETE /api/programmes/:slug/secrets/:slot` (the PL6 follow-up), `GET /api/portfolio`
+  and `POST /api/portfolio/rank` (Overlord W1: the operator's portfolio read and the rank door, which works while sign-in is dark
+  and records `flag-off` then), and `POST /api/answer-marks` (Overlord W1: the operator's answer marks on a Waiting on you row,
+  which work while sign-in is dark and record `flag-off` then), consult no box token
   either: the tick queues the operator's answer as system mail to the programme's coordinator in the move's own transaction,
   the secret door stores a pasted one-line value in its protected slot and ticks with "set" and when, and the last four
   characters only for a value the masker catches (at its 20-byte floor or longer, as one run), behind a step-up, the read

@@ -752,7 +752,7 @@ else:
 `);
 
 const S_T10 = 'docs/superpowers/specs';
-const SECTION_PATHS_T10 = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions'];
+const SECTION_PATHS_T10 = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions', 'docs/vision', 'docs/promise'];
 
 vT10.describe('docs listing: parse_ls_tree_long (§2 (f) Committed step 2)', () => {
   let h: HarnessT10;
@@ -838,7 +838,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
   });
   vT10.afterAll(() => { h.cleanup(); });
 
-  vT10.it('answers all four sections in SECTIONS order, each present or absent, and never lists a path outside them', () => {
+  vT10.it('answers every section in SECTIONS order, each present or absent, and never lists a path outside them', () => {
     const c = commitRowsT10(h, demo, [
       ['100644', B, `${S_T10}/a.md`],
       ['100644', B, 'docs/product-design/m.html'],
@@ -854,17 +854,20 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
       { slug: 'plans', path: 'docs/superpowers/plans', state: 'absent', count: 0 },
       { slug: 'product-design', path: 'docs/product-design', state: 'present', count: 1 },
       { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+      { slug: 'vision', path: 'docs/vision', state: 'absent', count: 0 },
+      { slug: 'promise', path: 'docs/promise', state: 'absent', count: 0 },
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['specs', 'a.md'], ['product-design', 'm.html']]);
     vT10.expect(r.blobs.map((b) => [b[0], b[1]])).toEqual([['product-design', 'm.html'], ['specs', 'a.md']]);
     vT10.expect(r.unlisted).toEqual({ count: 0, byReason: {} });
   });
 
-  vT10.it('answers a commit with no docs at all as four absent sections and no entries: not an error (§2 (h) 7)', () => {
+  vT10.it('answers a commit with no docs at all as every section absent and no entries: not an error (§2 (h) 7)', () => {
     const r = listT10(h, 'demo', commitRowsT10(h, demo, [['100644', B, 'README.md']]));
     vT10.expect(r.failure).toBeUndefined();
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'absent', 0], ['plans', 'absent', 0], ['product-design', 'absent', 0], ['conventions', 'absent', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries).toEqual([]);
     vT10.expect(r.blobs).toEqual([]);
@@ -880,6 +883,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     const r = listT10(h, 'demo', c);
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'absent', 0], ['plans', 'absent', 0], ['product-design', 'present', 1], ['conventions', 'absent', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['product-design', 'm.html']]);
   });
@@ -896,6 +900,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     vT10.expect(r.sections.map((s) => [s.slug, s.state, s.count])).toEqual([
       ['specs', 'not-a-directory', 0], ['plans', 'present', 1],
       ['product-design', 'not-a-directory', 0], ['conventions', 'not-a-directory', 0],
+      ['vision', 'absent', 0], ['promise', 'absent', 0],
     ]);
     vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([['plans', 'p.md']]);
     vT10.expect(r.blobs.map((b) => [b[0], b[1]])).toEqual([['plans', 'p.md']]);
@@ -958,7 +963,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
     vT10.expect(r.entries).toEqual([]);
   });
 
-  vT10.it('makes ONE git call, the fixed ls-tree over the four section paths, under the read env', () => {
+  vT10.it('makes ONE git call, the fixed ls-tree over the section paths, under the read env', () => {
     const g = makeHarnessT10('ccd-docs-');
     try {
       const dir = g.makeRepo('demo');
@@ -969,7 +974,7 @@ vT10.describe('docs listing: list_committed at a commit (§2 (f) Committed steps
       const lsTree = rec.calls().filter((k) => k.argv.includes('ls-tree'));
       vT10.expect(lsTree).toHaveLength(1);
       const argv = lsTree[0]!.argv;
-      // The caller's commit is the one value in it, after --end-of-options; the pathspecs are this file's own four.
+      // The caller's commit is the one value in it, after --end-of-options; the pathspecs are this file's own.
       vT10.expect(argv.slice(argv.indexOf('ls-tree'))).toEqual([
         'ls-tree', '-r', '-z', '--long', '--full-tree', '--end-of-options', c, '--', ...SECTION_PATHS_T10,
       ]);
@@ -1825,7 +1830,7 @@ import { hostFilterCaveat as t14hostFilterCaveat, unitJson as t14unitJson } from
 import { plantGitRecorder as t14plantGitRecorder } from './ccdDocsHelpers.js';
 
 const T14_S = 'docs/superpowers/specs/';
-const T14_SECTION_PATHS = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions'];
+const T14_SECTION_PATHS = ['docs/superpowers/specs', 'docs/superpowers/plans', 'docs/product-design', 'docs/conventions', 'docs/vision', 'docs/promise'];
 const t14sha = (b: string | Buffer): string => t14createHash('sha256').update(b).digest('hex');
 /** A python string literal for an ASCII value (every fixture path here is ASCII). */
 const t14q = (s: string): string => JSON.stringify(s);
@@ -2936,6 +2941,8 @@ describe('docs-tree end to end (docs W1a Task 15)', () => {
         { slug: 'plans', path: 'docs/superpowers/plans', state: 'present', count: 1 },
         { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
         { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+        { slug: 'vision', path: 'docs/vision', state: 'absent', count: 0 },
+        { slug: 'promise', path: 'docs/promise', state: 'absent', count: 0 },
       ]);
       expect(t.drafts).toEqual({
         state: 'holder', branch: 'main', worktree: { path: real, head, class: 'main' },
@@ -3731,4 +3738,36 @@ describe.skipIf(process.platform !== 'linux')('row 64 on Darwin: killpg answers 
     expect(s).toBeGreaterThanOrEqual(1.9);
     expect(s).toBeLessThan(2.7);
   }, 60000);
+});
+
+vT10.describe('six sections (rich-docs spec G1, W5b)', () => {
+  let h: HarnessT10;
+  let demo: string;
+  vT10.beforeAll(() => {
+    h = makeHarnessT10('ccd-docs-');
+    demo = h.makeRepo('demo');
+  });
+  vT10.afterAll(() => { h.cleanup(); });
+
+  vT10.it('lists vision and promise after the four, in DOC_SECTIONS order, and lists their entries recursively', () => {
+    const B = blobT10(h, demo, 'hello\n');
+    const c = commitRowsT10(h, demo, [
+      ['100644', B, 'docs/vision/v.md'],
+      ['100644', B, 'docs/promise/p.md'],
+      ['100644', B, 'docs/promise/sub/q.md'],
+    ]);
+    const r = listT10(h, 'demo', c);
+    vT10.expect(r.failure).toBeUndefined();
+    vT10.expect(r.sections).toEqual([
+      { slug: 'specs', path: 'docs/superpowers/specs', state: 'absent', count: 0 },
+      { slug: 'plans', path: 'docs/superpowers/plans', state: 'absent', count: 0 },
+      { slug: 'product-design', path: 'docs/product-design', state: 'absent', count: 0 },
+      { slug: 'conventions', path: 'docs/conventions', state: 'absent', count: 0 },
+      { slug: 'vision', path: 'docs/vision', state: 'present', count: 1 },
+      { slug: 'promise', path: 'docs/promise', state: 'present', count: 2 },
+    ]);
+    vT10.expect(r.entries.map((e) => [e.section, e.path])).toEqual([
+      ['vision', 'v.md'], ['promise', 'p.md'], ['promise', 'sub/q.md'],
+    ]);
+  });
 });

@@ -39,6 +39,16 @@ export function noticePayload(
   };
 }
 
+/** The PWA route a blocking item's push opens on tap: the Waiting on you list (`pwa/src/lib/routes.ts`'s `waiting` row). */
+export const WAITING_URL = '/waiting';
+
+/** An item's push copy, the one place it is built (the blocking item's, `ledgersRoutes.ts#pushBlocking` before the
+ *  push outbox): a `coord` notice with no session, titled "Waiting on you", the item's title as its body, collapsed
+ *  under `item-<id>` and opening the list on tap. Built by `noticePayload`, as every payload is. */
+export function itemPushPayload(id: number, title: string): PushPayload {
+  return noticePayload({ kind: 'coord', sessionId: '', title: 'Waiting on you', body: title }, { tag: `item-${id}`, url: WAITING_URL });
+}
+
 /** What the sender's `prepare` answers. `payload` is null and `service` false when there is no push service. */
 export interface PreparedPush { readonly payload: PushPayload | null; readonly pushId: string; readonly service: boolean }
 /** The bound-row callback a raising transaction calls with its source's id, built from the sender's `prepare`, so the
@@ -77,6 +87,8 @@ export interface PushDueFacts {
   readonly viewing: boolean;
   /** The source row was answered, withdrawn or closed. */
   readonly settled: boolean;
+  /** A newer push under the same tag was accepted (an unbound row's retry only; review 2150 F4). */
+  readonly superseded: boolean;
   /** A payload exists (a handover with no in-memory hold has none). */
   readonly payload: boolean;
 }
@@ -95,8 +107,8 @@ const EVENT_RULES: Readonly<Record<PushDueFacts['event'], { readonly heldDrain: 
 };
 
 /** Whether a row pushes now, by the first rule that matches:
- *  1. no push service is `no-service`; 2. no payload is `no-payload`; 3. a settled source is `settled`;
- *  4. an item that is not blocking is `level`; 5. the held drain never pushes (`older-build`: only an older build's
+ *  1. no push service is `no-service`; 2. no payload is `no-payload`; 3. a settled source is `settled`, and a row a
+ *  newer accepted push with its tag replaced is `superseded`; 4. an item that is not blocking is `level`; 5. the held drain never pushes (`older-build`: only an older build's
  *  toggle inside the hold makes a held item blocking with no row, and that build pushed it then; slug
  *  held-drain-is-silent); 6. a notice being viewed is `viewing`, except on a `claim`, because presence was decided once,
  *  at the reach or the arm (slug presence-read-once); 7. everything else is `now`. */
@@ -104,6 +116,7 @@ export function pushDue(f: PushDueFacts): PushDue {
   if (!f.service) return silent('no-service');
   if (!f.payload) return silent('no-payload');
   if (f.settled) return silent('settled');
+  if (f.superseded) return silent('superseded');
   if (f.source === 'item' && !f.blocking) return silent('level');
   const ev = EVENT_RULES[f.event];
   if (ev.heldDrain) return silent('older-build');
@@ -122,7 +135,8 @@ export function outboxRetryAt(attempts: number, armedAt: number, now: number): n
  *  rejected. In order: `no-subscription` is `unsent`; any `accepted` is `sent`; any `no-answer` or a null verdict is
  *  `unknown`, because the service may have taken it (slug no-answer-is-never-retried); every subscription `gone` is
  *  `unsent` (slug all-gone-is-unsent); any `refused` is `retrying` at `outboxRetryAt`, or `failed` past the horizon;
- *  anything else (a `refused-for-good` with no `refused`) is `failed` (slug permanent-refusal-fails). */
+ *  anything else (a `refused-for-good` or an `unsendable` with no `refused`) is `failed` (slugs permanent-refusal-fails,
+ *  local-refusal-is-unsendable). */
 export function outboxNextState(
   v: PushSendVerdict | null, row: { readonly attempts: number; readonly armedAt: number }, now: number,
 ): { readonly to: 'sent' | 'unsent' | 'failed' | 'unknown' } | { readonly to: 'retrying'; readonly nextAttemptAt: number } {

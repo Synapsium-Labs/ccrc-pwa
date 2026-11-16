@@ -88,7 +88,7 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 75 (push_outbox, push_outbox_meta and the reach stamps, Overlord W1), 74 (the anchor-slot lane-arm row, which goes with lane_arm_settings), 73 (continuity_probes and continuity_reads, Overlord W1a), 72 (continuity_notes and
+    // Back to version 53: undo migrations 80 (answer_marks, Overlord W1), 79 (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a), 78 (continuity_start_loads, Overlord W1 sandbox), 77 (continuity_quiz_runs, the replay quiz, Overlord W1a), 76 (portfolio_rank and portfolio_rank_revision, Overlord W1), 75 (push_outbox, push_outbox_meta and the reach stamps, Overlord W1), 74 (the anchor-slot lane-arm row, which goes with lane_arm_settings), 73 (continuity_probes and continuity_reads, Overlord W1a), 72 (continuity_notes and
     // continuity_handovers, Overlord W1a), 71
     // (plain_memory_settings, Overlord W1a launch profiles PR B), 70 (continuity_timers,
     // Overlord W1a), 69 (continuity_snapshots and continuity_card_reads, Overlord W1a), 68
@@ -100,7 +100,7 @@ describe('the store: three states per group, default shadow', () => {
     // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all twenty-two.
+    // as 54, so the reopen replays all twenty-seven.
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;
@@ -110,7 +110,8 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
-    fresh.exec('DROP TABLE push_outbox_meta; DROP TABLE push_outbox; ALTER TABLE asks DROP COLUMN reachedOperatorAt; ALTER TABLE operator_items DROP COLUMN reachedOperatorAt;');
+    fresh.exec('DROP TABLE answer_marks; DROP TABLE continuity_soft_renewals; DROP TABLE continuity_renew_calls; DROP TABLE continuity_checkpoints;');
+    fresh.exec('DROP TABLE continuity_start_loads; DROP TABLE continuity_quiz_runs; DROP TABLE portfolio_rank_revision; DROP TABLE portfolio_rank; DROP TABLE push_outbox_meta; DROP TABLE push_outbox; ALTER TABLE asks DROP COLUMN reachedOperatorAt; ALTER TABLE operator_items DROP COLUMN reachedOperatorAt;');
     fresh.exec('DROP TABLE continuity_reads; DROP TABLE continuity_probes; DROP TABLE continuity_handovers; DROP TABLE continuity_notes; DROP TABLE plain_memory_settings; DROP TABLE continuity_timers; DROP TABLE continuity_card_reads; DROP TABLE continuity_snapshots; DROP TABLE continuity_generations; DROP TABLE continuity_cursor; DROP TABLE face_settings; DROP TABLE continuity_starts; DROP INDEX mail_answers_once; ALTER TABLE mail DROP COLUMN answersMail; DROP TABLE testbox_staged_changes; ALTER TABLE claims DROP COLUMN chainedFrom; ALTER TABLE nodes DROP COLUMN reportedSweep; DROP TABLE claude_builds; DROP TABLE practice_cases; DROP TABLE testbox_events; DROP TABLE lane_arm_settings; DROP TABLE coordinator_calls; ALTER TABLE run_close_settings DROP COLUMN claimantGone; PRAGMA user_version = 53;');
     fresh.close();
     const coord = new CoordStore(openCoordDb(file));

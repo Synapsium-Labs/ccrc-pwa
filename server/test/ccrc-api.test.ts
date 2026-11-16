@@ -245,6 +245,7 @@ describe('the closed route table', () => {
     [['linking', 'show'], 'GET', '/api/linking'],
     // The start report (Overlord W1a): the session hook's report of its own SessionStart.
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
+    [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
     [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
     // The note door (Overlord W1a, the notes piece): a session's own notes; every row fills the pane's pair, so each runs in a pane.
     [['note', 'add', 'lane-a-project-a', '--json', '-'], 'POST', '/api/sessions/lane-a-project-a/notes'],
@@ -323,7 +324,8 @@ describe('the closed route table', () => {
     // Seventy-eight since the note door's four (Overlord W1a, the notes piece).
     // Eighty-one since the three `timer` rows (Overlord W1a, the timers piece); eighty-three since the probe door's two (Overlord,
     // the probes piece): `sessions.probe` and `probe.answer`.
-    expect(keys).toHaveLength(83);
+    // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
+    expect(keys).toHaveLength(84);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -338,7 +340,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -512,7 +514,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
-      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],

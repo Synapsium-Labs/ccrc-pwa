@@ -45,7 +45,8 @@ import { attributionVerdict } from './attribution.js';
 import { childReclaimGenerationRead } from './childReclaim.js';
 import { childReclaimUnlessDisabled } from './childReclaimDisabled.js';
 import { retireExecutor } from '../retireExecutor.js';
-import { DelegationCheckpointError, type DelegationDurability } from './delegation-checkpoint.js';
+import { DelegationCheckpointError } from './delegation-checkpoint.js';
+import { type DelegationDurability } from './delegation-durability.js';
 import { COORDINATOR_INTENT_ACTIONS, COORDINATOR_INTENT_REFUSALS, declareCoordinatorIntent, formatDelegationInstant } from './delegation-model.js';
 import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type LeaseDoorDeps } from './delegationLeaseDoor.js';
@@ -72,7 +73,8 @@ import {
 import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
-import { LANE_ARM_FEED_TITLE, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
+import { quizBaselineRead } from '../continuity/quizStore.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -126,7 +128,8 @@ import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
 } from './questions.js';
-import { noticeSink, type NoticeSink } from '../notice.js';
+import { noticeSink, questionOutboxOf, type NoticeSink } from '../notice.js';
+import { itemBoundOf, outboxSettledOf } from '../pushSender.js';
 import { registerLedgerCoordinatorRoutes } from './ledgersRoutes.js';
 import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
 import { endRequestHandler } from './endRequest.js';
@@ -145,6 +148,7 @@ import {
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { compactRefusal } from '../continuity/compactOwner.js';
 import {
   PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
 } from '../../../shared/plainAutoMemory.js';
@@ -638,7 +642,8 @@ export function registerCoordRoutes(
    * new instance over these same `deps`, so a test that registers these routes on a bare Fastify gets its own. Q3e: the raise ladder and the approval inputs live in it; Q3d moves the
    * hold carrier.
    */
-  questions: Questions = watcher?.questions ?? createQuestions(deps),
+  questions: Questions = watcher?.questions
+    ?? createQuestions(deps, { heldFor, outbox: questionOutboxOf(deps, () => questions) }), // the push outbox (Overlord W1)
   /**
    * W3 Q3f (D-7030): the operator's door's wiring (`OperatorDoorWiring`), which `buildServer` passes, read at a request
    * (a thunk, because `buildServer` declares `knownId` beside its session routes, after this call). Absent for a test
@@ -2043,7 +2048,12 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
     const coord = deps.coord;
-    const request = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    const parsed = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11):
+    // its refusal is one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
+    const owned = parsed.ok && parsed.ask.how.by === 'manual'
+      ? compactRefusal(parsed.ask.how.field, (lane) => laneArmRowViewOf(lane, coord.laneArmSetting(lane)).live) : null;
+    const request = owned === null ? parsed : { ok: false as const, detail: owned };
     if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
     const { id, ask } = request;
 
@@ -2128,6 +2138,7 @@ export function registerCoordRoutes(
     const runId = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
     return endRequestHandler(runId, {
       coord: deps.coord, now: () => Date.now(), requireAttribution, changed: () => { bus.emit('waiting'); },
+      itemReach: (item) => itemBoundOf(deps, item, 'reach'),
       verdictOf: (runId) => {
         const v = watcher?.runVerdicts.of(runId) ?? null;
         return v === null ? null : { reason: v.stuck?.reason ?? null, coordinatorGone: v.coordinatorGone };
@@ -2907,7 +2918,8 @@ export function registerCoordRoutes(
    *  (`laneArm.ts`): a lane is live on an exact `live` only. The POST takes `{lane, choice, confirm?}` and nothing else, and
    *  answers in the collector door's order: a bad body first; Live on a row whose gate stands is 409 `lane-gated`, its reason
    *  in `detail` (review 2003 F3); Live with no signed-in operator is 403 `sign-in-unarmed`
-   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live whose key is missing or stale is
+   *  (dark included), before any read; an unreadable row is 503 `state-unreadable`; Live on a W1a row before the replay quiz's
+   *  baseline row exists is 409 `baseline-missing` (W0-28; 503 `state-unreadable` when that cannot be read); Live whose key is missing or stale is
    *  409 `confirm-required` with the facts the server read and the key that binds them; then the one write, a record-only
    *  feed row naming the actor on a change, and the rows read after it. */
   app.get('/api/coord/lane-arm', async (_req, reply) => {
@@ -2924,8 +2936,9 @@ export function registerCoordRoutes(
     const { lane } = parsed.request;
     const before = laneArmRowViewOf(lane, coord.laneArmSetting(lane));
     const signedIn = deps.cfg.authEnabled && sessionAuth(req).reason === 'session';
-    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn });
+    const decided = decideLaneArmPost({ request: parsed.request, row: before, signedIn, baseline: quizBaselineRead(coord.db) });
     if (decided.kind === 'gated') return refuseRoute(reply, 'lane-gated', { detail: decided.reason });
+    if (decided.kind === 'baseline-missing') return refuseRoute(reply, 'baseline-missing', { detail: LANE_ARM_TEXT.baselineMissing });
     if (decided.kind === 'sign-in-unarmed') return refuseRoute(reply, 'sign-in-unarmed');
     if (decided.kind === 'unreadable') return refuseRoute(reply, 'state-unreadable', { detail: decided.detail });
     if (decided.kind === 'confirm') return reply.code(409).send(decided.body);
@@ -4917,6 +4930,7 @@ export function registerCoordRoutes(
   registerLedgerCoordinatorRoutes(app, {
     coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(),
     presenceOf, secretOf: (program, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, program, slot),
+    outbox: { deps, settledOf: outboxSettledOf(questions, deps.coord) },
   });
   // The coordinator call record (D-8126, wave A3): its handler lives in `coordCallsRoute.ts`, a lane source of its own.
   registerCoordCallsRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(), build: deps.build?.version ?? null });

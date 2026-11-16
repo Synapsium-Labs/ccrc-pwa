@@ -290,7 +290,11 @@ const TOKEN_DOORS = ['/api/token/rotate'];
 // …and D-8076's act and decline of an end-request item: the operator's Abandon run and Keep the run, session only, no box token.
 // …and D-8194's read of one item by its id, whatever its state and age: session only, no box token.
 // …and D-8126's Seen on a big call (`/api/calls/:id/seen`), the operator's, session only, no box token.
-const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot'];
+const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id/tick', '/api/items/:id/dismiss', '/api/items/:id/act', '/api/items/:id/decline', '/api/calls/:id/seen', '/api/items/:id/secret', '/api/programmes/:slug/secrets', '/api/programmes/:slug/secrets/:slot',
+  // The portfolio (Overlord W1): the operator's read and the rank door.
+  '/api/portfolio', '/api/portfolio/rank',
+  // The answer marks (Overlord W1): the operator's two marks on a Waiting on you row; they work dark and record `flag-off`.
+  '/api/answer-marks'];
 
 /** The continuity routes file's session-gated doors (Overlord W1a, the timers piece, slug continuity-session-doors-list):
  *  every door `continuity/routes.ts` registers beyond its box-token lanes (`CONTINUITY_LANES`), whichever piece adds it. The
@@ -350,7 +354,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a, the timers piece: the session's three timer doors, box-token lanes in the continuity file: eighty-two machine lanes in all.
   'eighty', 'eighty-one', 'eighty-two',
   // Overlord W1a, the probes piece: the probe door's two lanes in the continuity file: eighty-four machine lanes in all.
-  'eighty-three', 'eighty-four'];
+  'eighty-three', 'eighty-four',
+  // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
+  'eighty-five'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -501,7 +507,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'GET /api/sessions/:id/card',
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
     expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
@@ -1116,23 +1122,24 @@ describe("CLAUDE.md: the account-pool freshness dependency is named, not discove
 
 // ── the docs surface (the native Docs reader's W3, design 2026-10-01 §3.13) ───
 //
-// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its four are session-gated, NOT EXEMPT and
+// `server/src/docs/routes.ts` is the FIFTH file that registers routes. Its five are session-gated, NOT EXEMPT and
 // consult no box token at all (§3.4: "No box token is used"), so the census here is the update surface's, minus the
 // one lane: every registration it reads is a door in `DOCS_DOORS`, in both directions, and no docs file consults the
 // token. EVERY file under `server/src/docs/` is read, not `routes.ts` alone: a box-token call in the plugin's own
-// hooks would gate all four routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
+// hooks would gate all five routes as surely as one in a handler. `DOCS_DOORS` joins neither `SESSION_ONLY_ALL` nor
 // `ALL_LANES`: a docs read or refresh is not a coordination write, so CLAUDE.md's box-token bullet owes it no
 // sentence and no number word moves. And the page grammar's prefix is never a SERVER route (§3.13's new scan): a
 // `/docs/...` URL is the PWA's page, answered by the SPA shell, under every file in `server/src`.
-describe('the docs surface: four session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
+describe('the docs surface: five session-gated doors, no box token, no /docs route (spec 2026-10-01 §3.13)', () => {
   const DOCS_SRC = read('server/src/docs/routes.ts');
   /** Every source file of the docs surface, by listing the directory, so a file added there is read without an edit
    *  here. */
   const DOCS_FILES = readdirSync(path.join(REPO, 'server', 'src', 'docs'))
     .filter((f) => f.endsWith('.ts')).sort().map((f) => `server/src/docs/${f}`);
-  /** The four doors, by path (§3.4). Hand-kept for the NAMES only: the cases below derive the same set from the file
+  /** The five doors, by path (§3.4; the history door, rich-docs spec G4). Hand-kept for the NAMES only: the cases below derive the same set from the file
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
+    '/api/docs/:project/history',
     '/api/docs/:project/refresh'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);

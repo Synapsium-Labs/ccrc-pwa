@@ -60,10 +60,10 @@ export interface FleetWatcherView {
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceObserved'
-  | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'answerRenewCall' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
   | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
-  | 'childStaleActivity' | 'claimDigestDay' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
+  | 'childStaleActivity' | 'claimDigestDay' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'
@@ -71,10 +71,10 @@ export type WatcherCoordMember =
   | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'drainUntold' | 'driftAwaitingReview'
   | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'
   | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage' | 'generationsCursor' | 'goneSince'
-  | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
+  | 'handoverOf' | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
   | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApproval' | 'insertAsk'
-  | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor'
-  | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
+  | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor' | 'itemById'
+  | 'itemsFor' | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveGenerations' | 'liveNotes'
   | 'mailForRecipient' | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markClaudeBuildAttempt'
@@ -83,14 +83,14 @@ export type WatcherCoordMember =
   | 'maxRunEventId' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate'
   | 'noteLeaseDetail' | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'openRound' | 'outstandingMailFor' | 'parkDelivery'
   | 'parkedDeliveries' | 'pendingTimers' | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
-  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'purgeTimers' | 'queueDelivery' | 'queueRunCloseWarning'
-  | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
-  | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordStallObservation'
+  | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
+  | 'raiseItem' | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'
+  | 'recordObservation' | 'recordRejection' | 'recordRunCloseRefusal' | 'recordRunEvent' | 'recordShadowVerdict' | 'recordSoftRenewal' | 'recordStallObservation'
   | 'recordTeamCandidates'
   | 'refusalsFor' | 'refuseRelease' | 'rejectDelivery' | 'rekeyNode' | 'releaseAsk' | 'releaseLease' | 'releaseReviewItemRaised' | 'releases'
-  | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'run'
+  | 'renewCallsOf' | 'renewClaimRow' | 'requestNode' | 'resolveNode' | 'restampAsk' | 'retireGeneration' | 'reviewChildReleased' | 'reviveParkedDeliveries' | 'rollSettings' | 'rulingRowsOf' | 'run'
   | 'runCloseAnchors' | 'runCloseChoice' | 'runCloseRuns' | 'runCloseWarning' | 'runCloseWarningProgrammes' | 'runEvents' | 'runEventsSince' | 'runLastMoves' | 'runs' | 'runsNamingSession' | 'sealDeadCoordinatorBreakerState'
-  | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'staleAllocations'
+  | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds'
   | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
   | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeParked';
@@ -98,3 +98,11 @@ export type WatcherCoordMember =
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A
  *  `CoordStore` is assignable to it; it is not assignable back (the store's private members). */
 export type WatcherCoordPort = Pick<CoordStore, WatcherCoordMember>;
+
+/** Overlord W1, portfolio (plan w1-portfolio.md Task 2): the live signal for an open ask. `read` carries the `askKey` of the
+ *  ask the child's newest hookstate is `waiting` on, or `null` when that hookstate shows no ask; `unmeasured` when the
+ *  watcher has read no hookstate for that child in this process. A tagged answer, so no key can be mistaken for the
+ *  unmeasured case and every caller must handle both (review 2130, F7). Consumer: `portfolioStore.ts#portfolioFacts`;
+ *  adapter: `FleetWatcher#liveAskKey`, a read-only accessor that stores nothing new. */
+export type LiveAskAnswer = { kind: 'unmeasured' } | { kind: 'read'; key: string | null };
+export type LiveAskRead = (childId: string) => LiveAskAnswer;

@@ -29,7 +29,7 @@ import { ccrcRoot } from './helpers.js';
 
 const {
   CARD_REFUSALS, GENERIC_REFUSALS, NOTE_REFUSALS, OVERLORD_REFUSALS, OVERLORD_REFUSAL_WORDS, PROBE_REFUSALS,
-  REFUSAL_STATUS, ROUTE_REFUSALS, TIMER_REFUSALS, isOverlordRefusal,
+  REFUSAL_STATUS, ROUTE_REFUSALS, START_LOADS_REFUSALS, TIMER_REFUSALS, isOverlordRefusal,
 } = refusal;
 
 const SPEC = 'docs/superpowers/specs/2026-11-09-overlord-design.md';
@@ -72,8 +72,10 @@ const OVERLORD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   NOTE_REFUSALS: Object.values(NOTE_REFUSALS),
   PROBE_REFUSALS: Object.values(PROBE_REFUSALS),
   TIMER_REFUSALS: Object.keys(TIMER_REFUSALS),
-  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` is a route word.
-  'LANE_ARM_REFUSALS#lane-gated': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated'),
+  START_LOADS_REFUSALS: Object.values(START_LOADS_REFUSALS),   // the loads door's word (Overlord W1 sandbox, Task 5)
+  // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` and the replay
+  // quiz's `baseline-missing` are route words of the table.
+  'LANE_ARM_REFUSALS#lane-gated,baseline-missing': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated' || w === 'baseline-missing'),
 };
 
 /** The two directions' findings, pure over the table, the code's words, the Overlord's words and the data. */
@@ -226,8 +228,9 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
       red(tableFindings(table, route, overlordWords(), { ...d, releaseReasons: rest }));
     });
     it('codeOnly grown against a stand-in merge base', () => {
-      const base = JSON.stringify({ ...d, codeOnly: {} });
-      red(shrinkFindings(() => 'f'.repeat(40), () => base, d));
+      // The control plants its own word, so it reds whatever the live list holds, an empty one included.
+      const grown = { ...d, codeOnly: { ...d.codeOnly, 'planted-word': 'a control' } };
+      red(shrinkFindings(() => 'f'.repeat(40), () => JSON.stringify(d), grown));
       expect(shrinkFindings(() => 'f'.repeat(40), () => JSON.stringify(d), d)).toEqual([]);
     });
     it('an unresolvable merge base reds rather than skips', () => {
