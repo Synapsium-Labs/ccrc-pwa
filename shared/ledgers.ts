@@ -275,6 +275,91 @@ export interface ItemView {
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
 }
 
+/** What a goals version rests on (Overlord W1, portfolio B; spec §3.8), stored as `ratifiedBy` on the pin and on each
+ *  modification. It records the SOURCE only; whether that source ratifies is `goalRatification`'s, decided at every read.
+ *  W2 adds `{ kind: 'request' }`, with the row's requestId; the parser refuses it until then. */
+export type RatifiedBy =
+  | { kind: 'coordinator' }                  // the programme's own coordinator wrote it
+  | { kind: 'item' }                         // a modification that cites an item; the id is the row's itemId
+  | { kind: 'operator' };                    // the operator's ratify door
+export type RatifiedByKind = RatifiedBy['kind'];
+const RATIFIED_BY_KIND_MAP: Record<RatifiedByKind, true> = { coordinator: true, item: true, operator: true };
+/** Whether a word off the wire is a source this build can name (a newer server may send one it cannot). */
+export const isRatifiedByKind = (raw: unknown): raw is RatifiedByKind =>
+  typeof raw === 'string' && Object.prototype.hasOwnProperty.call(RATIFIED_BY_KIND_MAP, raw);
+/** NULL is a version written before the column (`unrecorded`); any other text this build cannot read is `unreadable`. */
+export const parseRatifiedBy = (raw: string | null): RatifiedBy | 'unrecorded' | 'unreadable' =>
+  raw === null ? 'unrecorded' : isRatifiedByKind(raw) ? { kind: raw } : 'unreadable';
+export const ratifiedByText = (r: RatifiedBy): string => r.kind;
+/** What a coordinator door may record: every source but the operator's, which only the ratify door writes (review 2240 F6). */
+export type WrittenSource = Exclude<RatifiedBy, { kind: 'operator' }>;
+/** A modification's source, from the row's own `itemId` (review 2240 F6: the store derives it, never the route). */
+export const modificationSource = (itemId: number | null): WrittenSource => (itemId === null ? { kind: 'coordinator' } : { kind: 'item' });
+/** The pin's stored source, counted only when it was recorded at or after the pin's text (review 2240 F2): a build older than
+ *  the ratification columns re-pins the text and leaves the source, so a source older than `inShortAt` describes text that is
+ *  gone, and reads `unrecorded`. Every writer of this build stamps `ratifiedAt` with or after `inShortAt`. */
+export const pinSource = (ratifiedBy: string | null, ratifiedAt: number | null, inShortAt: number | null): RatifiedBy | 'unrecorded' | 'unreadable' =>
+  ratifiedBy === null || ratifiedAt === null || inShortAt === null || ratifiedAt < inShortAt ? 'unrecorded' : parseRatifiedBy(ratifiedBy);
+/** (Question 1.) Whether a coordinator's own PIN ratifies. Operator item 328 (2026-11-16) answered yes: "a coordinator's
+ *  pin counts, shown as ratified by the coordinator" (slug coordinator-pin-ratifies). The pin only: a coordinator's
+ *  modification never ratifies (review 2240 F3; a change to the definition of done is operator-only, O3). */
+export const COORDINATOR_SOURCE_RATIFIES: boolean = true;
+/** Question 3's predicate: the operator ticked the item and it was not returned since (`checking` or `done`, with a tick).
+ *  A return moves it back to `open` keeping its old `tickedAt`; `act` and a settle from `open` reach `done` with none. */
+export const itemAnswered = (item: { state: string; tickedAt: number | null }): boolean =>
+  (item.state === 'checking' || item.state === 'done') && item.tickedAt !== null;
+export type RatificationWhy = 'unrecorded' | 'unreadable' | 'source-does-not-ratify' | 'effect-unmeasured'
+  | 'item-not-answered' | 'absent';
+const RATIFICATION_WHY_MAP: Record<RatificationWhy, true> = {
+  unrecorded: true, unreadable: true, 'source-does-not-ratify': true, 'effect-unmeasured': true, 'item-not-answered': true, absent: true,
+};
+/** Whether a word off the wire is a reason this build can name (a newer server may send one it cannot). */
+export const isRatificationWhy = (raw: unknown): raw is RatificationWhy =>
+  typeof raw === 'string' && Object.prototype.hasOwnProperty.call(RATIFICATION_WHY_MAP, raw);
+export type Ratification =
+  | { ratified: true; source: RatifiedBy }
+  | { ratified: false; why: RatificationWhy; source: RatifiedBy | null };
+/** Whether a goals version's source ratifies it. Pure. `item` is the cited item as the store read it, or null when the row
+ *  cites no item of this programme. `of` says whether the version is the pin or a modification: a coordinator's source
+ *  ratifies the pin only (question 1, review 2240 F3). The `item` arm answers `effect-unmeasured` in W1, because §6.3's
+ *  effect check arrives in W3 (slug item-ratifies-with-its-effect), which replaces that one arm. */
+export function goalRatification(source: RatifiedBy | 'unrecorded' | 'unreadable',
+  item: { program: string; state: string; tickedAt: number | null } | null, program: string, of: 'pin' | 'modification'): Ratification {
+  if (source === 'unrecorded' || source === 'unreadable') return { ratified: false, why: source, source: null };
+  switch (source.kind) {
+    case 'coordinator':
+      return of === 'pin' && COORDINATOR_SOURCE_RATIFIES ? { ratified: true, source } : { ratified: false, why: 'source-does-not-ratify', source };
+    case 'item':
+      if (item === null || item.program !== program) return { ratified: false, why: 'unreadable', source };
+      return { ratified: false, why: itemAnswered(item) ? 'effect-unmeasured' : 'item-not-answered', source };
+    case 'operator':
+      return { ratified: true, source };
+    default: {
+      const never: never = source;
+      return { ratified: false, why: 'unreadable', source: never };
+    }
+  }
+}
+/** The version the operator ratifies (the ratify door's body): the pin, named by the `inShortAt` stamp they were shown, or a
+ *  modification by id. */
+export type GoalsVersion = { pin: { inShortAt: number } } | { modification: number };
+/** The ratify door's body read, exactly one of the two shapes with nothing else in it, or null. Shared so the console builds
+ *  only what the door takes. */
+export function parseGoalsVersion(raw: unknown): GoalsVersion | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null;
+  const keys = Object.keys(raw);
+  if (keys.length !== 1) return null;
+  const b = raw as Record<string, unknown>;
+  if (keys[0] === 'modification') return Number.isSafeInteger(b['modification']) && (b['modification'] as number) > 0 ? { modification: b['modification'] as number } : null;
+  if (keys[0] !== 'pin') return null;
+  const pin = b['pin'];
+  if (typeof pin !== 'object' || pin === null || Array.isArray(pin) || Object.keys(pin).length !== 1) return null;
+  const at = (pin as Record<string, unknown>)['inShortAt'];
+  return Number.isSafeInteger(at) && (at as number) >= 0 ? { pin: { inShortAt: at as number } } : null;
+}
+/** The one reader of `GoalsView`'s optional verdicts: one absent from an older server is its own word, `absent`. */
+export const ratificationOf = (r: Ratification | undefined): Ratification => r ?? { ratified: false, why: 'absent', source: null };
+
 /** A programme's pinned spec and what has changed since its approval. */
 export interface GoalsView {
   program: string;
@@ -284,10 +369,20 @@ export interface GoalsView {
   modifications: {
     id: number; at: number; text: string; ruling: string | null;
     itemId: number | null; pr: number | null; merged: boolean;
+    /** Overlord W1, portfolio B: this row's verdict. Absent from an older server: read it through `ratificationOf`. */
+    ratification?: Ratification;
   }[];
   /** The stored definition of done (D-8126): optional on the type, always sent by the server;
    *  null when none is stored. */
   doneWhen?: readonly string[] | null;
+  /** Overlord W1, portfolio B: the pin's verdict, and the verdict of the version that wrote the current definition of done
+   *  (`doneWhenBy`). Absent from an older server: read each through `ratificationOf`. */
+  pinRatification?: Ratification;
+  doneWhenRatification?: Ratification;
+  /** Overlord W1, portfolio B (review 2240 F4): the version that wrote the stored definition of done, so the console shows
+   *  the list beside that version's verdict and Ratify control: the pin by its stamp, or a modification by id. Null when the
+   *  writer is not recorded or not readable; absent from an older server. */
+  doneWhenVersion?: GoalsVersion | null;
 }
 
 /** What a coordinator or the console reads of one programme (`GET /api/programmes/:slug/goals`, D-8126): the pin with its

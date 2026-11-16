@@ -42,15 +42,15 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     const tree = path.join(fixture.home, 'fixture-tree');
     mkdirSync(path.join(tree, 'ccd'), { recursive: true });
     // The publisher places the libraries a body pins (D-6913, D-7463) and the docs redactor's two shared/ files (D-7077),
-    // and renders each digest into the body's one placeholder line for it: the stub body carries the six placeholders
-    // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_LIB_LEASE_SHA256, __CCD_LIB_POOLSET_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
+    // and renders each digest into the body's one placeholder line for it: the stub body carries the seven placeholders
+    // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_LIB_LEASE_SHA256, __CCD_LIB_POOLSET_SHA256, __CCD_LIB_LONGLIVED_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
     // beside it. The stub never loads any of them.
     mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
-    for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+    for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
     mkdirSync(path.join(tree, 'shared'), { recursive: true });
     for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
-      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_LIB_LONGLIVED_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
     const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
@@ -93,6 +93,8 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       // Delegation broker wave 5 PR8b (D-8112, review 1665 N1): the adoption switch's writer rides `['delegation-adopt','--state']` and
       // starts under `bash -p`, as ws-lease-mark does.
       [['delegation-adopt', '--state', 'on'], true],
+      // The Overlord W1 ccd arms: the sleep markers' writer rides `['keep-awake','--session']` and starts under `bash -p`.
+      [['keep-awake', '--session', 'x', '--state', 'on'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;
