@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, toolAdjToken as adj, sessionTmpToken, sessionPanePath } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness, toolAdjToken as adj, sessionTmpToken, sessionPanePath } from './ccdWsHelpers.js';
 import { paneFragment } from './worktreeIdentityFixture.js';   // path-identity W3 (R8): the pane's entry-identity writer, read from ccd's composer
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
@@ -204,5 +204,63 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
     expect(p).toBe(today(`--resume '${UUID}'`)); expect(r).toBe(today(`--session-id '${UUID}'`));
     expect(h.reg('myid', 'degraded')).toBeNull();
     expect(eventsOf(h.home, 'route')).toHaveLength(0);
+  });
+});
+
+// The Overlord's settle arm (serviceability plan question 7, ruled F4): on a lane with no continuity record no rung
+// serves a set-side session, so a stamp would claim a fallback that does not exist.
+describe('_spawn_start on a lane with no continuity record, for a set-side session', () => {
+  const setSide = (id: string): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${id}.poolset`), 'pool-a'); };
+  const unmet = (): string[] => (fs.existsSync(path.join(h.home, '.cc-sessions', 'swap.log')) ? swapLog() : '')
+    .split('\n').filter((l) => l.includes('continuity-unmet'));
+
+  it('a standing degraded=opus: composes --model fable, leaves the stamp\'s bytes, no route row, exactly one continuity-unmet line', () => {
+    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus'); sweep({ claude: 0.1 }); setSide('myid');
+    const stamp = path.join(h.home, '.cc-sessions', 'myid.degraded');
+    const before = fs.readFileSync(stamp);
+    const [p, r] = spawnBoth('myid');
+    expect(p).toContain('--model fable '); expect(r).toContain('--model fable ');
+    expect(fs.readFileSync(stamp).equals(before), 'the stamp is as it was').toBe(true);
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
+    // two spawn lines (resume then create) run ONE settle, so the line is written once per settle
+    const lines = unmet();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d continuity-unmet myid: claude \(no-continuity\); composing fable, a standing degraded stamp left as it is$/);
+  });
+
+  it('no stamp stands: still no stamp, no route row, the line written, the intended class composed', () => {
+    seed('myid'); h.sh('_reg_set myid class opus'); limits('claude', 10, 99); setSide('myid');
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model opus ');
+    expect(h.reg('myid', 'degraded')).toBeNull();
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
+    expect(unmet()).toHaveLength(1);
+  });
+
+  it('an old projection says continuity-unread in the same arm', () => {
+    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus'); setSide('myid');
+    const sh = path.join(h.home, '.ccrc', 'accounts.sh');
+    fs.writeFileSync(sh, fs.readFileSync(sh, 'utf8').replace(/^_ccrc_continuity\(\) \{\n[\s\S]*?^\}\n/m, ''));
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model fable ');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    expect(unmet()[0]).toContain('(continuity-unread)');
+  });
+
+  it('a PLAIN session on the same lane composes as today: the ceiling degrades it', () => {
+    seed('myid'); h.sh('_reg_set myid class fable'); sweep({ claude: 0.5 });
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model opus ');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    expect(unmet()).toHaveLength(0);
+  });
+
+  it('a set-side session on a RECORDED lane settles as today (the ceiling degrades it), and says nothing of continuity', () => {
+    seedAccountsSh(h.home, rosterWithFacts({ claude: { fableBilling: 'included', continuity: 1_790_000_000 } }));
+    seed('myid'); h.sh('_reg_set myid class fable'); sweep({ claude: 0.5 }); setSide('myid');
+    const [p] = spawnBoth('myid');
+    expect(p).toContain('--model opus ');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    expect(unmet()).toHaveLength(0);
   });
 });

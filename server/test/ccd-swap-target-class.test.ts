@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -420,5 +420,70 @@ describe('D-8120: a lane with no 5h window swaps on its weekly figure alone', ()
     expect(target('claude')).toBe('rc=0');
     fiveLess('claude', 99);
     expect(target('claude')).toBe('claude-a rc=0');
+  });
+});
+
+// The asking session's id reaches every gate that holds one (serviceability plan Task 2): a session whose side is a set
+// is held to the lane's continuity record and, for fable, its billing fact; a session with no set is not.
+describe('the asking session\'s id reaches the class gate', () => {
+  const REC = 1_790_000_000;
+  const facts = (billing: 'included' | 'credits', recorded: readonly string[]): void => {
+    seedAccountsSh(h.home, rosterWithFacts(Object.fromEntries(
+      ['claude', 'claude-a', 'claude-b', 'claude-d'].map((w) => [w, { fableBilling: billing, ...(recorded.includes(w) ? { continuity: REC } : {}) }]))));
+  };
+  const setSide = (): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.poolset`), 'pool-a+untagged'); };
+
+  it('_swap_target: a set-side session skips a candidate with no continuity record and picks the next', () => {
+    facts('included', ['claude', 'claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus'); setSide();
+    expect(target('claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target: the same fleet and class for a session with no set picks the least-loaded, record or none (the control)', () => {
+    facts('included', ['claude', 'claude-b', 'claude-d']);
+    limits('claude', 99, 99); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus');
+    expect(target('claude')).toBe('claude-a rc=0');
+  });
+  it('_swap_target: a set-side session whose HOME has no record must leave it (the stay gate asks with the id)', () => {
+    facts('included', ['claude-b']);
+    limits('claude', 10, 10); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+    seedRow('claude', 'opus'); setSide();
+    expect(target('claude')).toBe('claude-b rc=0');
+  });
+  it('_swap_target: away from home, home recovered and recorded: go home; home unrecorded: stay on the recorded cur', () => {
+    facts('included', ['claude', 'claude-a', 'claude-b']);
+    limits('claude', 10, 10); limits('claude-a', 20, 20); limits('claude-b', 30, 30);
+    seedRow('claude-a', 'opus'); setSide();
+    expect(target('claude-a', '', 'claude')).toBe('claude rc=0');
+    facts('included', ['claude-a', 'claude-b']);
+    expect(target('claude-a', '', 'claude')).toBe('rc=0');
+  });
+  it('_affinity_cur_serves: a lane that bills credits does not serve a set-side fable session, and does serve a plain one', () => {
+    facts('credits', ['claude']);
+    limits('claude', 10, 10); sweep({ claude: 0.1 }); seedRow('claude', 'fable');
+    const ask = (): string => h.sh(`_affinity_cur_serves ${ID} claude clean ''; echo $?`);
+    expect(ask()).toBe('0');
+    setSide();
+    expect(ask()).toBe('1');
+    facts('included', ['claude']);
+    expect(ask()).toBe('0');
+  });
+  it('_class_gate with an id and a default class: 1 on a lane with no record for a set-side session, 0 with a record, 0 for a session with no set', () => {
+    facts('included', []);
+    seedRow('claude');
+    const gate = (cls: string, id: string): string => h.sh(`_class_gate claude '${cls}' ${id}; echo $?`);
+    expect(gate('default', ID)).toBe('0');          // no poolset entry
+    setSide();
+    expect(gate('default', ID)).toBe('1');
+    expect(gate('', ID)).toBe('1');
+    expect(h.sh('_class_gate claude default; echo $?'), 'no id: today').toBe('0');
+    facts('included', ['claude']);
+    expect(gate('default', ID)).toBe('0');
+  });
+  it('_class_gate with an id keeps the rc 2 of an unmeasured figure for a set-side session on a recorded lane', () => {
+    facts('included', ['claude']);
+    limits('claude', 10, 10); seedRow('claude', 'fable'); setSide();   // no sweep: unmeasured
+    expect(h.sh(`_class_gate claude fable ${ID}; echo $?`)).toBe('2');
   });
 });
