@@ -20,9 +20,9 @@ Measured with `server/test/growthCheck.ts#codeLines`, against `origin/main` afte
 
 | File | Net code lines | Plan's estimate |
 |---|---|---|
-| `ccd/lib/long-lived.sh` (new, in full) | +31 | +23 to +28 |
+| `ccd/lib/long-lived.sh` (new, in full) | +33 (+31 before fix round 1) | +23 to +28 |
 | `ccd/ccd` | +3 | about +4 |
-| `ccd (program)` | +34 | +27 to +32 |
+| `ccd (program)` | +36 (+34 before fix round 1) | +27 to +32 |
 | `ccd/ccrc` | +2 (the backup line and the floor row) | +1 to +2 |
 
 *Table 1. Every row is at 40 or under, with no waiver. `GROWTH_CHECK=1` `growth-check.test.ts` is green.*
@@ -31,7 +31,7 @@ Measured with `server/test/growthCheck.ts#codeLines`, against `origin/main` afte
 
 | Slug | What and why |
 |---|---|
-| `keep-awake-library-is-31-lines` | The library is 31 code lines, above the estimate of 23 to 28 but inside the 40-line rows. The two markers' creates are one spelled line each (so the single-definition scan sees each write), and the four read words take one line each. |
+| `keep-awake-library-is-31-lines` | The library is 31 code lines (33 after fix round 1's publish through `link` and its second read), above the estimate of 23 to 28 but inside the 40-line rows. The two markers' creates are one spelled line each (so the single-definition scan sees each write), and the four read words take one line each. |
 | `keep-awake-read-word` | `_keep_awake_ours` still answers rc 0 or 1, never 2. It also sets `KEEP_AWAKE_READ` to `ours`, `absent`, `foreign` or `unreadable`, so `off` alone tells a foreign marker (kept, exit 0) from one it cannot read (kept, exit 1), as question 8 rules. |
 | `keep-awake-window-test-without-a-seam` | The case "a hand marker created inside the window survives `on`" wraps the real `_keep_awake_ours` in the test, so the library carries no test-only seam. |
 | `keep-awake-caps-is-an-echo-line` | `ccd caps` advertises the verb and its token on one `echo` line beside `delegation-adopt`'s, not in the heredoc: newer verbs ride the echo lines below the heredoc, which sits above a frozen corpus. That is +1 to `ccd/ccd`, not +2. |
@@ -79,3 +79,23 @@ says must be one no floor row uses; it now uses `profile`.
 - `secret-mask` failed once inside a 27-file batch under fleet load and passed alone.
 - The shellcheck ratchet is killed by the local test slice's 6 GB memory cap on `ccd/ccd`, so CI is the arbiter there.
   `shellcheck` reports nothing on `ccd/lib/long-lived.sh`.
+
+## 5. Fix round 1 (review run 2231, the coordinator's ruling)
+
+- **F1:** `on` over an entry `_keep_awake_ours` reads `unreadable` (a dangling link, a link, a FIFO, a directory, mode 000),
+  for either marker, exits 1 and prints one line naming the marker and why. It writes and removes nothing there, and
+  prints no `awake` line. `off` over such an entry prints the same line and still exits 1. Plain `ccd hibernate`'s `-e`
+  check is unchanged, so there is no second tightening.
+- **F2 and F6:** `on` writes the stamp into a temp file in `$REG` (`mktemp`) and publishes it with `link`, the precedent
+  in `_reg_generation_mint`. `link` fails EEXIST on every kind of entry, so a planted FIFO or a link to `/dev/null` is
+  never blocked on or written through. A failed or short write is never published. The temp file is removed either way.
+  The library's comment now says this instead of O_EXCL.
+- **F3:** a foreign marker is said twice, as today's `kept <marker>: not keep-awake's` line and as the parseable token
+  `kept-foreign <marker>`, still exit 0. "Raise an item on kept-foreign no-roll" is carried into designation A's brief.
+- **F4:** `on` reads the marker again after a failed publish, so the loser of two concurrent `on` calls reports `ours`.
+- **F5:** accepted; the read-then-remove window is commented at `off`'s arm.
+- **F7:** `keep-awake` joins `ccd/ccd`'s direct-entry header comment. `CCD_ARGV.keepAwake` stays as its siblings are.
+
+- **Measured red first:** with the round's tests and the reviewed tip's library (restored from a saved copy afterwards), 28 cases
+  of `ccd-keep-awake.test.ts` fail and the planted-FIFO case blocks the verb until the run's outer timeout. With the
+  new library, all 48 pass.

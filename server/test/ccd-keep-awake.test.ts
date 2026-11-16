@@ -32,6 +32,15 @@ const marker = (m: string, id = ID): string => path.join(REG(), `${id}.${m}`);
 const seedRow = (id = ID): void => { fs.writeFileSync(path.join(REG(), `${id}.uuid`), '00000000-0000-4000-8000-000000000001\n'); };
 const entryOf = (m: string): fs.Stats | null => { try { return fs.lstatSync(marker(m)); } catch { return null; } };
 const kept = (m: string): string => `kept ${m}: not keep-awake's`;
+/** A foreign marker is said twice: today's line, and the token `kept-foreign <marker>` a caller may parse (review 2231 F3). */
+const foreign = (m: string): string[] => [kept(m), `kept-foreign ${m}`];
+const unreadable = (m: string): string => `kept ${m}: unreadable (a link, not a regular file, not readable, or the read timed out)`;
+/** keep-awake's temp files, which every path removes (review 2231 F2). */
+const temps = (): string[] => fs.readdirSync(REG()).filter((f) => f.includes('.keep-awake.'));
+/** The window between the check and the create, opened: the real `_keep_awake_ours` answers absent for `m`, then `plant` runs. */
+const windowFor = (m: string, plant: string): string =>
+  `eval "$(declare -f _keep_awake_ours | sed '1s/^_keep_awake_ours/_ka_real/')";`
+  + ` _keep_awake_ours() { _ka_real "$@"; local r=$?; [[ "$2" == ${m} && "$KEEP_AWAKE_READ" == absent ]] && { ${plant}; }; return $r; };`;
 
 interface Ran { code: number; stdout: string; stderr: string }
 /** The verb in source mode, stdout and stderr kept apart: a refusal that still printed `awake` is the defect that matters. */
@@ -85,10 +94,10 @@ describe('ccd keep-awake keeps a marker it did not write', () => {
       seedRow();
       fs.writeFileSync(marker('no-roll'), bytes);
       const a = on();
-      expect([a.code, a.stdout.split('\n')]).toEqual([0, [kept('no-roll'), `awake ${ID}`]]);
+      expect([a.code, a.stdout.split('\n')]).toEqual([0, [...foreign('no-roll'), `awake ${ID}`]]);
       expect(fs.readFileSync(marker('no-hibernate'), 'latin1'), 'its own marker is still written').toBe(STAMP);
       const b = off();
-      expect([b.code, b.stdout.split('\n')]).toEqual([0, [kept('no-roll'), `released ${ID}`]]);
+      expect([b.code, b.stdout.split('\n')]).toEqual([0, [...foreign('no-roll'), `released ${ID}`]]);
       expect(fs.readFileSync(marker('no-roll'), 'latin1')).toBe(bytes);
       expect(entryOf('no-hibernate'), 'its own marker is removed').toBeNull();
     });
@@ -96,11 +105,44 @@ describe('ccd keep-awake keeps a marker it did not write', () => {
   it('a hand marker created inside the window between the check and the create survives on', () => {
     // The window, opened: the real `_keep_awake_ours` answers absent, and then a hand marker appears before the create.
     seedRow();
-    const window = `eval "$(declare -f _keep_awake_ours | sed '1s/^_keep_awake_ours/_ka_real/')";`
-      + ` _keep_awake_ours() { _ka_real "$@"; local r=$?; [[ "$2" == no-roll ]] && printf 'mine' > "$REG/$1.no-roll"; return $r; };`;
-    const r = on(window);
-    expect([r.code, r.stdout.split('\n')]).toEqual([0, [kept('no-roll'), `awake ${ID}`]]);
+    const r = on(windowFor('no-roll', `printf 'mine' > "$REG/$1.no-roll"`));
+    expect([r.code, r.stdout.split('\n')]).toEqual([0, [...foreign('no-roll'), `awake ${ID}`]]);
     expect(fs.readFileSync(marker('no-roll'), 'latin1'), 'the create never replaced it').toBe('mine');
+    expect(temps(), 'the temp file is removed').toEqual([]);
+  });
+
+  it.each(MARKERS)('the loser of two concurrent on calls finds the winner\'s %s and reports it ours, not foreign (F4)', (m) => {
+    seedRow();
+    const r = on(windowFor(m, `printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$1.${m}"`));
+    expect(r).toEqual({ code: 0, stdout: `awake ${ID}`, stderr: '' });
+    for (const x of MARKERS) expect(fs.readFileSync(marker(x), 'latin1'), x).toBe(STAMP);
+    expect(temps()).toEqual([]);
+  });
+
+  it.each(MARKERS.flatMap((m) => [[m, 'a FIFO'], [m, 'a link to /dev/null']]))(
+    'a %s planted as %s inside the window is never written through or blocked on: exit 1, kept, no awake (F2)', (m, what) => {
+      seedRow();
+      const plant = what === 'a FIFO' ? `mkfifo -- "$REG/$1.${m}"` : `ln -s /dev/null "$REG/$1.${m}"`;
+      const t0 = Date.now();
+      const r = on(windowFor(m, plant));
+      expect(Date.now() - t0, 'the FIFO is never opened').toBeLessThan(15_000);
+      expect([r.code, r.stdout.split('\n')]).toEqual([1, [unreadable(m)]]);
+      const st = entryOf(m);
+      expect(what === 'a FIFO' ? st?.isFIFO() : st?.isSymbolicLink(), 'the planted entry stands').toBe(true);
+      const other = MARKERS.find((x) => x !== m)!;
+      expect(fs.readFileSync(marker(other), 'latin1'), 'the other marker is still written').toBe(STAMP);
+      expect(temps()).toEqual([]);
+    }, 30_000);
+
+  it('a short write is never published: on exits 1, no marker and no temp file is left (F6)', () => {
+    seedRow();
+    const short = `printf() { if [[ "\${2-}" == "$KEEP_AWAKE_STAMP" ]]; then builtin printf 'keep'; return 1; fi; builtin printf "$@"; };`;
+    const r = on(short);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(`could not write ${marker('no-hibernate')}`);
+    expect(r.stdout).not.toContain('awake');
+    for (const m of MARKERS) expect(entryOf(m), m).toBeNull();
+    expect(temps()).toEqual([]);
   });
 
   it.each(['a dangling link', 'a link to the stamp', 'a directory', 'a FIFO', 'mode 000'])(
@@ -115,8 +157,28 @@ describe('ccd keep-awake keeps a marker it did not write', () => {
       const t0 = Date.now();
       const r = off();
       expect(Date.now() - t0, 'the FIFO is never opened').toBeLessThan(15_000);
-      expect([r.code, r.stdout.split('\n')]).toEqual([1, [kept('no-roll'), `released ${ID}`]]);
+      expect([r.code, r.stdout.split('\n')]).toEqual([1, [unreadable('no-roll'), `released ${ID}`]]);
       expect(entryOf('no-roll'), 'kept').not.toBeNull();
+    }, 30_000);
+
+  it.each(MARKERS.flatMap((m) => ['a dangling link', 'a link to the stamp', 'a directory', 'a FIFO', 'mode 000'].map((w) => [m, w])))(
+    'on over a %s that is %s exits 1, says why, writes and removes nothing there, and prints no awake (F1)', (m, what) => {
+      seedRow();
+      const f = marker(m);
+      if (what === 'a dangling link') fs.symlinkSync(path.join(h.home, 'nowhere'), f);
+      if (what === 'a link to the stamp') { fs.writeFileSync(path.join(h.home, 'stamp'), STAMP); fs.symlinkSync(path.join(h.home, 'stamp'), f); }
+      if (what === 'a directory') fs.mkdirSync(f);
+      if (what === 'a FIFO') spawnSync('mkfifo', [f]);
+      if (what === 'mode 000') { fs.writeFileSync(f, 'mine'); fs.chmodSync(f, 0o000); }
+      const before = fs.lstatSync(f);
+      const t0 = Date.now();
+      const r = on();
+      expect(Date.now() - t0, 'the FIFO is never opened').toBeLessThan(15_000);
+      expect([r.code, r.stdout.split('\n')]).toEqual([1, [unreadable(m)]]);
+      const after = fs.lstatSync(f);
+      expect([after.ino, after.mode, after.mtimeMs], 'the entry is untouched').toEqual([before.ino, before.mode, before.mtimeMs]);
+      if (what === 'a directory') expect(fs.readdirSync(f), 'nothing written inside it').toEqual([]);
+      expect(temps()).toEqual([]);
     }, 30_000);
 
   it('a marker swapped for a FIFO between the regular-file test and the open is unreadable within the bound', () => {
@@ -129,7 +191,7 @@ describe('ccd keep-awake keeps a marker it did not write', () => {
     const t0 = Date.now();
     const r = off(`PATH="${fake}:$PATH";`);
     expect(Date.now() - t0, 'bounded by _plat_timeout 2 and its grace').toBeLessThan(15_000);
-    expect([r.code, r.stdout.split('\n')]).toEqual([1, [kept('no-roll'), `released ${ID}`]]);
+    expect([r.code, r.stdout.split('\n')]).toEqual([1, [unreadable('no-roll'), `released ${ID}`]]);
   }, 30_000);
 
   it('the same bytes give the same verdict under LC_ALL=C and en_US.UTF-8', () => {
@@ -138,7 +200,7 @@ describe('ccd keep-awake keeps a marker it did not write', () => {
       on('', { LC_ALL });
       fs.writeFileSync(marker('no-roll'), 'keep‑awake v1');   // a non-ASCII hyphen: other bytes
       const r = off('', { LC_ALL });
-      expect([r.code, r.stdout.split('\n')], LC_ALL).toEqual([0, [kept('no-roll'), `released ${ID}`]]);
+      expect([r.code, r.stdout.split('\n')], LC_ALL).toEqual([0, [...foreign('no-roll'), `released ${ID}`]]);
       expect(entryOf('no-hibernate'), `${LC_ALL}: the stamp is ours`).toBeNull();
       fs.rmSync(marker('no-roll'));
     }

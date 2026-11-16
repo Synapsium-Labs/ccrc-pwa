@@ -1066,12 +1066,13 @@ describe('the Overlord W1 ccd arms: the roll\'s opt-out has one shell writer, ke
   });
 });
 
-/** The one line of shell that writes `marker`: `cmd_keep_awake`'s no-clobber create (the Overlord W1 ccd arms). */
+/** The one line of shell that writes `marker`: `cmd_keep_awake`'s publish, the stamp written into a temp file and linked
+ * into place, so it fails EEXIST on every kind of entry (the Overlord W1 ccd arms, review 2231 F2). */
 function KEEP_AWAKE_WRITER(marker: 'no-hibernate' | 'no-roll'): string {
-  const create = `( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.${marker}" ) 2>/dev/null`;
+  const publish = `{ printf '%s' "$KEEP_AWAKE_STAMP" > "$t" && link "$t" "$REG/$id.${marker}"; } 2>/dev/null`;
   return marker === 'no-hibernate'
-    ? `ccd/lib/long-lived.sh: if [[ "$field" == no-hibernate ]]; then ${create}`
-    : `ccd/lib/long-lived.sh: else ${create}; fi && continue`;
+    ? `ccd/lib/long-lived.sh: if [[ "$field" == no-hibernate ]]; then ${publish}`
+    : `ccd/lib/long-lived.sh: else ${publish}; fi; rm -f -- "$t"`;
 }
 
 

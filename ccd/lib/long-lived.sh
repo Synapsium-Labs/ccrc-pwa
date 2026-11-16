@@ -21,13 +21,17 @@ KEEP_AWAKE_STAMP='keep-awake v1'
 cmd_keep_awake() {   # ccd keep-awake --session <id> --state on|off — set or clear the two sleep markers on one session (spec §3.2, C4)
   # A server-composed verb, never a session's (the designation's create and retire, X6): it writes `$REG/<id>.no-hibernate`
   # and `$REG/<id>.no-roll` holding its stamp, and removes only a marker holding exactly that stamp (question 8). A marker
-  # it did not write is the operator's opt-out: kept, and said (`kept <marker>: not keep-awake's`). `on` creates over an
-  # absent entry with a no-clobber create (`set -C`, O_EXCL: `_dispatch_swap`'s claim file is the precedent), so a hand
-  # marker made between the check and the write is never overwritten. A marker `off` cannot read (a link, not a regular
-  # file, not readable, or the bounded read timed out) is kept, and the verb exits 1. CHECKED on both arms, for
-  # `cmd_coord_pause`'s reason: no `-e`, so an unchecked write would fall through to the echo. Nothing parses the echo.
-  # Each marker's create is one spelled line, so the single-definition scan sees each write (ask-digest.test.ts, D-5242).
-  local LC_ALL=C IFS=' ' id="${2-}" state="${4-}" field f rc=0
+  # it did not write is the operator's opt-out: kept, and said twice, as today's line (`kept <marker>: not keep-awake's`)
+  # and as the token `kept-foreign <marker>`, which a caller may parse; the verb still exits 0. `on` writes the stamp into
+  # a temp file in `$REG` (mktemp, a regular file it owns) and publishes it with link(2), `_reg_generation_mint`'s
+  # idiom: link fails EEXIST on EVERY kind of entry (a regular file, a dangling link, a FIFO, a link to /dev/null), so a
+  # hand marker made between the check and the publish is never overwritten, never blocks the verb and is never written
+  # through, and a write that fails (a short write, ENOSPC) is never published, so no partial marker is left. The temp
+  # file is removed either way. A marker either arm cannot read (a link, not a regular file, not readable, or the bounded
+  # read timed out) is kept, said with why, and the verb exits 1. CHECKED on both arms, for `cmd_coord_pause`'s reason:
+  # no `-e`, so an unchecked write would fall through to the echo. Only the `kept-foreign` token is for parsing.
+  # Each marker's publish is one spelled line, so the single-definition scan sees each write (ask-digest.test.ts, D-5242).
+  local LC_ALL=C IFS=' ' id="${2-}" state="${4-}" field f t rc=0
   [[ $# -eq 4 && "$1" == --session && "$3" == --state && ( "$state" == on || "$state" == off ) ]] \
     || die "usage: ccd keep-awake --session <id> --state on|off"
   _reg_id_ok "$id" || die "bad session id"
@@ -35,17 +39,24 @@ cmd_keep_awake() {   # ccd keep-awake --session <id> --state on|off — set or c
   for field in no-hibernate no-roll; do
     f="$REG/$id.$field"; _keep_awake_ours "$id" "$field"
     case "$state $KEEP_AWAKE_READ" in
+      # ACCEPTED WINDOW (review 2231 F5): the read and the remove are two steps, so an operator's marker swapped in by the
+      # same uid between them is removed. Closing it would take a rename-aside-and-verify for a same-user hand edit
+      # landing inside microseconds; the coordinator accepted the window.
       "off ours") rm -f -- "$f" && [[ ! -e "$f" && ! -L "$f" ]] && continue; die "could not remove $f — the marker still stands" ;;
       "on absent")
-        if [[ "$field" == no-hibernate ]]; then ( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.no-hibernate" ) 2>/dev/null
-        else ( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.no-roll" ) 2>/dev/null; fi && continue
+        t=$(mktemp "$REG/.$id.$field.keep-awake.XXXXXX" 2>/dev/null) || die "could not write $f — the session is NOT kept awake"
+        if [[ "$field" == no-hibernate ]]; then { printf '%s' "$KEEP_AWAKE_STAMP" > "$t" && link "$t" "$REG/$id.no-hibernate"; } 2>/dev/null
+        else { printf '%s' "$KEEP_AWAKE_STAMP" > "$t" && link "$t" "$REG/$id.no-roll"; } 2>/dev/null; fi; rm -f -- "$t"
+        # Read again (review 2231 F4): the loser of two concurrent `on` calls finds the winner's marker, which is ours.
+        _keep_awake_ours "$id" "$field" && continue
         [[ -e "$f" || -L "$f" ]] || die "could not write $f — the session is NOT kept awake" ;;
       "on ours"|"off absent") continue ;;
-      "off unreadable") rc=1 ;;
     esac
-    printf 'kept %s: not keep-awake'"'"'s\n' "$field"
+    if [[ "$KEEP_AWAKE_READ" == unreadable ]]; then rc=1; printf 'kept %s: unreadable (a link, not a regular file, not readable, or the read timed out)\n' "$field"
+    else printf 'kept %s: not keep-awake'"'"'s\nkept-foreign %s\n' "$field" "$field"; fi
   done
-  if [[ "$state" == on ]]; then echo "awake $id"; else echo "released $id"; fi
+  # `awake` only when both markers are provably keep-awake's or foreign (rc 0): an unreadable entry is no promise of sleep.
+  if [[ "$state" == off ]]; then echo "released $id"; elif (( ! rc )); then echo "awake $id"; fi
   return "$rc"
 }
 _keep_awake_ours() {   # id marker -> rc 0 iff $REG/<id>.<marker> is a regular, readable file, not a link, holding exactly the

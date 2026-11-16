@@ -9,7 +9,7 @@
 set -uo pipefail
 
 # ── THE DIRECT-ENTRY BOUNDARY (D-3696, D-3697) — before any external command ──
-# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
+# A direct `ws-reclaim`, `ws-expire`, `ws-collect`, `ws-orphan`, `scratch-rescue`, `ws-shed-deps`, `keep-awake`, `ws-lease-mark`, `ws-lease-audit` or `delegation-adopt` (D-8112), or a direct `ws-audit --session <id>
 # --reclaim [--defer-expired]`, `… --expire` or `… --collect`, runs under Bash >= 4.4 PRIVILEGED with
 # no shell function defined — the state the installed launcher (`ccd/ccd-entry.py`
 # rendered to ~/.local/bin/ccd) starts it in, re-measured here, not taken on its
