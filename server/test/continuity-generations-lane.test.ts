@@ -1354,7 +1354,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // The probes piece: the round's composition and schedule (L1) and the snapshot's reader (L1); none of them sends.
       '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js',
       // The renewal act: the walk's deciders (L1). The acts are planned here and taken by `renewalActs.ts`, never imported.
-      './softRenewal.js', './renewalOrder.js', './renewalFeed.js'];
+      './softRenewal.js', './renewalOrder.js', './renewalFeed.js',
+      // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
+      '../../../shared/accountOrg.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());

@@ -209,20 +209,20 @@ export const M = <T>(value: T): Rd<T> => ({ kind: 'measured', value });
 
 /** Table 3.3.11b written out per role: Renew now, the hard rows, then the soft rows, each in the table's order. */
 export const ROWS_WRITTEN: Record<FleetRoleName, readonly Trig[]> = {
-  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired', 'term-raised',
-    'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long', 'soft-ceiling', 'turns',
-    'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed', 'compaction-refused', 'class-changed',
-    'evaluation-due'],
+  overlord: ['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'resumed-other-org', 'entry-retired',
+    'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long', 'soft-ceiling',
+    'turns', 'two-compactions', 'idle', 'daily-backstop', 'new-install', 'probe-failed', 'compaction-refused',
+    'class-changed', 'evaluation-due'],
   auditor: [], replay: [], worker: [], reviewer: [],
   coordinator: ['operator', 'hard-cap', 'not-local', 'resumed-long', 'two-compactions', 'new-install', 'probe-failed',
     'compaction-refused', 'wave-boundary'],
   plain: [],
 };
-const HARD_WRITTEN = new Set<Trig>(['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'entry-retired',
-  'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long']);
+const HARD_WRITTEN = new Set<Trig>(['operator', 'hard-cap', 'model-drift', 'resumed-other-class', 'resumed-other-org',
+  'entry-retired', 'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'not-local', 'resumed-long']);
 
-const BOOL_FIELDS = ['backstopDue', 'installBehind', 'probeFailedUnfixed', 'modelDrift', 'entryRetired', 'termRaised',
-  'accountOutsideSet', 'classUnservable', 'accountLoadMove', 'compactionRefused', 'classChanged', 'evaluationDue',
+const BOOL_FIELDS = ['startOtherOrg', 'backstopDue', 'installBehind', 'probeFailedUnfixed', 'modelDrift', 'entryRetired',
+  'termRaised', 'accountOutsideSet', 'classUnservable', 'accountLoadMove', 'compactionRefused', 'classChanged', 'evaluationDue',
   'notLocal', 'waveBoundary'] as const;
 
 /** A base where nothing fires: a 1M window (hard cap 250k), no context, no idle, every flag measured false. */
@@ -272,6 +272,7 @@ export function expectedRenewal(i: RIn): { due: boolean; why?: Trig; cls?: 'hard
     'daily-backstop': and(b(i.backstopDue)), 'new-install': and(b(i.installBehind)),
     'probe-failed': and(b(i.probeFailedUnfixed)), 'model-drift': and(b(i.modelDrift)),
     'resumed-other-class': and(res === null ? null : res.resumed && res.otherClass),
+    'resumed-other-org': and(b(i.startOtherOrg)),
     'entry-retired': and(b(i.entryRetired)), 'term-raised': and(b(i.termRaised)),
     'account-outside-set': and(b(i.accountOutsideSet)), 'class-unservable': and(b(i.classUnservable)),
     'account-load': and(b(i.accountLoadMove)), 'compaction-refused': and(b(i.compactionRefused)),
