@@ -141,10 +141,12 @@ describe('the plan sync (D-8182)', () => {
     let id: unknown = null;
     r.respond.current = (ask) => {
       if (ask.op === 'initiativeCreate') { id = ask.input['requestId']; return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' }; }
+      if (ask.op === 'initiativeById') return ok({ initiative: { id, name: 'Programme A' } });
       if (ask.op === 'initiativesByName') return ok({ nodes: [mineNode(id)] });
       return defaultRespond(ask, 0);
     };
     await r.sync.tick(afterDebounce(r));
+    expect(r.asks.find((a) => a.op === 'initiativeById')!.input).toEqual({ id });
     expect(r.asks.find((a) => a.op === 'initiativesByName')!.input).toEqual({ name: 'Programme A' });
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: id });
     expect(opsOf(r).filter((o) => o === 'initiativeCreate')).toHaveLength(1);   // never a second create
@@ -156,6 +158,7 @@ describe('the plan sync (D-8182)', () => {
     let id: unknown = null;
     r.respond.current = (ask) => {
       if (ask.op === 'initiativeCreate') { id = ask.input['requestId']; return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' }; }
+      if (ask.op === 'initiativeById') return ok({ initiative: { id, name: 'Programme A' } });
       if (ask.op === 'initiativesByName') return ok({ nodes: [mineNode(id, U(901))] });
       return defaultRespond(ask, 0);
     };
@@ -177,6 +180,18 @@ describe('the plan sync (D-8182)', () => {
     expect(opsOf(r).filter((o) => o === 'issueCreate')).toHaveLength(1);
   });
 
+  it('a conflict whose issue answers no team key fails the binding (a missing key is a mismatch)', async () => {
+    const r = await rig();
+    r.respond.current = (ask) => {
+      if (ask.op === 'issueCreate') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
+      if (ask.op === 'issueOwned') return ok({ issue: { id: ask.input['id'], identifier: 'AAA-7' } });
+      return defaultRespond(ask, 0);
+    };
+    await r.sync.tick(afterDebounce(r));
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid' });
+    expect(mails(r).filter((m) => m.subject.includes('ticket'))).toHaveLength(1);
+  });
+
   it('a conflict whose issue is in the planned team binds it', async () => {
     const r = await rig();
     r.respond.current = (ask) => {
@@ -188,20 +203,33 @@ describe('the plan sync (D-8182)', () => {
     expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'bound', identifier: 'AAA-7' });
   });
 
-  it('a create times out, the plan is renamed, the next pass recovers it and sends exactly one update with the new name', async () => {
+  it('a create times out, the plan is renamed: the retry conflicts, adopts the object by its own old name, then sends one update with the new name', async () => {
     const r = await rig();
-    r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? fail('timeout', true) : defaultRespond(ask, 0));
+    const existing = { name: 'Programme A', creatorId: VIEWER };   // the object in Linear carries the OLD name and ccrc's id
+    let id: unknown = null;
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativeCreate') { id = ask.input['requestId']; return fail('timeout', true); }
+      return defaultRespond(ask, 0);
+    };
     await r.sync.tick(afterDebounce(r));
     r.asks.length = 0;
     r.db.prepare("UPDATE programs SET title = 'Programme renamed' WHERE slug = ?").run(SLUG);
-    r.respond.current = (ask) => (ask.op === 'initiativesByName'
-      ? ok({ nodes: [{ ...mineNode(U(15)), name: 'Programme renamed' }] }) : defaultRespond(ask, 0));   // the by-name read asks the name as sent
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativeCreate') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
+      if (ask.op === 'initiativeById') return ok({ initiative: { id, name: existing.name } });
+      if (ask.op === 'initiativesByName') {   // answers from the name actually passed
+        return ok({ nodes: ask.input['name'] === existing.name ? [mineNode(id, existing.creatorId)] : [] });
+      }
+      return defaultRespond(ask, 0);
+    };
     r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
     await r.sync.tick(r.t.now + 60_000);
-    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: U(15) });
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: id });
     const updates = r.asks.filter((a) => a.op === 'initiativeUpdate');
     expect(updates).toHaveLength(1);
     expect(updates[0]!.input['name']).toBe('Programme renamed');
+    expect(opsOf(r).filter((o) => o === 'initiativeCreate')).toHaveLength(1);
+    expect(bindingOfKind(r, 'programme')!.fingerprint).not.toBe('adopted');   // the update wrote the real one
   });
 
   it('a milestone created twice (name not unique) binds the milestone whose id is the requestId, else fails and mails once', async () => {
@@ -611,6 +639,9 @@ describe('end to end through runCcrcOp, Linear faked at FetchLike (recorded answ
       const b = JSON.parse(init.body) as { query: string; variables?: { input?: { id?: string } } };
       docs.push(b.query);
       if (b.query === D.initiativeCreate) { requestId = b.variables?.input?.id ?? ''; return recordedAnswer('mutation-initiative-create-same-id'); }
+      if (b.query === D.initiativeById) {
+        return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { initiative: { id: requestId, name: 'Programme A', description: null, status: 'Planned', updatedAt: '2026-01-01T00:00:00.000Z', projects: { nodes: [] } } } }) });
+      }
       if (b.query === D.initiativesByName) {
         return linearAnswer({ ok: true, status: 200, json: async () => ({ data: { initiatives: { nodes: [{ id: requestId, name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creator: { id: VIEWER } }] } } }) });
       }

@@ -388,18 +388,24 @@ export class PlanSync {
       const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id }));
       if (!out.ok) return this.onFailure(out, s);
       const issue = out.value['issue'] as { id: string; identifier?: string; teamKey?: string };
-      if (held || issue.id !== id || issue.teamKey?.toUpperCase() !== step.teamKey?.toUpperCase()) { this.fail(s, 'linear-invalid'); return 'next'; }
+      if (held || issue.id !== id || step.teamKey === null || typeof issue.teamKey !== 'string' || issue.teamKey.toUpperCase() !== step.teamKey.toUpperCase()) { this.fail(s, 'linear-invalid'); return 'next'; }
       this.bind(b, issue.id, typeof issue.identifier === 'string' ? issue.identifier : null, ADOPTED);
       return 'next';
     }
     const viewer = built.snap.workspaces.find((w) => w.workspaceId === step.workspaceId)?.directory?.viewerId ?? null;
     if (viewer === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
-    const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: String(step.input['name']) }));
+    // Two reads: the object at ccrc's id (its own name, which a rename since the lost create may have left unlike the plan's),
+    // then that name's by-name listing, which carries the creator the by-id read does not select.
+    const isInit = step.op === 'initiativeCreate';
+    const byId = await this.deps.call(this.readAsk(isInit ? 'initiativeById' : 'projectById', s, step.teamKey, { id }));
+    if (!byId.ok) return this.onFailure(byId, s);
+    const found = byId.value[isInit ? 'initiative' : 'project'] as { id: string; name: string };
+    const out = await this.deps.call(this.readAsk(isInit ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: found.name }));
     if (!out.ok) return this.onFailure(out, s);
     const team = step.teamKey?.toUpperCase() ?? null;
     const nodes = out.value['nodes'] as { id: string; name: string; creatorId: string | null; teamKeys?: string[] }[];
-    const mine = nodes.find((n) => n.id === id && n.name === step.input['name'] && n.creatorId === viewer
-      && (step.op !== 'projectCreate' || team === null || (n.teamKeys ?? []).includes(team)));
+    const mine = nodes.find((n) => n.id === id && n.name === found.name && n.creatorId === viewer
+      && (isInit || team === null || (n.teamKeys ?? []).includes(team)));
     if (mine === undefined || held) { this.fail(s, 'linear-invalid'); return 'next'; }
     this.bind(b, mine.id, null, ADOPTED);
     return 'next';
