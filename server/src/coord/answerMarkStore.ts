@@ -1,5 +1,5 @@
 // Overlord W1, answer marks (spec 2026-11-09 §9.2.1, C70; plan docs/superpowers/plans/2026-11-14-overlord-w1/w1-delegation-marks.md,
-// Task 2). Ring: L3, context Coordination (C5). SQL only: every function is synchronous over the store's own database handle,
+// Tasks 2 and 5). Ring: L3, context Coordination (C5). SQL only: every function is synchronous over the store's own database handle,
 // and `CoordStore` keeps a one-line delegate for each. No repository and no async wrapper.
 //
 // ONE WRITER: `recordAnswerMark` is the only writer of `answer_marks` (`single-definition/writers-map.test.ts` pins the table,
@@ -11,7 +11,12 @@
 // THE READ keeps every distinction it reads: a mark this build does not know (a newer build's) is skipped and counted
 // `unreadable`, never folded into a known one; a throw is `{ ok: false, detail }`, never an empty map.
 import type { DatabaseSync } from 'node:sqlite';
-import { isAnswerMarkName, type AnswerMarkKind, type AnswerMarkName, type AnswerMarkWrite } from '../../../shared/answerMarks.js';
+import { isAnswerMarkName, type AnswerMarkKind, type AnswerMarkName, type AnswerMarkWrite, type AskMarkHow, type AskMarkRow } from '../../../shared/answerMarks.js';
+import { isAskReleaseReason, isAskState } from '../../../shared/api.js';
+import { CLEARED_WINDOW_MS } from '../../../shared/ledgers.js';
+import { askLiveOf, askMarkable } from './answerMarks.js';
+import { NEWEST_ASK } from './portfolioStore.js';
+import type { LiveAskRead } from './ports.js';
 import { tx } from './tx.js';
 export type { AnswerMarkKind, AnswerMarkWrite };
 
@@ -67,6 +72,55 @@ export function answerMarksOf(db: DatabaseSync, kind: AnswerMarkKind, ids: reado
       newest.set(r.rowId, marks);
     }
     return { ok: true, newest, unreadable };
+  } catch (err) {
+    return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** One ask the operator has, before its marks are attached (`AskMarkRow` less `answerMarks`). */
+export type AskMarkTarget = Omit<AskMarkRow, 'answerMarks'>;
+export type AskMarkTargetsRead = { ok: true; rows: AskMarkTarget[] } | { ok: false; detail: string };
+
+interface AskTargetRaw {
+  id: number; childId: string; askKey: string; question: string; state: string; answeredBy: string | null;
+  answeredAt: number | null; releasedAt: number | null; releaseReason: string | null; program: string | null; newest: number;
+}
+
+/** THE READ OF THE ASKS THE OPERATOR HAS (plan Task 5, slug ask-marks-follow-todays-ask-states), newest change first. One
+ *  statement selects the `released` and `declined` asks released inside the Recently cleared window or that are their child's
+ *  newest row (`NEWEST_ASK`, the portfolio's rule), and the answered asks inside the window. For each `released` or `declined`
+ *  ask that is its child's newest row it asks `liveAsk(childId)` once: the row's own key is live, any other key or none is not,
+ *  and `unmeasured` stays `'unmeasured'`. Every row `askMarkable` would not call markable is dropped, so a newest row past the
+ *  window that is not live is read and not listed: the read is bounded by the number of children, never by time. The
+ *  programme comes from the ask's run (`null` with no run row). A throw is `{ ok: false }` with its message, never an empty list. */
+export function askMarkTargets(db: DatabaseSync, now: number, liveAsk: LiveAskRead): AskMarkTargetsRead {
+  try {
+    const from = now - CLEARED_WINDOW_MS;
+    const raw = db.prepare(
+      'SELECT a.id, a.childId, a.askKey, a.question, a.state, a.answeredBy, a.answeredAt, a.releasedAt, a.releaseReason, ' +
+      `r.program, ${NEWEST_ASK} AS newest FROM asks a LEFT JOIN runs r ON r.id = a.runId ` +
+      `WHERE (a.state IN ('released', 'declined') AND (a.releasedAt >= ? OR ${NEWEST_ASK})) ` +
+      "OR (a.state = 'answered' AND a.answeredAt >= ?)",
+    ).all(from, from) as unknown as AskTargetRaw[];
+    const rows: AskMarkTarget[] = [];
+    for (const r of raw) {
+      const state = isAskState(r.state) ? r.state : 'unknown';
+      const open = state === 'released' || state === 'declined';
+      let live: boolean | 'unmeasured' = false;
+      if (open && r.newest === 1) {
+        live = askLiveOf(liveAsk(r.childId), r.askKey);
+      }
+      if (!askMarkable({ ...r, state }, live, now).markable) continue;
+      const how: AskMarkHow = state === 'answered' ? 'answered' : state === 'declined' ? 'declined'
+        : r.releaseReason === null ? 'lapsed' : 'released-at-mint';
+      rows.push({
+        id: r.id, childId: r.childId, program: r.program, question: r.question.split('\n')[0] ?? '', how,
+        reason: how === 'released-at-mint' ? (isAskReleaseReason(r.releaseReason) ? r.releaseReason : 'unknown') : null,
+        at: (state === 'answered' ? r.answeredAt : r.releasedAt) ?? 0, live,
+      });
+    }
+    rows.sort((a, b) => b.at - a.at || b.id - a.id);
+    return { ok: true, rows };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
   }

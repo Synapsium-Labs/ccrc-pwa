@@ -56,7 +56,7 @@ import { approvalClass, rootsForChild } from './approvalguard.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
-import type { WatcherCoordPort } from './ports.js';
+import type { LiveAskRead, WatcherCoordPort } from './ports.js';
 import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse, type QuestionHoldPhase } from './questionPolicy.js';
 import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
@@ -164,6 +164,23 @@ export function forCorrection(
 /** The drift lane's read: the questions still held, for its orphaned-question finding. */
 export function heldForDrift(store: Pick<CoordStore, 'driftHeldQuestions'>): ReturnType<CoordStore['driftHeldQuestions']> {
   return store.driftHeldQuestions();
+}
+
+/** The waiting view's read of the asks the operator has (Overlord W1, answer marks B; `waitingViewOf`). */
+export function markableAsks(store: Pick<CoordStore, 'askMarkTargets'>, now: number, liveAsk: LiveAskRead): ReturnType<CoordStore['askMarkTargets']> {
+  return store.askMarkTargets(now, liveAsk);
+}
+
+/** The answer-mark door's read (answer marks B): one asks row by id, and whether it is its child's newest row, the only one the
+ *  live-ask port speaks for. A refusal of either read is that refusal, never an absent row. */
+export function askForMark(store: Pick<CoordStore, 'askById' | 'currentAskFor'>, id: number):
+  | { ok: true; ask: AskRow | null; newest: boolean } | Extract<AskReadResult, { ok: false }> {
+  const read = store.askById(id);
+  if (!read.ok) return read;
+  if (read.ask === null) return { ok: true, ask: null, newest: false };
+  const current = store.currentAskFor(read.ask.childId);
+  if (!current.ok) return current;
+  return { ok: true, ask: read.ask, newest: current.ask?.id === read.ask.id };
 }
 
 // ── the owner of question state ──────────────────────────────────────────────────────────────────────────────────

@@ -1623,6 +1623,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The coordinator's presence for an item's stale label, built ONCE and handed to both lanes' routes and the frame (review 1335
   // F4): the watcher's last fleet frame and its registry ids, so an id the registry lists but the frame lacks is a doubt.
   const presenceOf = (id: string) => coordinatorPresenceIn(watcher?.currentFleet() ?? null, watcher?.currentRegistryIds() ?? null, id);
+  // The live signal for an ask (Overlord W1), once for the ledger routes and the frame: no watcher answers `unmeasured`.
+  const liveAsk = (childId: string) => (watcher === undefined ? { kind: 'unmeasured' as const } : watcher.liveAskKey(childId));
   let waitingBuilt: WaitingView | null = null;
   // A build that threw stands until the next cache drop, so the sockets of one change share ONE attempt and one failure
   // (review 1336 F4), and the warning is said once per distinct error, not once per socket per fleet emit.
@@ -1637,7 +1639,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (fresh) dropWaiting();
     if (waitingFailed) return null;
     try {
-      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf, (p, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, p, slot));
+      waitingBuilt ??= waitingViewOf(deps.coord, Date.now(), presenceOf, liveAsk, (p, slot) => readOperatorSecretMeta(deps.cfg.ccrcDir, p, slot));
       waitingWarned = null;
       return waitingBuilt;
     } catch (err) {
@@ -2655,7 +2657,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
-    liveAsk: (childId) => (watcher === undefined ? { kind: 'unmeasured' } : watcher.liveAskKey(childId)),
+    liveAsk,
   });
 
   /**

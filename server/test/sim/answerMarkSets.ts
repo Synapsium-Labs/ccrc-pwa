@@ -17,6 +17,7 @@ export type AnswerMarkVocab = typeof import('../../../shared/answerMarks.js');
 export const ITEM_MARKABLE_KEY = 'server/src/coord/answerMarks.ts#itemMarkable';
 export const MARK_VIEW_KEY = 'server/src/coord/answerMarks.ts#markViewOf';
 export const PARSE_WRITE_KEY = 'shared/answerMarks.ts#parseAnswerMarkWrite';
+export const ASK_MARKABLE_KEY = 'server/src/coord/answerMarks.ts#askMarkable';
 
 export const NOW = 1_790_000_000_000;
 export const MIN = 60_000;
@@ -140,7 +141,7 @@ export function parseWriteCases(m: Pick<AnswerMarkVocab, 'parseAnswerMarkWrite'>
       expect(ok(good)).toEqual({ kind: 'item', id: 3, mark: 'unsure', value: true });
       expect(ok({ ...good, mark: 'could-answer', value: false })).toEqual({ kind: 'item', id: 3, mark: 'could-answer', value: false });
     },
-    'accepts kind ask (the door refuses it until PR B)': () => {
+    'accepts kind ask': () => {
       expect(ok({ ...good, kind: 'ask', id: 1 })).toEqual({ kind: 'ask', id: 1, mark: 'unsure', value: true });
     },
     'refuses a body that is not an object': () => {
@@ -171,6 +172,81 @@ export function parseWriteCases(m: Pick<AnswerMarkVocab, 'parseAnswerMarkWrite'>
       const r = m.parseAnswerMarkWrite({ ...good, mark: 'sure' });
       expect(r.ok).toBe(false);
       expect(r.ok ? '' : r.detail).toMatch(/mark is one of could-answer, unsure/);
+    },
+  };
+}
+
+// ---------- askMarkable, askLiveOf and askListsView (PR B, plan Task 5) ----------
+
+type AskRow = { state: string; answeredBy: string | null; answeredAt: number | null; releasedAt: number | null };
+const askRow = (o: Partial<AskRow>): AskRow => ({
+  state: o.state ?? 'released', answeredBy: o.answeredBy === undefined ? null : o.answeredBy,
+  answeredAt: o.answeredAt === undefined ? null : o.answeredAt, releasedAt: o.releasedAt === undefined ? NOW - HOUR : o.releasedAt,
+});
+type Live = boolean | 'unmeasured';
+const LIVES: readonly Live[] = [true, false, 'unmeasured'];
+
+export function askMarkableCases(m: Pick<AnswerMarkDeciders, 'askMarkable' | 'askLiveOf' | 'askListsView'>): Record<string, SuiteCase> {
+  const at = (o: Partial<AskRow>, live: Live = false, now = NOW): string => word(m.askMarkable(askRow(o), live, now));
+  return {
+    'a released or declined ask inside the window is markable, live or not': () => {
+      for (const state of ['released', 'declined']) for (const live of LIVES) expect(at({ state }, live)).toBe('markable');
+    },
+    'a released or declined ask past the window is markable only while live; unmeasured counts as not live': () => {
+      for (const state of ['released', 'declined']) {
+        expect(at({ state, releasedAt: NOW - WINDOW - HOUR }, true)).toBe('markable');
+        expect(at({ state, releasedAt: NOW - WINDOW - HOUR }, false)).toBe('past-window');
+        expect(at({ state, releasedAt: NOW - WINDOW - HOUR }, 'unmeasured')).toBe('past-window');
+      }
+    },
+    'the window: released exactly at now - 48h is markable, one millisecond before it is past-window': () => {
+      expect(at({ releasedAt: NOW - WINDOW })).toBe('markable');
+      expect(at({ releasedAt: NOW - WINDOW - 1 })).toBe('past-window');
+      expect(at({ state: 'declined', releasedAt: NOW - WINDOW - 1 })).toBe('past-window');
+    },
+    'a released ask with no release time is markable only while live': () => {
+      expect(at({ releasedAt: null }, false)).toBe('past-window');
+      expect(at({ releasedAt: null }, true)).toBe('markable');
+    },
+    'an ask the operator answered is markable inside the window of its answer, live or not, and past it is not': () => {
+      for (const live of LIVES) {
+        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - HOUR, releasedAt: NOW - 3 * WINDOW }, live)).toBe('markable');
+        expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - HOUR, releasedAt: NOW - HOUR }, live)).toBe('past-window');
+      }
+      expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW })).toBe('markable');
+      expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: NOW - WINDOW - 1 })).toBe('past-window');
+      expect(at({ state: 'answered', answeredBy: 'operator', answeredAt: null })).toBe('past-window');
+    },
+    'an ask its parent answered was never the operator\'s, inside the window or not': () => {
+      for (const live of LIVES) {
+        expect(at({ state: 'answered', answeredBy: 'lane-a-parent', answeredAt: NOW - HOUR }, live)).toBe('not-shown');
+        expect(at({ state: 'answered', answeredBy: null, answeredAt: NOW - HOUR }, live)).toBe('not-shown');
+      }
+    },
+    'a held ask is not shown, live or not': () => {
+      for (const live of LIVES) expect(at({ state: 'held', releasedAt: null }, live)).toBe('not-shown');
+    },
+    'answering, stale, unknown and a state this build does not know are not listed, live or not': () => {
+      for (const state of ['answering', 'stale', 'unknown', 'archived', '']) for (const live of LIVES) expect(at({ state }, live)).toBe('not-listed');
+    },
+    'askLiveOf: the ask\'s own key is live, another key or none is not, and unmeasured stays unmeasured': () => {
+      expect(m.askLiveOf({ kind: 'read', key: 'k1' }, 'k1')).toBe(true);
+      expect(m.askLiveOf({ kind: 'read', key: 'k2' }, 'k1')).toBe(false);
+      expect(m.askLiveOf({ kind: 'read', key: null }, 'k1')).toBe(false);
+      expect(m.askLiveOf({ kind: 'unmeasured' }, 'k1')).toBe('unmeasured');
+    },
+    'askListsView: the live rows are asks, every other a cleared row, each with its own marks': () => {
+      const rows = [{ id: 1, live: true }, { id: 2, live: false }, { id: 3, live: 'unmeasured' as const }];
+      const v = m.askListsView(rows, (id) => ({ ok: true, couldAnswer: id === 2 ? { id: 9, value: 1, at: NOW, actor: 'op-a' } : null, unsure: null }));
+      expect(v.asks.map((r) => r.id)).toEqual([1]);
+      expect(v.asksCleared.map((r) => r.id)).toEqual([2, 3]);
+      expect(v.asks[0]!.answerMarks).toEqual({ couldAnswer: { state: 'never' }, unsure: { state: 'never' } });
+      expect(v.asksCleared[0]!.answerMarks).toEqual({ couldAnswer: { state: 'marked', id: 9, at: NOW, signedIn: true }, unsure: { state: 'never' } });
+    },
+    'askListsView: a failed mark read gives each row both marks unmeasured and drops none': () => {
+      const v = m.askListsView([{ id: 1, live: true }, { id: 2, live: false }], () => ({ ok: false, detail: 'disk I/O error' }));
+      const gone = { state: 'unmeasured', detail: 'disk I/O error' };
+      expect([...v.asks, ...v.asksCleared].map((r) => r.answerMarks)).toEqual([{ couldAnswer: gone, unsure: gone }, { couldAnswer: gone, unsure: gone }]);
     },
   };
 }
@@ -231,8 +307,32 @@ export const PARSE_WRITE_SET: MutantSet<AnswerMarkVocab> = {
   ],
 };
 
+export const ASK_MARKABLE_SET: MutantSet<AnswerMarkDeciders> = {
+  modulePath: DECIDER_TS,
+  suite: askMarkableCases,
+  mutants: [
+    // The plan's red checks: read live by child alone, without the ask's key; drop the window for an ask that is not live;
+    // accept the parent's answer as the operator's.
+    { id: 'AM-ASK-1', old: "read.kind === 'unmeasured' ? 'unmeasured' : read.key === askKey", new: "read.kind === 'unmeasured' ? 'unmeasured' : read.key !== null" },
+    { id: 'AM-ASK-2', old: 'live === true || inWindow(row.releasedAt)', new: 'true' },
+    { id: 'AM-ASK-3', old: 'if (row.answeredBy !== ASK_OPERATOR_PRINCIPAL) return askRefused(\'not-shown\');', new: '' },
+    { id: 'AM-ASK-4', old: 'live === true || inWindow(row.releasedAt)', new: 'live !== false || inWindow(row.releasedAt)' },
+    { id: 'AM-ASK-5', old: 'live === true || inWindow(row.releasedAt)', new: 'inWindow(row.releasedAt)' },
+    { id: 'AM-ASK-6', old: 'at !== null && at >= now - CLEARED_WINDOW_MS', new: 'at !== null && at > now - CLEARED_WINDOW_MS' },
+    { id: 'AM-ASK-7', old: "case 'released': case 'declined':", new: "case 'released':" },
+    { id: 'AM-ASK-8', old: "return inWindow(row.answeredAt) ? ASK_MARKABLE : askRefused('past-window');", new: "return inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('past-window');" },
+    { id: 'AM-ASK-9', old: "case 'held': return askRefused('not-shown');", new: '' },
+    { id: 'AM-ASK-10', old: "default: return askRefused('not-listed');", new: 'default: return ASK_MARKABLE;' },
+    { id: 'AM-ASK-11', old: "inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('past-window');", new: "inWindow(row.releasedAt) ? ASK_MARKABLE : askRefused('not-listed');" },
+    { id: 'AM-ASK-12', old: "read.kind === 'unmeasured' ? 'unmeasured' :", new: "read.kind === 'unmeasured' ? false :" },
+    { id: 'AM-ASK-13', old: 'asks: marked.filter((r) => r.live === true)', new: 'asks: marked.filter((r) => r.live !== false)' },
+    { id: 'AM-ASK-14', old: 'asksCleared: marked.filter((r) => r.live !== true)', new: 'asksCleared: marked.filter((r) => r.live === false)' },
+  ],
+};
+
 export const ANSWER_MARK_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [ITEM_MARKABLE_KEY]: ITEM_MARKABLE_SET as MutantSet<never>,
   [MARK_VIEW_KEY]: MARK_VIEW_SET as MutantSet<never>,
   [PARSE_WRITE_KEY]: PARSE_WRITE_SET as MutantSet<never>,
+  [ASK_MARKABLE_KEY]: ASK_MARKABLE_SET as MutantSet<never>,
 };

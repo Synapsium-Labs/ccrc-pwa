@@ -228,13 +228,15 @@ export function questionDoorIns(root: string = REPO): DoorInSite[] {
 
 /** The `CoordStore` question methods, a CLOSED list (slug question-census): every public `CoordStore` method whose
  *  name says ask, approval or question is on it, or on `NOT_QUESTION_STORE_METHODS`, and the census test reds on a
- *  method on neither (`coordStoreQuestionShapedMethods`). 32. */
+ *  method on neither (`coordStoreQuestionShapedMethods`). 33 (answer marks B added `askMarkTargets`). */
 export const QUESTION_STORE_METHODS: readonly string[] = [
   'askById', 'insertAsk', 'asksForParent', 'heldAskFor', 'currentAskFor', 'currentAsksFor', 'takeAskForAnswer', 'untakeAsk',
   'settleAsk', 'releaseAsk', 'declineAsk', 'staleAsk', 'restampAsk', 'heldQuestionRows', 'heldApprovalRowsByChild',
   'approvalById', 'approvalsForChild', 'heldApprovalsFor', 'approvalsInState', 'insertApproval', 'takeApprovalForRule',
   'declineApproval', 'lapseApproval', 'markApprovalOperator', 'markApprovalOperatorRows', 'staleApproval',
   'pruneApprovalInputs', 'pruneAskQuestions', 'digestAsks', 'digestApprovals', 'askForCorrection', 'driftHeldQuestions',
+  // Overlord W1, answer marks B: the read of the asks the operator has, reached through `questions.ts#markableAsks`.
+  'askMarkTargets',
 ];
 
 /** Public `CoordStore` methods whose names look like a question method and are not one, each with why. */

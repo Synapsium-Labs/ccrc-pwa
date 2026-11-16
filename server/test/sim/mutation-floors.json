@@ -105,6 +105,7 @@
   "server/src/coord/answerMarks.ts#itemMarkable": 1,
   "server/src/coord/answerMarks.ts#markViewOf": 1,
   "shared/answerMarks.ts#parseAnswerMarkWrite": 1,
+  "server/src/coord/answerMarks.ts#askMarkable": 1,
   "shared/serviceability.ts#serviceability": 1,
   "shared/serviceability.ts#askingOf": 1,
   "shared/rosterFacts.ts#factsChangeWidens": 1

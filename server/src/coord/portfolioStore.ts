@@ -78,7 +78,7 @@ const LISTED = (terminal: string): string =>
   `OR EXISTS (SELECT 1 FROM runs r WHERE r.program = p.slug AND r.state NOT IN ${terminal})`;
 
 /** An ask row that is its child's newest: the only one the live-ask port can speak for. */
-const NEWEST_ASK = '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.childId))';
+export const NEWEST_ASK = '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.childId))';
 
 /** Everything `portfolioFor` reads. It only bounds what it fetches: items still open or closed in the window; and asks
  *  released or answered in the window, still `answering`, or `released` or `declined` and their child's newest row (an
