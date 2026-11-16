@@ -31,14 +31,15 @@ import type { ReactNode } from 'react';
 import { cn, useNow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
-  WAITS_ON_WORDS, programmeWaitsOn, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
+  WAITS_ON_WORDS, programmeWaitsOn, type GoalsVersion, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
   type WaitsOn,
 } from '../../../shared/ledgers';
 import type { StepUpDeps } from '../accounts/useStepUp';
 import { markerState } from '../fleet/coordWords';
 import { fleetHues } from '../fleet/programmeBoxes';
 import { programWave, programmeTitle, waveOfWords } from '../fleet/runWords';
-import { api } from '../lib/api';
+import { api, ApiError } from '../lib/api';
+import { LEDGER_REFUSAL_TEXT, apiErrorText, refusalText } from '../lib/refusalWords';
 import { WAITING_BADGE_UNIT } from '../fleet/navBadges';
 import { inAppClick } from '../fleet/settingsText';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
@@ -46,7 +47,7 @@ import { ROUTES, waitingPath } from '../lib/routes';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { GoalsPanel, SpecLink } from './GoalsPanel';
 import { homeProjectOf, specHref } from './ledgerLinks';
-import { EMPTY_WORD, NO_FRAME_WORD, ageWords, itemPath, openRunsOf, programmeWaitingCount, type ItemList } from './ledgerWords';
+import { EMPTY_WORD, NO_FRAME_WORD, ageWords, itemPath, openRunsOf, programmeWaitingCount, ratifyFailureOf, type ItemList } from './ledgerWords';
 import { STORED_TEXT, StoredSecretRemove, removeStoredSecret, type RemoveSecret } from './ItemView';
 import { needsYou, needsYouCount } from './needsYou';
 import { HeadResumeSheet, ProgrammeHeadFacts, ProgrammeRunsSection, useProgrammeRuns, type ProgrammeRunsReaders } from './ProgrammeRuns';
@@ -66,7 +67,8 @@ type GoalsRead = 'reading' | 'failed' | GoalsView;
  *  view at all, is a failed read: the answer is drawn only when it is the one asked for. The read is kept beside the slug it
  *  was asked for, so a new slug reads `reading` from its first render, even on a mount not keyed by the slug (carry C, D-7951;
  *  review 1386 F6). */
-function useGoalsRead(slug: string): GoalsRead {
+function useGoalsRead(slug: string): { read: GoalsRead; reread: () => void } {
+  const [epoch, setEpoch] = useState(0);
   const [read, setRead] = useState<{ slug: string; read: GoalsRead }>({ slug, read: 'reading' });
   useEffect(() => {
     let live = true;
@@ -75,8 +77,8 @@ function useGoalsRead(slug: string): GoalsRead {
       () => { if (live) setRead({ slug, read: 'failed' }); },
     );
     return () => { live = false; };
-  }, [slug]);
-  return read.slug === slug ? read.read : 'reading';
+  }, [slug, epoch]);
+  return { read: read.slug === slug ? read.read : 'reading', reread: useCallback(() => setEpoch((n) => n + 1), []) };
 }
 
 const NO_RUNS: readonly RunSummary[] = [];
@@ -162,14 +164,26 @@ function waitsOnSentence(waitsOn: WaitsOn | null): string {
 }
 
 /** The cards' left column: Goals, or the word for why there are none to show. */
-function GoalsCard({ read, held, homeProject, heldItems, list }: {
-  read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>; list: ItemList;
+function GoalsCard({ slug, reread, read, held, homeProject, heldItems, list }: {
+  slug: string; reread: () => void; read: GoalsRead; held: GoalsView | null; homeProject: string | null; heldItems: ReadonlySet<number>; list: ItemList;
 }): ReactNode {
   // The frame's copy for THIS programme wins whenever the frame has one: the frame is re-sent on every spec pin, change and merge.
   // The fetch answers only for a programme the frame does not list (a programme with a pin and nothing else waiting is in it; one
   // with neither is not), and a read that has not answered or failed says so. The fallback is the one fetch, asked on arrival,
   // so it can be as old as the mount: a programme the frame stops listing, or never lists, shows that copy until the view is
   // opened again.
+  // The ratify control (Overlord W1, portfolio B): what a failure means is `ratifyFailureOf`'s; this card only wires it.
+  const [ratifyNote, setRatifyNote] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
+  const ratify = (version: GoalsVersion): void => {
+    setRatifyNote(null);
+    api.ratifyGoals(slug, version).then(reread, (err: unknown) => {
+      const failure = err instanceof ApiError ? ratifyFailureOf(err.status, err.body) : { kind: 'other' as const };
+      if (failure.kind === 'unavailable') { setUnavailable(failure.text); return; }
+      if (failure.kind === 'changed') reread();
+      setRatifyNote(refusalText(err, LEDGER_REFUSAL_TEXT) ?? apiErrorText(err));
+    });
+  };
   const goals = held ?? (read !== 'reading' && read !== 'failed' ? read : null);
   if (goals === null) {
     return (
@@ -181,7 +195,14 @@ function GoalsCard({ read, held, homeProject, heldItems, list }: {
       </section>
     );
   }
-  return <GoalsPanel goals={goals} homeProject={homeProject} itemHref={(id) => (heldItems.has(id) ? itemPath(id, list) : null)} />;
+  return (
+    <>
+      <GoalsPanel goals={goals} homeProject={homeProject} itemHref={(id) => (heldItems.has(id) ? itemPath(id, list) : null)}
+        onRatify={unavailable === null ? ratify : undefined} />
+      {unavailable !== null && <p className="pg-goals-none">{unavailable}</p>}
+      {ratifyNote !== null && <p className="pg-goals-none" role="alert">{ratifyNote}</p>}
+    </>
+  );
 }
 
 /** The right column: how many things wait on the operator, as a link to the one list filtered to this programme, or what the
@@ -231,7 +252,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
   const view = store((s) => s.waiting);
   const { sessions, runs } = useHeard(store);
   const unavailable = useUnavailable(store, view !== null);
-  const read = useGoalsRead(slug);
+  const { read, reread } = useGoalsRead(slug);
   const heard = runs ?? NO_RUNS;
   const open = openRunsOf(slug, heard);
   const wave = open.length === 0 ? null : programWave(open);
@@ -275,7 +296,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
       <div className="pv-two">
         <div className="pv-main">
         <div className="pv-card">
-          <GoalsCard read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
+          <GoalsCard slug={slug} reread={reread} read={read} held={held} homeProject={home} heldItems={heldItems} list={list} />
         </div>
         <WaitingCard slug={slug} view={view} sessions={sessions} runs={runs} unavailable={unavailable}
                      stored={<StoredSecretsSection slug={slug} secrets={stored.secrets} now={now} onRemoved={stored.reread}

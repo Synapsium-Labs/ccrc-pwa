@@ -27,8 +27,8 @@ import {
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
   namedAgentsOf,
-  recoverDelegation,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import {
   DELEGATION_CLOCK_SKEW_MS,
   DELEGATION_CORRELATION_REASONS,

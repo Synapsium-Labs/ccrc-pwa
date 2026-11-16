@@ -720,8 +720,8 @@ function pairDecl(): { bodySource: string; templateSource: string; entryDest: st
 }
 
 /** The library the body pins and the publisher places FIRST (D-6913): its source and destination, read from the same helper.
- *  `prefix` `TRAIN_` reads the second library's pair instead (D-7463), placed right after the first, `LEASE_` the third's and `POOLSET_` the fourth's (the Overlord's pool set). */
-function libDecl(prefix: '' | 'TRAIN_' | 'LEASE_' | 'POOLSET_' = ''): { libSource: string; libDest: string } {
+ *  `prefix` `TRAIN_` reads the second library's pair instead (D-7463), placed right after the first, `LEASE_` the third's, `POOLSET_` the fourth's (the Overlord's pool set) and `LONGLIVED_` the fifth's (the Overlord's ccd arms). */
+function libDecl(prefix: '' | 'TRAIN_' | 'LEASE_' | 'POOLSET_' | 'LONGLIVED_' = ''): { libSource: string; libDest: string } {
   const one = (name: string): string => {
     const all = [...PAIR_HELPER.matchAll(new RegExp(`^${name} = '([^'\\n]+)'$`, 'gm'))];
     if (all.length !== 1) throw new Error(`install-census.test.ts: expected exactly one \`${name} = '…'\` line in ${PAIR_HELPER_REL}, found ${all.length}`);
@@ -1831,9 +1831,9 @@ describe('ccd\'s pair (D-3696): the body under ~/.local/libexec is placed, remov
   });
 });
 
-// The four libraries the body pins (D-6913, D-7463, wave 5, the Overlord W1 pool set), each held to the same four facts.
-for (const prefix of ['', 'TRAIN_', 'LEASE_', 'POOLSET_'] as const) {
-describe(`ccd's ${prefix === '' ? 'library (D-6913)' : prefix === 'TRAIN_' ? 'second library (D-7463)' : prefix === 'LEASE_' ? 'third library (wave 5)' : 'fourth library (the pool set)'}: the file the body pins is placed by the pair publisher, removed by name and backed up before the body`, () => {
+// The five libraries the body pins (D-6913, D-7463, wave 5, the Overlord W1 pool set and ccd arms), each held to the same four facts.
+for (const prefix of ['', 'TRAIN_', 'LEASE_', 'POOLSET_', 'LONGLIVED_'] as const) {
+describe(`ccd's ${prefix === '' ? 'library (D-6913)' : prefix === 'TRAIN_' ? 'second library (D-7463)' : prefix === 'LEASE_' ? 'third library (wave 5)' : prefix === 'POOLSET_' ? 'fourth library (the pool set)' : 'fifth library (the ccd arms)'}: the file the body pins is placed by the pair publisher, removed by name and backed up before the body`, () => {
   it('the publisher declares it once, under a lib/ directory beside the body, and it is a tracked file', () => {
     const { libSource, libDest } = libDecl(prefix);
     const { bodyDest } = pairDecl();
@@ -1896,6 +1896,15 @@ describe(`ccd's ${prefix === '' ? 'library (D-6913)' : prefix === 'TRAIN_' ? 'se
       expect(sources.indexOf(`$HOME/${fourth}`)).toBe(sources.indexOf(`$HOME/${third}`) + 1);
       const text = deployText();
       expect(text.indexOf(`[ ! -f ~/${third} ] || cp -a`)).toBeLessThan(text.indexOf(`[ ! -f ~/${fourth} ] || cp -a`));
+    });
+  }
+  if (prefix === 'LONGLIVED_') {
+    it('the fifth library is backed up right after the fourth, by the update and by deploy.sh', () => {
+      const fourth = libDecl('POOLSET_').libDest; const fifth = libDecl(prefix).libDest;
+      const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+      expect(sources.indexOf(`$HOME/${fifth}`)).toBe(sources.indexOf(`$HOME/${fourth}`) + 1);
+      const text = deployText();
+      expect(text.indexOf(`[ ! -f ~/${fourth} ] || cp -a`)).toBeLessThan(text.indexOf(`[ ! -f ~/${fifth} ] || cp -a`));
     });
   }
 });

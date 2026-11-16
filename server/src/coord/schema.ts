@@ -3370,6 +3370,38 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
   CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
   `,
+
+  // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // What each goals version rests on (Overlord spec §3.8, Table 11.1a; W1, plan `w1-portfolio.md` Task 4): `ratifiedBy`
+  // (a `RatifiedBy` word: `coordinator`, `item` or `operator`) and `ratifiedAt` on the pin (`programs`) and on each
+  // modification, `ratifiedActor` beside them (the account gate's actor of the operator's ratify, its device label and
+  // session hash, because an act that confers authority keeps its device; NULL for every other source, review 2240 F7), and
+  // `programs.doneWhenBy` (`pin` or `mod:<id>`), the version that wrote the current definition of done.
+  // The source only: whether it ratifies is `goalRatification`'s, decided at every read. Writers, all in `ledgersStore.ts`:
+  // `setSpecPin` and `ratifyGoalsVersion` on `programs`, `addModification` and `ratifyGoalsVersion` on the modifications,
+  // and `doneWhenBy` only in the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). The pin's source counts only
+  // when `ratifiedAt >= inShortAt` (`pinSource`, review 2240 F2), so an older build's re-pin reads unrecorded. Nothing is back-filled:
+  // NULL is a version nobody recorded, read as `unrecorded`. Responses A (#2884) landed 82, so this is 83 (the coordinator's
+  // word, 2026-11-16).
+  //
+  // SEVEN NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 83` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), names none of them and boots. Its re-pin or modification leaves these columns as they
+  // stand. For the pin that is closed (the stamp rule above). For the definition of done it is ACCEPTED: an older build's
+  // modification with a list leaves `doneWhenBy` naming the version before it, so after a roll-forward that list reads that
+  // version's verdict until this build's next write (slug done-when-provenance-survives-a-rollback).
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;                  -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER;               -- wall ms the pin's source was recorded
+  ALTER TABLE programs ADD COLUMN doneWhenBy TEXT;                  -- 'pin' or 'mod:<id>'; NULL is unrecorded
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT;   -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER;
+  ALTER TABLE programs ADD COLUMN ratifiedActor TEXT;               -- the operator's ratify: the gate's actor; else NULL
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT; -- the operator's ratify: the gate's actor; else NULL
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -30,9 +30,9 @@ import {
 import {
   decodeDelegationCheckpoint,
   encodeDelegationCheckpoint,
-  recoverDelegation,
   validateDelegationCheckpoint,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import { type DelegationProjectionPort } from '../src/coord/delegation-db-projection.js';
 import { DelegationDurability, type DelegationDurabilityDeps, type DelegationLeaseTransitionRequest } from '../src/coord/delegation-durability.js';
 import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';

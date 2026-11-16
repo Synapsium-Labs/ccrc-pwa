@@ -2050,6 +2050,11 @@ describe('the peer protocol reference (Build 9 wave 8, D17)', () => {
     expect(allSkillText).not.toContain('delegation-adopt');
   });
 
+  it('never names keep-awake — the sleep markers\' writer is the server\'s, and a coordinator is a top-level session the forbidden-verb guard does not reach (Overlord W1 ccd arms)', () => {
+    expect(`${allSkillText}\nccd keep-awake\n`, 'CONTROL: a planted mention is seen').toContain('keep-awake');
+    expect(allSkillText).not.toContain('keep-awake');
+  });
+
   it('never names the Shadow lanes door — a door that would tell a coordinator how to arm a shadow lane in the operator\'s name (D-8274)', () => {
     // Spec 2026-10-28 R-6: "the coordinator, worker and reviewer skills are forbidden to name the route". EXEMPT above only
     // PERMITS the omission; this is what FORBIDS the mention.
