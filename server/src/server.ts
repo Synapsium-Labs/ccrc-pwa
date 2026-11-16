@@ -27,7 +27,7 @@ import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
-import { buildAgreement, defaultCachePath, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
+import { buildAgreement, defaultCachePath, inventoryBuildAgreement, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -95,6 +95,9 @@ import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
+import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
+import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { renewalHostOf } from './continuity/renewalWiring.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -2266,6 +2269,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
   registerFaceRoutes(app, { coord: deps.coord });
+  // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
+  // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
+  const overlordStore = deps.coord !== undefined && deps.overlordAuthority !== undefined
+    ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
+  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  registerOverlordRoutes(app, {
+    gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    clock: deps.time.clock, entropy: deps.time.entropy, dec: pwaDec,
+    body: ccdOverlordBody({
+      runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+      generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+      // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
+      stop: stopCreatedOf({
+        read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
+        identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
+      }),
+      projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
+      projectsChanged: () => projectWalk.drop(),
+    }),
+    facts: {
+      ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
+      roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
+    },
+  });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {

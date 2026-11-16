@@ -87,3 +87,23 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   row, each naming `INJECTED_PROMPTS['<row>'].text` literally, because the injected-prompts census accepts only that form.
 - **`registration-waits-for-the-body`**: `server.ts` registers the doors in Task 4's commit, with the body adapter, so
   `auth-gate`'s registration cases are red between the two commits.
+
+## Task 4 (the body adapter)
+
+- **`claudecode-strip-by-env-window`**: `RunCcd` takes only an argv, so `withoutClaudeCode` removes `CLAUDECODE` from the
+  environment for the synchronous start of the child and restores it in a `finally`. `ccd()` calls the runner before its
+  first await, and `execFile` copies the environment as it spawns. A server unit never carries the variable, and a
+  remote-mode call runs on the agent, so the window only matters on a local-mode server started from a session's shell.
+- **`doors-register-without-a-store`**: the doors always register. With no coordination store or authority journal
+  (`NO_OVERLORD_STORE`) every door answers `unavailable` after the gate, and the server logs one line at boot.
+- **`stop-unmeasurable-is-not-absent`**: `stopCreated` answers `absent: true` only for a proven absent registry row. An
+  unmeasurable or unlistable registry is `ok: false`, where the stop route answers `unknown-session` for both.
+- **`stop-has-no-census-row`**: `stopCreatedOf` takes the stop route's `measuredIdentity`, `stopPairRefused` and
+  `stopArgvFor` as values and names no `CCD_ARGV` builder, so `id-argv-census` has no row for it and `stopArgvFor`'s
+  caller pin is untouched. `overlord-body.test.ts` pins the stop's argv and its answers instead.
+- **`keep-awake-needs-its-line`**: an rc 0 `keep-awake` without its `awake <id>` or `released <id>` line is `ok: false`.
+- **`ensureProject-exists-is-ok`**: `project-add`'s `project exists` answer is `ok`.
+- **`create-leftbehind-is-yes`**: a refused `ws-add` that left a worktree behind answers `created: 'yes'`; a refusal
+  after which ccd made nothing answers `no`; a call cut short or lost is re-measured through the registry.
+- **`one-session-host-builder`**: `renewalWiring.ts#renewalHostOf` builds the `SessionHost` for both the renewal acts and
+  the designate door's first prompt, so its construction is not copied into `server.ts`.

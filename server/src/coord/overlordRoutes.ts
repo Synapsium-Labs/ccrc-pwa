@@ -110,6 +110,20 @@ export interface OverlordRouteDeps {
   };
 }
 
+/** What a server with no coordination store or no authority journal registers the doors over (a test server, a script): the doors
+ *  still exist and still ask the gate first, and every read answers `unmeasured`, which each door refuses as `unavailable` before
+ *  any writer is reached. A writer here is unreachable and throws if a later change reaches it; the journal refuses every append. */
+const unreachable = (): never => { throw new Error('the Overlord designation store is absent: no door reaches a writer'); };
+export const NO_OVERLORD_STORE: { readonly coord: OverlordCoord; readonly journal: AuthorityAppender } = {
+  coord: {
+    designationRead: () => ({ kind: 'unmeasured', why: 'this server has no coordination store or authority journal' }),
+    accountPoolEdges: () => new Map(),
+    designatePending: unreachable, bindPendingGeneration: unreachable, failPending: unreachable, retire: unreachable,
+    stopDone: unreachable, raiseItem: unreachable,
+  },
+  journal: { appendInTx: () => ({ ok: false, error: 'authority-unmeasured', detail: 'this server has no authority journal' }) },
+};
+
 // ── tables ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The pending attempt's deadline, set once at the create (plan question 5, slug `pending-deadline-covers-the-first-turn`):

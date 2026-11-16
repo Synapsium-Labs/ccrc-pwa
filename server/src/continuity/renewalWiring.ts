@@ -14,6 +14,7 @@ import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { liveWordFor, turnMarkFor, type TurnReadDeps } from '../turnverdict.js';
 import { readUsageMeasured } from '../usage.js';
 import { ccdSessionHost } from './ccdSessionHost.js';
+import type { SessionHost } from './sessionHost.js';
 import type { PlannedAct } from './generationsLane.js';
 import { runRenewalActs, type ActsResult } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
@@ -24,6 +25,27 @@ export interface RenewalWiring {
   readonly canRenew: boolean;
   readonly drainOf: (id: string) => Promise<DrainRead>;
   readonly run: (planned: readonly PlannedAct[]) => Promise<ActsResult>;
+}
+
+/** The `SessionHost` over ccd, one construction for the renewal acts and for the designation door's first prompt (Overlord W1
+ *  designation A). `serial` is as `renewalActsOf` takes it. */
+export function renewalHostOf(
+  deps: Pick<WatcherDeps, 'io' | 'cfg' | 'runCcd' | 'fleetState' | 'tmux' | 'queue' | 'time'>,
+  coord: Pick<WatcherCoordPort, 'startsOf'>,
+  serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null,
+): SessionHost {
+  const now = (): number => deps.time.clock.wall();
+  return ccdSessionHost({
+    runCcd: deps.runCcd, fleetState: deps.fleetState,
+    // One `sendPrompt` per row the port can name (`RenewalPrompt` has two), each typed by reference to the list.
+    send: (id, key) => (key === 'overlord-first-prompt'
+      ? sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['overlord-first-prompt'].text, SEND_OPTS)
+      : sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text, SEND_OPTS)),
+    usage: (id) => readUsageMeasured(deps.io, deps.cfg.registryDir, id, Math.floor(now() / 1000)),
+    startsOf: (id, limit) => coord.startsOf(id, limit),
+    log: (line) => console.warn(line),
+    around: (id, fn) => (serial === null ? deps.queue.run(id, fn) : serial(() => deps.queue.run(id, fn))),
+  });
 }
 
 /** The pass's renewal pieces. `serial` is the stop-and-done serialiser (null before the sleep lanes start), which the
@@ -37,17 +59,7 @@ export function renewalActsOf(
 ): RenewalWiring {
   const now = (): number => deps.time.clock.wall();
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
-  const host = ccdSessionHost({
-    runCcd: deps.runCcd, fleetState: deps.fleetState,
-    // One `sendPrompt` per row the port can name (`RenewalPrompt` has two), each typed by reference to the list.
-    send: (id, key) => (key === 'overlord-first-prompt'
-      ? sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['overlord-first-prompt'].text, SEND_OPTS)
-      : sendPrompt({ tmux: deps.tmux, queue: deps.queue }, id, INJECTED_PROMPTS['renewal-first-prompt'].text, SEND_OPTS)),
-    usage: (id) => readUsageMeasured(deps.io, deps.cfg.registryDir, id, Math.floor(now() / 1000)),
-    startsOf: (id, limit) => coord.startsOf(id, limit),
-    log: (line) => console.warn(line),
-    around: (id, fn) => (serial === null ? deps.queue.run(id, fn) : serial(() => deps.queue.run(id, fn))),
-  });
+  const host = renewalHostOf(deps, coord, serial);
   return {
     canRenew: capSupported(deps.fleetState, HIBERNATE_FRESH_CAP),
     drainOf: async (id) => {
