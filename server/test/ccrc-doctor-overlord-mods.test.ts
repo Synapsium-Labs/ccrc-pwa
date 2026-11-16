@@ -7,7 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { removeTmpFixturesEachTest } from './tmpHelpers.js';
 import {
   BASH, CCRC_SRC, CHECKS_SRC, UPSTREAM, doctorEnv, healthy, installDoctorHooks, plantHookRegistration, shq, writeCcrcEnv,
@@ -45,7 +45,7 @@ function designate(home: string, wrapper: string, o: { poolset?: boolean } = {})
   if (o.poolset) writeFileSync(join(reg, `${wrapper}-overlord.poolset`), 'pool-a\n');
 }
 function check(home: string): { lines: string[]; code: number } {
-  const r = spawnSync(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_check_overlord-mods`],
+  const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_check_overlord-mods`],
     { env: doctorEnv(home), encoding: 'utf8', timeout: 30_000 });
   return { lines: (r.stdout ?? '').split('\n').filter((l) => l !== ''), code: r.status ?? -1 };
 }

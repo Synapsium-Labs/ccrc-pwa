@@ -72,3 +72,11 @@ net 0). Every file is within 40, so the doctor check ships with its ruled FAIL s
   hand: `ccd/ccrc-doctor-checks` stays at its pin (34), the new ccd function is clean, and `ccd/ccrc` gained one data line.
 - `ccrc-install-codex`'s two box-token cases red on this box with and without this change: their WARN set gains
   `browser-mcp` from browser servers running on the box. `FLEET_BOX_CLASSES` gains `overlord-mods: PASS`.
+
+## CI's first full run (fix round 1)
+
+The first `full-ci` run on `d5078369c` was red on two guards this build had not run locally, both shallow:
+`spawn-group-pin` (the new doctor suite spawned bash with a timeout outside `spawnSyncGroup`; it now uses it, as its
+cap-floor sibling does) and `ccd-reg-get-census` (`_profile_workspace`'s `workdir` read is a 209th `_reg_get` call on a
+177th line; the census sentence and its history now say so). CodeQL was green, and the shellcheck ratchet and
+`ccrc-install-codex` passed in CI.
