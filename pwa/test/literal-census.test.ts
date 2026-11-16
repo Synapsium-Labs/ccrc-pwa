@@ -165,6 +165,14 @@ const REGISTERED: Record<string, string> = {
     'a whole number with an s, m, h or d suffix',
     'an absolute path, or one starting ~/, with no . or .. part',
   ].map((sentence) => [sentence, TESTBOX_SHAPE_COPY])),
+  // Native Docs reader C1 (completion plan Task 7): the mockup pipeline's files share two spellings with the reader lab.
+  'http://www.w3.org/2000/svg': 'ONE W3C CONSTANT, TWO READERS. The SVG namespace URI is fixed by the SVG specification and '
+    + 'cannot drift: `docs/mockup/load.ts` compares an element\'s namespace with it, and `readerLab/battery.ts` spells it inside '
+    + 'script TEXT that runs in a sandboxed lab frame, which cannot import a module, so there is nothing to fold it into.',
+  [`<meta http-equiv="Content-Security-Policy" content="${HOLE}">`]: 'TWO FRAMES, TWO POLICIES, agreeing today. `metaFor` '
+    + '(docs/mockup/policy.ts) builds the mockup frame\'s meta, which must equal its `csp` attribute (base 5.6.1), and '
+    + '`labSrcdoc` (readerLab/frames.ts) builds the reader lab\'s, each escaping its own content; the lab measures policies the '
+    + 'console never ships, so folding them would tie the lab\'s meta to the mockup\'s contract.',
   'not 32 lowercase hex characters': 'TWO READERS, TWO COPIES, agreeing today. `runId` (shared/testbox.ts) refuses a run id and `actState` '
     + '(shared/testbox-admin.ts) an act id, each its own reader of its own wire (the shared readers say each refusal in its own file, '
     + 'which names the field), so folding them would make one reader\'s rewording silently reword the other.',
