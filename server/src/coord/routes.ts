@@ -148,6 +148,7 @@ import {
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, isClaudeVersion, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { rollTargetsOf } from './rollTarget.js';
 import { plainAutoMemoryOf } from '../continuity/profileFor.js';
+import { compactRefusal } from '../continuity/compactOwner.js';
 import {
   PLAIN_AUTO_MEMORY_CHOICES, PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryView,
 } from '../../../shared/plainAutoMemory.js';
@@ -2047,7 +2048,12 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
     const coord = deps.coord;
-    const request = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    const parsed = parseRouteRequest(parseCanonicalPositiveSafeInteger((req.params as { id: string }).id), req.body);
+    // The launch-profile lane owns `compact` while it and `continuity` are live (`compactRefusal`, review 2024 F3, 2149 F11):
+    // its refusal is one more 400 `bad-request` with its detail, so it rides the parse's own refusal.
+    const owned = parsed.ok && parsed.ask.how.by === 'manual'
+      ? compactRefusal(parsed.ask.how.field, (lane) => laneArmRowViewOf(lane, coord.laneArmSetting(lane)).live) : null;
+    const request = owned === null ? parsed : { ok: false as const, detail: owned };
     if (!request.ok) return refuseRoute(reply, 'bad-request', { detail: request.detail });
     const { id, ask } = request;
 

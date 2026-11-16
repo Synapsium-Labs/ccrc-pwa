@@ -126,9 +126,33 @@ export interface CardHandover {
   readonly cautions: readonly string[];
   readonly tone: string;
 }
-/** The checkpoint carried across a renewal: in W1a, the handover note of the generation this one replaced (the notes piece;
- *  the renewal-act piece adds the thread). `at` is when the note was written. */
-export interface CardCheckpoint { readonly at: number; readonly handover: CardHandover }
+/** One live note as the checkpoint kept it when the generation before this one renewed: the note's own fields, its key as one
+ *  phrase (`noteKeyText`), and no key fact (the row is read as it was then). Its `waitsOn` and `next` are untrusted. */
+export interface CardCheckpointNote {
+  readonly id: number;
+  readonly at: number;
+  readonly kind: NoteKind;
+  readonly key: string;
+  readonly waitsOn: string;
+  readonly next: string;
+}
+/** One ruling a coordinator's checkpoint carries (the renewal-act piece): the operator's decision, sent to it as mail, kept as
+ *  stored. `source` is the door's word (`tick` or `correction`); `subject` and `text` are untrusted. */
+export interface CardRuling {
+  readonly at: number;
+  readonly source: string;
+  readonly subject: string;
+  readonly text: string;
+}
+/** The checkpoint carried across a renewal: what the generation this one replaced stored when the lane renewed it (the
+ *  renewal-act piece). `at` is when the lane stored it. ADDITIVE: the handover note is `null` for a hard renewal (none is
+ *  asked), and `notes` and `rulings` are absent in a snapshot stored before they existed, which reads as none. */
+export interface CardCheckpoint {
+  readonly at: number;
+  readonly handover: CardHandover | null;
+  readonly notes?: readonly CardCheckpointNote[];
+  readonly rulings?: readonly CardRuling[];
+}
 
 /** One pending timer of the session's own (the timers piece of W1a, plan `w1a-timers.md` Task 10): its id, its due time
  *  (an absolute stamp), the first words of its note (`timerPreview`, the one cut: the note itself never rides the card),

@@ -1,12 +1,22 @@
-// A generation day: the renewal deciders under crash and gap injection (Overlord W1a, renewal deciders Task 6; spec
-// §3.3.11, §11.5, §11.7). The control rows prove each invariant goes red on a hand-made sequence; the seeded rows run
-// the real deciders, and one hands the scenario a softRenewalMay that ignores the budget, which G2 must catch.
+// A generation day: the real generations lane and the renewal acts, over a fake host, under port failures, agent-link drops,
+// server crashes (between passes, inside one, between a pass and its acts, at the port call) and freezes (Overlord W1a, renewal
+// deciders Task 6 and renewal act Task 5; spec §3.3.11, §11.5, §11.7). The control rows prove each invariant goes red on a
+// hand-made sequence; the seeded rows run the real lane and acts, and each mutation row hands the scenario a mutant of one
+// decider or of the acts' runner, which the named invariant must catch. G7 and G8 keep their first meaning, so the renewal
+// act's invariants are G9 (one fresh conversation per renewal), G10 (every renewal ends), G11 (mail is held and none lost) and G12 (a renewal that reaches clearing makes its call).
 import { describe, expect, it } from 'vitest';
 import * as machine from '../../src/continuity/generationMachine.js';
 import * as renewal from '../../src/continuity/renewalDue.js';
 import * as soft from '../../src/continuity/softRenewal.js';
 import * as observed from '../../src/time/observed.js';
 import { GEN_DAY_INVARIANTS, generationDay, type GenDayModules } from './generationDay.js';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import * as feed from '../../src/continuity/renewalFeed.js';
+import type { runRenewalActs } from '../../src/continuity/renewalActs.js';
+import { rewriteRelativeImports } from './mutate.js';
+import { mkTmp } from '../tmpHelpers.js';
 import { assertScenario, simSeeds, simulate } from './run.js';
 import type { CoordStore } from '../../src/coord/store.js';
 import type { GenerationsCoord } from '../../src/continuity/generationsLane.js';
@@ -37,10 +47,13 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
       ['probes', 'o#2', 'passed', 'lane'], ['gen', 'o#2', 'active', 'lane']]);
     expect(byName('G1').check(ok)).toBeNull();
   });
-  it('CONTROL: G2 is red on a fourth soft renewal inside six observed hours, green on one just outside', () => {
-    const at = (ms: number): Row => ['soft-renewal', 'o', `obs=${ms};age=${H}`, 'lane'];
+  it('CONTROL: G2 is red on a fourth live soft renewal inside six observed hours, green on one just outside, and counts no shadow walk', () => {
+    const at = (ms: number, live = 1): Row => ['soft-renewal', 'o', `obs=${ms};age=${H};live=${live}`, 'lane'];
     expect(byName('G2').check(seqOf([at(0), at(H), at(2 * H), at(6 * H - 1)]))?.invariant).toBe('G2');
     expect(byName('G2').check(seqOf([at(0), at(H), at(2 * H), at(6 * H)]))).toBeNull();
+    // A shadow walk records no soft renewal row (review 2149 F14), so the budget does not bound it and G2 does not count it.
+    expect(byName('G2').check(seqOf([at(0, 0), at(H, 0), at(2 * H, 0), at(6 * H - 1, 0)]))).toBeNull();
+    expect(byName('G2').check(seqOf([at(0), at(H, 0), at(2 * H), at(6 * H - 1)]))).toBeNull();
   });
   it('CONTROL: G3 is red on a soft renewal at 29 observed minutes', () => {
     expect(byName('G3').check(seqOf([['soft-renewal', 'o', `obs=1;age=${29 * 60_000}`, 'lane']]))?.invariant).toBe('G3');
@@ -121,6 +134,64 @@ describe('the generation day\'s invariants go red on a hand-made sequence', () =
     expect(byName('G8').check(day(1))?.invariant).toBe('G8');
     expect(byName('G8').check(day(2))).toBeNull();
   });
+  it('CONTROL: G9 is red on a second renew call that started a fresh conversation in one renewal, green across two renewals of one generation', () => {
+    const began: Row = ['renewal', 'c#1', 'began;proven=1;from=active', 'lane'];
+    const start: Row = ['renew-start', 'c#1', 'after=3000', 'host'];
+    expect(byName('G9').check(seqOf([began, start, start]))?.invariant).toBe('G9');
+    expect(byName('G9').check(seqOf([began, start]))).toBeNull();
+    // A renewal that failed, and a later one of the same generation, are two renewals.
+    expect(byName('G9').check(seqOf([began, start, ['gen', 'c#1', 'active', 'lane'], began, start]))).toBeNull();
+    expect(byName('G9').check(seqOf([began, start, ['renew-start', 'c#2', 'after=1', 'host'], start]))?.invariant).toBe('G9');
+  });
+  it('CONTROL: G10 is red on a renewal that never ends, on an unproven generation back in active, and on a back to active that is never given a hold-off', () => {
+    const began = (proven: number): Row => ['renewal', 'c#1', `began;proven=${proven};from=active`, 'lane'];
+    const live: Row = ['arm', 'continuity', 'live', 'sim'];
+    // A renewal in clearing for longer than the budget plus one period per state, with the day running on.
+    expect(byName('G10').check(timed([[...live, 0] as TRow, ['gen', 'c#1', 'draining', 'lane', 0], [...began(1), 0] as TRow, ['gen', 'c#1', 'clearing', 'lane', 1_000],
+      ['sim', 'generation-day', 'end', 'sim', 1_000 + 480_001]]))?.invariant).toBe('G10');
+    expect(byName('G10').check(timed([[...live, 0] as TRow, [...began(1), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000], ['sim', 'generation-day', 'end', 'sim', 1_000 + 480_000]]))).toBeNull();
+    // A crash waives the time bound.
+    expect(byName('G10').check(timed([[...live, 0] as TRow, [...began(1), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000], ['server', 'crash', 'down', 'sim', 2_000],
+      ['sim', 'generation-day', 'end', 'sim', 900_000]]))).toBeNull();
+    // Back to active: an unproven generation ends in degraded; a proven one needs its hold-off before it renews again or the day ends.
+    expect(byName('G10').check(timed([[...live, 0] as TRow, [...began(0), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000], ['gen', 'c#1', 'active', 'lane', 2_000]]))?.invariant).toBe('G10');
+    expect(byName('G10').check(timed([[...live, 0] as TRow, [...began(0), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000], ['gen', 'c#1', 'degraded', 'lane', 2_000],
+      ['sim', 'generation-day', 'end', 'sim', 3_000]]))).toBeNull();
+    const back = (hold: boolean, between?: TRow): SequenceLine[] => timed([[...live, 0] as TRow, [...began(1), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000],
+      ['gen', 'c#1', 'active', 'lane', 2_000], ...(between === undefined ? [] : [between]), ...(hold ? [['hold-off', 'c#1', 'until=1', 'lane', 3_000] as TRow] : []),
+      ['sim', 'generation-day', 'end', 'sim', 400_000]]);
+    expect(byName('G10').check(back(true))).toBeNull();
+    expect(byName('G10').check(back(false))?.invariant).toBe('G10');
+    // The act that sets the hold-off follows the step, so a crash between them excuses it.
+    expect(byName('G10').check(back(false, ['server', 'crash', 'down', 'sim', 2_500]))).toBeNull();
+    expect(byName('G10').check(timed([[...live, 0] as TRow, [...began(1), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000], ['gen', 'c#1', 'active', 'lane', 2_000],
+      [...began(1), 3_000]]))?.invariant).toBe('G10');
+    // In shadow nothing is acted on, so no hold-off is owed.
+    expect(byName('G10').check(timed([['arm', 'continuity', 'shadow', 'sim', 0], [...began(1), 0], ['gen', 'c#1', 'clearing', 'lane', 1_000],
+      ['gen', 'c#1', 'active', 'lane', 2_000], ['sim', 'generation-day', 'end', 'sim', 400_000]]))).toBeNull();
+  });
+  it('CONTROL: G11 is red on a delivery while the recipient renews, on one delivered twice, and on one never delivered', () => {
+    const q: Row = ['mail', 'c', 'queued;mail=1', 'host'];
+    const d = (gen: string): Row => ['mail', 'c', `delivered;mail=1;gen=${gen}`, 'server'];
+    expect(byName('G11').check(seqOf([q, d('probing')]))?.invariant).toBe('G11');
+    expect(byName('G11').check(seqOf([q, d('draining')]))?.invariant).toBe('G11');
+    expect(byName('G11').check(seqOf([q, d('active')]))).toBeNull();
+    expect(byName('G11').check(seqOf([q, d('degraded')]))).toBeNull();
+    expect(byName('G11').check(seqOf([q, d('active'), d('active')]))?.invariant).toBe('G11');
+    expect(byName('G11').check(timed([['mail', 'c', 'queued;mail=1', 'host', 0], ['sim', 'generation-day', 'end', 'sim', H + 1]]))?.invariant).toBe('G11');
+    expect(byName('G11').check(timed([['mail', 'c', 'queued;mail=1', 'host', 0], ['sim', 'generation-day', 'end', 'sim', H]]))).toBeNull();
+  });
+  it('CONTROL: G12 is red on a live renewal that leaves clearing with no renew call, green when one reached the host or the server died', () => {
+    const live: Row = ['arm', 'continuity', 'live', 'sim'];
+    const clearing: Row = ['gen', 'c#1', 'clearing', 'lane'];
+    expect(byName('G12').check(seqOf([live, clearing, ['gen', 'c#1', 'active', 'lane']]))?.invariant).toBe('G12');
+    expect(byName('G12').check(seqOf([live, clearing, ['gen', 'c#1', 'degraded', 'lane']]))?.invariant).toBe('G12');
+    expect(byName('G12').check(seqOf([live, clearing, ['renew-call', 'c#1', 'reached', 'host'], ['gen', 'c#1', 'active', 'lane']]))).toBeNull();
+    expect(byName('G12').check(seqOf([live, clearing, ['server', 'crash', 'down', 'sim'], ['gen', 'c#1', 'active', 'lane']]))).toBeNull();
+    expect(byName('G12').check(seqOf([['arm', 'continuity', 'shadow', 'sim'], clearing, ['gen', 'c#1', 'active', 'lane']]))).toBeNull();
+    // The second renewal of one generation is held to the same rule.
+    expect(byName('G12').check(seqOf([live, clearing, ['renew-call', 'c#1', 'reached', 'host'], ['gen', 'c#1', 'active', 'lane'], clearing, ['gen', 'c#1', 'active', 'lane']]))?.invariant).toBe('G12');
+  });
   it('CONTROL: G5 counts the reported starts (review 2003 F7): red on a mint with no start, and on a start that had to mint and did not', () => {
     const r = (n: number, uuid = 'u1', source = 'clear'): Row => ['report', 'o', `start=${n};source=${source};uuid=${uuid}`, 'host'];
     const pass: Row = ['pass', 'server', 'o=1', 'lane'];
@@ -150,11 +221,23 @@ async function redSeed(mods: GenDayModules, invariant: string): Promise<string |
   }
   return null;
 }
+/** The renewal acts' runner from a copy of `renewalActs.ts` with `old` replaced once by `now`, written under a temp directory and
+ *  imported (relative imports made absolute, as `mutate.ts` does), so a mutant of the acts themselves reaches the scenario. */
+async function mutantActs(old: string, now: string): Promise<typeof runRenewalActs> {
+  const file = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/continuity/renewalActs.ts');
+  const source = readFileSync(file, 'utf8');
+  if (source.split(old).length !== 2) throw new Error(`mutantActs: ${JSON.stringify(old)} does not occur exactly once`);
+  const dir = mkTmp('ccrc-mutant-acts-');
+  mkdirSync(dir, { recursive: true });
+  const copy = path.join(dir, 'renewalActs.ts');
+  writeFileSync(copy, rewriteRelativeImports(source.replace(old, () => now), path.dirname(file)));
+  return ((await import(/* @vite-ignore */ pathToFileURL(copy).href)) as { runRenewalActs: typeof runRenewalActs }).runRenewalActs;
+}
 type Observe = typeof observed.observeTime;
 const withObserve = (f: Observe): GenDayModules => ({ ...REAL, observed: { ...observed, observeTime: f } });
 
 describe('the generation day over seeded runs', () => {
-  it('holds G1 to G8 on every seed and reaches every edge', async () => {
+  it('holds G1 to G12 on every seed and reaches every edge', async () => {
     await assertScenario(generationDay(REAL), GEN_DAY_INVARIANTS, { seeds: simSeeds(DEFAULTS), testFile: FILE });
   }, BOUND_MS);
 
@@ -221,12 +304,17 @@ describe('the generation day over seeded runs', () => {
     expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, softRenewalsInWindow: 0 }) } }, 'G2')).not.toBeNull();
   }, BOUND_MS);
 
-  it('MUTATION: a softRenewalMay that ignores the hold-off goes red on G7 within the CI seeds (review 1912, F9)', async () => {
-    expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) } }, 'G7')).not.toBeNull();
+  it('MUTATION: a soft renewal that ignores the hold-off, in softRenewalMay and at the permit, goes red on G7 within the CI seeds (review 1912, F9; review 2149 F1)', async () => {
+    expect(await redSeed({ ...REAL, soft: { softRenewalMay: (i) => soft.softRenewalMay({ ...i, holdOffUntilObservedMs: null }) },
+      permit: { renewalPermit: (i) => feed.renewalPermit({ ...i, holdOff: false }) } }, 'G7')).not.toBeNull();
   }, BOUND_MS);
 
-  it('MUTATION: a generationStep that drains on a soft due in degraded goes red on G7 within the CI seeds (review 1912, F9)', async () => {
-    expect(await redSeed({ ...REAL, machine: { ...machine,
-      generationStep: (g, e) => machine.generationStep(g, e.kind === 'due' && g.state === 'degraded' ? { kind: 'due', cls: 'hard' } : e) } }, 'G7')).not.toBeNull();
+  it('MUTATION: a renewalFeed that offers every due as a hard one lets a soft due drain a degraded generation, and goes red on G7 within the CI seeds (review 1912, F9)', async () => {
+    expect(await redSeed({ ...REAL, feed: { renewalFeed: (f) => feed.renewalFeed({ ...f, due: f.due === null ? null : { cls: 'hard' } }) } }, 'G7')).not.toBeNull();
+  }, BOUND_MS);
+
+  it('MUTATION: a renewal act that reads no receipt before a retry starts a second fresh conversation and goes red on G9 within the CI seeds (Task 5)', async () => {
+    const acts = await mutantActs("if (tryN > 1) {", "if (tryN > 1 && false) {");
+    expect(await redSeed({ ...REAL, acts }, 'G9')).not.toBeNull();
   }, BOUND_MS);
 });

@@ -15,6 +15,9 @@ import {
   TIMER_STATES, cancelActorOf, isTimerCancelReason, timerMoveAllowed, type TimerActor, type TimerCancelReason, type TimerState,
 } from '../../../shared/continuity-timers.js';
 import type { Observed } from '../time/observed.js';
+import { isTickMailSubject } from '../coord/ledgersMail.js';
+import { isDigestCorrectionSubject } from '../coord/digest.js';
+import { isRulingSource, type Checkpoint, type CheckpointHandover, type CheckpointNote, type Ruling } from './checkpoint.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
 import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
@@ -858,6 +861,15 @@ export function putHandover(db: DatabaseSync, h: { generationId: number; note: H
   }
 }
 
+/** A note key as JSON wrote it (a handover thread's reference, a checkpoint note's key), or null when it is not one. */
+function noteKeyOfJson(ref: unknown): NoteKey | null {
+  if (typeof ref !== 'object' || ref === null) return null;
+  const r = ref as Record<string, unknown>;
+  if (!isNoteKeyKind(r.kind)) return null;
+  if (r.kind === 'programme') return typeof r.slug === 'string' ? { kind: 'programme', slug: r.slug } : null;
+  return Number.isSafeInteger(r.id) ? { kind: r.kind, id: r.id as number } : null;
+}
+
 function handoverNoteOf(text: string): HandoverNote | null {
   try {
     const v = JSON.parse(text) as Record<string, unknown>;
@@ -865,16 +877,54 @@ function handoverNoteOf(text: string): HandoverNote | null {
     if (!Array.isArray(v.threads) || !strings(v.cautions) || typeof v.tone !== 'string') return null;
     const threads: HandoverThread[] = [];
     for (const t of v.threads as Record<string, unknown>[]) {
-      const ref = t?.ref as Record<string, unknown> | undefined;
-      if (typeof t?.waitsOn !== 'string' || typeof t.next !== 'string' || ref === undefined || !isNoteKeyKind(ref.kind)) return null;
-      const key: NoteKey | null = ref.kind === 'programme' ? (typeof ref.slug === 'string' ? { kind: 'programme', slug: ref.slug } : null)
-        : Number.isSafeInteger(ref.id) ? { kind: ref.kind, id: ref.id as number } : null;
-      if (key === null) return null;
+      const key = noteKeyOfJson(t?.ref);
+      if (typeof t?.waitsOn !== 'string' || typeof t.next !== 'string' || key === null) return null;
       threads.push({ ref: key, waitsOn: t.waitsOn, next: t.next });
     }
     return { threads, cautions: v.cautions, tone: v.tone };
   } catch {
     return null;
+  }
+}
+
+/** This generation's own handover note (written while it was `checkpointed`), or null when it wrote none: the renewal
+ *  walk's `handover` event and the checkpoint the acts seal read it (W1a renewal act). */
+export function handoverOf(db: DatabaseSync, generationId: number): HandoverRead {
+  try {
+    const row = stmt(db, 'SELECT g.n AS n, h.note AS note, h.dropped AS dropped, h.at AS at FROM continuity_handovers h '
+      + 'JOIN continuity_generations g ON g.id = h.generationId WHERE h.generationId = ?').get(generationId) as Record<string, unknown> | undefined;
+    if (row === undefined) return { ok: true, handover: null };
+    const note = typeof row.note === 'string' ? handoverNoteOf(row.note) : null;
+    const n = intOrNull(row.n); const dropped = intOrNull(row.dropped); const at = intOrNull(row.at);
+    if (note === null || n === null || dropped === null || at === null) return { ok: false, detail: `continuity_handovers row ${generationId} does not read` };
+    return { ok: true, handover: { generationId, n, note, dropped, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The soft renewals an identity's line spent in one term, as accumulator stamps: one row of `continuity_soft_renewals` per
+ *  soft due the lane fed, so a generation that renews softly twice (after one went back) counts twice, and the budget's
+ *  window spans generations (ruling R4; slug soft-renewals-are-rows). */
+export function softRenewalsOf(db: DatabaseSync, identity: string, term: number): { ok: true; observedMs: number[] } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, 'SELECT observedMs AS at FROM continuity_soft_renewals WHERE identity = ? AND term = ? ORDER BY id')
+      .all(identity, term) as { at: unknown }[];
+    const out: number[] = [];
+    for (const r of rows) { const at = intOrNull(r.at); if (at === null) return { ok: false, detail: 'continuity_soft_renewals observedMs does not read' }; out.push(at); }
+    return { ok: true, observedMs: out };
+  } catch (e) {
+    return { ok: false, detail: `continuity_soft_renewals read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** Feeding a soft `due` spends one of the soft budget's renewals: one row, stamped at the accumulator's reading. */
+export function recordSoftRenewal(db: DatabaseSync, g: { readonly id: number; readonly identity: string; readonly term: number }, observedMs: number): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO continuity_soft_renewals (identity, term, generationId, observedMs) VALUES (?, ?, ?, ?)').run(g.identity, g.term, g.id, observedMs);
+    return { ok: true };
+  } catch {
+    return { ok: false };
   }
 }
 
@@ -896,6 +946,183 @@ export function handoverBefore(db: DatabaseSync, identity: string, liveGeneratio
     return { ok: true, handover: { generationId: gid, n, note, dropped, at } };
   } catch (e) {
     return { ok: false, detail: `continuity_handovers read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ------------------------------------------------------------------------------------------------- the checkpoint
+// `continuity_checkpoints` and `continuity_renew_calls` (Overlord spec §3.3.2 C37, §3.3.11 H12, W1a, the renewal act; its
+// migration). ONE writer, the generations lane, through `putCheckpoint`, `claimRenewCall` and `answerRenewCall`; the card's gatherer
+// reads the checkpoint of the generation that ended last (`checkpointBefore`), the lane the renew calls of one generation
+// (`renewCallsOf`) and a coordinator's rulings (`rulingRowsOf`, which reads mail and writes nothing). A failed statement
+// answers ok: false, never a throw; a row this build cannot read fails the read whole, never a partial row.
+
+/** One stored checkpoint, with the outcome the generation it was assembled for ended with (null while it is still live). */
+export interface CheckpointRow {
+  readonly generationId: number; readonly n: number; readonly outcome: GenerationOutcome | null;
+  readonly notes: readonly CheckpointNote[]; readonly rulings: readonly Ruling[]; readonly handover: CheckpointHandover | null;
+  readonly at: number;
+}
+export type CheckpointRead = { ok: true; checkpoint: CheckpointRow | null } | { ok: false; detail: string };
+export type CheckpointInsert = Checkpoint & { readonly generationId: number; readonly at: number };
+
+/** The lane's checkpoint writer: one row per generation, the latest assembly standing (a retried step re-stores the same). */
+export function putCheckpoint(db: DatabaseSync, c: CheckpointInsert): { ok: true } | { ok: false } {
+  try {
+    stmt(db, 'INSERT INTO continuity_checkpoints (generationId, notes, rulings, handover, at) VALUES (?, ?, ?, ?, ?) '
+      + 'ON CONFLICT (generationId) DO UPDATE SET notes = excluded.notes, rulings = excluded.rulings, handover = excluded.handover, at = excluded.at')
+      .run(c.generationId, JSON.stringify(c.notes), JSON.stringify(c.rulings), c.handover === null ? null : JSON.stringify(c.handover), c.at);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+const parsedList = (text: unknown): unknown[] | null => {
+  if (typeof text !== 'string') return null;
+  try { const v: unknown = JSON.parse(text); return Array.isArray(v) ? v : null; } catch { return null; }
+};
+const isObj = (x: unknown): x is Record<string, unknown> => typeof x === 'object' && x !== null && !Array.isArray(x);
+
+function checkpointNotesOf(text: unknown): CheckpointNote[] | null {
+  const list = parsedList(text);
+  if (list === null) return null;
+  const out: CheckpointNote[] = [];
+  for (const x of list) {
+    if (!isObj(x)) return null;
+    const key = noteKeyOfJson(x.key);
+    if (!Number.isSafeInteger(x.id) || !Number.isSafeInteger(x.at) || !isNoteKind(x.kind) || key === null
+      || typeof x.waitsOn !== 'string' || typeof x.next !== 'string') return null;
+    out.push({ id: x.id as number, at: x.at as number, kind: x.kind, key, waitsOn: x.waitsOn, next: x.next });
+  }
+  return out;
+}
+
+function checkpointRulingsOf(text: unknown): Ruling[] | null {
+  const list = parsedList(text);
+  if (list === null) return null;
+  const out: Ruling[] = [];
+  for (const x of list) {
+    if (!isObj(x) || !Number.isSafeInteger(x.at) || !isRulingSource(x.source) || typeof x.subject !== 'string' || typeof x.text !== 'string') return null;
+    out.push({ at: x.at as number, source: x.source, subject: x.subject, text: x.text });
+  }
+  return out;
+}
+
+/** The handover as a checkpoint stores it: `{n, dropped, note}`, the note read by the handover row's own reader; undefined when
+ *  the text is not one (a null handover is the column's NULL, never this). */
+function checkpointHandoverOf(text: string): CheckpointHandover | undefined {
+  try {
+    const v: unknown = JSON.parse(text);
+    if (!isObj(v) || !Number.isSafeInteger(v.n) || !Number.isSafeInteger(v.dropped) || !isObj(v.note)) return undefined;
+    const note = handoverNoteOf(JSON.stringify(v.note));
+    return note === null ? undefined : { n: v.n as number, dropped: v.dropped as number, note };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The checkpoint of the generation just before `liveGenerationId` in its identity's line (the one the live generation
+ *  replaced), with that generation's outcome, or null when it stored none or there is none. It finds that generation by its
+ *  place in the line, as `handoverBefore` does, and reads no state column. A row that does not read, or an outcome word this
+ *  build does not know, is a failed read, never null. */
+export function checkpointBefore(db: DatabaseSync, identity: string, liveGenerationId: number): CheckpointRead {
+  try {
+    const row = stmt(db,
+      'SELECT g.id AS gid, g.n AS n, g.outcome AS outcome, c.notes AS notes, c.rulings AS rulings, c.handover AS handover, c.at AS at '
+      + 'FROM continuity_generations g LEFT JOIN continuity_checkpoints c ON c.generationId = g.id '
+      + 'WHERE g.identity = ? AND g.id < ? ORDER BY g.id DESC LIMIT 1',
+    ).get(identity, liveGenerationId) as Record<string, unknown> | undefined;
+    if (row === undefined || row.at === null) return { ok: true, checkpoint: null };
+    const gid = intOrNull(row.gid); const n = intOrNull(row.n); const at = intOrNull(row.at);
+    const outcome = row.outcome === null ? null : isGenerationOutcome(row.outcome) ? row.outcome : undefined;
+    const notes = checkpointNotesOf(row.notes); const rulings = checkpointRulingsOf(row.rulings);
+    const handover = row.handover === null ? null : typeof row.handover === 'string' ? checkpointHandoverOf(row.handover) : undefined;
+    if (gid === null || n === null || at === null || outcome === undefined || notes === null || rulings === null || handover === undefined) {
+      return { ok: false, detail: `continuity_checkpoints row ${String(row.gid)} does not read` };
+    }
+    return { ok: true, checkpoint: { generationId: gid, n, outcome, notes, rulings, handover, at } };
+  } catch (e) {
+    return { ok: false, detail: `continuity_checkpoints read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One `SessionHost.renew` call the lane made for one try of one renewal of a generation. A renewal is an EPISODE, named by
+ *  the wall time its generation entered `clearing` (set once on entry and kept while it retries there), because a
+ *  generation that went back to `active` may renew again and its tries start at 1 again (slug renew-calls-keyed-by-episode).
+ *  `answer` is null while the call is in flight, or when its answer was lost to a crash (the try is then never repeated: the
+ *  lane reads the receipt first). */
+export interface RenewCallRow {
+  readonly generationId: number; readonly episode: number; readonly try: number; readonly at: number; readonly answer: string | null;
+}
+export type RenewCallsRead = { ok: true; calls: RenewCallRow[] } | { ok: false; detail: string };
+/** Which call: the generation, its renewal's episode and the try within it. */
+export interface RenewCallKey { readonly generationId: number; readonly episode: number; readonly try: number }
+
+/** Claims a try BEFORE the call is made, so a crash between the claim and the call never repeats the try: `claimed: true`
+ *  for the one caller that inserted the row, `claimed: false` when it was already there. A statement that fails is
+ *  `ok: false`, kept apart from "already claimed". */
+export function claimRenewCall(db: DatabaseSync, k: RenewCallKey, at: number): { ok: true; claimed: boolean } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT OR IGNORE INTO continuity_renew_calls (generationId, episode, try, at, answer) VALUES (?, ?, ?, ?, NULL)')
+      .run(k.generationId, k.episode, k.try, at);
+    return { ok: true, claimed: Number(res.changes) === 1 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Records a claimed try's answer word, once: the first answer stands, and a try never claimed has no row to answer
+ *  (`recorded: false` for both). */
+export function answerRenewCall(db: DatabaseSync, k: RenewCallKey, answer: string): { ok: true; recorded: boolean } | { ok: false } {
+  try {
+    const res = stmt(db, 'UPDATE continuity_renew_calls SET answer = ? WHERE generationId = ? AND episode = ? AND try = ? AND answer IS NULL')
+      .run(answer, k.generationId, k.episode, k.try);
+    return { ok: true, recorded: Number(res.changes) === 1 };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** One renewal's calls (a generation's episode), in try order. */
+export function renewCallsOf(db: DatabaseSync, generationId: number, episode: number): RenewCallsRead {
+  try {
+    const rows = stmt(db, 'SELECT generationId, episode, try, at, answer FROM continuity_renew_calls WHERE generationId = ? AND episode = ? ORDER BY try')
+      .all(generationId, episode) as Record<string, unknown>[];
+    const calls: RenewCallRow[] = [];
+    for (const r of rows) {
+      const g = intOrNull(r.generationId); const ep = intOrNull(r.episode); const t = intOrNull(r.try); const at = intOrNull(r.at);
+      if (g === null || ep === null || t === null || at === null || (r.answer !== null && typeof r.answer !== 'string')) {
+        return { ok: false, detail: `continuity_renew_calls row (${String(r.generationId)}, ${String(r.episode)}, ${String(r.try)}) does not read` };
+      }
+      calls.push({ generationId: g, episode: ep, try: t, at, answer: r.answer as string | null });
+    }
+    return { ok: true, calls };
+  } catch (e) {
+    return { ok: false, detail: `continuity_renew_calls read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+export type RulingsRead = { ok: true; rulings: Ruling[] } | { ok: false; detail: string };
+
+/** A coordinator's rulings, newest first, at most `limit`: the operator's mail to its session id that rides no run and whose
+ *  subject is a tick's or a digest correction's (measured in `w1a-renewal-act/departures.md`, rulings-rows). The mail kind is
+ *  not selected on: the stall watch raises `operator` mail too, and only the subject tells a ruling from a notice. The text is
+ *  the mail's body as stored. A mail row that does not read fails the read whole. */
+export function rulingRowsOf(db: DatabaseSync, sessionId: string, limit: number): RulingsRead {
+  try {
+    const out: Ruling[] = [];
+    const rows = stmt(db, "SELECT at, subject, body FROM mail WHERE fromId = 'operator' AND toId = ? AND runId IS NULL ORDER BY id DESC").iterate(sessionId);
+    for (const r of rows as Iterable<Record<string, unknown>>) {
+      const at = intOrNull(r.at);
+      if (at === null || typeof r.subject !== 'string' || typeof r.body !== 'string') return { ok: false, detail: 'a mail row to the session does not read' };
+      const source = isTickMailSubject(r.subject) ? 'tick' : isDigestCorrectionSubject(r.subject) ? 'correction' : null;
+      if (source === null) continue;
+      out.push({ at, source, subject: r.subject, text: r.body });
+      if (out.length >= limit) break;
+    }
+    return { ok: true, rulings: out };
+  } catch (e) {
+    return { ok: false, detail: `mail read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
 }
 

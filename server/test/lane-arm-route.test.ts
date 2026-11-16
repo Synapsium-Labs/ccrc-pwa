@@ -177,31 +177,36 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(LANE_ARM_REFUSALS).toContain('sign-in-unarmed');
   });
 
-  it('the continuity row\'s gate: Live is refused 409 lane-gated with its reason, signed in, with a key or without, and Shadow is not (review 2003 F3)', async () => {
+  it('the renewal act lifted the continuity row\'s gate: its Live asks for the confirm key like any row, and no row is gated (review 2003 F3)', async () => {
     const { app, coord } = await setup();
-    for (const payload of [{ lane: 'continuity', choice: 'live' }, { lane: 'continuity', choice: 'live', confirm: 'continuity:shadow:0' }]) {
-      const res = await post(app, payload);
-      expect(res.statusCode).toBe(409);
-      expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated', detail: laneArmGate('continuity') });
-    }
+    // The replay quiz's baseline (W0-28) stands first, so what answers here is the row's own gate, not the baseline guard.
+    expect(insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 1, report: {
+      measuredAt: 1, reportSha: 'c'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    } }, (lane) => coord.laneArmSetting(lane))).toMatchObject({ ok: true, baseline: true });
+    const first = await post(app, { lane: 'continuity', choice: 'live' });
+    expect(first.statusCode).toBe(409);
+    expect(first.json()).toMatchObject({ ok: false, error: 'confirm-required', lane: 'continuity' });
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
+    const confirmed = await post(app, { lane: 'continuity', choice: 'live', confirm: (first.json() as { confirmKey: string }).confirmKey });
+    expect(confirmed.statusCode).toBe(200);
+    expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
-    // The gate is words a person reads, and only the continuity row has one.
-    expect(laneArmGate('continuity')).toMatch(/renewal act/);
-    expect(laneArmGate('roster-card')).toBeNull();
+    // The gate mechanism stays for a row that needs one; today no row has one.
+    for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot'] as const) expect(laneArmGate(lane)).toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
   });
 
-  it('a Live already stored on the gated continuity row reads shadow in the view, and the roster card\'s Live stays live (review 2006 N1)', async () => {
+  it('a Live stored on the continuity row reads live in the view, as the roster card\'s does; a gate, where one stands, keeps a stored Live shadow (review 2006 N1)', async () => {
     const { app, coord } = await setup();
     coord.setLaneArm('continuity', 'live', 1);
     coord.setLaneArm('roster-card', 'live', 1);
     const res = await get(app);
     const lanes = (res.json() as { lanes: { lane: string; stored: string; live: boolean }[] }).lanes;
-    expect(lanes.find((l) => l.lane === 'continuity')).toMatchObject({ stored: 'live', live: false });
+    expect(lanes.find((l) => l.lane === 'continuity')).toMatchObject({ stored: 'live', live: true });
     expect(lanes.find((l) => l.lane === 'roster-card')).toMatchObject({ stored: 'live', live: true });
-    expect(laneArmRowViewOf('continuity', { kind: 'row', choice: 'live', updatedAt: 1, importedAt: null, imported: null }).live).toBe(false);
+    expect(laneArmRowViewOf('continuity', { kind: 'row', choice: 'live', updatedAt: 1, importedAt: null, imported: null }, 'a gate').live).toBe(false);
   });
 
   it('refuses any other body with bad-request before anything else, and writes nothing', async () => {
