@@ -168,11 +168,56 @@ describe('set --fable-billing and --continuity (H16)', () => {
     const lone = ccrcRun(home, ['account', 'set', '--id', 'lane-b']);
     expect(lone.code).toBe(2);
     expect(answer(lone)['error']).toBe('missing-value');
-    expect(JSON.stringify(answer(lone))).toContain('ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits or --continuity on|off. Nothing was written.');
+    expect(JSON.stringify(answer(lone))).toContain('ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off or --org <label>|none. Nothing was written.');
     const unknown = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--bogus']);
     expect(unknown.code).toBe(2);
     expect(answer(unknown)['error']).toBe('unknown-argument');
     expect(JSON.stringify(answer(unknown))).toContain('--fable-billing included|credits');
     expect(JSON.stringify(answer(unknown))).toContain('--continuity on|off');
+  });
+});
+
+// The organization label (plan 2026-11-16-account-organization.md Task A3): `--org <label>|none`, passed through to
+// `set-facts`, which owns its shape and refuses an id-shaped value `org-looks-like-an-id`.
+describe('set --org (account organization A3)', () => {
+  const entryOf = (home: string, id: string): Record<string, unknown> | undefined =>
+    (JSON.parse(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')) as { accounts: Record<string, unknown>[] })
+      .accounts.find((a) => a['id'] === id);
+
+  it('writes the label in both spellings, the projection answers it, and none clears it', () => {
+    const home = laneBox('ccrc-set-org-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    const set = ccrcRun(home, ['account', 'set', '--id', 'lane-c', '--org', 'org-a']);
+    expect(set.code, set.stderr).toBe(0);
+    expect(entryOf(home, 'lane-c')?.['org']).toBe('org-a');
+    expect(projection(home)).toMatch(/^ {4}lane-c\) echo org-a ;;$/m);
+    const answered = (answer(set)['roster'] as { accounts: { id: string; org?: string }[] }).accounts;
+    expect(answered.find((a) => a.id === 'lane-c')).toMatchObject({ org: 'org-a' });
+    expect(ccrcRun(home, ['account', 'set', '--id=lane-c', '--org=org-b']).code).toBe(0);
+    expect(entryOf(home, 'lane-c')?.['org']).toBe('org-b');
+    const cleared = ccrcRun(home, ['account', 'set', '--id', 'lane-c', '--org', 'none']);
+    expect(cleared.code, cleared.stderr).toBe(0);
+    expect(entryOf(home, 'lane-c')).not.toHaveProperty('org');
+    expect(projection(home)).not.toMatch(/echo org-b/);
+  });
+
+  it('an id-shaped label is refused org-looks-like-an-id, an off-shape one bad-argv, and nothing is written', () => {
+    const home = laneBox('ccrc-set-org-bad-');
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    for (const [v, word] of [['abcdef0123456789abcdef0123456789', 'org-looks-like-an-id'], ['Org-A', 'bad-argv']] as const) {
+      const r = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--org', v]);
+      expect(r.code, v).toBe(2);
+      expect(answer(r)['error'], v).toBe(word);
+    }
+    const empty = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--org']);
+    expect(answer(empty)['error']).toBe('missing-value');
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+
+  it('--method beside --org is bad-argument', () => {
+    const home = laneBox('ccrc-set-org-method-');
+    const r = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--method', 'login', '--attempt', 'a'.repeat(32), '--org', 'org-a']);
+    expect(answer(r)['error']).toBe('bad-argument');
+    expect(JSON.stringify(answer(r))).toContain('--org');
   });
 });
