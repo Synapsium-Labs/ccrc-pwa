@@ -289,6 +289,18 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // reachability check, because `['win-size']` is a genuine prefix of the argv
   // `CCD_ARGV.winSize` builds. Cross-PACKAGE and object-reading, for the
   // reasons the ws-reap assertion above states.
+  // Overlord W1 pool set (plan Task 6, Review Focus 6): the read-only pool answer cannot be widened by the wire. Its
+  // grant stops at the flag, and the agent's `REQUIRED_VERB_FLAG` enrolment makes a bare grant a boot refusal.
+  it('pool-answer is grantable ONLY with --session', () => {
+    const pa = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'pool-answer');
+    expect(pa).toEqual([['pool-answer', '--session']]);
+    expect(isExecAllowed('ccd', ['pool-answer', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', ['pool-answer'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.poolAnswer('demo-quiet-basin')])).toBe(true);
+    expect(() => CCD_ARGV.poolAnswer('-x')).toThrow(/not a registry id/);
+    expect(() => CCD_ARGV.poolAnswer('a b')).toThrow(/not a registry id/);
+  });
+
   it('win-size is grantable ONLY with --session', () => {
     const ws = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'win-size');
     expect(ws.length, 'exactly one win-size grant').toBe(1);
@@ -632,6 +644,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
     routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
+    poolAnswer: ['pool-answer', '--session', 'demo-quiet-basin'],
     // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
     // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
     // stringified. Committed show is 12 tokens after the verb, draft show 14.

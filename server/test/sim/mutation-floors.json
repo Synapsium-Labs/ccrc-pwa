@@ -86,6 +86,7 @@
   "shared/poolrule.ts#poolRule": 1,
   "shared/poolset.ts#poolSetSpelling": 1,
   "shared/poolset.ts#parsePoolSet": 1,
+  "server/src/poolrule.ts#parsePoolAnswer": 1,
   "server/src/chainedJournal.ts#decodeChainedLine": 1,
   "server/src/chainedJournal.ts#ChainVerifier": 1,
   "server/src/chainedJournal.ts#chainedTailHealPlan": 1

@@ -87,12 +87,16 @@ const FIXTURE_FILES: Record<string, string> = {
   // rendered into `~/.local/bin/ccd` on the box). The script archives all of
   // `ccd/`, so neither is named in its pathspec — which is exactly why each is an
   // explicit expected member below rather than something that merely rides along.
-  'ccd/ccd': '#!/usr/bin/env bash\necho fixture ccd body\n',
+  'ccd/ccd': '#!/usr/bin/env bash\n# fixture ccd body: answers caps with a short list of well-shaped lines (build-release.sh stamps it)\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start ws-add pool-answer pool-set; exit 0; }\necho fixture ccd body\n',
   'ccd/ccd-entry.py': '#!/usr/bin/env python3\n# fixture launcher template\n',
   'shared/api.ts': '// fixture shared/api.ts\n',
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture ccrc.service\n',
   'deploy/verify-service.sh': '#!/usr/bin/env bash\necho fixture verify\n',
+  // The roster generator and its input (the Overlord W1 pool set, Task 7): build-release.sh seeds a scratch HOME with the
+  // generated default roster before it runs the tree's `ccd caps` for build.json's `ccdCaps`. A stub that prints one line.
+  'deploy/gen-accounts.mjs': "process.stdout.write('CCRC_ACCOUNTS=(lane-a)\\n');\n",
+  'deploy/accounts.default.json': '{ "accounts": [] }\n',
   // The real server package's install-time hook, in miniature: `npm ci` on the
   // box runs it, so the file it names must ride the tarball (D-3105 — v0.0.2
   // shipped the hook without the file, and every box's install died after the
@@ -224,6 +228,7 @@ const EXPECTED_ENTRIES = [
   'ccd/ccrc', 'ccd/ccrc-doctor-checks',
   'ccd/ccd', 'ccd/ccd-entry.py',
   'deploy/ccrc.service', 'deploy/verify-service.sh',
+  'deploy/gen-accounts.mjs', 'deploy/accounts.default.json',
   'install.sh',
   'MANIFEST',
   'build.json',
@@ -511,6 +516,58 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const line = manifest.split('\n').find((l) => l.endsWith(' build.json') || l.endsWith('*build.json'));
     expect(line, 'the MANIFEST does not name build.json').toBeTruthy();
     expect(line!.slice(0, 64)).toBe(sha256(join(dest, 'build.json')));
+  });
+
+  // THE OVERLORD W1 POOL SET (plan Task 7, slug `ccd-caps-ride-build-json`): build.json names the built tree's whole
+  // `ccd caps` list as `ccdCaps`, which `ccrc`'s capability floor reads before a move below a word a standing fact needs.
+  it('ships build.json with ccdCaps: the tree\'s whole ccd caps list, every token well-shaped', () => {
+    const home = mkTmp('build-release-ccdcaps-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, r.stderr).toBe(0);
+    const dest = join(home, 'extracted-ccdcaps');
+    extract(join(out, 'ccrc-v1.2.3.tar.gz'), dest);
+    const stamp = JSON.parse(readFileSync(join(dest, 'build.json'), 'utf8')) as Record<string, unknown>;
+    expect(stamp['ccdCaps']).toEqual(['start', 'ws-add', 'pool-answer', 'pool-set']);
+    for (const t of stamp['ccdCaps'] as string[]) expect(t).toMatch(/^[a-z][a-z0-9-]*$/);
+    // The scratch HOME the run seeded is not in the tree it shipped.
+    expect(tarListing(join(out, 'ccrc-v1.2.3.tar.gz')).some((e) => e.includes('caps-home') || e.includes('.cc-sessions'))).toBe(false);
+  });
+
+  const badCaps: ReadonlyArray<readonly [string, string, RegExp]> = [
+    ['exits non-zero', '#!/usr/bin/env bash\n[ "${1:-}" = caps ] && { echo start; exit 3; }\n', /ccd caps exited non-zero/],
+    ['prints nothing', '#!/usr/bin/env bash\n[ "${1:-}" = caps ] && exit 0\n', /ccd caps printed nothing/],
+    ['prints a line with a space', '#!/usr/bin/env bash\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start \'ws add\'; exit 0; }\n', /not a capability token: 'ws add'/],
+    ['prints a capital', '#!/usr/bin/env bash\n[ "${1:-}" = caps ] && { printf \'%s\\n\' start Pool-set; exit 0; }\n', /not a capability token: 'Pool-set'/],
+  ];
+  for (const [name, body, says] of badCaps) {
+    it(`fails the build when the tree's ccd caps ${name}, and writes no build.json or tarball`, () => {
+      const home = mkTmp('build-release-badcaps-');
+      const root = fixtureRepo(home, { tag: 'v1.2.3', files: { 'ccd/ccd': body } });
+      const out = join(home, 'out');
+      const r = runRelease(root, home, ['--out', out]);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(says);
+      expect(existsSync(join(out, 'ccrc-v1.2.3.tar.gz'))).toBe(false);
+    });
+  }
+
+  it('the bash floor: 3.2 and 4.3 are too old, naming the version; 4.4 and 5.2 pass', () => {
+    const src = readFileSync(SCRIPT, 'utf8');
+    const fn = /^br_bash_floor\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'build-release.sh has no br_bash_floor').toBeTruthy();
+    const ask = (maj: number, min: number, v: string) => spawnSync('bash', ['-c', `${fn![0]}\nbr_bash_floor ${maj} ${min} '${v}'`], { encoding: 'utf8' });
+    for (const [maj, min, v] of [[3, 2, '3.2.57(1)-release'], [4, 3, '4.3.48(1)-release']] as const) {
+      const r = ask(maj, min, v);
+      expect(r.status, v).toBe(1);
+      expect(r.stdout).toContain(`too old: bash ${v}`);
+    }
+    for (const [maj, min, v] of [[4, 4, '4.4.20'], [5, 2, '5.2.21']] as const) {
+      const r = ask(maj, min, v);
+      expect(r.status, v).toBe(0);
+      expect(r.stdout).toBe('');
+    }
   });
 
   it('--untagged names the artifact untagged-<shortsha>, and only with the flag', () => {

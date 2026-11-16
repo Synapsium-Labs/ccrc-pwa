@@ -244,6 +244,108 @@ const PARSE_SET: MutantSet<PoolSetModule> = {
   suite: parsePoolSetCases,
 };
 
+// ---------- parsePoolAnswer (plan Task 6) ----------
+
+const PARSER_MODULE = path.join(ROOT, 'server/src/poolrule.ts');
+export type PoolRuleServerModule = typeof import('../../src/poolrule.js');
+
+/** A well-formed `ccd pool-answer` line, its six values overridable by key. */
+export function poolAnswerLine(o: Partial<Record<'side' | 'verdict' | 'pool-side' | 'pool-state' | 'crossing' | 'account', string>> = {}): string {
+  const v = { side: 'set:pool-a,pool-b', verdict: 'serve', 'pool-side': 'account', 'pool-state': 'named:pool-a', crossing: 'none', account: 'lane-a', ...o };
+  return `pool-answer side=${v.side} verdict=${v.verdict} pool-side=${v['pool-side']} pool-state=${v['pool-state']} crossing=${v.crossing} account=${v.account}\n`;
+}
+
+export function parsePoolAnswerCases(m: Pick<PoolRuleServerModule, 'parsePoolAnswer'>): Record<string, SuiteCase> {
+  const ok = (stdout: string) => m.parsePoolAnswer({ ran: true, code: 0, stdout });
+  const kind = (stdout: string) => ok(stdout).kind;
+  return {
+    'ran is read first: a read that did not happen is not-run whatever its code, never refused': () => {
+      expect(m.parsePoolAnswer({ ran: false, code: 1, stdout: '' })).toStrictEqual({ kind: 'not-run' });
+      expect(m.parsePoolAnswer({ ran: false, code: 0, stdout: poolAnswerLine() })).toStrictEqual({ kind: 'not-run' });
+    },
+    'ran with a non-zero code is ccd\'s refusal, its code kept': () => {
+      expect(m.parsePoolAnswer({ ran: true, code: 1, stdout: '' })).toStrictEqual({ kind: 'refused', code: 1 });
+      expect(m.parsePoolAnswer({ ran: true, code: 3, stdout: poolAnswerLine() })).toStrictEqual({ kind: 'refused', code: 3 });
+    },
+    'a well-formed line is an answer, every field read': () => {
+      expect(ok(poolAnswerLine())).toStrictEqual({ kind: 'answer', answer: {
+        side: 'set:pool-a,pool-b', verdict: 'serve', poolSide: 'account', poolState: 'named:pool-a', crossing: 'none', account: 'lane-a' } });
+      expect(ok(poolAnswerLine({ side: 'set-unreadable', verdict: 'undecidable', 'pool-side': 'set', 'pool-state': 'unreadable', crossing: 'unreadable' })))
+        .toStrictEqual({ kind: 'answer', answer: { side: 'set-unreadable', verdict: 'undecidable', poolSide: 'set', poolState: 'unreadable', crossing: 'unreadable', account: 'lane-a' } });
+      expect(ok(poolAnswerLine({ side: 'untagged', 'pool-side': 'project', 'pool-state': 'untagged', crossing: 'valid' })).kind).toBe('answer');
+      expect(ok(poolAnswerLine({ side: 'named:pool-b', verdict: 'mismatch', 'pool-state': 'named:pool-a' })).kind).toBe('answer');
+      expect(ok(poolAnswerLine({ side: 'set:+untagged', 'pool-state': 'untagged' })).kind).toBe('answer');
+      expect(ok(poolAnswerLine().slice(0, -1)).kind, 'the newline is optional').toBe('answer');
+    },
+    'every side word ccd prints is read, and nothing else': () => {
+      for (const side of ['untagged', 'unreadable', 'malformed', 'set-unreadable', 'set-malformed', 'named:pool-a', 'set:pool-a', 'set:pool-a+untagged']) {
+        expect(kind(poolAnswerLine({ side })), side).toBe('answer');
+      }
+      for (const side of ['', 'named', 'named:', 'named:Pool', 'set:', 'set:pool-b,pool-a', 'set', 'stale', 'set-stale', 'named:pool-a,pool-b']) {
+        expect(kind(poolAnswerLine({ side })), JSON.stringify(side)).toBe('unparsed');
+      }
+    },
+    'an extra key, a missing key, a key out of order and a repeated key are unparsed': () => {
+      expect(kind(poolAnswerLine().replace('\n', ' extra=1\n'))).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace(' crossing=none', ''))).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace('verdict=serve pool-side=account', 'pool-side=account verdict=serve'))).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace('account=lane-a', 'crossing=none'))).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace('pool-answer ', 'pool-answers '))).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace('account=', 'acc0unt=')), 'a misspelled key of the same length').toBe('unparsed');
+    },
+    'a verdict, a pool side, a crossing or an account outside its vocabulary is unparsed': () => {
+      expect(kind(poolAnswerLine({ verdict: 'yes' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ verdict: '' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ 'pool-side': 'projection' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ crossing: 'maybe' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ account: '' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ account: 'a/b' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ account: 'a'.repeat(65) }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ account: 'a'.repeat(64) }))).toBe('answer');
+    },
+    'the pool state must be a word of its own side': () => {
+      expect(kind(poolAnswerLine({ 'pool-side': 'account', 'pool-state': 'stale' }))).toBe('answer');
+      expect(kind(poolAnswerLine({ 'pool-side': 'project', 'pool-state': 'stale' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ 'pool-side': 'project', 'pool-state': 'named:pool-a' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ 'pool-side': 'set', 'pool-state': 'unrecognised' }))).toBe('answer');
+      expect(kind(poolAnswerLine({ 'pool-side': 'set', 'pool-state': 'untagged' }))).toBe('unparsed');
+      expect(kind(poolAnswerLine({ 'pool-side': 'account', 'pool-state': 'named:' }))).toBe('unparsed');
+    },
+    'an empty stdout, a second line and a double space are unparsed': () => {
+      expect(kind('')).toBe('unparsed');
+      expect(kind('\n')).toBe('unparsed');
+      expect(kind(poolAnswerLine() + poolAnswerLine())).toBe('unparsed');
+      expect(kind(poolAnswerLine().replace(' verdict', '  verdict'))).toBe('unparsed');
+    },
+  };
+}
+
+const ANSWER_SET: MutantSet<PoolRuleServerModule> = {
+  modulePath: PARSER_MODULE,
+  mutants: [
+    { id: 'A1 code read before ran', old: '  if (!r.ran) return { kind: \'not-run\' };\n  if (r.code !== 0) return { kind: \'refused\', code: r.code };',
+      new: '  if (r.code !== 0) return { kind: \'refused\', code: r.code };\n  if (!r.ran) return { kind: \'not-run\' };' },
+    { id: 'A2 ran ignored', old: '  if (!r.ran) return { kind: \'not-run\' };\n', new: '' },
+    // A3 (the second-line check dropped) is EQUIVALENT, so it is not listed: a second line glues onto the last token, the
+    // account, whose pattern admits no newline. The check stays in the code for its own `why`.
+    { id: 'A4 the key count unchecked', old: 'if (tokens.length !== POOL_ANSWER_KEYS.length + 1) return', new: 'if (tokens.length < POOL_ANSWER_KEYS.length + 1) return' },
+    { id: 'A5 the head word unchecked', old: '  if (tokens[0] !== \'pool-answer\') return { kind: \'unparsed\', why: \'not a pool-answer line\' };\n', new: '' },
+    { id: 'A6 the side unchecked', old: '    return { kind: \'unparsed\', why: \'side\' };', new: '    void 0;' },
+    { id: 'A7 a set side read without its parse', old: "(side.startsWith('set:') && parsePoolSet(side.slice('set:'.length)).ok)", new: "side.startsWith('set:')" },
+    { id: 'A8 the verdict unchecked', old: '  if (!isWordOf(POOL_ANSWER_VERDICTS, verdict)) return { kind: \'unparsed\', why: \'verdict\' };\n', new: '' },
+    { id: 'A9 the pool side unchecked', old: '  if (!isWordOf(POOL_ANSWER_POOL_SIDES, poolSide)) return { kind: \'unparsed\', why: \'pool-side\' };\n', new: '' },
+    { id: 'A10 any state on any side', old: 'isWordOf(POOL_ANSWER_STATES[poolSide], poolState)', new: 'Object.values(POOL_ANSWER_STATES).some((w) => w.includes(poolState))' },
+    { id: 'A11 a named state on any side', old: "(poolSide === 'account' && namedPool(poolState))", new: 'namedPool(poolState)' },
+    { id: 'A12 the crossing unchecked', old: '  if (!isWordOf(POOL_ANSWER_CROSSINGS, crossing)) return { kind: \'unparsed\', why: \'crossing\' };\n', new: '' },
+    { id: 'A13 the account unchecked', old: '  if (!ACCOUNT_ID_RE.test(account)) return { kind: \'unparsed\', why: \'account\' };\n', new: '' },
+    { id: 'A14 a key read anywhere', old: "if (!t.startsWith(`${key}=`))", new: "if (!t.includes('='))" },
+    { id: 'A15 a named pool without its pattern', old: "w.startsWith('named:') && POOL_NAME_RE.test(w.slice('named:'.length))", new: "w.startsWith('named:')" },
+  ],
+  suite: parsePoolAnswerCases,
+};
+
+export const POOL_ANSWER_PARSE_KEY = 'server/src/poolrule.ts#parsePoolAnswer';
+
 export const POOL_RULE_KEY = 'shared/poolrule.ts#poolRule';
 export const POOL_SET_SPELLING_KEY = 'shared/poolset.ts#poolSetSpelling';
 export const POOL_SET_PARSE_KEY = 'shared/poolset.ts#parsePoolSet';
@@ -252,4 +354,5 @@ export const POOL_SET_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [POOL_RULE_KEY]: RULE_SET as MutantSet<never>,
   [POOL_SET_SPELLING_KEY]: SPELL_SET as MutantSet<never>,
   [POOL_SET_PARSE_KEY]: PARSE_SET as MutantSet<never>,
+  [POOL_ANSWER_PARSE_KEY]: ANSWER_SET as MutantSet<never>,
 };

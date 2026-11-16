@@ -143,3 +143,32 @@ _pool_set_start_warn() {   # id wrapper prc side state project pps -> `cmd_start
   if (( $3 == 1 )); then echo "ccd: warn: $1 lives on $2: $(_pool_mismatch_why "$2" "$5" "$6" "$7") — the auto-swapper relocates it at the next idle boundary"
   else echo "ccd: warn: $1 lives on $2 and its pool could not be decided: $(_pool_undecidable_why "$4" "$5" "$6" "$2" "$1") — nothing moves until it can"; fi
 }
+# ── `ccd pool-answer --session <id>` (PR B1: the plan's Task 6) ───────────────────────────────────────────────────────
+# The read-only pool answer for the account a session runs on, one line on stdout, read by the renewal rows piece and the
+# designation piece's door through `server/src/poolrule.ts#parsePoolAnswer` (its words: `shared/poolset.ts`):
+#   pool-answer side=<side> verdict=<serve|mismatch|undecidable> pool-side=<project|account|set> pool-state=<state> crossing=<valid|none|unreadable> account=<id>
+# A value with a space in ccd's own words carries `:` for it (`set:pool-a,pool-b`, `named:pool-a`). It asks the rule and
+# the marker's predicate and decides nothing itself (Review Focus 3): the side from `_session_pool_side`, the verdict and
+# its side and state from `_pool_ok` (called bare, snapshotted at once), the crossing from `_crosspool_valid`. Exit codes:
+# 0 the line; 1 no such session (no uuid field); 2 usage (any other argv, or an id `_reg_id_ok` refuses); 3 the session's
+# uuid, wrapper or project field could not be read (a missing wrapper names no account), a reason on stderr, no line.
+# A project field that is absent reads as the empty project, as `_swap_target` reads it. It writes nothing.
+cmd_pool_answer() {
+  local LC_ALL=C IFS=' ' id w p rc side verdict ps st x
+  [[ $# -eq 2 && "$1" == --session ]] && _reg_id_ok "$2" || { echo "usage: ccd pool-answer --session <id>" >&2; return 2; }
+  id="$2"
+  _reg_read_to w "$id" uuid; rc=$?
+  (( rc == 1 )) && { echo "ccd: pool-answer: no such session: $id" >&2; return 1; }
+  (( rc == 0 )) || { echo "ccd: pool-answer: $id: its registry fields cannot be read ($REG)" >&2; return 3; }
+  _reg_read_to w "$id" wrapper; rc=$?
+  (( rc == 0 )) && [[ -n "$w" ]] || { echo "ccd: pool-answer: $id: its wrapper field could not be read" >&2; return 3; }
+  _reg_read_to p "$id" project; rc=$?
+  (( rc != 2 )) || { echo "ccd: pool-answer: $id: its project field could not be read" >&2; return 3; }
+  side=$(_session_pool_side "$id" "$p")
+  _pool_ok "$w" "$side"; rc=$?; ps=$POOL_OK_SIDE; st=$POOL_OK_STATE
+  case "$rc" in 0) verdict=serve ;; 1) verdict=mismatch ;; *) verdict=undecidable ;; esac
+  _crosspool_valid "$id" "$side" "$w"; rc=$?
+  case "$rc" in 0) x=valid ;; 1) x=none ;; *) x=unreadable ;; esac
+  printf 'pool-answer side=%s verdict=%s pool-side=%s pool-state=%s crossing=%s account=%s\n' \
+    "${side// /:}" "$verdict" "$ps" "${st// /:}" "$x" "$w"
+}

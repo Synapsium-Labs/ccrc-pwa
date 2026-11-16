@@ -2930,14 +2930,15 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 13 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 14 of
 # them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (18/12 before fix round 1, which deleted two prose mentions along
 # with the falsified paragraphs that carried them: `cmd_ws_add`'s
 # unreachable-equivalence claim and this header's own sentence about that
 # builder folding rc 1 into rc 2. The call-site half did not move, which is
-# again the half that would have meant something.) (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
+# again the half that would have meant something.) (17/13 before the pool set's B1, whose `ccd pool-answer` asks the
+# rule once, in ccd/lib/pool-set.sh, which `ccdSource()` counts with this file.) (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
 # with a grep anchor, and 18/12 at routing slice 4, whose `_place_for_class`
 # asks the pool rule before it counts a class's unservable lanes — the
@@ -9426,6 +9427,10 @@ EOF
   # token, not a dispatchable verb, so `PoolsEnforcement.accountPools` can
   # answer `enforced` only against a box that actually took this deploy.
   echo account-pools
+  # `pool-answer` and `pool-set` (the Overlord W1 pool set, plan Tasks 6 and 7): the read-only verb
+  # (`ccd/lib/pool-set.sh#cmd_pool_answer`), and the word that says this box has all of the set: the session side, the
+  # route fields `poolset` and `acctorder`, and that verb. Added last among them, so no build lacking a part says it.
+  echo pool-answer; echo pool-set
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -48618,6 +48623,7 @@ case "${1:-}" in
   project-pool) shift; cmd_project_pool "$@" ;;
   project-add) shift; cmd_project_add "$@" ;;
   route)     shift; cmd_route "$@" ;;
+  pool-answer) shift; cmd_pool_answer "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-admin-merge) shift; cmd_pr_admin_merge "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
@@ -48630,6 +48636,6 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
 esac
 fi
