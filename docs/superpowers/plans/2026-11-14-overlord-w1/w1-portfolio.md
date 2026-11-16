@@ -13,11 +13,13 @@
   - hours waiting on the operator;
   - what blocks the programme.
 - Every goals version (the spec pin and each modification) records what it rests on in `ratifiedBy`. One L1 decider
-  says whether that source ratifies it, and in W1 only the operator's act does.
+  says whether that source ratifies it. In W1 the operator's act does, and so does the programme's own coordinator's
+  write, shown as "ratified by the coordinator" (operator item 328).
 
 **Why:** H38 (§5.6): the order between programmes is the operator's fact, and every measure is the server's. Nothing a
-model or a session writes ever sets a priority or a date. §3.8: goals carry authority only when the operator ratified
-them. Today every goal reads as not ratified, because no version records where it came from
+model or a session writes ever sets a priority or a date. §3.8: goals carry authority only when they are ratified, by
+the operator or, for a version the programme's own coordinator wrote, by that coordinator (operator item 328).
+Today every goal reads as not ratified, because no version records where it came from
 (`server/src/continuity/cardFacts.ts`, slug goals-unratified). W1's board and home read both, and W3's answers need
 ratified goals as their only goal evidence.
 
@@ -29,7 +31,7 @@ ratified goals as their only goal evidence.
   - `server/src/coord/portfolioStore.ts` (C5, L3) holds the rank's one writer and the facts read.
   - The operator's two doors, the read and the rank, join `registerLedgerOperatorRoutes` in
     `server/src/coord/ledgersRoutes.ts`.
-- **PR B, who ratified the goals (Tasks 4 and 5), after PR A and operator item 328.**
+- **PR B, who ratified the goals (Tasks 4 and 5), after PR A.** Operator item 328 answered question 1: yes.
   - `ratifiedBy` and `ratifiedAt` on the pin and on each modification, and `doneWhenBy` naming the version that wrote
     the current definition of done.
   - One decider in `shared/ledgers.ts`, `goalRatification`, reads them.
@@ -69,27 +71,28 @@ Revised in fix round 1 (review 2105). The coordinator's rulings are marked "(rul
 The index's questions this plan builds on come first. Each other question is one the spec leaves open or the tree
 contradicts. The plan builds every recommendation unless the coordinator or the operator rules otherwise.
 
-1. **Does a coordinator's own pin count as ratified?** (The index's question 24, operator item 328, unanswered.)
-   **Recommendation, built here:** no. Only the operator's own act ratifies.
+1. **Does a coordinator's own pin count as ratified?** (The index's question 24, operator item 328.) **Answered
+   yes** by the operator on 2026-11-16: "A coordinator's pin counts, shown as ratified by the coordinator." This plan
+   builds that answer.
 
    Every write records its source, so a coordinator's pin records `coordinator`. The decider has an explicit
-   `coordinator` case (ruled, F3). It reads one constant, `COORDINATOR_SOURCE_RATIFIES`, which is `false` under the
-   recommendation and answers `source-does-not-ratify`.
+   `coordinator` case (ruled, F3). It reads one constant, `COORDINATOR_SOURCE_RATIFIES`, which is `true`, so the case
+   answers ratified, with the source `coordinator`. A version any other session wrote still needs the operator's ratify
+   door: an item answer reads as not ratified until W3 (question 3), and W2's `request` source reads as §4.1 says.
 
-   **If the operator answers yes,** this is a bounded change across the sites below. Each is tagged "(question 1)"
-   where it appears.
-   - The constant (Task 4).
-   - The decider's test of the `coordinator` case, and the re-pin case (Task 4). A re-pin then reads ratified again.
-   - The mutation floor of the `coordinator` case (Task 4). It is measured again.
+   The answer reaches these sites. Each is tagged "(question 1)" where it appears.
+   - The constant (Task 4): `true`.
+   - The decider's test of the `coordinator` case, and the re-pin case (Task 4). A re-pin reads ratified again, by
+     the coordinator, because the new text's source is the coordinator's own write.
+   - The mutation floor of the `coordinator` case (Task 4).
    - The Goals panel (Task 5):
-     - a "ratified by the coordinator" word replaces "not ratified: written by the coordinator";
-     - the Ratify button no longer shows on coordinator-written versions;
-     - the panel's test changes with both.
-   - The card (Task 4): a coordinator's goals then render as ratified, outside the untrusted block, and its test case
-     changes.
-   - What a merge arms (Global Constraints): coordinator goals then render differently at PR B's merge.
+     - the word "Ratified by the coordinator", beside "Ratified by you";
+     - the Ratify button does not show on a coordinator-written version, because its verdict is already ratified;
+     - the panel's test checks both.
+   - The card (Task 4): a coordinator's goals render as ratified, outside the untrusted block, with the source shown.
+   - What a merge arms (Global Constraints): coordinator goals render as ratified from PR B's merge.
 
-   Columns, writers, doors and the item arm do not change.
+   Columns, writers, doors and the item arm are the same under either answer.
 2. **The rank door ships in PR A, in `ledgersRoutes.ts`** (slug `rank-door-ships-with-its-table`; ruled, F5). The index
    puts the rank door in PR B, which also waits for designation A.
    - **Ruled:** PR A ships the table and its one writer together. H38 is a `shape` call, so the table and its door ship
@@ -333,9 +336,9 @@ Measured on `main` at `2d5d4d4ef` (2026-11-15), and again in fix round 1.
 - **What a merge arms.** Nothing a running session sees or does changes.
   - PR A: no rank row exists until the operator writes one, and no W1 reader but the board and the home reads the rank.
     The relay's priority (W2) and the order where work waits (W6) come later.
-  - PR B: no version is ratified until the operator ratifies one, so the card and every goals read render as today,
-    with the source shown beside each goal. (Question 1: if a coordinator's pin counts, coordinator goals render as
-    ratified from the merge.)
+  - PR B (question 1): a version the programme's own coordinator wrote after the merge renders as ratified, "ratified
+    by the coordinator", on the card and in every goals read. A row from before the merge holds no source and reads
+    `unrecorded`, so it renders as today until its coordinator pins again or the operator ratifies it.
 - **SAFETY (`CLAUDE.md`).** No ccd verb, no fleet act and no live `~/.ccrc`. Tests build `coord.db` in memory or in a
   fixture directory under the per-run temp root.
 - **Tests.** Run from `server/` as `ccrc test -- ./node_modules/.bin/vitest run test/<file>.test.ts`, and from `pwa/`
@@ -371,7 +374,7 @@ Measured on `main` at `2d5d4d4ef` (2026-11-15), and again in fix round 1.
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net lines) |
 |---|---|---|---|---|
 | A | 1 to 3 | The class vocabulary and the wire; the shared wave rule and hold rule; `portfolioOrder` and `portfolioFor`; `portfolio_rank` with its revision row and writer; the facts read with the live-ask port; `GET /api/portfolio` and `POST /api/portfolio/rank` | nothing: **ready to build** | `schema.ts` +28 (one migration with its comment); `store.ts` +3 (two delegates, one import); `server.ts` +3 (`MASKED_GET_ROUTES` and the live-ask dep); `watch.ts` +6 (the read-only accessor) |
-| B | 4 and 5 | The ratification columns and their writers; `goalRatification` and `itemAnswered`; `GoalsView`'s sources and verdicts; the card's goals read; the ratify door; the Ratify control | PR A, and operator item 328 answered (question 1) | `schema.ts` +18 (one migration); `store.ts` +1 (one delegate; two delegate signatures widened in place); `pwa/src/lib/api.ts` +8 (one call with its 404 arm); `shared/api.ts` 0 |
+| B | 4 and 5 | The ratification columns and their writers; `goalRatification` and `itemAnswered`; `GoalsView`'s sources and verdicts; the card's goals read; the ratify door; the Ratify control | PR A (operator item 328 answered question 1: yes) | `schema.ts` +18 (one migration); `store.ts` +1 (one delegate; two delegate signatures widened in place); `pwa/src/lib/api.ts` +8 (one call with its 404 arm); `shared/api.ts` 0 |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 
@@ -398,8 +401,8 @@ The index (#2814) should carry these. The coordinator passes them to the index's
   - what it ships: "A: the class vocabulary, `portfolio_rank` with its rank door and the operator's portfolio read, and
     `portfolioFor` (W1's rows). B: `ratifiedBy` on the pin and on `programme_modifications`, the decider, and the
     operator's ratify door with its Goals-panel control (question 24)";
-  - "needs first": "A: nothing. B: PR A, and the operator's answer to question 24 (waits on item)". Designation A
-    comes off it (question 2, ruled).
+  - "needs first": "A: nothing. B: PR A". Question 24 is answered by operator item 328. Designation A comes off it
+    (question 2, ruled).
 - **Figure W1:**
   - the edge from "designation A" to "portfolio B" is removed;
   - `PFB --> HMB` becomes `PFA --> HMB`: home B needs portfolio A for the rank and the measures;
@@ -853,8 +856,8 @@ type RatifiedByKind = RatifiedBy['kind'];
 const RATIFIED_BY_KIND_MAP: Record<RatifiedByKind, true>;
 export const parseRatifiedBy: (raw: string | null) => RatifiedBy | 'unrecorded' | 'unreadable';
 export const ratifiedByText: (r: RatifiedBy) => string;      // 'coordinator' | 'item' | 'operator'
-/** (Question 1.) Whether a coordinator's own write ratifies. The one constant operator item 328 sets. */
-export const COORDINATOR_SOURCE_RATIFIES = false;
+/** (Question 1.) Whether a coordinator's own write ratifies. The one constant operator item 328 set: yes. */
+export const COORDINATOR_SOURCE_RATIFIES = true;
 /** Question 3's predicate: the operator ticked the item and it was not returned since. */
 export const itemAnswered: (item: { state: string; tickedAt: number | null }) => boolean;
 export type RatificationWhy = 'unrecorded' | 'unreadable' | 'source-does-not-ratify' | 'effect-unmeasured'
@@ -875,7 +878,8 @@ export const ratificationOf: (r: Ratification | undefined) => Ratification;
 
 `goalRatification`'s cases:
 - **`unrecorded` and `unreadable`** answer themselves, not ratified.
-- **`coordinator`** (question 1): ratified when `COORDINATOR_SOURCE_RATIFIES`, else `source-does-not-ratify`.
+- **`coordinator`** (question 1): ratified when `COORDINATOR_SOURCE_RATIFIES`, which is `true`, else
+  `source-does-not-ratify`.
 - **`item`:**
   - a cited item that is missing or of another programme answers `unreadable`;
   - one `itemAnswered` refuses answers `item-not-answered`;
@@ -897,9 +901,9 @@ export const ratificationOf: (r: Ratification | undefined) => Ratification;
   not guessed.
 
 **The card.** `cardFacts.ts` takes the In short goal's `ratified` from `pinRatification` and each definition-of-done
-line's from `doneWhenRatification`, through `ratificationOf`. Until the operator ratifies a version, every goal still
-renders as not ratified, inside the untrusted block, as today. (Question 1: under "yes", a coordinator's goals render as
-ratified.)
+line's from `doneWhenRatification`, through `ratificationOf`. A version the programme's own coordinator wrote renders
+as ratified, outside the untrusted block, with "ratified by the coordinator" beside it (question 1). A version that
+rests on an item, an older row and an absent field still render as not ratified, inside the untrusted block, as today.
 
 - [ ] **Step 1: Failing tests** (`test/goals-ratification.test.ts` for the deciders, `test/ledgers-store.test.ts` and
   `test/ledgers-coordinator-routes.test.ts` for the writes, `test/continuity-card-facts.test.ts` for the card):
@@ -917,19 +921,20 @@ ratified.)
     - `dismissed`: no.
   - **The item arm.** An item of another programme and a missing item read `unreadable`. A returned item reads
     `item-not-answered`. A ticked item reads `effect-unmeasured`, never ratified.
-  - **(Question 1)** A coordinator's pin reads `{ ratified: false, why: 'source-does-not-ratify' }`.
-  - **(Question 1)** A re-pin after an operator ratification reads not ratified again.
+  - **(Question 1)** A coordinator's pin reads `{ ratified: true, source: { kind: 'coordinator' } }`.
+  - **(Question 1)** A re-pin after an operator ratification reads ratified again, with the source `coordinator`,
+    never `operator`: new text is never ratified by an older act.
   - **The definition of done.** A modification that carries a new definition of done moves its verdict to that row's.
   - **Older rows and older servers.** A row written before the migration (inserted with NULL) reads `unrecorded`.
     `ratificationOf(undefined)` reads `absent`.
   - **The wire.** The goals read and the waiting frame carry the new fields.
-  - **(Question 1) The card** renders a goal as ratified only when its verdict is ratified.
+  - **(Question 1) The card** renders a goal as ratified only when its verdict is ratified: a coordinator's pin
+    outside the untrusted block with "ratified by the coordinator", an item-sourced version inside it.
   - **The column census** sees a planted fifth writer and reds.
 - [ ] **Step 2: Run.** Red.
-- [ ] **Step 3: Implement.** **(Question 1.)** `COORDINATOR_SOURCE_RATIFIES` is `false`. If operator item 328 answers
-  that a coordinator's own write counts, set it to `true`, change the three cases tagged "(question 1)" above and Task
-  5's tagged words, and measure the floors again (Step 5). The columns, writers, doors and the item arm stay as they
-  are.
+- [ ] **Step 3: Implement.** **(Question 1.)** `COORDINATOR_SOURCE_RATIFIES` is `true`, as operator item 328 answered.
+  The three cases tagged "(question 1)" above and Task 5's tagged words are written for that answer, and the floors
+  are measured with it (Step 5).
 - [ ] **Step 4: Run** these suites, `test/continuity-card-render.test.ts`, `test/ledgers-frame.test.ts`,
   `test/coord-db.test.ts`, `test/run-close-switch.test.ts`, `test/rings/*.test.ts`, `test/single-definition/*.test.ts`
   and the three `tsc` runs. Green.
@@ -938,7 +943,8 @@ ratified.)
   - let the `item` arm answer ratified on a ticked item;
   - read `unreadable` as `operator`;
   - let `itemAnswered` accept an `open` item with a `tickedAt`;
-  - (question 1) make the `coordinator` case ignore the constant.
+  - (question 1) make the `coordinator` case ignore the constant and answer `source-does-not-ratify`: the
+    coordinator's pin case reds.
 
   A re-pin that keeps the old source is not a mutant of a decider. It is caught by the re-pin case above, which runs in
   the full suite.
@@ -983,7 +989,7 @@ reads every other goals change.
 
 **The words.** The panel shows each version's verdict in words the operator reads without the plan:
 - "Ratified by you";
-- "Not ratified: written by the coordinator" (question 1);
+- "Ratified by the coordinator" (question 1);
 - "Not ratified: rests on item N's answer, which does not ratify goals yet";
 - "Not ratified: item N has not been answered";
 - "Not recorded", for a row older than this feature or from an older server.
@@ -1001,7 +1007,8 @@ reloads the goals and says they changed since they were shown.
   - the frame is emitted once on a change and not on `changed: false`.
 
   In `pwa/test/goals-panel.test.tsx`: each verdict's words render, the question 1 word tagged as such; no button
-  renders without `onRatify`; with it, the button calls it with the rendered stamp.
+  renders without `onRatify`; with it, the button calls it with the rendered stamp; a coordinator-written version
+  shows "Ratified by the coordinator" and no button (question 1).
 
   In `pwa/test/programme-screen.test.tsx`: a ratify reads the goals again; a 409 reloads and shows the notice; a 404
   hides the button and says the server does not offer it.
@@ -1018,10 +1025,12 @@ reloads the goals and says they changed since they were shown.
 - [ ] **Step 7: Commit.** `feat(goals): the operator's ratify door and the Ratify control (Overlord W1)`
 
 **PR B ends here.** Its body states:
-- question 1's answer as the operator gave it, and the constant it set;
+- question 1's answer as the operator gave it (item 328: "A coordinator's pin counts, shown as ratified by the
+  coordinator"), and the constant it set, `true`;
 - that an item answer does not ratify until W3 (question 3);
 - that the ratify door refuses dark;
-- what renders differently at merge, which is nothing under the recommended answer.
+- what renders differently at merge: a version the programme's own coordinator writes from then on renders as
+  ratified by the coordinator (question 1).
 
 ## Deviations found
 
@@ -1077,7 +1086,9 @@ the numbers.
 - From the brief and the index:
   - lane P, two pull requests, PR A ready to build now (question 36);
   - the shape of the merged piece plans;
-  - `ratifiedBy` built on question 24's recommendation.
+  - `ratifiedBy` built on question 24's answer.
+- From the operator, item 328 (2026-11-16): a coordinator's pin counts, shown as ratified by the coordinator
+  (question 1, the index's question 24). PR B builds that answer.
 - From fix round 1 (review 2105, ruled):
   - waits count only what truly waited on the operator (F1);
   - an explicit `coordinator` case, with every dependent site tagged (F3);
@@ -1086,16 +1097,14 @@ the numbers.
   - a rank write merges (F9).
   - Every other finding (F2, F4, F6 to F8, F10 to F14) was applied as the report directed.
 
-**Waiting on the operator:** question 1, the index's question 24 (operator item 328). PR B is built on the
-recommendation, and it merges once the item is answered.
+**Waiting on the operator:** nothing. Question 1 was answered by item 328.
 
 **Waiting on the coordinator:**
 - Questions 3, 5 to 7, 9 and 10's unruled parts stand as recommendations.
 - The declined-ask reading in question 10 corrects the ruling's premise and needs its confirmation.
 - Question 2's index changes are listed under "Index changes".
 
-**Needs before it starts:** PR A needs nothing beyond `main`. PR B needs PR A, and operator item 328's answer before
-merge.
+**Needs before it starts:** PR A needs nothing beyond `main`. PR B needs PR A.
 
 **What depends on it:**
 - home B: the strip and its rank control, from PR A;
