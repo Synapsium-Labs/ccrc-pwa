@@ -28,7 +28,7 @@ export default defineConfig({
     // spawns git today, so this keeps a future one from writing into the runner's checkout.
     // The one-text guard (the ccd file split, D-8048), shared rather than copied: a read or copy of ccd/ccd, or a listing of
     // ccd/, throws in the test that made it unless the caller is listed; see the header of ../server/test/ccdReadGuard.ts.
-    setupFiles: ['../server/test/git-env.setup.mjs', 'test/contain-path.setup.ts', '../server/test/ccdReadGuard.ts'],
+    setupFiles: ['../server/test/git-env.setup.mjs', '../server/test/ccdReadGuard.ts', 'test/contain-path.setup.ts'],
     globalSetup: ['../server/test/git-env.setup.mjs', '../server/test/run-tmp.globalsetup.mjs', 'test/contain-path.globalsetup.ts'],
   },
 });

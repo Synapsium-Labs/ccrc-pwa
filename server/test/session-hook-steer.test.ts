@@ -11,7 +11,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { tl } from './compactCardFixtures.js';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { itLinux, IS_DARWIN } from './platformFixtures.js';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ccdSource } from './ccdWsHelpers.js';
 import {
   STEER_FIRST_LINE, STEER_GENERIC_TEXT, STEER_FILE_MAX, BACKENDS, steerFileOf, composeSteerFile, makePairIndex, parseSpoolLine, cardLine,
 } from '../../ccd/history/lib.mjs';
@@ -1116,7 +1116,8 @@ describe('Overlord W1a compaction: the role section inside the one PreCompact pr
     for (const t of ['keep the run ids;', 'keep; the run ids.']) expect(runCopy(t), t).toBe(printOf(STEER_GENERIC_TEXT));
   });
   it('parity: the hook\'s COMPACT_TEXT_JQ is ccd\'s, byte for byte (one check of the projection\'s text, two readers)', () => {
-    const lineOf = (file: string): string => fs.readFileSync(file, 'utf8').split('\n').find((l) => l.startsWith('COMPACT_TEXT_JQ='))!;
+    // ccd is read as the program, its libraries spliced back (the file split, D-8048).
+    const lineOf = (file: string): string => (file === CCD ? ccdSource() : fs.readFileSync(file, 'utf8')).split('\n').find((l) => l.startsWith('COMPACT_TEXT_JQ='))!;
     expect(lineOf(HOOK)).toBeDefined();
     expect(lineOf(HOOK)).toBe(lineOf(CCD));
   });

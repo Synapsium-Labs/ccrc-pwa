@@ -195,7 +195,8 @@ describe('one library table, and every list on it (D-8048)', () => {
       'import importlib.util, sys',
       "s = importlib.util.spec_from_file_location('ccd_entry_install', sys.argv[1]); m = importlib.util.module_from_spec(s); s.loader.exec_module(m)",
       "print(' '.join(m.read_lib_table(open(sys.argv[2], 'rb').read())))",
-    ].join('\n'), path.join(REPO, 'ccd', 'ccd-entry-install.py'), CCD], { encoding: 'utf8', timeout: 60_000 });
+    ].join('\n'), path.join(REPO, 'ccd', 'ccd-entry-install.py'), CCD],
+    { encoding: 'utf8', timeout: 60_000, cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
     expect(py.stderr).toBe('');
     expect(py.stdout.trim().split(' '), 'the installer\'s read_lib_table').toEqual(words);
     // A fixture tree whose table holds a word the repository has no library for: every reader follows that tree's table.

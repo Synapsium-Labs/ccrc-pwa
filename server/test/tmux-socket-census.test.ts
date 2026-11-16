@@ -132,7 +132,9 @@ describe('D-8270 — no raw tmux call in bash: every one goes through the lookup
   });
 
   it('outside the lookup block, every raw `tmux` is a named exception', () => {
-    const bad = BASH_FILES.flatMap((f) => bashOutsideBlock(f, read(f)))
+    // ccd/ccd is read as the program, every library of its table spliced in, so a library is not scanned a second time on
+    // its own: an exception names ccd/ccd wherever a slice puts the call (the file split, D-8048).
+    const bad = BASH_FILES.filter((f) => !CCD_LIB_FILES.includes(f)).flatMap((f) => bashOutsideBlock(f, read(f)))
       .filter((s) => !covered(s, BASH_EXCEPTIONS)).map((s) => `${s.file}:${s.line}: ${s.text}`);
     expect(bad).toEqual([]);
   });

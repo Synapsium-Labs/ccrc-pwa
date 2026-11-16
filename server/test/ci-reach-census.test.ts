@@ -178,8 +178,8 @@ describe('the reach list follows what the tests read across trees', () => {
     const cfg = path.join(ROOT, 'agent', 'vitest.config.ts');
     const list = /setupFiles:\s*\[([^\]]*)\]/.exec(readFileSync(cfg, 'utf8'))?.[1] ?? '';
     const setups = [...list.matchAll(/['"]([^'"]+)['"]/g)].map((m) => path.resolve(ROOT, 'agent', m[1]!));
-    // Guard the guard: the config names its two setup files.
-    expect(setups.map((f) => path.relative(ROOT, f)).sort()).toEqual(['agent/test/contain-path.setup.ts', 'server/test/git-env.setup.mjs']);
+    // Guard the guard: the config names its three setup files (the one-text read guard of the ccd file split, D-8048).
+    expect(setups.map((f) => path.relative(ROOT, f)).sort()).toEqual(['agent/test/contain-path.setup.ts', 'server/test/ccdReadGuard.ts', 'server/test/git-env.setup.mjs']);
     for (const f of [cfg, ...setups]) {
       const docs = targetsOf(f).filter((t) => t === 'docs' || t.startsWith('docs/'));
       expect(docs, `${path.relative(ROOT, f)} reads docs/, so a docs-only change could change what the agent tests see`).toEqual([]);
