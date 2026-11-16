@@ -30,6 +30,7 @@ the programme ledger.
   pull request says the baseline must be measured before it is enqueued; that gate is the coordinator's, at landing.
 - **pin-test-scoped-by-its-holder** — `server/test/coordinator-skill.test.ts` and `README.md` are claimed by another
   run, whose holder granted only: the one literal, `'twenty-one'` in `WORDS`, the two count regexes widened, and the
-  README's one count word. The stale "twenty" in the test's comment and title (lines 116 and 166) and the
-  `toHaveLength(20)` in clause 17's test (line 655, which the new literal reds) were asked for; this branch changes them
-  only once that holder grants them.
+  README's one count word. It then granted three more, each one word or number: "twenty" to "twenty-one" in the
+  comment above `CONTRACT` and in the verbatim test's title, and `toHaveLength(20)` to 21 in clause 17's test, which the
+  new literal reds. The other comments that quote the count ("These twenty sentences", "carries all twenty") describe
+  the mechanism and stay as they are.

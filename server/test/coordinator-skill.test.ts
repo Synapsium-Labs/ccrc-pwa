@@ -113,7 +113,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twenty clauses, verbatim. Kept as a literal array rather than a regex per
+// The twenty-one clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -164,7 +164,7 @@ const CONTRACT = [
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twenty clauses verbatim', () => {
+  it('carries all twenty-one clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -649,7 +649,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(20);
+    expect(CONTRACT).toHaveLength(21);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
