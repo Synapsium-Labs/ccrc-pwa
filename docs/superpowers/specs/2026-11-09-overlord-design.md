@@ -514,7 +514,10 @@ is one call, by number, so the operator can approve or overturn it.
     door process, which carries the Overlord's identity. A reader of untrusted text returns a typed record, never free
     prose (§3.8).
   - **Reads are not acts.** A read changes nothing. It needs no grant, is allowed at every rung from `chat` up, and
-    writes no act row (§7.1).
+    writes no act row (§7.1). The inbox and `messages` reads are fenced, as the card's recording page is: they present
+    the act key, so a caller that forges the Overlord's attribution without the live generation's key is refused
+    `stale-generation` or `unwitnessed`, recorded as a fence refusal, and reaches no word and writes no ledger line,
+    so it cannot spend the ceiling either (the inbox plan, its questions 15 and 18, `fenced-reads`).
   - **Every read leaves a ledger line (H10).** Each read door appends one line to the read ledger in the private store:
     the door, the scope, the count, the generation and the reading session's turn state. Rate ceilings apply (Table 11.5b).
     A read with no turn behind it is counted: its turn state is null, which has one meaning, a read by the operator's
@@ -1741,6 +1744,11 @@ operator names the account pools it may draw from. Other sessions keep using eve
     generation's least age (§3.3.11): no soft renewal comes sooner than that age, so a hold-down no longer than it
     never holds one. A reading that hovers at the cap therefore does not flip the model at every renewal. A stamp
     that reads later than ccd's clock is written again as now, so a clock that steps back adds one hold-down at most.
+    ccd has no role vocabulary, so a long-lived role reaches it by a projected row: the launch row gains `longLived`,
+    projected from `FLEET_ROLES`, and ccd reads the row the route's `profile` names. A row with no `profile` reads as
+    not long-lived, which is today's behaviour. A `profile` that is present but cannot be read, or names no row, reads as
+    long-lived, which fails safe: the hold-down then costs at most one hour on the fallback class and a skipped `/model`
+    one keystroke, and neither moves the session (the ccd arms plan, its question 5).
   - **The renewal lane only applies it.** At each renewal it asks whether a fallback stands and whether the designated
     class is servable again. It never renews because the class is servable again: the return lands at the next renewal
     (Table 3.4b). The fresh start takes whatever class ccd's answer gives.
@@ -1967,7 +1975,8 @@ operator names the account pools it may draw from. Other sessions keep using eve
       stands until the next renewal of any kind. The set trigger is not due for an account a valid crossing marker
       names, as `ccd pool-answer` reports it.
     - Every renewal clears the crossing marker: the renewal's fresh start for a session whose side is a set removes
-      it and logs `crosspool-ended` with the reason `renewal`. C56's pick then lands it inside the set. Any other
+      it, only after the receipt proves the start, and logs `crosspool-ended` with the reason `renewal`. A side that
+      cannot be read, or is malformed, keeps the marker (the ccd arms plan, `crossing-ends-after-the-receipt`). C56's pick then lands it inside the set. Any other
       trigger that renews it, such as the load line or model drift, therefore ends the crossing too.
     - `prefer --cross-pool` is not a lasting crossing path for the Overlord. Its marker names the home, which moves
       nothing for the Overlord, and the next renewal clears it.
@@ -2034,7 +2043,11 @@ editions of this spec.*
     account under the soft line that can serve the designated class, once the hold-down allows that class. Next, the
     first listed account under the soft line, on the fallback class. Last, when every listed account is past the
     soft line, the least loaded one that can serve it at all, the designated class first. The pick leaves readiness
-    at `stranded` only when no account can serve it. Listed order and the soft line are new in ccd's pick, which
+    at `stranded` only when no account can serve it. A fresh start that cannot place refuses with exit 3 `unplaced`,
+    last in the re-measure, and one with nothing measured stays on its current account unless its class reads
+    unservable on both classes. The pick requires an Anthropic backend until a later piece records the operator's
+    listing of another lane for the Overlord (the ccd arms plan, `fresh-pick-refuses-before-the-act` and
+    `fresh-pick-anthropic-only-in-w1`). Listed order and the soft line are new in ccd's pick, which
     today ranks by load alone. Table 3.4a gives the order. The server leaves out an account where a start loaded
     something the profile does not list, until the operator clears the item (§3.6).
   - **The list holds only accounts in the set.** The server lists them in the order of the set's pools, and within a
@@ -3240,8 +3253,11 @@ need no receipts, so the receipts only split the rows not acted on into `opened`
     repeat, stores it on the push's outbox row, and writes the response row as `pending` before the send, so no
     receipt can arrive before its row. A push whose row could not be written is not sent with an id, and nothing
     reads it as not opened.
-  - **A per-send verdict.** `PushService` answers each send with the subscriptions that accepted it, or no
-    subscription, or all failed. The funnel writes the accepted subscriptions onto the row, each as a hash of its
+  - **A per-send verdict.** The verdict ships with the push outbox, which cannot mark a row sent or retry one without
+    it, and the response record reads it (the push outbox plan, its question 2, `verdict-ships-with-the-outbox`).
+    `PushService` answers each send with each subscription accepted, refused, gone or unanswered, by the hash of its
+    endpoint, or no subscription, or all failed, or `unsendable` when the send was refused on this box before any
+    request existed, as for a stored subscription with bad keys, which is read as a refusal for good. The funnel writes the accepted subscriptions onto the row, each as a hash of its
     endpoint, or removes its own pending row when none accepted, since that push reached no one. A row whose send
     never answered seals `unmeasured` (`no-verdict`).
   - **Response receipts.** These are the receipts of this section, not the renewal receipts of §3.3. The service
@@ -3775,7 +3791,7 @@ the Overlord's value lies in the brief and the done test, not in the extra hop.
 
 | Word | Door | When |
 |---|---|---|
-| `said-not-operator` | open request; relay, kickoff and start | A cited id is not a row of `operator_messages`, or a root request cites a spent message, or a cited message's stored hash no longer equals its row's |
+| `said-not-operator` | open request; relay, kickoff and start; `acknowledge` and `messages` | A cited id is not a row of `operator_messages`, or a root request cites a spent message, or a cited message's stored hash no longer equals its row's |
 | `request-not-yours` | `POST /api/runs` | The run's programme is not the request's owner |
 | `dependency-cycle` | the owner's `blocked` door | The dependency would close a cycle |
 | `relay-carries-method` | relay | The decision model flags the Overlord's part as prescribing a method |
@@ -3813,12 +3829,17 @@ operator's. Every measure and every date is computed by the server, never writte
     writes a priority.
   - **A programme with no rank row reads as the bottom of `standard`,** in the order it was created (oldest
     `createdAt` first, then by slug). The server writes no row. Only the operator's rank door places a programme.
-  - **`portfolioFor` is an L1 reader that stores nothing.** Its answer is on the board and on the home. Per programme,
-    in rank order, it answers:
+  - **`portfolioFor` is an L1 reader that stores nothing.** Its answer is on the board and on the home. It lists a
+    programme with an open run of any kind, and a ranked programme that closed a run in the last 28 days. A ranked
+    programme not listed keeps its row, since a rank write never deletes what the console did not list (the portfolio
+    plan, its question 7). Per programme, in rank order, it answers:
     - work in progress, and waves closed in 7 and in 28 days;
     - wave cycle time, as the median and the 85th percentile, and the age of the oldest open wave;
     - review rounds per wave, the abandon rate and spend per wave;
-    - hours waiting on the operator;
+    - hours waiting on the operator, over the last 28 days, counting only spans that truly waited on the operator: an
+      item while it is open and the operator has been shown it, an ask from its push at `releasedAt` to the
+      operator's own answer, and, while it is still released or declined and live, up to now. An end no live signal shows is
+      `unmeasured`, never zero (the portfolio plan, its question 10, `operator-wait-from-items-and-asks`);
     - what blocks the programme, and the critical path.
   - **What it cost.** Each request and each programme shows its measured spend: window use by model class, rolled up
     from the usage records of the sessions of its linked runs, and marked as attributed. The readiness line shows the
@@ -3918,7 +3939,12 @@ This section says which question rows the Overlord's tier sees, and which owner 
     `operator-answered`, `not-ready:<word>`, `server-gap` and `released:<cause>`. The cause is a row of Table 6.7c:
     `rung`, `disarmed`, `engagement`, `class-raised`, `grant-ended`, `bypassed` or `deaf`. The 85% load line
     releases nothing, so it is no cause, and the 95% line acts through `rung` (Table 6.7c). M3 counts `lapsed` only.
-  - **Items get the same two columns.** An item had no hold before, so these are its only new hold state.
+  - **Items get the same two columns.** An item already has a hold, `operator_items.heldUntil`, set by some
+    end-request, run-close-refusal and review-release raises, which keeps it off Waiting on you until it passes; these
+    two columns are its only new hold state. An item raised with no `heldUntil` is stamped at its raise. A held item
+    is stamped at `heldUntil` by the sender's lane pass, once the operator was shown it, through the same one writer,
+    and its outbox row is decided by `pushDue` (`held`) from its current level (the push outbox plan, its question 4,
+    `item-held-until-is-a-hold`).
   - **The Overlord answers only through its own door.** That door checks the designation, the fence (§3.3.11) and
     the authority decider (§7.1). It never answers through the claimant's door, which checks none of them.
   - **Why columns, and not a new state.** The tree's rows leave no room for a second holder. A row minted
@@ -4448,13 +4474,20 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
   - A row, its hold or its reach stamp, and its outbox row are written in the transaction that raises or releases
     it. A hold's outcome, the reach stamp and one outbox row are written in one transaction too. A row is stamped at
     most once.
-  - One sender drains the outbox. It marks a row sent when the push service accepts it. It retries an unsent row,
-    with backoff, while it runs, and sends every unsent row again at boot. A row the attention budget deferred
+  - Every push rides the outbox: the funnel's one send becomes the sender's insert, and the sender holds the only
+    `PushService.notify` call. Only asks and items are bound to a source row with a reach stamp. A second, unbound
+    send path would be a parallel mechanism (the push outbox plan, its question 1, `every-push-rides-the-outbox`).
+  - One sender drains the outbox. It marks a row sent when the push service accepts it. A row is claimed in its own
+    transaction before each attempt. It retries an unsent row, with backoff, while it runs, for the push's own
+    ten-minute lifetime. At boot it sends every row no attempt claimed that is still inside that horizon. A row
+    claimed with no verdict is sealed `unknown` and never sent again, and a row past the horizon at boot is `failed`,
+    so a restored snapshot never re-sends (the push outbox plan, its question 3, `a-claimed-row-is-never-sent-again`). A row the attention budget deferred
     to a stated time is not unsent before that time (§4.2).
-  - A row whose level makes no push today still gets its outbox row, marked silent. The sender marks it sent at once
-    and shows nothing, so the pushes stay those of today's build (I9).
+  - A row whose level makes no push today still gets its outbox row, marked silent. It is `silent`, a terminal state
+    of its own with its reason, and shows nothing, so `sent` always means the push service accepted it and the pushes
+    stay those of today's build (I9) (the push outbox plan, `silent-is-its-own-state`).
   - Each push carries the row's own tag, so a repeat replaces the first on the device.
-  - The promise: exactly one reach and one outbox row, at least one push attempt unless the row is silent or the
+  - The promise: exactly one reach and one outbox row, at least one claimed attempt unless the row is silent or the
     open console settled it, and at most one notification shown (invariant I2).
   - One L1 decider, `pushDue(row)`, is asked on every event: a reach, a change of level or urgency, a batch flush, a
     voided staged act (§7.2). The level is the higher of the coordinator's `neededBy` and the Overlord's urgency. The
@@ -4491,7 +4524,8 @@ released row carries `released:<cause>`, the word in brackets. Both are values o
 
 - **Older builds fail towards the operator.** The outbox and its boot pass ship in W1, two waves before holds, with a
   capability word of their own, `push-outbox-v1`. The hold tier can be armed only when every build the box keeps and
-  can roll back to carries that word. `ccrc rollback` to a build below it refuses unless forced (§11.5).
+  can roll back to carries that word. The refusal of a rollback below it ships with W3's hold arming, not in W1: W1 arms
+  no holds, and an older build then drops only rows still `pending` or `retrying` (§11.5).
 - **The invariants this section serves** (§11.7). I1: a held row is settled by the Overlord by its deadline, or
   reaches the operator by its deadline, or within one sweep of the first boot after it. I10: every open row is on
   the operator's list at all times. I9: while `mayHold` is false, the pushes and states of question rows equal
@@ -4513,7 +4547,12 @@ serve in time, a fair share for each programme, and a packet that lets the commo
     text would land in history beside the operator's own rows (§3.8).
   - **Labelling cards are not the Overlord's.** They are the operator's own one-tap cards (§3.7), never rows of
     this inbox.
-  - **One wake.** A single coalesced nudge, "3 held, the first lapses in 140 s", replaces a mail for each row.
+  - **One wake.** A single coalesced nudge, "3 held, the first lapses in 140 s", replaces a mail for each row that has
+    no nudge of its own. Each row's nudge is declared in L0: a message has its own, and a probe round's depends on its
+    kind (a start round has the renewal feed, a spot round the spot-probe notice, a compaction round none). In W1 the
+    wake covers a compaction round opened while `active` only. W2's band 3 and W3's band 2 join the wake by declaring
+    none, and its line still counts every waiting row, messages included (the inbox plan, its question 7,
+    `wake-covers-unnudged-rows`).
   - **Drills arrive the same way.** A drill (§7.5) is served by every Overlord read that would show a real row of that
     kind: the inbox, the packet, the board's counts, the item, ask and mail reads, and the sequence read. So it looks
     like a real row until grading.
@@ -4533,7 +4572,9 @@ serve in time, a fair share for each programme, and a packet that lets the commo
      arrive here: the replay lane serves them to the replay body (§9.5).
   - **Probes come before everything.** While the generation is `probing`, the probe door serves them, and every
     other door but card and note refuses `renewing` (§3.3.11). While it is `active`, a probe round is the inbox's
-    first row, ahead of band 1.
+    first row, ahead of band 1. While a round is open the inbox serves that round's row alone, with a count of the
+    rows waiting behind it, so its line carries nothing but the round's id (the inbox plan, its question 6,
+    `probe-round-served-alone`).
   - **Background work waits.** A turn cannot be interrupted. So band 4 is offered only when bands 1 to 3 are empty,
     the operator is inactive and the Overlord's accounts are under the first load line (Table 6.8a), and only in
     bounded pieces.
@@ -6527,7 +6568,12 @@ builds no stream of its own (H3, H27, H33).
   operator message's state.
 - **The sequence has one home.** It is a new append-only table in `coord.db`, `overlord_sequence`: the sequence number,
   the row's kind and id, its state, the actor and the time (the server's wall clock, §11.5). One writer function adds
-  its line inside each stamped transaction. Lines are kept 90 days (Table 11.5b). It ships in W1, with the invariant
+  its line inside each stamped transaction. The one named exception is `acknowledge`: it moves a message in the private
+  store, a second file behind the privacy boundary, so no transaction spans both. After the private store commits, it
+  writes its line in a `coord.db` transaction of its own, through the same writer, with kind `message`, the message
+  id and state `settled`. A crash between the two commits loses the line. The boot pass re-derives the private store's
+  state, and the monitor reads a message with no line as `unmeasured` for that message, never as a violation (the inbox
+  plan, its question 19, `acknowledge-stamps-after-the-store`). Lines are kept 90 days (Table 11.5b). It ships in W1, with the invariant
   monitor.
   - **The id of a line is opaque text, by kind.** A generation's is the row id. The designation's is the session id the
     move concerns, the pending id for `pending` and `failed`, and the bound id for `live` and `retired`. The rung's is
@@ -6763,6 +6809,7 @@ tested over its whole input domain (§11.7).*
 | `acknowledge` | C5, L4 | in W1, only the message row's state, through the private store's one message writer; act rows begin in W2, with `overlord_acts` | it | n/a | W1 (act row W2) | n/a | No route |
 | The ladder: rung, Pause, per-kind arming, engagement | K, L4 | ladder state | it | n/a | W1, W3 | n/a | No route |
 | The rank door, `POST /api/portfolio/rank`, in the programme ledgers' operator registration (`ledgersRoutes.ts`), working while sign-in is dark | C5, L4 | `portfolio_rank`, `portfolio_rank_revision` | it | n/a | W1 | n/a | No route |
+| The portfolio read, `GET /api/portfolio` (session-gated, a masked GET), which answers the rank's revision beside `portfolioFor`'s measures (§5.6) | C5, L4 | `portfolio_rank`, `portfolio_rank_revision` | n/a: a read | n/a | W1 | n/a | No route |
 | The ratify door, `POST /api/programmes/:slug/goals/ratify`, refusing `auth-off` while sign-in is dark (§3.8) | C5, L4 | `ratifiedBy` on the goals version it names | it, beside the goals doors | n/a | W1 | n/a | No route |
 | Open a request: `POST /api/overlord/requests` | C5, L4 | `overlord_requests` | it | n/a | W2 | n/a | No route |
 | Route, route elsewhere, re-relay, drop and `close-request` | C5, L4 | `overlord_requests` | each its own move | n/a | W2 | n/a | No route |
@@ -7106,7 +7153,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | 60 seconds, with a 180-second lease and at most 300 bytes | The door process's delta: how often it is refreshed, how long its lease lasts and how large it may be (§3.6) | W1 | wall |
 | 3 seconds | The report door's timeout in the hook | W1 | wall |
 | One second, doubling to 30 seconds | The back-off between the door process's act-key claims | W1 | wall |
-| Set by the plan before W1 | The read rate ceilings per door | W1 | wall |
+| Inbox 240, `messages` 120, board 120, history 60 and sequence 120 an hour, over a rolling hour; the coordinator re-fits them after the first week | The read rate ceilings per door, counting fenced reads only for the inbox and `messages` | W1 | wall |
 | Set by the plan before W2 | Each act kind's ceiling per programme and in all | W2 | wall |
 | Set by the plan before W3 | The window of a grant's evidence: the age past which a blind case counts no more | W3 | wall |
 | Set by the plan before W3 | The audit score under which the ladder latches at `advise` | W3 | n/a |
@@ -7121,7 +7168,11 @@ reversible, so no act reads the two `reversible` weights in version 1.
 
 - **Holds wait for their safety net.** The outbox and its boot pass ship in W1 with `push-outbox-v1`, two waves before
   holds. The hold tier can be armed only when every build the box keeps and can roll back to carries that word.
-  `ccrc rollback` below it refuses unless forced.
+  The refusal of a rollback below it ships with W3's hold arming, not in W1, which arms no holds: an older build
+  ignores `push_outbox` and its columns (the "ignored" class of Table 11.5) and drops only rows still `pending` or
+  `retrying`. W3 generalises the pool set's one capability record and rollback floor check, with a second `--below-cap`
+  word and its own standing fact, and no `--force` crosses the floor (the push outbox plan, its question 5,
+  `rollback-refusal-ships-with-holds`).
 - **A capability word is a property of the build.** `ccrc-api`'s Overlord verbs, the hook's card arm and clause 22 act
   only while the server's capability file carries `overlord-v1`. A later wave's doors and verbs act only while its own
   word stands (Table 11.1d). After a rollback to an older server, everything takes today's path by itself.
@@ -7205,7 +7256,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `unwitnessed` | Every Overlord write door | The hook reported no matching call before it | H25, H28 |
 | `overlord-uses-its-doors` | Peer mail, item raise, claims, the claimant's question door, coordinator intent | The designated session used a lane that is not its door | H10 |
 | `overlord-not-a-coordinator` | Run open | The designated session tried to open a run | C48 |
-| `said-not-operator` | Open a request; relay, kickoff and start | A cited id is not a row of `operator_messages`, a root request cites a spent message, or the message's sha256 stored with the request no longer equals the row's | H7 |
+| `said-not-operator` | Open a request; relay, kickoff and start; `acknowledge` and `messages` | A cited id is not a row of `operator_messages`, a root request cites a spent message, or the message's sha256 stored with the request no longer equals the row's | H7 |
 | `proposal-stale` | The command tap, the act | The proposal's target rows moved, or a parameter differs from the hash the command bound of what its card showed | H8 |
 | `no-new-evidence` | `object` | A second objection on one decision cites no new id | C59, H8 |
 | `default-not-safest` | The brief door | The brief's default is not its safest option | C58, H34 |
@@ -7720,8 +7771,8 @@ mechanism leaves something open, the row says what is left.
 | The account set fails open, or is too narrow | The Overlord runs on an account the operator did not name, or strands while other accounts have room | One writer, the operator's session-gated doors, and one rule, the pool rule, at every placement path. An empty set serves nothing, and untagged accounts serve it only when the set says so. An older ccd refuses the route write that carries the set, and designate refuses until every placing agent advertises `pool-set`. The server writes the set again at each renewal and on each change. M32 counts generations outside the set, and the target is zero. Fewer than two accounts in the set raises an item, and Settings shows the count beside the set |
 | It drifts into execution | Its context fills with diffs and logs, and coordinators lose ownership | No command, editing, web or workflow tool, measured by the sandbox check at every start. Run-open and other write lanes refuse it. A relay that prescribes a method is returned (`relay-carries-method`). M12 counts attempts |
 | Too many coordinators | Window spend and box load rise | `overlordLiveProgrammes`, `portfolioFocus`, the wake budget and the fleet's own admission. Scarcity rules hold back `background` work when a pool will run out |
-| A rollback to an older build | Holds or pushes are lost, or a new word is read wrongly | Capability words gate each part. The hold tier is armed only when every build the box can roll back to carries `push-outbox-v1`, and `ccrc rollback` below it refuses unless forced. A table of new persisted words says what an older build does with each (§11.5) |
-| Pushes are duplicated or lost | The operator is pinged twice, or never | The reach stamp and an outbox row commit in one transaction. One sender drains the outbox, and sends every unsent row again at boot. Each push carries its row's tag, so a repeat replaces the first on the device |
+| A rollback to an older build | Holds or pushes are lost, or a new word is read wrongly | Capability words gate each part. The hold tier is armed only when every build the box can roll back to carries `push-outbox-v1`, and the refusal of a rollback below it ships with W3's hold arming, never as `--force` (§11.5). A table of new persisted words says what an older build does with each (§11.5) |
+| Pushes are duplicated or lost | The operator is pinged twice, or never | The reach stamp and an outbox row commit in one transaction. One sender drains the outbox, and at boot sends every row no attempt claimed, inside the retry horizon. Each push carries its row's tag, so a repeat replaces the first on the device |
 | The playbook or its own proposals game the measures | A lesson that helps no one goes live, or it loosens its own bounds | Retiring an entry is automatic, and a widening entry needs the operator's tick. Canary holdouts, and outcomes only from measured rows. An entry expires unless its effect is measured. It may never propose a change to what judges, bounds or authorises it (A14) |
 | Forecasts mislead | The operator plans on a date nobody can meet | Only a seeded Monte Carlo over measured cycle times produces a date; no model and no session does. Each 85% date is sealed and scored, and dates are marked "uncalibrated" when they miss their band |
 | The size of the build | The plan stalls, or ships half a guard | W0 measures before anything depends on it. Each H call is marked shape or tightening, and ships with its wave or one wave after. Each wave ships dark behind a capability word. Every guard ships with the test that goes red without it, and the model, the simulator and mutation floors check that the machines compose (§11.7) |
@@ -8163,6 +8214,17 @@ coordinator ruled the matter, the row says so.
 | The hold of an account, the backstop and the second writer of the route (§3.6, §3.3.11, Tables 3.6a, 11.1d and 11.5b) | "Until the operator clears the item"; the backstop at "an hour inside the quiet hours"; "again at each renewal" with no writer named | A row of its own, `overlord_account_holds`, with a session-gated clear door; the backstop defaults to 04:00 `UTC` and has its own `GET` and `POST` door; designation B's step before each `renew` writes the set and the list. The readings plan, questions 2, 6 and 9 and its "Spec fixes" list |
 | The operator's messages (§3.8 H7, H8, Tables 9.1a and 11.5b) | A capped text with no cap; "the boot pass re-derives `settled`"; a nudge the reader acks; the settlement mark by the words | 16,384 bytes; a citation reader that answers `not-applicable` and rows read `unjudged`; the lane acks the nudge on its first delivery; the mark is a whole message. Also `bad-attachment`, 502 `unmeasured` on an unread designation, the send key, the term on a chat send, and the Overlord's `@overlord` operator mark. The private store plan, questions 3, 5, 6, 8, 9, 13, 16, 17 and 18 |
 | The read ledger and the privacy journal (§3.8, §9.4, Table 9.1a) | A line per read with no turn state; a witness-only answer to a lost journal | A nullable turn state meaning a console read, and eight turn words for a session's read; no line deleted in W1; `privacyCoherence` answers `coherent`, `fresh`, `re-anchor` or `refuse`. The private store plan, questions 10, 11 and 12 |
+| How a long-lived role reaches ccd (H16) | "A long-lived role", no way for ccd to know it | The launch row gains `longLived`, projected from `FLEET_ROLES`, read through the route's `profile`; an unreadable or unnamed profile reads as long-lived. The ccd arms plan, question 5 |
+| The fresh start's pick and the crossing marker (C56, C46) | The pick always places; every renewal clears the marker | A pick that cannot place refuses exit 3 `unplaced`, and needs an Anthropic backend in W1; the marker is cleared only after the receipt proves the start. The ccd arms plan, `fresh-pick-refuses-before-the-act`, `fresh-pick-anthropic-only-in-w1`, `crossing-ends-after-the-receipt` |
+| The portfolio's list and the wait it counts (§5.6) | "Per programme"; hours waiting unspecified | Programmes with an open run, and ranked ones that closed a run in 28 days; waiting counts only spans that truly waited on the operator, `unmeasured` when no live signal shows an end. The portfolio plan, questions 7 and 10 |
+| The read ceilings (Table 11.5b) | "Set by the plan before W1" | Inbox 240, `messages` 120, board 120, history 60, sequence 120 an hour, re-fitted after the first week. The inbox plan, question 1 |
+| `said-not-operator`'s doors (Table 11.6, §6.2 table) | Request, relay, kickoff and start | Also `acknowledge` and `messages`, one word for one cause. The inbox plan, questions 11 and 13 |
+| The inbox reads (§3.2) | "Reads are not acts" and take no act key | The inbox and `messages` reads are fenced, so a forged caller reaches no word and spends no ceiling. The inbox plan, questions 15 and 18 |
+| The wake and the probe row (§6.8) | One nudge replaces a mail for each row; a probe round is the first row | The wake covers only rows with no nudge of their own, in W1 a compaction round; while a round is open the inbox serves it alone. The inbox plan, questions 6 and 7 |
+| `acknowledge`'s sequence line (§10.4) | Every line is added inside its stamped transaction | `acknowledge` stamps after the private store commits, the one named exception; a missing line reads `unmeasured`. The inbox plan, question 19 |
+| The rollback refusal below `push-outbox-v1` (§6.7, §11.5, risk table) | `ccrc rollback` below it refuses unless forced, in W1 | The refusal ships with W3's hold arming, on the pool set's floor check with a second `--below-cap` word, never `--force`. The push outbox plan, question 5 |
+| The outbox's sender (§6.7, §4.3, Table 11.1a) | Sends every unsent row at boot; a silent row "marked sent at once"; the verdict in the response record; items "had no hold before"; the funnel's pushes unspecified | A row is claimed before each attempt, at boot only unclaimed rows inside the retry horizon are sent, a claimed one is sealed `unknown`; `silent` is a terminal state of its own; the verdict ships with the outbox, with `unsendable`; items already have `heldUntil`, stamped by the sender's lane pass; every push rides the outbox. The push outbox plan, questions 1 to 4 |
+| The portfolio read (Table 11.1e) | No read door | A session-gated, masked `GET /api/portfolio`, which answers the rank's revision for a stale-write check. The portfolio plan, `portfolio-read-door` |
 
 *Table B7. The corrections from the W1 plans.*
 
