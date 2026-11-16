@@ -265,6 +265,7 @@ export type ActJournalAppend =
 export interface ActWrite {
   kind: OverlordActKind; state: 'pending' | 'done'; target: ActTarget; targets: readonly ActTargetRef[];
   requestId: number | null; widens: { programme: string } | null;
+  opens: number | null;          // the open door's new request id: an act-open-request record follows the settle
   summary: string; why: string; authority: string;
   actor: RecordedActor; identityStrength: CallerStrength; isolation: IsolationWord;
   fence: { term: number; generationId: number; model: string | null; lane: string | null };
@@ -277,11 +278,12 @@ export type ActWritten =
   | { ok: false; error: 'not-in-transaction' | 'bad-row' | 'authority-rolled-back' | 'authority-unmeasured'
       | 'journal-append'; detail: string };
 /** Decide, append, apply: `actWriteVerdict` first (natural key and operation key free, the state an entering one);
- *  then the journal's record (`settle` with `from: null` for `done`, `intent` for `pending`); then the row; then the
- *  `act` line through `stampSequenceInTx`. A refusal before the append writes nothing. */
+ *  then the journal's record (`act-settle` with `from: null` for `done`, `act-intent` for `pending`, and
+ *  `act-open-request` after it when `opens` is set); then the row; then the `act` line through
+ *  `stampSequenceInTx`. A refusal before the append writes nothing. */
 export function writeActInTx(db: DatabaseSync, journal: ActJournalPort, w: ActWrite, at: number): ActWritten;
 /** The second step and the lane's settle: `ACT_TRANSITIONS` checked against the row read in this tx, then the
- *  journal's `settle` record carrying that `from`, then the row, then the `act` line. */
+ *  journal's `act-settle` record carrying that `from`, then the row, then the `act` line. */
 export function settleActInTx(db: DatabaseSync, journal: ActJournalPort, id: number,
   to: 'done' | 'refused' | 'unknown', by: 'door' | 'lane' | 'boot', at: number): ActSettled;
 ```
@@ -449,7 +451,7 @@ keeps the figure for the act read (the act reads piece serves it).
 
 **`acknowledge` in two steps.** The W1 inbox's handler (in `server/src/coord/overlordRoutes.ts`) keeps its gate, its
 `acknowledgeVerdict` and its `changed: false` for a settled message. When the message can be settled:
-1. `tx()`: `writeActInTx` with state `pending`, kind `acknowledge`, natural key (question 10). The journal's `intent`
+1. `tx()`: `writeActInTx` with state `pending`, kind `acknowledge`, natural key (question 10). The journal's `act-intent`
    record, the row, the `act` line.
 2. `OperatorModelStore.moveMessage(id, 'settle', 'acknowledge')` in the private store.
 3. `tx()`: `settleActInTx` to `done` (the move answered `changed: true`) or `refused` (`changed: false`: someone settled
@@ -557,9 +559,9 @@ then the client's), then A6. **Inside PR B:** B1, then B2, then B3.
 
 - [ ] **Step 1: Failing tests** (in-memory `coord.db` with every migration, the journal port a double that records):
   - outside `tx()`, both writers refuse `not-in-transaction` and write nothing;
-  - `writeActInTx` of `done` appends one `settle` record with `from: null`, then writes the row, then stamps one `act`
+  - `writeActInTx` of `done` appends one `act-settle` record with `from: null`, then writes the row, then stamps one `act`
     line, in that order (the double and the sequence read back);
-  - of `pending`, one `intent` record;
+  - of `pending`, one `act-intent` record;
   - a journal double that refuses: nothing is written, and the writer answers the journal's word;
   - a journal double that answers `ok` and an apply that throws after it: the transaction rolls back, and the double saw
     the record (the `trailing` case the journal reports to its guard);
