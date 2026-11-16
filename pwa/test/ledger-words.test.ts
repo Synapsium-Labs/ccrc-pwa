@@ -440,6 +440,7 @@ describe('ratifyFailureOf: what a failed ratify means to the Goals card', () => 
     expect(ratifyFailureOf(409, { ok: false, error: 'goals-changed' })).toEqual({ kind: 'changed' });
     expect(ratifyFailureOf(400, { ok: false, error: 'bad-request' })).toEqual({ kind: 'other' });
     expect(ratifyFailureOf(null, null)).toEqual({ kind: 'other' });
+    for (const inherited of ['toString', '__proto__', 'constructor']) expect(ratifyFailureOf(400, { ok: false, error: inherited }), inherited).toEqual({ kind: 'other' });
   });
   it('a version resting on an item\'s answer, ratified (from W3), has its own words', () => {
     expect(ratificationWords({ ratified: true, source: { kind: 'item' } }, 4)).toBe('Ratified by the answer to the item it cites');

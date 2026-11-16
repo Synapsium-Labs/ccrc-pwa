@@ -487,9 +487,17 @@ export const RATIFY_UNAVAILABLE_TEXT: Readonly<Record<'not-found' | 'not-configu
   'not-configured': 'This server does not offer ratifying goals.',
   'auth-off': 'Ratifying goals needs sign-in, which is off on this server.',
 };
+/** The refusal codes that mean something to the Goals card, read through this table rather than a literal branch each
+ *  (the ARCH-13b ratchet, `pwa/test/refusal-literal-ratchet.test.ts`); every other code is `other`. */
+const RATIFY_FAILURE_OF_CODE: Readonly<Record<'not-configured' | 'auth-off' | 'goals-changed', RatifyFailure>> = {
+  'not-configured': { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-configured'] },
+  'auth-off': { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['auth-off'] },
+  'goals-changed': { kind: 'changed' },
+};
 export function ratifyFailureOf(status: number | null, body: unknown): RatifyFailure {
-  const code = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
   if (status === 404) return { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-found'] };
-  if (code === 'not-configured' || code === 'auth-off') return { kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT[code] };
-  return code === 'goals-changed' ? { kind: 'changed' } : { kind: 'other' };
+  const code = typeof body === 'object' && body !== null ? (body as { error?: unknown }).error : undefined;
+  return typeof code === 'string' && Object.hasOwn(RATIFY_FAILURE_OF_CODE, code)
+    ? (RATIFY_FAILURE_OF_CODE as Record<string, RatifyFailure>)[code]!
+    : { kind: 'other' };
 }
