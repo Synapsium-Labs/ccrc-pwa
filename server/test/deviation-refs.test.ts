@@ -673,7 +673,8 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 // last four (see UNREAD_BASELINE). DEFINITION's grammar stays as it is.
 //
 // THE SHAPE is a bullet whose bold closes right after the number, at column 0:
-// `- **D-N**`. It is narrower than `DEFINED`'s prefix on purpose: `- **D-149
+// `- **D-N**`, or with a full stop inside the bold, `- **D-N.**` (the dot form, which
+// DEFINITION does not read either; Task C33b widened the shape to it). It is narrower than `DEFINED`'s prefix on purpose: `- **D-149
 // sweep:**` and `- **D-1039..D-1045**` are bolded citations the corpus rows
 // above pin, and they stay out of it.
 //
@@ -683,7 +684,7 @@ describe('the cross-tree collision scan (F7 — before the merge, not after)', (
 // em-dash spelling of its own number and the file is read again: if that adds a
 // definition, the line sits where the reader looks, and it is flagged. No second
 // fence parser is written here.
-const DEFINITION_SHAPE = /^- \*\*D-(\d+)\*\*/;
+const DEFINITION_SHAPE = /^- \*\*D-(\d+)\.?\*\*/;
 
 /** Definition-shaped lines `DEFINITION` does not read, as `file -> numbers`, one
  *  number per line (so a number unreadable on two lines appears twice). */
@@ -714,34 +715,91 @@ function unreadDefinitionShapes(
   return out;
 }
 
-/** The unreadable lines plans hold, measured on origin/main at 649ac3f13 by Task
- *  C33 (docs/superpowers/plans/2026-10-22-desktop-polish/c33.md): 175 lines in 14
- *  plans, plus the four hyphen entries C33 leaves for C33b. Of the 175, 170 are a
- *  backtick slug straight after the bold number, and five are prose that opens with
- *  the bold number (`- **D-N** is the rule below`, `- **D-N** stays unused`).
+/** The unreadable lines plans hold, measured on origin/main by Task C33 (649ac3f13) and
+ *  widened by Task C33b (docs/superpowers/plans/2026-10-22-desktop-polish/c33.md): 335
+ *  lines in 30 plans. 174 are Task C33's: 170 are a backtick slug straight after the bold
+ *  number, and four are prose that opens with the bold number (`- **D-N** is the rule
+ *  below`, `- **D-N** stays unused`): three in other programmes' plans, and D-7153 in the
+ *  desktop-polish plan, a citation of a number defined readably elsewhere, so it stays.
+ *  161 are Task C33b's dot form, `- **D-N.** subject`, in 17 plans.
  *  Bare numbers, not `D-` refs, so the floor scan reads nothing here.
  *  MAY ONLY SHRINK: a plan that converts a line removes its number here, and a
  *  number listed here that no longer stands unreadable reds below until it is
- *  removed. Nothing may join: a new unreadable line is written readable instead. */
+ *  removed. Nothing may join: a new unreadable line is written readable instead.
+ *  THE ONE TRADE the keying allows: a row is keyed by plan file and number, never by
+ *  the line's text or place, so an unreadable line may be reworded or moved inside its
+ *  plan and still pass, and an unreadable line that is deleted may be replaced by a new
+ *  one for the same number in the same plan, in any shape the guard flags. What it
+ *  cannot allow is one more unreadable line than the row counts, or a line for a number
+ *  the row does not list. */
 const UNREAD_BASELINE: ReadonlyMap<string, readonly number[]> = new Map<string, readonly number[]>([
-  ['2026-10-01-native-docs-reader-w1-ccd-reads-docs.md', [4150, 4151, 4152, 4153, 4154, 4155, 4156, 4157, 4158, 4159, 4160, 4161, 4162, 4163, 4164]],
-  ['2026-10-01-workspace-lifecycle-wave2-one-archive.md', [3836, 3837, 3838, 3839, 3840, 3841, 3842, 3843, 3844, 3845, 3866, 3867, 3868, 3869, 3870, 3877, 3878, 3879, 3880, 3881]],
-  ['2026-10-04-session-continuity-wave3-operator-choice.md', [3896, 3897, 3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3921, 3922, 3923, 3924, 3925, 3966, 3967, 3968, 3969]],
-  ['2026-10-04-workspace-lifecycle-wave3-ws-expire.md', [3886, 3887, 3888, 3889, 3890, 3891, 3892, 3893, 3894, 3895, 3958, 3959, 3960, 3961, 3962, 3963, 3964, 3965]],
-  ['2026-10-05-session-continuity-wave4-scope-sweep.md', [4012, 4013, 4014, 4015, 4016, 4017, 4018, 4019, 4020, 4021, 4088, 4089, 4090, 4091, 4092, 4093]],
-  ['2026-10-06-child-reclamation-wave6-reclaim-repairs.md', [4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137, 4138, 4139, 4140, 4141, 4142, 4143, 4144, 4145, 4146, 4147, 4148, 4149, 4455, 4456, 4457, 4458, 4459, 4460, 4461, 4462]],
-  ['2026-10-06-workspace-lifecycle-wave3b-expiry-lane.md', [4114, 4115, 4116, 4117, 4118, 4119, 4120, 4121, 4122, 4123, 4124, 4125]],
-  ['2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md', [4348, 4349, 4350, 4351, 4352, 4353, 4354, 4355, 4356, 4357, 4358, 4359, 4360, 4361, 4362, 4363, 4430, 4431, 4432, 4433, 4454]],
+  ['2026-10-01-native-docs-reader-w1-ccd-reads-docs.md', [
+    4150, 4151, 4152, 4153, 4154, 4155, 4156, 4157, 4158, 4159, 4160, 4161, 4162, 4163, 4164
+  ]],
+  ['2026-10-01-workspace-lifecycle-wave2-one-archive.md', [
+    3836, 3837, 3838, 3839, 3840, 3841, 3842, 3843, 3844, 3845, 3866, 3867, 3868, 3869, 3870, 3877, 3878, 3879,
+    3880, 3881
+  ]],
+  ['2026-10-04-session-continuity-wave3-operator-choice.md', [
+    3896, 3897, 3898, 3899, 3900, 3901, 3902, 3903, 3904, 3905, 3921, 3922, 3923, 3924, 3925, 3966, 3967, 3968,
+    3969
+  ]],
+  ['2026-10-04-workspace-lifecycle-wave3-ws-expire.md', [
+    3886, 3887, 3888, 3889, 3890, 3891, 3892, 3893, 3894, 3895, 3958, 3959, 3960, 3961, 3962, 3963, 3964, 3965
+  ]],
+  ['2026-10-05-session-continuity-wave4-scope-sweep.md', [
+    4012, 4013, 4014, 4015, 4016, 4017, 4018, 4019, 4020, 4021, 4088, 4089, 4090, 4091, 4092, 4093
+  ]],
+  ['2026-10-06-child-reclamation-wave6-reclaim-repairs.md', [
+    4126, 4127, 4128, 4129, 4130, 4131, 4132, 4133, 4134, 4135, 4136, 4137, 4138, 4139, 4140, 4141, 4142, 4143,
+    4144, 4145, 4146, 4147, 4148, 4149, 4455, 4456, 4457, 4458, 4459, 4460, 4461, 4462
+  ]],
+  ['2026-10-06-workspace-lifecycle-wave3b-expiry-lane.md', [
+    4114, 4115, 4116, 4117, 4118, 4119, 4120, 4121, 4122, 4123, 4124, 4125
+  ]],
+  ['2026-10-07-workspace-lifecycle-wave4-dead-coordinator-lane.md', [
+    4348, 4349, 4350, 4351, 4352, 4353, 4354, 4355, 4356, 4357, 4358, 4359, 4360, 4361, 4362, 4363, 4430, 4431,
+    4432, 4433, 4454
+  ]],
   ['2026-10-08-carry-link-via-mount.md', [4500, 4501]],
-  ['2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md', [4480, 4481, 4482, 4483, 4484, 4485, 4486, 4487, 4488, 4489, 4490, 4491, 4492, 4493, 4494]],
+  ['2026-10-08-workspace-lifecycle-wave5-residue-and-expiry-follow-ups.md', [
+    4480, 4481, 4482, 4483, 4484, 4485, 4486, 4487, 4488, 4489, 4490, 4491, 4492, 4493, 4494
+  ]],
+  ['2026-10-17-centralised-update-w17-install-doctor-prune.md', [
+    5313, 5314, 5315, 5316, 5317, 5318, 5319, 5320, 5321, 5322, 5323, 5324, 5325, 5326, 5327, 5328, 5329, 5330
+  ]],
+  ['2026-10-17-centralised-update-w20-docs-stop-eperm.md', [5333, 5334]],
+  ['2026-10-18-centralised-update-w21-release-yml-parses.md', [5565, 5566]],
+  ['2026-10-18-release-notes-whats-new.md', [5548, 5549, 5550, 5551]],
+  ['2026-10-20-build-guard-878-follow-up.md', [5994]],
   ['2026-10-20-ci-shards-nested-leak.md', [6112]],
-  // 7153 and 7253 are prose. 8344, 8345, 8354 and 8381 are hyphen entries that C33 left
-  // in place: on origin/main their task notes (c27.md to c30.md) still define them, so
-  // converting them here reads as one definition each side of the cross-tree scan. The
-  // follow-up C33b converts the four and removes them from this row once C33 has merged.
-  ['2026-10-22-desktop-polish.md', [7153, 7253, 8344, 8345, 8354, 8381]],
-  ['2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md', [6605]],
+  ['2026-10-22-centralised-update-w23-backup-retention.md', [
+    6346, 6347, 6348, 6349, 6350, 6351, 6352, 6353, 6354, 6355, 6356, 6357, 6358, 6359, 6360, 6361, 6362, 6363,
+    6364, 6365, 6464
+  ]],
+  ['2026-10-22-centralised-update-w25-no-release-without-a-build-change.md', [
+    6390, 6391, 6392, 6393, 6394, 6395, 6396, 6397, 6398, 6399, 6400, 6401, 6402, 6403, 6404, 6405, 6406, 6407,
+    6408, 6409, 6499, 6500, 6501, 6502, 6511, 6512, 6513, 6583
+  ]],
+  ['2026-10-22-desktop-polish.md', [7153]],
+  ['2026-10-23-centralised-update-w24-settings-live-in-ccrc-config.md', [
+    6605, 6587, 6588, 6589, 6590, 6591, 6592, 6593, 6594, 6595, 6596, 6597, 6598, 6599, 6600, 6601, 6602, 6603,
+    6604, 6744, 6745, 6746, 6747, 6748, 6749, 6750, 6606, 6841, 6751, 6842, 6843, 6844, 6605
+  ]],
+  ['2026-10-25-box-settings-view.md', [
+    6914, 6915, 6916, 6917, 6918, 6919, 7861, 7862, 7863, 7873, 7874, 7875, 7899, 7900
+  ]],
+  ['2026-10-25-review-cap-lift-control.md', [6909, 6910, 6911, 6912]],
+  ['2026-10-25-tmp-sweep-census-test-run-rows.md', [6854, 6855]],
+  ['2026-10-26-arch-60-adopted-arm-residual.md', [6993]],
+  ['2026-10-26-consolidation-w8-c8a-notes.md', [7090]],
+  ['2026-10-26-consolidation-w8-c8b-notes.md', [7130, 7131, 7132, 7133, 7134, 7135]],
+  ['2026-10-26-delegation-broker-wave4-project.md', [6999, 7002, 6999, 7002]],
   ['2026-10-26-orphan-census-truncation.md', [7867]],
+  ['2026-10-28-worktree-leak-design.md', [7279, 7278, 7280]],
+  ['2026-11-04-box-settings-view-w2.md', [
+    7906, 7907, 7908, 7909, 7914, 7910, 7911, 7912, 7913, 7915, 7916, 7917, 7918, 7919, 7920, 7921, 7922, 7923
+  ]],
 ]);
 
 /** `a` less `b`, counting repeats: what `a` holds that `b` does not cover. */
@@ -790,6 +848,13 @@ describe('every definition-shaped line is one the ledger reads (Task C33)', () =
     expect(one(`- **D-${n}**: a colon`)).toEqual([]);
     expect(one(`- Issued to this task, **D-${n}**: a citation`)).toEqual([]);
     expect(one(`- **D-${n} sweep:** a bolded citation`)).toEqual([]);
+    // The dot form (Task C33b): the full stop inside the bold, which DEFINITION does not read.
+    expect(one(`- **D-${n}.** a subject after the dot`)).toEqual([n]);
+    expect(one(`- **D-${n}.** \`a-slug\`: the dot form with a slug`)).toEqual([n]);
+    expect(one(`- **D-${n}.** — a dot, then an em dash`)).toEqual([n]);
+    expect(one(['```', `- **D-${n}.** quoted inside a fence`, '```'].join('\n'))).toEqual([]);
+    expect(one(`- **D-${n}.1** a decimal sub-number`)).toEqual([]);
+    expect(one(`  - **D-${n}.** indented, not at column 0`)).toEqual([]);
     expect(one(['```', `- **D-${n}** - quoted inside a fence`, '```'].join('\n'))).toEqual([]);
     expect(one(['```', '```', `- **D-${n}** - after a closed fence`].join('\n'))).toEqual([n]);
     // A number unreadable on two lines counts twice, so a baseline that lists it once
