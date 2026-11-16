@@ -2930,7 +2930,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 14 of
+# Measured: `cat ccd/ccd ccd/lib/*.sh | grep -c '_pool_ok '` finds 18 matching LINES now, 14 of
 # them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (18/12 before fix round 1, which deleted two prose mentions along

@@ -30,9 +30,9 @@ function box(prefix: string, o: { registry?: boolean; env?: string[]; sets?: str
   }
   return { home, reg, marker };
 }
-function check(home: string): { out: string; line: string; remedy: string; code: number } {
+function check(home: string, extra: NodeJS.ProcessEnv = {}): { out: string; line: string; remedy: string; code: number } {
   const r = spawnSyncGroup(BASH, ['-c', `set -uo pipefail\n. ${shq(CCRC_SRC)}\n. ${shq(CHECKS_SRC)}\n_check_cap-floor`],
-    { env: doctorEnv(home), encoding: 'utf8', timeout: 30_000 });
+    { env: { ...doctorEnv(home), ...extra }, encoding: 'utf8', timeout: 30_000 });
   const lines = (r.stdout ?? '').split('\n');
   const i = lines.findIndex((l) => /^(PASS|WARN|FAIL|SKIP) cap-floor: /.test(l));
   expect(i, `a cap-floor line: ${r.stdout}${r.stderr}`).toBeGreaterThanOrEqual(0);
@@ -40,7 +40,7 @@ function check(home: string): { out: string; line: string; remedy: string; code:
 }
 
 describe('cap-floor: a standing set needs a ccd that advertises pool-set', () => {
-  it('FAIL naming pool-set and the id, with a remedy naming the update and the Settings step', () => {
+  it('FAIL naming pool-set and the id, with a remedy naming the update and the operator\'s own clear (F5)', () => {
     const b = box('ccrc-doctor-capfloor-fail-', { sets: ['lane-b-overlord'] });
     const r = check(b.home);
     expect(r.code).toBe(1);
@@ -49,7 +49,8 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
     expect(r.line).toContain('lane-b-overlord');
     expect(r.remedy).toMatch(/^ {2}remedy: /);
     expect(r.remedy).toMatch(/ccrc\s+update/);
-    expect(r.remedy).toContain('Settings');
+    expect(r.remedy).toContain('ccd route --session <id> --set poolset= --set acctorder=');
+    expect(r.remedy).not.toContain('Settings');
   });
 
   it('names every id that stands', () => {
@@ -84,6 +85,14 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
     expect(r.code).toBe(1);
     expect(r.line).toMatch(/^FAIL cap-floor: unmeasured: /);
     expect(r.remedy).toMatch(/^ {2}remedy: /);
+  });
+
+  it('a ccd caps that hangs while an entry stands: FAIL unmeasured within the bound, never a hung doctor (F4)', () => {
+    const b = box('ccrc-doctor-capfloor-hang-', { sets: ['lane-b-overlord'], ccd: 'while :; do :; done' });
+    const t0 = Date.now();
+    const r = check(b.home, { CCRC_DOCTOR_DOCS_TIMEOUT: '1' });
+    expect(r.line).toMatch(/^FAIL cap-floor: unmeasured: /);
+    expect(Date.now() - t0).toBeLessThan(20_000);
   });
 
   it('no ccd at all while an entry stands: FAIL unmeasured', () => {

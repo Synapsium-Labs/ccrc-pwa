@@ -22,11 +22,18 @@ named by a slug; no D-number is invented.
 - **Task 8.** `ccd/ccrc#_box_build_fields` answers `ccdCaps` on a sixth, field-level line (`<absent>`, `<malformed>`,
   or the space-joined list), which never fails the stamp. The capability floor is a TABLE (the coordinator's ruling in
   the brief): `CAP_FLOOR_ROWS`, one row per word, `fact|word|remedy`, with the one row
-  `poolset|pool-set|clear the set (retire or rebind the Overlord in Settings)`. `_cap_floor_standing` measures every row's
-  fact (any `~/.cc-sessions/<id>.<fact>` entry, `-e` or `-L`); `_upd_cap_floor_check <stamp|-> <from>` refuses, remedy
-  first, at call site (a) in `cmd_update` after its second floor check (the staged stamp) and call site (b) in
-  `cmd_rollback`'s kept branch after `UPD_REPORTING=1` (the kept stamp copy). Restore arms 1 (previous's kept stamp) and
-  3 (`-`) and the watchdog warn and proceed. The doctor's check `cap-floor` reads every row.
+  `poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder=`.
+  `_cap_floor_standing` measures every row's fact (any `~/.cc-sessions/<id>.<fact>` entry, `-e` or `-L`, a dot-led id
+  included); `_upd_cap_floor_check <stamp|-> <from>` refuses, remedy first, at call site (a) in `cmd_update` after its
+  second floor check (the staged stamp) and call site (b) in `cmd_rollback`'s kept branch after `UPD_REPORTING=1` (the
+  kept stamp copy). Restore arms 1 (previous's kept stamp) and 3 (`-`) and the watchdog warn and proceed. The doctor's
+  check `cap-floor` reads every row, its `ccd caps` call bounded by `_plat_timeout` and reading no stdin.
+- **Fix round 1 (review 2186).** `cmd_rollback` accepts `--from watchdog` only from `cmd_watchdog`, which names its own
+  pid in `CCRC_WATCHDOG_CALLER` (this run's parent, the launcher `exec`s), never with `--detach`; `--from restore`, which
+  no caller passes `rollback`, refuses too. `update --check`'s line carries `needs=<words>|none|unmeasured` before
+  `state=`, and `ccrc rollout` refuses before either box moves when a box that is not first needs a word (with
+  `--server-first`, the fleet box). The stamp's token pattern ends in `\z`, so `"pool-set\n"` reads `<malformed>`
+  rather than failing the stamp.
 
 ### The floor's later rows, and their owners
 
@@ -119,6 +126,13 @@ No waiver.
 | call site (b) dropped | `ccrc-update-cap-floor`: 4 failed |
 | `--force` passes the floor | `ccrc-update-cap-floor`: 1 failed |
 | call site (b) moved above `UPD_REPORTING=1` | `ccrc-update-cap-floor`: 1 failed (the `failed`-report row) |
+| fix round 1: `cmd_rollback`'s `--from watchdog`/`restore` guard dropped | `ccrc-update-cap-floor`: 1 failed (the typed-refusal case) |
+| fix round 1: restore arm 3's call dropped | `ccrc-update-cap-floor`: 1 failed (arm 3 end to end) |
+| fix round 1: the token's `\z` back to `$` | `ccrc-box-build-caps`: 1 failed (the trailing newline went rc 6) |
+| fix round 1: the doctor's `ccd caps` unbounded | `ccrc-doctor-cap-floor`: 1 failed (a `ccd caps` that never returns) |
+| fix round 1: rollout's later-box refusal dropped | `ccrc-rollout`: 1 failed |
+| fix round 1: `--check`'s `needs=` always `none` | `ccrc-update-cap-floor`: 1 failed |
+| fix round 1: the dot-led id glob dropped | `ccrc-update-cap-floor`: 1 failed |
 
 `parsePoolAnswer` joins `POOL_SET_MUTANT_SETS` (`server/test/sim/poolSetSets.ts`) with 14 mutants, all killed, floor 1.
 A1 is the plan's "read `code` before `ran`". One candidate was dropped as EQUIVALENT, not as a survivor: the
@@ -135,7 +149,7 @@ read anywhere) survived the first suite and showed a missing case, a misspelled 
   places it. A check named for one row that FAILs for another would name the wrong word.
 - **`floor-sentence-names-the-fact`.** The plan's refusal ends `sets stand on <ids>`; with a table it ends
   `a <fact> stands for <ids>` (`a poolset stands for lane-a-overlord`). The remedy still comes first, so the console's
-  200-character cut keeps `Settings` with ten 40-character ids standing (pinned).
+  200-character cut keeps the `ccd route` clear with ten 40-character ids standing (pinned).
 - **`release-artifact-shape-carries-ccdcaps`.** `deploy/release-artifact.sh`'s `record` holds `build.json` to the
   builder's exact one-line shape, which the plan's file list did not name. Its pattern gains the `ccdCaps` array
   (non-empty, each token on the grammar), and `release-artifact.test.ts` refuses a stamp without it, with an empty one,
@@ -154,3 +168,22 @@ read anywhere) survived the first suite and showed a missing case, a misspelled 
   task's commit. Measured instead: with `origin/main`'s `build-release.sh` and `release-artifact.sh` swapped in (from
   saved copies, restored byte for byte), `release-main` ran 114 passed and `build-release` 68 passed and 6 failed, the
   six being exactly the new `ccdCaps` and bash-floor cases.
+- **`floor-remedy-names-what-exists`.** Fix round 1, F5 (the coordinator's ruling): the plan's remedy names a Settings
+  step that is not built. The row's remedy names the operator's own clear from their shell (`ccd route --session <id>
+  --set poolset= --set acctorder=`, which refuses inside a session); PR B2 adds `--below-cap`, and the designation
+  piece rewrites the remedy when its Settings doors land (a comment above `CAP_FLOOR_ROWS` says so).
+- **`rollback-watchdog-word-is-the-watchdogs`.** Fix round 1, F1: the plan accepts the real watchdog's warn and proceed
+  but is silent on a typed `--from watchdog`, which warned past the floor too. `cmd_rollback` now refuses `--from
+  watchdog` unless `CCRC_WATCHDOG_CALLER` equals its parent's pid (set by `cmd_watchdog`, an accident guard: one UNIX
+  user can forge it), and with `--detach`; and `--from restore`. The test runners that stand in for the watchdog
+  (`rollbackRun`, the phases suite's `runRollback`, `update-watchdog-revert`) pass the marker.
+- **`rollout-floored-box-moves-first`.** Fix round 1, F6: no check line can carry the target's `ccdCaps` (the release
+  publishes no `build.json` asset, and `--check` fetches nothing past SHA256SUMS), so `--check` names the words a
+  standing fact needs (`needs=`), and `ccrc rollout` refuses up front when a box that is not first needs one (or
+  could not say), naming the order as the remedy. A box that is first decides at its own update. A check line from a
+  ccrc before B1 carries no `needs=` and proceeds, as its own update has no floor.
+- **`build-machine-pool-sync-is-not-a-build-fact`.** Fix round 1, F8: `build-release.sh` stamps `ccd caps` from a
+  scratch HOME, so `pool-sync-absent` in `ccdCaps` describes the build machine, not the build. No floor row may key on
+  `pool-sync-installed` or `pool-sync-absent`.
+- **`restore-arm3-always-warns`.** Fix round 1, F10 (accepted, plan N8): arm 3 has no stamp to read, so it warns
+  whenever a fact stands, a same-tag copy-back included.

@@ -61,6 +61,8 @@ describe('_box_build_fields: the ccdCaps field answer (BOX_BUILD[5])', () => {
     ['a leading digit', '["1a"]'],
     ['a control byte', '["a\\u0007b"]'],
     ['a newline', '["a\\nb"]'],
+    // F2: jq's `$` matches before a final newline, so the token's end is `\z`; with `$` this stamp failed WHOLE (rc 6).
+    ['a trailing newline', '["pool-set\\n"]'],
   ];
   for (const [name, json] of MALFORMED) {
     it(`${name} reads <malformed>, never failing the stamp`, () => {

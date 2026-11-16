@@ -20,13 +20,15 @@ import { keepDigest } from './installTreeFixture.js';
 import { printableDetail } from '../src/update/inventory.js';
 import {
   REPO, BASH, updateEnv, plantOldBox, writeManifest, fullTree, stubTree, packRelease, runUpdate, freshUpdateBox,
-  sourcedCcrc, lastReport, plantW6Box, keptVersion, rollbackRun, onKeptV1, plantKillModeDropIn, UNIT_LINES,
+  sourcedCcrc, lastReport, plantW6Box, keptVersion, rollbackRun, onKeptV1, plantKillModeDropIn, UNIT_LINES, plantRestoreBox,
   fileText, linkOf, V1_SHA, V2_SHA, shippedStamp,
 } from './ccrc-updateFixture.js';
 
 removeTmpFixturesEachTest();
 
-const REMEDY = 'clear the set (retire or rebind the Overlord in Settings)';
+const REMEDY = 'the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder=';
+/** The remedy's way out, which the console's 200-character cut must keep (F5: only what exists today). */
+const WAY_OUT = 'ccd route --session <id> --set poolset= --set acctorder=';
 const LACKS = 'the target build lacks pool-set';
 const ABSENT = 'builds before ccdCaps predate pool-set';
 const MALFORMED = "the target's ccdCaps cannot be read";
@@ -91,6 +93,27 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
     expect(r.stdout + r.stderr).not.toContain('pool-set');
+  });
+
+  it('update --check names the words a standing fact needs on its check line, before state= (F6): none, pool-set, unmeasured', () => {
+    const home = movingBox('ccrc-capfloor-check-', ['ws-add']);
+    const needs = (): string => (runUpdate(home, ['--check']).stdout.match(/^check: .* needs=(\S+) projection=\S+ state=\S+$/m) ?? [])[1] ?? '<no line>';
+    expect(needs()).toBe('none');
+    plantSet(home);
+    expect(needs()).toBe('pool-set');
+    const reg = join(home, '.cc-sessions');
+    chmodSync(reg, 0o300);
+    try { expect(needs()).toBe('unmeasured'); } finally { chmodSync(reg, 0o700); }
+  });
+
+  it('a set standing for an id that starts with a dot is read too (F10)', () => {
+    const home = movingBox('ccrc-capfloor-a-dot-', ['ws-add']);
+    plantSet(home, '.lane-b-overlord');
+    const before = snapshot(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(1);
+    expect(r.stderr).toContain(`${REMEDY}: ${LACKS}; a poolset stands for .lane-b-overlord. ${NOTHING}`);
+    expect(snapshot(home)).toEqual(before);
   });
 
   it('a registry with no poolset entry: proceeds even though the target has no ccdCaps', () => {
@@ -238,6 +261,28 @@ describe('capability floor, call site (b): a rollback by flip reads the kept tre
     expect(linkOf(home)).toBe(kept);
   });
 
+  it('a hand-typed --from watchdog (no caller pid, or the wrong one), --from watchdog --detach and --from restore are refused before anything changes (F1)', () => {
+    const { home, kept } = flipBox('ccrc-capfloor-b-typed-', ['ws-add']);
+    plantSet(home);
+    const link = linkOf(home);
+    const report = existsSync(join(home, '.ccrc', 'update.json')) ? fileText(join(home, '.ccrc', 'update.json')) : null;
+    const cases: Array<[string[], NodeJS.ProcessEnv]> = [
+      [['--from', 'watchdog'], { CCRC_WATCHDOG_CALLER: '' }],
+      [['--from', 'watchdog'], { CCRC_WATCHDOG_CALLER: '1' }],
+      [['--from', 'watchdog', '--detach'], {}],
+      [['--from', 'restore'], {}],
+    ];
+    for (const [args, env] of cases) {
+      const r = rollbackRun(home, args, env);
+      const from = args[1]!;
+      expect(r.code, `${args.join(' ')}: ${r.stderr}`).toBe(2);
+      expect(r.stderr).toContain(`rollback: --from ${from} is the unattended watchdog's own word, refused when typed by hand; nothing on this box was changed`);
+      expect(linkOf(home)).toBe(link);
+      expect(existsSync(join(home, '.ccrc', 'update.json')) ? fileText(join(home, '.ccrc', 'update.json')) : null).toBe(report);
+    }
+    expect(linkOf(home)).not.toBe(kept);
+  });
+
   it('--from watchdog warns on stdout and flips', () => {
     const { home, kept } = flipBox('ccrc-capfloor-b-watchdog-', ['ws-add']);
     plantSet(home);
@@ -247,7 +292,7 @@ describe('capability floor, call site (b): a rollback by flip reads the kept tre
     expect(linkOf(home)).toBe(kept);
   });
 
-  it('a console run (--from pwa): the refusal closes the report `failed`, and its detail cut to 200 characters with TEN 40-character ids standing still carries the remedy ("Settings")', () => {
+  it('a console run (--from pwa): the refusal closes the report `failed`, and its detail cut to 200 characters with TEN 40-character ids standing still carries the remedy (the `ccd route` clear)', () => {
     const { home } = flipBox('ccrc-capfloor-b-console-', ['ws-add']);
     for (let i = 0; i < 10; i++) plantSet(home, `lane-${String(i).padStart(2, '0')}-${'x'.repeat(40)}`.slice(0, 40));
     const r = rollbackRun(home, ['--to', 'v1.0.0', '--from', 'pwa']);
@@ -255,11 +300,11 @@ describe('capability floor, call site (b): a rollback by flip reads the kept tre
     const last = lastReport(home);
     expect(last['phase']).toBe('failed');
     const detail = String(last['detail']);
-    expect(detail).toContain('Settings');
+    expect(detail).toContain(WAY_OUT);
     expect(detail.startsWith(REMEDY)).toBe(true);
     const cut = printableDetail(detail);
     expect(cut.length).toBeLessThanOrEqual(200);
-    expect(cut, 'the 200-character cut dropped the remedy').toContain('Settings');
+    expect(cut, 'the 200-character cut dropped the remedy').toContain(WAY_OUT);
     expect(cut).toContain(LACKS);
   });
 });
@@ -290,6 +335,22 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
     expect(linkOf(home)).toBe(v1);
   }, scaled(90_000));
 
+  it('arm 3 (END TO END): a gate failure whose arm 2 refuses (no bundle), with a set standing, falls to arm 3, which WARNs and still copies the tree back (F3)', () => {
+    const home = freshUpdateBox('ccrc-capfloor-arm3-e2e-');
+    plantRestoreBox(home, {
+      prevBundle: false,
+      onInstall: ['printf \'newsha0000000000000000000000000000000000\\nunsigned\\n\' > "$HOME/.ccrc/installed"'],
+    });
+    publishStub(home, ['pool-set']);   // v2.0.0 advertises the word, so call site (a) passes and the install runs
+    plantSet(home);
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
+    expect(r.stdout).toMatch(/^update: arm2-refused: /m);
+    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: the restored build's capabilities could not be read; a poolset stands for lane-b-overlord${WARN_TAIL('restore')}`);
+    expect(r.stdout).toMatch(/^update: REVERTED \(arm 3\): /m);
+    expect(lastReport(home)['phase']).toBe('reverted');
+  }, scaled(90_000));
+
   it('arm 3 (called directly, no stamp): `_upd_cap_floor_check - restore` WARNs "the restored build\'s capabilities could not be read" and returns 0', () => {
     const home = freshUpdateBox('ccrc-capfloor-arm3-');
     plantSet(home);
@@ -314,7 +375,7 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
 });
 
 describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is read by the same check, no code changed', () => {
-  const ROW = "  'poolset|pool-set|clear the set (retire or rebind the Overlord in Settings)'\n";
+  const ROW = "  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='\n";
   const EXTRA = "  'profiledigest|launch-surface-v1|retire the launch profile in Settings'\n";
 
   /** A fixture home with a PATCHED COPY of ccd/ccrc (one more row, nothing else), and a stamp file with `caps`. */

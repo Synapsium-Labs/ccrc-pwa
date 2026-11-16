@@ -72,8 +72,9 @@ const ID_BUILDERS = {
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   // The Overlord W1 pool set (plan Task 6): `poolAnswer`'s one id is refused by the builder itself unless `isRegistryId`
-  // admits it, as `leaseMark`'s are, so it never reaches the argv unexamined; no server code composes it yet (the renewal
-  // rows piece and the designation door do, and add their rows below).
+  // admits it, as `leaseMark`'s are, so the census's dash-led probe cannot reach it and the row is `no-id`. Nothing makes
+  // a later `server/src` caller (the renewal rows piece, the designation door) enter this census: the builder's own
+  // refusal is the guard for every caller.
   poolAnswer: 'no-id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;

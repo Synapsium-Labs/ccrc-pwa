@@ -12210,7 +12210,8 @@ _check_cap-floor() {
   _cap_floor_standing || { _dr_fail cap-floor "unmeasured: ~/.cc-sessions can be searched but not listed, so nobody knows whether a fact stands that needs a capability" \
     "give ~/.cc-sessions its read bit back (chmod u+r ~/.cc-sessions), then re-run: ccrc doctor"; return 1; }
   [ "${#CAP_FLOOR_STANDING[@]}" -gt 0 ] || { _dr_pass cap-floor "no fact stands on this box that needs a ccd capability"; return 0; }
-  caps="$("$HOME/.local/bin/ccd" caps 2>/dev/null)" || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" \
+  # Bounded, and reading no stdin, as the docs check's ccd calls are: `cmd_doctor` has no per-check timeout.
+  caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null 3>&-)" || { _dr_fail cap-floor "unmeasured: a fact stands, and this box's ccd caps did not answer" \
     "run \$HOME/.local/bin/ccd caps by hand to see why; ccrc update installs a ccd that answers"; return 1; }
   for row in "${CAP_FLOOR_STANDING[@]}"; do
     IFS='|' read -r fact word say ids <<<"$row"
