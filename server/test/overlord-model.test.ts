@@ -10,7 +10,29 @@ import { pythonOrSkip } from './ccgptHarness.js';
 // The scenarios W0's final matrix (matrix.out) measures at 1.1 s or less at the defaults, the plan's rule;
 // `nohold` measured 1.2 s there, so it runs only under CCRC_MODEL=full. `genback` (plan review 1902, F3) measured
 // 0.06 s; `genmachine` and `renewal`, which also exercise a failed renewal's return, take 15 s and more.
-const FAST = ['push', 'pause', 'race', 'asks', 'value', 'lineage', 'deadpush', 'restore', 'rebind', 'genback'];
+// W1's four (plan w1-authority-journal, Task 1) measured 3 s, 6 s, 1 s and 0.5 s: `restore-w1`, `witness`,
+// `writer-failure` and `malformed`. `confirm` (475,000 states, 12 s) runs only under CCRC_MODEL=full.
+const FAST = ['push', 'pause', 'race', 'asks', 'value', 'lineage', 'deadpush', 'restore', 'rebind', 'genback',
+  'restore-w1', 'witness', 'writer-failure', 'malformed'];
+
+// W1's planted mutations. The first group runs in the default suite; the second needs the `confirm` scenario (a restore,
+// Confirm, a second restore and a second Confirm: up to a million states), so it runs under CCRC_MODEL=full.
+const W1_MUTATIONS_FAST = ['same_host_agent_counts', 'heads_not_checked', 'trailing_widening_applied',
+  'append_over_incoherent', 'narrowing_refused_while_incoherent', 'narrowing_refused_on_append_failure',
+  'writer_failure_unfenced', 'no_confirm_over_malformed', 'this_boot_witness_counts'];
+const W1_MUTATIONS_FULL = ['epoch_in_db', 'confirm_no_epoch_raise', 'restore_generation_in_db',
+  'generation_ignores_witnesses'];
+type MutationRow = { mutation: string; expected: string; caught: string[] };
+// A row's expected string names the invariants that must catch it ("WH, I7w"), or starts "none expected".
+function expectMutations(names: string[], timeout: number): void {
+  const rows = JSON.parse(py(['--json', '--mutations', ...names], timeout)) as MutationRow[];
+  expect(rows.map((r) => r.mutation)).toEqual(names);
+  for (const r of rows) {
+    if (r.expected.startsWith('none expected')) expect(r.caught, r.mutation).toEqual([]);
+    else
+      for (const inv of r.expected.split(/,\s*/)) expect(r.caught, `${r.mutation} by ${inv}`).toContain(inv);
+  }
+}
 
 const PY = pythonOrSkip();
 const DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'model/overlord');
@@ -58,6 +80,13 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
   it('no_fence on rebind is caught by I5', () => {
     expect(check('rebind', 'MUTATION=no_fence').violated).toContain('I5');
   }, 60_000);
+  it('the W1 mutations are each caught by the invariant they name, and the weakened mitigation is not caught', () => {
+    expectMutations(W1_MUTATIONS_FAST, 120_000);
+  }, 120_000);
+  it('the W1 switch off leaves the W0 restore scenario as it was (AUTH_W1=False is the default)', () => {
+    expect(readFileSync(path.join(DIR, 'model.py'), 'utf8')).toMatch(/^\s*AUTH_W1=False,/m);
+    expect(check('restore')).toMatchObject({ states: 4563, transitions: 13002, violated: [] });
+  }, 60_000);
   it('the model imports only the standard library', () => {
     const allowed = new Set(['array', 'collections', 'json', 'os', 'sys', 'time', 'model']);
     for (const f of ['model.py', 'check.py'])
@@ -67,6 +96,9 @@ describe.skipIf(PY === null)('the Overlord model (§11.7, the first model)', () 
     it('every scenario holds every invariant at the defaults and ends under the bound', () => {
       const names = py(['--list']).split('\n')[0]!.replace(/^scenarios: /, '').split(', ');
       for (const sc of names) expect(check(sc), sc).toMatchObject({ scenario: sc, violated: [] });
+    }, 600_000);
+    it('the W1 mutations that need the confirm scenario are each caught by the invariant they name', () => {
+      expectMutations(W1_MUTATIONS_FULL, 600_000);
     }, 600_000);
     it('every planted mutation that names an invariant is caught by it', () => {
       for (const r of JSON.parse(py(['--json', '--mutations'], 600_000)) as { mutation: string; expected: string; caught: string[] }[])

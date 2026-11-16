@@ -45,6 +45,16 @@ DEFAULT = dict(
     OP_CLASS_REMOVALS=0,
     RESTORES=0,
     AUTH_CHANGES=0,        # journalled authority changes (I7 scenario)
+    # ---- W1: the authority journal, the witness and Confirm the restore (plan w1-authority-journal, Task 1) --------
+    AUTH_W1=False,         # the switch: False leaves every W0 scenario exactly as it was; True replaces W0's A tuple
+                           # (auth_events, boot_coherence, i7, i7t, the W0 Confirm) with AW and the W1 events below
+    W1_CHANGES=0,          # operator authority doors taken (rung down or up, latch raise or clear), every outcome
+    PRIVACY_RECORDS=0,     # records appended to the privacy journal (a second term of the epoch, Q7)
+    DAMAGES=0,             # the authority file damaged past the torn-tail heal while the server is down (Q17)
+    W1_EXCHANGES=3,        # witness exchanges (each a separate event, with a witness of the scenario's choosing)
+    CONFIRMS=0,            # Confirm the restore, taken by the operator (Q13, Q17, F5)
+    POST_APPEND_FAILS=0,   # the row's transaction fails after the record was appended, server keeps running (Q1, F1)
+    APPEND_FAILS=0,        # an append refused or failed on a coherent journal, under an operator narrowing (X3b)
     KINDS=(('item_none', 'ask_cd'), ('item_none', 'ask_cd')),
     BLOCKING=(True,),
     STALE_CALLERS=True,
@@ -122,6 +132,30 @@ Act = namedtuple('Act', 'kind q nk st term n conv eff auth obs cont')
 OB = namedtuple('OB', 'q sent att silent')
 # Authority journal and restore bookkeeping (§7.6), only when RESTORES > 0.
 A = namedtuple('A', 'jgrant jrung jterm repoch jepoch wepoch snap rolled trail cont truth')
+# W1 (only when AUTH_W1): the authority journal and its witnesses (plan w1-authority-journal Q1-Q17, Table 7.6a).
+#   jr      the authority journal file, a tuple of records: ('rung', v, fork), ('latch', v, fork) and
+#           ('confirm', rung, latch, epochAtConfirm, privacySeqAtConfirm, restoreGeneration, fork). `fork` is the
+#           lineage the record was appended in: a restore followed by an append makes a new one, which is how two
+#           histories of equal length are told apart (the head is (sequence, fork)).
+#   pj      the privacy journal: a tuple of forks, one per record.
+#   head    the head row (sequence, fork), or None; rows: an Overlord row exists (Table 7.6a rows 4 and 5).
+#   cont    the volatile continuation of "record appended, row not yet committed": (field, value, narrowing, epoch).
+#   mal     the file reads malformed (damaged past the heal, Q17).
+#   guard   ('coherent',) | ('rolled-back', cause) | ('unmeasured', why): the guard. `unmeasured` is reached only
+#           through an append that failed on a coherent journal (X3b); the model has no other unreadable file or row.
+#   nonce   unused beyond a boot count; wit the witnesses (console, same-host agent, other-host agent), each None or the
+#           tuple (epoch, base, authorityHead, privacyHead, restoreGeneration, thisBoot). `thisBoot` is the boot nonce
+#           reduced to what Q8 reads of it: whether the tuple was sent under the current boot's nonce (a boot clears it
+#           on every held tuple, since the nonce differs). answered the witnesses that answered
+#           since this boot; lifted whether `no-witness-since-boot` is lifted (Q8); settled the witnesses that had
+#           answered when the last Confirm ran (cleared by a restore).
+#   pend    narrowings appended and committed, not yet held off the volume (volatile: a crash clears them);
+#           told the narrowings the operator was told took effect, (field, value, record epoch) (WH, I7w).
+#   snap    a snapshot of the volume; lin the lineage counter (never restored); rst restores left.
+#   epdb, gdb  the epoch and the restore generation as a mutation keeps them in coord.db (a restore of the database
+#           takes them back); no honest transition reads them.
+AW = namedtuple('AW', 'jr pj head rows cont mal guard nonce wit answered lifted settled pend told snap lin rst '
+                      'epdb gdb chg prv fail afail dmg cfm exch')
 S = namedtuple('S', 't up boot measured crashes scr swaps ren rebinds term gen alive downt conv '
                     'startpend fault fev deafn brk rung latch grant msg msgs qs ob acts skew skews '
                     'ops revokes craises oprem word wsince proof auth pushfails')
@@ -150,7 +184,9 @@ def init_state(c):
     qs = tuple(Q('u', None, frozenset(), False, 0, 0, None, None, 0, False, None, False, None,
                  (), i, False, False, None, None, False, 0) for i in range(c.N_Q))
     auth = None
-    if c.RESTORES or c.AUTH_CHANGES:
+    if c.AUTH_W1:
+        auth = w1_init(c)
+    elif c.RESTORES or c.AUTH_CHANGES:
         auth = A(jgrant=c.GRANT_INITIAL, jrung='full', jterm=1, repoch=0, jepoch=0, wepoch=0,
                  snap=None, rolled=False, trail=None, cont=None,
                  truth=(c.GRANT_INITIAL, 'full', 1))
@@ -461,8 +497,8 @@ def gate(s, c, door, caller):
     if conv != s.conv or s.alive != 'up':
         return 'not-the-overlord'
     # 3. authority-rolled-back
-    if s.auth is not None and s.auth.rolled and not cpn:
-        return 'authority-rolled-back'
+    if s.auth is not None and not cpn and ((s.auth.guard[0] != 'coherent') if c.AUTH_W1 else s.auth.rolled):
+        return 'authority-rolled-back'      # W1: a rolled-back or unmeasured guard (Table 11.2, step 3)
     # 4. the off rung
     if s.rung == 'off' and not cpn:
         return 'overlord-off'
@@ -571,6 +607,8 @@ def successors(s, c):
         qs = tuple(q._replace(phase=None) for q in s.qs)
         acts = tuple(a._replace(cont=False) for a in s.acts)
         auth = s.auth._replace(cont=None) if s.auth is not None else None
+        if c.AUTH_W1:
+            auth = auth._replace(pend=frozenset())     # the door's report of a narrowing is in memory only
         add(('SERVER CRASH', s._replace(up=False, crashes=s.crashes - 1, qs=qs, acts=acts,
                                         boot=frozenset(), auth=auth)))
     if not s.up:
@@ -582,7 +620,7 @@ def successors(s, c):
                    for q in s.qs)
         ns = s._replace(up=True, boot=frozenset(boot), measured=False, qs=qs)
         if s.auth is not None:
-            ns = boot_coherence(ns, c)
+            ns = boot_w1(ns, c) if c.AUTH_W1 else boot_coherence(ns, c)
         add(('server boots', ns))
 
     # ---------------- boot pass (three writers, three transactions) -------------------
@@ -745,7 +783,7 @@ def successors(s, c):
 
     # ---------------- restore (I7) ---------------------------------------------------------
     if s.auth is not None:
-        out.extend(auth_events(s, c))
+        out.extend(w1_events(s, c) if c.AUTH_W1 else auth_events(s, c))
 
     res = []
     for tr in out:
@@ -1133,7 +1171,7 @@ def operator_events(s, c):
         add(('operator revokes the grant', op_revoke(s, c)))
     if s.rebinds > 0 and s.alive == 'down':
         add(('operator rebinds the Overlord', op_rebind(s, c)))
-    if s.auth is not None and s.auth.rolled:
+    if s.auth is not None and not c.AUTH_W1 and s.auth.rolled:
         add(('operator confirms the restore', s._replace(auth=s.auth._replace(rolled=False))))
     return out
 
@@ -1272,3 +1310,395 @@ def boot_coherence(s, c):
                       auth=a._replace(jgrant=g, jrung=r, jterm=term, rolled=True,
                                       repoch=max(a.repoch, a.wepoch) + 1, jepoch=max(a.repoch, a.wepoch) + 1,
                                       wepoch=max(a.repoch, a.wepoch) + 1))
+
+
+# --------------------------------------------------------------------------------------
+# W1: the authority journal, the witness and Confirm the restore (AUTH_W1)
+#
+# Source: docs/superpowers/plans/2026-11-14-overlord-w1/w1-authority-journal.md, "Open questions" Q1-Q17, the cross-plan
+# rulings X3, X3b, F4 and F5, and Task 4's table (Table 7.6a). Spec section 7.6 is the spec's own text. The model keeps two
+# authority fields, the operator rung (s.rung) and the latch cap (s.latch, the operator's raise or the restore-detected
+# latch: one row, as the ladder keeps it), because the stricter-of rules and the widening and narrowing doors are
+# the same for every field and the other fields (account set, model class, binding) add no new interleaving.
+# Every transition here is one transaction or one environment event, as W0's rule says.
+# --------------------------------------------------------------------------------------
+
+COHERENT = ('coherent',)
+COUNTING = (0, 2)       # the witnesses off the volume: the console and the agent on another host (Q8, Q10)
+W_NAMES = ('console', 'same-host agent', 'other-host agent')
+
+
+def w1_init(c):
+    return AW(jr=(), pj=(), head=None, rows=False, cont=None, mal=False, guard=COHERENT, nonce=0,
+              wit=(None, None, None), answered=frozenset(), lifted=False, settled=frozenset(),
+              pend=frozenset(), told=frozenset(), snap=None, lin=0, rst=c.RESTORES, epdb=0, gdb=0,
+              chg=c.W1_CHANGES, prv=c.PRIVACY_RECORDS, fail=c.POST_APPEND_FAILS, afail=c.APPEND_FAILS,
+              dmg=c.DAMAGES, cfm=c.CONFIRMS, exch=c.W1_EXCHANGES)
+
+
+def w1_db(c, v):
+    """The two counters only a mutation keeps in coord.db (epoch_in_db, restore_generation_in_db); every other run
+    leaves them 0 so they do not split states."""
+    return v if c.MUTATION in ('epoch_in_db', 'restore_generation_in_db') else 0
+
+
+def w1_fold(jr):
+    """The journal's view of the fields, trailing record included (what the records say). A field the records
+    never mention reads as the widest value, which is what the rows start with."""
+    rung, latch = 'full', None
+    for r in jr:
+        if r[0] == 'rung':
+            rung = r[1]
+        elif r[0] == 'latch':
+            latch = r[1]
+        else:
+            rung, latch = r[1], r[2]
+    return rung, latch
+
+
+def w1_lastconf(jr):
+    for i in range(len(jr) - 1, -1, -1):
+        if jr[i][0] == 'confirm':
+            return i
+    return -1
+
+
+def w1_base(a):
+    ci = w1_lastconf(a.jr)
+    return a.jr[ci][3] if ci >= 0 else 0
+
+
+def w1_gen(a):
+    """Q13: the last Confirm record's restore generation, 0 when there is none. The accessor is in the journal."""
+    ci = w1_lastconf(a.jr)
+    return a.jr[ci][5] if ci >= 0 else 0
+
+
+def w1_epoch(a, c):
+    """Q7 epoch-derived-from-heads: the last Confirm's epochAtConfirm, plus the authority records and the privacy
+    records after it; with no Confirm, the base is 0 and the terms are the two sequences."""
+    if c.MUTATION == 'epoch_in_db':
+        return a.epdb                    # a store inside coord.db, which a snapshot carries
+    ci = w1_lastconf(a.jr)
+    if ci < 0:
+        return len(a.jr) + len(a.pj)
+    r = a.jr[ci]
+    return r[3] + (len(a.jr) - ci - 1) + (len(a.pj) - r[4])
+
+
+def w1_tuple(a, c):
+    """The tuple the server sends a witness (Task 5): epoch, base, the two heads, the generation, the boot."""
+    ah = (len(a.jr), a.jr[-1][-1]) if a.jr else None
+    ph = (len(a.pj), a.pj[-1]) if a.pj else None
+    return (w1_epoch(a, c), w1_base(a), ah, ph, w1_gen(a), True)
+
+
+def w1_verdict(a):
+    """Task 4, the decider's table (Table 7.6a), first match. The model has no unreadable file or row, so the two
+    `unmeasured` rows (1 and 2) are reached only through the X3b append failure, not through the decider."""
+    if a.mal:
+        return 'malformed'                                     # row 3
+    n = len(a.jr)
+    if n == 0:
+        return 'coherent' if (a.head is None and not a.rows) else 'missing'    # rows 4 and 5
+    if a.head is None:
+        return 'trailing' if n == 1 else 'ahead'                # rows 8 and 9 with no head row
+    hs, hf = a.head
+    if hs <= n and a.jr[hs - 1][-1] != hf:
+        return 'diverged'                                        # row 7
+    if n == hs:
+        return 'coherent'                                        # row 6
+    if n == hs + 1:
+        return 'trailing'                                        # row 8
+    if n > hs + 1:
+        return 'ahead'                                           # row 9
+    return 'behind'                                              # row 10
+
+
+def w1_to_rb(s, cause):
+    """The guard's move off `coherent` or `unmeasured` (writerFailed, witnessRefused; a rolled-back guard stays as it
+    is). The first move out of coherent raises the restore-detected latch, a row, row-only while the journal is not
+    coherent (F4, Q9): a narrowing, which the model writes as the latch row."""
+    a = s.auth
+    if a.guard[0] == 'rolled-back':
+        return s
+    ns = s._replace(auth=a._replace(guard=('rolled-back', cause)))
+    if ns.latch is None:
+        ns = ns._replace(latch='chat', auth=ns.auth._replace(rows=True))
+    return ns
+
+
+def w1_apply(s, f, v):
+    ns = s._replace(**{f: v})
+    return ns._replace(auth=ns.auth._replace(rows=True))
+
+
+def w1_settle(s, c):
+    """WH: a narrowing is reported done (told) only when a counting witness holds an epoch at or above its record's.
+    The counting witnesses are the console and the agent on another host; the same-host agent never counts (Q10)."""
+    a = s.auth
+    idx = (0, 1, 2) if c.MUTATION == 'same_host_agent_counts' else COUNTING
+    pend, told = set(a.pend), set(a.told)
+    for e in list(pend):
+        if any(a.wit[i] is not None and a.wit[i][0] >= e[2] for i in idx):
+            pend.discard(e)
+            told.add(e)
+    return s._replace(auth=a._replace(pend=frozenset(pend), told=frozenset(told)))
+
+
+def boot_w1(s, c):
+    """Q6 restore-fences-doors-not-boot, Task 4: the boot step records its verdict in the guard and the server starts.
+    A rollback only a witness found is in memory, so it is not re-found here."""
+    a = s.auth
+    v = w1_verdict(a)
+    guard = COHERENT if v == 'coherent' else ('rolled-back', v)
+    wit = tuple(None if w is None else w[:5] + (False,) for w in a.wit)
+    ns = s._replace(auth=a._replace(guard=guard, wit=wit, answered=frozenset(), lifted=False,
+                                    pend=frozenset(), cont=None))
+    if v != 'coherent' and ns.latch is None:
+        ns = ns._replace(latch='chat', auth=ns.auth._replace(rows=True))    # F4: the boot step raises the latch
+    return ns
+
+
+def w1_doors(s):
+    """The operator's doors: (field, value, narrowing)."""
+    out = []
+    for v in ('advise', 'chat', 'off'):
+        if v in RUNG_TARGETS_W1 and RANK[v] < RANK[s.rung]:
+            out.append(('rung', v, True))
+    if s.latch is None:
+        out.append(('latch', 'chat', True))
+    if s.rung != 'full':
+        out.append(('rung', 'full', False))
+    if s.latch is not None:
+        out.append(('latch', None, False))
+    return out
+
+
+RUNG_TARGETS_W1 = ('advise', 'chat', 'off')   # narrowed by the scenario's RUNG_TARGETS in w1_events
+
+
+def w1_events(s, c):
+    out = []
+    a = s.auth
+    m = c.MUTATION
+    live = s.up and not boot_blocking(s, c)
+    idle = live and a.cont is None
+    g = a.guard[0]
+    verdict = w1_verdict(a)
+
+    # ---- the operator's doors (Q1, Q9, X3, X3b) -------------------------------------------------------------------
+    if idle and a.chg > 0:
+        for f, v, narrow in w1_doors(s):
+            if f == 'rung' and v not in ('full',) and v not in c.RUNG_TARGETS:
+                continue
+            if f == 'rung' and v == 'full' and not c.OP_UP:
+                continue
+            word = '%s %s' % (f, v)
+            ns0 = s._replace(auth=a._replace(chg=a.chg - 1))
+            if g == 'coherent' and verdict == 'coherent':
+                # Q1: the writer appends the record, then the caller's row commits in the same transaction. Two
+                # transitions, joined by the continuation, which a crash clears.
+                rec = (f, v, a.lin)
+                jr2 = a.jr + (rec,)
+                ep = w1_epoch(a._replace(jr=jr2, epdb=a.epdb + 1), c)
+                out.append(('operator %s: the journal appends the %s record (row not yet committed)'
+                            % ('narrows' if narrow else 'widens', word),
+                            ns0._replace(auth=ns0.auth._replace(jr=jr2, cont=(f, v, narrow, ep)))))
+                if narrow and a.afail > 0:
+                    # X3b: an append that fails on a coherent journal writes the row only; the guard leaves coherent.
+                    na = ns0.auth._replace(afail=a.afail - 1)
+                    if m == 'narrowing_refused_on_append_failure':
+                        out.append(('REFUSED narrowing %s: the append failed (the rule X3b withdrew)' % word,
+                                    s._replace(auth=a._replace(chg=a.chg - 1, afail=a.afail - 1))))
+                    else:
+                        ns = w1_apply(ns0._replace(auth=na), f, v)
+                        ns = ns._replace(auth=ns.auth._replace(guard=('unmeasured', 'journal')))
+                        if ns.latch is None:
+                            ns = ns._replace(latch='chat')
+                        out.append(('operator narrows %s: the append fails, the row lands alone, the guard leaves '
+                                    'coherent (X3b)' % word, ns))
+            elif g == 'coherent':
+                # Only a mutated guard reaches this: the writer re-reads the file and finds it incoherent (Q1).
+                if narrow:
+                    ns = w1_to_rb(w1_apply(ns0, f, v), verdict)
+                    out.append(('operator narrows %s: the writer finds the journal %s, the row lands alone'
+                                % (word, verdict), ns))
+                else:
+                    out.append(('operator widens %s: the writer finds the journal %s and refuses'
+                                % (word, verdict), w1_to_rb(ns0, verdict)))
+            elif narrow:
+                if m == 'narrowing_refused_while_incoherent':
+                    out.append(('REFUSED narrowing %s while the journal is incoherent (the strict rule)' % word,
+                                ns0))
+                elif m == 'append_over_incoherent' and verdict == 'trailing':
+                    # The old shape: the writer appends over the trailing record, so the head row moves level with
+                    # the file, and its apply step writes the journal's fold, trailing record included.
+                    jr2 = a.jr + ((f, v, a.lin),)
+                    fr, fl = w1_fold(jr2)
+                    ns = ns0._replace(rung=fr, latch=fl,
+                                      auth=ns0.auth._replace(jr=jr2, head=(len(jr2), a.lin), rows=True))
+                    out.append(('operator narrows %s: the writer appends over a trailing record' % word, ns))
+                else:
+                    # Q9 / X3: a narrowing while the journal is not coherent writes its row only; no append, and
+                    # the head row does not move.
+                    out.append(('operator narrows %s while the journal is incoherent: row only (X3)' % word,
+                                w1_apply(ns0, f, v)))
+            # a widening over a non-coherent guard is refused authority-rolled-back: no transition (the door says no)
+
+    # ---- the row commit, or its failure after the append (Q1, F1) ---------------------------------------------------
+    if s.up and a.cont is not None:
+        f, v, narrow, ep = a.cont
+        ns = w1_apply(s, f, v)
+        na = ns.auth
+        pend = set(na.pend)
+        told = set(na.told)
+        if narrow:
+            pend.add((f, v, ep))
+        else:
+            pend = {e for e in pend if e[0] != f}
+            told = {e for e in told if e[0] != f}
+        na = na._replace(cont=None, head=(len(na.jr), na.jr[-1][-1]), pend=frozenset(pend), told=frozenset(told),
+                         epdb=w1_db(c, ep))
+        ns = w1_settle(ns._replace(auth=na), c)
+        out.append(('row committed: %s %s' % (f, v), ns, {'w1': 'narrow' if narrow else 'widen'}))
+        if a.fail > 0:
+            nf = s._replace(auth=a._replace(cont=None, fail=a.fail - 1))
+            if m != 'writer_failure_unfenced':
+                nf = w1_to_rb(nf, 'trailing')           # F1: the writer calls writerFailed('trailing') at once
+            out.append(('the row fails after the append: the transaction rolls back, the record stays, the '
+                        'server keeps running (F1)', nf))
+
+    # ---- a privacy record (Q7, Q11) ---------------------------------------------------------------------------------
+    if idle and a.prv > 0:
+        out.append(('a privacy record is appended',
+                    s._replace(auth=a._replace(pj=a.pj + (a.lin,), prv=a.prv - 1, epdb=w1_db(c, a.epdb + 1)))))
+
+    # ---- a witness exchange, each witness separately, any order (Q8, Q10, Task 5's table) ---------------------------
+    if idle and not a.mal and g != 'unmeasured' and a.exch > 0:
+        for i in range(3):
+            out.append(w1_exchange(s, i, c))
+
+    # ---- the door re-measures an `unmeasured` guard (Task 4) ---------------------------------------------------------
+    if idle and g == 'unmeasured':
+        if verdict == 'coherent':
+            out.append(('the door re-measures the journal: coherent', s._replace(auth=a._replace(guard=COHERENT))))
+        else:
+            out.append(('the door re-measures the journal: %s' % verdict, w1_to_rb(s, verdict)))
+
+    # ---- the file damaged past the heal (Q17), found at the next boot ------------------------------------------------
+    if not s.up and a.dmg > 0 and not a.mal and a.jr:
+        out.append(('the journal file is damaged past the heal', s._replace(auth=a._replace(mal=True, dmg=a.dmg - 1))))
+
+    # ---- snapshot and restores ---------------------------------------------------------------------------------------
+    if idle and a.snap is None:
+        snap = (s.rung, s.latch, a.rows, a.head, a.epdb, a.gdb, a.jr, a.pj, a.wit[1])
+        out.append(('backup: snapshot of the volume', s._replace(auth=a._replace(snap=snap))))
+    if not s.up and a.snap is not None and a.rst > 0:
+        rg, la, rw, hd, ed, gd, jr, pj, ag = a.snap
+        base = s._replace(rung=rg, latch=la,
+                          auth=a._replace(rows=rw, head=hd, epdb=ed, gdb=gd, lin=a.lin + 1, rst=a.rst - 1,
+                                          settled=frozenset()))
+        out.append(('W1 RESTORE coord.db alone from the snapshot (journal file and witnesses stay)', base))
+        whole = base._replace(auth=base.auth._replace(jr=jr, pj=pj, mal=False,
+                                                      wit=(a.wit[0], ag, a.wit[2])))
+        out.append(('W1 RESTORE the whole volume from the snapshot (rows, head row, journal and the same-host '
+                    'agent come back)', whole))
+
+    # ---- Confirm the restore (Q7, Q13, Q17, F5, Task 8) --------------------------------------------------------------
+    if idle and a.cfm > 0 and g != 'unmeasured':
+        if g == 'coherent' and verdict == 'coherent':
+            pass                                    # nothing waits: no transition (answers changed:false)
+        elif g == 'coherent' and m == 'writer_failure_unfenced':
+            out.append(('Confirm answers changed:false, nothing waits (decided from the guard alone)',
+                        s._replace(auth=a._replace(cfm=a.cfm - 1))))
+        elif not (a.mal and m == 'no_confirm_over_malformed'):
+            out.append(w1_confirm(s, c))
+    return out
+
+
+def w1_exchange(s, i, c):
+    """One witness exchange (Task 5's table, first match): the verdict, what the witness keeps, what it counts."""
+    s = s._replace(auth=s.auth._replace(exch=s.auth.exch - 1))
+    a = s.auth
+    m = c.MUTATION
+    T = w1_tuple(a, c)
+    H = a.wit[i]
+    ans = a.answered | {i}
+
+    def put(t):
+        w = list(a.wit)
+        w[i] = t
+        return tuple(w)
+
+    nm = W_NAMES[i]
+    if H is None:                                                        # row 2: no-witness; it takes the tuple
+        ns = s._replace(auth=a._replace(wit=put(T), answered=ans))
+        return ('W1 exchange with the %s: it holds nothing and takes the tuple' % nm, w1_settle(ns, c),
+                {'w1x': (i, 'no-witness')})
+    if H[1] < T[1]:                                                      # row 4: stale (its base is below)
+        ns = s._replace(auth=a._replace(wit=put(T), answered=ans))
+        return ('W1 exchange with the %s: stale, it takes the tuple' % nm, w1_settle(ns, c),
+                {'w1x': (i, 'stale')})
+    cause = None
+    if H[1] > T[1] or H[0] > T[0]:                                       # row 5: its epoch is higher
+        cause = 'witness-epoch'
+    elif m != 'heads_not_checked':                                       # row 6: a head it holds is not held
+        if H[2] is not None and not (H[2][0] <= len(a.jr) and a.jr[H[2][0] - 1][-1] == H[2][1]):
+            cause = 'witness-heads'
+        elif H[3] is not None and not (H[3][0] <= len(a.pj) and a.pj[H[3][0] - 1] == H[3][1]):
+            cause = 'witness-heads'
+    if cause is not None:
+        ns = w1_to_rb(s._replace(auth=a._replace(answered=ans)), cause)
+        return ('W1 exchange with the %s: refused, %s' % (nm, cause), ns, {'w1x': (i, 'refused', cause)})
+    # row 7: consistent. It counts only off the volume, and only from an earlier boot (Q8).
+    counts = (i in COUNTING or (m == 'same_host_agent_counts' and i == 1)) and \
+        (not H[5] or m == 'this_boot_witness_counts')
+    keep = T if H[0] < T[0] else H
+    ns = s._replace(auth=a._replace(wit=put(keep), answered=ans, lifted=a.lifted or counts))
+    return ('W1 exchange with the %s: consistent%s' % (nm, ', and it counts' if counts else ''), w1_settle(ns, c),
+            {'w1x': (i, 'consistent', counts)})
+
+
+def w1_confirm(s, c):
+    """The operator's Confirm the restore (Task 8). Appends the Confirm record first (F5), then writes the stricter
+    values (X3). Over a malformed file it starts a new chain (Q17)."""
+    a = s.auth
+    m = c.MUTATION
+    ans = [a.wit[i] for i in a.answered if a.wit[i] is not None]
+    verdict = w1_verdict(a)
+    if a.mal:
+        bound = len(a.jr)
+        ep_floor, gen_floor = bound, bound
+        fr, fl = 'off', None                         # Q17: the journal side reads as the narrowest value
+        base_chain, lin = (), a.lin + 1
+    else:
+        ep_floor, gen_floor = w1_epoch(a, c), w1_gen(a)
+        fr, fl = w1_fold(a.jr)
+        base_chain, lin = a.jr, a.lin
+    # Q13: the epoch and the generation each above the journal's own and every answered witness's.
+    ep = (ep_floor if m == 'confirm_no_epoch_raise' else max([ep_floor] + [t[0] for t in ans])) + 1
+    if m == 'generation_ignores_witnesses':
+        gen = gen_floor + 1
+    elif m == 'restore_generation_in_db':
+        gen = a.gdb + 1
+    else:
+        gen = max([gen_floor] + [t[4] for t in ans]) + 1
+    # Task 8's stricter-of table: the lower rung, the union of latches (F4: the standing latch is not lifted).
+    rung = s.rung if RANK[s.rung] <= RANK[fr] else fr
+    latch = 'chat' if (s.latch or fl) else None
+    if m == 'trailing_widening_applied' and verdict == 'trailing':
+        r = a.jr[-1]
+        if r[0] == 'rung':
+            rung = r[1]
+        elif r[0] == 'latch':
+            latch = r[1]
+    rec = ('confirm', rung, latch, ep, len(a.pj), gen, lin)
+    jr2 = base_chain + (rec,)
+    ns = s._replace(rung=rung, latch=latch,
+                    auth=a._replace(jr=jr2, head=(len(jr2), lin), rows=True, mal=False, guard=COHERENT, cont=None,
+                                    cfm=a.cfm - 1, lin=lin, settled=frozenset(a.answered), epdb=w1_db(c, ep), gdb=w1_db(c, gen),
+                                    # the operator's step-up'd review accepts the state (the model's reading of I7w)
+                                    pend=frozenset(), told=frozenset()))
+    return ('operator confirms the restore%s' % (' (over a malformed journal: a new chain)' if a.mal else ''), ns,
+            {'w1': 'confirm'})

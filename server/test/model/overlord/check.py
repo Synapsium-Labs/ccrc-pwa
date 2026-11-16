@@ -85,7 +85,7 @@ def i7(s, c):
     # I7 "After a restore, no authority field is wider than the journal's".
     # Reading A: the journal file as it stands after the restore.
     a = s.auth
-    if a is None or not s.up or s.boot or a.cont is not None or a.snap != 'used':
+    if c.AUTH_W1 or a is None or not s.up or s.boot or a.cont is not None or a.snap != 'used':
         return None
     if M.GW[s.grant] > M.GW[a.jgrant]:
         return 'grant %s is wider than the journal (%s)' % (s.grant, a.jgrant)
@@ -100,7 +100,7 @@ def i7t(s, c):
     # I7, reading B: "the journal's" = every authority change the operator was told committed,
     # which a restore of the whole volume can take away with the journal file.
     a = s.auth
-    if a is None or not s.up or s.boot or a.cont is not None or a.snap != 'used':
+    if c.AUTH_W1 or a is None or not s.up or s.boot or a.cont is not None or a.snap != 'used':
         return None
     tg, tr, tt = a.truth
     if M.GW[s.grant] > M.GW[tg]:
@@ -171,11 +171,88 @@ def x4(s, c):
     return None
 
 
-STATE_CHECKS = [('I1', i1), ('I2', i2), ('I3', i3), ('I7', i7), ('I7t', i7t), ('I9', i9), ('I10', i10), ('X1', x1), ('X4', x4)]
+def i7w(s, c):
+    # W1, I7w (plan w1-authority-journal, Task 1): "After any restore, no authority field the server acts on is wider
+    # than every narrowing the operator was told took effect. This is I7, reading B, made exact."
+    # The server acts on a field while the guard is coherent; a rolled-back or unmeasured guard refuses the Overlord's
+    # doors and the ladder is latched at `chat`, so it acts at most there. `told` holds a narrowing only once a counting
+    # witness held an epoch at or above its record's (WH), and is dropped at Confirm, the operator's step-up'd review of
+    # the restored state, and when the operator widens the field. The check starts once every witness off the volume
+    # that holds a tuple has answered since this boot: before that the server is in Q8's first window, capped at
+    # `advise` (a stated residual, model-results.md), and no verdict can have been reached.
+    a = s.auth
+    if not c.AUTH_W1 or a is None or not s.up or s.boot or a.cont is not None or a.lin == 0:
+        return None
+    if any(a.wit[i] is not None and i not in a.answered for i in M.COUNTING):
+        return None
+    eff = min(M.RANK[s.rung], M.RANK[s.latch] if s.latch else 3)
+    if a.guard[0] != 'coherent':
+        eff = min(eff, M.RANK['chat'])
+    for f, v, e in sorted(a.told, key=str):
+        if eff > M.RANK[v if f == 'rung' else 'chat']:
+            return 'the server acts on rung %s%s (guard %s) but the operator was told %s %s took effect (record epoch %d)' % (
+                s.rung, ' under latch %s' % s.latch if s.latch else '', a.guard[0], f, v, e)
+    return None
+
+
+STATE_CHECKS = [('I1', i1), ('I2', i2), ('I3', i3), ('I7', i7), ('I7t', i7t), ('I7w', i7w), ('I9', i9), ('I10', i10),
+                ('X1', x1), ('X4', x4)]
+
+
+def w1_trans(s, lbl, info, s2, c):
+    out = []
+    a, b = s.auth, s2.auth
+    info = info or {}
+    # NL (rulings X3, X3b): an operator narrowing is never refused, whatever the journal's state and whatever its
+    # append answers. Only a mutation produces a refused narrowing; the edge's label says so.
+    if lbl.startswith('REFUSED narrowing'):
+        out.append(('NL', lbl))
+    if not lbl.startswith('W1 RESTORE'):
+        # I11a: a field widens only on an edge labelled as an operator's door (the commit of a widening), or as Confirm
+        # the restore taking the stricter of two values, which never widens against either side.
+        wider_rung = M.RANK[s2.rung] > M.RANK[s.rung]
+        wider_latch = s.latch is not None and s2.latch is None
+        if info.get('w1') == 'confirm':
+            fr, fl = ('off', None) if a.mal else M.w1_fold(a.jr)
+            if M.RANK[s2.rung] > M.RANK[s.rung] or M.RANK[s2.rung] > M.RANK[fr]:
+                out.append(('I11a', 'Confirm set rung %s: wider than the rows (%s) or the journal (%s)'
+                            % (s2.rung, s.rung, fr)))
+            if s2.latch is None and (s.latch or fl):
+                out.append(('I11a', 'Confirm cleared a latch the rows (%s) or the journal (%s) hold' % (s.latch, fl)))
+        elif (wider_rung or wider_latch) and info.get('w1') != 'widen':
+            out.append(('I11a', 'a field widened (rung %s -> %s, latch %s -> %s) on "%s", which is no operator '
+                                'widening door' % (s.rung, s2.rung, s.latch, s2.latch, lbl)))
+    # WH: a narrowing is reported done only when the console or the other-host agent holds an epoch at or above its
+    # record's.
+    for f, v, e in b.told - a.told:
+        if not any(b.wit[i] is not None and b.wit[i][0] >= e for i in M.COUNTING):
+            out.append(('WH', 'the operator was told %s %s took effect (record epoch %d) with no counting witness '
+                              'holding it (console %s, same-host agent %s, other-host agent %s)'
+                        % (f, v, e, b.wit[0] and b.wit[0][0], b.wit[1] and b.wit[1][0], b.wit[2] and b.wit[2][0])))
+    # RG: the restore generation never decreases, and a Confirm issues one above the journal's and every answered
+    # witness's (Q13; the witnesses that had not answered are the stated residual).
+    if info.get('w1') == 'confirm':
+        floor = len(a.jr) if a.mal else M.w1_gen(a)
+        floor = max([floor] + [a.wit[i][4] for i in a.answered if a.wit[i] is not None])
+        got = M.w1_gen(b)
+        if got <= floor:
+            out.append(('RG', 'Confirm issued restore generation %d, not above %d (the journal, or the file kept '
+                              'aside, and the witnesses that had answered)' % (got, floor)))
+    elif not lbl.startswith('W1 RESTORE') and M.w1_gen(b) < M.w1_gen(a):
+        out.append(('RG', 'the restore generation fell from %d to %d on "%s"' % (M.w1_gen(a), M.w1_gen(b), lbl)))
+    # L2 (the half of the liveness rule that says "stays"): after a Confirm and no restore, a witness that had
+    # answered before the Confirm never refuses again.
+    x = info.get('w1x')
+    if x is not None and x[1] == 'refused' and x[0] in a.settled:
+        out.append(('L2', 'the %s answered before the last Confirm, no restore happened since, and it refuses again '
+                          '(%s)' % (M.W_NAMES[x[0]], x[2])))
+    return out
 
 
 def trans_checks(s, lbl, info, s2, c):
     out = []
+    if c.AUTH_W1 and s.auth is not None:
+        out.extend(w1_trans(s, lbl, info, s2, c))
     if info:
         w = info.get('accepted_write')
         if w is not None:
@@ -237,7 +314,7 @@ def trans_checks(s, lbl, info, s2, c):
 # Search
 # --------------------------------------------------------------------------------------
 
-CAT_OTHER, CAT_OPANS, CAT_CRASH = 0, 1, 2
+CAT_OTHER, CAT_OPANS, CAT_CRASH, CAT_RESTORE = 0, 1, 2, 3
 
 
 def cat(lbl):
@@ -245,6 +322,8 @@ def cat(lbl):
         return CAT_OPANS
     if lbl.startswith('SERVER CRASH'):
         return CAT_CRASH
+    if lbl.startswith('W1 RESTORE'):
+        return CAT_RESTORE
     return CAT_OTHER
 
 
@@ -320,7 +399,14 @@ def fmt_state(s):
         out += '\n        outbox: ' + ' '.join(ob)
     if acts:
         out += '\n        acts: ' + ' '.join(acts)
-    if s.auth is not None:
+    if s.auth is not None and hasattr(s.auth, 'guard'):
+        a = s.auth
+        out += '\n        authority: jr=%s pj=%s head=%s rows=%s cont=%s%s guard=%s nonce=%d lift=%s' % (
+            [r[:-1] + ('f%d' % r[-1],) for r in a.jr], list(a.pj), a.head, a.rows, a.cont, ' MALFORMED' if a.mal else '',
+            a.guard, a.nonce, a.lifted)
+        out += '\n        witnesses=%s answered=%s settled=%s pend=%s told=%s lin=%d' % (
+            a.wit, sorted(a.answered), sorted(a.settled), sorted(a.pend, key=str), sorted(a.told, key=str), a.lin)
+    elif s.auth is not None:
         a = s.auth
         out += '\n        journal: grant=%s rung=%s term=%d; truth=%s; epochs row/journal/witness=%d/%d/%d%s' % (
             a.jgrant, a.jrung, a.jterm, a.truth, a.repoch, a.jepoch, a.wepoch, ' ROLLED' if a.rolled else '')
@@ -409,6 +495,18 @@ def liveness(g, c):
     bad = [k for k in range(n) if not mark[k]]
     if bad:
         res.append(('D2b', bad[0], 'generation machine cannot return to active or degraded', len(bad)))
+    if c.AUTH_W1:
+        # L1 (plan w1-authority-journal, Task 1, "Liveness"): from any state where the journal is not coherent -- a
+        # rolled-back guard of any cause, malformed and a failure after the append included, or a trailing file under
+        # a guard that reads coherent -- Confirm reaches `coherent` along edges that are not restores. States with no
+        # Confirm left are a bound, as W0 discounts a spent renewal budget. "Stays" is L2, an edge check.
+        good = bytearray(1 if (s.auth.guard[0] == 'coherent' and M.w1_verdict(s.auth) == 'coherent') else 0
+                         for s in st)
+        mark = backward(g, good, {CAT_OTHER, CAT_CRASH, CAT_OPANS})
+        bad = [k for k in range(n) if not mark[k] and st[k].auth.cfm > 0]
+        if bad:
+            res.append(('L1', bad[0], 'the journal is not coherent and no Confirm, with no restore, makes it coherent '
+                                      '(%d states)' % len(bad), len(bad)))
     # D3: an outbox row that can no longer be sent without a server crash (push service fair).
     for k in range(-1, c.N_Q):
         good = bytearray(0 if any(o.q == k and not o.sent for o in s.ob) else 1 for s in st)
@@ -483,6 +581,25 @@ SCEN = {
     'deadpush': sc(N_Q=1, KINDS=(('ask_oo',),), T_MAX=3, SESSION_CRASHES=1, RESTART_BOUND=0),
     # Restore: the authority journal, a snapshot, both kinds of restore, a trailing record.
     'restore': sc(N_Q=0, KINDS=(), RESTORES=1, AUTH_CHANGES=1, RUNG_OPS=2, SERVER_CRASHES=2, T_MAX=2),
+    # W1 (plan w1-authority-journal, Task 1), all behind AUTH_W1 and with the rest of the machine quiet: the authority
+    # journal, the witnesses, the boot coherence and Confirm the restore. The rung targets are `chat` alone: `off` is
+    # left out because a rolled-back guard acts at the `chat` latch, which is wider than a told `off` (model-results.md,
+    # residual 2), and `advise` only multiplies states. The exchange budget bounds the witnesses' variety.
+    # A snapshot, either restore, two authority changes, a crash, a Confirm, and two exchanges.
+    'restore-w1': sc(N_Q=0, KINDS=(), AUTH_W1=True, T_MAX=0, RESTORES=1, W1_CHANGES=2, SERVER_CRASHES=1, CONFIRMS=1,
+                     W1_EXCHANGES=2, RUNG_TARGETS=('chat',)),
+    # One change and a privacy record; the three witnesses' exchanges in every order, before and after a restore.
+    'witness': sc(N_Q=0, KINDS=(), AUTH_W1=True, T_MAX=0, RESTORES=1, W1_CHANGES=1, PRIVACY_RECORDS=1,
+                  SERVER_CRASHES=1, CONFIRMS=1, W1_EXCHANGES=3, RUNG_TARGETS=('chat',)),
+    # One change whose row fails after its append, a failed append, then an operator narrowing, then Confirm.
+    'writer-failure': sc(N_Q=0, KINDS=(), AUTH_W1=True, T_MAX=0, W1_CHANGES=2, POST_APPEND_FAILS=1, APPEND_FAILS=1,
+                         SERVER_CRASHES=1, CONFIRMS=1, W1_EXCHANGES=1, RUNG_TARGETS=('chat',)),
+    # The file damaged past the heal, an operator narrowing, then Confirm.
+    'malformed': sc(N_Q=0, KINDS=(), AUTH_W1=True, T_MAX=0, W1_CHANGES=2, DAMAGES=1, SERVER_CRASHES=1, CONFIRMS=1,
+                    W1_EXCHANGES=1, RUNG_TARGETS=('chat',)),
+    # A restore, Confirm, then a change; two crashes so a boot follows the Confirm. Full list only.
+    'confirm': sc(N_Q=0, KINDS=(), AUTH_W1=True, T_MAX=0, RESTORES=1, W1_CHANGES=2, SERVER_CRASHES=2, CONFIRMS=2,
+                  W1_EXCHANGES=2, RUNG_TARGETS=('chat',)),
     # Generation machine alone, with a bigger renewal budget, for D2.
     'genmachine': sc(N_Q=0, KINDS=(), RENEWALS=3, SESSION_CRASHES=1, SERVER_CRASHES=1, SWAPS=1,
                      OPERATOR_MSGS=1, PROBE_FAILS=True, GEN_TIMEOUTS=True, STALE_CALLERS=True, T_MAX=3),
@@ -561,6 +678,25 @@ MUTATIONS = [
     ('proof_outlives_conversation', 'genback', {}, 'X6'),
     ('back_always_degraded', 'genback', {},
      "none expected: the fact 'a failed renewal returns to active with a hold-off' becomes unreachable"),
+    # W1 (plan w1-authority-journal, Task 1's table). Each runs against the scenario and overrides without it.
+    ('same_host_agent_counts', 'restore-w1', {}, 'WH, I7w'),
+    # The plan names I7w for epoch_in_db; the model catches it by L2 instead (model-results.md, finding 1): a restore of
+    # the database alone lowers the stored epoch, boot coherence already refuses by the heads, and the Confirm that follows
+    # sets the epoch from the stored value, below a witness that answered, so that witness refuses again.
+    ('epoch_in_db', 'confirm', {}, 'L2'),
+    ('heads_not_checked', 'witness', {}, 'I7w'),
+    # Needs a witness holding a Confirm base above the new one: a Confirm, then a restore past it, then a second Confirm.
+    ('confirm_no_epoch_raise', 'confirm', {'W1_CHANGES': 1, 'RESTORES': 2, 'W1_EXCHANGES': 5}, 'L2'),
+    ('trailing_widening_applied', 'writer-failure', {}, 'I11a'),
+    ('append_over_incoherent', 'writer-failure', {}, 'I11a'),
+    ('narrowing_refused_while_incoherent', 'writer-failure', {}, 'NL'),
+    ('narrowing_refused_on_append_failure', 'writer-failure', {}, 'NL'),
+    ('writer_failure_unfenced', 'writer-failure', {}, 'L1'),
+    ('no_confirm_over_malformed', 'malformed', {}, 'L1'),
+    ('restore_generation_in_db', 'confirm', {}, 'RG'),
+    ('generation_ignores_witnesses', 'confirm', {}, 'RG'),
+    ('this_boot_witness_counts', 'restore-w1', {},
+     'none expected: a tuple from this boot lifts no-witness-since-boot, which weakens a mitigation, not an invariant'),
 ]
 
 # Reachability facts reported with every run (sanity of the model, and some design questions).
@@ -574,10 +710,22 @@ FACTS = {
     'a generation is active with its card unread': lambda s: s.gen.st == 'active' and not s.gen.card,
     'a row is released server-gap': lambda s: any(q.outcome == 'server-gap' for q in s.qs),
     'a failed renewal returns to active with a hold-off': lambda s: s.gen.st == 'active' and s.gen.holdoff,
+    # W1 sanity facts: the scenarios reach the states the invariants are about.
+    'W1: a witness refuses a restored volume': lambda s: hasattr(s.auth, 'guard') and s.auth.guard[0] == 'rolled-back'
+        and s.auth.guard[1] in ('witness-epoch', 'witness-heads'),
+    'W1: boot coherence finds a restore': lambda s: hasattr(s.auth, 'guard') and s.auth.guard[0] == 'rolled-back'
+        and s.auth.guard[1] in ('ahead', 'behind', 'diverged', 'missing'),
+    'W1: a failure after the append leaves a trailing record under a rolled-back guard':
+        lambda s: hasattr(s.auth, 'guard') and s.auth.guard == ('rolled-back', 'trailing') and s.up,
+    'W1: Confirm makes a rolled-back journal coherent':
+        lambda s: hasattr(s.auth, 'guard') and s.auth.settled != frozenset() and s.auth.guard[0] == 'coherent',
+    'W1: the boot finds a malformed journal': lambda s: hasattr(s.auth, 'guard') and s.auth.guard == ('rolled-back', 'malformed'),
+    'W1: the operator is told a narrowing took effect': lambda s: hasattr(s.auth, 'guard') and bool(s.auth.told),
+    'W1: no-witness-since-boot is lifted': lambda s: hasattr(s.auth, 'guard') and s.auth.lifted,
 }
 
-ALL_NAMES = ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I7t', 'I8', 'I9', 'I10', 'X1', 'X2', 'X4', 'X5', 'X6', 'D1', 'D2', 'D2b',
-             'D3']
+ALL_NAMES = ['I1', 'I2', 'I3', 'I4', 'I5', 'I6', 'I7', 'I7t', 'I7w', 'I8', 'I9', 'I10', 'I11a', 'RG', 'WH', 'NL', 'X1', 'X2',
+             'X4', 'X5', 'X6', 'D1', 'D2', 'D2b', 'D3', 'L1', 'L2']
 
 
 def run(name, overrides, show=True, live=True):
