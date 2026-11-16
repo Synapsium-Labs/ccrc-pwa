@@ -113,7 +113,8 @@ the waiting view and its frame, ask lists included, are open to any local proces
 ## Growth
 
 Measured against `origin/main` (merge base `649ac3f13`) with the growth check's own `netGrowth` over `growthFiles`:
-`server/src/coord/store.ts` +1 and `server/src/server.ts` +1; every other listed file 0. No waiver.
+`server/src/coord/store.ts` +2 (two delegates, `askMarkTargets` and `askMarkRead`) and `server/src/server.ts` +1; every
+other listed file 0. No waiver. Re-measured after review 2217's fix round.
 
 ## Red checks
 
