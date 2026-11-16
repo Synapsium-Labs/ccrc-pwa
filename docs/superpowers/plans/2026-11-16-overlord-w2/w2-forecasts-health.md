@@ -600,7 +600,7 @@ CREATE TABLE run_spend (
 - [ ] **Step 2: Failing tests:** a closed run with a live reading gets a `measured` row; one with none gets `absent`;
   a second pass changes nothing; a health change appends one row, a repeat appends none; a worse word records one
   `record-only` notice, a better word none; the notice never pushes.
-- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the suites above, `notice` tests and the
+- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the suites above, `notice.test.ts` and the
   typechecks. Green.
 - [ ] **Step 6: Red check.** Record `absent` as cost 0: its case reds. Notify on a better word: its case reds. A second
   writer of `run_spend`: `writers-map` reds.
@@ -634,8 +634,8 @@ request's runs.
   carries its reason; the view's calibration reads `unmeasured` with fewer than 8 scored seals per cut; a `target-ended`
   edge is listed and does not block; `blocked-on-you` from a shown `needs-decision` edge; spend sums measured rows and
   counts an `absent` one in `runsUnmeasured`, never as 0; the critical path through another programme's run.
-- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the portfolio suites, the auth-gate and
-  ledgers-route suites, the mutation floors and the typechecks, pwa's included. Green.
+- [ ] **Step 3: Run.** Red. **Step 4: Implement.** **Step 5: Run** the portfolio suites, `portfolio-routes.test.ts`,
+  the mutation floors and the typechecks, pwa's included. Green.
 - [ ] **Step 6: Red check.** Drop the edges from `blocking`: the `needs-decision` case reds. Fold `absent` into 0: the
   spend case reds.
 - [ ] **Step 7: Private-name scan**, then commit.
