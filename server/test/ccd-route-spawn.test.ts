@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness, toolAdjToken as adj, sessionTmpToken, sessionPanePath } from './ccdWsHelpers.js';
+import { programFile } from './consolidationCensus.js';
 import { paneFragment } from './worktreeIdentityFixture.js';   // path-identity W3 (R8): the pane's entry-identity writer, read from ccd's composer
 
 let h: CcdHarness;
@@ -370,7 +371,7 @@ describe('the codex-lane-workflows switch (D-8631)', () => {
     const files = [...['ccd', 'deploy', 'shared', 'server/src', 'agent/src', 'pwa/src'].flatMap((r) => walk(path.join(root, r))),
       ...['install.sh'].map((f) => path.join(root, f)).filter((f) => fs.existsSync(f))];
     expect(files.length, 'the walk reached the shipped tree').toBeGreaterThan(200);
-    const hits = files.flatMap((f) => codeLines(f, fs.readFileSync(f, 'utf8')).filter((l) => l.includes('codex-lane-workflows')).map((l) => `${path.relative(root, f)}: ${l.trim()}`));
+    const hits = files.flatMap((f) => codeLines(f, fs.readFileSync(f, 'utf8')).filter((l) => l.includes('codex-lane-workflows')).map((l) => `${programFile(path.relative(root, f))}: ${l.trim()}`));   // a library of ccd is ccd/ccd (D-8048)
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatch(/^ccd\/ccd: .*\[\[ -e "\$REG\/codex-lane-workflows" \]\]/);
   });

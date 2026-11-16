@@ -15,13 +15,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { bashCode, rawBashTmux, rawTsTmux, type Site } from './tmuxSocketCensus.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { ccdSource, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { CCD_LIB_FILES, programFile } from './consolidationCensus.js';
 import { sourceOfSymbol } from './scan/symbols.js';
 import { TMUX_REFUSE_SH, TMUX_SOCKET_FILE, TMUX_SOCKET_NAME_RE } from '../../shared/tmux-target.js';
 
 const ROOT = path.resolve(__dirname, '../..');
-const read = (f: string): string => fs.readFileSync(path.join(ROOT, f), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (f: string): string => (f === 'ccd/ccd' ? ccdSource() : fs.readFileSync(path.join(ROOT, f), 'utf8'));
 const tracked = (...dirs: string[]): string[] =>
   execFileSync('git', ['ls-files', '-z', '--', ...dirs], { cwd: ROOT, encoding: 'utf8' }).split('\0').filter(Boolean);
 

@@ -32,7 +32,8 @@ const sha = (text: string): string => createHash('sha256').update(text).digest('
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
 /** A fixture body: the pin placeholders the installer renders (the two libraries', D-6913 and D-7463, and the docs
  *  redactor's two, D-7077) and one line of its own. */
-const FIXTURE = `#!/usr/bin/env bash\n${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_TRAIN_LIB_PIN_PLACEHOLDER}\n${CCD_LEASE_LIB_PIN_PLACEHOLDER}\n${CCD_POOLSET_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\necho fixture\n`;
+// The fixture body names ccd's library table, as the real one does: the installer reads it (`read_lib_table`, D-8048).
+const FIXTURE = `#!/usr/bin/env bash\n__CCD_LIBS=(${CCD_LIBS.map((f) => path.basename(f, '.sh')).join(' ')})\n${CCD_LIB_PIN_PLACEHOLDER}\n${CCD_TRAIN_LIB_PIN_PLACEHOLDER}\n${CCD_LEASE_LIB_PIN_PLACEHOLDER}\n${CCD_POOLSET_LIB_PIN_PLACEHOLDER}\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\necho fixture\n`;
 
 /** A shipped-tree copy at `<home>/ccrc` holding THIS checkout's real ccd body, library, template and installer. */
 function plantTree(ccdText: string = fs.readFileSync(CCD, 'utf8')): void {

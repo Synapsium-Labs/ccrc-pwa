@@ -118,7 +118,7 @@ describe('PIN: the load before and after the table (D-8048)', () => {
       return text.replace(loaderOf(text), '').split('\n').filter((l) => !l.startsWith('__CCD_LIBS=(') && !/^\s*#/.test(l)).join('\n');
     };
     if (rest(before) !== rest(after)) return;
-    const dropLoader = (dump: string): string => dump.replace(/^_ccd_lib_load \(\) \n\{\n[\s\S]*?\n\}\n/m, '');
+    const dropLoader = (dump: string): string => dump.replace(/^_ccd_lib_load \(\) \n\{ ?\n[\s\S]*?\n\}\n/m, '');
     expect(dropLoader(programDump(after)), 'the program the load leaves').toBe(dropLoader(programDump(before)));
   });
 });

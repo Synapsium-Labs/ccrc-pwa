@@ -60,6 +60,28 @@ export const PROGRAM_READERS: readonly string[] = [
   'server/test/ccd-ws-lease-mark-argv.test.ts', // ccd/ listed for its skill directories; no program file is read
   'server/test/single-definition/switches-history.test.ts', // ccd/ and deploy/ walked whole; ccd/ccd read as the program (bashText)
   'server/test/ccrc-versioned-audit.test.ts', // ccd/ walked whole, lib/ among it
+  'server/test/census-w5/singleWriters.ts',   // ccd/ccd as ccdProgramBodies(), its libraries included; ccd/*.sh beside
+  'server/test/ccd-collect-record.test.ts',   // every program in ccd/ but ccd: the body and its libraries are ccd
+  'server/test/citations.test.ts',            // every tracked file, each library among them
+  'server/test/providers.test.ts',            // every tracked file, each library among them
+  'server/test/workflow-control-census.test.ts', // every tracked file under ccd/, each library among them
+  'server/test/testbox-knobs.test.ts',        // ccd/, deploy/ and agent/src walked whole
+  'server/test/units-limitcore.test.ts',      // ccd/ walked whole for unit files; no program file is read
+  'server/test/ccd-land-probe-readonly.test.ts', // every tracked file, each library among them
+  'server/test/ccd-python-reader-census.test.ts', // ccd/ listed recursively for its Python programs
+  'server/test/ccd-route-spawn.test.ts',      // the shipped tree walked whole; a holder named by programFile()
+  'server/test/census-w5/accountMarkers.ts',  // ccdProgramBodies(): ccd/ccd and every library of the table; ccd/'s programs beside
+  'server/test/census-kernel/baseUrl.ts',     // the roots walked whole
+  'server/test/census-w3/claimant.ts',        // ccd/ walked whole
+  'server/test/license.test.ts',              // its walks take in ccd/ whole; ccd/ccd's own lines are read as the program
+  'server/test/ci-pipeline.test.ts',          // every tracked shell file, each library among them
+  'server/test/graph-r2-consumers.test.ts',   // every tracked file, each library among them
+  'server/test/graph-resolve.test.ts',        // every tracked file, each library among them
+  'server/test/modelenv-single-writer.test.ts', // every tracked file, each library among them
+  'server/test/source-bytes.test.ts',         // every tracked file's bytes, each library among them
+  'server/test/no-default-saving-keystroke.test.ts', // ccd/ walked whole, its lib among it
+  'server/test/single-definition/roster-card.test.ts', // ccd/ walked whole for its jq programs
+  'server/test/testbox-config-file.test.ts',  // ccd/ listed for its testbox-* files; no program file is read
 ];
 
 const allowed = new Set([...FILE_READERS, ...PROGRAM_READERS]);

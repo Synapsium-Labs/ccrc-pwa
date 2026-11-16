@@ -349,7 +349,9 @@ describe.skipIf(!LINUX)('the collector’s quarantine maker under a setgid ~/.cc
 });
 
 /** Every shell script shipped under `ccd/` and `deploy/`, found by SHEBANG
- *  (`sh` or `bash`), never by a hand-kept list. */
+ *  (`sh` or `bash`), never by a hand-kept list, and every library under
+ *  `ccd/lib/`, which carries none: ccd loads them at its foot, so code the file
+ *  split moves there is still scanned (D-8048). */
 const REPO = path.resolve(path.dirname(CCD), '..');
 const shellScripts = (roots: readonly string[]): string[] => {
   const out: string[] = [];
@@ -358,7 +360,7 @@ const shellScripts = (roots: readonly string[]): string[] => {
       if (e.name === 'node_modules' || e.name.startsWith('.')) continue;
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.isFile() && /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? '')) out.push(p);
+      else if (e.isFile() && (/\/ccd\/lib\/[^/]+\.sh$/.test(p) || /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? ''))) out.push(p);
     }
   };
   for (const r of roots) walk(r);

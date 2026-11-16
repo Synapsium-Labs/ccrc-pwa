@@ -17,6 +17,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { bashCodeOf, CCD_FUNCTION_DEF, ccdLauncherIn, REPO, type CensusSite } from '../consolidationCensus.js';
+import { CCD, ccdSource } from '../ccdWsHelpers.js';
 
 /** The two files whose generated plists the launchd census reads, by their path under a root. */
 const launchdWriters = (root: string): Array<[string, string]> => [
@@ -24,7 +25,8 @@ const launchdWriters = (root: string): Array<[string, string]> => [
   ['ccd/ccd', ccdLauncherIn(root)],
 ];
 
-const linesOf = (abs: string): string[] => (existsSync(abs) ? readFileSync(abs, 'utf8').split('\n') : []);
+// The repository's ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048), so a plist a slice moved is still read.
+const linesOf = (abs: string): string[] => (abs === CCD ? ccdSource().split('\n') : existsSync(abs) ? readFileSync(abs, 'utf8').split('\n') : []);
 
 /** The one value shape a launchd cadence key may carry: a variable, named bare or braced. */
 const ACCEPTED_VALUE = /<key>StartInterval<\/key><integer>\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?<\/integer>/;
