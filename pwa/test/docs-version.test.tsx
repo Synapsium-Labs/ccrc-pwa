@@ -6,7 +6,7 @@
 // mounted with. Later tasks append their cases below the helpers. Placeholders only: project `demo`, branch `ws/a`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
-import { act, cleanup, render, renderHook, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import { DOCS_CLASS_CAP, entryView, resolveDocRef, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsBanners } from '../src/docs/DocsBanners';
@@ -147,6 +147,22 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     expect(container.textContent).toContain(sentence);
     expect(container.textContent).not.toContain(DOCS_FAILURE_SENTENCE['unknown-commit']);
     expect(container.textContent).not.toContain(DOCS_VIEW_TEXT.changing);
+  });
+
+  it('the missing-commit body of a version page offers a manual Retry, which reads the file again', async () => {
+    const f = versionLoaders();
+    // The first read says the box has no such commit; a refresh has fetched it by the time Retry reads again.
+    f.file.mockResolvedValueOnce(failedAnswer('unknown-commit'));
+    open(`/docs/demo/specs/a.md?at=${VERSION}`, f);
+    const sentence = fillSentence(DOCS_VIEW_TEXT.versionUnknownCommit, { short: shortCommit(VERSION) });
+    expect(await screen.findByText(sentence)).toBeInTheDocument();
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    // Nothing reads it again by itself; the tap does.
+    expect(f.file).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(sentence)).toBeNull();
   });
 
   it.each([['git-failed', { step: 'show' }], ['docs-busy', {}]] as const)(

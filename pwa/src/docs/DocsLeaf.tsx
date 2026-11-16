@@ -291,7 +291,15 @@ export function DocsLeaf(p: {
     } else if (file.s === 'failed' && page.at !== null && file.body.failure === 'unknown-commit') {
       // Refinement (p): the commit is the URL's, and no re-list can bring it back; on a shared link it may simply not be
       // in this box's clone, so the words name what is missing rather than the listing's remedy.
-      body = <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.versionUnknownCommit, { short: shortCommit(page.at) })}</p>;
+      // Retry is manual only: a refresh may have fetched the commit since, but nothing reads it again by itself.
+      body = (
+        <>
+          <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.versionUnknownCommit, { short: shortCommit(page.at) })}</p>
+          <div className="docs-leaf-actions">
+            <Button variant="ghost" className="docs-fail-action" onClick={visit.retryFile}>Retry</Button>
+          </div>
+        </>
+      );
     } else if (file.s !== 'ok') {
       body = <DocsFailureView answer={notOkOf(file)} onRetry={visit.retryFile} />;
     } else {
