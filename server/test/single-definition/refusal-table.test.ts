@@ -228,8 +228,9 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
       red(tableFindings(table, route, overlordWords(), { ...d, releaseReasons: rest }));
     });
     it('codeOnly grown against a stand-in merge base', () => {
-      const base = JSON.stringify({ ...d, codeOnly: {} });
-      red(shrinkFindings(() => 'f'.repeat(40), () => base, d));
+      // The control plants its own word, so it reds whatever the live list holds, an empty one included.
+      const grown = { ...d, codeOnly: { ...d.codeOnly, 'planted-word': 'a control' } };
+      red(shrinkFindings(() => 'f'.repeat(40), () => JSON.stringify(d), grown));
       expect(shrinkFindings(() => 'f'.repeat(40), () => JSON.stringify(d), d)).toEqual([]);
     });
     it('an unresolvable merge base reds rather than skips', () => {
