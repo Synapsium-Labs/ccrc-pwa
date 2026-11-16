@@ -41,6 +41,7 @@ Measured with `server/test/growthCheck.ts#codeLines`, against `origin/main` afte
 | `forbidden-verb-cases-are-named` | The classifier, the hook's two jq arms and the child deny file are each pinned by name in `ccd-keep-awake.test.ts`. The shared suites iterate the lists, so they would stay green if the word were dropped. |
 | `two-commits-not-three` | Tasks 1 to 3 land as one implementation commit after Task 2's characterization commit. Their `ccd/ccd` hunks interleave, and a non-interactive split would have to cut lines apart. |
 | `landing-merge-before-the-first-push` | Pool set B2 (#2887) merged before PR A's first push, so the branch absorbed `origin/main` once, clean, to carry the `CAP_FLOOR_FACTS` twin row (the coordinator's mail of 2026-11-16). |
+| `cap-floor-facts-exemption-shared-with-sandbox-a2` | With two route fields in `CAP_FLOOR_FACTS` (`poolset`, `acctorder`), `single-definition/update-stall.test.ts` read the literal as a restatement of `ROUTE_WRITABLE_FIELDS`. PR A carries sandbox A2's exemption of that literal by name (#2889), byte for byte, so whichever lands second merges it cleanly. |
 | `no-set-side-fixture` | Carried from serviceability A (`pool-set-fixtures-record-continuity`): no fixture of PR A places a set-side session, so none needs a recorded continuity lane. |
 
 *Table 2. Departures from the plan's text, each the builder's own call within the rulings.*
