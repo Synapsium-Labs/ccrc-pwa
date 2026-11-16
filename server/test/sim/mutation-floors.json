@@ -103,6 +103,7 @@
   "server/src/chainedJournal.ts#decodeChainedLine": 1,
   "server/src/chainedJournal.ts#ChainVerifier": 1,
   "server/src/chainedJournal.ts#chainedTailHealPlan": 1,
+  "server/src/responses.ts#receiptVerdict": 1,
   "server/src/coord/answerMarks.ts#itemMarkable": 1,
   "server/src/coord/answerMarks.ts#markViewOf": 1,
   "shared/answerMarks.ts#parseAnswerMarkWrite": 1,

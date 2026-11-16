@@ -21,6 +21,7 @@ import { noticePayload, noticeTitle, pushDue, type PushDue } from './pushOutbox.
 import { outboxSettledOf, senderFor, type BoundRowTarget, type OutboxStorePort, type SettledOf } from './pushSender.js';
 import type { QuestionOutbox, QuestionPush, Questions } from './coord/questions.js';
 import type { TimePorts } from './time/ports.js';
+import type { ResponseStamp } from '../../shared/responses.js';
 import type { Viewers } from './viewer.js';
 import type { Bus } from './bus.js';
 
@@ -82,6 +83,9 @@ export interface NoticeDeps {
   readonly time?: TimePorts | undefined;
   /** The wired masker (`Deps.masker`); absent, the sender masks with the shape-only one, as `PushService` is built. */
   readonly masker?: PayloadMasker | undefined;
+  /** The response record's stamp (`Deps.responseStamp`, Overlord W1): with it, a push this funnel sends gets a response
+   *  row; without it, none (slug no-stamp-no-response-row). */
+  readonly responseStamp?: (() => ResponseStamp) | undefined;
 }
 
 /** The port a writer outside `watch.ts` receives: `notify` bound to the composition root's sinks. */
@@ -157,7 +161,8 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   // The payload's one builder (the push outbox, Task 2): the default tag or the caller's, and `actions` and `url` when given.
   const due = pushDue({ event: 'reach', service: deps.push !== undefined, source: 'none', blocking: true, viewing: visible,
     settled: false, superseded: false, payload: true });
-  if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts));
+  // The notifier kind is the push's response-row label (Overlord W1, questions 2 and 18).
+  if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts), { label: event.kind });
   return { recorded, archived };
 }
 

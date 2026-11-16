@@ -43,6 +43,7 @@ import {
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
 import * as outbox from './pushOutboxStore.js';
+import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
 import type { GenView } from '../continuity/generationMachine.js';
@@ -5461,19 +5462,24 @@ export class CoordStore {
   snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
-  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row); }
-  claimOutboxRow(id: number, at: number): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at); }
-  silenceOutboxRow(id: number, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.silenceOutboxRow(this.db, id, why, at); }
+  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
+  claimOutboxRow(id: number, at: number, response?: responses.PushResponseOf): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at, response); }
+  silenceOutboxRow(id: number, why: PushSilentWhy, at: number): ReturnType<typeof outbox.silenceOutboxRow> { return outbox.silenceOutboxRow(this.db, id, why, at); }
   supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
-  markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): { changed: boolean } { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
+  markOutboxVerdict(id: number, claimSeq: number, move: outbox.OutboxVerdictMove, at: number): ReturnType<typeof outbox.markOutboxVerdict> { return outbox.markOutboxVerdict(this.db, id, claimSeq, move, at); }
   dueOutboxRows(now: number): outbox.OutboxRead { return outbox.dueOutboxRows(this.db, now); }
   openOutboxRows(): outbox.OutboxRead { return outbox.openOutboxRows(this.db); }
-  sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): { changed: boolean } { return outbox.sealAtBoot(this.db, id, to, at); }
+  sealAtBoot(id: number, to: 'unknown' | 'failed', at: number): ReturnType<typeof outbox.sealAtBoot> { return outbox.sealAtBoot(this.db, id, to, at); }
   heldItemsReached(now: number, firstBootAt: number): outbox.ItemsRead { return outbox.heldItemsReached(this.db, now, firstBootAt); }
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
   markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
   firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
   reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at); }
+  /** Overlord W1 (the response record, `responsesStore.ts`): the boot's record and the receipts door's one transaction. The
+   *  push row's writers run inside the outbox's transactions, so they take the handle and have no delegate. */
+  recordResponseBoot(buildSha: string | null, at: number): ReturnType<typeof responses.recordResponseBoot> { return responses.recordResponseBoot(this.db, buildSha, at); }
+  receiveReceipts(receipts: Parameters<typeof responses.receiveReceipts>[1], at: number, verdictOf: Parameters<typeof responses.receiveReceipts>[3]):
+    ReturnType<typeof responses.receiveReceipts> { return responses.receiveReceipts(this.db, receipts, at, verdictOf); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
