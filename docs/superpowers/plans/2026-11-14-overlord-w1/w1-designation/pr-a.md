@@ -107,3 +107,15 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   after which ccd made nothing answers `no`; a call cut short or lost is re-measured through the registry.
 - **`one-session-host-builder`**: `renewalWiring.ts#renewalHostOf` builds the `SessionHost` for both the renewal acts and
   the designate door's first prompt, so its construction is not copied into `server.ts`.
+
+## Task 3 (the roll and sleep holds)
+
+- **`roll-input-two-words`**: `AutoRollInput.overlord` is `boolean | 'unmeasured'`, so the bound-or-pending skip
+  (`overlord`) and the unread skip (`designation-unreadable`) are two values, read right after the setting and role
+  checks.
+- **`no-coord-reads-none`**: the sleep lanes' `designationOfCoord(undefined)` answers `none`, not unmeasured: with no
+  coordination store every row already holds `runs-unreadable`, and no Overlord can be bound without one.
+- **`renewal-drain-false`**: the renewal drain's hibernate input passes `overlord: false`, because the renewal is what
+  moves the Overlord's own body, and the sleep hold must not block it.
+- **`act-time-reread`**: the sleep lanes read the designation once a pass and again at the act, so a body designated
+  between the two is never stopped.
