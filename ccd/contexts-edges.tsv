@@ -449,6 +449,7 @@ cmd_hibernate -> _session_verdict
 cmd_hibernate -> _tmux_t
 cmd_hibernate -> _tmx
 cmd_hibernate -> _ws_unsupervise
+cmd_keep_awake -> _reg_id_ok
 cmd_menu -> _alive
 cmd_menu -> cmd_ensure
 cmd_pr_landing -> _reg_get

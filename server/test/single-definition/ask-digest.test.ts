@@ -998,10 +998,13 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   ] as const;
   const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
   const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
-  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+  // The Overlord W1 ccd arms (plan Task 2): `ccd keep-awake` is `no-hibernate`'s one writer in the tree, for the Overlord's
+  // body alone (spec §3.2, C4), so that marker has exactly one line of shell writing it, in `ccd/lib/long-lived.sh`'s
+  // `cmd_keep_awake`; the other three still have none.
+  it.each(MARKERS)('%s: no line of shell writes it, but keep-awake\'s one line', (name) => {
     expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
     const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
-    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+    expect(writers, `${name}: a line of shell writes it`).toEqual(name === 'no-hibernate' ? [KEEP_AWAKE_WRITER('no-hibernate')] : []);
   });
   it.each(MARKERS)('%s: its one TS holder is its definer, which reaches no node: module', (name) => {
     // `hibernate-live` and `hibernate-disabled` contain no other marker; `no-hibernate` is not a substring of the three
@@ -1034,6 +1037,42 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
+
+
+// The Overlord W1 ccd arms (plan Task 2). `$REG/<id>.no-roll` (the roll's opt-out, decision U4) was written by hand only;
+// `ccd keep-awake` now writes it on the Overlord's body (spec §3.2, C4), from exactly one line of shell. The TS half: its
+// definer `server/src/coord/rollTarget.ts` and every file that names `NO_ROLL_SUFFIX` reach no write. BLIND SPOTS, stated:
+// the shell half reads bash files only (`helpers.ts#BASH`), never `ccd/*.py` or `.mjs`, and the TS half's spelled check
+// does not see a template such as `${id}.no-roll`.
+describe('the Overlord W1 ccd arms: the roll\'s opt-out has one shell writer, keep-awake', () => {
+  const DEFINER = 'server/src/coord/rollTarget.ts';
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it('no-roll: exactly one line of shell writes it, in ccd/lib/long-lived.sh\'s cmd_keep_awake', () => {
+    expect(SHELL_WRITE.test('touch "$REG/$id.no-roll"'), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes('no-roll') && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, 'no-roll: its shell writers').toEqual([KEEP_AWAKE_WRITER('no-roll')]);
+  });
+  it('no-roll: its one TS holder is its definer, which reaches no node: module', () => {
+    expect(ALL.filter((f) => stallCode(f).includes("'no-roll'") || stallCode(f).includes('"no-roll"')
+      || stallCode(f).includes('`no-roll') || stallCode(f).includes('/no-roll')).map(rel).sort(),
+    'no-roll spelled on a code line outside its definer').toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it('NO_ROLL_SUFFIX: the files that name it reach no write', () => {
+    const holders = ALL.filter((f) => stallCode(f).includes('NO_ROLL_SUFFIX')).map(rel).sort();
+    expect(holders, 'NO_ROLL_SUFFIX: nobody names it').toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+});
+
+/** The one line of shell that writes `marker`: `cmd_keep_awake`'s no-clobber create (the Overlord W1 ccd arms). */
+function KEEP_AWAKE_WRITER(marker: 'no-hibernate' | 'no-roll'): string {
+  const create = `( set -C; printf '%s' "$KEEP_AWAKE_STAMP" > "$REG/$id.${marker}" ) 2>/dev/null`;
+  return marker === 'no-hibernate'
+    ? `ccd/lib/long-lived.sh: if [[ "$m" == no-hibernate ]]; then ${create}`
+    : `ccd/lib/long-lived.sh: else ${create}; fi && continue`;
+}
 
 
 // D-6631 (fleet disk retention DR-19; spec 2026-10-23 sections 2.3 and 4). The orphan-worktree lane ships SHADOW behind two

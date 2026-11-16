@@ -31,7 +31,8 @@ get wrong when editing `src/whitelist.ts`.
   `ws-lease-mark` requires `--lease` (the write of one delegation lease's carrier; only the server composes it, delegation
   broker wave 5), `ws-lease-audit` requires `--lease` (the read-only measure of one leased tree; it writes nothing to any
   durable path, its residuals named in `ccd/lib/delegation-lease.sh`, and only the server composes it, delegation broker
-  wave 5). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  wave 5), `keep-awake` requires `--session` (the set or clear of one session's two sleep markers; only the server
+  composes it, through the designation's doors, Overlord W1 ccd arms). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail

@@ -71,6 +71,8 @@ const ID_BUILDERS = {
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', delegationAdopt: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
+  // The Overlord W1 ccd arms (plan Task 3): `keepAwake` has no caller yet; designation A's create and retire add their rows.
+  keepAwake: 'id',
   // The Overlord W1 pool set (plan Task 6): `poolAnswer`'s one id is refused by the builder itself unless `isRegistryId`
   // admits it, as `leaseMark`'s are, so the census's dash-led probe cannot reach it and the row is `no-id`. Nothing makes
   // a later `server/src` caller (the renewal rows piece, the designation door) enter this census: the builder's own
@@ -126,6 +128,7 @@ const ID_PROBE = {
   routeApply: [PROBE_ID, 'class', 'x', null],
   routeSet: [PROBE_ID, { effort: 'high' }, null],
   winSize: [PROBE_ID, 'smallest'],
+  keepAwake: [PROBE_ID, 'on'],
 } satisfies { [K in IdBuilder]: Parameters<(typeof CCD_ARGV)[K]> };
 
 const ID_ARG_AT: Readonly<Record<string, number>> = Object.fromEntries(
@@ -556,7 +559,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(32);
+    expect(ID_KEYS).toHaveLength(33);   // 33: the Overlord W1 ccd arms add keepAwake
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];
