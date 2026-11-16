@@ -3370,6 +3370,34 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
   CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
   `,
+
+  // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
+  // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
+  // reason, at the plan when `runId` is null or at that run's wave boundary); `programme_edges`, what the programme waits
+  // on, each a `needs-landed` or `needs-decision` edge whose `target` is the canonical JSON of an `EdgeTarget`
+  // (`shared/programmeFacts.ts#edgeTargetKey`), so the partial unique index sees two equal targets as one open edge. ONE
+  // writer of both inserts, `programmeFactsStore.ts#insertRemaining`, in the statement's transaction; the edge's state
+  // columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's edge arm's alone. NEW TABLES only:
+  // an older build at this `user_version` takes rule 3 and never names them. Responses B (#2914) and portfolio B (#2904)
+  // each add one too, so this lands at 85 or later, renumbered at landing on the coordinator's word. RE-MEASURE the slot:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_remaining (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    byId TEXT NOT NULL, runId INTEGER, lo INTEGER NOT NULL, hi INTEGER NOT NULL, reason TEXT NOT NULL, build TEXT
+  );
+  CREATE INDEX programme_remaining_by_program ON programme_remaining (program, id);
+  CREATE TABLE programme_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    statementId INTEGER NOT NULL REFERENCES programme_remaining(id), kind TEXT NOT NULL, target TEXT NOT NULL,
+    why TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', openedAt INTEGER NOT NULL, endedAt INTEGER, evidence TEXT,
+    unmeasuredSince INTEGER
+  );
+  CREATE UNIQUE INDEX programme_edges_one_open ON programme_edges (program, kind, target) WHERE state = 'open';
+  CREATE INDEX programme_edges_by_program ON programme_edges (program, state);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
