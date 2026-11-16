@@ -11,10 +11,10 @@
 // (`pool-set-operator-only`), and the server and the agent are units, never such a session. A server started from a session's
 // shell would carry the variable down to every child, so `withoutClaudeCode` takes it out of the environment for the one
 // synchronous moment the child is started (an `execFile` reads the environment as it spawns), and puts it back.
-import { isRegistryId, type RouteFields } from '../../../shared/api.js';
+import { isRegistryId, type ChildReclaimGeneration, type RouteFields } from '../../../shared/api.js';
 import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
 import {
-  CCD_ARGV, POOL_SET_CAP, WS_TITLE_CAP, WS_WRAPPER_CAP, capSupported, ccdCan, type ActorFlags, type CcdArgv,
+  CCD_ARGV, WS_TITLE_CAP, WS_WRAPPER_CAP, capSupported, ccdCan, type ActorFlags, type CcdArgv,
 } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import { cutShort } from '../lifecycle.js';
@@ -28,8 +28,9 @@ import type { BodyAnswer, CreateAnswer, KeepAwakeAnswer, OverlordBody, StopAnswe
 /** The Overlord's display title, passed to `ws-add --title` (the named create's mark, which the sweep exempts). */
 const OVERLORD_TITLE = 'Overlord';
 
-/** `$REG/<id>.generation`, as `childReclaimGenerationRead` answers it: the value, a proven absence, or a read that failed. */
-export type GenerationRead = { readonly kind: 'value'; readonly v: string } | { readonly kind: 'absent' | 'unreadable' };
+/** `$REG/<id>.generation`, as `childReclaimGenerationRead` answers it (L0's one shape): the value, a proven absence, or a
+ *  read that failed. */
+export type GenerationRead = ChildReclaimGeneration;
 
 /** What the adapter reaches, each narrow so a test hands fakes; the server binds each to its own read. */
 export interface OverlordBodyDeps {
@@ -139,7 +140,8 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
   }
 
   async function writeSet(id: string, set: { poolset: string; acctorder: string }): Promise<BodyAnswer> {
-    if (!capSupported(state(), POOL_SET_CAP)) return refuse('the deployed ccd has no pool set (pool-set)');
+    // One word, `pool-set`, says ccd takes both the pool answer and the set's route fields, so the row is the answer's.
+    if (!ccdCan(state(), 'poolAnswer')) return refuse('the deployed ccd has no pool set (pool-set)');
     return setRoute(id, { poolset: set.poolset, acctorder: set.acctorder });
   }
 
