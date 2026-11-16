@@ -38,8 +38,9 @@ const HEADING = '### 11.6 Refusal words';
 const CAPTION = '*Table 11.6.';
 const HEADER = '| Word | Door or lane | Meaning | Call |';
 const MIN_ROWS = 70;
-/** The waves a table word can wait for. `W1` is not one, so no W1 word can be deferred. */
-const WAVES = new Set(['W1a', 'W2', 'W3', 'W4', 'W4b', 'W5', 'W6']);
+/** The waves a table word can wait for. Neither `W1` nor `W2` is one, so no W1 or W2 word can be deferred (the W2
+ *  vocabulary plan's question 3): a spec fix that adds a W2 word to Table 11.6 adds it to the group in the same PR. */
+const WAVES = new Set(['W1a', 'W3', 'W4', 'W4b', 'W5', 'W6']);
 
 interface Data { codeOnly: Record<string, string>; waveMap: Record<string, string>; releaseReasons: Record<string, string> }
 
@@ -172,6 +173,13 @@ const W1_GROUP: Readonly<Record<string, number>> = {
   'overlord-uses-its-doors': 403, 'overlord-not-a-coordinator': 403, 'history-unreachable': 503, 'read-ceiling': 429,
 };
 
+/** The W2 group, as the W2 vocabulary plan's Table V1 gives it: each word with its status, chosen by the family rule. */
+const W2_GROUP: Readonly<Record<string, number>> = {
+  'act-ceiling': 429, 'dependency-cycle': 409, 'egress-refused': 403, 'goal-conflict-open': 409, 'identity-too-weak': 403,
+  'operator-has-it': 409, 'operator-only': 403, 'relay-carries-method': 400, 'request-not-yours': 403,
+  'said-not-operator': 409, 'server-not-isolated': 409,
+};
+
 const data = (): Data => JSON.parse(readFileSync(path.join(ccrcRoot, DATA), 'utf8')) as Data;
 const overlordWords = (): Set<string> => new Set(Object.values(OVERLORD_GROUPS).flat());
 
@@ -189,10 +197,11 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
     expect(tableFindings(table, route, overlordWords(), data())).toEqual([]);
   });
 
-  it('the wave map holds no W1 word and no word of the Overlord group', () => {
+  it('the wave map holds no W1 or W2 word and no word of the Overlord group', () => {
     const d = data();
     for (const [w, wave] of Object.entries(d.waveMap)) {
       expect(wave, w).not.toBe('W1');
+      expect(wave, w).not.toBe('W2');
       expect(w in OVERLORD_REFUSALS, w).toBe(false);
     }
   });
@@ -213,8 +222,25 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
       const o = overlordWords(); o.delete('history-unreachable');
       red(tableFindings(table, r, o, d));
     });
-    it('a route word put on the wave map', () => red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'rung-below': 'W2' } })));
-    it('a map entry the table no longer has', () => red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'no-such-word': 'W2' } })));
+    it('a W2 word dropped from the group', () => {
+      const r = new Set(route); r.delete('egress-refused');
+      const o = overlordWords(); o.delete('egress-refused');
+      red(tableFindings(table, r, o, d));
+    });
+    it('a W2 word put back on the wave map under W2', () => {
+      const f = tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'act-ceiling': 'W2' } });
+      expect(f).toContain('act-ceiling: on the wave map with W2, which is not one of W1a, W3, W4, W4b, W5, W6');
+      expect(f).toContain('act-ceiling: a route refusal now; take it off the wave map in this pull request');
+    });
+    // Each plants a wave still in WAVES, and asserts its own finding, so neither reds through the wave-list finding alone.
+    it('a route word put on the wave map', () => {
+      expect(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'rung-below': 'W3' } }))
+        .toEqual(['rung-below: a route refusal now; take it off the wave map in this pull request']);
+    });
+    it('a map entry the table no longer has', () => {
+      expect(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'no-such-word': 'W3' } }))
+        .toEqual(['no-such-word: on the wave map, and Table 11.6 has no such row']);
+    });
     it('a map entry under a wave outside the closed list, W1 included', () => {
       red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, defer: 'W1' } }));
       red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, defer: 'W9' } }));
@@ -256,8 +282,8 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
 });
 
 describe('OVERLORD_REFUSALS: complete, alone, and each status by the family rule', () => {
-  it('its words are exactly the W1 rows of the plan\'s Task 3 table and read-ceiling, each with its status', () => {
-    expect({ ...OVERLORD_REFUSALS }).toEqual(W1_GROUP);
+  it('its words are exactly the W1 rows of the plan\'s Task 3 table and read-ceiling, and the W2 rows of Table V1, each with its status', () => {
+    expect({ ...OVERLORD_REFUSALS }).toEqual({ ...W1_GROUP, ...W2_GROUP });
   });
 
   it('OVERLORD_REFUSAL_WORDS is the group\'s own keys', () => {
