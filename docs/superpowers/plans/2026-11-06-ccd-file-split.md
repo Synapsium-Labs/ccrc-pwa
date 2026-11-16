@@ -453,7 +453,7 @@ Task 5 ends the per-file install, so only the tree side needs the table. The bac
 
 *Not evidence.* `ccrc-install-tree` and `ccrc-install-landing` (38 rows) went red only because the scratch installer does not publish new libraries; Task 5 ends that. `build-release`, `ccd-tick-diet-equivalence-static` and `session-hook` show the same reds on an untouched tree on this Mac. `transcript-jq-ship` and `path-identity-w1b-prose` read top-level text that stays, and convert with the rest. The agent suite and `ccrc-account` were not run; Step 6 covers them.
 
-- [ ] **Step 1: First commit: the pin.** These rows pass on the old code. Commit them alone.
+- [x] **Step 1: First commit: the pin.** These rows pass on the old code. Commit them alone.
 
 ```ts
 it('PIN: the source form loads disk-retention, train-proof, delegation-lease, in that order', () => {});
@@ -462,13 +462,13 @@ it('PIN: every test-side library list names those three', () => {});
 it('PIN: programDump of the source form is unchanged by this PR, apart from _ccd_lib_load', () => { /* moveBase against HEAD */ });
 ```
 
-- [ ] **Step 2: Second commit: the scanners and the guard.** Convert the inventory, and add `ccdReadGuard.ts` to `setupFiles`. No `ccd/ccd` line changes, so Step 1's rows stay green.
+- [x] **Step 2: Second commit: the scanners and the guard.** Convert the inventory, and add `ccdReadGuard.ts` to `setupFiles`. No `ccd/ccd` line changes, so Step 1's rows stay green.
 
 The guard works by behaviour, not spelling. It wraps `fs.readFileSync`, `fs.copyFileSync`, `fs.readdirSync` and `fs.promises.readFile`, then calls `syncBuiltinESMExports()`, so a named import sees it too. A read or copy of `ccd/ccd`, or a listing of `ccd/`, throws in the test that made it, unless the first test-side stack frame is in `FILE_READERS` (tests about the bytes) or `PROGRAM_READERS` (walks that also take in `ccd/lib`). The same wrapper is what measured the inventory: it saw `read()` helpers, `scan` arrays, `CCD_PATH` and flat listings alike. This replaces the regex in `ccd-lib-load.test.ts`.
 
 The wrapper cannot see a child process. So one static row pins that no test hands `ccd/ccd` to `grep`, `sed`, `awk`, `wc`, `cat`, `head` or `tail` in a shell string (0 today).
 
-- [ ] **Step 3: Third commit: write the failing rows.**
+- [x] **Step 3: Third commit: write the failing rows.**
 
 ```ts
 it('every test-side library list follows the table', () => { /* a fixture tree with a fourth word */ });
@@ -485,17 +485,36 @@ it('hook-helpers.mjs reads the same text as spliceCcd', () => {});
 
 The top-level split reuses `census-w5/accountMarkers.ts`'s reader.
 
-- [ ] **Step 4: Implement.** `_ccd_lib_load` builds its file list from `__CCD_LIBS`; the three pin lines stay until Task 5. Same libraries published, same order, same refusal words.
+- [x] **Step 4: Implement.** `_ccd_lib_load` builds its file list from `__CCD_LIBS`; the three pin lines stay until Task 5. Same libraries published, same order, same refusal words.
 
-- [ ] **Step 5: Verify.**
+- [x] **Step 5: Verify.**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/ccd-lib-load.test.ts test/ccd-lib-shape.test.ts test/ccd-entry-install.test.ts test/ccd-install-stamp.test.ts test/install-census.test.ts test/ownership.test.ts test/routing-references.test.ts --maxWorkers=2`, then `cd agent && ./node_modules/.bin/vitest run test/ccd-entry-exec.test.ts test/deploy-verify.test.ts --maxWorkers=2`
 Expected: PASS.
 
-- [ ] **Step 6: Rehearse the end state.** In a scratch copy of the branch, `move` every slice, then run the whole server and agent suites with the guard on, beside the same suites on an untouched copy.
+- [x] **Step 6: Rehearse the end state.** In a scratch copy of the branch, `move` every slice, then run the whole server and agent suites with the guard on, beside the same suites on an untouched copy.
 Expected: no new red except the `ccrc-install-*` rows above, and no guard throw. A new red or throw is a scanner the inventory missed: convert it in this PR.
 
 Exit count: 0 test files hard-code the three library names as a list; 23 inventory files converted; 0 guard throws in the rehearsal; `ccd/ccd` functions equal to `moveBase`'s count; `programDump` differs by `_ccd_lib_load` alone.
+
+*Measured 2026-11-16 (D-8048),* at `origin/main` `fae8fe45f`, under the operator's ruling S1 (2026-11-14, D-8634). For the yield check, one `gh pr list` wrote the heads of the 15 open PRs. `_ccd_lib_load` is the one `ccd/ccd` function this task touches, and no open head touches it (one head touches eight other functions), so nothing was left alone. The table is `__CCD_LIBS=(disk-retention train-proof delegation-lease pool-set)`. `ccd/ccd` holds 807 functions, as `moveBase` does, and `programDump` differs by `_ccd_lib_load` alone (Step 1's pin). The guard lists 13 files that read the bytes and 54 walks that take in `ccd/lib/`.
+
+The rehearsal (Step 6) ran in a scratch clone of the branch and was never committed here. `move` took all 19 slices in 15 s, leaving a 4,785-line spine with 34 functions and 23 libraries in the table; the largest, `accounts.sh`, is 5,512 lines. Judged alone against this task's tip, the move is pure, defines no function twice and leaves `programDump` byte-identical.
+
+The server suite (1,691 files) ran with the guard on: 1,685 files in the moved copy. Each red file ran again on the untouched tree and, where both were red, on a pristine `origin/main`. Five `ccrc-doctor-*` and `ccrc-account` files do not finish inside a ten-minute bound on a development Mac. A first pass on 2026-11-15 ran them in partitions, green in both copies, and the guard never named them. `history-replay` hangs on Node 26, which is environmental. The agent suite (46 files) ran in both copies.
+- The guard named 57 files the inventory did not list, one of them the full run's tree-scan recorder. Each is converted or listed, and the moved run ends with no throw.
+- These reds would have come from a slice, and are converted here: `tmux-socket-census`; `testbox-pins` (a `git grep` child the guard cannot see); `citations` (a moved cited line was read as added); three rows of `ccd-lib-load` and its planted tree; and `session-hook-steer`.
+- The install class stays red until Task 5: 20 server files and 2 agent files that install ccd or run an installed body. The installer refuses a table that names a library it does not publish, and an installed body refuses a word with no pin (`lib-digest`).
+- `ccd-split-pin`'s purity row goes red only because the rehearsal stacks this task and the move in one diff against `moveBase`. A slice is judged after this task lands.
+- Every other red was red on a pristine `origin/main` too, or on the untouched tree, or passed when run again under less load.
+
+*Deviations found:*
+- The step names three libraries, but the table holds four, `pool-set` among them, because the pool set's library landed after this plan was written. Every count above is four.
+- The install class is wider than the `ccrc-install-*` rows. It holds every test that installs ccd or runs the installed body: `ccrc-update-*`, `ccd-entry-install`, `ccd-install-stamp`, `ownership`, `ccd-lib-load`'s installed arm, four direct-entry suites, the agent's `ccd-entry-exec` and one `deploy-verify` row. Task 5 ends both causes.
+- Three test files still spell the four library files, each for something that stays fixed until its own task: the installer's published files (`ccd-entry-install`, until Task 5), `ccrc uninstall`'s rows (`ccrc-uninstall`, until Task 9), and the four pins (`ccd-lib-load`, whose first row now checks that the four load first). Every list that means ccd's libraries derives from the table.
+- The guard passes over a full run's tree-scan recorder (`.github/ci/tree-scanners.mjs`). Its setup file loads after the guard, so its lister wrapper would be the first repository frame of every listing of `ccd/`, and every listed walk would be refused in the merge queue. A fixture row pins it.
+- The guard is a setup file of every server run, so it joins the node-floor pathspec in `ci.yml`. In the agent package it runs ahead of the contained `PATH`, which `tmpfixtures` pins last.
+- `citations` counts a cited line that the same diff removes as moved, so the one heredoc line Task 3 kept in `_pr_py` does not turn slice 10 red.
 
 ### Task 5: Assemble at install
 
