@@ -3,8 +3,12 @@
 // whose mutant set runs them against each mutant in `sim/mutation-floors.test.ts`; here they run against the real module.
 import { describe, it } from 'vitest';
 import * as names from '../../shared/private-names.mjs';
-import { keyCases } from './sim/privateNamesSets.js';
+import { hitsCases, keyCases } from './sim/privateNamesSets.js';
 
 describe('the key threads through every hash of the matcher', () => {
   for (const [name, run] of Object.entries(keyCases(names))) it(name, run);
+});
+
+describe('privateNameHits answers ids and refuses a list it cannot trust', () => {
+  for (const [name, run] of Object.entries(hitsCases(names))) it(name, run);
 });

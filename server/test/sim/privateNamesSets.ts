@@ -144,6 +144,115 @@ export const PRIVATE_NAMES_KEY_SET: MutantSet<PrivateNamesModule> = {
   suite: keyCases,
 };
 
+/** Task 3: `privateNameHits` answers distinct entry ids in first-hit order, never text, and throws on a list it cannot
+ *  trust, so a wiring bug can never pass a known name as clean. */
+export function hitsCases(m: PrivateNamesModule): Record<string, SuiteCase> {
+  const canary = (key?: string): Entry => m.entryOf(m.CANARY, 'part', key) as Entry;
+  const listOf = (key: string, ...more: Entry[]) => ({ key, entries: [canary(key), ...more] });
+  const ofMode = (mode: Mode, key: string): Entry[] => m.entriesOf(NAMES[mode].name, mode, key) as Entry[];
+  const H8 = /^[0-9a-f]{8}$/;
+  const refused = (list: unknown, what: string): void => {
+    let err: unknown = null;
+    try { m.privateNameHits('see zz-alpha and zed quux', list as never); } catch (e) { err = e; }
+    expect(err, what).toBeInstanceOf(m.PrivateNameListInvalid);
+    const text = `${(err as Error).name} ${(err as Error).message}`;
+    for (const leak of ['zz', 'alpha', 'zed', 'quux', K1, K2, canary(K1).h.slice(0, 8), canary(K2).h.slice(0, 8)]) {
+      expect(text.toLowerCase(), `${what}: ${leak}`).not.toContain(leak.toLowerCase());
+    }
+  };
+  return {
+    'a keyed list is hit on a line that spells one of its names, for each mode, and answers that entry\'s id': () => {
+      for (const mode of MODES) {
+        const own = ofMode(mode, K1);
+        expect(m.privateNameHits(`a line\n${NAMES[mode].line}\nanother`, listOf(K1, ...own)), mode).toEqual([h8(own[0]!)]);
+      }
+    },
+    'distinct 8-hex ids in first-hit order; [] for clean text and for a list holding only its canary': () => {
+      const part = ofMode('part', K1), exact = ofMode('exact', K1), words = ofMode('words', K1);
+      const list = listOf(K1, ...part, ...exact, ...words);
+      const got = m.privateNameHits('ok zq-bravo-x9 ok\nsee zz-alpha, zz-alpha\nby zed quux and zq-bravo-x9', list);
+      expect(got).toEqual([h8(exact[0]!), h8(part[0]!), h8(words[0]!)]);
+      for (const id of got) expect(id).toMatch(H8);
+      expect(m.privateNameHits('nothing to see\nhere at all', list)).toEqual([]);
+      expect(m.privateNameHits('see zz-alpha and zed quux', listOf(K1))).toEqual([]);
+      expect(m.privateNameHits('', list)).toEqual([]);
+      // A phrase broken across a line starts on the earlier line, so it comes before the later line's own hits.
+      expect(m.privateNameHits('by zed\nquux and zz-alpha', list)).toEqual([h8(words[0]!), h8(part[0]!)]);
+    },
+    'the canary itself is a hit, so a list is never blind to its own first entry': () => {
+      expect(m.privateNameHits(`a ${m.CANARY} b`, listOf(K1))).toEqual([h8(canary(K1))]);
+    },
+    'a words phrase split across two lines is a hit under the key, and split across three is not': () => {
+      const words = ofMode('words', K1);
+      expect(m.privateNameHits('by zed\nquux today', listOf(K1, ...words))).toEqual([h8(words[0]!)]);
+      expect(m.privateNameHits('by zed\n\nquux today', listOf(K1, ...words))).toEqual([]);
+      expect(m.privateNameHits('first line\nby zed\nquux today', listOf(K1, ...words))).toEqual([h8(words[0]!)]);
+    },
+    'no exemption applies: a hit the history documents\' rule would exempt is still a hit': () => {
+      // An entry carrying the exempt upstream id, found by its first-token hash (a one-token entry checks no other).
+      const upstream: Entry = { h: `4dda1e70${'0'.repeat(24)}`, f: m.hashEntry('zzalpha', K1), n: 1, mode: 'part' };
+      expect(m.hitsIn('see zzalpha@abcdef1234 there', 'docs/ccrc-history-x.md', [upstream], K1)).toEqual([]);
+      expect(m.privateNameHits('see zzalpha@abcdef1234 there', listOf(K1, upstream))).toEqual(['4dda1e70']);
+    },
+    'the list check: no key, an empty or non-string key, no entries, a first entry not the canary, a canary under another key': () => {
+      const own = ofMode('part', K1);
+      refused(undefined, 'no list');
+      refused(null, 'a null list');
+      refused({ entries: [canary(), ...ofMode('part', m.PRIVATE_NAME_SALT)] }, 'a missing key over a salted list');
+      refused({ key: '', entries: [canary(''), ...ofMode('part', '')] }, 'an empty key');
+      refused({ key: 42, entries: [canary(K1), ...own] }, 'a non-string key');
+      refused({ key: K1 }, 'no entries');
+      refused({ key: K1, entries: 'zz' }, 'entries not an array');
+      refused({ key: K1, entries: [] }, 'an empty entries array');
+      refused({ key: K1, entries: [...own, canary(K1)] }, 'the canary not first');
+      refused({ key: K1, entries: [canary(K2), ...own] }, 'a canary built under another key');
+    },
+    'the canary is compared in all four fields': () => {
+      const own = ofMode('part', K1);
+      const c = canary(K1);
+      refused({ key: K1, entries: [{ ...c, f: canary(K2).f }, ...own] }, 'another first-token hash');
+      refused({ key: K1, entries: [{ ...c, n: c.n + 1 }, ...own] }, 'another token count');
+      refused({ key: K1, entries: [{ ...c, mode: 'exact' }, ...own] }, 'another mode');
+      refused({ key: K1, entries: [{ ...c, h: canary(K2).h }, ...own] }, 'another hash');
+    },
+  };
+}
+
+export const PRIVATE_NAME_HITS_KEY = 'shared/private-names.mjs#privateNameHits';
+
+export const PRIVATE_NAME_HITS_SET: MutantSet<PrivateNamesModule> = {
+  modulePath: path.join(ROOT, 'shared/private-names.mjs'),
+  mutants: [
+    {
+      id: 'H1 the list check dropped',
+      old: "if (typeof key !== 'string' || key === '' || !Array.isArray(entries) || entries.length === 0) throw new PrivateNameListInvalid();",
+      new: '',
+    },
+    { id: 'H2 an empty key allowed', old: "typeof key !== 'string' || key === '' ||", new: "typeof key !== 'string' ||" },
+    {
+      id: 'H3 the canary compared on h alone',
+      old: 'first.h !== canary.h || first.f !== canary.f || first.n !== canary.n || first.mode !== canary.mode',
+      new: 'first.h !== canary.h',
+    },
+    { id: 'H4 the canary checked under the salt', old: "const canary = entryOf(CANARY, 'part', key);", new: "const canary = entryOf(CANARY, 'part');" },
+    { id: 'H5 pairs not scanned', old: "if (i > 0) for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) ids.add(id);", new: '' },
+    { id: 'H6 a duplicate returned', old: 'const ids = new Set();', new: 'const ids = Object.assign([], { add(v) { this.push(v); } });' },
+    { id: 'H7 the folded text returned instead of the id', old: 'ids.add(hit.h8)', new: 'ids.add(hit.folded.slice(hit.start, hit.end))' },
+    {
+      id: 'H8 the exemptions applied',
+      old: 'for (const hit of hitsAt(lines[i], entries, key)) ids.add(hit.h8);',
+      new: "for (const id of hitsIn(lines[i], 'docs/ccrc-history.md', entries, key)) ids.add(id);",
+    },
+    {
+      id: 'H9 a pair after the later line',
+      old: "    if (i > 0) for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) ids.add(id);\n    for (const hit of hitsAt(lines[i], entries, key)) ids.add(hit.h8);",
+      new: "    for (const hit of hitsAt(lines[i], entries, key)) ids.add(hit.h8);\n    if (i > 0) for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) ids.add(id);",
+    },
+  ],
+  suite: hitsCases,
+};
+
 export const PRIVATE_NAMES_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [PRIVATE_NAMES_KEY_KEY]: PRIVATE_NAMES_KEY_SET as MutantSet<never>,
+  [PRIVATE_NAME_HITS_KEY]: PRIVATE_NAME_HITS_SET as MutantSet<never>,
 };

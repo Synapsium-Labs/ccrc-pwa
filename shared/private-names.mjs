@@ -536,6 +536,43 @@ export function maskText(text, entries) {
   return out;
 }
 
+/** A list `privateNameHits` will not scan: it has no key, or its first entry is not the canary under that key. It
+ *  carries no detail, so it can never echo an entry or a text (Overlord W2, `private-name-hits-checks-its-list`). */
+export class PrivateNameListInvalid extends Error {
+  constructor() {
+    super('the private-name list is invalid');
+    this.name = 'PrivateNameListInvalid';
+  }
+}
+
+/** A list built under one key, the canary first: `{ key, entries }`.
+ *  @typedef {{ key: string, entries: Entry[] }} NameList */
+
+/** The one check the egress doors call (Overlord W2, `private-name-hits-answers-ids`): the `h8` of every entry the text
+ *  hits, each once, in the order of first hit, scanning each line and each pair of adjacent lines (a `words` phrase
+ *  broken by a line break) under `list.key`, and `[]` when it hits none. Never text, positions or a count of characters;
+ *  no file exemption applies, since an egress text has no file. A list with no key, or whose first entry is not the
+ *  canary under that key, throws `PrivateNameListInvalid`: with the salt as every default, a lost key would otherwise
+ *  scan under the salt, match nothing and pass a known name.
+ *  @param {string} text @param {NameList} list @returns {string[]} */
+export function privateNameHits(text, list) {
+  const key = list?.key;
+  const entries = list?.entries;
+  if (typeof key !== 'string' || key === '' || !Array.isArray(entries) || entries.length === 0) throw new PrivateNameListInvalid();
+  const canary = entryOf(CANARY, 'part', key);
+  const first = entries[0];
+  if (!first || first.h !== canary.h || first.f !== canary.f || first.n !== canary.n || first.mode !== canary.mode) {
+    throw new PrivateNameListInvalid();
+  }
+  const ids = new Set();
+  const lines = text.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    if (i > 0) for (const id of pairHits(lines[i - 1], lines[i], '', entries, key)) ids.add(id);
+    for (const hit of hitsAt(lines[i], entries, key)) ids.add(hit.h8);
+  }
+  return [...ids];
+}
+
 /** The committed entries: the canary first, then every entry of every list row
  *  measured `pub` (present in this repository's public history, so its hash
  *  reveals nothing new), sorted. Regenerate with `hash --list <path>` and paste,
