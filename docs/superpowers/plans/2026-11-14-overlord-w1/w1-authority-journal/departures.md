@@ -29,6 +29,10 @@ slug, never a D-number (cross-plan ruling X9). The coordinator folds what the le
 - **`census-reads-the-adapter-as-a-taker`.** `chained-journal-formats.test.ts` reads the format-taking exports of
   `chainedJournalFile.ts` as well as the kernel's, so a format passed only to `chainedJournalFileAt`, unannotated, is still
   found by the kinds census. The plan did not name this; it keeps the census whole once both W1 journals bind the adapter.
+- **`truncate-census-lists-the-port-cut`.** `delegation-wave3.integration.test.ts` keeps a closed list of every truncating
+  call in a server file that can reach a file. The port's one cut adds three spellings there (its fs-operations member,
+  that member's `node:fs` default, and the cut's one call), so the list names them, with a comment saying they cut the
+  Overlord's chained journals and name neither delegation file. The plan did not name this census.
 - **`notes-file-path`.** The brief names `w1-authority-journal-a0.md` for these notes; the plan's Global Constraints name
   `w1-authority-journal/departures.md`. The plan governs (worker clause 6), so this file is the plan's.
 

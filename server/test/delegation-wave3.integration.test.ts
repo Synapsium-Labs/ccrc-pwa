@@ -1532,9 +1532,15 @@ describe('8. the closed scope census', () => {
     //    journal (#384's own collector journal, and a string helper), and neither names the journal (the list above).
     //    R80 N5: scoped to the files that can reach a file at all (they import `node:fs`, `node:fs/promises` or the delegation file port), so
     //    a string helper named like `truncateLabel(` elsewhere in the server does not red this; one added to such a file must be listed.
+    //    Overlord W1 (authority journal A0): the shared append-only port's one cut, `appendOnlyFile.ts#appendOnlyFileAt`'s `cutAside`, is
+    //    three spellings (its fs-operations member, that member's node:fs default, and the cut's one call). It cuts the Overlord's chained
+    //    journals, reached only through `chainedJournalFile.ts`, and names neither delegation file (the list above).
     const reachesFiles = (src: string): boolean => /from '(?:node:)?fs(?:\/promises)?'|DelegationFilePort|nodeDelegationFilePort/.test(src);
     const cuts = SRC.filter((f) => reachesFiles(read(f))).flatMap((f) => (code(read(f)).match(/[\w.]*truncate\w*\(/gi) ?? []).map((m) => `${f}: ${m}`)).sort();
     expect(cuts, 'every truncating call in a file that can reach a file (a new string helper there needs listing here)').toEqual([
+      'server/src/appendOnlyFile.ts: ftruncateSync(',
+      'server/src/appendOnlyFile.ts: ftruncateSync(',
+      'server/src/appendOnlyFile.ts: ops.ftruncateSync(',
       'server/src/coord/collectLaneJournal.ts: ftruncateSync(',
       `${applier}: this.port.truncate(`,
       'server/src/coord/delegation-file-port.ts: fsp.truncate(',
