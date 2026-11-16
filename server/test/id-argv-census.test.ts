@@ -681,7 +681,7 @@ describe('every id-taking argv call has an origin and a gate (spec §2.3)', () =
         /\bdecideClose\(\{ step: 'close'[\s\S]*?if \(act\.kind !== 'go'\) return stopped\(deps, act\);[\s\S]*\bactOnFleet\(/,
       // The composer builds the argv and asks `ccdCan` of that same row (closeRun's own order before ARCH-35); nothing in
       // `actOnFleet` acts before it, and the order test below pins that ccd runs only after the verb step admits it.
-      'fleetArgv <- coord/close.ts | actOnFleet': /\): Promise<CloseHalt \| null> \{\n\s*const verb = fleetArgv\(/,
+      'fleetArgv <- coord/close.ts | actOnFleet': /\): Promise<CloseHalt \| FleetDone> \{\n\s*const verb = fleetArgv\(/,
       'holdAndBindSession <- coord/routes.ts | POST /api/runs':
         /\bconst pre = await openRunPreconditions\(\{[\s\S]*?if \(!pre\.ok\) return sendOpenRunRefusal\(reply, pre\.refusal\);[\s\S]*\bholdAndBindSession\(coord, reply, opened, sessionId\)/,
     };

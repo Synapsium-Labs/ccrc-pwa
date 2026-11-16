@@ -9,7 +9,7 @@
 // because a flag skipped it. A later edit that folds any of them back in fails
 // here rather than on a phone.
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
@@ -635,5 +635,109 @@ describe('the abandon arm records the stuck reason', () => {
     w.watcher.runVerdicts.replace(new Map([[id, verdictFor('overtaken')]]), new Map());
     await postAbandon(app!, id, { detail: 'abandon:owner-gone', state: 'done', reason: 'x' });
     expect(closeCols(w.coord, id)).toEqual({ closedBy: 'operator', closeDetail: 'abandon:overtaken' });
+  });
+});
+
+// D-8664: a run whose session the fleet NO LONGER HAS (removed from the registry after the run named it) used to be
+// unabandonable forever: the arm sent `ccd ws-release`, ccd died `no such session`, and the close answered
+// `fleetFailed` on every retry. A release of a session the registry POSITIVELY lists as absent is already done, so the
+// arm commits with no `ccd` call and one `fleet-act-omitted:session-absent` run event. Only a positive absence counts:
+// an unlistable registry, or any `ccd` failure while the session is listed, keeps today's `fleetFailed`.
+describe('D-8664: abandoning a run whose session the fleet no longer has', () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  const GONE_EVENT = 'fleet-act-omitted:session-absent';
+  /** ccd's own answer for a session with no `.uuid` in its registry: what the live box said. */
+  const ccdNoSuchSession = (calls: string[][]): Runner => async (_cmd, args) => {
+    calls.push(args);
+    return args[0] === 'ws-release'
+      ? { ran: true, code: 1, stdout: '', stderr: `ccd: no such session: ${args[2] ?? ''}` }
+      : { ran: true, code: 0, stdout: '', stderr: '' };
+  };
+  /** The run names the session, and the registry no longer lists it. */
+  const forget = (home: string, sessionId: string): void => {
+    rmSync(path.join(home, '.cc-sessions'), { recursive: true, force: true });
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    expect(existsSync(path.join(home, '.cc-sessions', `${sessionId}.uuid`))).toBe(false);
+  };
+
+  it('planned, never dispatched, its session gone: ok, planned → failed, no ws-release, the gone event recorded', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const calls: string[][] = [];
+    const w = await openApp(home, ccdNoSuchSession(calls)); app = w.app;
+    const sessionId = `${PROJECT}-gone`;
+    const id = wedged(w.coord, home, 'planned', sessionId);
+    forget(home, sessionId);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, id, state: 'failed', released: true });
+    expect(calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
+    expect(okRun(w.coord.run(id))!.state).toBe('failed');
+    expect(w.coord.runEvents(id).map((e) => e.detail ?? '')).toContain(GONE_EVENT);
+  });
+
+  it('a dispatched run whose session was removed: → closing → failed, with no ws-release', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const calls: string[][] = [];
+    const w = await openApp(home, ccdNoSuchSession(calls)); app = w.app;
+    const sessionId = `${PROJECT}-removed`;
+    const id = wedged(w.coord, home, 'working', sessionId);
+    forget(home, sessionId);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(calls.filter((c) => c[0] === 'ws-release')).toEqual([]);
+    const events = w.coord.runEvents(id);
+    expect(events.filter((e) => e.detail !== GONE_EVENT).map((e) => e.toState).slice(-2)).toEqual(['closing', 'failed']);
+    // ONE trail row, after the commit, in the `fleet-act-omitted:bad-session` shape.
+    expect(events.filter((e) => e.detail === GONE_EVENT).map((e) => [e.causedBy, e.fromState, e.toState]))
+      .toEqual([['operator', 'failed', 'failed']]);
+  });
+
+  it('FAIL-SHUT: an unlistable registry is not an absence — the release runs, fails, and the run stays retryable', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const calls: string[][] = [];
+    const registry = path.join(home, '.cc-sessions');
+    const io: FleetIO = { ...localIO, readdir: async (p) => (p === registry ? null : localIO.readdir(p)) };
+    const w = await openApp(home, ccdNoSuchSession(calls), { io }); app = w.app;
+    const sessionId = `${PROJECT}-unlistable`;
+    const id = wedged(w.coord, home, 'planned', sessionId);
+    forget(home, sessionId);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, stderr: `ccd: no such session: ${sessionId}` });
+    expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+    expect(okRun(w.coord.run(id))!.state).toBe('planned');
+    expect(w.coord.runEvents(id).map((e) => e.detail ?? '')).not.toContain(GONE_EVENT);
+  });
+
+  it('FAIL-SHUT: a listed session whose release fails for another reason is still fleetFailed', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner({ fail: new Set(['ws-release']) });
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-present-broken`;
+    const id = wedged(w.coord, home, 'planned', sessionId);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toMatchObject({ ok: false, stderr: 'ws-release failed on the box' });
+    expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+    expect(okRun(w.coord.run(id))!.state).toBe('planned');
+  });
+
+  it('a present session is released exactly as before, with no gone event', async () => {
+    const home = mkTmp('ccrc-abandon-');
+    const { run, calls } = makeRunner();
+    const w = await openApp(home, run); app = w.app;
+    const sessionId = `${PROJECT}-present`;
+    const id = wedged(w.coord, home, 'planned', sessionId);
+
+    const res = await postAbandon(app, id);
+    expect(res.statusCode).toBe(200);
+    expect(calls).toContainEqual(['ws-release', '--session', sessionId]);
+    expect(w.coord.runEvents(id).map((e) => e.detail ?? '')).not.toContain(GONE_EVENT);
   });
 });
