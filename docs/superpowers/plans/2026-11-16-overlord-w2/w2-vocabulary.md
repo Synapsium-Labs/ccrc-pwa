@@ -60,7 +60,7 @@ operator: they are implementation detail.
   | `goal-conflict-open` | 409 | A state of the world: a pair the operator has not ruled |
   | `identity-too-weak` | 403 | The caller is not allowed: its identity strength is under the act's least |
   | `operator-has-it` | 409 | A state of the world: the row reached the operator, or moved since the caller read it |
-  | `operator-only` | 403 | The caller is not allowed: the act is the operator's |
+  | `operator-only` | 403 | The caller is not allowed: a member of the act's effective class is not covered (C25, C26) |
   | `relay-carries-method` | 400 | A body the caller can fix: the relay's own part, rewritten without the method |
   | `request-not-yours` | 403 | The caller is not allowed, as `not-owner` |
   | `said-not-operator` | 409 | A state of the world: the cited message is not on record, spent or changed. The W1 inbox plan chose 409 too |
@@ -167,7 +167,8 @@ group; every arrow keeps its shape.*
   "no W1 or W2 word"; it now also checks `expect(wave, w).not.toBe('W2')`.
 - [ ] **Step 3: Controls.** Under `CONTROLS`, add two cases: a W2 word dropped from the group and the route words
   (as the `history-unreachable` control does, with `egress-refused`) reds `tableFindings`; and a W2 word put back on
-  the wave map under `W2` reds it twice (a route word on the map, and a wave outside the list).
+  the wave map under `W2` reds it (at least one finding: a wave outside the list; once Task 2 has made it a route word,
+  a route word on the map as well).
 - [ ] **Step 4: Run it red.**
 
   Run: `cd server && ccrc test -- ./node_modules/.bin/vitest run test/single-definition/refusal-table.test.ts`
@@ -191,13 +192,16 @@ group; every arrow keeps its shape.*
   'act-ceiling': 429,
   // `overlordMayAct`: the caller's identity strength is under the act's least (act catalogue B). 403.
   'identity-too-weak': 403,
+  // `overlordMayAct`: a member of the act's effective class is not covered (C25, C26; act catalogue B). 403.
+  'operator-only': 403,
   ```
 
-  and so on for `operator-only`, `server-not-isolated`, `operator-has-it`, `said-not-operator`, `request-not-yours`,
+  and so on for `server-not-isolated`, `operator-has-it`, `said-not-operator`, `request-not-yours`,
   `dependency-cycle`, `egress-refused`, `relay-carries-method` and `goal-conflict-open`, each naming the piece of the
   W2 index that sends it.
 - [ ] **Step 2: Say W2 in the comments.** The group's doc comment says "The Overlord's W1 and W2 refusal words", and
-  that no W2 door sends one until its piece lands. The spread's comment in `REFUSAL_STATUS` says the same.
+  that no W2 door sends one until its piece lands. The spread's comment in `REFUSAL_STATUS` says the same. In passing,
+  fix `read-ceiling`'s comment, which says `codeOnly` names it: `codeOnly` is empty on `main`.
 - [ ] **Step 3: Empty the W2 rows of the wave map.** Delete the eleven `"W2"` entries from `waveMap`. Leave W1a's and
   the later waves' entries.
 - [ ] **Step 4: Run the guard green.**
