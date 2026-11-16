@@ -456,11 +456,12 @@ describe('the client stays closed', () => {
     expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
     // THE APPEND-LAST FILLS, derived from the client's own blocks: every `if [[ "$key" == …` block that fills the pane's pair
     // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
-    // no such block that splices it. The remaining-work door joined the note and probe rows (Overlord W2, review 2265 F9).
+    // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)
+    // joined the note and probe rows.
     const blocks = [...code.matchAll(/^  if \[\[ ("\$key" == '[a-z.-]+'(?: \|\| "\$key" == '[a-z.-]+')*) \]\]; then\n([\s\S]*?)^  fi$/gm)];
     const keysOf = (head: string): string[] => [...head.matchAll(/'([a-z.-]+)'/g)].map((m) => m[1]!);
     const appendLast = blocks.filter((b) => /append_body_field 'byId'/.test(b[2]!)).flatMap((b) => keysOf(b[1]!)).sort();
-    expect(appendLast).toEqual(['note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
+    expect(appendLast).toEqual(['goals.merged', 'goals.modify', 'goals.pin', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
     for (const b of blocks.filter((x) => keysOf(x[1]!).includes('programme.remaining'))) {
       expect(b[2]).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
       expect(b[2]).not.toMatch(/splice_body_field/);
