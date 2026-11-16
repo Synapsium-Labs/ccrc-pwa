@@ -1,5 +1,6 @@
 // The mockup pre-scan, rule v7 (native Docs reader, completion plan Task 5, C1; base spec 2026-10-01 5.6.2 and decision
-// 9, rows M5.22 and M5.B8; departs from 5.6.2's pop sentence as D-8661, is namespace-aware as D-8663, with v4 to v7 folded into D-8663, and the attribute cap D-8671). Ring L1: pure
+// 9, rows M5.22 and M5.B8; departs from 5.6.2's pop sentence as D-8661, is namespace-aware as D-8663, with v3 to v7's foreign
+// rules folded into D-8663 (asks 448 and 450 to 454), and the attribute cap D-8671). Ring L1: pure
 // text in, a verdict out; it imports only `./policy`, so it holds no DOM, no I/O and no timer, and the browser's HTML
 // parser is named in `parse.ts` alone. It is the only guard that runs before the native parse, which cannot be aborted
 // (E13), so it is conservative and linear: ONE left-to-right pass, every region consumed once. TAGS ARE COUNTED EVERYWHERE
@@ -12,7 +13,7 @@
 // parser keeps it (eight or more special elements) leaves a formatting clone in the parser's list while the scan's count falls.
 // Exactness is the requirement, not a bound: where the scan cannot follow the tokenizer or the tree builder exactly it
 // refuses, and the browser leg holds both to Chromium (the oracle rows of `browser/mockup-parse.browser.test.ts`). v6 adds:
-// the scan never pops through an entry (the parser may not hold it: a stale entry, from an implicit close or a start tag the
+// outside foreign content the scan never pops through an entry (the parser may not hold it: a stale entry, from an implicit close or a start tag the
 // parser ignores, made a later end tag pop what the parser kept), and it refuses CDATA and raw text where it cannot tell what
 // the parser does.
 //

@@ -1,5 +1,7 @@
 // M5.B8: the parse budget of the mockup viewer, measured in a real Chrome (native Docs reader, completion plan Task 5,
-// C1; base spec 2026-10-01 5.6.2 "The time budget", rows M5.B8 and E13). The pre-scan (`mockup/prescan.ts`, rule v4) is the only guard before the browser's uncancellable `DOMParser` parse, so its limits are only as good as the
+// C1; base spec 2026-10-01 5.6.2 "The time budget", rows M5.B8 and E13). The pre-scan (`mockup/prescan.ts`, rule v7 and the
+// attribute cap D-8671; the labels below are the versions and review rounds of the completion plan's Results, C1) is the only
+// guard before the browser's uncancellable `DOMParser` parse, so its limits are only as good as the
 // worst page it ADMITS. This file builds each worst shape the limits admit, at the constants `policy.ts` holds, and
 // times `new DOMParser().parseFromString(text, 'text/html')` on it inside a blank page (`performance.now()` around the
 // one call). Every gate asserts, in node, that `prescanMockup` ADMITS the fixture and that it stands at the limit it
@@ -33,22 +35,23 @@
 //       pre-scan's answer compared with it: where a script, a style, a textarea or a plaintext ends (the number of `<b>` the
 //       parser makes after the text, against the pre-scan's formatting count), and whether a root tag self-closed (the number
 //       of children the root `<svg>` or `<math>` has, against the pre-scan's depth);
-//   (v6) THE SIXTH REVIEW. (v6a) the generators, `S(M, R)` = `<div>` + M x `<b id=k>` + `</div>` + R x `<p>x`, 100 and 1000:
+//   (v6) THE FIFTH REVIEW (round 5). (v6a) the generators, `S(M, R)` = `<div>` + M x `<b id=k>` + `</div>` + R x `<p>x`, 100 and 1000:
 //       CDATA after the parser left foreign content (`<svg></p><![CDATA[>`, `<math></br>...`, `<svg><font color=x>...`), a raw-text
 //       start the parser ignores (`<template><col><xmp>`, `<plaintext>`), and the stale-entry shapes (an implicit close of a p, a
 //       heading or a button, a form with a null pointer, an ignored `<tr>`, `<td>` or `<caption>`, followed by li and dd): 12 heavy
 //       fixtures, each refused, and parsed in Chromium only if admitted; (v6c) the oracle pages: CDATA as a bogus comment or not,
 //       `</p>` and `</br>` as foreign exits, and font with and without color, face and size;
-//   (v8) THE SEVENTH REVIEW. FOREIGN CONTENT IS EXACT OR REFUSED: the scan's foreign entries are one run on top of its stack that mirrors
+//   (v7) THE SIXTH REVIEW (round 6). FOREIGN CONTENT IS EXACT OR REFUSED: the scan's foreign entries are one run on top of its stack that mirrors
 //       the parser's (a root is pushed only where the parser surely makes it; a self-closed child pops at once; an end tag walks
 //       down through the run; a breakout, `</p>` and `</br>` pop exactly the run; an end tag whose walk reaches an HTML entry
-//       refuses). (v8a) the review's five cycles (a stale foreign source, eight elements the parser holds as HTML specials, an exit,
+//       refuses). (v7a) the review's five cycles (a stale foreign source, eight elements the parser holds as HTML specials, an exit,
 //       the close of a formatting element), 100 copies and 1000 paragraphs: refused, and parsed in Chromium only if admitted;
-//       (v8c) the ORACLE: every HTML element name against Chromium's breakout list, icon and exit pages against the namespace
+//       (v7c) the ORACLE: every HTML element name against Chromium's breakout list, icon and exit pages against the namespace
 //       Chromium gives the element after them, the font breakout, and CDATA after an exit;
-//   (v9) THE ATTRIBUTE CAP (D-8671). The parser copies every attribute of a formatting element into each clone it makes, so a tag
-//       with 150 000 attributes and 4 000 paragraphs took 19.1 s. (v9a) the review's probes g1 to g3, at sizes that stay under a second
-//       on v8 (20 000 attributes): refused `too-many-attributes`, parsed in Chromium only if admitted; (v9) the two WORST shapes the
+//   (cap) THE ATTRIBUTE CAP (D-8671), after the seventh review (round 7). The parser copies every attribute of a
+//       formatting element into each clone it makes, so a tag
+//       with 150 000 attributes and 4 000 paragraphs took 19.1 s. (cap-a) the review's probes g1 to g3, at sizes that stay under a second
+//       on v7 (20 000 attributes): refused `too-many-attributes`, parsed in Chromium only if admitted; (cap) the two WORST shapes the
 //       cap admits, gated at MOCKUP_MAX_ATTRIBUTES: F formatting elements each carrying the cap's attributes, filled to the tag limit
 //       (reconstruction), and the adoption-agency variant;
 //   (d) the control: E13's 660 KiB of nested `<div>`, parsed DIRECTLY (not through `parseMockup`), must exceed 1000 ms,
@@ -258,7 +261,7 @@ async function refusedRow(key: string, text: string, why: string): Promise<void>
 
 const foreignRow = (key: string, text: string): Promise<void> => refusedRow(key, text, 'foreign-markup');
 
-describe('M5.B8 (v9): the worst shapes the attribute cap admits', { timeout: 120_000 }, () => {
+describe('M5.B8 (cap, D-8671): the worst shapes the attribute cap admits', { timeout: 120_000 }, () => {
   it('F formatting elements each with MOCKUP_MAX_ATTRIBUTES attributes, filled to MOCKUP_MAX_TAGS (reconstruction), parse within the budget', async () => {
     await gate(`c-attr-recon F=${MOCKUP_MAX_OPEN_FORMATTING} A=${MOCKUP_MAX_ATTRIBUTES} T=${MOCKUP_MAX_TAGS}`,
       attributeRecon(MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_TAGS),
@@ -277,22 +280,22 @@ describe('M5.B8 (v9): the worst shapes the attribute cap admits', { timeout: 120
   });
 });
 
-describe('M5.B8 (v9a): the attribute probes g1 to g3, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
+describe('M5.B8 (cap-a, D-8671): the attribute probes g1 to g3, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
   const attrs = (count: number): string => Array.from({ length: count }, (_, k) => ` a${k.toString(36)}`).join('');
   it('g1: <div><b a0..a20000></div> + 1000 paragraph divs', async () => {
-    await refusedRow('v9-g1', `<div><b${attrs(20_000)}></div>${'<div>x</div>'.repeat(1000)}`, 'too-many-attributes');
+    await refusedRow('cap-g1', `<div><b${attrs(20_000)}></div>${'<div>x</div>'.repeat(1000)}`, 'too-many-attributes');
   });
 
   it('g2: a single start tag with 150 000 attributes', async () => {
-    await refusedRow('v9-g2', `<div><b${attrs(150_000)}></div>`, 'too-many-attributes');
+    await refusedRow('cap-g2', `<div><b${attrs(150_000)}></div>`, 'too-many-attributes');
   });
 
   it('g3: the p-chain variant (20 000 attributes, 250 paragraphs)', async () => {
-    await refusedRow('v9-g3-p', `<div><b${attrs(20_000)}></div>${'<p>x'.repeat(250)}`, 'too-many-attributes');
+    await refusedRow('cap-g3-p', `<div><b${attrs(20_000)}></div>${'<p>x'.repeat(250)}`, 'too-many-attributes');
   });
 
   it('g3: the adoption-agency variant (20 000 attributes, 100 cycles)', async () => {
-    await refusedRow('v9-g3-aaa', `<div><b${attrs(20_000)}></div>${`<div>x${'<div>'.repeat(8)}</b>${'</div>'.repeat(9)}`.repeat(100)}`, 'too-many-attributes');
+    await refusedRow('cap-g3-aaa', `<div><b${attrs(20_000)}></div>${`<div>x${'<div>'.repeat(8)}</b>${'</div>'.repeat(9)}`.repeat(100)}`, 'too-many-attributes');
   });
 });
 
@@ -424,7 +427,7 @@ const CHAIN = '<li><dd>'.repeat(5);
 const storm = (m: number, r: number): string => `<div>${Array.from({ length: m }, (_, k) => `<b id=${k}>`).join('')}</div>${'<p>x'.repeat(r)}`;
 const staleStorm = (unit: (k: number) => string): string => `<div>${Array.from({ length: 100 }, (_, k) => unit(k)).join('')}</div>${'<p>x</p>'.repeat(1000)}`;
 
-describe('M5.B8 (v6a): the sixth review\'s shapes, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
+describe('M5.B8 (v6a): the fifth review\'s shapes, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
   it.each([
     ['<svg></p><![CDATA[>', '', 'too-many-formatting'],
     ['<math></br><![CDATA[>', '', 'too-many-formatting'],
@@ -448,7 +451,7 @@ describe('M5.B8 (v6a): the sixth review\'s shapes, in real Chromium: refused, an
   });
 });
 
-describe('M5.B8 (v8a): the seventh review\'s cycles, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
+describe('M5.B8 (v7a): the sixth review\'s cycles, in real Chromium: refused, and parsed only if admitted', { timeout: 180_000 }, () => {
   it.each([
     ['svg stale, <br> exit', (k: number) => `<b id=${k}><svg><g></svg>${'<section>'.repeat(8)}<br></b>`],
     ['svg stale, </p> exit', (k: number) => `<b id=${k}><svg><g></svg>${'<section>'.repeat(8)}</p></b>`],
@@ -456,11 +459,11 @@ describe('M5.B8 (v8a): the seventh review\'s cycles, in real Chromium: refused, 
     ['math stale, span exit', (k: number) => `<b id=${k}><math><mrow></math>${'<nav>'.repeat(8)}<span></span></b>`],
     ['a instead of b', (k: number) => `<a id=${k}><svg><g></svg>${'<aside>'.repeat(8)}<br></a>`],
   ])('%s: 100 copies and 1000 paragraphs', async (name, unit) => {
-    await refusedRow(`v8-${name}`, `<div>${Array.from({ length: 100 }, (_, k) => unit(k)).join('')}</div>${'<p>x</p>'.repeat(1000)}`, 'too-deep');
+    await refusedRow(`v7-${name}`, `<div>${Array.from({ length: 100 }, (_, k) => unit(k)).join('')}</div>${'<p>x</p>'.repeat(1000)}`, 'too-deep');
   });
 });
 
-describe('M5.B8 (v8c): the pre-scan\'s foreign state agrees with Chromium\'s', { timeout: 180_000 }, () => {
+describe('M5.B8 (v7c): the pre-scan\'s foreign state agrees with Chromium\'s', { timeout: 180_000 }, () => {
   const XHTML = 'http://www.w3.org/1999/xhtml';
   interface Made { b: number; svgChildren: number; descNs: string | null; foNs: string | null }
   async function oracle(texts: readonly string[]): Promise<Made[]> {

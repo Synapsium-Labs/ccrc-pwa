@@ -245,7 +245,7 @@ describe('v2 (D-8661): an end tag the parser ignores neither pops nor decrements
 
   it('(1b) the same with <svg><desc></b></desc></svg> in place of the table', () => {
     const text = `<div>${Array.from({ length: 1874 }, (_, k) => `<b data-i=${k}><svg><desc></b></desc></svg>`).join('')}</div>${rep('<p>x</p>', 3751)}`;
-    // v8: the </b> reaches an HTML entry through the foreign run, which the scan does not follow, so the page is refused at once.
+    // v7: the </b> reaches an HTML entry through the foreign run, which the scan does not follow, so the page is refused at once.
     expect(prescanMockup(text)).toMatchObject({ ok: false, why: 'foreign-markup' });
   });
 
@@ -462,7 +462,7 @@ const PIECES: readonly string[] = [
   '<g>', '</g>', '<path/>', '<use href=#a>', '<font>', '<font color=red>', '</font>', '<annotation-xml>', '</annotation-xml>', '<mo>', '<mtext>',
   '<script>', '</script>', '<!--<script>', '<!-->', '<svg / >', '<svg /\t>', '<svg / x>', '<svg/ >', '<svg a=b/>', '<style><style>', '</style>', '<title>', '<textarea>', '<xmp>',
   '<svg><g></svg>', '<svg><path/></svg>', '<math><mrow></math>', '<section>', '</svg>', '</g>', '<g>', '<path/>', '<use/>',
-  // v9: attribute-rich tags (the cap refuses them; the property bound counts elements, so it cannot see their cost: the Chromium gates do).
+  // The cap (D-8671): attribute-rich tags (the cap refuses them; the property bound counts elements, so it cannot see their cost: the Chromium gates do).
   `<b${Array.from({ length: 70 }, (_, k) => ` a${k}`).join('')}>`, `<div${Array.from({ length: 70 }, (_, k) => ` a${k}`).join('')}>`, '<b a b a b a b a>', '<b a=1 b=\'2\' c="3" d>',
   '<![CDATA[>', '<svg></p>', '<math></br>', '<font color=x>', '<template><col>', '<tr>', '<caption>', '<form>', '</form>',
   '<![CDATA[', ']]>', '<![CDATA[x]]>', '<svg><style>', '</style></svg>', '<svg><title>', '</title></svg>', '<svg><desc>', '<math><mi>',
@@ -498,7 +498,7 @@ const SEEDS: readonly string[] = [
   `<b id=@><button><button></button>${'<li><dd>'.repeat(5)}</button></b>`, `<b id=@><tr>${'<li><dd>'.repeat(5)}</tr></b>`,
   `<b id=@><td>${'<li><dd>'.repeat(5)}</td></b>`, `<b id=@><caption>${'<li><dd>'.repeat(5)}</caption></b>`,
   `<b id=@>${'<form><table></form></table></form>'.repeat(9)}</b>`, `<b id=@><tr><span></tr></b>`,
-  // v7/v8: a stale foreign source, eight elements the parser holds as HTML specials, an exit the parser performs, the close of a b.
+  // v7: a stale foreign source, eight elements the parser holds as HTML specials, an exit the parser performs, the close of a b.
   `<b id=@${Array.from({ length: 70 }, (_, k) => ` a${k}`).join('')}><p>x`, `<b id=@><svg><g></svg>${'<section>'.repeat(8)}<br></b>`, `<b id=@><svg><g></svg>${'<section>'.repeat(8)}</p></b>`,
   `<b id=@><svg><path/></svg>${'<article>'.repeat(8)}<font color=r></font></b>`, `<b id=@><math><mrow></math>${'<nav>'.repeat(8)}<span></span></b>`,
   `<a id=@><svg><g></svg>${'<aside>'.repeat(8)}<br></a>`, `<b id=@><svg><g></svg>${'<section>'.repeat(8)}</br></b>`,
@@ -622,9 +622,9 @@ describe('v3 (D-8663): integration points refuse markup, in real Chromium\'s ter
     expect(prescanMockup(rep('<svg><desc>D</desc></svg><math><mi>x</mi></math>', 60))).toMatchObject({ ok: true });
   });
 
-  it('an end tag pops an integration point with its own name, and a parent\'s end tag pops through it (v8: the foreign walk)', () => {
+  it('an end tag pops an integration point with its own name, and a parent\'s end tag pops through it (v7: the foreign walk)', () => {
     expect(prescanMockup('<svg><foreignObject>a</foreignObject><g><path/></g></svg>')).toMatchObject({ ok: true });
-    // v8: the foreign walk pops through an integration point, as the parser's foreign end-tag steps do (it was refused as stale in v6).
+    // v7: the foreign walk pops through an integration point, as the parser's foreign end-tag steps do (it was refused as stale in v6).
     expect(prescanMockup('<svg><foreignObject>a</svg><div>x</div>')).toMatchObject({ ok: true });
     expect(prescanMockup('<math><annotation-xml>a</annotation-xml><mi>b</mi></math>')).toMatchObject({ ok: true });
   });
@@ -789,14 +789,14 @@ describe('v4 (D-8663): a self-closed svg or math is popped at once, so what foll
     expect(prescanMockup(rep('<svg a=">/">', D + 1))).toMatchObject({ ok: false, why: 'too-deep' });
   });
 
-  it('every foreign self-closed element pushes nothing too (v8: the parser pops it at once and the foreign state is exact)', () => {
+  it('every foreign self-closed element pushes nothing too (v7: the parser pops it at once and the foreign state is exact)', () => {
     expect(prescanMockup(`<svg>${rep('<path/>', D)}</svg>`)).toMatchObject({ ok: true, depth: 1 });
     expect(prescanMockup(`<svg>${rep('<svg/>', 1000)}</svg>`)).toMatchObject({ ok: true, depth: 1 });
   });
 });
 
 describe('v4 (D-8663): a foreign entry above the match blocks every end tag outside the implied-closer group', () => {
-  it('a formatting end tag over a foreign entry is refused (v8: its walk reaches the HTML b, which the scan does not follow)', () => {
+  it('a formatting end tag over a foreign entry is refused (v7: its walk reaches the HTML b, which the scan does not follow)', () => {
     refusedAs('<b><svg></b>', 'foreign-markup');
     refusedAs('<b data-i=1><math><mi>x</mi></b>', 'foreign-markup');
   });
@@ -808,13 +808,13 @@ describe('v4 (D-8663): a foreign entry above the match blocks every end tag outs
   });
 
   it('the implied-closer group is gone: a closer end tag pops only its match at the top, like every other end tag', () => {
-    // A div end tag with an svg open reaches the HTML div through the foreign run: refused (v8).
+    // A div end tag with an svg open reaches the HTML div through the foreign run: refused (v7).
     refusedAs('<div><svg></div>', 'foreign-markup');
     expect(prescanMockup(rep('<p>x</p><ul><li>a</li><li>b</li></ul>', 1000))).toMatchObject({ ok: true, depth: 2 });
     expect(prescanMockup(rep('<table><tr><td>x</td></tr></table>', 1000))).toMatchObject({ ok: true, depth: 3 });
   });
 
-  it('inline svg inside inline HTML: the HTML parent closes once the svg is closed (v8: a self-closed child leaves nothing)', () => {
+  it('inline svg inside inline HTML: the HTML parent closes once the svg is closed (v7: a self-closed child leaves nothing)', () => {
     expect(prescanMockup(rep('<span><svg></svg>label</span>', 1000))).toMatchObject({ ok: true, depth: 2 });
     expect(prescanMockup(rep('<a href="#x"><svg><path/></svg></a>', 20))).toMatchObject({ ok: true });
     expect(prescanMockup(rep('<button><svg><use href="#x"/></svg> OK</button>', 60))).toMatchObject({ ok: true });
@@ -975,7 +975,7 @@ describe('v5 (D-8663): the attribute tokenizer decides the tag\'s end and its se
   });
 });
 
-/** The sixth review's test payload `S(M, R)`: M unclosed formatting elements in a block that is then closed, then R paragraphs. */
+/** The fifth review's (round 5) test payload `S(M, R)`: M unclosed formatting elements in a block that is then closed, then R paragraphs. */
 const storm = (m: number, r: number): string => `<div>${Array.from({ length: m }, (_, k) => `<b id=${k}>`).join('')}</div>${rep('<p>x', r)}`;
 /** `<div>` + `copies` of a unit + `</div>` + paragraphs: the stale-entry shapes the review measured. */
 const staleUnits = (unit: (k: number) => string, copies: number, fill: number): string =>
@@ -1023,7 +1023,7 @@ describe('v6 (D-8663): the parser\'s own foreign exits: </p> and </br> pop forei
 
   it('they stop at an integration point, which the parser also keeps', () => {
     expect(prescanMockup(rep('<svg><desc></p>', 5))).toMatchObject({ ok: false, why: 'foreign-markup' });
-    // v8: with an integration point open the parser runs the HTML rules for </p> inside it, which the scan does not follow.
+    // v7: with an integration point open the parser runs the HTML rules for </p> inside it, which the scan does not follow.
     expect(prescanMockup('<svg><desc></p>text</desc></svg>')).toMatchObject({ ok: false, why: 'foreign-markup' });
   });
 
@@ -1087,7 +1087,7 @@ describe('v6 (D-8663): an end tag pops only when its match is the TOP entry (sta
   });
 });
 
-/** The seventh review's cycle: a stale foreign source (an svg or math closed out of order, or with a self-closed child), eight
+/** The sixth review's (round 6) cycle: a stale foreign source (an svg or math closed out of order, or with a self-closed child), eight
  *  elements a parser holds as HTML specials, an exit the parser also performs (a breakout start tag, `</p>`, a void), then the
  *  close of a formatting element. */
 const SOURCES: ReadonlyArray<readonly [string, string]> = [['<svg><g></svg>', '<svg><g></svg>'], ['<svg><path/></svg>', '<svg><path/></svg>'], ['<math><mrow></math>', '<math><mrow></math>']];
@@ -1098,7 +1098,7 @@ const refusedAs = (text: string, why: string | null = null): void => {
   if (why !== null) expect(v.ok ? '' : v.why, text.slice(0, 80)).toBe(why);
 };
 
-describe('v7 (D-8663): the seventh review\'s cycles, all variants, refused', () => {
+describe('v7 (D-8663): the sixth review\'s cycles, all variants, refused', () => {
   it.each(SOURCES.flatMap(([name, source]) => EXITS.map((exit) => [name, exit, source] as const)))(
     'stale source %s + 8 sections + %s + </b>, 100 copies and 1000 paragraphs, and 300 copies and 3000', (_name, exit, source) => {
       const unit = (k: number): string => `<b id=${k}>${source}${rep('<section>', 8)}${exit}</b>`;
@@ -1119,7 +1119,7 @@ describe('v7 (D-8663): the seventh review\'s cycles, all variants, refused', () 
   });
 });
 
-describe('v8 (D-8663): foreign content is exact or refused: the foreign entries are one run on top and mirror the parser\'s', () => {
+describe('v7 (D-8663): foreign content is exact or refused: the foreign entries are one run on top and mirror the parser\'s', () => {
   it('ordinary icons leave NOTHING on the stack: a self-closed child pops at once, an end tag pops through the foreign run', () => {
     const icons = [
       '<svg><path/><use/></svg>', '<svg viewBox="0 0 1 1"><path d="M0"/></svg>', '<svg><defs><symbol id="a"><path d="M0"/></symbol></defs><use href="#a"/></svg>',
@@ -1205,7 +1205,7 @@ describe('v8 (D-8663): foreign content is exact or refused: the foreign entries 
 const attrs = (count: number): string => Array.from({ length: count }, (_, k) => ` a${k.toString(36)}`).join('');
 const tooMany = { ok: false, why: 'too-many-attributes' } as const;
 
-describe('v8 (D-8671): a start tag with more than MOCKUP_MAX_ATTRIBUTES attributes refuses the page', () => {
+describe('the cap (D-8671): a start tag with more than MOCKUP_MAX_ATTRIBUTES attributes refuses the page', () => {
   it('the limit is inclusive: exactly MOCKUP_MAX_ATTRIBUTES attributes are admitted, one more is refused too-many-attributes', () => {
     for (const tag of ['b', 'div', 'span', 'a', 'p', 'svg', 'br', 'input', 'style', 'script', 'textarea', 'table', 'custom-element']) {
       expect(prescanMockup(`<${tag}${attrs(A)}>`), tag).toMatchObject({ ok: true });

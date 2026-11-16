@@ -626,7 +626,7 @@ describe('buildMockupSrcdoc: the output cap (D-8662)', () => {
   }
   const comment = (chars: number): string => `<!--${'x'.repeat(Math.max(0, chars - 7))}-->`;
 
-  it('500 uses of one 100 KB image: the length is at most the cap, exactly what fits is inlined, the rest are skipped:over-budget in DOM order, and the image is read once', async () => {
+  it('500 uses of one 100 KiB image: the length is at most the cap, exactly what fits is inlined, the rest are skipped:over-budget in DOM order, and the image is read once', async () => {
     const img = png(100 * 1024);
     const html = `<!doctype html><html><body>${'<img src="a.png">'.repeat(500)}</body></html>`;
     const base = await baseLength(html, { 'a.png': img });
@@ -647,7 +647,7 @@ describe('buildMockupSrcdoc: the output cap (D-8662)', () => {
     expect(r.plan.reservedBytes).toBe(r.assets.plan.reservedBytes);
     expect(r.reads).toEqual(['a.png']);
     // The measured length, for the report.
-    process.stdout.write(`C1-T7 cap row: 500 x 100 KB image -> srcdoc length ${r.srcdoc.length}, inlined ${fits}, skipped ${r.skipped.length}\n`);
+    process.stdout.write(`C1-T7 cap row: 500 x 100 KiB image -> srcdoc length ${r.srcdoc.length}, inlined ${fits}, skipped ${r.skipped.length}\n`);
   });
 
   it('a use that exactly reaches the cap is inlined and the next is skipped', async () => {
