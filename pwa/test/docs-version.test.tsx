@@ -14,7 +14,7 @@ import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import {
-  DOCS_BANNER_TEXT, DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, servedRefText,
+  DOCS_BANNER_TEXT, DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOC_LINK_INERT_SENTENCE, DOCS_VIEW_TEXT, ENTRY_BADGE_TEXT, fillSentence, kib, servedRefText,
   shareRefusalSentence, shortCommit,
 } from '../src/docs/docsText';
 import { exportLinkTarget } from '../src/docs/export/exportMarkdown';
@@ -516,6 +516,12 @@ describe('Export on a version page (refinement (t))', () => {
     expect(exportLinkTarget(at, VERSION, '../../../README.md')).toEqual(inert);
     expect(exportLinkTarget(at, VERSION, '#top')).toEqual({ kind: 'fragment', href: '#top' });
     expect(exportLinkTarget(at, VERSION, 'https://a.example/x')).toEqual({ kind: 'external', href: 'https://a.example/x' });
+    // A self-contained link and a refused one keep their own words, not the version's.
+    const here = { section: 'specs', path: 'a.md' } as const;
+    expect(resolveDocRef(here, 'data:text/plain,x')).toMatchObject({ kind: 'self-contained', scheme: 'data' });
+    expect(exportLinkTarget(at, VERSION, 'data:text/plain,x')).toEqual({ kind: 'inert', title: DOC_LINK_INERT_SENTENCE['data'] });
+    expect(resolveDocRef(here, '//other.example/x')).toMatchObject({ kind: 'refused', why: 'protocol-relative' });
+    expect(exportLinkTarget(at, VERSION, '//other.example/x')).toEqual({ kind: 'inert', title: DOC_LINK_INERT_SENTENCE['protocol-relative'] });
     // The listing's own commit: the same doc is a permalink.
     expect(exportLinkTarget(at, COMMIT_A, 'b.md'))
       .toEqual({ kind: 'permalink', href: `${GH}/blob/${COMMIT_A}/docs/superpowers/specs/b.md` });
