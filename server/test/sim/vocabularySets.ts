@@ -22,8 +22,8 @@ export function injectedRowCases(m: InjectedPromptsModule): Record<string, Suite
   const of = (v: unknown): string | null => m.injectedPromptOf(v);
   const keys = Object.keys(rows);
   return {
-    'the eight keys, kebab and unique': () => {
-      expect(keys).toEqual(['mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model']);
+    'the nine keys, kebab and unique (the renewal act added renewal-first-prompt)': () => {
+      expect(keys).toEqual(['mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model', 'renewal-first-prompt']);
       for (const k of keys) expect(k, k).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
       expect(new Set(keys).size).toBe(keys.length);
     },

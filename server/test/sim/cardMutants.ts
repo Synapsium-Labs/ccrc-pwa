@@ -140,7 +140,7 @@ export const CARD_BLOCK_SET: MutantSet<Card> = {
   mutants: [
     { id: 'M1', old: '${fieldsBlock(fieldLine(n.next), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.next)}' },
     { id: 'M7', old: '${fieldsBlock(fieldLine(n.waitsOn), NOTE_FIELD_CAP_BYTES, at)}', new: '${fieldLine(n.waitsOn)}' },
-    { id: 'M2', old: "${fieldsBlock(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the handover row, which nothing reads back in W1a')}", new: "${lines.join('\\n')}" },
+    { id: 'M2', old: "${fieldsBlock(lines.join('\\n'), CHECKPOINT_CAP_BYTES, 'stored on the checkpoint row')}", new: "${lines.join('\\n')}" },
     { id: 'M3', old: "block(it.text, SHORT_CAP_BYTES, `on item ${it.id}'s row`)", new: 'it.text' },
     { id: 'M4', old: "block(p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n'), SHORT_CAP_BYTES, where)", new: "p.decisions.map((d) => `${iso(d.at)}: ${d.text}`).join('\\n')" },
     { id: 'M5', old: "block(ratified.join('\\n'), SHORT_CAP_BYTES, where)", new: "ratified.join('\\n')" },

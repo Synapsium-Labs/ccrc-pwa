@@ -6827,7 +6827,10 @@ export type MailGate =
   | 'parked'
   // D-5912: the send's `onDraft: 'stash'` refused — a stash already held (`stash-occupied`), or the box did not
   // empty after `C-s` (`stash-failed`). Recorded after the send, beside its `lastError`.
-  | 'stash-failed' | 'stash-occupied';
+  | 'stash-failed' | 'stash-occupied'
+  // Overlord W1a, the renewal act: the recipient's generation is renewing (`draining` to `probing`), so its mail waits
+  // until it is proven again (`renewalHoldsMail`); the handover ask alone passes.
+  | 'renewing';
 
 /** Total, so a refusal path added to `sweepMail` without a member here is a
  *  TS2739 rather than a silent hole — the `RUN_REFUSE_CODE_MAP` shape, and the
@@ -6838,7 +6841,7 @@ const MAIL_GATE_MAP: Record<MailGate, true> = {
   'tmux-gone': true, 'session-dead': true, 'tmux-unknown': true, hibernated: true, 'wake-pressure': true,
   'pending-ask': true, 'no-pane': true, 'no-config-dir': true,
   'not-idle': true, 'not-quiet': true, 'turn-mark-unreadable': true, parked: true,
-  'stash-failed': true, 'stash-occupied': true,
+  'stash-failed': true, 'stash-occupied': true, renewing: true,
 };
 export const MAIL_GATES: readonly MailGate[] = Object.keys(MAIL_GATE_MAP) as MailGate[];
 

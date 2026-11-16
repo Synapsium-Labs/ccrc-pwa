@@ -145,10 +145,10 @@ export const LANE_ARM_TEXT = {
       legend: 'Renew long-lived sessions',
       shadowNote: 'Each start of a coordinator mints a generation and every pass records whether a renewal would be due; '
         + 'nothing is held, refused or renewed.',
-      liveNote: 'A coordinator\'s generations move through the renewal states; until the renewal act ships, this changes '
-        + 'nothing a session sees.',
-      gate: 'Live waits for the renewal act: until it ships, nothing moves a generation on from its start, so a live walk '
-        + 'would stand still and fire every deadline at once when it arrives. Live is refused until then.',
+      liveNote: 'A coordinator that is due renews: its mail is held, it writes a handover note, ccd starts it fresh in the '
+        + 'same session, and it reads its card and answers its probes before its mail is released. One that cannot is '
+        + 'left working and raises an item.',
+      gate: null,
     },
     [LAUNCH_PROFILE_LANE]: {
       legend: 'Launch profiles',

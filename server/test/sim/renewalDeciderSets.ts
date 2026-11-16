@@ -595,7 +595,7 @@ export const GEN_EVENTS: GEvent[] = [
   { kind: 'host-ended' }, { kind: 'host-failed', afterEnd: false }, { kind: 'host-failed', afterEnd: true },
   { kind: 'started', resumed: false }, { kind: 'started', resumed: true }, { kind: 'card-read', hashMatches: true },
   { kind: 'card-read', hashMatches: false }, { kind: 'probes', passed: true }, { kind: 'probes', passed: false },
-  { kind: 'nudge-due' }, { kind: 'deadline' }, { kind: 'renew-now' },
+  { kind: 'nudge-due' }, { kind: 'deadline' }, { kind: 'renew-now' }, { kind: 'host-gave-up' }, { kind: 'disarmed' },
 ];
 
 /** Every view: each state with `cls` and the counters at their edge values. */
@@ -639,6 +639,12 @@ export const GEN_RULES: readonly Rule[] = [
   { why: 'draining "120": a failure before the first half (active if proven, else degraded with an item)', st: ['draining'], ev: (e) => e.kind === 'deadline', then: BACK },
   { why: 'checkpointed: the note, or "60, then clearing without the note"', st: ['checkpointed'],
     ev: (e) => e.kind === 'handover' || e.kind === 'deadline', then: () => ({ state: 'clearing', over: { tries: 1, hostEnded: false }, actions: ['renew'] }) },
+  { why: 'the coordinator\'s ruling F13 on review 2149: a live walk whose row is switched off ends at once, degraded after the first half',
+    st: ['draining', 'checkpointed', 'clearing', 'carded', 'probing'], ev: (e) => e.kind === 'disarmed', when: (g) => g.hostEnded, then: DEGRADE },
+  { why: 'F13: before the first half, a disarmed walk goes back as a failure before it does',
+    st: ['draining', 'checkpointed', 'clearing', 'carded', 'probing'], ev: (e) => e.kind === 'disarmed', then: BACK },
+  { why: 'the coordinator\'s ruling F5 on review 2149: wake-failed is terminal, so clearing degrades at once, after the first half',
+    st: ['clearing'], ev: (e) => e.kind === 'host-gave-up', then: (g) => DEGRADE({ ...g, hostEnded: true }) },
   { why: 'clearing: the receipt\'s first half', st: ['clearing'], ev: (e) => e.kind === 'host-ended',
     then: () => ({ state: 'clearing', over: { hostEnded: true }, actions: [] }) },
   { why: '"A failure before the first half returns the generation to active with a hold-off if it was proven"', st: ['clearing'],
@@ -699,7 +705,7 @@ export function generationStepCases(m: GenModule): Record<string, SuiteCase> {
     },
     'EXHAUSTIVE: every state x every event x cls x the counters\' edges, against Table 3.3.11a written out': () => {
       const views = genViews();
-      expect(views.length * GEN_EVENTS.length).toBe(1152 * 16);
+      expect(views.length * GEN_EVENTS.length).toBe(1152 * 18);
       for (const g of views) for (const e of GEN_EVENTS) expect(m.generationStep(g, e), JSON.stringify([g, e])).toEqual(expectedStep(g, e));
     },
     'every step into degraded carries raise-item, a carded deadline and an unproven back() included (plan Step 1; review 1912, F1)': () => {
