@@ -266,6 +266,26 @@ export function insertDigestResponsesInTx(db: DatabaseSync, d: {
   return { inserted };
 }
 
+/** One response write inside the move it rides, under its own SAVEPOINT (review 2260 F5). A failure SQLite undid at the
+ *  statement or the savepoint (a constraint, a trigger's `RAISE(ABORT)`) is rolled back to the savepoint, so the write
+ *  leaves nothing (a digest's lines go all or none), and answered `{ ok: false }`: the move stands and the caller logs it. A
+ *  failure SQLite answered by rolling back the WHOLE transaction (SQLITE_FULL, IOERR, NOMEM, INTERRUPT, `RAISE(ROLLBACK)`)
+ *  leaves no transaction open, so it is re-thrown: the move fails whole, never half-committed and reported as a failure. */
+export function responseWriteInTx<T>(db: DatabaseSync, fn: () => T): { readonly ok: true; readonly value: T } | { readonly ok: false; readonly detail: string } {
+  db.exec('SAVEPOINT response_write');
+  let value: T;
+  try {
+    value = fn();
+  } catch (e) {
+    if (!db.isTransaction) throw e;
+    db.exec('ROLLBACK TO response_write');
+    db.exec('RELEASE response_write');
+    return { ok: false, detail: message(e) };
+  }
+  db.exec('RELEASE response_write');
+  return { ok: true, value };
+}
+
 /** Logs a response write that failed inside a move it must never cost, once per cause through a change latch (the cause
  *  names no id), so a standing failure logs once, not once per move. */
 const writeLatch = changeLatch();
@@ -400,7 +420,9 @@ export function responseRetention(db: DatabaseSync): RetentionRead {
 }
 /** The retention door's one write. The door has bounded `days` and asked its gate. */
 export function setResponseRetention(db: DatabaseSync, days: number, at: number): { readonly changed: boolean } {
-  const res = stmt(db, 'UPDATE response_settings SET retentionDays = ?, updatedAt = ? WHERE id = 1 AND retentionDays IS NOT ?').run(days, at, days);
+  // An upsert: a missing row (which no code deletes) is written back, never a 200 that kept nothing (review 2260 F4).
+  const res = stmt(db, 'INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, ?, ?) ON CONFLICT(id) DO UPDATE SET '
+    + 'retentionDays = excluded.retentionDays, updatedAt = excluded.updatedAt WHERE response_settings.retentionDays IS NOT excluded.retentionDays').run(days, at);
   return { changed: Number(res.changes) > 0 };
 }
 

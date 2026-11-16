@@ -133,7 +133,8 @@ describe('GET /api/responses?ref=…', () => {
   it('a malformed ref is bad-request; a failed read is unavailable, never an empty list', async () => {
     const { app, coord } = await server();
     seed(coord);
-    for (const ref of ['', 'item:', 'item:x', 'ask:3', 'digest:2026-11-16:nope:4', 'push:1']) {
+    // 9999999999999999 matches the id's sixteen digits but is no safe integer (review 2260 F8).
+    for (const ref of ['', 'item:', 'item:x', 'item:9999999999999999', 'ask:3', 'digest:2026-11-16:nope:4', 'push:1']) {
       expect((await app.inject({ method: 'GET', url: `/api/responses?ref=${ref}` })).json(), ref).toMatchObject({ ok: false, error: 'bad-request' });
     }
     vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -227,5 +228,9 @@ describe('GET and POST /api/responses/retention (§9.4, question 16)', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     r.coord.db.prepare('DELETE FROM response_settings').run();
     expect((await setDays(r, 400)).json()).toMatchObject({ ok: false, error: 'step-up-required' });
+    // With the step-up, the missing row is written back, never a 200 that kept nothing (review 2260 F4).
+    await r.stamp();
+    expect((await setDays(r, 400)).json()).toEqual({ ok: true, days: 400, default: 180, min: 14, max: 3650 });
+    expect(stored(r)).toBe(400);
   });
 });

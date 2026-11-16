@@ -8,7 +8,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { tx } from '../src/coord/tx.js';
 import { insertPushResponseInTx, insertWaitingResponseInTx, landPushVerdictInTx, openResponseRows, replacedOnOf, type OpenResponseRow } from '../src/coord/responsesStore.js';
-import type { BoundWrite } from '../src/coord/pushOutboxStore.js';
+import { insertUnboundRow, type BoundWrite } from '../src/coord/pushOutboxStore.js';
 import { itemBoundOf, senderFor, type SenderDeps } from '../src/pushSender.js';
 import { ownerFactsOf } from '../src/responses/lane.js';
 import { WAITING_WINDOW_MS, type ResponseStamp } from '../../shared/responses.js';
@@ -138,6 +138,26 @@ describe('a Waiting on you row rides the reach (Table 4.3a)', () => {
     expect(waiting(c)).toEqual([]);
     expect(warn.mock.calls.filter(([l]) => String(l).includes('a Waiting on you row was not written'))).toHaveLength(1);
   });
+
+  it('an insert SQLite answers by rolling back the whole transaction fails the move whole, never half-committed (review 2260 F5)', () => {
+    const c = store();
+    // RAISE(ROLLBACK) stands in for SQLITE_FULL or IOERR: the whole transaction is gone, not just the statement.
+    c.db.exec("CREATE TRIGGER gone BEFORE INSERT ON operator_responses WHEN NEW.kind = 'waiting' BEGIN SELECT RAISE(ROLLBACK, 'disk full'); END");
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(() => c.raiseItemReached({ ...ITEM, neededBy: 'soon', heldUntil: null }, T, 'coordinator', reach(c))).toThrow(/disk full/);
+    expect(c.db.isTransaction).toBe(false);
+    // Nothing the move would have written after the response insert (the item's outbox row) ran in autocommit.
+    for (const t of ['operator_items', 'push_outbox', 'operator_responses']) expect(c.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get(), t).toEqual({ n: 0 });
+    expect(warn.mock.calls.filter(([l]) => String(l).includes('a Waiting on you row was not written'))).toEqual([]);
+  });
+  it("a push's response insert that takes the whole transaction: the unbound insert answers ok: false and keeps no row (review 2260 F5)", () => {
+    const c = store();
+    c.db.exec("CREATE TRIGGER gone BEFORE INSERT ON operator_responses WHEN NEW.kind = 'push' BEGIN SELECT RAISE(ROLLBACK, 'disk full'); END");
+    const out = insertUnboundRow(c.db, { pushId: 'a'.repeat(32), payload: { title: 'T', body: 'B', tag: 'x' }, at: T }, { label: 'coord', carries: null, stamp: STAMP });
+    expect(out).toMatchObject({ ok: false, detail: expect.stringContaining('disk full') });
+    expect(c.db.isTransaction).toBe(false);
+    expect(c.db.prepare('SELECT COUNT(*) AS n FROM push_outbox').get()).toEqual({ n: 0 });
+  });
 });
 
 describe('a digest line rides the digest claim (question 8)', () => {
@@ -166,6 +186,23 @@ describe('a digest line rides the digest claim (question 8)', () => {
     expect(c.claimDigestDay('2026-11-17', T, 1, () => { throw new Error('boom'); })).toBe(true);
     expect(c.digestDay('2026-11-17')).toMatchObject({ day: '2026-11-17', count: 1 });
     expect(warn).toHaveBeenCalled();
+  });
+  it('a line that fails takes back every line of its digest, and the claim stands (review 2260 F5)', () => {
+    const c = store();
+    c.db.exec("CREATE TRIGGER no_calls BEFORE INSERT ON operator_responses WHEN NEW.label = 'call' BEGIN SELECT RAISE(ABORT, 'no call lines'); END");
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(c.claimDigestDay('2026-11-18', T, 3, () => c.insertDigestResponses({ day: '2026-11-18', lines: LINES, stamp: STAMP, at: T, windowCapAt: T + 99 }))).toBe(true);
+    expect(c.digestDay('2026-11-18')).toMatchObject({ day: '2026-11-18', count: 3 });
+    expect(digestRows(c)).toEqual([]);
+    expect(warn.mock.calls.filter(([l]) => String(l).includes('no call lines'))).toHaveLength(1);
+  });
+  it('a line SQLite answers by rolling back the whole transaction fails the claim too, so the next beat claims again (review 2260 F5)', () => {
+    const c = store();
+    c.db.exec("CREATE TRIGGER gone BEFORE INSERT ON operator_responses WHEN NEW.kind = 'digest' BEGIN SELECT RAISE(ROLLBACK, 'disk full'); END");
+    expect(() => c.claimDigestDay('2026-11-19', T, 3, () => c.insertDigestResponses({ day: '2026-11-19', lines: LINES, stamp: STAMP, at: T, windowCapAt: T + 99 }))).toThrow(/disk full/);
+    expect(c.db.isTransaction).toBe(false);
+    expect(c.digestDay('2026-11-19')).toBeNull();
+    expect(digestRows(c)).toEqual([]);
   });
 });
 

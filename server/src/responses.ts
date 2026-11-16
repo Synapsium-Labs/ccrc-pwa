@@ -3,7 +3,7 @@ import {
   type ActedHow, type BootStamp, type ReceiptDrop, type ReceiptIn, type ReceiptKind, type ReceiptSource, type ResponseDelivery,
   type ResponseKind, type ResponseOutcome, type ResponseRowState, type ResponseStamp, type RestoreStamp, type UnmeasuredWhy,
 } from '../../shared/responses.js';
-import type { AskState } from '../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL, type AskState } from '../../shared/api.js';
 import type { ItemActor, ItemEventAct } from '../../shared/ledgers.js';
 
 /**
@@ -94,6 +94,8 @@ export type SealOutcome = Extract<SealDecision, { seal: true }>;
 const OPERATOR_ITEM_ACTS: Readonly<Partial<Record<ItemEventAct, ActedHow>>> = { tick: 'tick', dismiss: 'dismiss', act: 'act', decline: 'decline' };
 /** An item's moves that settle it: every move but a return, which reopens it; a raise or a blocking change is no move. */
 const ITEM_SETTLING: readonly ItemEventAct[] = ['tick', 'confirm', 'withdraw', 'dismiss', 'act', 'decline', 'settle'];
+/** The move that reopens a settled item. */
+const ITEM_REOPENING: ItemEventAct = 'return';
 
 /** When the message was in front of the operator from: a push from its delivery (its insert while pending), any other
  *  row from its insert. */
@@ -120,13 +122,21 @@ export function responseWindowEnd(row: SealRow, owner: OwnerFacts): number | nul
   return settled === null ? cap : Math.min(cap, settled);
 }
 
+/** The row's window's end once it has passed at `now`, else null: the window is open (or has no end known) and nothing
+ *  is read or sealed for it yet. `responseSealDue` decides from it, and the lane asks it before reading any receipt. */
+export function responseWindowEnded(row: SealRow, owner: OwnerFacts, now: number): number | null {
+  const end = responseWindowEnd(row, owner);
+  return end === null || now < end ? null : end;
+}
+
 const sealOf = (outcome: ResponseOutcome, more: Partial<Omit<SealOutcome, 'seal' | 'outcome'>> = {}): SealOutcome =>
   ({ seal: true, outcome, how: null, why: null, actedAt: null, shownAt: null, openedAt: null, ...more });
 
 /** The operator's act on the owner's row inside `[start, end]`, earliest first, or null. A digest line's correction has
  *  no time on an ask or an approval (a flag, question 9), so it counts whenever it is set at the seal: a correction made
  *  between the window's end and the seal is counted as inside, an overcount of at most one lane period or the reader's
- *  deferral (slug a-digest-correction-is-read-at-the-seal). A big call's `overturnedAt` is read against the window. */
+ *  deferral (slug a-digest-correction-is-read-at-the-seal). A big call's `overturnedAt` is read against the window's start
+ *  only, for the same reason. */
 function operatorAct(owner: OwnerFacts, start: number, end: number): { how: ActedHow; at: number | null } | null {
   const inside = (at: number): boolean => at >= start && at <= end;
   if (owner.kind === 'item') {
@@ -136,7 +146,7 @@ function operatorAct(owner: OwnerFacts, start: number, end: number): { how: Acte
     return { how: OPERATOR_ITEM_ACTS[first.act]!, at: first.at };
   }
   if (owner.kind === 'ask') {
-    return owner.state === 'answered' && owner.answeredBy === 'operator' && owner.answeredAt !== null && inside(owner.answeredAt)
+    return owner.state === 'answered' && owner.answeredBy === ASK_OPERATOR_PRINCIPAL && owner.answeredAt !== null && inside(owner.answeredAt)
       ? { how: 'answer', at: owner.answeredAt } : null;
   }
   if (owner.kind === 'digest') {
@@ -146,10 +156,20 @@ function operatorAct(owner: OwnerFacts, start: number, end: number): { how: Acte
   return null;
 }
 
-/** Whether someone settled the owner's row by the window's end without an operator act inside it: an item withdrawn,
- *  confirmed, settled by `ccrc` or moved before the window; an ask answered by a session, or before the window. */
+/** Whether the owner's row stood settled at the window's end without an operator act inside it: an item whose last
+ *  settling or reopening move at or before the end settled it (withdrawn, confirmed, settled by `ccrc`, or moved before the
+ *  window and not returned since); an ask answered by a session, or before the window. An item settled and then returned
+ *  stands open, whenever the settling move was (slug settled-is-the-state-at-the-end). */
 function settledElsewhere(owner: OwnerFacts, end: number): boolean {
-  if (owner.kind === 'item') return owner.acts.some((a) => ITEM_SETTLING.includes(a.act) && a.at <= end);
+  if (owner.kind === 'item') {
+    let last: ItemEventAct | null = null;
+    let lastAt = -Infinity;
+    for (const a of owner.acts) {
+      if (a.at > end || (!ITEM_SETTLING.includes(a.act) && a.act !== ITEM_REOPENING)) continue;
+      if (a.at >= lastAt) { last = a.act; lastAt = a.at; }
+    }
+    return last !== null && last !== ITEM_REOPENING;
+  }
   if (owner.kind === 'ask') return owner.state === 'answered' && owner.answeredAt !== null && owner.answeredAt <= end;
   return false;
 }
@@ -172,6 +192,8 @@ export function responseOutcome(f: SealFacts, windowEnd: number): SealOutcome {
   const shownAt = earliest('shown');
   const openedAt = earliest('opened');
   const seen = { shownAt, openedAt };
+  // 0. a push no device received reads no act and no settling: unmeasured, no-verdict (slug pending-push-reads-no-verdict-first)
+  if (isPush && row.state === 'pending') return sealOf('unmeasured', { why: 'no-verdict', ...seen });
   // 1. acted
   const act = operatorAct(owner, start, windowEnd);
   if (act !== null) return sealOf('acted', { how: act.how, actedAt: act.at, ...seen });
@@ -180,8 +202,7 @@ export function responseOutcome(f: SealFacts, windowEnd: number): SealOutcome {
   if (owner.kind === 'gone') return sealOf('unmeasured', { why: 'reader', ...seen });
   // 3. not-actionable
   if (isPush && row.carries === null && !row.hasActions) return sealOf('not-actionable', seen);
-  // 4. unmeasured, with its reason
-  if (isPush && row.state === 'pending') return sealOf('unmeasured', { why: 'no-verdict', ...seen });
+  // 4. unmeasured, with its reason (a pending push read rule 0)
   if (owner.kind === 'ask' && (owner.state === 'stale' || owner.state === 'unknown')) return sealOf('unmeasured', { why: 'ask-ended', ...seen });
   if (isPush && openedAt === null) {
     const shownBy = new Set(f.receipts.filter((r) => r.receipt === 'shown' && counted(r)).map((r) => r.endpointHash));
@@ -210,9 +231,8 @@ export function responseSealDue(row: SealRow, read: { readonly ok: true; readonl
     if (end === null || now < end + SEAL_DEFER_MS) return { seal: false };
     return sealOf('unmeasured', { why: 'reader' });
   }
-  const end = responseWindowEnd(row, read.facts.owner);
-  if (end === null || now < end) return { seal: false };
-  return responseOutcome(read.facts, end);
+  const end = responseWindowEnded(row, read.facts.owner, now);
+  return end === null ? { seal: false } : responseOutcome(read.facts, end);
 }
 
 // ── THE FIGURES (PR B, Task 5: question 13; W3's Week page is the first reader) ─────────────────────────────────────────

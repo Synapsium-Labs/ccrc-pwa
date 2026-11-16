@@ -113,6 +113,7 @@ const C = 'c'.repeat(64);
 type RowV = 'push-bare' | 'push-actions' | 'push-item' | 'push-ask' | 'waiting-item' | 'waiting-ask' | 'digest';
 /** The owner variants, each a family's (none, item, ask, digest) or `gone`. */
 type OwnerV = 'none' | 'item-none' | 'item-op-in' | 'item-op-after' | 'item-coord-in' | 'item-op-before' | 'item-raise-only'
+  | 'item-op-before-returned' | 'item-returned-in'
   | 'ask-held' | 'ask-op-in' | 'ask-session-in' | 'ask-stale' | 'ask-unknown'
   | 'digest-clean' | 'digest-corrected' | 'digest-overturned-in' | 'digest-overturned-before' | 'gone';
 type ReceiptsV = 'none' | 'shownA' | 'shownAB' | 'shownAB-openA' | 'shownAB-openA-after' | 'shownAB-openC' | 'console-open' | 'console-open-after';
@@ -128,6 +129,7 @@ const familyOf = (r: RowV): 'none' | 'item' | 'ask' | 'digest' =>
 const ownersFor = (r: RowV): OwnerV[] => {
   const fam = familyOf(r);
   const all: OwnerV[] = ['none', 'item-none', 'item-op-in', 'item-op-after', 'item-coord-in', 'item-op-before', 'item-raise-only',
+    'item-op-before-returned', 'item-returned-in',
     'ask-held', 'ask-op-in', 'ask-session-in', 'ask-stale', 'ask-unknown',
     'digest-clean', 'digest-corrected', 'digest-overturned-in', 'digest-overturned-before'];
   return [...all.filter((o) => (fam === 'none' ? o === 'none' : o.startsWith(`${fam}-`))), ...(fam === 'none' ? [] : ['gone' as const])];
@@ -154,7 +156,7 @@ function rowOfScenario(s: Scenario): SealRowT {
 }
 function ownerOfScenario(s: Scenario): OwnerT {
   const inside = startOf(s) + 5_000, after = endOf(s) + 5_000, before = T0 - 5_000;
-  const item = (acts: { act: 'tick' | 'withdraw' | 'raise' | 'block'; actor: 'operator' | 'coordinator'; at: number }[]): OwnerT => ({ kind: 'item', acts });
+  const item = (acts: { act: 'tick' | 'withdraw' | 'raise' | 'block' | 'return'; actor: 'operator' | 'coordinator'; at: number }[]): OwnerT => ({ kind: 'item', acts });
   const ask = (state: 'held' | 'answered' | 'stale' | 'unknown', answeredBy: string | null, answeredAt: number | null): OwnerT =>
     ({ kind: 'ask', state, answeredBy, answeredAt, endedAt: answeredAt });
   switch (s.owner) {
@@ -165,6 +167,9 @@ function ownerOfScenario(s: Scenario): OwnerT {
     case 'item-op-after': return item([{ act: 'tick', actor: 'operator', at: after }]);
     case 'item-coord-in': return item([{ act: 'withdraw', actor: 'coordinator', at: inside }]);
     case 'item-op-before': return item([{ act: 'tick', actor: 'operator', at: before }]);
+    // Review 2260 F1: ticked, then returned, both before the window: the item stood open all window.
+    case 'item-op-before-returned': return item([{ act: 'tick', actor: 'operator', at: before - 5_000 }, { act: 'return', actor: 'coordinator', at: before }]);
+    case 'item-returned-in': return item([{ act: 'tick', actor: 'operator', at: before }, { act: 'return', actor: 'coordinator', at: inside }]);
     case 'item-raise-only': return item([{ act: 'raise', actor: 'coordinator', at: inside }, { act: 'block', actor: 'coordinator', at: inside }]);
     case 'ask-held': return ask('held', null, null);
     case 'ask-op-in': return ask('answered', 'operator', inside);
@@ -213,11 +218,11 @@ function expectedOutcome(s: Scenario): string {
   const allShown = s.receipts === 'shownAB' || s.receipts === 'shownAB-openA' || s.receipts === 'shownAB-openA-after' || s.receipts === 'shownAB-openC';
   const stampsHold = s.stamp === 'equal' && s.boots === 0;
   const RULES: readonly [() => boolean, string][] = [
+    [() => push && s.state === 'pending', 'unmeasured/no-verdict'],
     [() => ['item-op-in', 'ask-op-in', 'digest-corrected', 'digest-overturned-in'].includes(s.owner), 'acted'],
     [() => ['item-coord-in', 'item-op-before', 'ask-session-in'].includes(s.owner), 'settled-elsewhere'],
     [() => s.owner === 'gone', 'unmeasured/reader'],
     [() => s.row === 'push-bare', 'not-actionable'],
-    [() => push && s.state === 'pending', 'unmeasured/no-verdict'],
     [() => s.owner === 'ask-stale' || s.owner === 'ask-unknown', 'unmeasured/ask-ended'],
     [() => push && !counted && (!(s.accepted === 'AB' ? allShown : true) || (s.replaced && s.accepted === 'AB') || !stampsHold), 'unmeasured/receipts'],
     [() => counted, 'opened'],
@@ -303,12 +308,33 @@ export function responseOutcomeCases(m: ResponsesModule): Record<string, SuiteCa
       const f = { ...factsOfScenario(base), replacedOn: [C] };
       expect(m.responseOutcome(f, endOf(base)).outcome).toBe('not-opened');
     },
-    'monotone: adding an operator act inside the window always makes the row acted': () => {
+    'monotone: adding an operator act inside the window always makes a received row acted': () => {
       for (const s of everyScenario()) {
         const op = OP_IN[familyOf(s.row)];
-        if (op === null || s.owner === 'gone') continue;
+        if (op === null || s.owner === 'gone' || (isPushV(s.row) && s.state === 'pending')) continue;
         expect(out({ ...s, owner: op }).outcome, JSON.stringify(s)).toBe('acted');
       }
+    },
+    'a push no device received reads no-verdict, even with an operator act or a settling inside its window (review 2260 F2)': () => {
+      for (const owner of ['item-op-in', 'item-coord-in', 'item-op-before'] as const) {
+        expect(outcomeWord(out({ ...base, state: 'pending', accepted: 'none', owner })), owner).toBe('unmeasured/no-verdict');
+      }
+      expect(outcomeWord(out({ ...base, row: 'push-ask', state: 'pending', accepted: 'none', owner: 'ask-op-in' }))).toBe('unmeasured/no-verdict');
+    },
+    'settled is the state at the end: a tick and a return before a new push leave it open all window (review 2260 F1)': () => {
+      // tick at T1, return at T2, a new push delivered at T3, nothing after: not settled-elsewhere.
+      const f = factsOfScenario(base);
+      const ticked: OwnerT = { kind: 'item', acts: [{ act: 'tick', actor: 'operator', at: T0 - 9_000 }, { act: 'return', actor: 'coordinator', at: T0 - 5_000 }] };
+      expect(outcomeWord(m.responseOutcome({ ...f, owner: ticked }, endOf(base)))).toBe('not-opened');
+      // ...and settled again before the end: the last move decides.
+      const again: OwnerT = { kind: 'item', acts: [...ticked.acts, { act: 'withdraw', actor: 'coordinator', at: DELIVERED + 1_000 }] };
+      expect(m.responseOutcome({ ...f, owner: again }, endOf(base)).outcome).toBe('settled-elsewhere');
+      // ...and a return inside the window after an earlier settling reopens it.
+      const reopened: OwnerT = { kind: 'item', acts: [{ act: 'tick', actor: 'coordinator', at: T0 - 9_000 }, { act: 'return', actor: 'coordinator', at: DELIVERED + 1_000 }] };
+      expect(outcomeWord(m.responseOutcome({ ...f, owner: reopened }, endOf(base)))).toBe('not-opened');
+      // ...and a move after the end is not read.
+      const later: OwnerT = { kind: 'item', acts: [...ticked.acts, { act: 'withdraw', actor: 'coordinator', at: endOf(base) + 1 }] };
+      expect(outcomeWord(m.responseOutcome({ ...f, owner: later }, endOf(base)))).toBe('not-opened');
     },
     'monotone: adding a counted opened never moves a row to not-opened': () => {
       for (const s of everyScenario()) {
@@ -532,12 +558,17 @@ export const RESPONSES_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'O21 any actor acts', old: "a.actor === 'operator' && OPERATOR_ITEM_ACTS[a.act] !== undefined", new: 'OPERATOR_ITEM_ACTS[a.act] !== undefined' },
     { id: 'O22 an act after the window counts', old: 'const inside = (at: number): boolean => at >= start && at <= end;', new: 'const inside = (at: number): boolean => at >= start;' },
     { id: 'O23 an act before the window counts', old: 'const inside = (at: number): boolean => at >= start && at <= end;', new: 'const inside = (at: number): boolean => at <= end;' },
-    { id: 'O24 a session answer is acted', old: "owner.answeredBy === 'operator' && ", new: '' },
+    { id: 'O24 a session answer is acted', old: 'owner.answeredBy === ASK_OPERATOR_PRINCIPAL && ', new: '' },
     { id: 'O25 a digest flag ignored', old: "return owner.corrected ? { how: 'correct', at: null } : null;", new: 'return null;' },
     { id: 'O26 an overturn before the line counts', old: "return owner.overturnedAt >= start ? { how: 'correct', at: owner.overturnedAt } : null;", new: "return { how: 'correct', at: owner.overturnedAt };" },
     { id: 'O27 latest act wins', old: '(b.at < a.at ? b : a)', new: '(b.at > a.at ? b : a)' },
-    { id: 'O28 elsewhere counts a return', old: "const ITEM_SETTLING: readonly ItemEventAct[] = ['tick', 'confirm',", new: "const ITEM_SETTLING: readonly ItemEventAct[] = ['return', 'tick', 'confirm'," },
-    { id: 'O29 elsewhere after the window', old: "ITEM_SETTLING.includes(a.act) && a.at <= end);", new: 'ITEM_SETTLING.includes(a.act));' },
+    { id: 'O29 elsewhere after the window', old: 'if (a.at > end || (!ITEM_SETTLING', new: 'if ((!ITEM_SETTLING' },
+    { id: 'O33 a return never reopens', old: 'return last !== null && last !== ITEM_REOPENING;', new: 'return last !== null;' },
+    { id: 'O34 the first move decides', old: 'if (a.at >= lastAt) { last = a.act; lastAt = a.at; }', new: 'if (last === null) { last = a.act; lastAt = a.at; }' },
+    { id: 'O35 a return is not read', old: "(!ITEM_SETTLING.includes(a.act) && a.act !== ITEM_REOPENING)", new: '!ITEM_SETTLING.includes(a.act)' },
+    { id: 'O36 any settling at all', old: "  if (owner.kind === 'item') {\n    let last", new: "  if (owner.kind === 'item') return owner.acts.some((a) => ITEM_SETTLING.includes(a.act) && a.at <= end);\n  if (owner.kind === 'item') {\n    let last" },
+    { id: 'O37 a pending push read after the act', old: "  if (isPush && row.state === 'pending') return sealOf('unmeasured', { why: 'no-verdict', ...seen });\n  // 1. acted\n  const act = operatorAct(owner, start, windowEnd);\n  if (act !== null) return sealOf('acted', { how: act.how, actedAt: act.at, ...seen });",
+      new: "  const act = operatorAct(owner, start, windowEnd);\n  if (act !== null) return sealOf('acted', { how: act.how, actedAt: act.at, ...seen });\n  if (isPush && row.state === 'pending') return sealOf('unmeasured', { why: 'no-verdict', ...seen });" },
     { id: 'O30 a session answer after the window is elsewhere', old: "owner.state === 'answered' && owner.answeredAt !== null && owner.answeredAt <= end;", new: "owner.state === 'answered';" },
     { id: 'O31 a push starts at its insert', old: "(row.kind === 'push' ? (row.deliveredAt ?? row.insertedAt) : row.insertedAt)", new: 'row.insertedAt' },
     { id: 'O32 shownAt read from opened', old: "const shownAt = earliest('shown');", new: "const shownAt = earliest('opened');" },
@@ -551,6 +582,7 @@ export const RESPONSES_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'W7 the latest move settles', old: 'return at.length === 0 ? null : Math.min(...at);\n  }\n  if (owner.kind === \'ask\')', new: 'return at.length === 0 ? null : Math.max(...at);\n  }\n  if (owner.kind === \'ask\')' },
     { id: 'W8 an ask never settles', old: "if (owner.kind === 'ask') return owner.state === 'answered' && owner.answeredAt !== null && owner.answeredAt >= from ? owner.answeredAt : null;", new: '' },
     { id: 'W9 an answer before the window settles', old: '&& owner.answeredAt >= from ? owner.answeredAt', new: '? owner.answeredAt' },
+    { id: 'W11 a return settles', old: "const ITEM_SETTLING: readonly ItemEventAct[] = ['tick', 'confirm',", new: "const ITEM_SETTLING: readonly ItemEventAct[] = ['return', 'tick', 'confirm'," },
     { id: 'W10 no cap reads as the insert', old: '  if (cap === null) return null;\n', new: '  if (cap === null) return row.insertedAt;\n' },
   ], responseWindowEndCases),
   'server/src/responses.ts#responseSealDue': set([
@@ -558,8 +590,8 @@ export const RESPONSES_MUTANT_SETS: Record<string, MutantSet<never>> = {
     { id: 'S2 no deferral', old: 'now < end + SEAL_DEFER_MS', new: 'now < end' },
     { id: 'S3 never seals a failed read', old: "    return sealOf('unmeasured', { why: 'reader' });", new: '    return { seal: false };' },
     { id: 'S4 a failed pending push read uses the cap', old: "const end = row.kind === 'push' && row.state === 'pending' ? row.insertedAt + PUSH_WINDOW_MS : row.windowCapAt;", new: 'const end = row.windowCapAt;' },
-    { id: 'S5 an open window seals', old: 'if (end === null || now < end) return { seal: false };', new: 'if (end === null) return { seal: false };' },
-    { id: 'S6 the end is exclusive', old: 'if (end === null || now < end) return { seal: false };', new: 'if (end === null || now <= end) return { seal: false };' },
+    { id: 'S5 an open window seals', old: 'return end === null || now < end ? null : end;', new: 'return end;' },
+    { id: 'S6 the end is exclusive', old: 'return end === null || now < end ? null : end;', new: 'return end === null || now <= end ? null : end;' },
     { id: 'S7 the deferral is inclusive', old: 'now < end + SEAL_DEFER_MS', new: 'now <= end + SEAL_DEFER_MS' },
   ], responseSealDueCases),
   'server/src/responses.ts#responsesFor': set([

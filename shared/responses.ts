@@ -134,13 +134,20 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PUSH_ID = /^[0-9a-f]{32}$/;
 const ENDPOINT_HASH = /^[0-9a-f]{64}$/;
 
+/** A digest line key's parts, or null for any string `digestLineKey` could not have produced (the one reader of a key). */
+export function parseDigestLineKey(key: string): { readonly day: string; readonly rowKind: DigestRowKind; readonly id: number } | null {
+  const parts = key.split(':');
+  if (parts.length !== 3) return null;
+  const [day, rowKind, id] = parts as [string, string, string];
+  if (!DAY.test(day) || !(DIGEST_KEY_ROW_KINDS as readonly string[]).includes(rowKind) || !/^[1-9][0-9]*$/.test(id)) return null;
+  const n = Number(id);
+  if (!Number.isSafeInteger(n) || key !== digestLineKey(day, rowKind as DigestRowKind, n)) return null;
+  return { day, rowKind: rowKind as DigestRowKind, id: n };
+}
+
 /** Whether `key` is a key `digestLineKey` could have produced. */
 export function isDigestLineKey(key: string): boolean {
-  const parts = key.split(':');
-  if (parts.length !== 3) return false;
-  const [day, rowKind, id] = parts as [string, string, string];
-  if (!DAY.test(day) || !(DIGEST_KEY_ROW_KINDS as readonly string[]).includes(rowKind) || !/^[1-9][0-9]*$/.test(id)) return false;
-  return key === digestLineKey(day, rowKind as DigestRowKind, Number(id));
+  return parseDigestLineKey(key) !== null;
 }
 
 function parseRef(x: unknown, at: string): Parsed<ResponseRef> {

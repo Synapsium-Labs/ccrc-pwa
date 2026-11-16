@@ -10,7 +10,7 @@ import { tx } from '../src/coord/tx.js';
 import {
   deleteResponsesThroughInTx, insertPushResponseInTx, insertReceipt, insertWaitingResponseInTx, landPushVerdictInTx, recordResponseBoot,
 } from '../src/coord/responsesStore.js';
-import { responsesLane } from '../src/responses/lane.js';
+import { RESPONSES_LANE_CAUSES_MAX, responsesLane } from '../src/responses/lane.js';
 import { PUSH_WINDOW_MS, SEAL_DEFER_MS, WAITING_WINDOW_MS, type ResponseStamp } from '../../shared/responses.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -118,6 +118,26 @@ describe('the seal', () => {
     const id = pushRow(c, '5'.repeat(32), T, measured(1), []);
     run(c, T + 9 * DAY, null);
     expect(one(c, id)).toMatchObject({ sealedAt: null });
+  });
+
+  it('a failing cause logs once while it recurs, again after a pass it cleared in, and the causes one pass keeps are bounded (review 2260 F11)', () => {
+    const c = store();
+    const lines: string[] = [];
+    const lane = responsesLane((l) => lines.push(l));
+    const ids = Array.from({ length: RESPONSES_LANE_CAUSES_MAX + 8 }, (_, i) => pushRow(c, i.toString(16).padStart(32, '7'), T, measured(1), []));
+    const seal = vi.spyOn(c, 'sealResponse').mockImplementation((id) => { throw new Error(`seal broke on ${id}`); });
+    lane.run(c, () => measured(1), T + 9 * DAY);
+    lane.run(c, () => measured(1), T + 9 * DAY);
+    const sealLines = (): string[] => lines.filter((l) => l.includes('seal broke'));
+    expect(sealLines()).toHaveLength(RESPONSES_LANE_CAUSES_MAX);
+    expect(lines.filter((l) => l.includes('8 more failing causes'))).toHaveLength(1);
+    // A pass that seals cleanly clears every cause; the same cause failing after it is logged again.
+    seal.mockImplementation(() => ({ changed: false }));
+    lane.run(c, () => measured(1), T + 9 * DAY);
+    seal.mockImplementation((id) => { throw new Error(`seal broke on ${id}`); });
+    lane.run(c, () => measured(1), T + 9 * DAY);
+    expect(sealLines().filter((l) => l.includes(`seal broke on ${ids[0]})`))).toHaveLength(2);
+    expect(lines.filter((l) => l.includes('more failing causes'))).toHaveLength(2);
   });
 
   it('a failing seal does not stop retention', () => {

@@ -3376,7 +3376,8 @@ export const MIGRATIONS: readonly string[] = [
   // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
   // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
   // nothing on an existing table: an older build at `user_version 83` takes rule 3, never names it, and keeps no response
-  // rows. Portfolio B lands its migration first, so this entry is renumbered at the landing on the coordinator's word.
+  // rows. Entry 83 here by position only: its slot is the next free one at landing (84 once portfolio B's #2904 has
+  // merged), and the coordinator renumbers it then (review 2260's ruling).
   // RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

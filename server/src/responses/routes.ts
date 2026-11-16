@@ -80,7 +80,7 @@ export function registerResponseRoutes(app: FastifyInstance, opts: ResponseRoute
     const kind = ref.slice(0, sep);
     const rest = ref.slice(sep + 1);
     let read: ReturnType<typeof coord.responsesForRef>;
-    if (sep > 0 && kind === 'item' && ID.test(rest)) read = coord.responsesForRef({ kind: 'item', id: Number(rest) });
+    if (sep > 0 && kind === 'item' && ID.test(rest) && Number.isSafeInteger(Number(rest))) read = coord.responsesForRef({ kind: 'item', id: Number(rest) });
     else if (sep > 0 && kind === 'digest' && isDigestLineKey(rest)) read = coord.responsesForRef({ kind: 'digest', key: rest });
     else return refuseRoute(reply, 'bad-request', { detail: 'ref is not item:<id> or digest:<key>' });
     if (!read.ok) return refuseRoute(reply, 'unavailable', { detail: UNAVAILABLE_DETAIL });

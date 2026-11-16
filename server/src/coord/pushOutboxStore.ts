@@ -14,7 +14,7 @@ import { NEEDED_BY_LEVELS, type NeededBy } from '../../../shared/ledgers.js';
 import type { PushPayload } from '../push.js';
 import { asSendVerdict, type PreparedPush, type PushDue } from '../pushOutbox.js';
 import { operatorWasShown } from './ledgersStore.js';
-import { insertPushResponseInTx, insertWaitingResponseInTx, landPushVerdictInTx, warnResponseWrite, type PushResponseOf } from './responsesStore.js';
+import { insertPushResponseInTx, insertWaitingResponseInTx, landPushVerdictInTx, responseWriteInTx, warnResponseWrite, type PushResponseOf } from './responsesStore.js';
 import type { ResponseStamp } from '../../../shared/responses.js';
 import { tx } from './tx.js';
 
@@ -78,25 +78,19 @@ const hasActions = (p: OutboxPayload): boolean => (p.actions?.length ?? 0) > 0;
  *  payload being sent; slug tag-and-actions-from-the-claimed-payload), or, with none (an unbound row's retry, which has
  *  no label to hand), whether one already stands under the id. Either way `responseWritten` says the row is there. */
 function pushResponseSide(db: DatabaseSync, pushId: string, payload: OutboxPayload, response: PushResponseOf | undefined, at: number): ResponseSide {
-  try {
-    if (response === undefined) {
-      return { responseWritten: stmt(db, "SELECT 1 FROM operator_responses WHERE kind = 'push' AND pushId = ?").get(pushId) !== undefined };
-    }
+  const w = responseWriteInTx(db, () => {
+    if (response === undefined) return stmt(db, "SELECT 1 FROM operator_responses WHERE kind = 'push' AND pushId = ?").get(pushId) !== undefined;
     insertPushResponseInTx(db, { ...response, pushId, tag: payload.tag, hasActions: hasActions(payload), at });
-    return { responseWritten: true };
-  } catch (e) {
-    return { responseWritten: false, responseDetail: `a push's response row was not written (${message(e)}); it is sent with no push id` };
-  }
+    return true;
+  });
+  return w.ok ? { responseWritten: w.value }
+    : { responseWritten: false, responseDetail: `a push's response row was not written (${w.detail}); it is sent with no push id` };
 }
 /** A landed verdict's side on the push row (`landPushVerdictInTx`, the sender's), caught as `pushResponseSide` is. */
 function landResponse(db: DatabaseSync, pushId: string, verdict: PushSendVerdict | null, to: OutboxState, at: number): string | undefined {
   const accepted = verdict?.kind === 'sent' ? verdict.subs.filter((x) => x.verdict === 'accepted').map((x) => x.endpointHash) : [];
-  try {
-    landPushVerdictInTx(db, pushId, { accepted, terminal: isTerminal(to), answered: to !== 'unknown' }, at);
-    return undefined;
-  } catch (e) {
-    return `a push's verdict did not land on its response row (${message(e)})`;
-  }
+  const w = responseWriteInTx(db, () => landPushVerdictInTx(db, pushId, { accepted, terminal: isTerminal(to), answered: to !== 'unknown' }, at));
+  return w.ok ? undefined : `a push's verdict did not land on its response row (${w.detail})`;
 }
 
 const COLS = 'id, pushId, sourceKind, sourceId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt, '
@@ -238,14 +232,14 @@ export function armInTx(db: DatabaseSync, source: OutboxSource, sourceId: number
 }
 
 /** A new reach's Waiting on you row (Overlord W1 responses B, Table 4.3a), inside the move that stamped it, only when the
- *  stamp is new and a stamp source is given. A throw from the insert is caught here and logged once per cause, so a
- *  failed response write never rolls back the move it rides (Global Constraints: fail closed toward the operator). */
+ *  stamp is new and a stamp source is given. A failed insert is rolled back to its savepoint and logged once per cause, so
+ *  a failed response write never rolls back the move it rides (Global Constraints: fail closed toward the operator); a
+ *  failure that took the whole transaction is re-thrown (`responsesStore.ts#responseWriteInTx`). */
 function waitingRowOnReach(db: DatabaseSync, source: OutboxSource, sourceId: number, stamp: ResponseStamp | undefined, at: number,
   reached: { readonly changed: boolean }): void {
   if (!reached.changed || stamp === undefined) return;
-  try { insertWaitingResponseInTx(db, { source, id: sourceId, stamp, at }); } catch (e) {
-    warnResponseWrite(`waiting:${message(e)}`, `a Waiting on you row was not written (${message(e)}); the move it rode stands`);
-  }
+  const w = responseWriteInTx(db, () => insertWaitingResponseInTx(db, { source, id: sourceId, stamp, at }));
+  if (!w.ok) warnResponseWrite(`waiting:${w.detail}`, `a Waiting on you row was not written (${w.detail}); the move it rode stands`);
 }
 
 /** THE ONE WRITER of `reachedOperatorAt` (C31): a row is stamped at most once (`WHERE reachedOperatorAt IS NULL`). It

@@ -9929,12 +9929,14 @@ export class CoordStore {
   /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
    *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). With
    *  `onClaim` (the digest lines' response rows, W1 responses B), the claim and the callback share one transaction and the
-   *  callback runs only when the claim won; a throw from it is logged and never costs the claim. */
+   *  callback runs only when the claim won, under its own savepoint: its rows go all or none, a throw from it is logged and
+   *  never costs the claim, and a failure that took the whole transaction fails the claim too (`responseWriteInTx`). */
   claimDigestDay(day: string, sentAt: number, count: number, onClaim?: () => unknown): boolean {
     return tx(this.db, () => {
       const won = Number(this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count).changes) > 0;
       if (won && onClaim !== undefined) {
-        try { onClaim(); } catch (e) { responses.warnResponseWrite(`digest:${e instanceof Error ? e.message : String(e)}`, `the digest's response rows were not written (${e instanceof Error ? e.message : String(e)}); the claim stands`); }
+        const w = responses.responseWriteInTx(this.db, onClaim);
+        if (!w.ok) responses.warnResponseWrite(`digest:${w.detail}`, `the digest's response rows were not written (${w.detail}); the claim stands`);
       }
       return won;
     });

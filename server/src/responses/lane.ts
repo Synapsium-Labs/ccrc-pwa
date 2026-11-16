@@ -3,10 +3,9 @@
 // response store, asks `responseSealDue` (L1), and writes what it answers through `sealResponse`, once; then it keeps the
 // operator's retention through the deleter by time. It decides nothing. Each step has its own `try`, so a failed seal never
 // stops retention. A response is never an answer and never authority: the lane writes the response tables only.
-import { DIGEST_KEY_ROW_KINDS, type ResponseStamp } from '../../../shared/responses.js';
+import { parseDigestLineKey, type ResponseStamp } from '../../../shared/responses.js';
 import { ITEM_ACTORS, ITEM_ACTS, isItemNonMove, type ItemEventAct } from '../../../shared/ledgers.js';
-import type { DigestRowKind } from '../../../shared/api.js';
-import { responseSealDue, responseWindowEnd, type OwnerFacts, type SealFacts } from '../responses.js';
+import { responseSealDue, responseWindowEnded, type OwnerFacts, type SealFacts } from '../responses.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { approvalForResponse, askCorrectionForResponse, askForResponse } from '../coord/questions.js';
 import type { OpenResponseRow } from '../coord/responsesStore.js';
@@ -51,10 +50,9 @@ export function ownerFactsOf(port: WatcherCoordPort, row: OpenResponseRow): { re
 }
 
 function digestFacts(port: WatcherCoordPort, key: string | null): { readonly ok: true; readonly owner: OwnerFacts } | { readonly ok: false; readonly detail: string } {
-  const parts = (key ?? '').split(':');
-  const rowKind = parts[1] as DigestRowKind;
-  const id = Number(parts[2]);
-  if (parts.length !== 3 || !DIGEST_KEY_ROW_KINDS.includes(rowKind) || !Number.isSafeInteger(id)) return { ok: false, detail: 'a digest key is not readable' };
+  const parsed = key === null ? null : parseDigestLineKey(key);
+  if (parsed === null) return { ok: false, detail: 'a digest key is not readable' };
+  const { rowKind, id } = parsed;
   if (rowKind === 'ask') {
     const r = askCorrectionForResponse(port, id);
     if (!r.ok) return { ok: false, detail: r.detail };
@@ -69,26 +67,33 @@ function digestFacts(port: WatcherCoordPort, key: string | null): { readonly ok:
   return { ok: true, owner: call === null ? { kind: 'gone' } : { kind: 'digest', corrected: false, overturnedAt: call.overturnedAt } };
 }
 
-/** One lane: its pass, and the latch that logs each failing cause once until it clears. */
+/** The most failing causes one pass remembers; a cause past it is counted into one line instead (each named cause can
+ *  carry a row's detail, so the set is bounded, never grown by every row). */
+export const RESPONSES_LANE_CAUSES_MAX = 32;
+
+/** One lane: its pass, and the latch that logs each failing cause once while it recurs, pass after pass. */
 export interface ResponsesLane {
   run(port: ResponsesLanePort, stamp: (() => ResponseStamp) | undefined, now: number): void;
 }
 
 export function responsesLane(warn: (line: string) => void = (l) => console.warn(l)): ResponsesLane {
-  const latched = new Set<string>();
+  // The causes logged and still failing as of the last pass. A pass keeps only the causes it met again, so every cause
+  // is cleared on the first pass it does not recur in (its recovery) and is logged again if it comes back.
+  let latched = new Set<string>();
+  let met = new Set<string>();
+  let overflow = 0;
   const once = (cause: string, line: string): void => {
-    if (latched.has(cause)) return;
-    latched.add(cause);
-    warn(`ccrc-server: responses: ${line}`);
+    if (met.has(cause)) return;
+    if (met.size >= RESPONSES_LANE_CAUSES_MAX) { overflow += 1; return; }
+    met.add(cause);
+    if (!latched.has(cause)) warn(`ccrc-server: responses: ${line}`);
   };
-  const clear = (prefix: string): void => { for (const c of [...latched]) if (c.startsWith(prefix)) latched.delete(c); };
 
   function seal(port: ResponsesLanePort, stamp: (() => ResponseStamp) | undefined, now: number): void {
     // No stamp source this pass (a narrow composition): every row is left for a pass that has one.
     if (stamp === undefined) return;
     const open = port.openResponseRows();
     if (!open.ok) { once(`open:${open.detail}`, `${open.detail}; the next pass reads again`); return; }
-    clear('open:');
     for (const bad of open.unreadable) once(`row:${bad.detail}`, `a response row is unreadable by this build (${bad.detail}); it is left unsealed`);
     const stampNow = stamp();
     for (const row of open.rows) {
@@ -99,8 +104,8 @@ export function responsesLane(warn: (line: string) => void = (l) => console.warn
           once(`owner:${owner.detail}`, `an owner read failed (${owner.detail}); the seal waits at most a day past the window`);
           read = { ok: false };
         } else {
-          const end = responseWindowEnd(row, owner.owner);
-          if (end === null || now < end) continue;          // the window is open: no receipts are read for it yet
+          const end = responseWindowEnded(row, owner.owner, now);
+          if (end === null) continue;          // the window is open: no receipts are read for it yet
           try {
             read = { ok: true, facts: { row, owner: owner.owner, receipts: port.responseReceipts(row.id), replacedOn: port.responseReplacedOn(row, end),
               bootsInWindow: port.responseBootsInWindow(row.insertedAt, end), stampNow } };
@@ -121,7 +126,6 @@ export function responsesLane(warn: (line: string) => void = (l) => console.warn
     const r = port.responseRetention();
     // An unreadable setting deletes nothing this pass, never the default (slug retention-unreadable-deletes-nothing).
     if (!r.ok) { once(`retention:${r.detail}`, `the retention setting is unreadable (${r.detail}); nothing is deleted this pass`); return; }
-    clear('retention:');
     port.deleteResponsesThrough(now - r.days * DAY_MS);
   }
 
@@ -129,6 +133,11 @@ export function responsesLane(warn: (line: string) => void = (l) => console.warn
     run(port, stamp, now) {
       try { seal(port, stamp, now); } catch (e) { once(`pass:${message(e)}`, `the seal step failed (${message(e)})`); }
       try { retain(port, now); } catch (e) { once(`delete:${message(e)}`, `the retention step failed (${message(e)}); the next pass tries again`); }
+      if (overflow > 0 && !latched.has('overflow')) warn(`ccrc-server: responses: ${overflow} more failing causes this pass were not logged`);
+      if (overflow > 0) met.add('overflow');
+      latched = met;
+      met = new Set<string>();
+      overflow = 0;
     },
   };
 }
