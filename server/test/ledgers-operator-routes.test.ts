@@ -259,14 +259,14 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
   it('a pinned programme with no item still has its goals in the list', async () => {
     const r = await rig();
     r.coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-c', 'C', 0, 'active')").run();
-    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-c', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const w = ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting;
     expect(w.goals.map((g) => g.program)).toContain('prog-c');
   });
 
   it('serves one programme\'s goals', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, null, { kind: 'coordinator' });
     const res = await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' });
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toMatchObject({ ok: true, goals: { program: 'prog-a', specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'What it builds.' } });
@@ -274,7 +274,7 @@ describe('GET /api/waiting and GET /api/programmes/:slug/goals (plan PL4)', () =
 
   it('the read answers the goals and the programme\'s open items, and nothing else of an item (the goals-read-v1 shape)', async () => {
     const r = await rig();
-    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+    r.coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
     const open = raise(r, { kind: 'decide', title: 'Which branch', options: ['main', 'release'], recommended: 0, recommendedWhy: 'Main ships.', neededBy: 'blocking' });
     raise(r, { program: 'prog-b', runId: null, raisedBy: 'lane-b', title: 'Another programme' });
     const body = (await r.app.inject({ method: 'GET', url: '/api/programmes/prog-a/goals' })).json() as { ok: true; goals: unknown } & GoalsRead;
@@ -323,7 +323,7 @@ async function armed(): Promise<{ app: FastifyInstance; coord: CoordStore }> {
   const base = testDeps(home, recorder().run);
   app = await buildServer({ ...base, cfg: { ...base.cfg, authEnabled: true }, mailToken: BOX, coord });
   coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'A', 0, 'active')").run();
-  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.']);
+  coord.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'What it builds.', NOW0, ['It ships.'], { kind: 'coordinator' });
   return { app, coord };
 }
 

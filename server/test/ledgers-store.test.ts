@@ -369,15 +369,17 @@ describe('the spec pin and the modifications (plan PL2)', () => {
   it('goalsFor on a programme with no pin reads nulls and an empty list', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
-    expect(s.goalsFor('prog-a')).toEqual({ program: 'prog-a', specPath: null, inShort: null, inShortAt: null, doneWhen: null, modifications: [] });
-    expect(s.goalsFor('prog-z')).toEqual({ program: 'prog-z', specPath: null, inShort: null, inShortAt: null, doneWhen: null, modifications: [] });
+    expect(s.goalsFor('prog-a')).toEqual({ program: 'prog-a', specPath: null, inShort: null, inShortAt: null, doneWhen: null,
+      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
+    expect(s.goalsFor('prog-z')).toEqual({ program: 'prog-z', specPath: null, inShort: null, inShortAt: null, doneWhen: null,
+      pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
   });
 
   it('setSpecPin replaces the pin and its In short copy, and stamps the time', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
-    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'First summary.', NOW, null);
-    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Second summary.', NOW + 5, null);
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'First summary.', NOW, null, { kind: 'coordinator' });
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Second summary.', NOW + 5, null, { kind: 'coordinator' });
     expect(s.goalsFor('prog-a')).toMatchObject({
       specPath: 'docs/superpowers/specs/2026-11-01-x-design.md', inShort: 'Second summary.', inShortAt: NOW + 5 });
   });
@@ -391,8 +393,8 @@ describe('the spec pin and the modifications (plan PL2)', () => {
     expect(s.markModificationsMerged('prog-a', 10, NOW + 30)).toBe(1);
     const g = s.goalsFor('prog-a');
     expect(g.modifications).toEqual([
-      { id: m2, at: NOW + 10, text: 'Second change.', ruling: null, itemId: 3, pr: 11, merged: false },
-      { id: m1, at: NOW, text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10, merged: true },
+      { id: m2, at: NOW + 10, text: 'Second change.', ruling: null, itemId: 3, pr: 11, merged: false, ratification: { ratified: false, why: 'unreadable', source: { kind: 'item' } } },
+      { id: m1, at: NOW, text: 'First change.', ruling: 'ledger entry 4', itemId: null, pr: 10, merged: true, ratification: { ratified: false, why: 'source-does-not-ratify', source: { kind: 'coordinator' } } },
     ]);
     expect(g.modifications.map((m) => m.id)).not.toContain(other);
     // The other programme's modification on the same PR number was not marked.
@@ -516,19 +518,19 @@ describe('the stored definition of done (D-8126)', () => {
   it('setSpecPin stores a list, goalsFor reads it, a re-pin with null keeps it', () => {
     const s = mk();
     s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')").run();
-    s.setSpecPin('prog-a', SPEC, 'First.', NOW, ['x']);
+    s.setSpecPin('prog-a', SPEC, 'First.', NOW, ['x'], { kind: 'coordinator' });
     expect(s.goalsFor('prog-a').doneWhen).toEqual(['x']);
-    s.setSpecPin('prog-a', SPEC, 'Second.', NOW + 1, null);
+    s.setSpecPin('prog-a', SPEC, 'Second.', NOW + 1, null, { kind: 'coordinator' });
     expect(s.goalsFor('prog-a')).toMatchObject({ inShort: 'Second.', doneWhen: ['x'] });
-    s.setSpecPin('prog-a', SPEC, 'Third.', NOW + 2, ['y', 'z']);
+    s.setSpecPin('prog-a', SPEC, 'Third.', NOW + 2, ['y', 'z'], { kind: 'coordinator' });
     expect(s.goalsFor('prog-a').doneWhen).toEqual(['y', 'z']);
   });
 
   it('setDoneWhen replaces the list and touches nothing else', () => {
     const s = mk();
     s.db.prepare("INSERT INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'Prog A', 1, 'active')").run();
-    s.setSpecPin('prog-a', SPEC, 'Summary.', NOW, ['x']);
-    s.setDoneWhen('prog-a', ['a', 'b'], NOW + 9);
+    s.setSpecPin('prog-a', SPEC, 'Summary.', NOW, ['x'], { kind: 'coordinator' });
+    s.setDoneWhen('prog-a', ['a', 'b'], NOW + 9, 7);
     expect(s.goalsFor('prog-a')).toMatchObject({ specPath: SPEC, inShort: 'Summary.', inShortAt: NOW, doneWhen: ['a', 'b'] });
   });
 

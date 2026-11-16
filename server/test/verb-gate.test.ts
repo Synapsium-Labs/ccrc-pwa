@@ -112,6 +112,9 @@ const CAP_GATED_VERBS: ReadonlySet<string> = new Set([
   'route', 'ws-reclaim', 'reclaim-pause', 'ws-expire', 'ws-collect', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log',
   // D-6784: sent only behind the `pr-landing-v1` capability word (CCD_CAN's `capRow`); PL-4's lane is its one call site.
   'pr-landing',
+  // The Overlord W1 ccd arms (cross-plan ruling X8): `keep-awake` is read through `capRow(KEEP_AWAKE_CAP)`, refusing on no
+  // evidence, so a box whose ccd lacks it answers `capability-missing`; designation A is its call site.
+  'keep-awake',
 ]);
 
 /**

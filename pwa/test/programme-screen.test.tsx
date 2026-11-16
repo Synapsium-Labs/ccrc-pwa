@@ -8,6 +8,7 @@ import type { GoalsView, StoredSecretsAnswer } from '../../shared/ledgers';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
+import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { PROGRAM_SLUG_MAX_CHARS, type ProgrammeRow, type RunHit } from '../../shared/api';
 import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, shellViewOf, topRouteOf } from '../src/lib/routes';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
@@ -732,5 +733,46 @@ describe('the programme page: Runs', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Reclaim' }));
       await waitFor(() => expect(reclaim).toHaveBeenCalledWith(7, 'coord-b'));
     });
+  });
+});
+
+describe('the programme view: ratifying Goals', () => {
+  const unrecorded = { ratified: false, why: 'unrecorded', source: null } as const;
+  const asked = () => goals({ pinRatification: unrecorded });
+
+  it('a ratify posts the stamp the panel rendered, then reads the Goals again', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: asked() });
+    const ratify = vi.spyOn(api, 'ratifyGoals').mockResolvedValue({ ok: true, changed: true, goals: asked() });
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ratify' }));
+    await waitFor(() => expect(ratify).toHaveBeenCalledWith('prog-a', { pin: { inShortAt: asked().inShortAt } }));
+    await waitFor(() => expect(api.goals).toHaveBeenCalledTimes(2));
+  });
+
+  it('a 409 goals-changed reads again and says the goals changed', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: asked() });
+    vi.spyOn(api, 'ratifyGoals').mockRejectedValue(new ApiError(409, { ok: false, error: 'goals-changed' }));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ratify' }));
+    expect(await screen.findByText(LEDGER_REFUSAL_TEXT['goals-changed'])).toBeTruthy();
+    await waitFor(() => expect(api.goals).toHaveBeenCalledTimes(2));
+  });
+
+  it('a 404 from a server without the door hides the button and says the server does not offer it', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: asked() });
+    vi.spyOn(api, 'ratifyGoals').mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ratify' }));
+    expect(await screen.findByText('This server does not offer ratifying goals.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
+  });
+
+  it('auth-off while sign-in is dark hides the button and says ratifying needs sign-in', async () => {
+    vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: asked() });
+    vi.spyOn(api, 'ratifyGoals').mockRejectedValue(new ApiError(501, { ok: false, error: 'auth-off' }));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Ratify' }));
+    expect(await screen.findByText('Ratifying goals needs sign-in, which is off on this server.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
   });
 });

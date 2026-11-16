@@ -33,7 +33,7 @@ import {
   ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, parseItemActBody, refusedCloseDetail, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
-  nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  nextItemState, outsideDocLink, parseGoalsVersion, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -522,7 +522,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
         return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'this programme already has a definition of done; change it with goals modify, citing a ruling or an itemId' });
       }
     }
-    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen, { kind: 'coordinator' });
     changed();
     return reply.code(200).send({ ok: true });
   });
@@ -568,6 +568,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
+    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
     const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
@@ -851,6 +852,29 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
+  });
+
+  // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
+  // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
+  // (`LEDGER_OPERATOR_DOORS`). The body names the version by the stamp the operator was shown (`parseGoalsVersion`); a pin
+  // that moved since is `goals-changed`, so text they were not shown is never ratified. Whether the version already reads
+  // ratified is `goalRatification`'s, asked inside `ratifyGoalsVersion`'s transaction; the door decides nothing and awaits
+  // nothing between the read and the write. A change emits the waiting frame, as the tick door does; the coordinator is not
+  // mailed, and reads the verdict through its goals read.
+  app.post('/api/programmes/:slug/goals/ratify', (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const slug = (req.params as { slug: string }).slug;
+    const version = parseGoalsVersion(req.body);
+    if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
+    // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), String(g.actor));
+    if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
+    if (res.changed) deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, changed: res.changed, goals: coord.goalsFor(slug) });
   });
 
   app.post('/api/items/:id/tick', (req, reply) => {
