@@ -411,6 +411,84 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
   return { steps: phases.flat(), failedInputs, notices };
 }
 
+// ── The pass's ruled verdicts (final review I-4): what the L4 pass reads, it asks here; it never decides itself ──
+
+/** What a Linear object is to the adoption rule: an initiative, a project, a milestone or an issue. */
+export type AdoptionKind = 'initiative' | 'project' | 'milestone' | 'issue';
+/** One object as a read answered it (`creatorId` from a by-name listing, `teamKeys` a project's, `teamKey` an issue's). */
+export interface AdoptionNode { id: string; creatorId?: string | null; teamKeys?: readonly string[]; teamKey?: string }
+export interface AdoptionAsk {
+  /** The id ccrc sent on its create (R1): ccrc's own object always carries it. */
+  requestId: string;
+  /** The directory's viewer: the key ccrc writes with. Null when no directory is held (nothing is then provably ccrc's). */
+  viewer: string | null;
+  /** The step's planned team key: a project must be in it, an issue on it. */
+  teamKey: string | null;
+  /** Every Linear id another binding holds. */
+  held: ReadonlySet<string>;
+}
+export type AdoptionVerdict = { verdict: 'adopt'; id: string } | { verdict: 'none' };
+
+/**
+ * C2' (amending C2), C11 and R2: which object, if any, is ccrc's own, after a create that may have been sent (`recover`) or
+ * one answered "conflict on insert" (`bindExisting`). Only the object at the requestId, held by no other binding, and: an
+ * initiative or a project made by the viewer (a project in the planned team); a milestone as it is (it was read inside
+ * ccrc's own bound project, and has no creator, R3); an issue on the planned team. A name-only match is never ours (every
+ * kind takes a caller id, FX2): `none`, and the caller sends the create (recovery) or fails the binding (a conflict).
+ */
+export function adoptionVerdict(kind: AdoptionKind, nodes: readonly AdoptionNode[], a: AdoptionAsk): AdoptionVerdict {
+  const team = a.teamKey === null ? null : a.teamKey.toUpperCase();
+  const ours = (n: AdoptionNode): boolean => {
+    if (n.id !== a.requestId || a.held.has(n.id)) return false;
+    switch (kind) {
+      case 'milestone': return true;
+      case 'issue': return team !== null && typeof n.teamKey === 'string' && n.teamKey.toUpperCase() === team;
+      case 'initiative': return a.viewer !== null && n.creatorId === a.viewer;
+      case 'project': return a.viewer !== null && n.creatorId === a.viewer && (team === null || (n.teamKeys ?? []).some((k) => k.toUpperCase() === team));
+    }
+  };
+  const found = nodes.find(ours);
+  return found === undefined ? { verdict: 'none' } : { verdict: 'adopt', id: found.id };
+}
+
+/** An issue as `issueOwned` answered it, for C12's read. */
+export interface IssueRead { stateType?: string; title?: string; description?: string | null; teamKey?: string; projectId?: string | null; milestoneId?: string | null }
+export type IssueReadVerdict = 'same' | 'state-held' | 'send';
+
+/**
+ * C12 and C19: what an issue update sends once the issue was read. Another state type, or another team (a move, or a team it
+ * did not answer), sends the update as planned, its state with it (a moved issue's state goes with the move). The planned type
+ * in the planned team with every other planned field the same is `same` (only the fingerprint is written); the type alone
+ * agreeing is `state-held` (the update goes without its state: Linear owns the state's name).
+ */
+export function issueReadVerdict(issue: IssueRead, step: { stateType?: string; teamKey: string | null; input: CcrcOpInput }): IssueReadVerdict {
+  const sameTeam = typeof issue.teamKey === 'string' && step.teamKey !== null && issue.teamKey.toUpperCase() === step.teamKey.toUpperCase();
+  if (issue.stateType !== step.stateType || !sameTeam) return 'send';
+  const sameRest = issue.title === step.input['title'] && (issue.description ?? '').trim() === String(step.input['description'] ?? '').trim()
+    && issue.projectId === step.input['projectId'] && (issue.milestoneId ?? null) === (step.input['projectMilestoneId'] ?? null);
+  return sameRest ? 'same' : 'state-held';
+}
+
+/** Why a failed binding is asked about: the tick's sweep (a directory refresh after the failure, or the last backoff step
+ *  passed), or the pass's inputs trigger (the inputs the deciders report for it now). */
+export type RequeueWhy = { kind: 'time'; filledAt: number | null; olderThan: number } | { kind: 'inputs'; inputs: string };
+export type RequeueVerdict = 'stay' | 'to-bound' | 'to-pending';
+
+/**
+ * C10 and C17: whether a `failed` binding gets another try, and where it goes. It is retried when its workspace's directory
+ * was filled after the failure (`filledAt`, null when none is held), when it failed before `olderThan`, or when its inputs
+ * changed. A binding with a Linear object goes back to `bound` with its stored fingerprint, so the deciders emit an update
+ * (or a move, or a link) and never a create; one with none goes back to `pending`.
+ */
+export function requeueVerdict(b: Pick<BindingRow, 'state' | 'failedAt' | 'failedInputs' | 'linearId'>, why: RequeueWhy): RequeueVerdict {
+  if (b.state !== 'failed') return 'stay';
+  const due = why.kind === 'inputs'
+    ? b.failedInputs !== why.inputs
+    : b.failedAt !== null && ((why.filledAt !== null && b.failedAt < why.filledAt) || b.failedAt < why.olderThan);
+  if (!due) return 'stay';
+  return b.linearId === null ? 'to-pending' : 'to-bound';
+}
+
 // ── The initiatives-off item (Task 3.5, §5.2's "initiatives off") ──
 
 /** What the pass does about one workspace's operator item: raise it or leave things as they are (settling is the tick's:

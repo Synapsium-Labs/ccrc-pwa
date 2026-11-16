@@ -665,3 +665,47 @@ describe('C12: a state change by type reads the issue first', () => {
     expect(r.asks.slice(from).find((a) => a.op === 'issueUpdate')!.input['stateId']).toBe(U(22));
   });
 });
+
+describe('final-review fixes: a team move (D-8182)', () => {
+  /** A bound t2 in project-b (team AAA), then project-b re-keyed to CCC inside the workspace: the next update is a move. */
+  async function moving(): Promise<{ r: Rig; t2Binding: () => BindingRow | undefined; linearId: string }> {
+    const r = await rig({ extraTeam: true });
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    const t2 = epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!;
+    const t2Binding = () => r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2.id);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();
+    return { r, t2Binding, linearId: t2Binding()!.linearId! };
+  }
+  const read = (team: string) => (ask: CcrcOpAsk): CcrcOpOutcome | null =>
+    ask.op === 'issueOwned' ? ok({ issue: { id: ask.input['id'], identifier: 'AAA-9', stateType: 'unstarted', teamKey: team } }) : null;
+
+  it('C19: a move whose issue already reads the planned type still sends the state with the move (never state-held)', async () => {
+    const { r } = await moving();
+    r.respond.current = (ask) => read('AAA')(ask) ?? defaultRespond(ask);
+    const from = r.asks.length;
+    due(r); await tick(r);
+    const upd = r.asks.slice(from).find((a) => a.op === 'issueUpdate')!;
+    expect(upd.input['teamId']).toBe(CCC_TEAM.id);
+    expect(upd.input['stateId']).toBe(U(31));                          // CCC's own unstarted state goes with the move
+    expect(upd.fields).toContain('state');
+  });
+
+  it('I-2 (C17): a refused team move, requeued, sends one issueUpdate with the move and no create', async () => {
+    const { r, t2Binding, linearId } = await moving();
+    r.respond.current = (ask) => read('AAA')(ask) ?? (ask.op === 'issueUpdate' ? { ok: false, word: 'policy-denied', maybeSent: false } : defaultRespond(ask));
+    due(r); await tick(r);
+    expect(t2Binding()).toMatchObject({ state: 'failed', failedWord: 'policy-denied', linearId });
+    r.respond.current = (ask) => read('AAA')(ask) ?? (ask.op === 'issueUpdate' ? ok({ id: ask.target, identifier: 'CCC-9' }) : defaultRespond(ask));
+    const from = r.asks.length;
+    r.t.now += 1_800_000;                                               // past the last backoff step (C10)
+    await tick(r);
+    const sent = opsOf(r, from);
+    expect(sent).not.toContain('issueCreate');
+    const moves = r.asks.slice(from).filter((a) => a.op === 'issueUpdate');
+    expect(moves).toHaveLength(1);
+    expect(moves[0]!.input['teamId']).toBe(CCC_TEAM.id);
+    expect(moves[0]!.destinationTeamKey).toBe('CCC');
+    expect(t2Binding()).toMatchObject({ state: 'bound', linearId, identifier: 'CCC-9', teamKey: 'CCC' });
+  });
+});

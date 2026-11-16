@@ -2,7 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps, requestIdOf, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, issueReadVerdict, plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  requeueVerdict, requestIdOf, type AdoptionKind, type AdoptionNode, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
@@ -212,5 +213,66 @@ describe('planSyncSteps rulings (D-8182)', () => {
     expect(m).toMatchObject({ input: { targetDate: '2026-11-05', description: expect.stringContaining('Met on 2026-11-05: PR #42') } });
     expect(steps.find((x) => x.kind === 'create' && x.op === 'issueCreate')).toMatchObject({ input: { stateId: U(22) } });
     expect(steps.find((x) => x.kind === 'update')).toMatchObject({ op: 'projectUpdate', input: { statusId: U(33) } });
+  });
+});
+
+describe('final-review rulings: the pure verdicts (D-8182)', () => {
+  const RID = requestIdOf('epic', 1, WS);
+  const VIEWER = U(9);
+  const NONE = new Set<string>();
+  const ask = (o: { viewer?: string | null; teamKey?: string | null; held?: ReadonlySet<string> } = {}) => ({
+    requestId: RID, viewer: o.viewer === undefined ? VIEWER : o.viewer, teamKey: o.teamKey === undefined ? 'AAA' : o.teamKey, held: o.held ?? NONE,
+  });
+  const ROWS: { name: string; kind: AdoptionKind; nodes: AdoptionNode[]; a?: Parameters<typeof ask>[0]; adopt: boolean }[] = [
+    { name: "C2': an initiative at the requestId made by this key", kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], adopt: true },
+    { name: 'I-1: an initiative at the requestId made by another creator', kind: 'initiative', nodes: [{ id: RID, creatorId: U(901) }], adopt: false },
+    { name: "C-2: a same-named initiative of this key at another id (another programme's)", kind: 'initiative', nodes: [{ id: U(77), creatorId: VIEWER }], adopt: false },
+    { name: 'an initiative with no creator answered', kind: 'initiative', nodes: [{ id: RID, creatorId: null }], adopt: false },
+    { name: 'no viewer known: nothing is provably ours', kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], a: { viewer: null }, adopt: false },
+    { name: 'an object another binding holds', kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], a: { held: new Set([RID]) }, adopt: false },
+    { name: 'a project at the requestId, this key, in the team', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['AAA'] }], a: { teamKey: 'aaa' }, adopt: true },
+    { name: 'a project at the requestId outside the team', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['BBB'] }], adopt: false },
+    { name: "C-2: another programme's same-named project in the team", kind: 'project', nodes: [{ id: U(78), creatorId: VIEWER, teamKeys: ['AAA'] }], adopt: false },
+    { name: 'I-1: a project at the requestId made by another creator', kind: 'project', nodes: [{ id: RID, creatorId: U(901), teamKeys: ['AAA'] }], adopt: false },
+    { name: "C2': a milestone at the requestId", kind: 'milestone', nodes: [{ id: U(5) }, { id: RID }], a: { viewer: null }, adopt: true },
+    { name: "C2': a milestone of the same name at another id", kind: 'milestone', nodes: [{ id: U(5) }], adopt: false },
+    { name: 'a milestone another binding holds', kind: 'milestone', nodes: [{ id: RID }], a: { held: new Set([RID]) }, adopt: false },
+    { name: 'C11: an issue at the requestId in the planned team', kind: 'issue', nodes: [{ id: RID, teamKey: 'aaa' }], adopt: true },
+    { name: 'C11: an issue at the requestId in another team', kind: 'issue', nodes: [{ id: RID, teamKey: 'BBB' }], adopt: false },
+    { name: 'C11: an issue that answers no team', kind: 'issue', nodes: [{ id: RID }], adopt: false },
+    { name: 'C11: an issue with no planned team', kind: 'issue', nodes: [{ id: RID, teamKey: 'AAA' }], a: { teamKey: null }, adopt: false },
+    { name: 'C11: an issue another binding holds', kind: 'issue', nodes: [{ id: RID, teamKey: 'AAA' }], a: { held: new Set([RID]) }, adopt: false },
+  ];
+  it.each(ROWS)('adoptionVerdict: $name', (row) => {
+    expect(adoptionVerdict(row.kind, row.nodes, ask(row.a))).toEqual(row.adopt ? { verdict: 'adopt', id: RID } : { verdict: 'none' });
+  });
+
+  const step = { stateType: 'started', teamKey: 'AAA', input: { title: 'T', description: 'D', projectId: U(501), projectMilestoneId: null } };
+  const issue = { stateType: 'started', title: 'T', description: 'D\n', teamKey: 'aaa', projectId: U(501), milestoneId: null };
+  const READS: { name: string; over: Record<string, unknown>; verdict: 'same' | 'state-held' | 'send' }[] = [
+    { name: 'everything planned already reads in Linear (C12)', over: {}, verdict: 'same' },
+    { name: 'the type agrees, the title differs (C12)', over: { title: 'Edited' }, verdict: 'state-held' },
+    { name: 'another type (C12)', over: { stateType: 'unstarted' }, verdict: 'send' },
+    { name: 'C19: the type agrees but the issue is in another team (a move)', over: { teamKey: 'CCC' }, verdict: 'send' },
+    { name: 'C19: the type agrees but the issue answers no team', over: { teamKey: undefined }, verdict: 'send' },
+  ];
+  it.each(READS)('issueReadVerdict: $name', (row) => {
+    expect(issueReadVerdict({ ...issue, ...row.over }, step)).toBe(row.verdict);
+  });
+
+  const failed = (o: Partial<BindingRow> = {}): BindingRow => bind({ localKind: 'epic', localId: 1, state: 'failed', failedAt: 1_000, failedInputs: 'in-1', ...o });
+  const REQUEUES: { name: string; b: BindingRow; why: Parameters<typeof requeueVerdict>[1]; verdict: 'stay' | 'to-bound' | 'to-pending' }[] = [
+    { name: 'a bound binding stays', b: bind({ localKind: 'epic', localId: 1 }), why: { kind: 'time', filledAt: 5_000, olderThan: 5_000 }, verdict: 'stay' },
+    { name: 'C10: a refresh after the failure, never created: back to pending', b: failed({ linearId: null }), why: { kind: 'time', filledAt: 2_000, olderThan: 0 }, verdict: 'to-pending' },
+    { name: 'C17: a refresh after the failure, an object known: back to bound', b: failed(), why: { kind: 'time', filledAt: 2_000, olderThan: 0 }, verdict: 'to-bound' },
+    { name: 'C10: past the last backoff step', b: failed(), why: { kind: 'time', filledAt: null, olderThan: 1_001 }, verdict: 'to-bound' },
+    { name: 'C10: a refresh before the failure and inside the backoff', b: failed(), why: { kind: 'time', filledAt: 999, olderThan: 1_000 }, verdict: 'stay' },
+    { name: 'C10: no failure time', b: failed({ failedAt: null }), why: { kind: 'time', filledAt: 2_000, olderThan: 5_000 }, verdict: 'stay' },
+    { name: 'C10: the same inputs', b: failed(), why: { kind: 'inputs', inputs: 'in-1' }, verdict: 'stay' },
+    { name: 'C10+C17: changed inputs, an object known', b: failed(), why: { kind: 'inputs', inputs: 'in-2' }, verdict: 'to-bound' },
+    { name: 'C10: changed inputs, never created', b: failed({ linearId: null }), why: { kind: 'inputs', inputs: 'in-2' }, verdict: 'to-pending' },
+  ];
+  it.each(REQUEUES)('requeueVerdict: $name', (row) => {
+    expect(requeueVerdict(row.b, row.why)).toBe(row.verdict);
   });
 });

@@ -17,6 +17,7 @@ import {
   PLAN_SYNC_BACKOFF_MS, PLAN_SYNC_CALL_TIMEOUT_MS, PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_TICK_DEADLINE_MS, PlanSync, type PlanSyncDeps,
 } from '../src/linear/planSync.js';
 import { PLAN_SYNC_BEAT_MS, laneRow } from '../src/laneSchedule.js';
+import { requestIdOf } from '../src/linear/planSyncPolicy.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer } from './linearFetchFake.js';
@@ -320,24 +321,28 @@ describe('the plan sync (D-8182)', () => {
     expect(dueAt(r)).not.toBeNull();                      // still due: the next tick carries on
   });
 
-  it('two name matches for a name-and-creator create fail the binding and mail the coordinator', async () => {
+  it("C2': same-named objects made by this key at other ids are never adopted: the create is sent with its id", async () => {
     const r = await rig();
     r.plan.ensurePending('programme', r.plan.programmeRowId(SLUG)!, WS.a.id, null);
     const node = (n: number) => ({ id: U(n), name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER });
     r.respond.current = (ask) => (ask.op === 'initiativesByName' ? ok({ nodes: [node(11), node(12)] }) : defaultRespond(ask, 0));
     await r.sync.tick(afterDebounce(r));
-    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed' });
-    expect(opsOf(r)).not.toContain('initiativeCreate');
-    expect(mails(r)).toHaveLength(1);
+    const sent = r.asks.filter((a) => a.op === 'initiativeCreate');
+    expect(sent).toHaveLength(1);
+    expect(sent[0]!.input['requestId']).toBe(requestIdOf('programme', r.plan.programmeRowId(SLUG)!, WS.a.id));
+    expect(bindingOfKind(r, 'programme')?.linearId).not.toBe(U(11));
+    expect(bindingOfKind(r, 'programme')?.linearId).not.toBe(U(12));
+    expect(mails(r)).toHaveLength(0);
   });
 
-  it('a crash with the journal row still pending binds by name and creator, and sends no second create', async () => {
+  it('a crash with the journal row still pending binds its own object (requestId and creator), and sends no second create', async () => {
     const r = await rig();
     r.plan.ensurePending('programme', r.plan.programmeRowId(SLUG)!, WS.a.id, null);
+    const rid = requestIdOf('programme', r.plan.programmeRowId(SLUG)!, WS.a.id);
     r.respond.current = (ask) => (ask.op === 'initiativesByName'
-      ? ok({ nodes: [{ id: U(13), name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER }] }) : defaultRespond(ask, 0));
+      ? ok({ nodes: [{ id: rid, name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER }] }) : defaultRespond(ask, 0));
     await r.sync.tick(afterDebounce(r));
-    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: U(13) });
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: rid });
     expect(opsOf(r)).not.toContain('initiativeCreate');
     expect(r.asks[0]).toMatchObject({ op: 'initiativesByName', input: { name: 'Programme A' }, pass: 'plan-sync' });
   });
@@ -485,17 +490,18 @@ describe('every outcome has one handling', () => {
     expect(r.asks).toHaveLength(before);
   });
 
-  it('a create that times out after send stays pending and the next pass binds it by name', async () => {
+  it('a create that times out after send stays pending and the next pass binds it by name, at its requestId', async () => {
     const r = await rig();
     r.respond.current = (ask) => (ask.op === 'initiativeCreate' ? fail('timeout', true) : defaultRespond(ask, 0));
     await r.sync.tick(afterDebounce(r));
     expect(bindingOfKind(r, 'programme')?.state).toBe('pending');
     r.asks.length = 0;
+    const rid = requestIdOf('programme', r.plan.programmeRowId(SLUG)!, WS.a.id);
     r.respond.current = (ask) => (ask.op === 'initiativesByName'
-      ? ok({ nodes: [{ id: U(15), name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER }] }) : defaultRespond(ask, 0));
+      ? ok({ nodes: [{ id: rid, name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER }] }) : defaultRespond(ask, 0));
     r.t.now += 30_000 + PLAN_SYNC_DEBOUNCE_MS;
     await r.sync.tick(r.t.now);
-    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: U(15) });
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: rid });
     expect(opsOf(r)).not.toContain('initiativeCreate');
   });
 
@@ -653,5 +659,82 @@ describe('end to end through runCcrcOp, Linear faked at FetchLike (recorded answ
     await sync.tick(afterDebounce(r));
     expect(docs.filter((d) => d === D.initiativeCreate)).toHaveLength(1);
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: requestId });
+  });
+});
+
+describe('final-review fixes (D-8182)', () => {
+  const LAST = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1];
+  const conflict: CcrcOpOutcome = { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
+
+  it("C-2 (C2'): after prog-a's rate-limited project create, prog-a never adopts prog-b's same-titled project", async () => {
+    const r = await rig();
+    applyPlanChanges(r.db, 'prog-b', changes({ epics: { insert: [{ key: 'e1', project: 'project-a', waves: [1], ordinal: 0, title: 'Epic one', summary: 'Summary' }], update: [], drop: [] } }),
+      'coord-b', T, { home: 'project-a', title: 'Programme B' });
+    const linear: { id: string; name: string; createdAt: string; creatorId: string; teamKeys: string[] }[] = [];
+    let limited = false;
+    r.respond.current = (ask) => {
+      if (ask.op === 'projectCreate') {
+        if (!limited) { limited = true; return { ok: false, word: 'rate-limited', retryAfterS: 1 }; }   // refused locally: never sent
+        const id = String(ask.input['requestId']);
+        linear.push({ id, name: String(ask.input['name']), createdAt: '2026-01-01T00:00:00.000Z', creatorId: VIEWER, teamKeys: ['AAA'] });
+        return ok({ id }, id);
+      }
+      if (ask.op === 'projectsByName') return ok({ nodes: linear.filter((n) => n.name === ask.input['name']) });
+      return defaultRespond(ask, 0);
+    };
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    expect(bindingOfKind(r, 'epic')).toMatchObject({ state: 'pending', linearId: null });
+    await r.sync.passFor('prog-b', r.t.now + 60_000);
+    const bProject = r.plan.bindingsOf('prog-b').find((b) => b.localKind === 'epic')!;
+    expect(bProject.state).toBe('bound');
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    const aProject = bindingOfKind(r, 'epic')!;
+    expect(aProject.state).toBe('bound');
+    expect(aProject.linearId).not.toBe(bProject.linearId);
+    expect(aProject.linearId).toBe(requestIdOf('epic', r.plan.planOf(SLUG).epics[0]!.id, WS.a.id));
+    expect(linear).toHaveLength(2);                                       // each programme its own project
+  });
+
+  it("I-1 (C2'): an object at the requestId made by another creator is never adopted: send, conflict, failed, also after a requeue", async () => {
+    const r = await rig();
+    const rowid = r.plan.programmeRowId(SLUG)!;
+    r.plan.ensurePending('programme', rowid, WS.a.id, null);
+    const rid = requestIdOf('programme', rowid, WS.a.id);
+    const foreign = { id: rid, name: 'Programme A', createdAt: '2026-01-01T00:00:00.000Z', creatorId: U(901) };
+    r.respond.current = (ask) => {
+      if (ask.op === 'initiativesByName') return ok({ nodes: [foreign] });
+      if (ask.op === 'initiativeCreate') return conflict;
+      if (ask.op === 'initiativeById') return ok({ initiative: { id: rid, name: 'Programme A' } });
+      return defaultRespond(ask, 0);
+    };
+    await r.sync.tick(afterDebounce(r));
+    expect(opsOf(r).slice(0, 4)).toEqual(['initiativesByName', 'initiativeCreate', 'initiativeById', 'initiativesByName']);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid', linearId: null });
+    r.asks.length = 0;
+    r.t.now += LAST + 1_000;                                              // C10: the 30 min requeue
+    await r.sync.tick(r.t.now);
+    expect(opsOf(r).slice(0, 4)).toEqual(['initiativesByName', 'initiativeCreate', 'initiativeById', 'initiativesByName']);
+    expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid', linearId: null });
+    expect(opsOf(r)).not.toContain('initiativeUpdate');                   // nothing of ccrc's plan written into it
+    expect(mails(r).filter((m) => m.subject.includes('programme'))).toHaveLength(1);
+  });
+
+  it("I-2 (C17): a bound project's refused update, requeued, sends one projectUpdate and no create", async () => {
+    const r = await rig();
+    await r.sync.tick(afterDebounce(r));
+    const before = bindingOfKind(r, 'epic')!;
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [], update: [{ id: r.plan.planOf(SLUG).epics[0]!.id, title: 'Renamed epic' }], drop: [] } }), OWNER, r.t.now, null);
+    r.respond.current = (ask) => (ask.op === 'projectUpdate' ? fail('linear-forbidden') : defaultRespond(ask, 0));
+    r.t.now += PLAN_SYNC_DEBOUNCE_MS + 1;
+    await r.sync.tick(r.t.now);
+    expect(bindingOfKind(r, 'epic')).toMatchObject({ state: 'failed', failedWord: 'linear-forbidden' });
+    r.asks.length = 0;
+    r.respond.current = defaultRespond;
+    r.t.now += LAST + 1_000;
+    await r.sync.tick(r.t.now);
+    expect(opsOf(r).filter((o) => o === 'projectUpdate')).toHaveLength(1);
+    expect(opsOf(r)).not.toContain('projectCreate');
+    expect(opsOf(r)).not.toContain('projectsByName');
+    expect(bindingOfKind(r, 'epic')).toMatchObject({ state: 'bound', linearId: before.linearId });
   });
 });

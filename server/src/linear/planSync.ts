@@ -14,9 +14,10 @@
  *
  * WHAT IS WRITTEN BEFORE A CALL. The binding row is `pending` before a create is sent (`ensurePending`) and `bound` after;
  * a row found `pending` at the start of a step is a create a previous pass may have sent (a crash, a timeout), so the
- * step recovers first (C2): by the caller's own id on the answer, by name and creator for an initiative or a project, by
- * name inside its project for a milestone. It never reads `LinearJournal.viaFleet`: in the very crash this exists for the
- * journal row is still `pending` with no result.
+ * step recovers first (C2'): it adopts only ccrc's own object, the one at the create's requestId (an initiative or a project
+ * made by this key, a milestone inside its own bound project), and otherwise sends the create with that id. Which object is
+ * ccrc's is `adoptionVerdict`'s to say (L1), as C12's issue read is `issueReadVerdict`'s and a requeue `requeueVerdict`'s.
+ * It never reads `LinearJournal.viaFleet`: in the very crash this exists for the journal row is still `pending` with no result.
  *
  * LINEAR'S TEXT IS NEVER IN A MAIL. A coordinator is mailed a fixed sentence naming the object kind, its plan key and the
  * word, once per object and word (`hasMailWithSubject`, durable).
@@ -39,7 +40,10 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, planSyncSteps, type Local, type SyncSnapshot, type SyncStep } from './planSyncPolicy.js';
+import {
+  adoptionVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
+  type AdoptionAsk, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+} from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
  *  plan verbs becomes one pass. */
@@ -137,24 +141,28 @@ export class PlanSync {
     }
   }
 
-  /** C10: a `failed` binding returns to `pending` when its workspace's directory was filled after the failure (a status
-   *  type added, write access regained by a verified key, the probe turned on), and otherwise once the last backoff step
-   *  has passed since `failedAt`; its programme is then due. (The inputs trigger is the pass's own: it has the snapshot.) */
+  /** C10 and C17 (`requeueVerdict`): a `failed` binding gets another try when its workspace's directory was filled after the
+   *  failure (a status type added, write access regained by a verified key, the probe turned on), and otherwise once the last
+   *  backoff step has passed since `failedAt`; its programme is then due. (The inputs trigger is the pass's own: it has the
+   *  snapshot.) */
   private async requeueSweep(now: number): Promise<void> {
     const slots = slotsOf(await this.deps.readLinearStore());
     for (const p of this.deps.coord.programs()) {
       let requeued = false;
       for (const b of this.deps.plan.bindingsOf(p.slug)) {
-        if (b.state !== 'failed' || b.failedAt === null) continue;
+        if (b.state !== 'failed') continue;
         const slot = slots.get(b.workspaceId);
-        const filled = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
-        if ((filled !== null && b.failedAt < filled) || b.failedAt < now - LAST_BACKOFF_MS) {
-          this.deps.plan.requeueFailed({ bindingId: b.id });
-          requeued = true;
-        }
+        const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
+        requeued = this.requeue(b, requeueVerdict(b, { kind: 'time', filledAt, olderThan: now - LAST_BACKOFF_MS })) || requeued;
       }
       if (requeued) this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
     }
+  }
+
+  /** Write a requeue verdict: whether the binding was returned. */
+  private requeue(b: BindingRow, verdict: RequeueVerdict): boolean {
+    if (verdict === 'stay') return false;
+    return this.deps.plan.requeueFailed({ bindingId: b.id, to: verdict === 'to-bound' ? 'bound' : 'pending' }) > 0;
   }
 
   /** The operator's Check again on an initiatives item: queue the probe for that workspace's slot and answer at once, never
@@ -319,7 +327,7 @@ export class PlanSync {
       let requeued = false;
       for (const f of failedInputs) {
         const b = built.snap.bindings.find((x) => x.id === f.bindingId);
-        if (b !== undefined && b.failedInputs !== f.inputs) { plan.requeueFailed({ bindingId: b.id }); requeued = true; }
+        if (b !== undefined) requeued = this.requeue(b, requeueVerdict(b, { kind: 'inputs', inputs: f.inputs })) || requeued;
       }
       if (requeued) continue;
 
@@ -497,55 +505,52 @@ export class PlanSync {
     return this.onFailure(out, subject(b.id));
   }
 
-  /** C12: an issue's planned state is a TYPE, and Linear owns the name. Read the issue first: when it already reads the type
-   *  and everything else planned (a GitHub integration moved it), the fingerprint is all that is written (`same`); when only
-   *  the state agrees, the update goes without it (`state-held`); a read that cannot tell (`not-found`) sends the update as
-   *  planned and lets its own answer rule. */
+  /** C12 and C19: an issue's planned state is a TYPE, and Linear owns the name. Read the issue first and ask
+   *  `issueReadVerdict` what to send (`same`: the fingerprint only; `state-held`: the update without its state; `send`: as
+   *  planned, a move's state with it); a read that cannot tell (`not-found`) sends the update as planned and lets its own
+   *  answer rule. */
   private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | { verdict: 'send' | 'state-held' | 'same'; team: string | null }> {
     if (step.op !== 'issueUpdate') return 'send';
     if (this.deps.now() >= deadlineAt) return 'defer';
     const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id: b.linearId! }));
     if (!out.ok) return out.word === 'not-found' ? 'send' : (this.onFailure(out, s) === 'defer' ? 'defer' : 'next');
-    const issue = out.value['issue'] as { stateType?: string; title?: string; description?: string | null; teamKey?: string; projectId?: string | null; milestoneId?: string | null };
-    const team = typeof issue.teamKey === 'string' ? issue.teamKey : null;
-    if (issue.stateType !== step.stateType) return { verdict: 'send', team };
-    const sameRest = issue.title === step.input['title'] && (issue.description ?? '').trim() === String(step.input['description'] ?? '').trim()
-      && issue.projectId === step.input['projectId'] && (issue.milestoneId ?? null) === (step.input['projectMilestoneId'] ?? null)
-      && typeof issue.teamKey === 'string' && step.teamKey !== null && issue.teamKey.toUpperCase() === step.teamKey.toUpperCase();
-    return { verdict: sameRest ? 'same' : 'state-held', team };
+    const issue = out.value['issue'] as IssueRead;
+    return { verdict: issueReadVerdict(issue, step), team: typeof issue.teamKey === 'string' ? issue.teamKey : null };
   }
 
-  /** C2: a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds. */
+  /** C2': a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds and adopt
+   *  only ccrc's own object (`adoptionVerdict`); anything else sends the create, whose id makes a lost race a `conflict`. */
   private async recover(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<'bound' | 'send' | 'next' | 'defer'> {
-    const held = new Set(built.snap.bindings.flatMap((x) => (x.linearId === null ? [] : [x.linearId])));
+    let kind: AdoptionKind;
+    let nodes: AdoptionNode[];
     if (step.recover === 'name-and-creator') {
-      const viewer = built.snap.workspaces.find((w) => w.workspaceId === step.workspaceId)?.directory?.viewerId ?? null;
-      if (viewer === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
-      const name = String(step.input['name']);
-      const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name }));
+      if (this.viewerOf(built, step.workspaceId) === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
+      const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: String(step.input['name']) }));
       if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
-      const nodes = (out.value['nodes'] as { id: string; name: string; creatorId: string | null; teamKeys?: string[] }[]);
-      const team = step.teamKey?.toUpperCase() ?? null;
-      const mine = nodes.filter((n) => n.name === name && !held.has(n.id)
-        && (n.id === step.requestId || n.creatorId === viewer)
-        && (step.op !== 'projectCreate' || team === null || (n.teamKeys ?? []).includes(team)));
-      const certain = mine.filter((n) => n.id === step.requestId);
-      const found = certain.length > 0 ? certain : mine;
-      if (found.length === 0) return 'send';
-      if (found.length > 1) { this.fail(s, 'name-ambiguous'); return 'next'; }
-      this.bind(b, found[0]!.id, null, ADOPTED);
-      return 'bound';
+      kind = step.op === 'initiativeCreate' ? 'initiative' : 'project';
+      nodes = out.value['nodes'] as AdoptionNode[];
+    } else {
+      // name-in-project: read inside ccrc's own bound project (a milestone has no creator, R3)
+      const out = await this.deps.call(this.readAsk('projectById', s, step.teamKey, { id: String(step.input['projectId']) }));
+      if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
+      kind = 'milestone';
+      nodes = (out.value['project'] as { milestones?: AdoptionNode[] }).milestones ?? [];
     }
-    // name-in-project: a milestone has no creator (R3); its project holds only what ccrc made
-    const out = await this.deps.call(this.readAsk('projectById', s, step.teamKey, { id: String(step.input['projectId']) }));
-    if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
-    const milestones = ((out.value['project'] as { milestones?: { id: string; name: string }[] }).milestones ?? []);
-    const name = String(step.input['name']);
-    const mine = milestones.filter((m) => (m.id === step.requestId || m.name === name) && !held.has(m.id));
-    const found = mine.filter((m) => m.id === step.requestId).concat(mine.filter((m) => m.id !== step.requestId));
-    if (found.length === 0) return 'send';
-    this.bind(b, found[0]!.id, null, ADOPTED);
+    const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
+    if (v.verdict === 'none') return 'send';
+    this.bind(b, v.id, null, ADOPTED);
     return 'bound';
+  }
+
+  private viewerOf(built: NonNullable<ReturnType<PlanSync['snapshot']>>, workspaceId: string): string | null {
+    return built.snap.workspaces.find((w) => w.workspaceId === workspaceId)?.directory?.viewerId ?? null;
+  }
+
+  /** What `adoptionVerdict` is asked with: the create's id, the directory's viewer, the planned team, and every Linear id
+   *  another binding of this programme holds. */
+  private adoptionAsk(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, built: NonNullable<ReturnType<PlanSync['snapshot']>>): AdoptionAsk {
+    const held = new Set(built.snap.bindings.flatMap((x) => (x.id === b.id || x.linearId === null ? [] : [x.linearId])));
+    return { requestId: step.requestId, viewer: this.viewerOf(built, step.workspaceId), teamKey: step.teamKey, held };
   }
 
   /** R2 and C11: a create answered "conflict on insert" (or a milestone "name not unique"): an object exists at ccrc's id. Ids
@@ -555,39 +560,37 @@ export class PlanSync {
    *  `linear-invalid`, mailed once, and never sends a second create. Adopted bindings carry the `adopted` fingerprint. */
   private async bindExisting(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<Flow> {
     const id = step.requestId;
-    const held = built.snap.bindings.some((x) => x.id !== b.id && x.linearId === id);
+    let kind: AdoptionKind;
+    let nodes: AdoptionNode[];
+    let identifier: string | null = null;
     if (step.op === 'projectMilestoneCreate') {
       const out = await this.deps.call(this.readAsk('projectById', s, step.teamKey, { id: String(step.input['projectId']) }));
       if (!out.ok) return this.onFailure(out, s);
-      const ms = ((out.value['project'] as { milestones?: { id: string }[] }).milestones ?? []).find((m) => m.id === id);
-      if (ms === undefined || held) { this.fail(s, 'linear-invalid'); return 'next'; }
-      this.bind(b, ms.id, null, ADOPTED);
-      return 'next';
-    }
-    if (step.op === 'issueCreate') {
+      kind = 'milestone';
+      nodes = (out.value['project'] as { milestones?: AdoptionNode[] }).milestones ?? [];
+    } else if (step.op === 'issueCreate') {
       const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id }));
       if (!out.ok) return this.onFailure(out, s);
-      const issue = out.value['issue'] as { id: string; identifier?: string; teamKey?: string };
-      if (held || issue.id !== id || step.teamKey === null || typeof issue.teamKey !== 'string' || issue.teamKey.toUpperCase() !== step.teamKey.toUpperCase()) { this.fail(s, 'linear-invalid'); return 'next'; }
-      this.bind(b, issue.id, typeof issue.identifier === 'string' ? issue.identifier : null, ADOPTED);
-      return 'next';
+      const issue = out.value['issue'] as AdoptionNode & { identifier?: string };
+      kind = 'issue';
+      nodes = [issue];
+      identifier = typeof issue.identifier === 'string' ? issue.identifier : null;
+    } else {
+      if (this.viewerOf(built, step.workspaceId) === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
+      // Two reads: the object at ccrc's id (its own name, which a rename since the lost create may have left unlike the plan's),
+      // then that name's by-name listing, which carries the creator the by-id read does not select.
+      const isInit = step.op === 'initiativeCreate';
+      const byId = await this.deps.call(this.readAsk(isInit ? 'initiativeById' : 'projectById', s, step.teamKey, { id }));
+      if (!byId.ok) return this.onFailure(byId, s);
+      const found = byId.value[isInit ? 'initiative' : 'project'] as { id: string; name: string };
+      const out = await this.deps.call(this.readAsk(isInit ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: found.name }));
+      if (!out.ok) return this.onFailure(out, s);
+      kind = isInit ? 'initiative' : 'project';
+      nodes = out.value['nodes'] as AdoptionNode[];
     }
-    const viewer = built.snap.workspaces.find((w) => w.workspaceId === step.workspaceId)?.directory?.viewerId ?? null;
-    if (viewer === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS); return 'defer'; }
-    // Two reads: the object at ccrc's id (its own name, which a rename since the lost create may have left unlike the plan's),
-    // then that name's by-name listing, which carries the creator the by-id read does not select.
-    const isInit = step.op === 'initiativeCreate';
-    const byId = await this.deps.call(this.readAsk(isInit ? 'initiativeById' : 'projectById', s, step.teamKey, { id }));
-    if (!byId.ok) return this.onFailure(byId, s);
-    const found = byId.value[isInit ? 'initiative' : 'project'] as { id: string; name: string };
-    const out = await this.deps.call(this.readAsk(isInit ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: found.name }));
-    if (!out.ok) return this.onFailure(out, s);
-    const team = step.teamKey?.toUpperCase() ?? null;
-    const nodes = out.value['nodes'] as { id: string; name: string; creatorId: string | null; teamKeys?: string[] }[];
-    const mine = nodes.find((n) => n.id === id && n.name === found.name && n.creatorId === viewer
-      && (isInit || team === null || (n.teamKeys ?? []).includes(team)));
-    if (mine === undefined || held) { this.fail(s, 'linear-invalid'); return 'next'; }
-    this.bind(b, mine.id, null, ADOPTED);
+    const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
+    if (v.verdict === 'none') { this.fail(s, 'linear-invalid'); return 'next'; }
+    this.bind(b, v.id, identifier, ADOPTED);
     return 'next';
   }
 

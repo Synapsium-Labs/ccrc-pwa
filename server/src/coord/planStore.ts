@@ -438,17 +438,19 @@ export function markBound(db: DatabaseSync, id: number, linearId: string, identi
 export function markFailed(db: DatabaseSync, id: number, word: string, inputs: string, now: number): void {
   db.prepare("UPDATE linear_bindings SET state = 'failed', failedAt = ?, failedWord = ?, failedInputs = ? WHERE id = ?").run(now, word, inputs, id);
 }
-/** `failed` bindings back to `pending`, clearing the three `failed*` columns; `where` narrows by workspace, one binding or
- *  failures older than a time. Returns how many it returned. */
-export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; bindingId?: number; olderThan?: number }): number {
-  const conds = ["state = 'failed'"];
+/** `failed` bindings back to `to`, clearing the three `failed*` columns and keeping the stored fingerprint; `where` narrows by
+ *  workspace, one binding or failures older than a time. C17 (`requeueVerdict` decides `to`): only a binding with a Linear
+ *  object returns to `bound`, only one without returns to `pending`, so a row is never a create of an object that exists.
+ *  Returns how many it returned. */
+export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; bindingId?: number; olderThan?: number; to: 'bound' | 'pending' }): number {
+  const conds = ["state = 'failed'", where.to === 'bound' ? 'linearId IS NOT NULL' : 'linearId IS NULL'];
   const args: (string | number)[] = [];
   if (where.workspaceId !== undefined) { conds.push('workspaceId = ?'); args.push(where.workspaceId); }
   if (where.bindingId !== undefined) { conds.push('id = ?'); args.push(where.bindingId); }
   if (where.olderThan !== undefined) { conds.push('failedAt < ?'); args.push(where.olderThan); }
   const res = db.prepare(
-    `UPDATE linear_bindings SET state = 'pending', failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE ${conds.join(' AND ')}`,
-  ).run(...args);
+    `UPDATE linear_bindings SET state = ?, failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE ${conds.join(' AND ')}`,
+  ).run(where.to, ...args);
   return Number(res.changes);
 }
 /** Every `operator-act` checkpoint of a programme that is still open and names an operator item: what the sync's tick checks

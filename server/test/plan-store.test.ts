@@ -335,3 +335,25 @@ describe('programmeRowId (C6)', () => {
     expect(port.programmeRowId('nope')).toBeNull();
   });
 });
+
+describe('requeueFailed (C17)', () => {
+  it('to bound keeps the linear id and the stored fingerprint; to pending only a binding no object backs', () => {
+    declare('prog-a');
+    const port = planStorePort(db);
+    const epicId = port.planOf('prog-a').epics[0]!.id;
+    const made = port.ensurePending('epic', epicId, 'ws-a', 'AAA');
+    port.markBound(made.id, 'lin-1', null, 'fp-1', 10);
+    port.markFailed(made.id, 'linear-forbidden', 'in-1', 20);
+    expect(port.requeueFailed({ bindingId: made.id, to: 'pending' })).toBe(0);          // an object is known: never pending
+    expect(port.requeueFailed({ bindingId: made.id, to: 'bound' })).toBe(1);
+    expect(port.bindingOf('epic', epicId, 'ws-a')).toMatchObject({
+      state: 'bound', linearId: 'lin-1', fingerprint: 'fp-1', failedAt: null, failedWord: null, failedInputs: null,
+    });
+    const cpId = port.planOf('prog-a').epics[0]!.checkpoints[0]!.id;
+    const never = port.ensurePending('checkpoint', cpId, 'ws-a', 'AAA');
+    port.markFailed(never.id, 'status-missing', 'in-2', 30);
+    expect(port.requeueFailed({ bindingId: never.id, to: 'bound' })).toBe(0);             // nothing to be bound to
+    expect(port.requeueFailed({ bindingId: never.id, to: 'pending' })).toBe(1);
+    expect(port.bindingOf('checkpoint', cpId, 'ws-a')).toMatchObject({ state: 'pending', linearId: null, failedAt: null });
+  });
+});
