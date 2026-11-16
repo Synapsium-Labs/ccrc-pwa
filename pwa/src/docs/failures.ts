@@ -10,8 +10,9 @@
 // defect's included: the classifier cannot tell a network failure's `TypeError` from a bug's.
 import {
   DOCS_FAILURE_RETRY, DOCS_FAILURES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, contentClass, sniffRaster,
-  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsProjectsResponse,
-  type DocsRefreshResponse, type DocsRefSpec, type DocsTreeResponse, type RasterMime, type RasterType,
+  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsHistoryResponse,
+  type DocsLogAsk, type DocsProjectsResponse, type DocsRefreshResponse, type DocsRefSpec, type DocsTreeResponse,
+  type RasterMime, type RasterType,
 } from '../../../shared/docs';
 // A type-only import, erased at build time: lib/api.ts imports this module, so a value import back would be a cycle.
 import type { ApiError } from '../lib/api';
@@ -47,6 +48,12 @@ export type DocsRasterAnswer = DocsAnswer<DocsRasterBytes>;
 /** Spec 4.3's `DocsRefreshAnswer`, renamed: server/src/docs/policy.ts already exports that name (the route's own
  *  verdict), and single-definition.test.ts holds every server/src/docs export to one declaration in the four roots. */
 export type DocsRefreshLoaderAnswer = DocsAnswer<DocsRefreshResponse>;
+/** A history read's answer (rich-docs spec G4). */
+export type DocsHistoryAnswer = DocsAnswer<DocsHistoryResponse>;
+
+/** The history loader (refinement (s)): beside `DocsLoaders`, not in it, so no visit fake moves until a view reads
+ *  history (W8b). Resolves a union, as every docs loader does. */
+export interface DocsHistoryLoader { history(project: string, ask: DocsLogAsk): Promise<DocsHistoryAnswer> }
 
 /** The loader seam (spec 4.3). `api.docs` is the default; tests inject their own.
  *  - `tree`'s `ref: null` is the default view (no `?ref=`).

@@ -288,3 +288,40 @@ describe('api.docs.raster: the two client checks (M5.18) and the representation 
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+describe('api.docs.history: the history loader beside DocsLoaders (refinement (s))', () => {
+  const ASK = { commit: C, section: 'specs' as const, path: 'a b+c.md' };
+  const LOG_OK = { ok: true, log: { entries: [], truncated: false } };
+
+  it('history GETs docsApi.history with the marker header', async () => {
+    const { api, spy } = apiOver(async () => jsonResponse(200, LOG_OK));
+    await api.docs.history('demo', ASK);
+    const [url, init] = callOf(spy);
+    expect(url).toBe(docsApi.history('demo', ASK));
+    expect(init.method).toBeUndefined();
+    expect(new Headers(init.headers).get(DOCS_REQUEST_HEADER)).toBe(DOCS_REQUEST_HEADER_VALUE);
+  });
+
+  it('an ok answer resolves {s:ok, value}', async () => {
+    const { api } = apiOver(async () => jsonResponse(200, LOG_OK));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'ok', value: LOG_OK });
+  });
+
+  it('a docs failure body resolves {s:failed}', async () => {
+    const body = { ok: false, failure: 'foreign-request' };
+    const { api } = apiOver(async () => jsonResponse(403, body));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'failed', body });
+  });
+
+  it('an answer without log is unexpected-response', async () => {
+    const { api } = apiOver(async () => jsonResponse(200, { ok: true }));
+    expect(await api.docs.history('demo', ASK))
+      .toEqual({ s: 'unexpected-response', status: 200, contentType: 'application/json; charset=utf-8' });
+  });
+
+  it('a 401 raises the login overlay through request', async () => {
+    const { api } = apiOver(async () => jsonResponse(401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'auth' });
+    expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
+  });
+});

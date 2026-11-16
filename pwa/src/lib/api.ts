@@ -26,10 +26,11 @@ import { TOKEN_ROTATE_PATH } from '../../../shared/box-token';
 import { READER_LAB_RUNS_PATH, readerLabClosePath, readerLabProbePath, readerLabRunPath } from '../../../shared/readerLab';
 import {
   DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, contentClass, docsApi, type DocsFileResponse, type DocsProjectsResponse,
-  type DocsRefreshResponse, type DocsTreeResponse,
+  type DocsHistoryResponse, type DocsRefreshResponse, type DocsTreeResponse,
 } from '../../../shared/docs';
 import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
+  type DocsHistoryLoader,
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
@@ -1115,7 +1116,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders => {
+    docs: ((): DocsLoaders & DocsHistoryLoader => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
@@ -1156,6 +1157,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           headers: { ...marker, 'content-type': 'application/json' },
           body: JSON.stringify({ ref: body.ref, reason: body.reason }),
         }),
+        history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),
       };
     })(),
     /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a
