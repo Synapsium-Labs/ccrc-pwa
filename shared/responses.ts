@@ -1,6 +1,6 @@
 /** The response record's vocabulary (Overlord design spec §4.3, C66 and C67; plan
  *  `docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md`, Task 1). Ring L0, context C6: pure vocabulary and
- *  one parser, no value import (the PWA bundles this file). PR B adds the outcomes, the windows and the retention bounds.
+ *  one parser, no value import (the PWA bundles this file). PR B added the outcomes, the windows and the retention bounds.
  *
  *  A message ccrc puts in front of the operator gets one row. A receipt says what the operator's device or console did
  *  with it: ids, kinds and times only, never text (Global Constraints). */
@@ -69,6 +69,37 @@ export const RECEIPTS_PER_PUSH_MAX = 8;                     // worker receipts o
 /** A push's window: 24 hours from its first acceptance (§4.3 Table 4.3a). Set on the row as `windowCapAt` when the
  *  verdict lands (PR A); the seal reads it (PR B). */
 export const PUSH_WINDOW_MS = 24 * 3_600_000;
+
+/** What the operator did with a message, sealed once its window closes (§4.3 Table 4.3b). The order is the table's,
+ *  which is `responseOutcome`'s first match (PR B). */
+const RESPONSE_OUTCOME_MAP: Record<ResponseOutcome, true> = {
+  acted: true, 'settled-elsewhere': true, 'not-actionable': true, unmeasured: true, opened: true, 'not-opened': true,
+};
+export type ResponseOutcome = 'acted' | 'settled-elsewhere' | 'not-actionable' | 'unmeasured' | 'opened' | 'not-opened';
+export const RESPONSE_OUTCOMES = Object.keys(RESPONSE_OUTCOME_MAP) as ResponseOutcome[];
+
+/** How an act was recorded. `reply` and `push-action` have no writer in W1 (questions 4 and 10). */
+const ACTED_HOW_MAP: Record<ActedHow, true> = {
+  tick: true, answer: true, dismiss: true, act: true, decline: true, correct: true, reply: true, 'push-action': true,
+};
+export type ActedHow = 'tick' | 'answer' | 'dismiss' | 'act' | 'decline' | 'correct' | 'reply' | 'push-action';
+export const ACTED_HOWS = Object.keys(ACTED_HOW_MAP) as ActedHow[];
+
+/** Why a row sealed `unmeasured`: a push never delivered, a fact the lane could not read, an ask that ended `stale` or
+ *  `unknown`, or receipts that cannot prove an open or its absence. */
+const UNMEASURED_WHY_MAP: Record<UnmeasuredWhy, true> = { 'no-verdict': true, reader: true, 'ask-ended': true, receipts: true };
+export type UnmeasuredWhy = 'no-verdict' | 'reader' | 'ask-ended' | 'receipts';
+export const UNMEASURED_WHYS = Object.keys(UNMEASURED_WHY_MAP) as UnmeasuredWhy[];
+
+/** A Waiting on you row's longest window: seven days from its reach (§4.3 Table 4.3a), unrelated to token rotation. */
+export const WAITING_WINDOW_MS = 7 * 86_400_000;
+/** A failed reader defers a seal at most a day past the window's end, then the row seals `unmeasured`, `reader`. */
+export const SEAL_DEFER_MS = 86_400_000;
+/** The operator's retention of response rows, in whole days (§9.4 rule 10; question 16). The minimum covers the longest
+ *  seal path, a Waiting on you row's seven days plus the seal's one-day deferral, with room. Starting values. */
+export const RESPONSE_RETENTION_DEFAULT_DAYS = 180;
+export const RESPONSE_RETENTION_MIN_DAYS = 14;
+export const RESPONSE_RETENTION_MAX_DAYS = 3_650;
 
 /** The digest row kinds, spelled as a map typed by `DigestRowKind`, so a new kind is a compile error here; a test pins
  *  the list equal to `DIGEST_ROW_KINDS` (a value import of `api.ts` would make this file carry its weight). */
