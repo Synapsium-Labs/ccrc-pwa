@@ -14,7 +14,6 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSyncGroup } from './spawnGroup.js';
 import { CCD, makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { parsePoolAnswer } from '../src/poolrule.js';
 import { parsePoolAnswerCases } from './sim/poolSetSets.js';
 
@@ -22,7 +21,7 @@ let h: CcdHarness;
 let reg: string;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-pool-answer-');
-  seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  seedAccountsSh(h.home, LANE_ROSTER);
   plantPoolEpoch(h.home, POOL_BY_ID);
   reg = path.join(h.home, '.cc-sessions');
 });
@@ -32,7 +31,16 @@ afterEach(() => {
   h.cleanup();
 });
 
-const ID = 'claude-overlord';
+const ID = 'lane-a-overlord';
+/** Three neutral accounts of its own: one in each fixture pool and one untagged, declared and projected alike (a roster
+ *  needs exactly one upstream account: `lane-a`). */
+const lane = (id: string, hue: string, pool?: string): Record<string, unknown> => ({
+  id, label: id, configDirSuffix: `.${id}`, exec: { kind: id === 'lane-a' ? 'upstream' : 'generated' }, homeAble: true, hue,
+  telemetry: 'anthropic',
+  ...(pool === undefined ? {} : { pool }),
+});
+const LANE_ROSTER = { version: 1, accounts: [lane('lane-a', 'cyan', 'pool-a'), lane('lane-b', 'violet', 'pool-b'), lane('lane-c', 'blue')] };
+const POOL_BY_ID: Readonly<Record<string, string>> = { 'lane-a': 'pool-a', 'lane-b': 'pool-b' };
 const PROJECT = 'project-a';
 const seedRow = (wrapper: string, project: string | null = PROJECT): void => {
   h.sh(`_reg_set ${ID} uuid b7001948-3333-4bcc-b60b-0cfc0dc3d199
@@ -90,7 +98,7 @@ describe('ccd pool-answer: the line agrees with _pool_ok and _crosspool_valid', 
     ['a malformed set', () => plantSet('pool-b,pool-a')],
   ];
   const ACCOUNTS: readonly (readonly [string, string])[] = [
-    ['claude-a', 'in pool-a'], ['claude-b', 'in pool-b'], ['claude-d', 'untagged'],
+    ['lane-a', 'in pool-a'], ['lane-b', 'in pool-b'], ['lane-c', 'untagged'],
   ];
   for (const [sideName, plant] of SIDES) {
     for (const [account, accountName] of ACCOUNTS) {
@@ -112,33 +120,33 @@ describe('ccd pool-answer: the line agrees with _pool_ok and _crosspool_valid', 
 
   it('a stale projection is undecidable on the account side, under a set and under a named project', () => {
     plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
-    seedRow('claude-a');
+    seedRow('lane-a');
     plantSet('pool-a');
     expect(verb('--session', ID).stdout)
-      .toBe('pool-answer side=set:pool-a verdict=undecidable pool-side=account pool-state=stale crossing=none account=claude-a\n');
+      .toBe('pool-answer side=set:pool-a verdict=undecidable pool-side=account pool-state=stale crossing=none account=lane-a\n');
     fs.rmSync(path.join(reg, `${ID}.poolset`));
     tagProject('pool-a');
     expect(verb('--session', ID).stdout)
-      .toBe('pool-answer side=named:pool-a verdict=undecidable pool-side=account pool-state=stale crossing=none account=claude-a\n');
+      .toBe('pool-answer side=named:pool-a verdict=undecidable pool-side=account pool-state=stale crossing=none account=lane-a\n');
   });
 
   it('the exact line for a set the account is outside, and for an unreadable set', () => {
-    seedRow('claude-a');
+    seedRow('lane-a');
     plantSet('pool-b');
     expect(verb('--session', ID).stdout)
-      .toBe('pool-answer side=set:pool-b verdict=mismatch pool-side=account pool-state=named:pool-a crossing=none account=claude-a\n');
+      .toBe('pool-answer side=set:pool-b verdict=mismatch pool-side=account pool-state=named:pool-a crossing=none account=lane-a\n');
     fs.rmSync(path.join(reg, `${ID}.poolset`));
     unreadableSet();
     expect(verb('--session', ID).stdout)
-      .toBe('pool-answer side=set-unreadable verdict=undecidable pool-side=set pool-state=unreadable crossing=none account=claude-a\n');
+      .toBe('pool-answer side=set-unreadable verdict=undecidable pool-side=set pool-state=unreadable crossing=none account=lane-a\n');
   });
 
   it('a valid crossing marker answers crossing=valid, a lapsed one none, an unreadable one unreadable', () => {
-    seedRow('claude-a');
+    seedRow('lane-a');
     plantSet('pool-b');
-    plantCrossing('set:pool-b', 'claude-a');
+    plantCrossing('set:pool-b', 'lane-a');
     expect(verb('--session', ID).stdout).toContain(' verdict=mismatch pool-side=account pool-state=named:pool-a crossing=valid ');
-    plantCrossing('set:pool-a', 'claude-a');
+    plantCrossing('set:pool-a', 'lane-a');
     expect(verb('--session', ID).stdout).toContain(' crossing=none ');
     fs.rmSync(path.join(reg, `${ID}.crosspool`));
     fs.mkdirSync(path.join(reg, `${ID}.crosspool`));
@@ -146,15 +154,15 @@ describe('ccd pool-answer: the line agrees with _pool_ok and _crosspool_valid', 
   });
 
   it('a row with no project field reads the empty project, as _swap_target does: untagged', () => {
-    seedRow('claude-a', null);
+    seedRow('lane-a', null);
     expect(verb('--session', ID).stdout)
-      .toBe('pool-answer side=untagged verdict=serve pool-side=project pool-state=untagged crossing=none account=claude-a\n');
+      .toBe('pool-answer side=untagged verdict=serve pool-side=project pool-state=untagged crossing=none account=lane-a\n');
   });
 
   it('writes nothing: the fixture HOME lists the same before and after', () => {
-    seedRow('claude-b');
+    seedRow('lane-b');
     plantSet('pool-a,pool-b');
-    plantCrossing('set:pool-a,pool-b', 'claude-b');
+    plantCrossing('set:pool-a,pool-b', 'lane-b');
     const before = listing();
     expect(verb('--session', ID).code).toBe(0);
     expect(listing()).toStrictEqual(before);
@@ -163,13 +171,13 @@ describe('ccd pool-answer: the line agrees with _pool_ok and _crosspool_valid', 
 
 describe('ccd pool-answer: its refusals carry no line', () => {
   it('rc 1: no such session (no uuid)', () => {
-    const r = verb('--session', 'claude-nobody');
+    const r = verb('--session', 'lane-a-nobody');
     expect(r).toMatchObject({ code: 1, stdout: '' });
     expect(r.stderr).toContain('no such session');
   });
 
   it('rc 2: usage, for any other argument shape or an id outside the registry-id grammar', () => {
-    seedRow('claude-a');
+    seedRow('lane-a');
     for (const args of [[], ['--session'], [ID], ['--session', ID, 'extra'], ['--id', ID], ['--session', '-x'], ['--session', 'a b'], ['--session', '../x']]) {
       const r = verb(...args);
       expect(r, JSON.stringify(args)).toMatchObject({ code: 2, stdout: '' });
@@ -177,7 +185,7 @@ describe('ccd pool-answer: its refusals carry no line', () => {
   });
 
   it('rc 3: the session\'s wrapper or project field could not be read, with a reason and no line', () => {
-    seedRow('claude-a');
+    seedRow('lane-a');
     fs.chmodSync(path.join(reg, `${ID}.wrapper`), 0o000);
     let r = verb('--session', ID);
     fs.chmodSync(path.join(reg, `${ID}.wrapper`), 0o644);
@@ -197,7 +205,7 @@ describe('ccd pool-answer: its refusals carry no line', () => {
   });
 
   it('a registry that cannot be searched is rc 3, never "no such session"', () => {
-    seedRow('claude-a');
+    seedRow('lane-a');
     fs.chmodSync(reg, 0o600);
     const r = verb('--session', ID);
     fs.chmodSync(reg, 0o755);

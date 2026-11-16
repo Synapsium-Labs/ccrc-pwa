@@ -41,33 +41,33 @@ function check(home: string): { out: string; line: string; remedy: string; code:
 
 describe('cap-floor: a standing set needs a ccd that advertises pool-set', () => {
   it('FAIL naming pool-set and the id, with a remedy naming the update and the Settings step', () => {
-    const b = box('ccrc-doctor-capfloor-fail-', { sets: ['claude-overlord'] });
+    const b = box('ccrc-doctor-capfloor-fail-', { sets: ['lane-b-overlord'] });
     const r = check(b.home);
     expect(r.code).toBe(1);
     expect(r.line).toMatch(/^FAIL cap-floor: /);
     expect(r.line).toContain('pool-set');
-    expect(r.line).toContain('claude-overlord');
+    expect(r.line).toContain('lane-b-overlord');
     expect(r.remedy).toMatch(/^ {2}remedy: /);
     expect(r.remedy).toMatch(/ccrc\s+update/);
     expect(r.remedy).toContain('Settings');
   });
 
   it('names every id that stands', () => {
-    const b = box('ccrc-doctor-capfloor-ids-', { sets: ['claude-overlord', 'claude-two'] });
+    const b = box('ccrc-doctor-capfloor-ids-', { sets: ['lane-b-overlord', 'lane-b-two'] });
     const r = check(b.home);
-    expect(r.line).toContain('claude-overlord');
-    expect(r.line).toContain('claude-two');
+    expect(r.line).toContain('lane-b-overlord');
+    expect(r.line).toContain('lane-b-two');
   });
 
   it('PASS when the ccd advertises pool-set', () => {
-    const b = box('ccrc-doctor-capfloor-pass-', { sets: ['claude-overlord'], ccd: 'printf "ws-add\\npool-set\\n"' });
+    const b = box('ccrc-doctor-capfloor-pass-', { sets: ['lane-b-overlord'], ccd: 'printf "ws-add\\npool-set\\n"' });
     const r = check(b.home);
     expect(r.code).toBe(0);
     expect(r.line).toMatch(/^PASS cap-floor: /);
   });
 
   it('a token that merely contains pool-set does not satisfy it', () => {
-    const b = box('ccrc-doctor-capfloor-sub-', { sets: ['claude-overlord'], ccd: 'printf "pool-set-x\\nmy-pool-set\\n"' });
+    const b = box('ccrc-doctor-capfloor-sub-', { sets: ['lane-b-overlord'], ccd: 'printf "pool-set-x\\nmy-pool-set\\n"' });
     expect(check(b.home).line).toMatch(/^FAIL cap-floor: /);
   });
 
@@ -79,7 +79,7 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
   });
 
   it('caps exits non-zero while an entry stands: FAIL unmeasured', () => {
-    const b = box('ccrc-doctor-capfloor-unm-', { sets: ['claude-overlord'], ccd: 'exit 1' });
+    const b = box('ccrc-doctor-capfloor-unm-', { sets: ['lane-b-overlord'], ccd: 'exit 1' });
     const r = check(b.home);
     expect(r.code).toBe(1);
     expect(r.line).toMatch(/^FAIL cap-floor: unmeasured: /);
@@ -87,12 +87,12 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
   });
 
   it('no ccd at all while an entry stands: FAIL unmeasured', () => {
-    const b = box('ccrc-doctor-capfloor-noccd-', { sets: ['claude-overlord'], ccd: null });
+    const b = box('ccrc-doctor-capfloor-noccd-', { sets: ['lane-b-overlord'], ccd: null });
     expect(check(b.home).line).toMatch(/^FAIL cap-floor: unmeasured: /);
   });
 
   it('a registry that can be searched but not listed: its own FAIL unmeasured', () => {
-    const b = box('ccrc-doctor-capfloor-nor-', { sets: ['claude-overlord'] });
+    const b = box('ccrc-doctor-capfloor-nor-', { sets: ['lane-b-overlord'] });
     chmodSync(b.reg, 0o300); restore.push(b.reg);
     const r = check(b.home);
     expect(r.code).toBe(1);
@@ -101,7 +101,7 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
   });
 
   it('a registry that cannot be searched: SKIP (the pools check reports it)', () => {
-    const b = box('ccrc-doctor-capfloor-nox-', { sets: ['claude-overlord'] });
+    const b = box('ccrc-doctor-capfloor-nox-', { sets: ['lane-b-overlord'] });
     chmodSync(b.reg, 0o600); restore.push(b.reg);
     const r = check(b.home);
     expect(r.code).toBe(3);
@@ -121,15 +121,15 @@ describe('cap-floor: a standing set needs a ccd that advertises pool-set', () =>
 
   it('a dangling symlink at the poolset path counts as standing', () => {
     const b = box('ccrc-doctor-capfloor-link-');
-    symlinkSync(join(b.home, 'nowhere'), join(b.reg, 'claude-overlord.poolset'));
+    symlinkSync(join(b.home, 'nowhere'), join(b.reg, 'lane-b-overlord.poolset'));
     const r = check(b.home);
     expect(r.line).toMatch(/^FAIL cap-floor: /);
-    expect(r.line).toContain('claude-overlord');
+    expect(r.line).toContain('lane-b-overlord');
   });
 
   it('a directory at the poolset path counts as standing', () => {
     const b = box('ccrc-doctor-capfloor-dir-');
-    mkdirSync(join(b.reg, 'claude-overlord.poolset'));
+    mkdirSync(join(b.reg, 'lane-b-overlord.poolset'));
     expect(check(b.home).line).toMatch(/^FAIL cap-floor: /);
   });
 

@@ -45,15 +45,16 @@ and proceeding with both words).
 
 A tree from before PR A1, `main` at `a6b87cf794f11303bcadbcfc418d152b3d23b8e6` (the parent of PR A1's merge),
 extracted with `git archive a6b87cf79 ccd shared | tar -x -C <scratch>`, its `ccd/ccd` run in a fixture HOME
-(`makeCcdHarness`, the roster `POOLED_TEST_ROSTER`, the epoch `POOL_BY_ID`), a row `claude-overlord` on `claude`
-(`pool-a`) in an untagged project, every account's limits at 5%:
+(`makeCcdHarness`, a pooled fixture roster and its epoch), a row `lane-a-overlord` on `lane-a` (`pool-a`) in an
+untagged project, with `lane-b` also in `pool-a` and `lane-c` in `pool-b`, every account's limits at 5% (the names
+here are stand-ins for the fixture roster's accounts):
 
-- its `ccd route --session claude-overlord --set poolset=pool-b` exits 1:
+- its `ccd route --session lane-a-overlord --set poolset=pool-b` exits 1:
   `ccd: unknown routing field 'poolset' (want one of: class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact)`;
-- with `claude-overlord.poolset` reading `pool-b`, its `_swap_target` answers empty, rc 0: the row stays on `claude`,
-  outside the set (this tree's ccd answers `claude-b`);
-- with `claude` at 100%, its `_swap_target` answers `claude-a`, rc 0: it moves the row to another account outside the
-  set (this tree's ccd answers `claude-b`).
+- with `lane-a-overlord.poolset` reading `pool-b`, its `_swap_target` answers empty, rc 0: the row stays on `lane-a`,
+  outside the set (this tree's ccd answers `lane-c`);
+- with `lane-a` at 100%, its `_swap_target` answers `lane-b`, rc 0: it moves the row to another account outside the
+  set (this tree's ccd answers `lane-c`).
 
 That is why Task 8 refuses: an older ccd neither writes the set nor honours one that stands.
 
@@ -133,7 +134,7 @@ read anywhere) survived the first suite and showed a missing case, a misspelled 
   so it is `cap-floor`, on `pool-sync`'s line of `CCRC_DOCTOR_CHECKS` and appended at the end of the file as the plan
   places it. A check named for one row that FAILs for another would name the wrong word.
 - **`floor-sentence-names-the-fact`.** The plan's refusal ends `sets stand on <ids>`; with a table it ends
-  `a <fact> stands for <ids>` (`a poolset stands for claude-overlord`). The remedy still comes first, so the console's
+  `a <fact> stands for <ids>` (`a poolset stands for lane-a-overlord`). The remedy still comes first, so the console's
   200-character cut keeps `Settings` with ten 40-character ids standing (pinned).
 - **`release-artifact-shape-carries-ccdcaps`.** `deploy/release-artifact.sh`'s `record` holds `build.json` to the
   builder's exact one-line shape, which the plan's file list did not name. Its pattern gains the `ccdCaps` array

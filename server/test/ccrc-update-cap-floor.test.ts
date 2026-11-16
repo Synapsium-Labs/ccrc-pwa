@@ -35,7 +35,7 @@ const NOTHING = 'Nothing on this box was changed';
 const WARN_TAIL = (from: string): string => ` - proceeding because this run is --from ${from}`;
 
 /** A set standing for `id`: a regular file at `~/.cc-sessions/<id>.poolset`. */
-function plantSet(home: string, id = 'claude-overlord'): string {
+function plantSet(home: string, id = 'lane-b-overlord'): string {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   const p = join(reg, `${id}.poolset`);
@@ -80,7 +80,7 @@ function snapshot(home: string): { stamp: string; installed: string | null; link
 /** Asserts the refusal: exit 1, the remedy-led sentence on stderr, and the box exactly as it was. */
 function expectRefused(home: string, before: ReturnType<typeof snapshot>, r: { code: number; stderr: string }, why: string): void {
   expect(r.code, `stderr: ${r.stderr}`).toBe(1);
-  expect(r.stderr).toContain(`${REMEDY}: ${why}; a poolset stands for claude-overlord. ${NOTHING}`);
+  expect(r.stderr).toContain(`${REMEDY}: ${why}; a poolset stands for lane-b-overlord. ${NOTHING}`);
   expect(snapshot(home)).toEqual(before);
 }
 
@@ -96,7 +96,7 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
   it('a registry with no poolset entry: proceeds even though the target has no ccdCaps', () => {
     const home = movingBox('ccrc-capfloor-a-empty-', undefined);
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
-    writeFileSync(join(home, '.cc-sessions', 'claude-overlord.hold'), 'x\n');
+    writeFileSync(join(home, '.cc-sessions', 'lane-b-overlord.hold'), 'x\n');
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
   });
@@ -146,7 +146,7 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
     const home = movingBox('ccrc-capfloor-a-dangling-', ['ws-add']);
     const reg = join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    symlinkSync(join(home, 'nowhere-at-all'), join(reg, 'claude-overlord.poolset'));
+    symlinkSync(join(home, 'nowhere-at-all'), join(reg, 'lane-b-overlord.poolset'));
     const before = snapshot(home);
     const r = runUpdate(home);
     expectRefused(home, before, r, LACKS);
@@ -157,7 +157,7 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
       const home = movingBox(`ccrc-capfloor-a-${kind}-`, ['ws-add']);
       const reg = join(home, '.cc-sessions');
       mkdirSync(reg, { recursive: true });
-      const p = join(reg, 'claude-overlord.poolset');
+      const p = join(reg, 'lane-b-overlord.poolset');
       if (kind === 'dir') mkdirSync(p); else expect(spawnSync('mkfifo', [p]).status).toBe(0);
       const before = snapshot(home);
       expectRefused(home, before, runUpdate(home), LACKS);
@@ -175,10 +175,10 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
   it('the refusal names every id that stands, in one sentence', () => {
     const home = movingBox('ccrc-capfloor-a-ids-', ['ws-add']);
     plantSet(home, 'lane-a-overlord');
-    plantSet(home, 'claude-overlord');
+    plantSet(home, 'lane-b-overlord');
     const r = runUpdate(home);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/a poolset stands for (claude-overlord lane-a-overlord|lane-a-overlord claude-overlord)\. Nothing on this box was changed/);
+    expect(r.stderr).toMatch(/a poolset stands for (lane-b-overlord lane-a-overlord|lane-a-overlord lane-b-overlord)\. Nothing on this box was changed/);
   });
 
   // A typed `--from restore` is refused by the lock-holder contract (only arm 2's child, under its parent's lock, may say
@@ -190,7 +190,7 @@ describe('capability floor, call site (a): a bare update reads the staged stamp 
     writeFileSync(stamp, shippedStamp('v2.0.0', 'c'.repeat(40)));
     setCaps(stamp, ['ws-add']);
     const r = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" restore || rc=$?; echo "rc=$rc"`);
-    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${LACKS}; a poolset stands for claude-overlord${WARN_TAIL('restore')}`);
+    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${LACKS}; a poolset stands for lane-b-overlord${WARN_TAIL('restore')}`);
     expect(r.stdout).toContain('rc=0');
   });
 });
@@ -243,7 +243,7 @@ describe('capability floor, call site (b): a rollback by flip reads the kept tre
     plantSet(home);
     const r = rollbackRun(home, ['--from', 'watchdog']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${LACKS}; a poolset stands for claude-overlord${WARN_TAIL('watchdog')}`);
+    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${LACKS}; a poolset stands for lane-b-overlord${WARN_TAIL('watchdog')}`);
     expect(linkOf(home)).toBe(kept);
   });
 
@@ -284,7 +284,7 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(4);
     expect(r.stdout).toContain('update: arm 1: v1.0.0 is kept at $HOME/ccrc-versions/v1.0.0 — flipping back to it (no download)');
-    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${ABSENT}; a poolset stands for claude-overlord${WARN_TAIL('restore')}`);
+    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: ${ABSENT}; a poolset stands for lane-b-overlord${WARN_TAIL('restore')}`);
     expect(r.stdout).toContain(`update: REVERTED (arm 1): this box runs v1.0.0 again`);
     expect(r.stdout).toContain(GATE_DENIED);
     expect(linkOf(home)).toBe(v1);
@@ -294,7 +294,7 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
     const home = freshUpdateBox('ccrc-capfloor-arm3-');
     plantSet(home);
     const r = sourcedCcrc(home, 'rc=0; _upd_cap_floor_check - restore || rc=$?; echo "rc=$rc"');
-    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: the restored build's capabilities could not be read; a poolset stands for claude-overlord${WARN_TAIL('restore')}`);
+    expect(r.stdout).toContain(`update: WARN: ${REMEDY}: the restored build's capabilities could not be read; a poolset stands for lane-b-overlord${WARN_TAIL('restore')}`);
     expect(r.stdout).toContain('rc=0');
   });
 
@@ -309,7 +309,7 @@ describe('capability floor, the automatic restore: warns, never refuses', () => 
     plantSet(home);
     const r = sourcedCcrc(home, `_upd_cap_floor_check "${home}/no-such-stamp" cli`);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain(`${REMEDY}: the target's stamp could not be read (rc 3); a poolset stands for claude-overlord. ${NOTHING}`);
+    expect(r.stderr).toContain(`${REMEDY}: the target's stamp could not be read (rc 3); a poolset stands for lane-b-overlord. ${NOTHING}`);
   });
 });
 
@@ -356,7 +356,7 @@ describe('capability floor, THE TABLE: a data row added to CAP_FLOOR_ROWS is rea
     plantSet(home);
     const r = check(home, script, stamp);
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain(`${REMEDY}: ${LACKS}; a poolset stands for claude-overlord`);
+    expect(r.stderr).toContain(`${REMEDY}: ${LACKS}; a poolset stands for lane-b-overlord`);
     expect(r.stderr).toContain('retire the launch profile in Settings: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord');
   });
 
