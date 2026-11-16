@@ -34,8 +34,16 @@
  * node's install time, then `measure` (the live reads), then behind, the opt-outs, the idle gate, hibernation and
  * compaction.
  * Every fact that could not be read holds. A MANUAL restart never calls this: the operator chose the session.
+ *
+ * THE HAND-OFF TO THE RENEWAL LANE (Overlord spec §3.3.8; W1a, plan `w1a-renewal-handoffs.md` Task 5): once the `continuity`
+ * row is live, a long-lived session is the renewal lane's (`renewal-owns`): a roll would resume its old conversation, and the
+ * renewal lane renews it from canonical state instead (the new install it would have answered is `renewalDue`'s
+ * `new-install` soft row). A session whose long-life cannot be read is held (`role-unknown`). While the row is shadow every
+ * session is judged as before (slug roll-skips-long-lived-when-live).
  */
 import type { SessionRole } from '../../../shared/api.js';
+import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
+import { ROLE_AMBIGUITIES, type RoleReading } from '../roleOf.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets, type ClaudeBuildFact, type ClaudeRollTargets } from '../../../shared/claudeVersion.js';
 import { hibernateVerdict, type HibernateHold, type HibernateInput, type IdleGateOptions } from './hibernate.js';
 
@@ -58,7 +66,8 @@ export const ROLL_SWEEP_ACTOR = 'sweep:roll';
 const AUTO_ROLL_SKIP_MAP = {
   'setting-unreadable': 'the Settings row could not be read, so nothing is rolled',
   'setting-off': 'Settings › Automation › Roll idle sessions is off',
-  'role-unknown': 'the setting is coordinators only, and the row does not say whether it is a coordinator',
+  'role-unknown': 'the row does not say whether it is a coordinator (the setting is coordinators only) or whether it is long-lived (continuity is live)',
+  'renewal-owns': 'continuity is live and it is long-lived: the renewal lane renews it from its card, so a roll would resume its old conversation',
   'not-coordinator': 'the setting is coordinators only, and it is not one: it picks up the release when it next starts for another reason',
   'release-unmeasured': 'when the node\'s current ccrc install completed could not be read',
   'start-unmeasured': 'when its Claude Code process started could not be read',
@@ -79,17 +88,33 @@ export function isAutoRollKebab(token: string): boolean { return AUTO_ROLL_KEBAB
 /** The setting and the role, the filter every automatic roll applies before it measures anything. */
 export type RollTargetVerdict =
   | { readonly take: true }
-  | { readonly take: false; readonly skip: Extract<AutoRollSkip, 'setting-off' | 'role-unknown' | 'not-coordinator'> };
+  | { readonly take: false; readonly skip: Extract<AutoRollSkip, 'setting-off' | 'role-unknown' | 'not-coordinator' | 'renewal-owns'> };
 
-/** May an automatic roll take this session at all? `off` takes nothing; `all` (D-8276) every role, the role unread;
- *  `coordinators` only a coordinator. Under `coordinators` a row whose role is unknown (an older build's snapshot) is
- *  never taken, and an unreadable `.child` already reads `child` (`server/src/roleOf.ts#sessionRoleOf`). */
-export function rollTargetVerdict(targets: ClaudeRollTargets, role: SessionRole | null): RollTargetVerdict {
+/** May an automatic roll take this session at all? `off` takes nothing. While `continuityLive`, a long-lived session is the
+ *  renewal lane's (`renewal-owns`) and one whose long-life is unread (`null`) is held (`role-unknown`); while it is shadow,
+ *  `longLived` is not read. Then `all` (D-8276) takes every role, the role unread, and `coordinators` only a coordinator.
+ *  Under `coordinators` a row whose role is unknown (an older build's snapshot) is never taken, and an unreadable `.child`
+ *  already reads `child` (`server/src/roleOf.ts#sessionRoleOf`). */
+export function rollTargetVerdict(targets: ClaudeRollTargets, role: SessionRole | null, longLived: boolean | null,
+  continuityLive: boolean): RollTargetVerdict {
   if (targets === 'off') return { take: false, skip: 'setting-off' };
+  if (continuityLive && longLived === null) return { take: false, skip: 'role-unknown' };
+  if (continuityLive && longLived) return { take: false, skip: 'renewal-owns' };
   if (targets === 'all') return { take: true };
   if (role === null) return { take: false, skip: 'role-unknown' };
   if (role !== 'coordinator') return { take: false, skip: 'not-coordinator' };
   return { take: true };
+}
+
+/** Whether a session is long-lived, for the roll's hand-off: its role's `longLived` (Table 3.3.9a) when `roleOf` decided it,
+ *  or when every role it cannot tell apart agrees (worker or reviewer: no). A coordinator-or-plain reading (no open run
+ *  claimed, intent unread) is long-lived exactly when the renewal lane holds a live generation for it, since it mints for
+ *  nothing else (slug roll-long-lived-reads-the-live-generation); null when that could not be read either. */
+export function longLivedOf(r: RoleReading, liveGeneration: boolean | 'unmeasured'): boolean | null {
+  if (r.kind === 'role') return FLEET_ROLES[r.role].longLived || liveGeneration === true;
+  const members = ROLE_AMBIGUITIES[r.between].map((role) => FLEET_ROLES[role].longLived);
+  if (members.every((m) => m === members[0])) return members[0]!;
+  return liveGeneration === 'unmeasured' ? null : liveGeneration;
 }
 
 /** The Settings row as the store read it (`CoordStore.rollSettings`), every value `unknown`. `seeded`: the row is the
@@ -113,6 +138,10 @@ export interface AutoRollInput {
   readonly targets: ClaudeRollTargets | null;
   /** `FleetSession.role` (`server/src/roleOf.ts#sessionRoleOf`); null when the row did not say. */
   readonly role: SessionRole | null;
+  /** Whether the session is long-lived (`longLivedOf`); null when unread. Read only while `continuityLive`. */
+  readonly longLived: boolean | null;
+  /** The `continuity` row is live: the renewal lane owns every long-lived session (Task 5). */
+  readonly continuityLive: boolean;
   /** When the node's current ccrc install completed (epoch ms); null when it could not be read. */
   readonly release: number | null;
   /** When this session's Claude Code process started (epoch ms); null when it could not be read. Read with the live
@@ -153,7 +182,7 @@ export function startedBeforeRelease(startedAt: number, release: number): boolea
 /** Roll this session onto the current release and build now? */
 export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.targets === null) return { act: 'skip', reason: 'setting-unreadable' };
-  const t = rollTargetVerdict(i.targets, i.role);
+  const t = rollTargetVerdict(i.targets, i.role, i.longLived, i.continuityLive);
   if (!t.take) return { act: 'skip', reason: t.skip };
   if (i.release === null) return { act: 'skip', reason: 'release-unmeasured' };
   if (i.sleep.live.kind === 'unread') return { act: 'measure' };

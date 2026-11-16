@@ -9,7 +9,7 @@ import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
 import {
-  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, rollTargetsOf,
+  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, longLivedOf, rollTargetsOf,
   rollTargetVerdict, type AutoRollInput,
 } from '../src/coord/rollTarget.js';
 import { HIBERNATE_AFTER_MS_DEFAULT, hibernateVerdict, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
@@ -44,6 +44,8 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
 const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => ({
   targets: CLAUDE_ROLL_TARGETS_DEFAULT,
   role: 'coordinator',
+  longLived: false,
+  continuityLive: false,
   release: INSTALLED,
   startedAt: PANE_START,
   build: { kind: 'unmeasured' },
@@ -148,14 +150,63 @@ describe('the role (D-8276): every idle session under all, coordinators only und
   });
 
   it('rollTargetVerdict is the filter: setting first, then the role, which only coordinators reads', () => {
-    expect(rollTargetVerdict('coordinators', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'coordinator')).toEqual({ take: false, skip: 'setting-off' });
-    expect(rollTargetVerdict('coordinators', 'child')).toEqual({ take: false, skip: 'not-coordinator' });
-    expect(rollTargetVerdict('coordinators', null)).toEqual({ take: false, skip: 'role-unknown' });
-    expect(rollTargetVerdict('all', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', 'child')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', null)).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'child')).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'coordinator', false, false)).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'child', false, false)).toEqual({ take: false, skip: 'not-coordinator' });
+    expect(rollTargetVerdict('coordinators', null, false, false)).toEqual({ take: false, skip: 'role-unknown' });
+    expect(rollTargetVerdict('all', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', 'child', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', null, false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'child', false, false)).toEqual({ take: false, skip: 'setting-off' });
+  });
+});
+
+describe('the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  const TARGETS = ['all', 'coordinators', 'off'] as const;
+  const ROLES = ['coordinator', 'child', null] as const;
+  const LONG = [true, false, null] as const;
+
+  it('CHARACTERIZATION: with continuity shadow every case answers as it did before the hand-off, whatever longLived reads', () => {
+    const before = (t: (typeof TARGETS)[number], r: (typeof ROLES)[number]) => (t === 'off' ? { take: false, skip: 'setting-off' }
+      : t === 'all' ? { take: true } : r === null ? { take: false, skip: 'role-unknown' } : r !== 'coordinator' ? { take: false, skip: 'not-coordinator' }
+        : { take: true });
+    for (const t of TARGETS) for (const r of ROLES) for (const l of LONG) {
+      expect(rollTargetVerdict(t, r, l, false), `${t} ${r} ${l}`).toEqual(before(t, r));
+    }
+  });
+
+  it('live: a long-lived session is skipped renewal-owns under every setting but off, and an unread one is role-unknown', () => {
+    for (const t of ['all', 'coordinators'] as const) for (const r of ROLES) {
+      expect(rollTargetVerdict(t, r, true, true), `${t} ${r}`).toEqual({ take: false, skip: 'renewal-owns' });
+      expect(rollTargetVerdict(t, r, null, true), `${t} ${r}`).toEqual({ take: false, skip: 'role-unknown' });
+    }
+    for (const l of LONG) expect(rollTargetVerdict('off', 'coordinator', l, true)).toEqual({ take: false, skip: 'setting-off' });
+  });
+
+  it('live: a session that is not long-lived (a plain session, a child) is judged as today', () => {
+    for (const t of TARGETS) for (const r of ROLES) {
+      expect(rollTargetVerdict(t, r, false, true), `${t} ${r}`).toEqual(rollTargetVerdict(t, r, false, false));
+    }
+  });
+
+  it('autoRollVerdict carries it: an idle coordinator behind on release is renewal-owns while live, and rolled while shadow', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true }))).toEqual({ act: 'skip', reason: 'renewal-owns' });
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: false }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'coordinator', longLived: false, continuityLive: true }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    // Before anything is measured: the hand-off is decided on the frame's facts alone.
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true, sleep: sleep(2 * HOUR, { unread: true }) })))
+      .toEqual({ act: 'skip', reason: 'renewal-owns' });
+  });
+
+  it('longLivedOf: a decided role by its column; agreeing ambiguities decide; coordinator-or-plain reads the live generation', () => {
+    expect(longLivedOf({ kind: 'role', role: 'coordinator' }, false)).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'overlord' }, 'unmeasured')).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'worker' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'role', role: 'plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'worker-or-reviewer' }, 'unmeasured')).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, true)).toBe(true);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, 'unmeasured')).toBeNull();
   });
 });
 
@@ -350,7 +401,7 @@ describe('claimed runs and claims do not hold a roll (D-7562)', () => {
 describe('the vocabulary', () => {
   it('every skip is named, in the order the ladder tests them', () => {
     expect([...AUTO_ROLL_SKIPS]).toEqual([
-      'setting-unreadable', 'setting-off', 'role-unknown', 'not-coordinator', 'release-unmeasured', 'start-unmeasured',
+      'setting-unreadable', 'setting-off', 'role-unknown', 'renewal-owns', 'not-coordinator', 'release-unmeasured', 'start-unmeasured',
       'no-roll', 'idle-gate', 'hibernation-due', 'compacting',
     ]);
   });

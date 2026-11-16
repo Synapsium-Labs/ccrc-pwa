@@ -53,7 +53,15 @@ export interface RenewalActsDeps {
   /** What this process already did once, kept by the caller across passes: an item raised for a generation's stay in its
    *  state, and a generation logged as having no programme to raise one on. A memo, never a decision's durable state. */
   readonly memo?: Set<string>;
+  /** Write the session's `precompact` route field (the renewal hand-offs, Task 6), through `CCD_ARGV.routeSet`. Absent: the
+   *  field is not written, and the act is skipped and logged. */
+  readonly routePrecompact?: (sessionId: string, value: 'refuse' | 'allow') => Promise<PrecompactWrite>;
 }
+
+/** `routePrecompact`'s answers: written, refused by ccd, no answer, or a ccd with no `route` verb. */
+export type PrecompactWrite =
+  | { readonly kind: 'written' } | { readonly kind: 'refused'; readonly reason: string }
+  | { readonly kind: 'unreachable'; readonly detail: string } | { readonly kind: 'capability-missing' };
 
 /** What one run of the acts did, by act. */
 export interface ActsResult {
@@ -97,6 +105,15 @@ async function act(deps: RenewalActsDeps, t: ActTarget, a: RenewalAct, r: Counts
     case 'set-hold-off': {
       const g = reread(deps, t.genId);
       if (g === null || !deps.coord.setHoldOff(g.id, genExpectOf(g)).changed) { r.failed += 1; say('the hold-off could not be set'); }
+      return;
+    }
+    case 'precompact-field': {
+      if (deps.routePrecompact === undefined) { r.skipped += 1; say('the precompact field was not written: no route writer'); return; }
+      const w = await deps.routePrecompact(t.sessionId, a.value);
+      if (w.kind !== 'written') {
+        r.failed += 1;
+        say(`precompact=${a.value} was not written (${w.kind}${'reason' in w ? `: ${w.reason}` : 'detail' in w ? `: ${w.detail}` : ''})`);
+      }
       return;
     }
     default: { const never: never = a; return never; }

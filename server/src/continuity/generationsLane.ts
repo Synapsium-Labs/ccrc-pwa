@@ -80,6 +80,7 @@ import type { UsageRead } from '../usage.js';
 import { compactionInFlight, compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
 import { RENEW_REQUESTS_CURSOR, effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
 import { renewNowStands, renewalModeOf } from './renewNow.js';
+import { precompactField } from './precompact.js';
 import { markAges, markProgrammesOf, operatorQuietOf, type MarkReading } from './operatorMark.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
@@ -123,7 +124,12 @@ export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'li
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
-export interface RegistryFacts { readonly id: string; readonly uuid: string | null; readonly lane: string | null; readonly child: ChildMark }
+export interface RegistryFacts {
+  readonly id: string; readonly uuid: string | null; readonly lane: string | null; readonly child: ChildMark;
+  /** The route's `precompact` field as the registry read it (null: not set), or `unread` when it could not be read. Absent
+   *  reads `unread`, so the PreCompact field is never written over a value nobody read (the hand-offs piece, Task 6). */
+  readonly precompact?: string | null | 'unread';
+}
 
 /** The fleet reads of one generation, made by `gatherGenerationReadings`. */
 export interface GenReadings {
@@ -574,8 +580,25 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if (calls !== null && !calls.ok) { fail('generations', calls.detail, `generation ${g.id}'s renew waits for the next pass, and`); continue; }
     const owed = calls === null ? null : renewOwed('clearing', g.attempts, calls.calls.map((c) => c.try));
     if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
+    // The PreCompact arm's field (the hand-offs piece, Task 6; slug precompact-field-from-the-budget): `precompactField` of the
+    // soft budget's count, planned only when it differs from what the registry read, and never over a field it could not
+    // read or from a count it could not read. Live only: shadow writes nothing (this loop's `live` check above).
+    const reg = registry.get(g.sessionId);
+    const have = reg === undefined || reg.precompact === undefined ? 'unread' : reg.precompact;
+    const used = softRenewalsInWindowOf(coord, g);
+    if (have !== 'unread' && Number.isInteger(used)) {
+      const want = precompactField(used);
+      if (have !== want) planned.push({ target: targetOf(g), act: { kind: 'precompact-field', value: want } });
+    }
   }
   return result();
+}
+
+/** The soft renewals of the identity's line within the budget's window of observed time (the accumulator carries across
+ *  mints); NaN when they could not be read, which is not a count. `softRenewalMay`'s count and `precompactField`'s. */
+function softRenewalsInWindowOf(coord: Pick<GenerationsCoord, 'softRenewalsOf'>, g: GenRow): number {
+  const stamps = coord.softRenewalsOf(g.identity, g.term);
+  return stamps.ok ? stamps.observedMs.filter((at) => g.observed.ms - at < SOFT_BUDGET.windowMs).length : Number.NaN;
 }
 
 /** Where a degraded generation's item stands (`ItemStanding`): only a coordinator has a programme to raise it on. */
@@ -624,8 +647,7 @@ function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, iden
  *  waits `unmeasured`. */
 function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindingsOf'>, g: GenRow, r: GenReadings | undefined,
   overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly MarkReading[] | 'unmeasured'): SoftInputs {
-  const stamps = coord.softRenewalsOf(g.identity, g.term);
-  const inWindow = stamps.ok ? stamps.observedMs.filter((at) => g.observed.ms - at < SOFT_BUDGET.windowMs).length : Number.NaN;
+  const inWindow = softRenewalsInWindowOf(coord, g);
   const na: SoftReading<number> = { kind: 'not-applicable' };
   return {
     role: g.role,

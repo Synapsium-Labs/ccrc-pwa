@@ -9,6 +9,17 @@
 // the operator's or ccd's own and always passes), the hook's scope verdict is `main` (`subagent`, `ambiguous` and no
 // verdict never refuse, R7a), and no refusal was recorded for this turn (R11: once a turn, so the turn after a refusal
 // may compact; the hook reads an unreadable turn marker as "refused already").
+import { SOFT_BUDGET } from '../../../shared/continuity.js';
+
+/** The route field the generations lane writes for a live long-lived generation (the renewal hand-offs, Task 6): `refuse`
+ *  while the soft budget has a renewal left, so the arm sends a proactive compaction to a soft renewal instead, and `allow`
+ *  once it is spent. It reads the budget's count alone, never `softRenewalMay`'s answer, which names no budget left and tests
+ *  the budget only after the least age and the hold-off (m8; slug precompact-field-from-the-budget). A count that is not one
+ *  (a read that failed) is `allow`: the arm then refuses nothing, which fails open. */
+export type PrecompactField = 'refuse' | 'allow';
+export function precompactField(softRenewalsInWindow: number): PrecompactField {
+  return Number.isInteger(softRenewalsInWindow) && softRenewalsInWindow >= 0 && softRenewalsInWindow < SOFT_BUDGET.count ? 'refuse' : 'allow';
+}
 
 /** What the arm decides: block the compaction (and record a `refused` line), or let it through. */
 export type PrecompactVerdict = 'refuse' | 'pass';

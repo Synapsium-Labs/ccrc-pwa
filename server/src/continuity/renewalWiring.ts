@@ -5,7 +5,7 @@
 // plan. It decides nothing: every decision is in `renewalFeed.ts`, `renewalDrain.ts` and the machine.
 import type { SessionRecord } from '../registry.js';
 import type { FleetSession } from '../../../shared/api.js';
-import { HIBERNATE_FRESH_CAP, capSupported } from '../ccdargv.js';
+import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { queueSystemMail } from '../coord/rundefsTx.js';
@@ -15,8 +15,11 @@ import { liveWordFor, turnMarkFor, type TurnReadDeps } from '../turnverdict.js';
 import { readUsageMeasured } from '../usage.js';
 import { ccdSessionHost } from './ccdSessionHost.js';
 import type { PlannedAct } from './generationsLane.js';
-import { runRenewalActs, type ActsResult } from './renewalActs.js';
+import { runRenewalActs, type ActsResult, type PrecompactWrite } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
+
+/** The actor the precompact route writes are journalled under on the box. */
+const PRECOMPACT_ACTOR = 'generations lane';
 
 export interface RenewalWiring {
   readonly canRenew: boolean;
@@ -58,6 +61,13 @@ export function renewalActsOf(
     },
     run: (planned) => runRenewalActs({
       coord, host, now, log: (line) => console.warn(line), memo,
+      // The PreCompact arm's field (the renewal hand-offs, Task 6): one `route --set precompact=` behind the `route` verb's cap.
+      routePrecompact: async (id, value): Promise<PrecompactWrite> => {
+        if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
+        const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
+        if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
+        return res.ok ? { kind: 'written' } : { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
+      },
       mail: (toId, subject, body) => queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body }).queued,
     }, planned),
   };

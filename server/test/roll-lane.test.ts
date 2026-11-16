@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import { VIEWER_OPEN_TTL_MS, type FleetSession, type RunState } from '../../shared/api.js';
 import { CLAUDE_ROLL_TARGETS_DEFAULT, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
+import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { ROLL_HOLD_OFF_MS, rollPass, type ReleaseRead, type RollSweepDeps, type RollSweepMemory } from '../src/rollLane.js';
 import type { SleepActPort } from '../src/sleepLane.js';
 type RollActPort = SleepActPort<FleetSession>;
@@ -832,5 +833,50 @@ describe('rollPass: behind on the Claude Code build (D-8276)', () => {
     const opted = fresh();
     expect(await buildPass(opted, rows, [`${COORD2}.no-roll`])).toEqual([{ id: COORD2, kind: 'skipped', reason: 'no-roll' }]);
     expect(opted.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  const recOf = (id: string, child: SessionRecord['child'] = { kind: 'none' }): SessionRecord =>
+    ({ id, uuid: `uuid-${id}`, wrapper: 'lane-a', child }) as unknown as SessionRecord;
+  const claimRun = (f: Fake, id: string): void => {
+    f.coord.db.exec("INSERT OR IGNORE INTO programs (slug, title, createdAt, state) VALUES ('prog-a', 'P', 1, 'active')");
+    f.coord.db.prepare("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) VALUES ('prog-a', 1, 2, 'project-a', 'working', ?, 1)").run(id);
+  };
+  const live = (f: Fake): void => { f.coord.setLaneArm(CONTINUITY_LANE, 'live', 1); };
+  const handoff = (f: Fake, rows: FleetSession[]) =>
+    rollPass({ ...f.deps, continuity: f.coord }, mem(), rows, rows.map((r) => recOf(r.id)), []);
+
+  it('continuity live: a coordinator claiming an open run is skipped renewal-owns, and nothing is called', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a session the renewal lane holds a live generation for is renewal-owns, though it claims no open run', async () => {
+    const f = fake();
+    live(f);
+    const s = f.coord.insertStart({ sessionId: COORD, reportId: 'r-1', uuid: 'u', source: 'startup', model: null, rowIncarnation: 'inc',
+      reportedAt: 1, receivedAt: 1 });
+    if (!s.ok) throw new Error('start');
+    f.coord.mintGeneration({ identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, rowIncarnation: 'inc', startId: s.id,
+      startReportedAt: 1, resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'woken', mono: 1, proc: 'p1', now: 1 }, null, true);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'skipped', reason: 'renewal-owns' }]);
+    expect(f.calls).toEqual([]);
+  });
+
+  it('continuity live: a plain session (no open run, no generation) is rolled as today', async () => {
+    const f = fake();
+    live(f);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('continuity shadow: a coordinator claiming an open run is rolled as today', async () => {
+    const f = fake();
+    claimRun(f, COORD);
+    expect(await handoff(f, [row(COORD)])).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
   });
 });

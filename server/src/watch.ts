@@ -2451,7 +2451,7 @@ export class FleetWatcher {
         const reads = turnReadDeps(this.deps, this);
         const coord = this.deps.coord;
         await rollPass({
-          coord, viewers: this.deps.viewers,
+          coord, continuity: coord, viewers: this.deps.viewers,
           targets: () => (coord === undefined ? null : rollTargetsOf(coord.rollSettings())),
           release: () => this.nodeRelease(),
           liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
@@ -6138,7 +6138,8 @@ export class FleetWatcher {
       const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
         log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
-          lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
+          lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child,
+          precompact: r.route === null ? null : r.route.unreadable.includes('precompact') ? 'unread' : r.route.fields.precompact ?? null })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
         listedAt,
         readings,
