@@ -112,7 +112,7 @@ describe('the committed list and its consumer', () => {
 
   it('the public-text class `private name (hashed)` answers the canary\'s h8 for a line that spells it', () => {
     const cls = publicTextClassesFor([]).find((c) => c.name === 'private name (hashed)');
-    expect(cls).toBeDefined();
-    expect(cls!.match(`a ${CANARY} b`, FILE)).toEqual([CANARY_H8]);
+    expect(cls?.match).toBeDefined();
+    expect(cls!.match!(`a ${CANARY} b`, FILE)).toEqual([CANARY_H8]);
   });
 });
