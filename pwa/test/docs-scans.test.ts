@@ -1575,9 +1575,11 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
 // `HttpsOrigin` is the only value `mockupCsp` appends to the frame's policy, and its type promises it was accepted by
 // `parseMockupOrigin` (https, the LDH host grammar, no IP literal, no `localhost`, not the console's own host). The
 // promise is a brand, so a cast anywhere else would put an unchecked origin into the CSP. Across every `.ts` and `.tsx`
-// file under `pwa/src`, TypeScript's parser finds each type assertion to `HttpsOrigin` (`x as HttpsOrigin`,
-// `<HttpsOrigin>x`, and the `HttpsOrigin` of `x as unknown as HttpsOrigin`), and the only one allowed is a single
-// assertion inside the function `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
+// file under `pwa/src`, TypeScript's parser finds each type assertion whose type names `HttpsOrigin` anywhere inside it
+// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2259 F2) the
+// array, readonly array, `Array<>`, `ReadonlyArray<>` and union forms, `xs as readonly HttpsOrigin[]`,
+// `x as HttpsOrigin | null`: the only sinks take arrays), and the only one allowed is a single assertion inside the function
+// `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
 // NOT EXHAUSTIVE: an alias of the type (`type H = HttpsOrigin`), a structural object literal of the brand's shape, a
 // generic helper that casts to its type parameter, and `any` flowing into an `HttpsOrigin` slot are not seen.
 // ---------------------------------------------------------------------------------------------------------------
@@ -1587,7 +1589,10 @@ const ORIGIN_HOME = 'src/docs/mockup/origins.ts';
 /** Every assertion to `HttpsOrigin` in one module, as `<file> <enclosing function or (top level)>`. */
 function originCasts(source: string, file: string): string[] {
   const hits: string[] = [];
-  const named = (t: ts.TypeNode): boolean => ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'HttpsOrigin';
+  /** Whether the type node names `HttpsOrigin` anywhere inside it (an element type, a type argument, a union member). */
+  const named = (t: ts.Node): boolean =>
+    (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'HttpsOrigin')
+    || (ts.forEachChild(t, (c) => (named(c) ? true : undefined)) ?? false);
   const enclosing = (n: ts.Node): string => {
     for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) {
       if (ts.isFunctionDeclaration(p) && p.name !== undefined) return p.name.text;
@@ -1634,6 +1639,11 @@ describe('clause C1 origins: an HttpsOrigin is made only in parseMockupOrigin (M
     ['an angle-bracket assertion', 'src/docs/mockup/policy.ts', "export function planted(s: string) { return <HttpsOrigin>s; }", 'src/docs/mockup/policy.ts planted'],
     ['a second cast in origins.ts outside the function', ORIGIN_HOME, "export const planted = (s: string) => s as HttpsOrigin;", `${ORIGIN_HOME} planted`],
     ['a cast in another Docs file', 'src/docs/DocsLeaf.tsx', "export const planted = (s: string) => s as HttpsOrigin;", 'src/docs/DocsLeaf.tsx planted'],
+    ['a readonly array cast', 'src/docs/mockup/policy.ts', "export const planted = (xs: string[]) => xs as readonly HttpsOrigin[];", 'src/docs/mockup/policy.ts planted'],
+    ['a union cast', 'src/docs/mockup/policy.ts', "export const planted = (s: string) => s as HttpsOrigin | null;", 'src/docs/mockup/policy.ts planted'],
+    ['an array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
+    ['an Array<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as Array<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
+    ['an as-unknown array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as unknown as readonly HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
   ])('planted: %s is red', (_name, rel, text, hit) => {
     expect(originCensus(planted(rel, `\n${text}\n`))).toEqual({ hits: [hit], allowed: 1 });
   });
