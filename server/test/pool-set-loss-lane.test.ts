@@ -119,12 +119,13 @@ describe('the push when a placing box loses pool-set while a set stands (Task 10
 
   it('the table: a second row on a copy is honoured by the push with no code change', async () => {
     const s = await setup(['pool-set']);
-    const rows = [...CAP_FLOOR_FACTS, { fact: 'profiledigest' as const, word: 'launch-surface-v1' }];
+    // A fictional word on a route field no floor row uses, so a row a later piece ships never collides with it.
+    const rows = [...CAP_FLOOR_FACTS, { fact: 'acctorder' as const, word: 'table-word-v1' }];
     const lane = new PoolSetLossLane(() => s.deps, rows);
-    lane.check([rec('lane-a-overlord', { poolset: 'pool-a', profiledigest: 'd' })]);
+    lane.check([rec('lane-a-overlord', { poolset: 'pool-a', acctorder: 'lane-a' })]);
     expect(s.sent).toHaveLength(1);
-    expect(s.sent[0]!.title).toBe('The fleet box lost launch-surface-v1');
-    expect(s.sent[0]!.body).toContain('a profiledigest stands for lane-a-overlord');
+    expect(s.sent[0]!.title).toBe('The fleet box lost table-word-v1');
+    expect(s.sent[0]!.body).toContain('a acctorder stands for lane-a-overlord');
     expect(s.sent[0]!.body).not.toContain('pool-set');
   });
 

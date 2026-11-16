@@ -482,12 +482,15 @@ describe('the override, --below-cap <word> (pool set B2, Task 9): passes its row
     const reg = join(home, '.cc-sessions');
     chmodSync(reg, 0o300);
     try {
-      const r = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli pool-set || rc=$?; echo "rc=$rc"`);
+      // An unlistable registry passes only when the flag names every row's word, whatever the table holds.
+      const r = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli "$(_cap_floor_words)" || rc=$?; echo "rc=$rc"`);
       expect(r.stdout).toContain('update: WARN: --below-cap passed the capability floor for an unlistable ~/.cc-sessions');
       expect(r.stdout).toContain('rc=0');
       const refused = sourcedCcrc(home, `_upd_cap_floor_check "${stamp}" cli`);
       expect(refused.code).toBe(1);
-      expect(refused.stderr).toContain(`pass --below-cap pool-set, or ${UNLISTABLE}`);
+      expect(refused.stderr).toMatch(/pass --below-cap pool-set(,[a-z0-9-]+)*, or make ~\/\.cc-sessions listable/);
+      const one = sourcedCcrc(home, `rc=0; _upd_cap_floor_check "${stamp}" cli "$(_cap_floor_words),pool-set" || rc=$?; echo "rc=$rc"`);
+      expect(one.stdout).toContain('rc=0');
     } finally { chmodSync(reg, 0o700); }
   });
 
@@ -498,7 +501,8 @@ describe('the override, --below-cap <word> (pool set B2, Task 9): passes its row
     for (const args of [['--below-cap', 'something-else'], ['--below-cap', 'Pool-Set'], ['--below-cap', ''], ['--below-cap', 'pool-set,'], ['--below-cap']]) {
       const r = runUpdate(home, args);
       expect(r.code, args.join(' ')).toBe(2);
-      expect(r.stderr, args.join(' ')).toContain('--below-cap names capability floor words, comma-joined: pool-set (got: ');
+      expect(r.stderr, args.join(' ')).toContain('--below-cap names capability floor words, comma-joined: pool-set');
+      expect(r.stderr, args.join(' ')).toContain(' (got: ');
       expect(snapshot(home)).toEqual(before);
     }
     const rb = rollbackRun(home, ['--to', 'v1.0.0', '--below-cap', 'something-else']);
@@ -582,7 +586,8 @@ describe('the override on the rollback verb: its kept branch, its detach and its
 
 describe('the override and THE TABLE: --below-cap names any row\'s word, and overrides only the row it names (pool set B2)', () => {
   const ROW = "  'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='\n";
-  const EXTRA = "  'profiledigest|launch-surface-v1|retire the launch profile in Settings'\n";
+  // A fictional row, so a row a later piece ships never collides with it.
+  const EXTRA = "  'tablefact|table-word-v1|the remedy of a row this test adds'\n";
   function patched(home: string, caps: string[]): { script: string; stamp: string } {
     const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
     expect(src, 'the row line moved: the patch has nothing to anchor on').toContain(ROW);
@@ -601,7 +606,7 @@ describe('the override and THE TABLE: --below-cap names any row\'s word, and ove
     const home = freshUpdateBox(prefix);
     const p = patched(home, ['ws-add']);
     mkdirSync(join(home, '.cc-sessions'), { recursive: true });
-    writeFileSync(join(home, '.cc-sessions', 'lane-a-overlord.profiledigest'), 'x\n');
+    writeFileSync(join(home, '.cc-sessions', 'lane-a-overlord.tablefact'), 'x\n');
     plantSet(home);
     return { home, ...p };
   };
@@ -611,25 +616,25 @@ describe('the override and THE TABLE: --below-cap names any row\'s word, and ove
     const r = sh(home, script, `_upd_cap_floor_check "${stamp}" cli pool-set`);
     expect(r.code).toBe(1);
     expect(r.stdout).toContain(PASSED(LACKS));
-    expect(r.stderr).toContain('pass --below-cap launch-surface-v1, or retire the launch profile in Settings: the target build lacks launch-surface-v1; a profiledigest stands for lane-a-overlord');
+    expect(r.stderr).toContain('pass --below-cap table-word-v1, or the remedy of a row this test adds: the target build lacks table-word-v1; a tablefact stands for lane-a-overlord');
     expect(r.stderr).not.toContain('lacks pool-set');
   });
 
   it('naming both words passes both, each with its WARN; with no flag one refusal names both words at its front', () => {
     const { home, script, stamp } = both('ccrc-capfloor-bc-table-both-');
-    const r = sh(home, script, `rc=0; _upd_cap_floor_check "${stamp}" cli pool-set,launch-surface-v1 || rc=$?; echo "rc=$rc"`);
+    const r = sh(home, script, `rc=0; _upd_cap_floor_check "${stamp}" cli pool-set,table-word-v1 || rc=$?; echo "rc=$rc"`);
     expect(r.stdout).toContain('rc=0');
-    expect(r.stdout).toContain('--below-cap passed the capability floor for pool-set (the target build lacks pool-set; a poolset stands for lane-b-overlord); launch-surface-v1 (');
+    expect(r.stdout).toContain('--below-cap passed the capability floor for pool-set (the target build lacks pool-set; a poolset stands for lane-b-overlord); table-word-v1 (');
     const none = sh(home, script, `_upd_cap_floor_check "${stamp}" cli`);
     expect(none.code).toBe(1);
-    expect(none.stderr).toContain('pass --below-cap pool-set,launch-surface-v1, or ');
+    expect(none.stderr).toContain('pass --below-cap pool-set,table-word-v1, or ');
   });
 
-  it('the argument check reads the table: launch-surface-v1 is a word in the patched copy and a usage error in the shipped file', () => {
+  it('the argument check reads the table: table-word-v1 is a word in the patched copy and a usage error in the shipped file', () => {
     const { home, script } = both('ccrc-capfloor-bc-table-arg-');
-    expect(sh(home, script, '_below_cap_arg 2 launch-surface-v1 && echo ok').stdout.trim()).toBe('ok');
-    expect(sh(home, script, '_below_cap_arg 2 pool-set,launch-surface-v1 && echo ok').stdout.trim()).toBe('ok');
-    const shipped = sh(home, join(REPO, 'ccd', 'ccrc'), '_below_cap_arg 2 launch-surface-v1 && echo ok');
+    expect(sh(home, script, '_below_cap_arg 2 table-word-v1 && echo ok').stdout.trim()).toBe('ok');
+    expect(sh(home, script, '_below_cap_arg 2 pool-set,table-word-v1 && echo ok').stdout.trim()).toBe('ok');
+    const shipped = sh(home, join(REPO, 'ccd', 'ccrc'), '_below_cap_arg 2 table-word-v1 && echo ok');
     expect(shipped.code).toBe(2);
     expect(shipped.stdout).not.toContain('ok');
   });
