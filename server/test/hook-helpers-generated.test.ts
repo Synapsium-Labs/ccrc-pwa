@@ -19,12 +19,12 @@ import {
 import { LOGLINE_REGION_BEGIN, LOGLINE_REGION_END, renderLogLineBody } from '../../shared/hook-helpers.mjs';
 import { markGenerated, verifyMarker } from '../../shared/mark.mjs';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ccdSource, ccdTreeCopy, ghContainedEnv } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (f: string): string => readFileSync(path.join(root, f), 'utf8');
 const hook = read('ccd/session-hook.sh');
-const ccd = read('ccd/ccd');
+const ccd = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
 const ccrc = read('ccd/ccrc');
 const probe = read('ccd/ccd-account-health');
 const block = (src: string): string => {
@@ -158,7 +158,8 @@ describe('`ccrc restamp ccd/ccd-account-health` regenerates the auth-dead region
   const tree = (): string => {
     const t = mkTmp('ccrc-restamp-probe-');
     mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
-    for (const f of ['ccd/ccd', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    for (const f of ['shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    ccdTreeCopy(join(t, 'ccd'));
     return t;
   };
   const restamp = (f: string): { code: number; stdout: string; stderr: string } => {
@@ -269,7 +270,8 @@ describe('the server-cap reader region in ccrc-api (D-7321)', () => {
   it('`ccrc restamp ccd/ccrc-api` regenerates a hand-edited region from its own tree, then answers current', () => {
     const t = mkTmp('ccrc-restamp-api-');
     mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
-    for (const f of ['ccd/ccd', 'ccd/session-hook.sh', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    for (const f of ['ccd/session-hook.sh', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    ccdTreeCopy(join(t, 'ccd'));
     const f = join(t, 'ccd', 'ccrc-api');
     writeFileSync(f, api.replace('now - at <= 180', 'now - at <= 300'));
     const home = mkTmp('ccrc-restamp-api-home-');
@@ -430,7 +432,8 @@ describe('the log-line redactor region (C5i)', () => {
   const planted = (files: Record<string, string>): string => {
     const t = mkTmp('ccrc-restamp-logline-');
     mkdirSync(join(t, 'ccd')); mkdirSync(join(t, 'shared'));
-    for (const f of ['ccd/ccd', 'shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    for (const f of ['shared/mark.mjs', 'shared/hook-helpers.mjs']) copyFileSync(join(root, f), join(t, f));
+    ccdTreeCopy(join(t, 'ccd'));
     for (const [rel, body] of Object.entries(files)) writeFileSync(join(t, rel), body);
     return t;
   };

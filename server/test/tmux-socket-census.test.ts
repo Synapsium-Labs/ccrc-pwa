@@ -15,12 +15,14 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { bashCode, rawBashTmux, rawTsTmux, type Site } from './tmuxSocketCensus.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { ccdSource, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD_LIB_FILES, programFile } from './consolidationCensus.js';
 import { sourceOfSymbol } from './scan/symbols.js';
 import { TMUX_REFUSE_SH, TMUX_SOCKET_FILE, TMUX_SOCKET_NAME_RE } from '../../shared/tmux-target.js';
 
 const ROOT = path.resolve(__dirname, '../..');
-const read = (f: string): string => fs.readFileSync(path.join(ROOT, f), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (f: string): string => (f === 'ccd/ccd' ? ccdSource() : fs.readFileSync(path.join(ROOT, f), 'utf8'));
 const tracked = (...dirs: string[]): string[] =>
   execFileSync('git', ['ls-files', '-z', '--', ...dirs], { cwd: ROOT, encoding: 'utf8' }).split('\0').filter(Boolean);
 
@@ -130,7 +132,9 @@ describe('D-8270 — no raw tmux call in bash: every one goes through the lookup
   });
 
   it('outside the lookup block, every raw `tmux` is a named exception', () => {
-    const bad = BASH_FILES.flatMap((f) => bashOutsideBlock(f, read(f)))
+    // ccd/ccd is read as the program, every library of its table spliced in, so a library is not scanned a second time on
+    // its own: an exception names ccd/ccd wherever a slice puts the call (the file split, D-8048).
+    const bad = BASH_FILES.filter((f) => !CCD_LIB_FILES.includes(f)).flatMap((f) => bashOutsideBlock(f, read(f)))
       .filter((s) => !covered(s, BASH_EXCEPTIONS)).map((s) => `${s.file}:${s.line}: ${s.text}`);
     expect(bad).toEqual([]);
   });
@@ -146,10 +150,7 @@ describe('D-8270 — no raw tmux call in bash: every one goes through the lookup
 describe('D-8270 — the lookup is one block, the same bytes in every script that cannot source ccd', () => {
   /** A file that only ever runs SOURCED by another (`ccd/lib/*.sh` by ccd/ccd, the doctor's checks by ccrc). */
   const SOURCED_BY: Readonly<Record<string, string>> = {
-    'ccd/lib/disk-retention.sh': 'ccd/ccd',
-    'ccd/lib/train-proof.sh': 'ccd/ccd',
-    'ccd/lib/delegation-lease.sh': 'ccd/ccd',
-    'ccd/lib/pool-set.sh': 'ccd/ccd',
+    ...Object.fromEntries(CCD_LIB_FILES.map((f) => [f, programFile(f)])),   // every library of ccd's table (D-8048)
     'ccd/ccrc-doctor-checks': 'ccd/ccrc',
   };
   const canonical = lookupBlock(read('ccd/ccd'));

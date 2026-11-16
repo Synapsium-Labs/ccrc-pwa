@@ -42,6 +42,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const FORBIDDEN = /update[-_]branch|updatePullRequestBranch/i;
@@ -82,7 +83,8 @@ describe('update-branch is absent from executable source (landing-order spec §5
   it('spells update-branch only in the two licensed lines — the detector and the classifier', () => {
     const found: Record<string, string[]> = {};
     for (const f of executableSource()) {
-      const lines = readFileSync(path.join(root, f), 'utf8').split('\n').filter((l) => FORBIDDEN.test(l));
+      // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048): the pathspec names no library, and a moved line must still be read.
+      const lines = (f === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(root, f), 'utf8')).split('\n').filter((l) => FORBIDDEN.test(l));
       if (lines.length > 0) found[f] = lines;
     }
     expect(found, 'executable source names update-branch outside its two licensed spellings; the fleet never issues one')

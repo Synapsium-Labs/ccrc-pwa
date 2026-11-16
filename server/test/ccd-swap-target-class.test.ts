@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD as CCD_PATH, makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
+import { ccdSource, makeCcdHarness, seedAccountsSh, rosterWithFacts, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -511,7 +511,8 @@ describe('the asking session\'s id reaches the class gate', () => {
 // `_auto_swap_check`'s rehome arm runs only for a session whose side is not a set. These scans red on a NEW id-less
 // caller or on the rehome call leaving its guard, so the next placement path has to take an id.
 describe('F9: a row carrying a poolset never reaches the id-less placement path', () => {
-  const lines = fs.readFileSync(CCD_PATH, 'utf8').split('\n');
+  // ccd is read as the program, its libraries spliced back (the file split, D-8048), so a caller a slice moves is still seen.
+  const lines = ccdSource().split('\n');
   /** The top-level function enclosing each CODE line (comments and the definitions themselves left out) that names `sym`. */
   const callersOf = (sym: string): string[] => {
     const out = new Set<string>();

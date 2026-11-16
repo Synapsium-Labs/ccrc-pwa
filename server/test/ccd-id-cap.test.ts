@@ -25,6 +25,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, FIXTURE_MOUNTINFO, WS_ADD, ghContainedEnv, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { CCD_LIB_FILES, programFile } from './consolidationCensus.js';
 import { inheritedEnv } from './gitEnvStrip.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { DEPS_SHED_STAMP_SUFFIX } from '../src/depsShedPass.js';
@@ -304,19 +305,23 @@ describe('a new id fits every name ccd derives from it (path-identity spec §2.6
     expect(hits.length, 'the scan finds templates at all').toBeGreaterThan(300);
     expect(hits.filter((x) => !covered(x.shape)).map((x) => `${x.file}:${x.line} ${x.shape}`),
       'a name embeds an id and no census row covers it').toEqual([]);
-    expect(ID_NAME_TEMPLATES.filter((r) => !hits.some((x) => x.file === r.file && x.shape === r.template))
+    expect(ID_NAME_TEMPLATES.filter((r) => !hits.some((x) => programFile(x.file) === programFile(r.file) && x.shape === r.template))
       .map((r) => `${r.file} ${r.template}`), 'a census row names a template its file no longer holds').toEqual([]);
     // The two out-var readers' own templates are seen: `_reg_get_to`'s `$REG/$2.$3`, and `_reg_read_to`'s
     // `$REG/$1.$2`, spelled after its `shift`.
-    const ccd = read('ccd/ccd');   // line numbers below are the FILE's, so the file itself
     for (const fn of ['_reg_get_to', '_reg_read_to']) {
+      // The walk reports each file's own lines, so the function is read in the program file that defines it: ccd/ccd or a
+      // library of the table (the file split, D-8048), wherever a slice has put it.
+      const file = ['ccd/ccd', ...CCD_LIB_FILES].find((f) => fs.existsSync(path.join(REPO, f)) && read(f).includes(`\n${fn}() {`)) ?? 'ccd/ccd';
+      const ccd = read(file);
       const first = ccd.slice(0, ccd.indexOf(`\n${fn}() {`)).split('\n').length + 1;
       const last = first + bodyOf(ccd, fn).split('\n').length - 2;
-      expect(hits.filter((x) => x.file === 'ccd/ccd' && x.line >= first && x.line <= last && x.shape === FAMILY).length,
+      expect(hits.filter((x) => x.file === file && x.line >= first && x.line <= last && x.shape === FAMILY).length,
         `the census reads ${fn}'s own template as ${FAMILY}`).toBeGreaterThan(0);
     }
     // The field family is taken at the longest field literal in the tree, read through `_reg_set`, `_reg_get` and
     // `_reg_read`, and through the out-var readers `_reg_get_to <var> "$id" <field>` and `_reg_read_to <var> "$id" <field>`.
+    const ccd = ccdSource();   // the field scan reads the program, its libraries spliced back (D-8048)
     const FIELD_CALL =
       /\b_reg_(?:set|get|read|(?:get|read)_to\s+[A-Za-z_][A-Za-z_0-9]*)\s+"?\$\{?[A-Za-z_0-9]+\}?"?\s+([a-z][a-z0-9_-]*)/g;
     const calls = [...ccd.matchAll(FIELD_CALL)];

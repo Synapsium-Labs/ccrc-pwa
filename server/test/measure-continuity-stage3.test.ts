@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { ccdSource, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 const TOOL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../deploy/measure-continuity.py');
 
@@ -241,7 +241,7 @@ describe('the instrument spells the program\'s tuples', () => {
     }
     const rx = /S3_MANIFEST = re\.compile\(([\s\S]*?)\n\S/.exec(tool)![1];
     for (const n of ['MANIFEST_SITES', 'MANIFEST_VERDICTS', 'MANIFEST_WHY']) expect(rx, n).toContain(`"|".join(${n})`);
-    const ccd = fs.readFileSync(path.join(ROOT, 'ccd/ccd'), 'utf8');
+    const ccd = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
     const body = /^_inflight_write\(\) \{[\s\S]*?\n\}\n/m.exec(ccd)![0];
     const words = [...body.matchAll(/\bwhy="?([a-z][a-z-]*)/g)].map((m) => m[1]);
     expect(words.length).toBeGreaterThan(0);

@@ -698,7 +698,9 @@ function envOf(s: Src, open: number, close: number, bs: Binding[], member: strin
 const RUNNERS = new Set(["'bash'", 'BASH', 'DEADLINE_BIN', 'DOCTOR_DEADLINE_BIN', 'bashPath']);
 // `git show <rev>:<path>` and `git ls-files <path>` name the script as a path; `'node'` is
 // `hook-helpers-generated.test.ts`'s `node shared/hook-helpers.mjs --check <hook> <ccd>`, which only reads ccd's text.
-const READERS = new Set(["'git'", "'node'"]);
+// `'python3'` is `ccd-lib-shape.test.ts`'s `read_lib_table` over ccd's bytes, the installer's reading of its library table
+// (the file split, D-8048): it runs no ccd.
+const READERS = new Set(["'git'", "'node'", "'python3'"]);
 interface Spawn {
   file: string; line: number; kind: 'script' | 'sliced' | null; prog: string; placed: boolean;
   shape: Shape | null; argText: string;

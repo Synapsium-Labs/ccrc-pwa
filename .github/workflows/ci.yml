@@ -343,7 +343,7 @@ jobs:
               ':(glob)**/package.json' ':(glob)**/package-lock.json' ':(glob)**/.nvmrc' \
               ':(glob)ccd/history/**' ':(glob).github/**' \
               server/test/node-floor.test.ts ':(glob)server/test/history-*.test.ts' server/test/measure-history.test.ts \
-              server/vitest.config.ts server/vitest.select.config.ts \
+              server/vitest.config.ts server/vitest.select.config.ts server/test/ccdReadGuard.ts \
               ':(glob)server/test/*.setup.mjs' ':(glob)server/test/*.globalsetup.mjs'); then
             if [ -n "$changed" ]; then
               echo "run=true" >> "$GITHUB_OUTPUT"

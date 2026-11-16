@@ -14,7 +14,7 @@
 // is never read as a write; a `$(…)` inside double quotes is code.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { bashCodeOf, CCD_LIB_FILES, ccdLauncherIn, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
+import { bashCodeOf, CCD_LIB_FILES, ccdLauncherIn, ccdLibFilesIn, codeOf, esc, REPO, type CensusSite } from '../consolidationCensus.js';
 
 /** The two per-lane account markers ARCH-72 gives one write primitive each (spec K16). */
 export type AccountMarker = 'authdead' | 'disabled';
@@ -205,10 +205,11 @@ function firstWrite(body: BashBody, suffix: RegExp): { line: number; raw: string
 export interface ProgramBody extends BashBody { readonly file: string }
 
 /** ccd's bodies under `root`, read as `ccdFunctionDefinitions` reads ccd (D-6913): `ccd/ccd`, then each library file of
- *  `CCD_LIB_FILES` that exists, in load order, each split on its own (its functions, then its top level). A moved
- *  function is still ccd's. A tree without a library file (a fixture) has no bodies from it. */
+ *  the tree's table (`ccdLibFilesIn`, the file split, D-8048) that exists, in load order, each split on its own (its
+ *  functions, then its top level). A moved function is still ccd's. A tree without a library file (a fixture) has no
+ *  bodies from it. */
 export function ccdProgramBodies(root: string = REPO): ProgramBody[] {
-  const files: Array<[string, string]> = [['ccd/ccd', ccdLauncherIn(root)], ...CCD_LIB_FILES.map((r): [string, string] => [r, path.join(root, r)])];
+  const files: Array<[string, string]> = [['ccd/ccd', ccdLauncherIn(root)], ...ccdLibFilesIn(root).map((r): [string, string] => [r, path.join(root, r)])];
   return files.filter(([, abs]) => existsSync(abs))
     .flatMap(([file, abs]) => bashBodies(readFileSync(abs, 'utf8')).map((b) => ({ ...b, file })));
 }

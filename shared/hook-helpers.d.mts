@@ -2,6 +2,10 @@
 export const HOOK_CONSTANTS: Readonly<{ CCRC_PROJ_CLASS: string; CCRC_PROJ_MAX: number; CCRC_ID_MAX: number }>;
 export const HOOK_REGION_BEGIN: string;
 export const HOOK_REGION_END: string;
+/** `main` with each `# @ccd-lib:<id>` pointer line replaced by that region of `libs`, one level deep (the file split, D-8048). */
+export function spliceProgram(main: string, libs: readonly string[]): string;
+/** ccd's program as one text: the ccd at `ccdPath` with the libraries its `__CCD_LIBS` table names spliced back. */
+export function readCcdProgram(ccdPath: string): string;
 /** The body of ccd's `_plat_epoch_ms`, or null when ccd has none. */
 export function ccdEpochBody(ccdSrc: string): string | null;
 /** The region's unstamped body: `_hook_epoch_ms` and the three constants. */

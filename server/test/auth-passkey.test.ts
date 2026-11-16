@@ -44,6 +44,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
@@ -2336,7 +2337,8 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
     for (const rel of scan) {
       const f = path.join(root, rel);
       if (!existsSync(f)) continue;
-      for (const line of readFileSync(f, 'utf8').split('\n')) {
+      // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+      for (const line of (rel === 'ccd/ccd' ? ccdSource() : readFileSync(f, 'utf8')).split('\n')) {
         if (!/\bcurl\b/.test(line)) continue;
         for (const m of line.matchAll(/(\/api\/[A-Za-z0-9/_-]+)/g)) called.add(m[1]!);
       }

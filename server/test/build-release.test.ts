@@ -35,6 +35,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { canonicalPython3 } from './ccdWsHelpers.js';
+import { CCD_LIB_FILES } from './consolidationCensus.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 import { parse } from 'yaml';
 import { onBlock } from './workflowTrigger.js';
@@ -423,11 +424,10 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // The third member is the program that renders and publishes the pair on
     // the box (`ccrc install`/`update` and `deploy.sh` both run it from the
     // tree), so a release without it installs nothing at all.
-    // The fourth is the library the body pins and loads (D-6913): a release without it installs a ccd that refuses every start.
-    // The fifth and sixth are the docs redactor the installer publishes beside the body and pins (D-7077, OA-C11 (a)).
-    // The seventh is the body's second library, the train proof (D-7463), pinned and loaded as the fourth is.
-    // The eighth is its third, the delegation lease (wave 5), likewise, and the ninth its fourth, the pool set (the Overlord W1).
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh'] as const;
+    // The fourth and fifth are the docs redactor the installer publishes beside the body and pins (D-7077, OA-C11 (a)).
+    // Then every library the body loads (D-6913, D-7463), each word of its `__CCD_LIBS` table (the file split, D-8048): a
+    // release without one installs a ccd that refuses every start.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'shared/redact.mjs', 'shared/redact-cli.mjs', ...CCD_LIB_FILES];   // every library of ccd's table (D-8048)
     const home = mkTmp('build-release-ccd-pair-');
     const root = fixtureRepo(home, {
       tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),
@@ -457,7 +457,7 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
     // With the libraries the body pins (D-6913, D-7463) and the docs redactor's two files (D-7077): the installer renders their digests
     // into the body, then stamps it.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh'] as const;
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'shared/redact.mjs', 'shared/redact-cli.mjs', ...CCD_LIB_FILES];   // every library of ccd's table (D-8048)
     const home = mkTmp('build-release-ccd-stamp-');
     const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
     const out = join(home, 'out');
@@ -472,17 +472,17 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const installed = readFileSync(join(box, '.local', 'libexec', 'ccrc', path.basename(pair[0])), 'utf8');
     expect(verifyMarker(installed)).toBe('ccrc-unmodified');
     expect(installed, 'the installed body pins the library it shipped with').toContain(
-      `\n__CCD_LIB_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[3]))).digest('hex')}\n`);
+      `\n__CCD_LIB_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'ccd/lib/disk-retention.sh'))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the train-proof library it shipped with').toContain(
-      `\n__CCD_LIB_TRAIN_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[6]))).digest('hex')}\n`);
+      `\n__CCD_LIB_TRAIN_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'ccd/lib/train-proof.sh'))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the delegation-lease library it shipped with').toContain(
-      `\n__CCD_LIB_LEASE_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[7]))).digest('hex')}\n`);
+      `\n__CCD_LIB_LEASE_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'ccd/lib/delegation-lease.sh'))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the pool-set library it shipped with').toContain(
-      `\n__CCD_LIB_POOLSET_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[8]))).digest('hex')}\n`);
+      `\n__CCD_LIB_POOLSET_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'ccd/lib/pool-set.sh'))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the redact.mjs it shipped with').toContain(
-      `\n__CCD_REDACT_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[4]))).digest('hex')}\n`);
+      `\n__CCD_REDACT_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'shared/redact.mjs'))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the redact-cli.mjs it shipped with').toContain(
-      `\n__CCD_REDACT_CLI_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[5]))).digest('hex')}\n`);
+      `\n__CCD_REDACT_CLI_SHA256=${createHash('sha256').update(readFileSync(join(dest, 'shared/redact-cli.mjs'))).digest('hex')}\n`);
     expect(verifyMarker(readFileSync(join(dest, pair[0]), 'utf8')), 'the release tree itself carries no stamp').toBe('foreign');
     expect(readFileSync(join(dest, pair[0]), 'utf8'), 'nor a library digest').toContain('\n__CCD_LIB_SHA256=stamp-at-install\n');
     // Each placeholder is checked as its own whole line: they need not be adjacent, since each carries its own

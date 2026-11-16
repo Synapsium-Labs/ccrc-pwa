@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, ccdTreeCopy, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rescue-jitter-solo-'); });
@@ -154,10 +154,11 @@ describe('the setting, and the old spread (D-8123)', () => {
   });
 
   it('a settings library that is missing reads the default, and the dispatch still happens', () => {
-    // ccd copied beside no lib/ and with no ~/.local/libexec/ccrc/ccrc-settings.sh in the fixture HOME.
+    // ccd copied with its program's libraries alone (`ccdTreeCopy`, the file split, D-8048), so its lib/ holds no
+    // ccrc-settings.sh, and with no ~/.local/libexec/ccrc/ccrc-settings.sh in the fixture HOME.
     const bare = path.join(h.home, 'bare');
-    fs.mkdirSync(bare, { recursive: true });
-    fs.copyFileSync(CCD, path.join(bare, 'ccd'));
+    ccdTreeCopy(bare);
+    expect(fs.existsSync(path.join(bare, 'lib', 'ccrc-settings.sh'))).toBe(false);
     stampSwap(ID, 0);
     const r = spawnSync('bash', ['-c', 'a_src=$A_SRC a_snip=$A_SNIP; unset A_SRC A_SNIP; source "$a_src"; eval "$a_snip"'], {
       env: ghContainedEnv(h.home, { ...h.env(), A_SRC: path.join(bare, 'ccd'), A_SNIP: `${STUBS}\n_dispatch_swap ${ID} claude-a rescue` },

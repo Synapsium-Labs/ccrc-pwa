@@ -21,6 +21,7 @@ import { KeyedQueue } from '../src/inject/queue.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fakeTime } from './fakeTime.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const ID = 'claude-a-project-f';
 
@@ -211,7 +212,8 @@ describe('GET /api/sessions/:id/pane/history', () => {
 // and the reader wraps it once, at its own width.
 describe('the shipped comments say what F1 measured', () => {
   const root = path.resolve(__dirname, '../..');
-  const read = (rel: string): string => readFileSync(path.join(root, rel), 'utf8');
+  // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+  const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(root, rel), 'utf8'));
 
   /** The comment body, as a scanner should see it: every comment continuation
    *  marker dropped and all runs of whitespace flattened, so a claim does not

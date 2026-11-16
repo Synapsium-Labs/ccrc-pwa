@@ -19,6 +19,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
+import { CCD_LIB_FILES, programFile } from './consolidationCensus.js';
 
 const REPO = path.resolve(path.dirname(CCD), '..');
 const ROOTS = [path.join(REPO, 'ccd'), path.join(REPO, 'deploy')];
@@ -33,14 +34,15 @@ const walk = (dir: string, keep: (p: string) => boolean, out: string[] = []): st
   return out;
 };
 /** Every shell script shipped under the roots, found by SHEBANG (`sh` or `bash`), never by a hand-kept list. */
+// ccd's libraries carry no shebang and are ccd's code (the file split, D-8048): each is taken in beside the scripts.
 const shellScripts = (roots: readonly string[]): string[] => roots.flatMap((r) => walk(r, (p) =>
-  /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? ''))).sort();
+  CCD_LIB_FILES.includes(path.relative(REPO, p)) || /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? ''))).sort();
 const pythonFiles = (roots: readonly string[]): string[] => roots.flatMap((r) => walk(r, (p) => p.endsWith('.py'))).sort();
 
 /** A line as CODE: a whole-line comment is none, and a trailing ` # …` comment is cut. */
 const codeOf = (line: string): string | null => (/^\s*#/.test(line) ? null : line.replace(/\s#\s.*$/, ''));
 /** Every code line matching `re`, as `<file> <function>: <code>` — the function being the last `name() {` at column 0
- *  above it. */
+ *  above it, and the file a library's line is in named as ccd/ccd (`programFile`, D-8048). */
 const hits = (files: readonly string[], re: RegExp): string[] => files.flatMap((file) => {
   let fn = '(top level)';
   const out: string[] = [];
@@ -48,7 +50,7 @@ const hits = (files: readonly string[], re: RegExp): string[] => files.flatMap((
     const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(raw);
     if (def) fn = def[1]!;
     const code = codeOf(raw);
-    if (code !== null && re.test(code)) out.push(`${path.relative(REPO, file)} ${fn}: ${code.trim()}`);
+    if (code !== null && re.test(code)) out.push(`${programFile(path.relative(REPO, file))} ${fn}: ${code.trim()}`);
   }
   return out;
 });

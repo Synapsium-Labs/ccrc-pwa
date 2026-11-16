@@ -8,6 +8,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parsedFile } from './scan/symbols.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -21,7 +22,7 @@ describe('claims are advisory (D12)', () => {
   it('ccd/ccd and session-hook.sh carry ZERO claims-API references', () => {
     const floors: Record<string, number> = { 'ccd/ccd': 11_000, 'ccd/session-hook.sh': 50 };
     for (const [file, floor] of Object.entries(floors)) {
-      const src = readFileSync(path.join(REPO, file), 'utf8');
+      const src = file === 'ccd/ccd' ? ccdSource() : readFileSync(path.join(REPO, file), 'utf8');   // ccd: the program, its libraries spliced back (the file split, D-8048)
       // Coverage: an empty or truncated read must not pass by having nothing
       // in it to match.
       expect(src.split('\n').length, `${file} shrank out from under the scan`)

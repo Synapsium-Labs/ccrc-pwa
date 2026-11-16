@@ -64,6 +64,10 @@ function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'install
   if (lease !== null) fs.writeFileSync(path.join(dir, 'lib', 'delegation-lease.sh'), lease);
   const poolset = mutatePoolset(fs.readFileSync(POOLSET_LIB, 'utf8'));
   if (poolset !== null) fs.writeFileSync(path.join(dir, 'lib', 'pool-set.sh'), poolset);
+  // Every other library of the table, unchanged: a slice of the file split adds one, and the copy stays the whole program (D-8048).
+  for (const other of CCD_LIBS.filter((l) => ![LIB, TRAIN_LIB, LEASE_LIB, POOLSET_LIB].includes(l))) {
+    fs.copyFileSync(other, path.join(dir, 'lib', path.basename(other)));
+  }
   return ccd;
 }
 const MARK = (): string => path.join(h.home, 'lib-ran');
@@ -127,8 +131,9 @@ describe('the library and the pin', () => {
     expect(bytes.includes(0), 'no NUL byte').toBe(false);
   });
 
-  it('ccd and its libraries are four, and ccdSource() splices the pool-set region in place of its pointer (the Overlord W1)', () => {
-    expect(CCD_LIBS, 'four libraries, in load order').toEqual([LIB, TRAIN_LIB, LEASE_LIB, POOLSET_LIB]);
+  it('ccd\'s table loads these four first, and ccdSource() splices the pool-set region in place of its pointer (the Overlord W1)', () => {
+    // A slice of the file split appends its library's word to the table (D-8048); these four, with their pins, load first.
+    expect(CCD_LIBS.slice(0, 4), 'the four pinned libraries, first in load order').toEqual([LIB, TRAIN_LIB, LEASE_LIB, POOLSET_LIB]);
     expect(POOLSET_VARS, 'the library\'s two bounds').toEqual(expect.arrayContaining(['POOL_SET_SPELLING_MAX_BYTES', 'ROUTE_LIST_MAX_BYTES']));
     const src = ccdSource();
     expect(src).toContain('POOL_SET_SPELLING_MAX_BYTES=1024');
@@ -162,10 +167,8 @@ describe('the library and the pin', () => {
 
 describe('a test that scans ccd reads all of it', () => {
   // `ccdSource()` puts the moved regions back where they sat; a bare read of `CCD` as text sees ccd without them, and a scanner
-  // built on it passes over less than it did. These files read the FILE, not the program, on purpose.
-  const FILE_READERS = new Set(['ccd-lib-load.test.ts', 'ccd-entry-install.test.ts', 'ownership.test.ts', 'ccrc-restamp.test.ts', 'ccd-install-stamp.test.ts', 'ccdWsHelpers.ts',
-    // W5-B8 builds an older ccd from the FILE (its `--base` arm removed) and sources it beside copies of the libraries.
-    'ccd-ws-add-base.test.ts']);
+  // built on it passes over less than it did. The guard in `ccdReadGuard.ts`, a `setupFiles` entry, holds that by behaviour
+  // (the file split, D-8048): it replaced the spelling check that stood here.
 
   it('every region of every library is spliced back by a pointer line in ccd/ccd, and every marker is one region id', () => {
     // `ccdSource()` replaces each `# @ccd-lib:<id>` pointer in ccd/ccd with that library region and never reports a region
@@ -185,12 +188,6 @@ describe('a test that scans ccd reads all of it', () => {
     expect([...pointers].filter((p) => !regions.includes(p)), 'a pointer in ccd/ccd with no library region').toEqual([]);
   });
 
-  it('no test file reads CCD as text outside the ones about the file itself', () => {
-    const dir = path.join(REPO, 'server', 'test');
-    const bare = fs.readdirSync(dir).filter((f) => f.endsWith('.ts') && !FILE_READERS.has(f))
-      .filter((f) => /\breadFileSync\(\s*CCD\s*,\s*['"]utf-?8['"]\s*\)/.test(fs.readFileSync(path.join(dir, f), 'utf8')));
-    expect(bare, 'read ccd through ccdSource() (ccdWsHelpers.ts), which includes the library').toEqual([]);
-  });
 });
 
 describe('a faithful copy loads', () => {
@@ -647,7 +644,7 @@ describe('the layout is read one way, and the redactor\'s directory comes from c
   });
 
   it('REAL: _docs_redact_cli derives dir as _ccd_lib_load does, made absolute, and from nothing else', () => {
-    const src = fs.readFileSync(CCD, 'utf8');
+    const src = ccdSource();   // the program: a slice of the file split may move _docs_redact_cli into a library (D-8048)
     const body = src.slice(src.indexOf('\n_docs_redact_cli() {'), src.indexOf('\n}\n', src.indexOf('\n_docs_redact_cli() {')));
     const loader = src.slice(src.indexOf('\n_ccd_lib_load() {'), src.indexOf('\n}\n', src.indexOf('\n_ccd_lib_load() {')));
     const derive = '  [[ "$self" == */* ]] && dir="${self%/*}"';

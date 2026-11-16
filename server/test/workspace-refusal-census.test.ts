@@ -160,7 +160,7 @@ export const WORKSPACE_REFUSAL_CENSUS: readonly CensusEdge[] = [
   e('collect', 'rowless', 'paused', 'ccd', 'collection is paused fleet-wide'),
 ];
 
-const CCD = read('ccd/ccd');
+const CCD = ccdSource();   // the program, its libraries spliced back (the file split, D-8048)
 const DOOR = read('server/src/coord/archiveDoor.ts');
 const key = (x: CensusEdge): string => `${x.verb}|${x.from}|${x.code}`;
 

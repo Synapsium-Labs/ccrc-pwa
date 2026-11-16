@@ -15,6 +15,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, type CcdHarness, ccdSource } from './ccdWsHelpers.js';
 import { DASH_IDS, wideLetterLocale } from './dashIdFixture.js';
+import { programFile } from './consolidationCensus.js';
 
 /** The definition line's shape, with or without the `function` keyword. A call never carries the parentheses. */
 const REG_ID_OK_DEF = /^\s*(?:function\s+)?_reg_id_ok\s*\(\s*\)/;
@@ -99,7 +100,8 @@ describe('_reg_id_ok: the id a verb may bind is never dash-leading (path-identit
       .filter((f) => !f.endsWith('.md') && fs.statSync(f).isFile());
     const holders = files.flatMap((f) => fs.readFileSync(f, 'utf8').split('\n')
       .flatMap((l, i) => (REG_ID_OK_DEF.test(l) ? [`${path.relative(ccdDir, f)}:${i + 1}`] : [])));
-    expect(holders.map((x) => x.replace(/:\d+$/, '')), `definitions:\n${holders.join('\n')}`).toEqual(['ccd']);
+    // Named as the program (`programFile`): a slice of the file split may move it into a library (D-8048).
+    expect(holders.map((x) => programFile(`ccd/${x.replace(/:\d+$/, '')}`)), `definitions:\n${holders.join('\n')}`).toEqual(['ccd/ccd']);
     // WHERE: below every line the compaction-card corpus cites, and above the temp-root id predicate's comment
     // block. Later definitions of the same family may stand between the two, never above this one.
     const lines = ccdLines();

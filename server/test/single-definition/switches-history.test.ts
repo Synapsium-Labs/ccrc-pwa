@@ -4,7 +4,8 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { PANE_SCOPE_STOP_LIVE_MARKER, SWITCHES, TESTBOX_REMOTE_LIVE_MARKER } from '../../../shared/switches.js';
-import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, bashRoots, ccrcRoot, codeLines, here, holdersOf, isBashComment, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
+import { ALL, ALL_MJS, BASH, HISTORY_DIR, HISTORY_MJS, bashRoots, bashText, ccrcRoot, codeLines, here, holdersOf, isBashComment, mjsUnder, prose, rel, stallCode, stallCodeText } from './helpers.js';
+import { programFile } from '../consolidationCensus.js';
 
 
 // SESSION-CONTINUITY WAVE 4 (spec §5.6, the coordinator's safety ruling). APPENDED, for the reason the stall-watch
@@ -64,10 +65,11 @@ describe('the pane-scope sweep: its arming file has no writer in the tree', () =
 describe('the nested rescue: its arming file has no writer in the tree', () => {
   // DR-21 (D-6633) gives it its one TS holder, its switchboard row in `shared/switches.ts` (L0, no `node:` module, so it
   // cannot write the marker); the server only shows what the arm would do.
-  it('nested-rescue-live: one shell holder, the ccd library, whose one line is a read; one TS holder, its definer, which reaches no write', () => {
-    // The nested rescue moved with its helpers to ccd's loaded library (D-6913): ccd/lib/disk-retention.sh is the holder.
-    expect(holdersOf('nested-rescue-live'), 'a line of shell other than the ccd library names it — a writer in waiting').toEqual(['ccd/lib/disk-retention.sh']);
-    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/lib/disk-retention.sh') ?? '').filter((l) => l.includes('nested-rescue-live')))
+  it('nested-rescue-live: one shell holder, ccd (its library), whose one line is a read; one TS holder, its definer, which reaches no write', () => {
+    // The nested rescue moved with its helpers to ccd's loaded library (D-6913), and a holder in ccd's program is named as
+    // ccd/ccd (`holdersOf`, the file split, D-8048), whichever of its files holds the line.
+    expect(holdersOf('nested-rescue-live'), 'a line of shell other than ccd names it — a writer in waiting').toEqual(['ccd/ccd']);
+    expect(codeLines(BASH.find((f) => rel(f) === 'ccd/ccd') ?? '').filter((l) => l.includes('nested-rescue-live')))
       .toEqual(['_ws_nested_rescue_live() { [[ -e "$REG/nested-rescue-live" ]]; }']);
     expect(ALL.filter((f) => stallCode(f).includes('nested-rescue-live')).map(rel), 'spelled on a code line outside shared/switches.ts')
       .toEqual(['shared/switches.ts']);
@@ -1125,7 +1127,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
 
   it('ccd/ccd: the code lines naming it are _reg_purge\'s post-generation rm and _inflight_write\'s one compaction write (6b-2)', () => {
     const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
-    const all = readFileSync(ccd, 'utf8').split('\n');
+    const all = bashText(ccd).split('\n');   // the program (D-8048)
     const open = all.findIndex((l) => l.startsWith('_inflight_write() {'));
     expect(open, '_inflight_write is defined').toBeGreaterThan(0);
     const close = all.findIndex((l, i) => i > open && l === '}');
@@ -1147,7 +1149,7 @@ describe('the launch record: one appender, one purge, and no reader in the tree 
   });
 
   it('no other shell file under ccd/ or deploy/ names it', () => {
-    const others = BASH.filter((f) => !['ccd/ccd', 'ccd/session-hook.sh'].includes(rel(f)));
+    const others = BASH.filter((f) => !['ccd/ccd', 'ccd/session-hook.sh'].includes(programFile(rel(f))));   // ccd's libraries are ccd (D-8048)
     expect(others.length, 'the walk reached the other shell files').toBeGreaterThan(10);
     expect(others.filter((f) => codeLines(f).some(bashNames)).map(rel)).toEqual([]);
   });
@@ -1188,7 +1190,7 @@ describe('the manifest: one writer, and no reader in the tree but the program\'s
 
   it('ccd/ccd: every code line naming it is inside _inflight_write, and they are exactly its listed write, its header-only write and its rm', () => {
     const ccd = BASH.find((f) => rel(f) === 'ccd/ccd') ?? '';
-    const all = readFileSync(ccd, 'utf8').split('\n');
+    const all = bashText(ccd).split('\n');   // the program (D-8048)
     const open = all.findIndex((l) => l.startsWith('_inflight_write() {'));
     expect(open, '_inflight_write is defined').toBeGreaterThan(0);
     expect(all.filter((l) => l.startsWith('_inflight_write() {')), 'once').toHaveLength(1);
@@ -1201,7 +1203,7 @@ describe('the manifest: one writer, and no reader in the tree but the program\'s
   });
 
   it('no other shell file under ccd/ or deploy/ names it', () => {
-    const others = BASH.filter((f) => rel(f) !== 'ccd/ccd');
+    const others = BASH.filter((f) => programFile(rel(f)) !== 'ccd/ccd');   // ccd's libraries are ccd (D-8048)
     expect(others.length, 'the walk reached the other shell files').toBeGreaterThan(10);
     expect(others.filter((f) => codeLines(f).some(bashNames)).map(rel)).toEqual([]);
   });

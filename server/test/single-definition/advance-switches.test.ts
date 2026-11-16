@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { sourceOfSymbol, callsIn } from '../scan/symbols.js';
-import { markerDefinitions, reclaimPauseParseSites } from '../consolidationCensus.js';
+import { markerDefinitions, programFile, reclaimPauseParseSites } from '../consolidationCensus.js';
 import { parseSource } from '../scan/parse.js';
 import { SWITCHES } from '../../../shared/switches.js';
 import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBashComment, rel, stallCode, stallCodeText } from './helpers.js';
@@ -253,7 +253,8 @@ describe('one writer per fact (ARCH-40): the switches whose writer set is alread
     markerDefinitions(name).map((s) => /\bconst\s+([A-Za-z_$][\w$]*)/.exec(s.text)![1]!);
   const writersOf = (name: string): string[] => {
     const out: string[] = [];
-    for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${rel(f)}:${fn}`);
+    // A library of ccd's table is ccd/ccd (programFile, the file split, D-8048): a slice that moves the writer keeps the answer.
+    for (const f of BASH) for (const fn of bashWriters(readFileSync(f, 'utf8'), name)) out.push(`${programFile(rel(f))}:${fn}`);
     const consts = constsOf(name);
     for (const f of [...ALL, ...ALL_MJS]) if (tsFileWrites(stallCode(f), name, consts)) out.push(rel(f));
     for (const f of pyFiles()) if (pyFileWrites(readFileSync(f, 'utf8'), name)) out.push(rel(f));

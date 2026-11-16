@@ -24,6 +24,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
 import { platformContrast } from './platformFixtures.js';
+import { programFile } from './consolidationCensus.js';
 
 removeTmpFixturesEachTest();
 
@@ -244,6 +245,9 @@ function git(args: string[]): { status: number | null; stdout: string } {
 }
 
 describe('testboxReaders(): nothing outside docs/ reads a test box setting or the remote-live marker yet (D-7402)', () => {
+  // `git grep -l`'s files, each named as `programFile` names it: a library of ccd's table is ccd/ccd, so a slice of the file
+  // split that moves a reader leaves the list alone (D-8048). Sorted, as git lists paths.
+  const holders = (out: string): string[] => [...new Set(out.split('\n').filter((l) => l !== '').map(programFile))].sort();
   // This file names both in its own pattern, so it is left out by path. Each later TB task raises the list to its own
   // literal list of readers.
   // TB2 (D-7404) adds the switch row: its definer and the two tests that pin it name the marker; none of them reads it
@@ -347,11 +351,11 @@ describe('testboxReaders(): nothing outside docs/ reads a test box setting or th
   it('the tracked readers are exactly the literal list (TB1: the settings; TB2: the switch row and its two pins; TB3: the transport; TB4: the test service; TB5: the pristine store and the proxy; TB6: the tool sync; TB7: the box package; TB8: the remote arm; TB9: the agent op, the decider and the switch verb; TB10: the Test box card\'s read hook; TB11: the doctor line, the durations timer, lifecycle and README; W2: the box settings view\'s table, value words and tests)', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/', `:!${SELF}`]);
     expect(r.status === 0 || r.status === 1, 'git grep ran (1 is no match)').toBe(true);
-    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual(HOLDERS);
+    expect(holders(r.stdout)).toEqual(HOLDERS);
   });
   it('the pattern reaches: without the exclusion, it finds this file', () => {
     const r = git(['grep', '-l', '-E', 'CCRC_TESTBOX_|testbox-remote-live', '--', '.', ':!docs/']);
-    expect(r.stdout.split('\n').filter((l) => l !== '')).toEqual([...HOLDERS, SELF].sort());
+    expect(holders(r.stdout)).toEqual([...HOLDERS, SELF].sort());
   });
 });
 

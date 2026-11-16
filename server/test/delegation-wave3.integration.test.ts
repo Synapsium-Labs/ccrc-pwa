@@ -53,6 +53,7 @@ import {
 import { FLEET_PROTO, FLEET_PROTO_MIN, type DelegationObservationHealth, type FleetSession } from '../../shared/api.js';
 import { READ_FROM_MAX_BYTES } from '../../shared/agent-protocol.js';
 import { makeCcdHarness } from './ccdWsHelpers.js';
+import { programFile } from './consolidationCensus.js';
 import * as policy from '../src/coord/delegation-policy.js';
 import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -974,9 +975,12 @@ const W5_OPEN: readonly (readonly [string, RegExp, readonly string[]])[] = [
 const STILL_CLOSED = /\bws-lease-clean\b|\bcmd_ws_lease_clean\b|\blease-clean(?:-v1|-live)?\b|cleanup-queue/i;
 /** The fleet-side files allowed to hold the bare word `leases` (a path composed from parts has no token for W5_OPEN). */
 const W5_FLEET_LEASES = ['ccd/lib/delegation-lease.sh', 'ccd/ccrc-api'];   // PR8: `ccrc-api`'s `[leases.retain]` row names the route
+/** Whether `f` is in `allowed`: itself, or, for a library of ccd's table, as ccd/ccd (`programFile`; the file split, D-8048), so a
+ *  slice that moves a function into a library leaves the answer alone. */
+const allowedIn = (allowed: readonly string[], f: string): boolean => allowed.includes(f) || allowed.includes(programFile(f));
 /** For each W5_OPEN row, the files of `shipped` (read through `text`) that hold its word outside its list. */
 const w5Offenders = (shipped: readonly string[], text: (f: string) => string): string[] =>
-  W5_OPEN.flatMap(([word, re, allowed]) => shipped.filter((f) => re.test(text(f)) && !allowed.includes(f)).map((f) => `${word}: ${f}`));
+  W5_OPEN.flatMap(([word, re, allowed]) => shipped.filter((f) => re.test(text(f)) && !allowedIn(allowed, f)).map((f) => `${word}: ${f}`));
 
 // ── a small bash command extractor, for the doctor clause ───────────────────────────────────────────────────────────────────
 interface ShellCmd { word: string; args: string[] }
@@ -1284,7 +1288,7 @@ describe('8. the closed scope census', () => {
     // and the agent but for the lease library (the checkpoint's `leases` list is the server's and the deploy helper's, which are not scanned)
     const FLEET_SIDE = ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-api', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh', 'ccd/install-session-hooks.sh',
       ...filesUnder('ccd/lib'), ...filesUnder('agent/src')];
-    expect(FLEET_SIDE.filter((f) => /\bleases\b/i.test(read(f)) && !W5_FLEET_LEASES.includes(f)), 'the word `leases` in a fleet-side file').toEqual([]);
+    expect(FLEET_SIDE.filter((f) => /\bleases\b/i.test(read(f)) && !allowedIn(W5_FLEET_LEASES, f)), 'the word `leases` in a fleet-side file').toEqual([]);
     const h = makeCcdHarness('ccrc-dlgint-ccd-');
     try {
       // and the real thing: the function that makes the spool directory, run, leaves `delegation/` holding exactly `spool` (the leases

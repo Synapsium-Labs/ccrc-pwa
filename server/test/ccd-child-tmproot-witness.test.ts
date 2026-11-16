@@ -521,10 +521,12 @@ describe('$REG/tmproots is invisible to every registry walker (spec §5.2, the p
   });
 
   const CCD_DIR = path.dirname(CCD);
-  /** Every shell file ccd/ ships, found by SHEBANG — never a hand-kept list. */
-  const shipped = (): string[] => fs.readdirSync(CCD_DIR, { withFileTypes: true })
+  /** Every shell file ccd/ ships, found by SHEBANG — never a hand-kept list — and every library under ccd/lib/, which has
+   *  none: ccd loads them at its foot, so a function the file split moves there is still scanned (D-8048). */
+  const shipped = (): string[] => [...fs.readdirSync(CCD_DIR, { withFileTypes: true })
     .filter((e) => e.isFile()).map((e) => path.join(CCD_DIR, e.name))
-    .filter((p) => /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? ''));
+    .filter((p) => /^#!.*[/ ](ba)?sh(\s|$)/.test(fs.readFileSync(p, 'utf8').split('\n', 1)[0] ?? '')),
+  ...fs.readdirSync(path.join(CCD_DIR, 'lib')).filter((n) => n.endsWith('.sh')).map((n) => path.join(CCD_DIR, 'lib', n))];
   /** A glob rooted at the registry, and the character right after its `*`. */
   const REG_GLOB = /(?:\$\{?(?:REG|_SVC_REG|reg)\}?|\$HOME"?\/\.cc-sessions)"?\/\*(.?)/g;
   const REG_FIND = /\bfind\b[^#\n]*\$\{?(?:REG|_SVC_REG|reg)\b/;

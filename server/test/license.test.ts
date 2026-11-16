@@ -19,9 +19,11 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PRIVATE_NAMES, matchLine } from './private-names.mjs';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
+// ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : readFileSync(join(REPO, rel), 'utf8'));
 
 /** SPDX id, spelled once here and required everywhere it is claimed. */
 const SPDX = 'AGPL-3.0-only';

@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { FLEET_ROLE_NAMES } from '../../shared/fleetRoles.js';
 import { launchRowOf } from '../src/continuity/launchProfile.js';
+import { ccdSource } from './ccdWsHelpers.js';
 
 const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
 
@@ -61,7 +62,8 @@ describe('ccd/lib/launch-profiles.json is the role table, projected (H1)', () =>
     expect(flags[at + 1]).not.toContain("'");
   });
   it('ships where ccd reads it: both installers place it in ~/.cc-sessions/lib, ccd fallback path, and uninstall removes it', () => {
-    const read = (rel: string): string => fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8');
+    // ccd/ccd is read as the program, its libraries spliced back (the file split, D-8048).
+    const read = (rel: string): string => (rel === 'ccd/ccd' ? ccdSource() : fs.readFileSync(path.resolve(__dirname, '../..', rel), 'utf8'));
     expect(read('ccd/ccd')).toContain('[[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"');
     const ccrc = read('ccd/ccrc');
     expect(ccrc).toContain('_inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644');

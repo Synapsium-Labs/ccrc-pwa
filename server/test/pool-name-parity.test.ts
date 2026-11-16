@@ -371,7 +371,7 @@ describe('the project-name grammar is one grammar in two files (and both refuse 
    *  WHICH NAMES REACH A PRINTED COMMAND. */
   const OMIT_ARM_RE = /^[ \t]*(\S+)\) p_stale_omit=\$\(\(p_stale_omit \+ 1\)\); continue ;;$/gm;
 
-  const ccdValidFn = (): string => oneFunction(readFileSync(CCD_PATH, 'utf8'), '_ws_project_valid');
+  const ccdValidFn = (): string => oneFunction(CCD_PATH === CCD ? ccdSource() : readFileSync(CCD_PATH, 'utf8'), '_ws_project_valid');
 
   const omitPattern = (): string => {
     const arms = [...readFileSync(CHECKS_PATH, 'utf8').matchAll(OMIT_ARM_RE)];

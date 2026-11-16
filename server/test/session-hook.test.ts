@@ -7,7 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, ccdSource } from './ccdWsHelpers.js';
+import { CCD, CCD_LIBS, ccdSource } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
 import { hasCommit, isAncestorOfHead, isShallow, readAtSha } from './frozenSource.js';
@@ -5115,7 +5115,7 @@ describe('the compaction card — the two documents say what the code does (spec
       .filter((e) => e.isFile())
       .map((e) => [e.name, fs.readFileSync(path.join(dir, e.name), 'utf8')] as [string, string]), ...libs];
   };
-  const SCANNED = ['session-hook.sh', 'ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh'];   // the second and third libraries' comments too (D-7463)
+  const SCANNED = ['session-hook.sh', 'ccd', ...CCD_LIBS.map((f) => `lib/${path.basename(f)}`)];   // every library's comments too (D-7463), each word of ccd's table (D-8048)
   /** NOT FUNCTIONS, and each is here for a stated reason rather than because it
    *  was in the way. All three are declared by the GENERATED roster projection
    *  (`~/.ccrc/accounts.sh`, `shared/generate.mjs`), which this repo builds but

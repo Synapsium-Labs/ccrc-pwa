@@ -8,6 +8,7 @@ import { PR_REASONS, LIFECYCLE_ACTS, LC_ACT_UNKNOWN, ASK_STATES, isAskState, ASK
   DELEGATION_CARRIER_STATES, DELEGATION_DISPOSITIONS } from '../../../shared/api.js';
 import { PR_STATE_PR_WORDS } from '../../src/prstate.js';
 import { reclaimPauseParseSites } from '../consolidationCensus.js';
+import { ccdSource } from '../ccdWsHelpers.js';
 import { callsIn, parsedFile, symbolOf } from '../scan/symbols.js';
 import { ALL, ALL_MJS, BASH, ROOTS, ccrcRoot, codeLines, here, holdersOf, isBash, prose, rel, sources } from './helpers.js';
 
@@ -1580,7 +1581,8 @@ describe('delegation wave 5 PR8b: the adoption switch vocabulary is declared onc
 describe('the admin-merge door reads a hold as the session hook does', () => {
   it('ccd AM_HOLD_WAVE_RE is session-hook.sh CCRC_HOLD_WAVE_RE, byte for byte', () => {
     const read = (file: string, name: string): string => {
-      const m = new RegExp(`^${name}='([^']*)'$`, 'm').exec(readFileSync(path.join(ccrcRoot, 'ccd', file), 'utf8'));
+      // ccd is read as the program, its libraries spliced back (the file split, D-8048).
+      const m = new RegExp(`^${name}='([^']*)'$`, 'm').exec(file === 'ccd' ? ccdSource() : readFileSync(path.join(ccrcRoot, 'ccd', file), 'utf8'));
       if (!m) throw new Error(`${file} no longer assigns ${name} as one single-quoted line`);
       return m[1]!;
     };

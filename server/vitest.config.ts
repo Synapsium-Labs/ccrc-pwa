@@ -105,6 +105,8 @@ export default defineConfig({
     // FIRST, in the main process and again in every worker, so a fixture `git init` can never reach the checkout the
     // runner was started from; see test/scrub-git-env.mjs. Pinned by test/git-env-scrub.test.ts.
     globalSetup: ['test/git-env.setup.mjs', 'test/run-tmp.globalsetup.mjs', 'test/proc-leak.globalsetup.mjs'],
-    setupFiles: ['test/git-env.setup.mjs'],
+    // The one-text guard (the ccd file split, D-8048): a read or copy of ccd/ccd, or a listing of ccd/, throws in the test
+    // that made it unless the caller is listed; see the header of test/ccdReadGuard.ts.
+    setupFiles: ['test/git-env.setup.mjs', 'test/ccdReadGuard.ts'],
   },
 });

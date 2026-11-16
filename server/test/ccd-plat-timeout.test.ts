@@ -4,7 +4,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { accessSync, constants, existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, statSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
+import { CCD, ccdSource, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 
 // DERIVED FROM `ccdWsHelpers`'s CCD, NOT SPELLED AGAIN. `single-definition.test.ts`
 // allows exactly one file in the test corpus to name the path to the `ccd` script,
@@ -34,7 +34,8 @@ const REAL_TIMEOUT: string | null = (() => {
 const itDelegating = REAL_TIMEOUT === null ? it.skip : it;
 
 function body(file: string, name: string): string {
-  const src = readFileSync(path.join(CCD_DIR, file), 'utf8');
+  const at = path.join(CCD_DIR, file);
+  const src = at === CCD ? ccdSource() : readFileSync(at, 'utf8');   // ccd: the program, its libraries spliced back (the file split, D-8048)
   const m = new RegExp(`${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}`).exec(src);
   expect(m, `${name} not found in ${file}`).not.toBeNull();
   return `${name}() {\n${m![1]!}\n}\n`;

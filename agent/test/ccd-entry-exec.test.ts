@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
+import { ccdLibNames } from '../../server/test/ccdLibTable.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -46,11 +47,12 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
     // (__CCD_LIB_SHA256, __CCD_LIB_TRAIN_SHA256, __CCD_LIB_LEASE_SHA256, __CCD_LIB_POOLSET_SHA256, __CCD_REDACT_SHA256, __CCD_REDACT_CLI_SHA256), the real files are planted
     // beside it. The stub never loads any of them.
     mkdirSync(path.join(tree, 'ccd', 'lib'), { recursive: true });
-    for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh']) copyFileSync(path.join(REPO, 'ccd', 'lib', f), path.join(tree, 'ccd', 'lib', f));
+    // Every library of ccd's `__CCD_LIBS` table (the file split, D-8048), which the stub names as the real body does.
+    for (const w of ccdLibNames()) copyFileSync(path.join(REPO, 'ccd', 'lib', `${w}.sh`), path.join(tree, 'ccd', 'lib', `${w}.sh`));
     mkdirSync(path.join(tree, 'shared'), { recursive: true });
     for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
     writeFileSync(path.join(tree, 'ccd', 'ccd'),
-      `#!/usr/bin/env bash\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
+      `#!/usr/bin/env bash\n__CCD_LIBS=(${ccdLibNames().join(' ')})\n__CCD_LIB_SHA256=stamp-at-install\n__CCD_LIB_TRAIN_SHA256=stamp-at-install\n__CCD_LIB_LEASE_SHA256=stamp-at-install\n__CCD_LIB_POOLSET_SHA256=stamp-at-install\n__CCD_REDACT_SHA256=stamp-at-install\n__CCD_REDACT_CLI_SHA256=stamp-at-install\n{ printf "%s\\0" "$-"; printf "%s\\0" "$@"; } > ${JSON.stringify(out)}\n`);
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), path.join(tree, 'ccd', 'ccd-entry.py'));
     copyFileSync(path.join(REPO, 'ccd', 'ccd-entry-install.py'), path.join(tree, 'ccd', 'ccd-entry-install.py'));
     const python = spawnSync('python3', ['-IS', '-c', 'import os,sys;sys.stdout.write(os.path.realpath(sys.executable))'],
