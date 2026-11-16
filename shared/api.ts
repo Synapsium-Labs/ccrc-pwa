@@ -13895,6 +13895,12 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+/** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
+ *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
+export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];
+/** The direct runs of the verb's script (`deploy/account-op.mjs`) a bare prefix rule can name; the hook's account arm
+ *  matches the script's name in any path-qualified, installed-tree or `$VAR` form, which a prefix rule cannot. */
+export const ACCOUNT_OP_RUNS: readonly string[] = ['node deploy/account-op.mjs', 'node ./deploy/account-op.mjs', './deploy/account-op.mjs'];
 
 /** The Linear MCP tools no fleet session may call (D-7674, #1444 spec §11): every Linear act goes through `ccrc-api linear`
  *  and the server's proxy, never a sign-in of a session's own. `mcp__claude_ai_Linear` is the claude.ai Linear connector's
@@ -13918,6 +13924,8 @@ export const ACCOUNT_DENY_RULES: readonly string[] = [
   'Bash(ccd account-pane:*)',
   ...ACCOUNT_SECRET_PATHS.map((p) => `Read(${p})`),
   ...ACCOUNT_WRITE_DIRS.map((p) => `Edit(${p})`),
+  ...ACCOUNT_ROSTER_FILES.map((p) => `Edit(${p})`),
+  ...ACCOUNT_OP_RUNS.map((r) => `Bash(${r}:*)`),
   ...LINEAR_MCP_DENY,
 ];
 

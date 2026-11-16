@@ -6,7 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  HAVE_FLOCK, NODE_ID, addLane, answer, ccrcRun, laneBox, laneState,
+  HAVE_FLOCK, NODE_ID, addLane, answer, ccrcRun, laneBox, laneState, shadowAccountOp,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -143,6 +143,18 @@ describe('set --fable-billing and --continuity (H16)', () => {
       expect(JSON.stringify(answer(r))).toContain(words);
     }
     expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+  });
+
+  it('a refused set-facts after a placement says the placement change stands (F5)', () => {
+    const home = laneBox('ccrc-set-facts-after-placement-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    shadowAccountOp(home, 'set-facts');   // the facts op is the one that cannot run; set-placement still does
+    const r = ccrcRun(home, ['account', 'set', '--id', 'lane-c', '--placement', 'overflow', '--continuity', 'on']);
+    expect(r.code, r.stderr).not.toBe(0);
+    expect(homeAbleOf(home, 'lane-c')).toBe(false);   // the placement change stands
+    const said = JSON.stringify(answer(r));
+    expect(said).toContain('The placement was recorded. Nothing else was written.');
+    expect(said).not.toMatch(/(?<!recorded\. )Nothing else was written/);
   });
 
   it('--method beside either is bad-argument; a lone --id is missing-value with the new sentence; an unknown flag is still refused', () => {

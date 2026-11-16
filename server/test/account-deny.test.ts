@@ -16,7 +16,7 @@ import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
 import {
   ACCOUNT_CLI_ONLY_VERBS, ACCOUNT_DENY_RULES, ACCOUNT_DENY_SUBS, ACCOUNT_READ_SUBS, ACCOUNT_SECRET_PATHS,
-  ACCOUNT_SUBS, ACCOUNT_WRITE_DIRS, LINEAR_MCP_DENY,
+  ACCOUNT_OP_RUNS, ACCOUNT_ROSTER_FILES, ACCOUNT_SUBS, ACCOUNT_WRITE_DIRS, LINEAR_MCP_DENY,
 } from '../../shared/api.js';
 import { OPERATOR_SECRETS_DIR } from '../../shared/ledgers.js';
 import { ACCOUNT_SUB_ARGV } from '../../shared/account-argv.js';
@@ -131,6 +131,22 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes.md' })).toBeUndefined();
   });
 
+  it('the list refuses a write of the roster and its mirror and a direct run of the verb script, and never a read of them (F2)', () => {
+    expect(ACCOUNT_ROSTER_FILES).toEqual(['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh']);
+    for (const f of ACCOUNT_ROSTER_FILES) {
+      for (const tool of ['Edit', 'Write', 'MultiEdit']) expect(anyRule(tool, { file_path: f }), `${tool} ${f}`).toBe(`Edit(${f})`);
+      expect(anyRule('Read', { file_path: f }), `Read ${f}`).toBeUndefined();
+    }
+    expect(anyRule('Edit', { file_path: '~/.ccrc/accounts.json.bak' })).toBeUndefined();
+    for (const run of ACCOUNT_OP_RUNS) expect(bashDenied(`${run} set-facts --file x --id lane-a --continuity on`), run).toBe(`Bash(${run}:*)`);
+    expect(bashDenied('cd x && node deploy/account-op.mjs roster --file y')).toBe('Bash(node deploy/account-op.mjs:*)');
+    // reads stay open
+    for (const read of ['cat ~/.ccrc/accounts.json', 'grep lane-a ~/.ccrc/accounts.sh', 'grep x deploy/account-op.mjs', 'cat deploy/account-op.mjs',
+      'cd server && ./node_modules/.bin/vitest run test/account-op-set-facts.test.ts']) {
+      expect(bashDenied(read), read).toBeUndefined();
+    }
+  });
+
   it('the list refuses the claude.ai Linear connector\'s tools, by its prefix alone (D-7674; #1444 §11)', () => {
     // The switch-over does not rest on the manual removal of the per-account MCP entries alone: every fleet session's
     // deny file refuses the connector's tools. Its prefix names no workspace. A per-account server's name is the
@@ -190,7 +206,7 @@ describe('CLAUDE.md\'s SAFETY section (D-6202)', () => {
     const s = safety();
     const missing = [
       ...ACCOUNT_DENY_SUBS.map((w) => `\`${w}\``), '`ccd-account-auth`', '`ccd account-pane`', '`ACCOUNT_DENY_RULES`',
-      ...[...ACCOUNT_SECRET_PATHS, ...ACCOUNT_WRITE_DIRS].map((p) => `\`${p.replace(/\*\*$/, '')}\``),
+      ...[...ACCOUNT_SECRET_PATHS, ...ACCOUNT_WRITE_DIRS, ...ACCOUNT_ROSTER_FILES].map((p) => `\`${p.replace(/\*\*$/, '')}\``), '`deploy/account-op.mjs`',
     ].filter((w) => !s.includes(w));
     expect(missing).toEqual([]);
     expect(s).toMatch(/accident guard/);
@@ -233,6 +249,18 @@ describe('MUST-ALLOW: the guard never refuses a swap path (the operator\'s Q8 ru
     // the grammar is live: the same matcher refuses a listed form
     expect(bashDenied('cd x && FOO=1 ccrc account remove --id lane-x')).toBe('Bash(ccrc account remove:*)');
     expect(anyRule('Read', { file_path: '~/.cc-secrets/x-oauth.env' })).toBe('Read(~/.cc-secrets/**)');
+  });
+  it('the classifier marks a direct run of the verb script and a write of the roster forbidden, and a read of the script is not (F2)', () => {
+    for (const command of [
+      'node deploy/account-op.mjs set-facts --file f --id lane-a --continuity on', 'node ./deploy/account-op.mjs roster --file f', './deploy/account-op.mjs roster',
+      'node /srv/home/ccrc/deploy/account-op.mjs set-facts', 'node "$T/deploy/account-op.mjs" set-facts', 'cd x && FOO=1 node account-op.mjs set-facts', 'exec node account-op.mjs x',
+      // the roster files sit under `~/.ccrc`, which the `a registry path` row already forbids in any Bash text
+      'echo x > ~/.ccrc/accounts.json', 'cp /tmp/x $HOME/.ccrc/accounts.sh',
+    ]) expect(classOf('Bash', { command }), command).toBe('forbidden');
+    for (const f of ACCOUNT_ROSTER_FILES) expect(classOf('Write', { file_path: f, content: '{}' }), f).toBe('forbidden');
+    for (const command of ['grep x deploy/account-op.mjs', 'cat deploy/account-op.mjs', 'git diff -- deploy/account-op.mjs']) {
+      expect(classOf('Bash', { command }), command).not.toBe('forbidden');
+    }
   });
   it('the classifier answers every MUST-ALLOW form as `main` does', () => {
     const diff = mustAllow().flatMap((r) => {

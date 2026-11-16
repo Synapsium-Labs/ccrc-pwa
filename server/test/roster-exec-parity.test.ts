@@ -256,4 +256,13 @@ describe('fableBilling and continuity: both parsers decide alike', () => {
     expect(words('shared/roster-json.mjs')).toEqual([...FABLE_BILLINGS]);
     expect(words('shared/rosterFacts.ts')).toEqual([...FABLE_BILLINGS]);
   });
+
+  /** `shared/generate.mjs` spells the two words a third time, as the closed set an `accounts.sh` arm may echo (F7). */
+  it('the generator\'s billing filter admits exactly FABLE_BILLINGS, in order', async () => {
+    const { FABLE_BILLINGS } = await import('../../shared/rosterFacts.js');
+    const src = readFileSync(path.join(root, 'shared/generate.mjs'), 'utf8');
+    const m = src.match(/\.filter\(\(a\) => (a\.fableBilling === '[a-z]+'(?: \|\| a\.fableBilling === '[a-z]+')*)\)/);
+    if (m === null) throw new Error('no fableBilling filter in shared/generate.mjs');
+    expect([...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!)).toEqual([...FABLE_BILLINGS]);
+  });
 });

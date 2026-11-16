@@ -8622,13 +8622,14 @@ _acct_set() {
       fi
     fi
     _acct_write_op "${done_note}Nothing else was written." set-placement --file "$(_acct_roster_path)" --id "$id" --placement "$placement"
+    done_note="${done_note}The placement was recorded. "
     _acct_projection "The roster records lane $id's placement as $placement."
   fi
   if [ -n "$billing$continuity" ]; then   # the serviceability facts (H16), under the same marker lock as the placement write
     [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
     _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
       ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} --recorded-at now
-    _acct_projection "The roster records lane $id's billing and continuity facts."
+    _acct_projection "The roster records lane $id's ${billing:+billing }${billing:+${continuity:+and }}${continuity:+continuity }fact${billing:+${continuity:+s}}."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"

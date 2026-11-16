@@ -41,8 +41,26 @@ plan, by slug, for the coordinator to fold into the ledger. No number is minted 
   `peers-claims-l0.test.ts`'s import pin counts twenty lines.
 - **`pool-set-fixtures-record-continuity`.** `ccd-pool-a3.test.ts`'s session has a pool set, so it is a set-side asker,
   and F8 holds it to a continuity record on every lane: with none recorded, `_swap_target` found no lane for it. Its
-  fixture lanes now record one, so its cases still measure the pool rule alone. Pool set B and the designation should
-  expect the same: a set-side session needs recorded lanes to be placed anywhere.
+  fixture lanes now record one, so its cases still measure the pool rule alone. The plan that meets this next is the
+  ccd arms plan (`w1-ccd-arms.md`): its fresh pick and settle call `_class_gate` with the id, and its fixtures carry a
+  `poolset`, so their lanes need a continuity record too (review 2192 F6; the coordinator carries it into that build's
+  brief). Pool set B has no set-side placement case, and the designation's count already reads the TypeScript twin.
+- **`continuity-on-top-of-the-other-tests`** (review 2192 F1, ruled). The plan's order put the continuity arm first, so
+  on an unrecorded lane a set-side session skipped the backend, billing, Fable-share and seven-day tests. Ruled: those
+  tests run first, exactly as for a plain session, and `no-continuity` (or `continuity-unread`) applies on top of
+  them, never instead: a base refusal keeps its own word and the settle drops a rung for it as for a plain session; a
+  servable, skipped or unmeasured base answers the continuity word. The settle then composes the intended class only
+  when the base answer is servable, and on an unmeasured base composes what stands, writing no stamp either way.
+- **`no-set-reaches-the-id-less-placers`** (review 2192 F9). `_place_for_class`, `_ws_least_loaded` and `_ws_lane_why`
+  take no id. No designation path places a set-side row through them: `ws-add`, `start` and `enable` refuse a `poolset`
+  on `--route` before they place (`_route_argv_check`), the designation writes the set with `ccd route --session` after
+  the session exists, and `_auto_swap_check`'s rehome calls `_ws_least_loaded` only for a side that is not a set. A
+  guard test in `ccd-swap-target-class.test.ts` pins the id-less placers' callers and that guard.
+- **`roster-files-join-the-account-deny`** (review 2192 F2, ruled). A session could change the two facts by writing
+  `~/.ccrc/accounts.json` or `~/.ccrc/accounts.sh`, or by running `deploy/account-op.mjs` directly, past the verb and
+  the door's step-up. All three join the account deny rules, the session hook's account arm and the classifier, as
+  an accident guard like the others (an assembled `bash -c` string or another interpreter still runs past it); the
+  must-allow list is unchanged.
 - **`departures-note-path`.** The brief names this file `w1-serviceability-a.md`; the plan's Global Constraints name
   `w1-serviceability/departures.md`. The brief's name is used.
 
