@@ -1723,7 +1723,7 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -2930,7 +2930,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 matching LINES now, 12 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 13 of
 # them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (18/12 before fix round 1, which deleted two prose mentions along
@@ -3016,7 +3016,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 #
 # GLOBALS, NOT STDOUT, and the precedent is `_session_probe` below: `$( )`
 # would fork a subshell and eat them. MEASURED rather than assumed, because
-# this only works if no call site captures the call — all 12 invoke it
+# this only works if no call site captures the call — all 13 invoke it
 # rc-style (`; prc=$?`, `|| continue`, `if ! …`), so the writes land in the
 # caller's own scope. Two consequences a future caller must respect: a caller
 # that runs OTHER functions between the call and the render must SNAPSHOT them
@@ -3036,6 +3036,8 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # call (`_place_for_class`'s `PLACE_DEGRADED_TO`, printed on a second line to
 # survive the subshell) — the day one of these four is called bare instead of
 # captured, the next `_pool_ok` render silently reads the wrong call's answer.
+# `_default_pool` calls it too since the pool set's PR A3, and is reached only through `_pool_for`,
+# whose two call sites are `$( )`-substituted as well.
 _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
   local ap pp
   POOL_OK_SIDE=''; POOL_OK_STATE=''
@@ -3349,10 +3351,10 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; local __rg_
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 209
-# invocations across 177 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 208
+# invocations across 176 non-comment lines.
 #
-# THE LAST MOVE WAS `_spawn_mode` (overlord W1a, fresh start), the −1 call on two fewer lines: four copies of the spawn-mode line's `started` read became one reader making three calls on two lines; before it `_pane_type_ready`'s refusal-memo read (D-8271), the +1 call on its own line; before it `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
+# THE LAST MOVE WAS `_default_pool` (overlord W1 pool set A3), the −1 call on its own line: its project read for a pay-per-use lane became `_session_pool_side`'s; before it `_spawn_mode` (overlord W1a, fresh start), the −1 call on two fewer lines: four copies of the spawn-mode line's `started` read became one reader making three calls on two lines; before it `_pane_type_ready`'s refusal-memo read (D-8271), the +1 call on its own line; before it `cmd_forget`'s workspace read, now `_reg_read_to` (D-8140), the −1 call on its own line; before it `_default_pool`'s project read for a pay-per-use lane (D-8098), the +1 call on its own line; before it `cmd_pr_train_prove`'s project read (D-7378), the +1 call on its own line; before it `cmd_pr_landing`'s two reads (a session's `workspace` and `project`), the +2 calls on two lines; before it ws-expire's `--child-of` marker read (`_ws_expire_not_child`, D-6640), the +1 call on its own line; before it the named-workspace title verb's workspace gate (`cmd_ws_title`'s `workspace` read), the +1 call on its own line; before it the children's spawn record (plan Task 15, D-5299), the +1 (`_spawn_start`'s `.child` test); before it the tick diet's `_reg_get_to` conversions (D-4963), the −9 (`_session_hard_blocked` 2, `_auto_stale_check` 1, `_auto_swap_check` 2, `_auto_compact_check` 3, `_route_applied_get_to` 1: each hot read now fills its variable with builtins, no subshell); before it the forked-session transcript's review round 2 — the held-conversation wait (`_ci_held_wait` +3, `_supervised_start` +2, `_ci_bgwait_open`/`_ci_bgwait_close` +1 each — D-4944), the +7; before it its review round 1 (`_ci_bg_follow`, `_ci_chain_end`, `_ci_resume_follow` — D-4944/D-4945), the +3; before it the forked-session transcript's continued-in walk (`_sync_uuid`, `_follow_continued_in`), the +2; before it the read-back's lane gate (`_route_readback_transcript`), the +1; before it the read-back's transcript memo (`_route_readback_transcript`), the +1; before it the return gate's unarchive (workspace lifecycle wave 3b), the +2; before it the route read-back's uuid read (`_route_readback`), the +1; before it the EXPIRE region's reads (workspace lifecycle wave 3), the +10; before that the operator-choice reads (session-continuity wave 3), the +3; before that the rescue wait's reads (session-continuity wave 2), the +3;
 # then D-3526's carried-in verdict, the +6 (`_limit_dated`, `_limit_read`, `_never_came_up`, three in `_carried_in_note`); then the RECLAIM region's reads (#166 wave 3, Task 5), `_child_tmpdir`'s and #127's.
 # BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -4104,14 +4106,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, the start report's spool `startpending` 58 (overlord W1a), and the anchor's owed mark `anchor-owed` 59 (overlord W1a) — by addition, NOT a fresh census of
+  # floors): 38; #166's `child` made 39, D-3526's `carriednote` and `tdate` 41, the stall watch's `turn` 42, continuity's `rescuewait` 43, `typed` 44, `choicekept` 45, the route read-back's `readbackseen` 46, the background-job wait's `bgwait` 47 (#189), D-6180's stand-down lines `standdown`, `standdownaff` and `standdownprobe` 50, D-5941's `prbranch` 51, and D-8271's typing-check log floor `typerefuse` 52, the launch record's `deleg` 53 (D-8367), the fresh start's `fresh` 54 (overlord W1a), the manifest's `inflight` 55 (D-8374), the Overlord's compaction events `compactevents` and `compacteventsprev` 57, the start report's spool `startpending` 58 (overlord W1a), the anchor's owed mark `anchor-owed` 59 (overlord W1a), and the loads report's `loadpending` and `loadlast` 61 (Overlord W1 sandbox) — by addition, NOT a fresh census of
   # every per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
   # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
   # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
   # omits; the gap is pre-existing, not new, and this paragraph's count tracks
   # only the additions named above against the last stated total.
-  # The 59: `anchor-owed`, `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
-  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`,
+  # The 61: `anchor-owed`, `archived`, `archivedreason`, `archivemanifest`, `base`, `bgwait`, `branch`,
+  # `carriednote`, `child`, `choicekept`, `compactevents`, `compacteventsprev`, `compactnote`, `compactskip`, `crosspool`, `deleg`, `fresh`, `hold`, `home`, `hookstate`, `inflight`, `lastcompact`, `lastswap`, `loadlast`, `loadpending`,
   # `pool`, `prbranch`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
   # `readbackseen`, `reaping`, `rescuewait`, `setup`, `spawn`, `stalenarrownote`, `standdown`, `standdownaff`, `standdownprobe`, `started`, `startpending`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
@@ -4303,10 +4305,10 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     rm -f "$pf" || _reg_purge_unremoved "$pf"
   done
   # GENERATION LAST, after the archived/reaping tail and every private family, and OUTSIDE the loop above, which skips it: the row's authorization, so while it stands a hook holding it can still take the lock.
-  # `joined`, `joinedprev` and `deleg` (the launch record, D-8367: the hook appends it without a lock under the same two-sided rule), `startpending` (the start report's spool, Overlord W1a: the hook rewrites it without a lock under the same rule), and `anchor-owed` (the anchor's owed mark, Overlord W1a: the owed prompt rewrites its try count without a lock under the same rule; review 2073 N2), ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
-  # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself. Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
+  # `joined`, `joinedprev` and `deleg` (the launch record, D-8367: the hook appends it without a lock under the same two-sided rule), `startpending` (the start report's spool, Overlord W1a: the hook rewrites it without a lock under the same rule), `anchor-owed` (the anchor's owed mark, Overlord W1a: the owed prompt rewrites its try count without a lock under the same rule; review 2073 N2), and `loadpending` and `loadlast` (the loads report's spool and its last reported start, Overlord W1 sandbox: the hook writes both without a lock under the same rule), ONCE MORE, AFTER IT, in ONE `rm` call on the same line, and the order is the point: session-hook.sh appends `$REG/$id.joined` on a SubagentStart WITHOUT this lock (and renames it whole to `joinedprev` past 128 lines), only while `generation` stands (it checks before the append and again after it, and removes both names if the row is gone), and the glob loop above passed the names tens of milliseconds before this line.
+  # An append that lands before this line is taken by it; one that lands after `generation` has gone sees no row on its re-check and removes itself (every one of those writers' paths ends at that re-check, the loads report's wait path included: review 2135 F3). Placed earlier, it would leave a hook that still sees the row free to write behind it, and an orphaned dot-free field holds the slug for ever (`_ws_slug_free`'s any-field check; `ws-gc`, keyed on `.uuid`/`.workspace`, never clears it).
   # Its own literal paths and never the loop's `f` (the note beside the `hf` loop: a second unlink through that variable is a second canonical write on the compaction card's allow-list; neither name is on it). ONE call, so the purge's unlink count stays what `ccd-workspaces.test.ts` pins; a refusal names each path still standing. Line-neutral by construction, so no cited anchor below moves.
-  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; [[ -e "$REG/$id.deleg" ]] && _reg_purge_unremoved "$REG/$id.deleg"; [[ -e "$REG/$id.startpending" ]] && _reg_purge_unremoved "$REG/$id.startpending"; [[ -e "$REG/$id.anchor-owed" ]] && _reg_purge_unremoved "$REG/$id.anchor-owed"; }
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"; rm -f "$REG/$id.joined" "$REG/$id.joinedprev" "$REG/$id.deleg" "$REG/$id.startpending" "$REG/$id.anchor-owed" "$REG/$id.loadpending" "$REG/$id.loadlast" || { [[ -e "$REG/$id.joined" ]] && _reg_purge_unremoved "$REG/$id.joined"; [[ -e "$REG/$id.joinedprev" ]] && _reg_purge_unremoved "$REG/$id.joinedprev"; [[ -e "$REG/$id.deleg" ]] && _reg_purge_unremoved "$REG/$id.deleg"; [[ -e "$REG/$id.startpending" ]] && _reg_purge_unremoved "$REG/$id.startpending"; [[ -e "$REG/$id.anchor-owed" ]] && _reg_purge_unremoved "$REG/$id.anchor-owed"; [[ -e "$REG/$id.loadpending" ]] && _reg_purge_unremoved "$REG/$id.loadpending"; [[ -e "$REG/$id.loadlast" ]] && _reg_purge_unremoved "$REG/$id.loadlast"; }
   _compact_lock_release "$_pg_fd"
   return "$_pg_urc"
 }
@@ -9464,6 +9466,8 @@ EOF
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
+  echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
+  echo docs-log; echo docs-log-v1   # native Docs reader W5b (rich-docs spec G4): the verb, and the token that says it takes exactly this argv; the server sends it only behind the token
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -10102,8 +10106,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     [[ ( "$f" == poolset || "$f" == acctorder ) && -n "${CLAUDECODE:-}" ]] && die "pool-set-operator-only: a Claude Code session may not write $f"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
     # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
-    # designation's retire and rebind, plan slug poolset-empty-value-clears). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder ) ]] && continue
+    # designation's retire and rebind, plan slug poolset-empty-value-clears), and so does `profiledigest` (Overlord W1 sandbox:
+    # retire, rebind and a failed pending designation). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -19455,8 +19460,10 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # A PAY-PER-USE LANE IS THE EXCEPTION (operator ruling 2026-11-07, D-8098).
   # Being enabled is not enough for a non-home-able lane whose provider bills
   # per use (`_is_pay_per_use`): every session it takes spends the key. It joins
-  # only when a pool names it — the session's project is tagged with a pool and
-  # the lane's own pool, as the projection measures it, is that same pool. A
+  # only when a pool names it — the session's side (its set when one stands on the
+  # route record, else its project's tag) serves the lane by the lane's own pool,
+  # as the projection measures it (`_pool_ok` rc 0 with the account side named):
+  # an untagged lane never joins, even under a set that admits `+untagged`. A
   # hand-set registry `pool` list names it too, because `_pool_for` then never
   # calls this function. A session already on such a lane is not evacuated:
   # nothing checks that `cur` is a pool member, the same asymmetry as above. A
@@ -19464,7 +19471,7 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
   # knowingly, so it stays in the unconditional half.
   #
   # `$1` is the session id every caller passes (`_pool_for`). Only that rule
-  # reads it, for the project's pool tag, and only when a pay-per-use lane is
+  # reads it, for the session's side (`_session_pool_side`), and only when a pay-per-use lane is
   # enabled; for every other lane the default pool is the same for every session.
   #
   # A SPACE-JOINED STRING, not an array, and `_swap_target` consumes it through
@@ -19489,8 +19496,8 @@ _default_pool() {   # id -> wrappers this session may auto-swap between.
     _is_home_able "$w" && continue
     _account_ok "$w" || continue
     if _is_pay_per_use "$w"; then
-      [[ -n "$pps" ]] || pps=$(_project_pool_state "$(_reg_get "$1" project)")
-      [[ "$pps" == "named "* && "$(_acct_pool_state "$w")" == "$pps" ]] || continue
+      [[ -n "$pps" ]] || pps=$(_session_pool_side "$1")
+      _pool_ok "$w" "$pps" && [[ "$POOL_OK_SIDE" == account && "$POOL_OK_STATE" == "named "* ]] || continue
     fi
     pool="$pool $w"
   done
@@ -20082,7 +20089,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
-_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
+_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule on the project side, 7 on the account side (the projection), 8 on the set side; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
   # THREE ANSWERS, NOT TWO (#67 review, S4/S5). `return 0` with empty stdout
   # used to mean BOTH "stay put, everything is fine" and "the crossing record
   # could not be read, so I decline to decide" — and the caller handles those
@@ -20140,7 +20147,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # answer, so refusing there would break the limit rescue to close nothing.
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable && return 3
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   # UNDECIDABLE IS NOT A DECISION — FOR THE MARKER TOO, NOT ONLY FOR THE TAG
   # (C1, D-1991). rc 2 says the marker's own record could not be read, so this
   # function cannot say whether a deliberate crossing stands. Taking that as
@@ -20189,7 +20196,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # constraint, which is the overloaded-null defect this tree names. What
   # changes is that the caller now knows WHICH condition stopped it and says so.
   _pool_ok "$cur" "$pps"; prc=$?
-  [[ "$prc" -eq 2 ]] && return 4
+  [[ "$prc" -eq 2 ]] && { _pool_undecided_rc "$POOL_OK_SIDE"; return $?; }
   # A WRONG-POOL CURRENT ACCOUNT IS A MUST-LEAVE (ruling 5): `force=pool` skips
   # both "stay" shortcuts exactly as a hard block does, so a retag relocates the
   # session at its next idle boundary instead of waiting for telemetry to turn
@@ -21035,6 +21042,7 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
+    projection|set) _pool_undecidable_cause "$1" "$2" ;;
     classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
@@ -21398,7 +21406,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _tick_strand_undecidable "$id" project "$wrapper"
     return 0
   fi
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   # THREE OUTCOMES, NOT TWO (C1, D-1988). `_crosspool_tick` answers rc 2 —
   # "nobody can say" — when an input it would have ended the crossing on could
   # not be measured. `&& crossed=1` reads that as "no crossing stands", which
@@ -21465,7 +21473,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # stands". On rc 2 both are false, so the row is left exactly as it is until
   # the input becomes readable again — the same standing-still the undecidable
   # project tag already produces one level down.
-  if [[ "$ctrc" -eq 1 ]]; then
+  if [[ "$ctrc" -eq 1 && "$pps" != "set "* ]]; then
     _pool_ok "$home" "$pps"; prc=$?
     if [[ "$prc" -eq 1 ]]; then
       new=$(_ws_least_loaded "$project")
@@ -21512,7 +21520,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # naming `crosspool` there would send them to the wrong file.
   [[ "$hrc"  -eq 2 ]] && stuck=home
   [[ -z "$stuck" && "$ctrc" -eq 2 ]] && stuck=crosspool
-  [[ -z "$stuck" && "$prc"  -eq 2 ]] && stuck=pool
+  [[ -z "$stuck" && "$prc"  -eq 2 ]] && stuck=$(_pool_undecided_word "$POOL_OK_SIDE")
   [[ -n "$stuck" ]] && _tick_undecidable "$id" "$stuck"
   # ── THE COOLDOWN GATES CLEAR, AND THE PANE GATE DOES NOT (#69 round 4, B2) ──
   # Round 2 stormed because the clear ran BEFORE the setter. Round 3 moved the
@@ -21715,7 +21723,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       case "$strc" in
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
-        4) uword=pool ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
+        4|7|8) uword=$(_pool_undecided_word "$strc") ;;        # the pool rule against cur, by side: 4 the tag under `$POOLS_DIR`, 7 the projection, 8 the session's set
         5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac
@@ -22126,8 +22134,9 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # next spawn removes it. `precompact` (Overlord W1a compaction, plan slug route-fields-outside-route-any) is skipped
   # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. THE POOL SET'S TWO (`poolset`,
   # `acctorder`; the Overlord's W1, plan slug pool-fields-outside-route-any) decide placement, never the spawn's model or flags.
+  # Nor `profiledigest` (Overlord W1 sandbox): `_profile_spawn_compose` reads it, and an Overlord row is not a routed row.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 # @ccd-lib:poolset — a session's pool set (the Overlord's W1, C46): its bounds, its spelling's parser and the ordered list's shape check, which `_route_valid` reads, live in ccd/lib/pool-set.sh
@@ -22174,6 +22183,9 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     # `acctorder` the Overlord's ordered account list, checked for shape only. Both live in ccd/lib/pool-set.sh.
     poolset)  _poolset_parse "$v" >/dev/null ;;
     acctorder) _acctorder_valid "$v" ;;
+    # `profiledigest` (Overlord W1 sandbox, Task 3): the sha256 the server expects of the row `profile` names. While it
+    # stands, `_profile_spawn_compose` renders the row's surface whole or refuses the spawn.
+    profiledigest) [[ "$v" =~ ^[0-9a-f]{64}$ ]] ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -26167,26 +26179,59 @@ _fleet_spawn_compose() {   # id launchflags -> sets FLEET_SPAWN_FLAGS; never fai
 # that cannot be read journals its own `route-unmeasured` line here, floored by the same `routeunmeasprofile` marker.
 # The raw read keeps `_route_get`'s other two lines itself (review 1970 N1): a `.profile` present but unreadable journals
 # `_route_unread_note`'s line, and a word that is not a row (or bytes of no word's shape) `_route_reject_note`'s.
+# THE SURFACE (Overlord W1 sandbox, Task 3; slugs expected-digest-rides-the-route, surfaced-profile-fails-closed). Only when
+# the route's `profiledigest` stands, and tested BEFORE the "no `profile`" return: `_profile_digest_ok` must pass (the row
+# `profile` names, as `jq -cS` prints it, hashes to the field), and the row's `flags` (each word checked by shape, the
+# `--agents` value only for a quote, then single-quoted), `surfaceSettings` (merged after `settings` and
+# `compactionSettings`) and `remoteControl` (`off` strips the `--remote-control '<id>'` the launch flags open with) are
+# rendered, with CCRC_LAUNCH_PROFILE=<role>:<digest> and CCRC_LAUNCH_RC=on|off (read from the final flags) in the
+# environment. Any step that fails refuses the spawn (rc 1 here, one `launch-profile-refused` line in swap.log, and
+# `_spawn_start` dies on it, its only failure mode, D-300): the field,
+# never a role word, makes a spawn fail closed. A route without the field takes the W1a path above, fail-open included.
+# The program's output is read with the unit separator, which is not IFS whitespace, so an empty field keeps its place.
 LAUNCH_PROFILES_JSON="${BASH_SOURCE[0]%/*}/lib/launch-profiles.json"
 [[ -f "$LAUNCH_PROFILES_JSON" ]] || LAUNCH_PROFILES_JSON="$HOME/.cc-sessions/lib/launch-profiles.json"
 PROFILE_ROW_JQ='.[$r] as $x
-  | if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
+  | def agents($i): $i > 0 and $x.flags[$i - 1] == "--agents";
+  if ($x | type) == "object" and ($x.env | type) == "object" and ($x.settings | type) == "object"
        and ($x.compactionSettings | type) == "object" and ($x.autoMemory == "off" or $x.autoMemory == "switch")
        and ($x.env | to_entries | all((.key | test("\\ACLAUDE_CODE_[A-Z_]+\\z")) and (.value | type == "string") and (.value | test("\\A[A-Za-z0-9._-]+\\z"))))
+       and ($sf == "" or (($x.flags | type) == "array" and ($x.surfaceSettings | type) == "object" and ($x.remoteControl == "on" or $x.remoteControl == "off")
+         and ($x.flags | to_entries | all(.value | type == "string") and all(if agents(.key) then (.value | test("[\u0027\\x00-\\x1f\\x7f]") | not) else (.value | test("\\A[A-Za-z0-9,._-]+\\z")) end))))
     then . else error("malformed row") end
-  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) | tojson) + "\t"
+  | ($x.settings * (if $cw == "" then {} else $x.compactionSettings end) * (if $sf == "" then {} else $x.surfaceSettings end) | tojson) + "\u001f"
     + ([$x.env | to_entries[] | "\(.key)=\(.value)"]
        + (if $x.autoMemory == "off" or $am == "off" then ["CLAUDE_CODE_DISABLE_AUTO_MEMORY=1"] else [] end)
-       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))'
-_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never fails, never half-applies
-  local id="$1" p="" am cw out="" pset="" penv="" unread=""
+       + (if $cw == "" then [] else ["CLAUDE_CODE_AUTO_COMPACT_WINDOW=" + $cw] end) | join(" "))
+    + "\u001f" + (if $sf == "" then "" else ([$x.flags | to_entries[] | if agents(.key) then "\u0027" + .value + "\u0027" else .value end] | join(" ")) + "\u001f" + $x.remoteControl end)'
+_profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `profile` names hashes to it (then PROFILE_DIGEST_P, _D and _ROW hold the profile, the digest and the row, as `jq -cS` printed it, that it read, for the caller to render: review 2135 F7); else 1 and PROFILE_DIGEST_WHY
+  local d p="" h row; PROFILE_DIGEST_WHY="" PROFILE_DIGEST_P="" PROFILE_DIGEST_D="" PROFILE_DIGEST_ROW=""
+  [[ -e "$REG/$1.profiledigest" || -L "$REG/$1.profiledigest" ]] || return 0
+  d=$(_route_get "$1" profiledigest)
+  if [[ -z "$d" ]]; then PROFILE_DIGEST_WHY="profiledigest unreadable"
+  elif ! _reg_get_to p "$1" profile 2>/dev/null || [[ ! "$p" =~ ^[a-z]{1,16}$ ]]; then PROFILE_DIGEST_WHY="profile absent or unreadable"
+  elif ! row=$(jq -cS --arg r "$p" '.[$r]' "$LAUNCH_PROFILES_JSON" 2>/dev/null) || ! h=$(printf '%s\n' "$row" | _plat_sha256); then PROFILE_DIGEST_WHY="launch profiles unreadable"
+  elif [[ "${h%% *}" != "$d" ]]; then PROFILE_DIGEST_WHY="row $p does not hash to profiledigest"
+  else PROFILE_DIGEST_P="$p" PROFILE_DIGEST_D="$d" PROFILE_DIGEST_ROW="$row"; return 0; fi
+  return 1
+}
+_profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
+  echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
+}
+_profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never half-applies; rc 1 only under a standing profiledigest
+  local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
-  [[ -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
-  _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
+  if [[ -e "$REG/$id.profiledigest" || -L "$REG/$id.profiledigest" ]]; then
+    _profile_digest_ok "$id" || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
+    sf=1 p="$PROFILE_DIGEST_P" d="$PROFILE_DIGEST_D" src=/dev/stdin   # render the row the digest covered: one read (F7)
+  fi
+  [[ -n "$sf" || -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
+  [[ -n "$sf" ]] || _reg_get_to p "$id" profile 2>/dev/null || { _route_unread_note "$id" profile; unread=1; }
   am=$(_route_get "$id" automem); cw=$(_route_get "$id" compactwindow)
-  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" "$PROFILE_ROW_JQ" "$LAUNCH_PROFILES_JSON" 2>/dev/null) || out=""
-  IFS=$'\t' read -r pset penv <<< "$out"
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] && out=$(jq -r --arg r "$p" --arg am "$am" --arg cw "$cw" --arg sf "$sf" "$PROFILE_ROW_JQ" "$src" 2>/dev/null <<<"{\"$p\":${PROFILE_DIGEST_ROW:-null}}") || out=""
+  IFS=$'\x1f' read -r pset penv pflags prc <<< "$out"
   if [[ -z "$pset" ]]; then
+    [[ -z "$sf" ]] || { _profile_refused "$id" "row $p malformed"; return 1; }
     if ! jq -e 'type == "object"' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; then _route_note_floored "$id" routeunmeasprofile \
       || echo "$(date '+%F %T') route-unmeasured $id: field profile could not be checked — this box's launch profiles ($LAUNCH_PROFILES_JSON) cannot be read; treated as absent — re-run ccrc install" >> "$REG/swap.log"
     elif [[ -z "$unread" ]] && ! { [[ "$p" =~ ^[a-z]{1,16}$ ]] && jq -e --arg r "$p" 'has($r)' "$LAUNCH_PROFILES_JSON" >/dev/null 2>&1; }; then
@@ -26195,8 +26240,17 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
     [[ "$p" =~ ^[a-z]{1,16}$ ]] || p="<$(_route_bytes "$p") bytes>"
     echo "ccd: warn: $id: launch profile $p unreadable — spawning without it" >&2; return 0
   fi
-  [[ "$pset" == '{}' ]] || { _spawn_settings_last "$id" "$2" "$pset" "launch profile $p" || return 0; PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"; }
+  if [[ "$pset" != '{}' ]] && ! _spawn_settings_last "$id" "$2" "$pset" "launch profile $p"; then
+    [[ -z "$sf" ]] || { _profile_refused "$id" "settings merge failed"; return 1; }
+    return 0
+  fi
+  [[ "$pset" == '{}' ]] || PROFILE_SPAWN_FLAGS="$SPAWN_SETTINGS_FLAGS"
   PROFILE_SPAWN_ENV="$penv"
+  [[ -n "$sf" ]] || return 0
+  [[ "$prc" != off ]] || { PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS#"--remote-control '$id'"}"; PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS# }"; }
+  PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS:+$PROFILE_SPAWN_FLAGS }$pflags"
+  [[ "$PROFILE_SPAWN_FLAGS" == *"--remote-control "* ]] && prc=on || prc=off
+  PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
 }
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
@@ -26840,7 +26894,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _account_spawn_compose "$id" "$launchflags"; launchflags="$ACCOUNT_SPAWN_FLAGS"
   # THE FLEET PINS (D-8173), for EVERY row, LAST: the auto-continue, inbox and idle-compaction rulings merge into the one `--settings`.
   _fleet_spawn_compose "$id" "$launchflags"; launchflags="$FLEET_SPAWN_FLAGS"
-  _profile_spawn_compose "$id" "$launchflags"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
+  _profile_spawn_compose "$id" "$launchflags" || die "$id: launch profile refused, no pane started (swap.log names the step)"; launchflags="$PROFILE_SPAWN_FLAGS"; resenv="$resenv${PROFILE_SPAWN_ENV:+ $PROFILE_SPAWN_ENV}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -27809,7 +27863,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # refuse a REVIVAL of a session a retag put in the wrong pool — which
   # ruling 5 moves at the next idle boundary instead. At most a warning.
   local pps prc pside pstate
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$wrapper" "$pps"; prc=$?
   # SNAPSHOT THE TWO FACTS IMMEDIATELY (fix round 1, I1/I2) — see the header at
   # the rule itself. Nothing runs between here and the two `die`s below today,
@@ -27819,9 +27873,11 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   if [[ -z "$regw" ]]; then
     [[ "$prc" -eq 2 ]] \
-      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper"); nothing was touched"
+      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
     [[ "$prc" -eq 1 && -z "$cross" ]] \
       && die "pool-mismatch: $(_pool_mismatch_why "$wrapper" "$pstate" "$project" "$pps") — to cross on purpose: ccd start --cross-pool $wrapper $project"
+  elif _pool_side_is_set "$pps"; then
+    (( prc == 0 )) || _pool_set_start_warn "$id" "$wrapper" "$prc" "$pside" "$pstate" "$project" "$pps" >&2
   elif [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
     # SAID, NOT DECIDED. `$pps` is `untagged` here because the field could not be
     # read, not because the project carries no tag, so the mismatch arm below
@@ -27969,7 +28025,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
-  [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "${pps#named }" "$wrapper"
+  [[ "$prc" -eq 1 && -n "$cross" && -z "$regw" ]] && _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$wrapper"
   local mode; mode=$(_spawn_mode "$id")
   # A deliberate revival supersedes a refused swap's banner: `ccd start <id>`
   # is the human act §4.4 names as "what would bring this back" (whether typed
@@ -30546,7 +30602,7 @@ _rescue_target() {   # id cur home hard-blocked hrc -> `_swap_target`'s stdout a
   # session just left blocked).
   local out rc recent
   out=$(_swap_target "$@"); rc=$?
-  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc <= 5 )) || ! _rescue_history "$1" \
+  if [[ -z "$4" || -z "$out" ]] || (( rc >= 2 && rc != 6 )) || ! _rescue_history "$1" \
      || [[ -z "$RESCUE_SKIP_LEFT$RESCUE_SKIP_RECENT" ]]; then
     [[ -n "$out" ]] && printf '%s\n' "$out"
     return "$rc"
@@ -30647,12 +30703,12 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # are stated in two places because they are two different questions: which
   # accounts a walk considers, and in which order it rejects them.
   local id="$1" p="$2" pps cand ap cur out="" prc
-  pps=$(_project_pool_state "$p")
+  pps=$(_session_pool_side "$id" "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
   # accounts would invent five reasons for one condition. One token, with the
   # path, because the remedy is a permission or a rewrite and not an account.
-  [[ "$pps" == untagged || "$pps" == "named "* ]] \
-    || { echo "tag:$pps $POOLS_DIR/$p"; return 0; }
+  [[ "$pps" == untagged || "$pps" == "named "* || "$pps" == "set "* ]] \
+    || { _pool_side_is_set "$pps" && echo "set:${pps#set-} $REG/$id.poolset" || echo "tag:$pps $POOLS_DIR/$p"; return 0; }
   cur=$(_reg_get "$id" wrapper)
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
@@ -30740,9 +30796,9 @@ _strand_mark() {   # id wrapper project [cause] — a hard-blocked session with 
   # rewording it is a test change in the same commit, not a comment.
   local id="$1" w="$2" p="$3" cause="${4:-}" now pps pool pdesc why nts banner=1 msg prev prc pat
   now=$(date +%s)
-  pps=$(_project_pool_state "$p")
+  pps=$(_session_pool_side "$id" "$p")
   pool='-'; pdesc='(untagged)'
-  [[ "$pps" == "named "* ]] && { pool="${pps#named }"; pdesc="$pool"; }
+  { [[ "$pps" == "named "* ]] || _pool_side_is_set "$pps"; } && { pool=$(_pool_side_token "$pps"); pdesc="$pool"; }
   if [[ -n "$cause" ]]; then
     why="$cause"
     msg="cc swap STRANDED: $id is blocked on $w — $cause"
@@ -30896,7 +30952,7 @@ _crosspool_valid() {   # id pool-state account... -> 0 valid / 1 none / 2 the re
   # rc 1 — it went away between the `-e` above and this line. Nothing stands.
   [[ "$rrc" -eq 1 ]] && return 1
   read -r ts pool acct <<<"$raw" || :
-  [[ -n "${pool:-}" && "$pps" == "named $pool" ]] || return 1
+  [[ -n "${pool:-}" ]] && _pool_cross_match "$pps" "$pool" || return 1
   for a in "$@"; do [[ -n "$a" && "$a" == "${acct:-}" ]] && return 0; done
   return 1
 }
@@ -31000,7 +31056,7 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 no
   # UNDECIDABLE, decided by the one reader of the record (C1). The marker
   # survives untouched and this function says so, rather than picking an arm.
   [[ "$cvrc" -eq 2 ]] && return 2
-  [[ "$pps" == named* || "$pps" == untagged ]] || return 1
+  [[ "$pps" == "named "* || "$pps" == "set "* || "$pps" == untagged ]] || return 1
   raw=$(_reg_read "$id" crosspool); rrc=$?
   # A SECOND READ, FOR THE REASON ONLY — the verdict above was
   # `_crosspool_valid`'s. It is measured too, because the record can turn
@@ -31026,8 +31082,8 @@ _crosspool_tick() {   # id wrapper home pool-state -> 0 a crossing stands / 1 no
     reason="marker record is empty"
   elif [[ -z "${pool:-}" ]]; then
     reason="marker record is malformed"
-  elif [[ "$pps" != "named $pool" ]]; then
-    reason="project pool is now $pps"
+  elif ! _pool_cross_match "$pps" "$pool"; then
+    reason=$(_pool_cross_lapse_why "$pps")
   else
     reason="moved off ${acct:-<unrecorded>}"
   fi
@@ -31554,7 +31610,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
                          # not an unbound-variable error under `set -u`.
   local id="${1:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}" target="${2:?usage: ccd swap [--force] [--cross-pool] [--interrupt] <id> <target-wrapper>}"
   _is_valid_wrapper "$target" || die "unknown wrapper '$target' (valid: ${CCRC_ACCOUNTS[*]})"
-  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _reg_id_ok "$id" && [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _ws_expire_refuse_return "$id" swap   # a return during an expiry refuses, before anything is journaled (EXPIRE region)
   # A HIBERNATED ROW IS NOT SWAPPED (D-5242): it has no pane to move, and a swap
   # would respawn it on another account behind the wake paths' budget.
@@ -31606,7 +31662,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$target" "$pps"; prc=$?
   # THE SNAPSHOT IS LOAD-BEARING HERE, not a convention (fix round 1, I1/I2).
   # `_crosspool_valid` and `_strand_mark` both run between this call and the
@@ -31618,7 +31674,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # pool X to pool Y on purpose"; when the tag cannot be read there is no X to
   # name, so there is no decision to override.
   [[ "$prc" -eq 2 ]] \
-    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target"); nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
   if [[ "$prc" -eq 1 ]]; then
     # `if` TAKES rc 2 AS FALSE, AND THAT IS THE RIGHT ANSWER HERE (C1) — but it
     # is right for a reason, not by luck, so it is said out loud. This is the
@@ -31957,7 +32013,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # re-execs itself detached, so a line written there would tell the operator
   # they crossed twice.
   if [[ -n "$crossing" ]]; then
-    _crosspool_mark "$id" "${pps#named }" "$target"
+    _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$target"
     # `target-pool` IS THE SNAPSHOT, NOT A FRESH DECLARED READ (fix round 1 —
     # the same carrier correction as the refusals above, applied to the one
     # renderer of this fact the review did not enumerate). Two reasons the
@@ -31966,7 +32022,7 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
     # a crossing at all, and it re-read minutes later — the carry can take
     # them — so the line recorded a pool that need not be the one the
     # decision was made against. `$pstate` is that decision's own word.
-    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
+    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=$(_pool_side_token "$pps") target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   local _oc_from=0 _oc_to=0; _is_anthropic_backend "$cur" && _oc_from=1; _is_anthropic_backend "$target" && _oc_to=1
@@ -32003,7 +32059,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   set -- "${args[@]}"
   local id="${1:?usage: ccd prefer <id> <wrapper>}" w="${2:?usage: ccd prefer <id> <wrapper>}"
   _is_valid_wrapper "$w" || die "unknown wrapper '$w' (valid: ${CCRC_ACCOUNTS[*]})"
-  [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
+  _reg_id_ok "$id" && [[ -f "$REG/$id.uuid" ]] || die "no registry for '$id'"
   _account_still_rostered "$w" "The home for '$id' is unchanged."
   # Shell-only: no whitelist entry and no CCD_ARGV builder, so no route can
   # reach this. The pool rule still applies — the auto-swapper would otherwise
@@ -32034,12 +32090,12 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   project=$(_reg_read "$id" project); prjrc=$?
   [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable \
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
-  pps=$(_project_pool_state "$project")
+  pps=$(_session_pool_side "$id" "$project")
   _pool_ok "$w" "$pps"; prc=$?
   # SNAPSHOT, for the reason `cmd_start`'s own snapshot states.
   local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   [[ "$prc" -eq 2 ]] \
-    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w"); nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w" "$(_pool_set_sid "$pps" "$id")"); nothing was touched"
   [[ "$prc" -eq 1 && -z "$cross" ]] \
     && die "pool-mismatch: $(_pool_mismatch_why "$w" "$pstate" "$project" "$pps") — to cross on purpose: ccd prefer --cross-pool $id $w"
   old=$(_home_for "$id")
@@ -32052,7 +32108,7 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
   [[ -e "$REG/$id.swappin" || -e "$REG/$id.swappinexp" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote" "$REG/$id.swappinexp"   # D-6181: with its expiry
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
-    && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
+    && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "$(_pool_side_token "$pps")" "$w"; }
   # THE ONE UNCONDITIONAL `.home` WRITER IN THIS FILE, and until now the only
   # account decision that left no record at all — so the one move an operator
   # makes by hand was the one the journal could not show.
@@ -44618,9 +44674,9 @@ _pr_state_by_pr() {   # project number -> ONE JSON line: one PR by number, no wo
   printf '%s' "$out" | _pr_py by-pr "$n" ""
 }
 
-# ── DOCS: the four docs verbs (spec 2026-10-01 §2) ──────────────────────────
-# `docs-index`, `docs-tree` and `docs-show` are read-only views of a project's
-# four docs sections; `docs-fetch` moves ONE remote-tracking ref. Each verb is a
+# ── DOCS: the five docs verbs (spec 2026-10-01 §2) ──────────────────────────
+# `docs-index`, `docs-tree`, `docs-show` and `docs-log` are read-only views of a project's
+# docs sections; `docs-fetch` moves ONE remote-tracking ref. Each verb is a
 # bash front over one embedded python helper, `_docs_py`, and the front does
 # three things, in this order and nothing else (spec §2 (a) Shape):
 #   1. the exact arity and flag-order check, the `--max-bytes` grammar included.
@@ -44691,7 +44747,7 @@ cmd_docs_index() {   # --all; every project under ccd's projects root, as one JS
   _docs_py docs-index "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
-cmd_docs_tree() {   # --project P [--ref R]; one project's four sections at one ref, with its drafts
+cmd_docs_tree() {   # --project P [--ref R]; one project's sections at one ref, with its drafts
   [[ "${1-}" == --project && ( $# -eq 2 || ( $# -eq 4 && "${3-}" == --ref ) ) ]] \
     || die "usage: ccd docs-tree --project P [--ref R]"
   _docs_front docs-tree || return 0
@@ -44722,6 +44778,15 @@ cmd_docs_fetch() {   # --project P [--branch B]; fetch ONE branch from origin in
     || die "usage: ccd docs-fetch --project P [--branch B]"
   _docs_front docs-fetch || return 0
   _docs_py docs-fetch "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
+cmd_docs_log() {   # --project P --commit C --section S --path X; one doc's commits from C back, newest first (rich-docs spec G4)
+  # Exactly 8 tokens in this order; the helper reads each value by fixed index, so the path is a value and never a
+  # pathspec: git logs the fixed section path, and the helper matches the doc's path by exact bytes.
+  [[ $# -eq 8 && "${1-}" == --project && "${3-}" == --commit && "${5-}" == --section && "${7-}" == --path ]] \
+    || die "usage: ccd docs-log --project P --commit C --section S --path X"
+  _docs_front docs-log || return 0
+  _docs_py docs-log "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
 _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
@@ -44775,7 +44840,7 @@ HELPER_FAILED_DETAIL_MAX_BYTES = 512
 # declares, each compared with its TS twin by docs-parity.test.ts, in both
 # directions. Nothing but those literals and comments goes between the markers.
 # docs-parity: begin
-SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions'}
+SECTIONS={'specs':'docs/superpowers/specs','plans':'docs/superpowers/plans','product-design':'docs/product-design','conventions':'docs/conventions','vision':'docs/vision','promise':'docs/promise'}
 PROJECT_RE=r'[A-Za-z0-9_][A-Za-z0-9._-]{0,99}'
 BARE_REF_RE=r'(?!HEAD$)(?!refs/)(?!.*\.\.)(?!.*\.lock(?:/|$))(?!.*\.(?:/|$))[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*'
 REF_MAX_CHARS=200
@@ -44798,6 +44863,10 @@ DOCS_MAX_ENTRIES=5000
 DOCS_DRAFT_HASH_BUDGET=33554432
 DOCS_MAX_DRAFTS=1000
 DOCS_FETCH_MIN_INTERVAL_MS=10000
+DOCS_LOG_MAX_ENTRIES=100
+DOCS_LOG_SUBJECT_MAX_CHARS=200
+DOCS_LOG_AUTHOR_MAX_CHARS=100
+DOCS_LOG_MAX_WIRE_BYTES=131072
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
 FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
 # docs-parity: end
@@ -44963,9 +45032,11 @@ TreeArgs = namedtuple('TreeArgs', ['project', 'ref'])
 ShowCommittedArgs = namedtuple('ShowCommittedArgs', ['project', 'commit', 'ref', 'section', 'path', 'max_bytes'])
 ShowDraftArgs = namedtuple('ShowDraftArgs', ['project', 'branch', 'head', 'section', 'path', 'fp', 'max_bytes'])
 FetchArgs = namedtuple('FetchArgs', ['project', 'branch'])
+LogArgs = namedtuple('LogArgs', ['project', 'commit', 'section', 'path'])
 
 SHOW_COMMITTED_FLAGS = ('--project', '--commit', '--ref', '--section', '--path', '--max-bytes')
 SHOW_DRAFT_FLAGS = ('--project', '--draft-branch', '--head', '--section', '--path', '--fingerprint', '--max-bytes')
+LOG_ARG_FLAGS = ('--project', '--commit', '--section', '--path')
 
 
 def _contract(ok, what):
@@ -45003,7 +45074,7 @@ def read_args(verb, rest):
 
     Order: tree -- project, ref (bare or qualified). show committed -- project, commit, ref (qualified
     only), section, path. show draft -- project, draft branch (bare), head, section, path, fingerprint.
-    fetch -- project, branch (bare). --max-bytes is the front's grammar: re-asserted, never refused."""
+    fetch -- project, branch (bare). log -- project, commit, section, path. --max-bytes is the front's grammar: re-asserted, never refused."""
     rest = list(rest)
     if verb == 'docs-index':
         _contract(rest == ['--all'], 'docs-index takes exactly --all')
@@ -45039,6 +45110,14 @@ def read_args(verb, rest):
         _refuse(valid_project(project), 'bad-project')
         _refuse(branch is None or valid_bare_ref(branch), 'bad-ref')
         return FetchArgs(project, branch)
+    if verb == 'docs-log':
+        project, commit, section, raw_path = _values(rest, LOG_ARG_FLAGS)
+        _refuse(valid_project(project), 'bad-project')
+        _refuse(valid_sha(commit), 'bad-commit')
+        _refuse(valid_section(section), 'bad-section')
+        rel = valid_rel_path(raw_path)
+        _refuse(rel is not None, 'bad-path')
+        return LogArgs(project, commit, section, rel)
     raise RuntimeError('docs argv contract: no argument reader for ' + repr(verb))
 
 # ===== docs: runner =====
@@ -45064,8 +45143,8 @@ import time
 # Budgets. Each literal is ONE line, so W2's budget test can extract it. A verb
 # builds one Deadline from HELPER_DEADLINE_S at its start; each git call it
 # makes is bounded by min(CALL_S[its class], what is left of that deadline).
-HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}
-CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5}
+HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}
+CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}
 KILL_GRACE_S=2
 REDACT_BUDGET_MS=900
 GIT_STDOUT_CAP=16777216
@@ -45389,19 +45468,33 @@ class GitRefused(ValueError):
 
 # The subcommand allowlist of section 2 (a), verbatim: each row is a token
 # prefix the subcommand must start with. docs-fetch alone may also run fetch.
+# The log row (rich-docs spec G4, M9.5; docs-log only): `log` runs with exactly
+# these -c pairs and this head, then `--end-of-options <commit> -- <section
+# path>`, and nothing else: no -n, no other pathspec, no caller's path
+# (git_argv checks the whole tail). The format has no `format:` prefix, so the
+# no-colon rule below holds for log too (git reads a string holding % as
+# tformat): five NUL-ended fields, the newline before the names, NUL-ended names.
+# The -c pairs pin every log.* setting that changes that shape, since the
+# user's and the repository's config are still read: under log.showRoot=false
+# a root commit prints no newline and no names (measured, git 2.53).
+LOG_CFLAGS = ('-c', 'log.showSignature=false', '-c', 'log.follow=false', '-c', 'log.mailmap=false',
+              '-c', 'log.showRoot=true')
+LOG_ROW = ('log', '--no-show-signature', '--encoding=UTF-8', '--no-merges',
+           '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only')
 READ_ALLOW = (
     ('rev-parse',), ('symbolic-ref',), ('for-each-ref',), ('ls-tree',),
     ('cat-file', '--batch-check'), ('cat-file', 'blob'),
     ('worktree', 'list'), ('status',), ('ls-files',),
     ('merge-base', '--is-ancestor'), ('rev-list', '--left-right', '--count'),
     ('config', '--get'), ('config', '-z', '--get-regexp'),
+    LOG_ROW,
 )
 FETCH_ALLOW = READ_ALLOW + (('fetch',),)
 # The spec's "never used" list, enforced rather than remembered: no filter or
 # textconv driver ever runs, and no <rev>:<path> object name reaches a command
 # that would read through it.
 NEVER_FLAGS = ('--textconv', '--filters')
-OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list')
+OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list', 'log')
 # The two settings the prefix pins. git lets a later -c win, so a caller's -c
 # may never set either again.
 PINNED_KEYS = ('core.fsmonitor', 'core.hookspath')
@@ -45449,6 +45542,10 @@ def git_argv(cwd, args, fetch=False):
             raise GitRefused('a flag the runner never passes: ' + a.split('=', 1)[0])
     if sub[0] in OBJECT_NAME_VERBS and any(':' in a for a in sub[1:]):
         raise GitRefused('no <rev>:<path> object names: ' + sub[0])
+    if sub[0] == 'log' and (tuple(cflags) != LOG_CFLAGS or len(sub) != len(LOG_ROW) + 4
+                            or sub[-4] != '--end-of-options' or sub[-2] != '--'
+                            or sub[-1] not in SECTIONS.values()):
+        raise GitRefused('log takes its fixed flags, one commit and one section path')
     prefix = FETCH_PREFIX if fetch else READ_PREFIX
     return list(prefix) + cflags + ['-C', cwd] + sub
 
@@ -46113,7 +46210,7 @@ def list_committed(repo, commit, dl, stdout_cap=GIT_STDOUT_CAP):
     """The committed half of a tree answer, from ONE ls-tree at `commit`.
 
     Returns (sections, entries, unlisted, blobs):
-    - sections: all four, in SECTIONS order, each {slug, path, state, count}.
+    - sections: every one in SECTIONS, in its order, each {slug, path, state, count}.
       state is 'present' (records under it), 'absent' (nothing there at C:
       section 2 (h) 7, an ok answer, never an error) or 'not-a-directory'
       (the section path is itself a record: a symlink, a gitlink or a file).
@@ -46348,7 +46445,7 @@ def index_name(raw):
 
 
 def index_sections_on_disk(path):
-    """The sections a non-git directory holds as directories: four lstats, in
+    """The sections a non-git directory holds as directories: one lstat each, in
     SECTIONS order. A section that cannot be lstat'd is not there."""
     have = []
     for slug, sec in SECTIONS.items():
@@ -46362,7 +46459,7 @@ def index_sections_on_disk(path):
 
 
 def index_section_counts(repo, commit, dl):
-    """{slug: count or None} for the four sections at commit, from ONE
+    """{slug: count or None} for every section at commit, from ONE
     ls-tree --name-only, which never lazy-fetches. A count is what docs-tree
     would list there: the names under the section that listing_admit admits,
     so a section whose every name is refused counts 0. None means nothing is
@@ -47418,7 +47515,7 @@ def draft_phase(ctx, repo, bd, ref, blobs, dl, call_s=None, stdout_cap=GIT_STDOU
 # ===== docs: tree =====
 # docs-tree (spec 2026-10-01 section 2 (b) DocsTreeOk, (e) "Snapshot", (g) "The
 # signal docs-tree reports"). One call does everything, in the snapshot's
-# order: resolve the served commit C, list the four sections at C, then take
+# order: resolve the served commit C, list the sections at C, then take
 # the holder snapshot of the draft branch Bd = ref.name, bracketed by its own
 # HEAD checks. The draft phase runs in BOTH views: in the default view its
 # facts feed only the PWA's hint, in a ref view they overlay iff baseEqual,
@@ -47958,6 +48055,139 @@ def verb_show(ctx, a):
             'mode': mode, 'onRef': on_ref(repo, a.commit, a.ref, dl)}
     return encode_show(data, base)
 
+# ===== docs: log =====
+# docs-log (rich-docs spec 2026-10-12 G4; W5b): one doc's commits, newest
+# first, from --commit back. ONE `git log` of the fixed SECTION path (LOG_ROW),
+# so the caller's path never reaches an argv or a pathspec. No -n: the helper
+# keeps the first DOCS_LOG_MAX_ENTRIES records whose names hold the doc's repo
+# path, byte for byte, and stops there. The helper deadline and GIT_STDOUT_CAP
+# bound the walk; a walk either ended short of that many is `truncated`, and so
+# is a shallow repository's short walk, since a cut history can hide older
+# commits (on_ref's rule). A shallow walk that read past a parentless record
+# touching the doc is `truncated` however full its list.
+LOG_SHA_RE = re.compile(rb'[0-9a-f]{40}|[0-9a-f]{64}')
+
+
+def parse_log(buf, sec_b, want, limit, shallow=False):
+    """`(rows, skipped)`: the records of LOG_ROW's output whose names hold
+    `want` exactly, as (sha, parents, date, author, subject) byte strings,
+    newest first, at most `limit`, and the count of parentless records a
+    shallow walk read past that touched `want` (each may be a change to the
+    doc). A record is five NUL-ended fields, the newline git writes before the
+    names, then NUL-ended names, each under `sec_b` + '/' or `sec_b` itself
+    (the pathspec limits them; the bare name is a commit that touched a
+    FILE at the section path, which is never the doc but must be read past);
+    the next record starts after the last name's NUL. A record git prints
+    without names (a gitlink under diff.ignoreSubmodules=all) has no newline
+    and is read as touching nothing. A buffer cut inside a
+    record (an expiry or the stdout cap) ends the walk at the last whole
+    record. A record that does not parse is git-failed {step:'log'}. When
+    `shallow`, a parentless record is parsed and read past but never listed: a
+    shallow boundary is a root to git, so it prints every file of the section,
+    and it cannot be told from a true root without reading the shallow file."""
+    rows = []
+    skipped = 0
+    prefix = sec_b + b'/'
+    bare = sec_b + b'\0'
+    i, n = 0, len(buf)
+    while i < n and len(rows) < limit:
+        fields = []
+        for _ in range(5):
+            j = buf.find(b'\0', i)
+            if j < 0:
+                return rows, skipped
+            fields.append(buf[i:j])
+            i = j + 1
+        if i >= n:
+            return rows, skipped
+        parent = fields[1].split(b' ')[0]
+        if (not LOG_SHA_RE.fullmatch(fields[0])
+                or (parent and not LOG_SHA_RE.fullmatch(parent))):
+            raise fail('git-failed', step='log', detail='unexpected log output')
+        hit = False
+        if buf[i:i + 1] == b'\n':
+            i += 1
+            while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):
+                j = buf.find(b'\0', i)
+                if j < 0:
+                    return rows, skipped
+                hit = hit or buf[i:j] == want
+                i = j + 1
+        if hit and not (shallow and not parent):
+            rows.append(tuple(fields))
+        elif hit:
+            skipped += 1
+    return rows, skipped
+
+
+def log_entries(rows):
+    """The wire entries for parse_log's rows: sha, first parent (None for a
+    root commit), the committer date, and the author and subject decoded,
+    redacted by ONE redactor call over their lines (neither can hold a
+    newline; the line count is checked), then cut to their caps in code
+    points, so a cut never splits a secret the redactor would have matched. A
+    cut can end inside a mask (`?token=*`); the server's check re-applies
+    redact-then-cut, so such a text passes."""
+    texts = []
+    for row in rows:
+        texts.append(row[3].decode('utf-8', 'replace'))
+        texts.append(row[4].decode('utf-8', 'replace'))
+    red = redact('\n'.join(texts)).split('\n') if texts else []
+    if len(red) != len(texts):
+        raise RuntimeError('docs-log: the redactor changed the line count')
+    out = []
+    for k, row in enumerate(rows):
+        first = row[1].split(b' ')[0]
+        out.append({'sha': row[0].decode('ascii'),
+                    'parent': first.decode('ascii') if first else None,
+                    'date': row[2].decode('ascii', 'replace'),
+                    'author': red[2 * k][:DOCS_LOG_AUTHOR_MAX_CHARS],
+                    'subject': red[2 * k + 1][:DOCS_LOG_SUBJECT_MAX_CHARS]})
+    return out
+
+
+def guard_log(obj, line):
+    """docs-log's final guard (M9.7): `line`, or too-many-entries {count,
+    bytes} in its place when the entries pass DOCS_LOG_MAX_ENTRIES or the line,
+    framed as the agent frames it, passes DOCS_LOG_MAX_WIRE_BYTES (the
+    listings' word and measure). run() hands it ok lines only."""
+    count = len(obj['entries'])
+    size = framed_len(line)
+    if count <= DOCS_LOG_MAX_ENTRIES and size <= DOCS_LOG_MAX_WIRE_BYTES:
+        return line
+    return line_of({'v': 1, 'verb': obj['verb'], 'ok': False, 'elapsedMs': obj['elapsedMs'],
+                    'failure': 'too-many-entries', 'count': count, 'bytes': size})
+
+
+def verb_log(ctx, a):
+    """docs-log: the doc's history as DocsLogOk's body. Discovery first, as in
+    every verb; the commit must be the repository's own object-id length (else
+    bad-commit), present (else unknown-commit) and a commit (else
+    not-a-commit), as a committed docs-show checks it. One log call, soft: an
+    expiry or the stdout cap keeps what was read, and any other non-zero rc is
+    git-failed {step:'log'}. run() puts the line through guard_log."""
+    dl = Deadline(HELPER_DEADLINE_S[ctx.verb])
+    repo = discover(ctx, a.project, dl)
+    if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    kind = show_object_type(repo, a.commit, dl)
+    if kind is None:
+        raise fail('unknown-commit')
+    if kind != 'commit':
+        raise fail('not-a-commit')
+    sec = SECTIONS[a.section]
+    r = docs_git(repo.path, list(LOG_CFLAGS) + list(LOG_ROW) + ['--end-of-options', a.commit, '--', sec],
+                 call_s=CALL_S['log'], dl=dl, ceiling=ceiling_of(repo.path), soft=True)
+    cut = r.timed_out or r.overflow
+    if not cut and r.rc != 0:
+        raise show_failed('log', r)
+    want = (sec + '/' + a.path).encode('utf-8')
+    rows, skipped = parse_log(r.out, sec.encode('ascii'), want, DOCS_LOG_MAX_ENTRIES, repo.shallow)
+    entries = log_entries(rows)
+    # A full list is truncated too when a shallow walk read past a parentless record that touched the doc.
+    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow) or skipped > 0
+    return {'commit': a.commit, 'section': a.section, 'path': a.path, 'entries': entries, 'truncated': truncated}
+
 # ===== docs: fetch =====
 # docs-fetch (spec 2026-10-01 section 2 (g) steps 1-9): ONE branch from origin
 # into refs/remotes/origin/<b>, and nothing else. In order: discovery (a
@@ -48218,7 +48448,7 @@ def verb_fetch(ctx, a, fetch_s=CALL_S['fetch'], total_s=HELPER_DEADLINE_S['docs-
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
 # make run() reach a stand-in body.
-VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch}
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log}
 
 # The verbs whose ok answer is a listing, bounded by guard_listing.
 LISTING_VERBS = ('docs-index', 'docs-tree')
@@ -48284,7 +48514,7 @@ def run(argv):
 
     Ctx and read_args (the grammar section) build the context and the verb's
     arguments; guard_listing(obj, line) bounds every ok docs-tree and
-    docs-index answer, and guard_show(line) every ok docs-show answer. Each is
+    docs-index answer, and guard_show(line) every ok docs-show answer, and guard_log(obj, line) every ok docs-log answer. Each is
     looked up by name when run() reaches it, and each guard takes the line
     WITHOUT its newline and returns the line to write, also without it."""
     verb = argv[0] if len(argv) > 0 else None
@@ -48315,6 +48545,8 @@ def _run_verb(verb, argv):
             line = guard_listing(obj, line)
         elif verb == 'docs-show':
             line = guard_show(line)
+        elif verb == 'docs-log':
+            line = guard_log(obj, line)
         return line + b'\n'
     except Fail as f:
         try:
@@ -48622,7 +48854,8 @@ case "${1:-}" in
   docs-tree)  shift; cmd_docs_tree "$@" ;;
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
+  docs-log)   shift; cmd_docs_log "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|route|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|version} <args>" >&2; exit 1 ;;
 esac
 fi

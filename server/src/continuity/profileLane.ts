@@ -6,7 +6,10 @@
 // ONE WRITER PER ROUTE FIELD. The lane is the one writer of `profile`, `automem` and `compactwindow` (lane-only: every door
 // refuses them, `ROUTE_LANE_ONLY_FIELDS`), and it writes `compact` only while the `continuity` row is live (the doors' refusal
 // of `compact` then is built with the renewal act, which lifts that gate: the departure `compact-owned-while-continuity-live`).
-// A role with no compaction column has `compactwindow` cleared, and `compact` too while `continuity` is live. It writes through
+// A role with no compaction column has `compactwindow` cleared, and `compact` too while `continuity` is live. It writes
+// `profiledigest` (Overlord W1 sandbox) only while the fleet node's build equals the server's (`profileDigestWriteOf`), and
+// clears it for a role with no surface; designation's create is its one recorded second writer (slug
+// `profile-fields-written-at-create`: only a create-time write stands before the first spawn). It writes through
 // `CCD_ARGV.routeSet`, ONE argv per session with every changed field (ccd validates every pair before it writes any), behind
 // the `route` verb's cap, and never a field whose value already stands, so an armed lane on a settled fleet sends nothing.
 //
@@ -22,7 +25,7 @@
 // write (`unknown routing field`). The lane's call carries only its own fields, so such a refusal loses nothing else; it
 // is counted as failed and logged, and no capability word is added (the departure `no-cap-word-the-lane-call-is-its-own`).
 import { CONTINUITY_LANE, LAUNCH_PROFILE_LANE, laneArmGate, type LaneArmLane } from '../../../shared/lane-arm.js';
-import { ROUTE_WRITABLE_FIELDS, isRegistryId, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
+import { ROUTE_WRITABLE_FIELDS, isRegistryId, type BuildAgreement, type ChildMark, type RouteField, type RouteFields, type RunKind } from '../../../shared/api.js';
 import { HISTORY_STEER_ON_DIR, type ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
@@ -34,15 +37,16 @@ import type { FleetIO } from '../io.js';
 import type { SessionRecord } from '../registry.js';
 import { roleFactsOf, roleOf } from '../roleOf.js';
 import type { UsageRead } from '../usage.js';
-import { plainAutoMemoryOf, profileFor } from './profileFor.js';
+import { plainAutoMemoryOf, profileDigestWriteOf, profileFor } from './profileFor.js';
 
 /** The lane's `LANE_SCHEDULE` row. */
 export const LAUNCH_PROFILE_LANE_ROW = 'launchProfile';
 /** At most this many route writes succeed a pass (the plan's five): a fleet armed at once converges over a few passes. A failed
  *  write does not count, so a row that fails every pass never starves the rest (review 2024 F12). */
 export const PROFILE_WRITES_PER_PASS = 5;
-type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow'>;
-const PROFILE_FIELD: Readonly<Record<ProfileField, true>> = { compact: true, profile: true, automem: true, compactwindow: true };
+type ProfileField = Extract<RouteField, 'compact' | 'profile' | 'automem' | 'compactwindow' | 'profiledigest'>;
+const PROFILE_FIELD: Readonly<Record<ProfileField, true>> = { compact: true, profile: true, automem: true, compactwindow: true,
+  profiledigest: true };
 const isProfileField = (f: RouteField): f is ProfileField => Object.hasOwn(PROFILE_FIELD, f);
 /** The route fields the lane writes, in the route vocabulary's order (`ROUTE_WRITABLE_FIELDS`), narrowed by a type guard, so
  *  no later route field enters the diff unseen by the compiler (review 2024 F11). */
@@ -72,6 +76,9 @@ export interface ProfileReads {
   /** Declared coordinator intent on the session's registry incarnation (`declaredIntentOf`), read only for a non-child that
    *  claims no open run. */
   declaredIntent(id: string): Promise<boolean | 'unmeasured'>;
+  /** Whether the fleet node's measured build equals the server's, from the update control plane's per-node inventory
+   *  (`buildAgreement` over `inventoryBuilds`); read once a pass, and only `agreed` lets `profiledigest` be written. */
+  buildAgreement(): BuildAgreement;
 }
 
 /** The W3 steer marker of one session on the fleet node, as the session hook reads it (`<ccrcDir>/history/steer-on/<id>`):
@@ -121,7 +128,7 @@ export interface ProfileLaneResult {
   readonly memoryUnread: number;
 }
 
-const zeroFields = (): Record<ProfileField, number> => ({ profile: 0, automem: 0, compact: 0, compactwindow: 0 });
+const zeroFields = (): Record<ProfileField, number> => ({ profile: 0, automem: 0, compact: 0, compactwindow: 0, profiledigest: 0 });
 
 /** One pass. It awaits the fleet reads and each write in turn; nothing it holds is a decision's durable state. */
 export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileRow[]): Promise<ProfileLaneResult> {
@@ -141,6 +148,7 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
   let would = 0; let written = 0; let failed = 0; let deferred = 0; let unsupported = 0;
   let routeUnread = 0; let roleUnread = 0; let steered = 0; let steerUnread = 0; let memoryUnread = 0;
   const failures: string[] = [];
+  let builds: BuildAgreement | null = null;   // read once a pass, at the first surfaced row
 
   for (const r of rows) {
     if (!isRegistryId(r.id)) { routeUnread += 1; continue; }   // a listing never builds a refused id; refused here too, before any argv
@@ -157,15 +165,22 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     if (continuityLive && row.compaction !== null) want = profileFor(reading, memory ?? 'off', windowOf(await deps.reads.usage(r.id)), true);
     const memoryKnown = memory !== null || row.autoMemory !== 'switch';
     if (!memoryKnown) memoryUnread += 1;
-    const target: Readonly<Record<ProfileField, string | null>> = {
+    let target: Readonly<Record<ProfileField, string | null>> = {
       profile: want.profile,
       automem: memoryKnown ? want.automem : null,
       // A role with no compaction column leaves none behind (review 2024 F2 c): `compactwindow` is the lane's alone, and
       // `compact` is the lane's while `continuity` is live.
       compact: row.compaction === null ? (continuityLive ? CLEARED : null) : want.compact === null ? null : String(want.compact),
       compactwindow: row.compaction === null ? CLEARED : want.compactwindow === null ? null : String(want.compactwindow),
+      profiledigest: null,
     };
     const have = r.route?.fields ?? {};
+    // `profiledigest` (Overlord W1 sandbox): written only at build agreement, held under skew, cleared for a role with no surface.
+    if (want.profiledigest !== undefined || have.profiledigest !== undefined) {
+      if (want.profiledigest !== undefined && builds === null) builds = deps.reads.buildAgreement();
+      const d = profileDigestWriteOf(want.profiledigest, have.profiledigest, builds ?? 'unknown');
+      target = { ...target, profiledigest: d.act === 'write' ? d.value : d.act === 'clear' ? CLEARED : null };
+    }
     const diff: RouteFields = {};
     for (const f of PROFILE_ROUTE_FIELDS) {
       const v = target[f];

@@ -29,7 +29,7 @@ import { ccrcRoot } from './helpers.js';
 
 const {
   CARD_REFUSALS, GENERIC_REFUSALS, NOTE_REFUSALS, OVERLORD_REFUSALS, OVERLORD_REFUSAL_WORDS, PROBE_REFUSALS,
-  REFUSAL_STATUS, ROUTE_REFUSALS, TIMER_REFUSALS, isOverlordRefusal,
+  REFUSAL_STATUS, ROUTE_REFUSALS, START_LOADS_REFUSALS, TIMER_REFUSALS, isOverlordRefusal,
 } = refusal;
 
 const SPEC = 'docs/superpowers/specs/2026-11-09-overlord-design.md';
@@ -72,6 +72,7 @@ const OVERLORD_GROUPS: Readonly<Record<string, readonly string[]>> = {
   NOTE_REFUSALS: Object.values(NOTE_REFUSALS),
   PROBE_REFUSALS: Object.values(PROBE_REFUSALS),
   TIMER_REFUSALS: Object.keys(TIMER_REFUSALS),
+  START_LOADS_REFUSALS: Object.values(START_LOADS_REFUSALS),   // the loads door's word (Overlord W1 sandbox, Task 5)
   // Hand-registered: LANE_ARM_REFUSALS' comment does not name the Overlord, and only its `lane-gated` and the replay
   // quiz's `baseline-missing` are route words of the table.
   'LANE_ARM_REFUSALS#lane-gated,baseline-missing': LANE_ARM_REFUSALS.filter((w) => w === 'lane-gated' || w === 'baseline-missing'),

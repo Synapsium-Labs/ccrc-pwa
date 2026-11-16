@@ -96,7 +96,7 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
   it('400 naming the field for each launch-profile field: the lane writes those, never this door (Overlord W1a, F1)', async () => {
     const home = seededHome();
     const { app, calls } = await open(home, async () => ({ ran: true, code: 0, stdout: '', stderr: '' }), BOTH_CAPS);
-    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(6);   // the launch profile's three, the compaction piece's precompact and the pool set's poolset and acctorder (Overlord W1)
+    expect(ROUTE_LANE_ONLY_FIELDS).toHaveLength(7);   // the launch profile's three, the compaction piece's precompact, the pool set's poolset and acctorder (Overlord W1) and the W1 sandbox's profiledigest
     for (const field of ROUTE_LANE_ONLY_FIELDS) {
       const res = await post(app, ID, { field, value: LANE_ONLY_VALUE[field] });
       expect(res.statusCode, field).toBe(400);

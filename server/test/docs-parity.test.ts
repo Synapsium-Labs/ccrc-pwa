@@ -239,7 +239,8 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
     '# ===== docs: grammar =====', '# ===== docs: runner =====', '# ===== docs: discovery =====',
     '# ===== docs: refs =====', '# ===== docs: listing =====', '# ===== docs: stamps =====',
     '# ===== docs: index =====', '# ===== docs: holders =====', '# ===== docs: drafts =====',
-    '# ===== docs: tree =====', '# ===== docs: show =====', '# ===== docs: fetch =====', '# ===== docs: entry =====',
+    '# ===== docs: tree =====', '# ===== docs: show =====', '# ===== docs: log =====', '# ===== docs: fetch =====',
+    '# ===== docs: entry =====',
   ];
   const parse38 = (code: string) => spawnSyncT6(realPythonT6,
     ['-c', 'import ast, sys; ast.parse(sys.stdin.read(), feature_version=(3, 8))'], { input: code, encoding: 'utf8' });
@@ -286,9 +287,9 @@ describe('the helper source: one write, python 3.8, ASCII, and its section marke
     expect(() => helperSourceT6(['x', pyCloseT6, 'a', pyOpenT6].join('\n'))).toThrow(/no program/);
   });
 
-  it('importing the helper runs nothing, and VERBS names exactly the four verbs', () => {
+  it('importing the helper runs nothing, and VERBS names exactly the five verbs', () => {
     expect(unitJsonT6<string[]>(h.home, 'out(sorted(H.VERBS))'))
-      .toEqual(['docs-fetch', 'docs-index', 'docs-show', 'docs-tree']);
+      .toEqual(['docs-fetch', 'docs-index', 'docs-log', 'docs-show', 'docs-tree']);
   });
 });
 
@@ -328,6 +329,10 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
     ['DOCS_DRAFT_HASH_BUDGET', parityL0.DOCS_DRAFT_HASH_BUDGET],
     ['DOCS_MAX_DRAFTS', parityL0.DOCS_MAX_DRAFTS],
     ['DOCS_FETCH_MIN_INTERVAL_MS', parityL0.DOCS_FETCH_MIN_INTERVAL_MS],
+    ['DOCS_LOG_MAX_ENTRIES', parityL0.DOCS_LOG_MAX_ENTRIES],
+    ['DOCS_LOG_SUBJECT_MAX_CHARS', parityL0.DOCS_LOG_SUBJECT_MAX_CHARS],
+    ['DOCS_LOG_AUTHOR_MAX_CHARS', parityL0.DOCS_LOG_AUTHOR_MAX_CHARS],
+    ['DOCS_LOG_MAX_WIRE_BYTES', parityL0.DOCS_LOG_MAX_WIRE_BYTES],
   ];
   /** The block's other names, each compared in its own shape: SECTIONS as ordered pairs (below), FAILURES as a set
    *  and REDACT_RULES rule by rule (Task 6's row-48 cases above). */
@@ -335,7 +340,8 @@ describe('the helper parity block equals shared/docs.ts, by value and in both di
   /** The caps among them: each must be its own integer literal in the helper, never an expression or an alias. */
   const CAPS = ['REF_MAX_CHARS', 'PATH_MAX_BYTES', 'PATH_MAX_COMPONENT_BYTES', 'PATH_MAX_DEPTH', 'DOCS_MAX_FILE_BYTES',
     'DOCS_MAX_ANSWER_BYTES', 'DOCS_MAX_LISTING_WIRE_BYTES', 'DOCS_MAX_ENTRIES', 'DOCS_DRAFT_HASH_BUDGET',
-    'DOCS_MAX_DRAFTS', 'DOCS_FETCH_MIN_INTERVAL_MS'];
+    'DOCS_MAX_DRAFTS', 'DOCS_FETCH_MIN_INTERVAL_MS', 'DOCS_LOG_MAX_ENTRIES', 'DOCS_LOG_SUBJECT_MAX_CHARS',
+    'DOCS_LOG_AUTHOR_MAX_CHARS', 'DOCS_LOG_MAX_WIRE_BYTES'];
   /** Read per case, never at collection: a missing marker reds these cases, not the whole file. */
   const src = (): string => helperSourceForParity();
   const home = harnessForParity('ccd-docs-parity-').home;
@@ -841,5 +847,24 @@ describe('the docs profile masks a Linear API key by its prefix, and the helper 
     ].join('\n'));
     expect(py).toEqual(ROWS.map(([, output]) => output));
     expect(pythonRedactorTablesT6()).toEqual([]);
+  });
+});
+
+// ---- Docs W5b-1 Task 11: the doctor's one cap literal (rich-docs spec A12) ----
+// `ccd/ccrc-doctor-checks` names the two `ccd caps` words the Docs screen's W5b features need in ONE assignment,
+// `CCRC_DOCTOR_DOCS_CAPS`, because a shell file cannot import the server's constants. This block holds that one line
+// equal to the two constants joined by a space, so a word renamed on one side reds here. Every import is aliased.
+import * as docsCapsVitest from 'vitest';
+import * as docsCapsFs from 'node:fs';
+import * as docsCapsPath from 'node:path';
+import { DOCS_LOG_CAP as docsLogCapForDoctor, DOCS_SECTIONS_CAP as docsSectionsCapForDoctor } from '../src/ccdargv.js';
+
+docsCapsVitest.describe("CCRC_DOCTOR_DOCS_CAPS is one literal, equal to ccdargv's two docs cap constants", () => {
+  const text = docsCapsFs.readFileSync(docsCapsPath.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'), 'utf8');
+  const lines = text.split('\n').filter((l) => /^\s*CCRC_DOCTOR_DOCS_CAPS=/.test(l));
+
+  docsCapsVitest.it('is assigned on exactly one line, its value the two constants joined by a space', () => {
+    docsCapsVitest.expect(lines).toHaveLength(1);
+    docsCapsVitest.expect(lines[0]).toBe(`CCRC_DOCTOR_DOCS_CAPS='${[docsLogCapForDoctor, docsSectionsCapForDoctor].join(' ')}'`);
   });
 });

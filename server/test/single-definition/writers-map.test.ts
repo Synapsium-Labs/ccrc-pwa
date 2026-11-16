@@ -311,7 +311,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
-  'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision'] as const;
+  'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
+  'continuity_start_loads'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -387,6 +388,7 @@ describe(TABLES_PIN, () => {
       continuity_checkpoints: ['server/src/continuity/continuityStore.ts#putCheckpoint'],
       continuity_renew_calls: ['answerRenewCall', 'claimRenewCall'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_soft_renewals: ['server/src/continuity/continuityStore.ts#recordSoftRenewal'],
+      continuity_start_loads: ['server/src/continuity/continuityStore.ts#insertStartLoads'],
       // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
       push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
         'sealAtBoot', 'silenceOutboxRow'].map((f) => `server/src/coord/pushOutboxStore.ts#${f}`),

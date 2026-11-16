@@ -24,7 +24,8 @@ import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import {
-  COLLECT_CAP, DOCS_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP,
+  CCD_ARGV, COLLECT_CAP, DOCS_CAP, DOCS_LOG_CAP, EXPIRE_CAP, RECLAIM_CAP, RECLAIM_PAUSE_CAP, ROUTE_APPLY_CAP,
+  ccdCan,
 } from '../src/ccdargv.js';
 import { expireArchived, learnExpiry } from '../src/coord/expireArchived.js';
 import {
@@ -310,6 +311,22 @@ describe('the docs verbs (D-5866, Step 1)', () => {
     await d.fetcher.fetch({ project: 'demo' } as never, null);
     expect(d.sent).toEqual(v !== null && v.includes(DOCS_CAP) ? ['docs-index', 'docs-fetch'] : []);
   });
+  // docs-log (docs W5b-1): the adapter's log read gates on the `docsLog` row, which refuses on no evidence, so a list
+  // without `docs-log-v1` (or no list at all) sends nothing.
+  const LOG_ASK = { commit: 'a'.repeat(40), section: 'specs', path: 'a.md' } as const;
+  it.each(FOUR(DOCS_LOG_CAP).filter(([, v]) => !(v !== null && v.includes(DOCS_LOG_CAP))))(
+    'docs-log over %s is unsupported, with zero execs', async (_what, v) => {
+      const d = docs(v);
+      const out = await d.reader.log({ node: 'n', project: 'demo' }, LOG_ASK);
+      expect(d.sent).toEqual([]);
+      expect(out).toEqual({ ok: false, failure: v !== null && v.includes('caps') ? 'unsupported' : 'caps-unknown' });
+    });
+  it.each(FOUR(DOCS_LOG_CAP).filter(([, v]) => v !== null && v.includes(DOCS_LOG_CAP)))(
+    'docs-log over %s execs once', async (_what, v) => {
+      const d = docs(v);
+      await d.reader.log({ node: 'n', project: 'demo' }, LOG_ASK);
+      expect(d.sent).toEqual(['docs-log']);
+    });
   it('the four docs verb names without docs-v1 are not the token', async () => {
     const d = docs(['caps', 'docs-index', 'docs-tree', 'docs-show', 'docs-fetch']);
     await d.reader.index('n' as never);

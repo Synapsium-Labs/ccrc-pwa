@@ -732,9 +732,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[74] (push_outbox, push_outbox_meta and the reach stamps on asks and items, the push outbox, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, the portfolio, Overlord W1)
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
-    // and MIGRATIONS[77] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(78);
-    expect(MIGRATIONS.length).toBe(78);
+    // and MIGRATIONS[77] (continuity_start_loads, the loads report, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, the renewal act, Overlord W1a).
+    expect(COORD_SCHEMA_VERSION).toBe(79);
+    expect(MIGRATIONS.length).toBe(79);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -837,8 +838,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[74] (push_outbox and the reach stamps, Overlord W1)
     // and MIGRATIONS[75] (portfolio_rank and portfolio_rank_revision, Overlord W1)
     // and MIGRATIONS[76] (continuity_quiz_runs, the replay quiz, Overlord W1a)
-    // and MIGRATIONS[77] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(78);
+    // and MIGRATIONS[77] (continuity_start_loads, Overlord W1 sandbox)
+    // and MIGRATIONS[78] (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(79);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -877,6 +879,36 @@ describe('coord.db: dead_claimants, the dead-coordinator lane’s durable anchor
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare('SELECT count(*) AS n FROM dead_claimants').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT claimedBy, state FROM runs').get()).toEqual({ claimedBy: 'c', state: 'working' });
+    db.close();
+  });
+});
+
+describe('coord.db: continuity_start_loads, the loads report (Overlord W1 sandbox, Task 5)', () => {
+  /** Found by its DDL, never hard-coded (the dead_claimants case's rule): a sibling that lands first moves this entry up. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads')) + 1;
+  it('a NEW TABLE and nothing else, keyed by its start', () => {
+    expect(SLOT, 'no MIGRATIONS entry creates continuity_start_loads').toBeGreaterThanOrEqual(78);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and alters nothing')
+      .toMatch(/^CREATE TABLE continuity_start_loads \([^;]*\);$/);
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const pk = db.prepare("SELECT name FROM pragma_table_info('continuity_start_loads') WHERE pk = 1").all() as { name: string }[];
+    expect(pk).toEqual([{ name: 'startId' }]);
+    db.close();
+  });
+  it('reaches a database ALREADY at the version before it and leaves every existing start as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) VALUES ('lane-a-project-a', 'r-00000001', 'u', 'startup', NULL, NULL, 1, 2)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare('SELECT count(*) AS n FROM continuity_start_loads').get()).toEqual({ n: 0 });
+    expect(db.prepare('SELECT reportId FROM continuity_starts').get()).toEqual({ reportId: 'r-00000001' });
     db.close();
   });
 });
@@ -2883,9 +2915,9 @@ describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the rene
     (db.prepare(`PRAGMA table_info(${table})`).all() as { name: string; notnull: number; pk: number }[])
       .map((c) => `${c.name}${c.notnull === 1 ? '!' : ''}${c.pk > 0 ? `#${c.pk}` : ''}`);
 
-  it('THREE NEW TABLES and an index in one entry, the one after the replay quiz\'s, and nothing on an existing table', () => {
-    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_quiz_runs (')) + 2);
-    expect(SLOT).toBe(78);
+  it('THREE NEW TABLES and an index in one entry, the one after the loads report\'s, and nothing on an existing table', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_start_loads (')) + 2);
+    expect(SLOT).toBe(79);
     expect(MIGRATIONS[SLOT - 1]).toContain('CREATE TABLE continuity_renew_calls');
     const sql = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     expect(sql.match(/\b(?:CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)\b[^;(]*/g)!.map((x) => x.trim())).toEqual([
@@ -2893,7 +2925,7 @@ describe('coord.db: the checkpoint and renew-call tables (Overlord W1a, the rene
       'CREATE INDEX continuity_soft_renewals_identity ON continuity_soft_renewals']);
   });
 
-  it('reaches a database ALREADY at the version before it (77): the tables land, empty, and an existing row is as it was', () => {
+  it('reaches a database ALREADY at the version before it (78): the tables land, empty, and an existing row is as it was', () => {
     const p = dbPathIn(mkTmp('ccrc-coord-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);

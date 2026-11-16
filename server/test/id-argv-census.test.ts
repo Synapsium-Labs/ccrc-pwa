@@ -71,7 +71,7 @@ const ID_BUILDERS = {
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', delegationAdopt: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
-  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id',
+  docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {

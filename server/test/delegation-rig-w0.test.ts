@@ -420,6 +420,35 @@ describe('rig.sh: a scenario may carry a launch profile (W0 Task 2)', () => {
     expect(launchLine({ args: ['--strict-mcp-config'] })).toMatch(/timeout -k 10 1200 /);
   }, 60_000);
 
+  it('a launch file may be a link under the run root and a file under the root itself (W1 sandbox Task 1)', () => {
+    launchLine({ files: [
+      { in: 'root', path: 'fixhome/.cc-sessions/staged/SKILL.md', text: 'W0-STAGED @RIG_REPO@' },
+      { in: 'repo', path: '.claude/skills/staged', link: '@RIG_ROOT@/fixhome/.cc-sessions/staged' },
+      { in: 'root', path: 'CLAUDE.md', text: 'W0-PARENT' },
+    ] });
+    const root = path.dirname(path.dirname(cfg));
+    const link = path.join(root, 'repo/.claude/skills/staged');
+    expect(fs.lstatSync(link).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(link)).toBe(path.join(root, 'fixhome/.cc-sessions/staged'));
+    expect(fs.readFileSync(path.join(link, 'SKILL.md'), 'utf8')).toBe(`W0-STAGED ${root}/repo`);
+    expect(fs.readFileSync(path.join(root, 'CLAUDE.md'), 'utf8')).toBe('W0-PARENT');
+  }, 60_000);
+
+  it.each([
+    ['a link outside the run root', { in: 'repo', path: 'x', link: '/etc' }],
+    ['a link through ..', { in: 'repo', path: 'x', link: '@RIG_ROOT@/../x' }],
+    ['a link that also carries text', { in: 'repo', path: 'x', link: '@RIG_ROOT@/x', text: 'y' }],
+    ['a link that is executable', { in: 'repo', path: 'x', link: '@RIG_ROOT@/x', exec: true }],
+    ['a file in an unknown place', { in: 'home', path: 'x', text: 'y' }],
+  ])('check-scenario refuses %s, exit 2 (W1 sandbox Task 1)', (_w, file) => {
+    expect(rigsh(['check-scenario', scen('scenarios-overlord', 'badlink', [{ waitReady: 60 }], { launch: { files: [file] } })]).status).toBe(2);
+  }, 60_000);
+
+  it('--remote-control takes one value on a launch (W1 sandbox Task 1, M6)', () => {
+    expect(launchLine({ args: ['--remote-control', 'w0-rc'] })).toMatch(/ --remote-control w0-rc/);
+    expect(rigsh(['check-scenario', scen('scenarios-overlord', 'rcbare', [{ waitReady: 60 }], { launch: { args: ['--remote-control'] } })]).status).toBe(2);
+  }, 60_000);
+
   it('the usage names print-launch, and the header still ends on its last line', () => {
     const r = rigsh(['bogus']);
     expect(r.status).toBe(2);
@@ -571,6 +600,33 @@ function capture(payload: object): Record<string, unknown> {
   const lines = fs.readFileSync(log, 'utf8').split('\n').filter(Boolean);
   return JSON.parse(lines[lines.length - 1] as string);
 }
+
+describe('the rig\'s transcript-snap stub (W1 sandbox Task 1, M4 and M6)', () => {
+  it('copies the payload\'s transcript per event and indexes its attachment kinds, env names but never values', () => {
+    const d = mkTmp('ccrc-dlg-snap-');
+    const t = path.join(d, 'session.jsonl');
+    fs.writeFileSync(t, [JSON.stringify({ type: 'user' }), JSON.stringify({ type: 'attachment', attachment: { type: 'skill_listing' } }),
+      JSON.stringify({ type: 'attachment', attachment: { type: 'instructions' } })].join('\n') + '\n');
+    const out = path.join(d, 'snaps');
+    const payload = JSON.stringify({ transcript_path: t, source: 'startup', permission_mode: 'default', hook_event_name: 'SessionStart' });
+    const r = runStub('transcript-snap.mjs', ['--dir', out, '--event', 'SessionStart'], payload, { CLAUDE_CODE_W0_SECRET: 'v-9c1e' });
+    expect(r.status).toBe(0);
+    expect(r.stdout).toBe('');
+    expect(fs.readFileSync(path.join(out, '0001-SessionStart.jsonl'), 'utf8')).toBe(fs.readFileSync(t, 'utf8'));
+    const idx = fs.readFileSync(path.join(out, 'index.ndjson'), 'utf8');
+    const rec = JSON.parse(idx.trim()) as Record<string, unknown>;
+    expect(rec).toMatchObject({ event: 'SessionStart', n: 1, source: 'startup', permission_mode: 'default', attachments: ['skill_listing', 'instructions'] });
+    expect(rec.env).toContain('CLAUDE_CODE_W0_SECRET');
+    expect(idx).not.toContain('v-9c1e');
+  }, 60_000);
+
+  it('indexes a payload with no readable transcript, and copies nothing', () => {
+    const out = path.join(mkTmp('ccrc-dlg-snap-'), 'snaps');
+    runStub('transcript-snap.mjs', ['--dir', out, '--event', 'Stop'], JSON.stringify({ transcript_path: '/nonexistent/x.jsonl' }));
+    expect(fs.readdirSync(out).sort()).toEqual(['index.ndjson']);
+    expect(JSON.parse(fs.readFileSync(path.join(out, 'index.ndjson'), 'utf8').trim())).toMatchObject({ event: 'Stop', size: null, attachments: [] });
+  }, 60_000);
+});
 
 describe('the rig\'s W0 stubs (W0 Task 3)', () => {
   it('the door stub lists card, read and act, and logs the nonce as present, never its value', async () => {

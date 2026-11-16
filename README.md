@@ -1500,14 +1500,14 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the eighty-four machine lanes the
+liveness gate reads the shipped sha out of it), the eighty-five machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
-the hook's start report (`POST /api/sessions/:id/start`), the card door (`GET /api/sessions/:id/card`), the note door
+the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
 (`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`),
@@ -3787,6 +3787,14 @@ when Settings' release-notification choice selects it. Ask nudges to a coordinat
 replies, the watch's `orphaned:` and `failed:` self-wake mail, and a run's move to `closing` are recorded in `/mail`
 and never pushed. Nothing is pushed for a session a client has on screen;
 mail and run records still land in the feed.
+
+**Every push is recorded** (the push outbox, `push-outbox-v1`). Each push the server sends is first a row of
+`push_outbox` in `coord.db`, and one sender sends it and records each subscription's answer. A push that every
+subscription refused for a reason that can pass (a 429, a 5xx, a network error before the request left the box) is
+retried, 30 s and then doubling, for the push's own ten-minute lifetime; one the push service may have taken (a reset or
+a timeout after the request was written) is never sent again, so no device shows it twice. A push still unsent when the
+server stopped is sent at its next boot if it is inside those ten minutes. A question or a Waiting on you item that
+reaches you also gets the time it reached you (`reachedOperatorAt`), with or without push keys.
 
 A `✓ Finished` push means a main turn ended inside the busy stretch that just went idle (D-5233): the session's turn
 marker records a Stop at or after the stretch began (2 s of slack), with no newer turn opened after it. A stretch of

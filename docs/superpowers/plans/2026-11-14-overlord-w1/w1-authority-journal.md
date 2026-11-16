@@ -178,9 +178,10 @@ piece are quoted in their own section below.
    failed replay exits the server (`index.ts`, "landing journal recovery refused"). Here the spec answers a failed
    coherence check with a door refusal, and the operator ends it at a door, so the server must start.
    **Recommendation:** the boot step records its verdict in the guard and the server starts. Only what reads the
-   guard refuses: the gates' step 3, the writer (through `AuthorityGuardPort`), and the ladder's `restore-detected`
-   latch, which is derived from the guard. That is "legitimately different" from the landing journal, whose writes are
-   fleet-wide.
+   guard refuses: the gates' step 3 and the writer (through `AuthorityGuardPort`). The boot step, and the guard when it
+   first enters `rolled-back` or `unmeasured` while running, also raise the ladder's `restore-detected` latch, a row
+   written through the ladder's `raiseLatch` (ruling F4, below). That is "legitimately different" from the landing
+   journal, whose writes are fleet-wide.
    - A rollback that boot coherence or the writer found is re-found at every boot, because it is in the file and the
      head row. A rollback that only a witness found (`witness-epoch`, `witness-heads`) is held in memory. A restart
      clears it until a witness answers again, and the witness then refuses again on its first exchange, since what it
@@ -223,14 +224,19 @@ piece are quoted in their own section below.
      file and the head row are absent is not safe: a restore to a snapshot from before the journal reads as absent
      too.
 9. **What may be written while the journal is incoherent** (slug `narrowing-row-only-while-incoherent`, cross-plan
-   ruling X3, which withdraws this plan's strict rule). While the journal is not coherent:
+   ruling X3, which withdraws this plan's strict rule, widened by X3b). While the journal is not coherent, and, under
+   X3b, on any refused append:
    - an operator narrowing (Pause, retire, a rung down, a latch raise) writes its row only. It appends nothing, and
      the head row does not move, so the journal still reads incoherent and the operator keeps every lever;
    - a widening is still refused, `authority-rolled-back`;
    - Confirm the restore folds the narrower row side in, since `restoreStricter` already takes the narrowest value. It
      writes the stricter values through the tables' inner, unjournalled writers inside its own transaction, and its
      one Confirm record carries them;
-   - the `restore-detected` latch is derived from the guard's state, is not journalled, and only Confirm clears it.
+   - the `restore-detected` latch is a row the ladder writes, raised through the ladder's `raiseLatch` at the boot step
+     and when the guard first enters `rolled-back` or `unmeasured`. The raise is a narrowing, so it lands as its row
+     while the journal is not coherent. Confirm does not lift it: it stands, stamped by the Confirm record, until the
+     operator clears it on the ladder's clear door, which the journal refuses until it is coherent (ruling F4, which
+     supersedes X3's last sentence).
 
    The strict rule's reason was wrong (review F5). The gates' step 3 holds the Overlord's own doors (group 1). Pause,
    retire, the rung door and latch-clear are the operator's doors (group 2), which the spec never refuses while
@@ -325,7 +331,16 @@ for the rest. These touch this plan:
 
 - **X1, the shared journal-file adapters have one owner.** The authority journal plan owns `server/src/appendOnlyFile.ts`, `server/src/chainedJournalFile.ts` and `chainNext` (with the delegation writer's two seeds re-pointed). They ship as their own small PR, **authority journal A0** (the authority plan's Task 2 and the adapter half of Task 3, behaviour-neutral, characterization first), which both authority journal A and private store A need first. "First to merge ships both" is withdrawn. The contract is stated once, in the authority plan, and the private store plan cites it by reference instead of restating signatures. The contract: `appendNext` re-reads and verifies the file on every call (a snapshot is single-use and is never reused across appends); the port gains one named cut operation for the torn-tail heal (truncate, the quarantine directory's create and the rename), the heal being its only caller; every error union is named. Both plans add a two-records-in-a-row test through their own store. The cost of the whole-file verify goes in a "Later" line (a verified-head cache keyed on device, inode, size and digest; retention).
 - **X2, which designation moves are authority records.** Only moves that grant or remove authority are journalled: `goLive` appends `authority-designate` (a first body) or `authority-rebind` (a rebind), carrying the raised term, the session id and the generation; `retire` of a bound row appends `authority-retire` with `previousSessionId` set to the bound session. `designatePending`, `bindPendingGeneration` and `failPending` grant nothing and append nothing. The designate door also journals the account set and the model class (C46) as their own records in its transaction. The generation is a string (the UUID ccd records), never a number, in the authority grammar and its fold. `appendInTx` answers `{ok:false, …}` and never throws: every caller checks the result and writes no row when it is refused. A door maps the refusal as the authority plan says. `goLive` in sandbox B's settle step completes the operator's designate or rebind act (attributed to that attempt's actor): a refused append rolls `goLive` back, the attempt stays pending and the settle tries again on its next pass; at the pending deadline the attempt fails with an outcome the designation plan names and adds to its spec-fixes list as a Table 11.6 row (plan-driven consistency). Designation A adds `overlord_designation` to `OVERLORD_AUTHORITY_TABLES`.
-- **X3, an operator narrowing over an incoherent journal (authority Q9).** Withdraw the strict rule. While the journal is not coherent, an operator narrowing (Pause, retire, a rung down, a latch raise) writes its row only, with no append and with the head row unmoved, so the operator keeps every lever; Confirm the restore folds the narrower row side in, as `restoreStricter` already takes the narrowest value. A widening is still refused. Confirm writes the stricter values through the tables' inner, unjournalled writers inside its own transaction, and its one Confirm record carries them. The `restore-detected` latch is derived from the guard's state, is not journalled, and only Confirm clears it.
+- **X3, an operator narrowing over an incoherent journal (authority Q9).** Withdraw the strict rule. While the journal is not coherent, an operator narrowing (Pause, retire, a rung down, a latch raise) writes its row only, with no append and with the head row unmoved, so the operator keeps every lever; Confirm the restore folds the narrower row side in, as `restoreStricter` already takes the narrowest value. A widening is still refused. Confirm writes the stricter values through the tables' inner, unjournalled writers inside its own transaction, and its one Confirm record carries them. The `restore-detected` latch is derived from the guard's state, is not journalled, and only Confirm clears it. (Widened by X3b, and its last sentence superseded by F4: both below.)
+- **X3b, a narrowing always lands** (the ladder plan's fix round 1, review 2159 F3). On any refused append an operator
+  narrowing writes its row only, the journal calls `writerFailed`, and the answer says `journalled: false`; a widening
+  still refuses. It extends X3 in X3's own direction, and trades journal completeness for a brake that always lands.
+  This plan's decision rows 5 and 8 answer `row-only` for a narrowing, and NL is tested once per row.
+- **F4, `restore-detected` is a row** (the ladder plan's fix round 1, review 2159). The spec governs over X3's last
+  sentence: "The `chat` cap stays as an ordinary latch, which the operator clears as any other" (§7.6). The latch is a
+  row raised through the ladder's writer, which this plan's boot step and guard call; Confirm does not lift it.
+- **F5, Confirm appends first** (the same round). Confirm's transaction appends its record, then calls the ladder's
+  `applyRestoreInTx` with that record's sequence, and the record's `latches` carries `{cause, cap}` pairs.
 - **X9, D-numbers.** Plan decisions stay plain-words slugs, as every other W1 piece's do. No D-number is minted for them.
 - **X10, the index.** I make every index change the four reviews list in my own index edit; do not edit the index plan.
 
@@ -486,7 +501,8 @@ guard implements it, and `index.ts` passes the guard in. PR A0 ships `appendOnly
     clears `authority-rolled-back`.
   - An agent's held tuple: the agent's `witness` op. A console's: `pwa/src/lib/witness.ts`.
   - The restore generation: the Confirm record (question 13).
-  - The `restore-detected` latch has no writer. It is derived from the guard (question 9).
+  - The `restore-detected` latch's row: the ladder's `raiseLatchInTx`, reached through `raiseLatch`, which this plan's
+    boot step and guard call (question 9, ruling F4).
 - **Fail closed, and never fold "unmeasured".**
   - An unreadable journal, head row or privacy head reads `unmeasured`, and `unmeasured` refuses as
     `authority-rolled-back` does. It keeps its own cause word in the guard and on the console.
@@ -567,11 +583,12 @@ other. The second of them to land merges `main` once (worker clause 16).
 - Private store A: `appendOnlyFile.ts`, `chainedJournalFile.ts` and the contract of question 3 (PR A0).
 - Designation A and the ladder: `OverlordAuthorityJournal.appendInTx` with its answers, the W1 kinds and
   `authorityDirection` (PR A), and `OVERLORD_AUTHORITY_TABLES`, to which each adds its table. Each also exposes the
-  inner, unjournalled writer Confirm calls (question 9).
+  inner, unjournalled writer Confirm calls (question 9); the ladder's is `applyRestoreInTx`, which takes the Confirm
+  record's sequence.
 - Gates B: `OverlordAuthorityGuard.state()` for step 3 (PR A).
-- The ladder's `restore-detected` latch: the guard's state (PR A). Its "taking effect until a witness holds it":
-  `offVolumeHeld(epoch)` (PR B). Until PR B lands, the ladder reads it as `unmeasured`, so a narrowing shows as
-  taking effect.
+- The ladder: PR B raises `restore-detected` through the ladder's `raiseLatch`, and implements the ladder's
+  `NarrowingWitness` port over `offVolumeHeld(epoch)`. Until PR B lands, the ladder's W1 adapter answers `not-yet`, so a
+  narrowing shows as taking effect. PR C calls the ladder's `applyRestoreInTx` after `appendConfirmInTx`.
 - Private store A: the `PrivacyJournalHead` port (PR B), and the witnesses' highest message id
   (`witnessHighestIds()`), above which "no id is used twice" makes it issue.
 - Responses B and the Overlord's timers: `restoreGeneration()` (PR C).
@@ -631,6 +648,8 @@ the `A` tuple gains these fields:
 - a failure after the append in a running server: the row's transaction rolls back, the record stays, and the server
   keeps running (review F1);
 - an operator narrowing while the journal is incoherent, which writes its row only (question 9);
+- an operator narrowing whose append fails on a coherent journal, which writes its row only and moves the guard off
+  `coherent` (X3b);
 - the file damaged past the heal, so it reads `malformed` (review F2);
 - a privacy record appended;
 - a witness exchange with each witness, separately and in any order;
@@ -649,7 +668,8 @@ the `A` tuple gains these fields:
 - **WH.** A narrowing is reported done only when the console or the other-host agent holds an epoch at or above its
   record's.
 
-- **NL.** An operator narrowing is never refused, whatever the journal's state (ruling X3).
+- **NL.** An operator narrowing is never refused, whatever the journal's state, and whatever its append answers
+  (rulings X3 and X3b).
 
 **Liveness** (in `liveness`): from `rolled-back`, whatever its cause (`malformed` and a post-append failure included),
 a Confirm reaches `coherent` with no further restore, and stays there while no further restore happens.
@@ -674,6 +694,7 @@ a Confirm reaches `coherent` with no further restore, and stays there while no f
 | `trailing_widening_applied`: Confirm takes the trailing record's value whatever it is | I11a |
 | `append_over_incoherent`: the writer appends a narrowing over a trailing record, moving the head row level with the file | I11a, then a later widening |
 | `narrowing_refused_while_incoherent`: the old strict rule | NL |
+| `narrowing_refused_on_append_failure`: a narrowing whose append fails on a coherent journal is refused (the rule X3b withdrew) | NL |
 | `writer_failure_unfenced`: a failure after the append leaves the guard `coherent`, and Confirm decides "nothing waits" from the guard alone | liveness |
 | `no_confirm_over_malformed`: Confirm refuses a `malformed` journal | liveness |
 | `restore_generation_in_db`: the counter kept in the database | RG |
@@ -862,7 +883,7 @@ the UUID ccd records, never a number (ruling X2). Which designation moves append
 | `authority-latch-clear` | `cause` | widens |
 | `authority-account-set` | `from`, `to` (each `{pools, untagged}`, pools sorted and unique) | narrows when `to` is within `from`, else widens |
 | `authority-model-class` | `from`, `to` | narrows to `opus`, widens to `fable` |
-| `authority-restore-confirmed` | `term`, `epochAtConfirm`, `privacySequenceAtConfirm` (null when the privacy journal is absent), `restoreGeneration`, `newChain` (true when it is record 1 after a whole-file cut), and the stricter values it wrote: `binding` (`{kind: 'kept', sessionId, generation}` or `{kind: 'cleared'}`), `operatorRung`, `latches` (sorted, unique), `accountSet`, `modelClass` | written only by `appendConfirmInTx` |
+| `authority-restore-confirmed` | `term`, `epochAtConfirm`, `privacySequenceAtConfirm` (null when the privacy journal is absent), `restoreGeneration`, `newChain` (true when it is record 1 after a whole-file cut), and the stricter values it wrote: `binding` (`{kind: 'kept', sessionId, generation}` or `{kind: 'cleared'}`), `operatorRung`, `latches` (`{cause, cap}` pairs, sorted by cause, one per cause; ruling F5), `accountSet`, `modelClass` | written only by `appendConfirmInTx` |
 
 - `opKey` is the door call's operation key, minted by the door through `Entropy` (`entropy.hex(16)`) unless the door
   has a natural key of its own.
@@ -893,7 +914,7 @@ export function authorityDirection(entry: Exclude<OverlordAuthorityEntry, { kind
  *  Confirm record sets every field to the stricter value it carries. */
 export interface AuthorityView {
   designation: { term: number; sessionId: string | null; generation: string | null } | null;
-  operatorRung: RungWord | null; latches: ReadonlySet<string>;
+  operatorRung: RungWord | null; latches: ReadonlyMap<string, RungWord>;   // cause to cap (ruling F5)
   accountSet: { pools: readonly string[]; untagged: boolean } | null; modelClass: 'opus' | 'fable' | null;
   lastConfirm: { sequence: number; epochAtConfirm: number; privacySequenceAtConfirm: number | null;
     restoreGeneration: number } | null;
@@ -911,7 +932,7 @@ export type AuthorityState =
 export interface AuthorityGuardPort {
   state(): AuthorityState;
   /** The writer's failure at or after the append (`trailing`), or the verdict of a head mismatch it measured. */
-  writerFailed(cause: 'trailing' | 'behind' | 'ahead' | 'diverged' | 'malformed'): void;
+  writerFailed(cause: 'trailing' | 'behind' | 'ahead' | 'diverged' | 'malformed' | 'unreadable'): void;
 }
 export type AuthorityAppend =
   | { ok: true; kind: 'appended'; record: ChainedJournalRecord<OverlordAuthorityEntry> }
@@ -943,10 +964,11 @@ export type AuthorityFileRead =
 | 2 | `unmeasured` | any | widens | `authority-unmeasured` |
 | 3 | `rolled-back` | any | narrows | `row-only` |
 | 4 | `rolled-back` | any | widens | `authority-rolled-back` |
-| 5 | `coherent` | unreadable | any | `authority-unmeasured`, and the guard is not told (the next read re-measures) |
+| 5 | `coherent` | unreadable | narrows | `row-only`, and `writerFailed('unreadable')`, which moves the guard to `unmeasured: journal` (X3b) |
+| 5w | `coherent` | unreadable | widens | `authority-unmeasured`, and the guard is not told (the next read re-measures) |
 | 6 | `coherent` | they disagree | narrows | `row-only`, and `writerFailed(verdict)` |
 | 7 | `coherent` | they disagree | widens | `authority-rolled-back`, and `writerFailed(verdict)` |
-| 8 | `coherent` | they agree | any | append, then the head row: `appended`, or on a failure at or after the append `journal-append` and `writerFailed('trailing')` |
+| 8 | `coherent` | they agree | any | append, then the head row: `appended`; on a failure at or after the append, `writerFailed('trailing')`, then `row-only` for a narrowing (X3b) and `journal-append` for a widening |
 
 The verdict in rows 6 and 7 is `authorityCoherence`'s over the file and the head row (Task 4). A file one record past
 the head row reads `trailing`, which is how the writer sees a caller's row or a commit that failed after it answered
@@ -978,14 +1000,19 @@ CREATE TABLE overlord_authority_head (
     delegation format;
   - `authorityDirection`: every row of the grammar table, both ways where it has two;
   - `authorityFold`: designate, then rebind, then retire leaves no binding and the last term. A latch raised then
-    cleared leaves none. A Confirm sets `lastConfirm` and every field to the values it carries, so a widening before
-    it is gone. An empty journal folds to every field `null`.
+    cleared leaves none, and a raised latch keeps its cap. A Confirm sets `lastConfirm` and every field to the values
+    it carries, its latches with their caps, so a widening before it is gone. An empty journal folds to every field
+    `null`. A Confirm record whose `latches` carries a bare cause string, a cap outside the rung words or one cause
+    twice is refused with `OverlordAuthorityError`.
 
   Failing tests (`overlord-authority-journal.test.ts`, on a fixture `DatabaseSync`, a fixture directory and a guard
   double):
   - an append outside `tx()` refuses `not-in-transaction` and writes nothing;
   - an append inside `tx()` writes one line and the head row;
   - every row of the decision table, with the guard double in each state;
+  - **NL, once per row** (X3b): a narrowing is never answered with a refusal in any of the table's rows (5 and 8
+    included); `not-in-transaction` is the one refusal a narrowing can meet, and it is a caller's error, not a journal
+    state;
   - **the post-append failure in a running server** (review F1): a head-row write that throws after the append answers
     `journal-append`, never throws, and calls `writerFailed('trailing')`. A caller's own row that throws after an
     `appended` answer leaves the line and rolls the head row back; the next `appendInTx` of a widening refuses
@@ -994,8 +1021,8 @@ CREATE TABLE overlord_authority_head (
     narrowing answers `row-only`, and neither appends (review F10);
   - a file whose head is behind, ahead or diverged from the head row reports that verdict to the guard;
   - an absent file with no head row appends sequence 1;
-  - an `AppendOnlyFsOps` double that fails at each step answers `journal-append` (never a throw) and leaves the head
-    row unwritten;
+  - an `AppendOnlyFsOps` double that fails at each step answers `journal-append` for a widening and `row-only` for a
+    narrowing (never a throw), calls `writerFailed('trailing')`, and leaves the head row unwritten;
   - two records in a row, each through the writer in its own transaction, chain, and the second re-reads the file
     (ruling X1).
 - [ ] **Step 3: Run.** Red.
@@ -1007,6 +1034,7 @@ CREATE TABLE overlord_authority_head (
   - write the head row before the append;
   - let `appendInTx` append over a head mismatch;
   - answer `appended` for a narrowing over a `rolled-back` guard;
+  - answer `authority-unmeasured` or `journal-append` for a narrowing (the refusal X3b withdrew): an NL case goes red;
   - drop the `writerFailed('trailing')` call after a failed head-row write.
 
   Record the floors.
@@ -1064,17 +1092,21 @@ Confirm the restore moves past it (question 17).
 export class OverlordAuthorityGuard implements AuthorityGuardPort {
   /** `measure` is the composition root's closure over the journal's `readVerified()` and the head row. */
   constructor(measure: () => CoherenceVerdict);
-  state(): AuthorityState;          // gates B's step 3, the ladder's derived latch, and the writer through its port
+  state(): AuthorityState;          // gates B's step 3, and the writer through its port
   bootVerdict(v: CoherenceVerdict): void;        // input 1: the boot step, once
   witnessRefused(cause: 'witness-epoch' | 'witness-heads'): void; // input 2: PR B
-  writerFailed(cause: 'trailing' | 'behind' | 'ahead' | 'diverged' | 'malformed'): void; // input 3: the writer (F1)
+  writerFailed(cause: 'trailing' | 'behind' | 'ahead' | 'diverged' | 'malformed' | 'unreadable'): void; // input 3: the writer (F1, X3b)
   confirmed(): void;                // input 4: PR C, after the Confirm transaction commits
   remeasure(): void;                // re-runs coherence when the state is `unmeasured`, never when `rolled-back`
 }
 ```
 
 - A `rolled-back` state leaves only by `confirmed()`. `writerFailed` moves a `coherent` or `unmeasured` state to
-  `rolled-back` with its cause, and leaves a `rolled-back` one as it is.
+  `rolled-back` with its cause, and leaves a `rolled-back` one as it is; `writerFailed('unreadable')` moves a
+  `coherent` state to `unmeasured: journal` (X3b) and leaves any other as it is.
+- When the boot step's verdict, or a running guard's first move out of `coherent`, is `rolled-back` or `unmeasured`,
+  the guard's holder raises the ladder's `restore-detected` latch through `raiseLatch` (ruling F4), once: a standing
+  latch of the cause answers `changed: false`. `confirmed()` lowers nothing on the ladder.
 - An `unmeasured` state is re-measured, at most once a call, by the door that reads it. A boot that met a transient
   read error can therefore recover without a restart, and a rolled-back one cannot.
 - The server starts whatever the verdict (question 6), and logs one `console.warn('ccrc-server: …')` line naming it.
@@ -1298,33 +1330,42 @@ is never offered a tuple and never counted.*
 ### Task 7: The ladder's two cause rows (PR B)
 
 **Files:**
-- Modify: the ladder's cause and condition tables (their module named by the ladder's plan). Two rows are added, and
-  nothing else changes.
-- Modify: the ladder's latch-clear door, which does not offer `restore-detected`: that latch is derived, has no row
-  and no writer, and is not journalled. It holds while the guard reads anything but `coherent`, and only Confirm the
-  restore clears it, by moving the guard to `coherent` (ruling X3).
-- Test: the ladder's suite (its file named by its plan), with the cases below.
+- Modify: the ladder's cause table (`shared/overlord-ladder.ts#LADDER_CAUSE_MAP`) and its input table
+  (`server/src/coord/overlordLadderRead.ts`'s `LadderConditionInputs`). Two rows and one input are added, and nothing
+  else in the ladder changes.
+- Modify: the guard's holder (`server/src/index.ts`'s boot step and the guard's transition hook), which raises
+  `restore-detected` through the ladder's `raiseLatch` when the boot verdict, or the guard's first move out of
+  `coherent`, is `rolled-back` or `unmeasured` (ruling F4).
+- Modify: `server/src/index.ts`, which wires the ladder's `NarrowingWitness` port to this piece's witness state, in
+  place of the ladder's W1 adapter.
+- Test: the ladder's suites (`server/test/overlord-ladder-read.test.ts`, `server/test/overlord-ladder-seams.test.ts`),
+  with the cases below.
 
 | Cause key | Kind | Effect | Input |
 |---|---|---|---|
-| `restore-detected` | latch, derived | cap `chat` | the guard's state: `rolled-back` or `unmeasured` holds it, and `coherent`, which after a rollback only Confirm brings, lifts it |
+| `restore-detected` | latch, a row | cap `chat` | raised through `raiseLatch` at the boot step and when the guard first enters `rolled-back` or `unmeasured`; lands as its row while the journal is not coherent; Confirm does not lift it; the operator clears it on the ladder's clear door, which the journal refuses until it is coherent |
 | `no-witness-since-boot` | condition | cap `advise` | no counting `consistent` answer since this boot (question 8). It lifts at the first one and comes back at the next boot |
 
-The ladder's "taking effect until a witness holds it" reads `offVolumeHeld(recordEpoch)`. While nothing has answered,
-it reads `not-yet`, and the console shows "taking effect".
+The ladder's "taking effect until a witness holds it" asks `NarrowingWitness.heldFor(recordSequence)`, which this task
+implements: the record's epoch, then `offVolumeHeld`. While nothing has answered, it reads `not-yet`, and the console
+shows "taking effect".
 
 - [ ] **Step 1: Failing tests:**
-  - a boot over a `trailing` journal holds the latch, and `effectiveRung` reads `chat`;
-  - a writer failure after the append (the guard's `writerFailed`) holds it at once;
-  - the latch-clear door does not offer it, and no row or record is written for it;
-  - Confirm the restore lifts it;
+  - a boot over a `trailing` journal raises the latch once, as a row with a NULL sequence, and `effectiveRung` reads
+    `chat`;
+  - a writer failure after the append (the guard's `writerFailed`) raises it at once, and a second failure does not
+    raise it again;
+  - Confirm the restore leaves it standing, stamped with the Confirm record's sequence;
+  - the ladder's clear door refuses it `authority-rolled-back` while the journal is not coherent, and clears it, with
+    an `authority-latch-clear` record, once it is;
   - a fresh boot reads the condition, and `effectiveRung` is capped at `advise`;
   - a counting console answer lifts it;
   - a same-host agent's answer does not;
+  - `NarrowingWitness` answers `held` once a counting witness holds the record's epoch;
   - the ladder's monotonicity property still holds with the two rows.
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the ladder's suites, these, the mutation floors and
   every `tsc`. Green.
-- [ ] **Step 5: Commit.** `feat(ladder): the restore-detected latch, derived from the guard, and the no-witness-since-boot condition (Overlord W1, Table 7.5a)`
+- [ ] **Step 5: Commit.** `feat(ladder): the restore-detected latch, raised as a row, and the no-witness-since-boot condition (Overlord W1, Table 7.5a)`
 
 **PR B ends here.**
 
@@ -1341,9 +1382,10 @@ it reads `not-yet`, and the console shows "taking effect".
 - Modify: `server/src/coord/overlordAuthorityJournal.ts` (`appendConfirmInTx`: the one append allowed over an
   incoherent journal, and only of `authority-restore-confirmed`; over a `malformed` file it sets the whole file aside
   first, question 17)
-- Modify: the designation's store (designation A's module) and the ladder's store, each exposing the inner,
-  unjournalled writer for its fields, called only from this transaction (ruling X3). The designation row's writers
-  list in Table 11.1a already names Confirm the restore.
+- Modify: the designation's store (designation A's module), exposing the inner, unjournalled writer for its fields,
+  called only from this transaction (ruling X3). The designation row's writers list in Table 11.1a already names
+  Confirm the restore. The ladder's is `applyRestoreInTx(db, stricter, confirmSequence, at)`, which the ladder ships
+  and this transaction calls after the append (ruling F5).
 - Modify: the door censuses for `POST /api/overlord/restore/confirm`, as in Task 6, and `CLAUDE.md`'s sentence.
 - Create: `pwa/src/overlord/RestoreBanner.tsx`, with `pwa/src/lib/api.ts`'s `confirmRestore` (question 14)
 - Modify: `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`: C5's `pwa/src` column gains
@@ -1360,14 +1402,15 @@ it reads `not-yet`, and the console shows "taking effect".
 | The designation's binding | The row's binding if the journal's last designate, rebind or retire names the same session. Otherwise no binding, both ids join the past ids, and `binding: 'cleared'` | §7.6 |
 | `term` | The higher of the two, plus one | §3.1. Not `designatedTerm`, which Confirm never raises |
 | `operatorRung` | The lower rung | §7.5 |
-| Latches | The union | A latch either side holds stands. `restore-detected` is derived and is neither side's |
+| Latches | The union, each with its cap | A latch either side holds stands. `restore-detected` is a row on the database side, so the union keeps it (ruling F4) |
 | The account set | The intersection, and `untagged` only when both hold it | Question 12 |
 | The model class | `opus` unless both read `fable` | Question 12 |
 
 - **An absent side reads as the narrowest value per field** (review F4, spec I11a). An absent row (a lost or new
   `coord.db` beside an intact journal), and the journal side of a `malformed` file (question 17), are each read as no
   binding, the lowest rung, no latch, the empty account set without `untagged`, and `opus`. The term of an absent
-  side is 0, so the other side's term, plus one, wins.
+  side is 0, so the other side's term, plus one, wins. An absent ladder row is such a side and reads `off`; the
+  ladder's default `chat` belongs to an ordinary read of a box that never had a row, never to Confirm (ruling F8).
 - A trailing record is folded into the journal's side, so a narrowing one is applied and a widening one is not (Table
   7.6a's last row). An operator narrowing written row-only while the journal was incoherent is on the row side, and
   the stricter-of keeps it. No special case is needed for either.
@@ -1383,19 +1426,22 @@ it reads `not-yet`, and the console shows "taking effect".
      after its append, and it waits (review F1).
 2. Over a `malformed` file, `cutAside` sets the whole file aside under `~/.ccrc/overlord-authority-torn/`, and the
    Confirm record becomes record 1 of a new chain (question 17).
-3. Each table writes its stricter value through its inner, unjournalled writer (ruling X3).
-4. `appendConfirmInTx` appends `authority-restore-confirmed`, carrying the values step 3 wrote:
+3. `appendConfirmInTx` appends `authority-restore-confirmed` first (ruling F5), carrying the stricter values the next
+   step writes:
    - `epochAtConfirm` is the higher of the server's epoch (or the `malformed` file's bound) and every witness's,
      plus one;
    - `restoreGeneration` is the higher of the journal's last (or the bound) and every held witness's, plus one
      (question 13);
    - the record also carries the privacy sequence, the term and `newChain`.
 
-   The head row moves to it.
-5. After the commit: `guard.confirmed()`, which lifts the derived `restore-detected` latch, then the exchange offers
-   the new tuple at once.
+   The head row moves to it, and the append answers the record's sequence (1 on a new chain).
+4. Each table writes its stricter value through its inner, unjournalled writer (ruling X3): the designation's, and the
+   ladder's `applyRestoreInTx` with that sequence, which stamps the rung row's `recordSequence` and each latch's
+   `raiseSequence` where they are NULL and gives a journal-only latch that sequence.
+5. After the commit: `guard.confirmed()`, then the exchange offers the new tuple at once. The `restore-detected`
+   latch stays standing (ruling F4).
 
-A failure before step 4's append leaves the file as it was, and Confirm can run again. A failure after the append
+A failure before step 3's append leaves the file as it was, and Confirm can run again. A failure after the append
 leaves the Confirm record trailing. The guard stays `rolled-back`, the next Confirm folds that record in and counts
 its generation, so the generation skips a value and never repeats one. A failure after a whole-file cut leaves a
 file Confirm can run over again: the kept bytes are under the torn directory.
@@ -1414,7 +1460,12 @@ renewal readings piece wires it.
   - a `coherent` guard over a file with a trailing record (a writer failure after its append, review F1) is
     confirmed, not `changed: false`;
   - after a restore of `coord.db` alone, Confirm keeps the journal's later retire;
-  - an operator narrowing written row-only while rolled back is kept by Confirm (ruling X3);
+  - an operator narrowing written row-only while rolled back is kept by Confirm (ruling X3), and its row carries the
+    Confirm record's sequence afterwards (ruling F5);
+  - the order: the Confirm record is appended before any table writes, and a table writer that throws rolls the
+    transaction back with the record left trailing, as a failure after the append does;
+  - an absent ladder row reads `off` on the database side (ruling F8);
+  - the `restore-detected` latch stands after Confirm (ruling F4);
   - over a `malformed` file, and over a trailing record behind a torn tail the heal refuses: Confirm sets the file
     aside, writes record 1 of a new chain, reads the journal side as the narrowest value, and sets the epoch and the
     generation above the file's bound and every witness's (review F2);
@@ -1500,10 +1551,13 @@ numbers.
   under an earlier boot. A first boot, and the rest of a boot after an in-boot Confirm, stay capped at `advise`
   (question 8, review F7, an accepted residual).
 - **`narrowing-row-only-while-incoherent`**: over an incoherent journal nothing but the Confirm record is appended,
-  an operator narrowing writes its row only, and a widening is refused (question 9, ruling X3).
-- **`restore-latch-derived-from-the-guard`**: the `restore-detected` latch is derived from the guard, is not
-  journalled, and only Confirm the restore clears it, where §7.6 has the operator clear it once the restore is
-  confirmed (ruling X3).
+  an operator narrowing writes its row only, and a widening is refused (question 9, ruling X3). Under X3b a narrowing
+  whose append fails on a coherent journal lands as its row too (decision rows 5 and 8).
+- **`restore-latch-is-a-row`** (replacing `restore-latch-derived-from-the-guard`, ruling F4): the `restore-detected`
+  latch is a row raised through the ladder's writer at boot or on the guard's first move to `rolled-back` or
+  `unmeasured`, Confirm does not lift it, and the operator clears it once the journal is coherent, as §7.6 says.
+- **`confirm-appends-then-stamps`** (ruling F5): Confirm appends its record before the tables write their stricter
+  values, so the ladder stamps its rows with that record's sequence; the record's latches carry their caps.
 - **`agent-witness-waits-for-host-report`**: an agent counts as off the volume only once the isolation word reports
   it on another host (question 10).
 - **`privacy-head-wired-by-the-second`**: the privacy head is a port, wired by this piece or private store A,
@@ -1568,7 +1622,8 @@ C, PR A, designation A, responses A and the ladder.
     coherence and the guard.
   - B ships the witness tuple with its per-term counts and restore generation, the epoch, the verdict, the agent's
     `witness` op and ready field, the console's door, the `authorityWitness` lane, the witness file in the deny set,
-    and the ladder's `restore-detected` and `no-witness-since-boot` rows. It needs designation A and the ladder.
+    and the ladder's `restore-detected` (a row, raised through `raiseLatch`) and `no-witness-since-boot` rows, and
+    the ladder's `NarrowingWitness`. It needs designation A and the ladder.
   - C ships Confirm the restore (over a `malformed` journal too), its banner, the restore generation and
     `termRaised`. It needs designation A, responses A and the ladder.
 - Lane C's file list:

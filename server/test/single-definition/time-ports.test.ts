@@ -26,6 +26,7 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/fleetRoles.ts',
   'server/src/pushOutbox.ts',
   'server/src/coord/pushOutboxStore.ts',
+  'server/src/pushSender.ts',
   // Overlord W1, portfolio: the class vocabulary, the pure decider and the store take `now` as an argument.
   'shared/portfolio.ts',
   'server/src/coord/portfolio.ts',

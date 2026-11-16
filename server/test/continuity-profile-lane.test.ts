@@ -65,6 +65,8 @@ interface World {
   fail?: Set<string>;
   notRan?: Set<string>;
   openGate?: boolean;
+  /** The fleet node's build against the server's (W1 sandbox: `profiledigest` waits for `agreed`); `agreed` when unnamed. */
+  builds?: 'agreed' | 'skewed' | 'unknown';
 }
 
 function harness(w: World = {}) {
@@ -89,6 +91,7 @@ function harness(w: World = {}) {
       },
       steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
       declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },
+      buildAgreement: () => w.builds ?? 'agreed',
     },
     act: {
       runCcd: async (argv: CcdArgv): Promise<CcdResult> => {
@@ -132,6 +135,23 @@ describe('the launch-profile lane, one pass (Task 5)', () => {
     expect(h.sent.map(sets)).toEqual([['automem=off'], ['profile=plain', 'automem=on']]);
     expect(h.sent[0]!.slice(0, 3)).toEqual(['route', '--session', 'lane-a-project-a']);
     expect(h.sent[0]!.join(' ')).toContain('launch-profile lane');
+  });
+
+  it('profiledigest (W1 sandbox): a role with no surface has a standing digest cleared, whatever the builds, and no other row is sent it', async () => {
+    let asked = 0;
+    const h = harness({ lanes: LIVE, coordinators: ['lane-a-project-a', 'lane-a-project-b'], builds: 'skewed' });
+    const reads = h.deps.reads;
+    const deps = { ...h.deps, reads: { ...reads, buildAgreement: () => { asked += 1; return reads.buildAgreement(); } } };
+    const D = 'd'.repeat(64);
+    const r = await profilePass(deps, [
+      row('lane-a-project-a', { profile: 'coordinator', automem: 'off', profiledigest: D }),   // a coordinator carries no surface
+      row('lane-a-project-b', { profile: 'coordinator', automem: 'off' }),                    // settled, and no digest ever stood
+    ]);
+    expect(h.sent.map(sets)).toEqual([['profiledigest=']]);
+    expect(r.byField.profiledigest).toBe(1);
+    // No surfaced reading reaches the lane before designation A (roleOf reads `overlord` only from a designation), so the
+    // builds are never asked: the write-at-agreement and hold-under-skew rules are `profileDigestWriteOf`'s cases.
+    expect(asked).toBe(0);
   });
 
   it('a route field it could not read is skipped and counted, never written blind', async () => {

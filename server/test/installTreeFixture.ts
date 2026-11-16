@@ -248,6 +248,8 @@ export const TREE_FILES = [
   'ccd/compact-card.mjs',
   // The launch profiles ccd renders at a profile-naming spawn (Overlord W1a); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/launch-profiles.json',
+  // The Overlord's constitution (W1 sandbox); `_inst_files` places it under `.cc-sessions/lib`.
+  'ccd/lib/overlord-constitution.md',
   // The transcript reader ccd and the doctor load with `jq -L` (ARCH-65); `_inst_files` places it under `.cc-sessions/lib`.
   'ccd/lib/transcript.jq',
   // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.

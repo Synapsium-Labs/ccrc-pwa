@@ -73,7 +73,7 @@ export type WatcherCoordMember =
   | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage' | 'generationsCursor' | 'goneSince'
   | 'handoverOf' | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
   | 'heldAskFor' | 'heldQuestionRows' | 'holdParked' | 'importLaneArmMarker' | 'ingestJournal' | 'insertApproval' | 'insertAsk'
-  | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor'
+  | 'insertDelegationEvents' | 'insertMail' | 'insertObservation' | 'insertStallObservation' | 'intentFor' | 'itemById'
   | 'itemsFor' | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveGenerations' | 'liveNotes'

@@ -15,7 +15,8 @@ import { FLEET_ROLES, type FleetRole } from '../../../shared/fleetRoles.js';
 import { PLAIN_AUTO_MEMORY_DEFAULT, isPlainAutoMemoryChoice, type PlainAutoMemoryChoice } from '../../../shared/plainAutoMemory.js';
 import type { ChildReclaimGeneration } from '../../../shared/api.js';
 import type { RoleAmbiguity, RoleReading } from '../roleOf.js';
-import { compactThresholdFor } from './launchProfile.js';
+import type { BuildAgreement } from '../../../shared/api.js';
+import { compactThresholdFor, launchDigestOf } from './launchProfile.js';
 
 /** The member of each undecided reading that does less (C49). */
 export const PROFILE_OF_UNDECIDED: Readonly<Record<RoleAmbiguity, FleetRole>> = {
@@ -34,6 +35,10 @@ export interface ProfileRoute {
   readonly compact: number | null;
   /** Claude Code's auto-compact window in tokens (route field `compactwindow`), or null: leave the route alone. */
   readonly compactwindow: number | null;
+  /** The expected digest of the row (route field `profiledigest`, Overlord W1 sandbox Task 2): `launchDigestOf(profile)` for a
+   *  role whose profile has a surface, absent for every other. ccd refuses the spawn when the row it reads does not hash to
+   *  it, so the field, never a role word, makes a spawn fail closed (slug `expected-digest-rides-the-route`). */
+  readonly profiledigest?: string;
 }
 
 export function profileFor(reading: RoleReading, plainAutoMemory: 'on' | 'off', windowTokens: number | null,
@@ -42,7 +47,24 @@ export function profileFor(reading: RoleReading, plainAutoMemory: 'on' | 'off', 
   const row = FLEET_ROLES[profile].launchProfile;
   const automem = row.autoMemory === 'switch' ? plainAutoMemory : 'off';
   const t = continuityLive ? compactThresholdFor(row, windowTokens) : null;
-  return { profile, automem, compact: t === null ? null : t.pct, compactwindow: t === null ? null : t.windowTokens };
+  const base = { profile, automem, compact: t === null ? null : t.pct, compactwindow: t === null ? null : t.windowTokens };
+  return row.surface === null ? base : { ...base, profiledigest: launchDigestOf(profile) };
+}
+
+/** What the lane does to `profiledigest` this pass (Overlord W1 sandbox Task 2, question 5 ruled in fix round 2: never kill what
+ *  cannot be respawned). `write` the target only while the fleet node's measured build equals the server's, so the field never
+ *  leads the row the fleet box has installed; `hold` (send nothing for the field) while they differ or the inventory is
+ *  unmeasured, so a rollout's skew keeps the old value; `clear` (an empty value) when the role has no surface and the field
+ *  stands; `none` otherwise. A row whose field never stood is never sent a clear, so an older ccd sees nothing new. */
+export type ProfileDigestWrite =
+  | { readonly act: 'write'; readonly value: string }
+  | { readonly act: 'hold' | 'clear' | 'none' };
+
+export function profileDigestWriteOf(target: string | undefined, standing: string | undefined,
+  builds: BuildAgreement): ProfileDigestWrite {
+  if (target === undefined) return standing !== undefined ? { act: 'clear' } : { act: 'none' };
+  if (standing === target) return { act: 'none' };
+  return builds === 'agreed' ? { act: 'write', value: target } : { act: 'hold' };
 }
 
 /** The Settings row "Auto memory for plain sessions" as the store read it: a row, no row, or a read that failed, never one

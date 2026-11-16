@@ -42,9 +42,12 @@ subagent metadata — measured per installed binary, so the delegation broker (s
     refused, here and in `launch.settings.env`);
   - `launch.settings` — merged over the fixture's `settings.json` with jq's `*`, each `hooks.<event>` array appended so
     ccrc's own hook stays;
-  - `launch.files` — `[{in: "cfg"|"repo"|"cfg2", path, text, exec?}]`, written under the fixture config or the fixture
-    repo at setup, or under the second config when `swapConfig` makes it; a path may name `@RIG_PROJECT@`, the project
-    directory Claude Code derives from the fixture repo (for project memory);
+  - `launch.files` — `[{in: "cfg"|"repo"|"cfg2"|"root", path, text, exec?}]`, written under the fixture config, the
+    fixture repo or the run root at setup, or under the second config when `swapConfig` makes it; a path may name
+    `@RIG_PROJECT@`, the project directory Claude Code derives from the fixture repo (for project memory). An entry may
+    carry `link` in place of `text` (and no `exec`): the path is then a symbolic link to `link`, which must spell
+    `@RIG_ROOT@/` followed by `..`-free segments, so a link never leaves the run root (the sandbox piece's linked skill
+    and memory file, plan `2026-11-14-overlord-w1/w1-sandbox.md` Task 1);
   - placeholders `@RIG_ROOT@`, `@RIG_HOME@`, `@RIG_CFG@`, `@RIG_REPO@` and `@RIG_STUBS@`, replaced literally in
     args, env values, settings strings and file texts;
   - `capS` (60 to 5400, the run's cap in place of 1200), `timing: true` (each step's start and `waitReady`'s elapsed
