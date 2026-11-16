@@ -18,7 +18,7 @@ import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextVa
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
 import type { DetachedUrls } from './docsLinks';
-import { DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, slotSentence } from './docsText';
+import { DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, shortCommit, slotSentence } from './docsText';
 import { leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import { downloadDocFile, showBytes } from './objectUrls';
@@ -199,8 +199,10 @@ function RasterBody(p: {
  *  field, its fingerprint among them, so a new fingerprint asks the render gate again). A committed body is keyed by
  *  the blob the ANSWER carries, so a re-list that moves the commit but not the file keeps the formatted body (and its
  *  scroll), and an answer with no blob falls back to the commit-bearing pin. */
-function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string): string {
-  if (pin.kind === 'draft' || show.blob === undefined) return pinKey;
+function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string, version: boolean): string {
+  // A version is keyed by its pin, so it remounts the reader with its own sha (rich-docs spec 4.1) even when its blob is
+  // the latest's.
+  if (pin.kind === 'draft' || version || show.blob === undefined) return pinKey;
   return ['blob', show.blob, show.section, show.path].join('\u0000');
 }
 
@@ -268,7 +270,7 @@ export function DocsLeaf(p: {
     } else if (file.s === 'too-large') {
       body = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
     } else if (cls === 'other') {
-      const size = pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
+      const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
       body = (
         <>
           <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.noPreview, typeof size === 'number' ? { size: kib(size) } : {})}</p>
@@ -286,6 +288,10 @@ export function DocsLeaf(p: {
           <Button variant="ghost" className="docs-fail-action" onClick={visit.retryFile}>Retry</Button>
         </div>
       );
+    } else if (file.s === 'failed' && page.at !== null && file.body.failure === 'unknown-commit') {
+      // Refinement (p): the commit is the URL's, and no re-list can bring it back; on a shared link it may simply not be
+      // in this box's clone, so the words name what is missing rather than the listing's remedy.
+      body = <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.versionUnknownCommit, { short: shortCommit(page.at) })}</p>;
     } else if (file.s !== 'ok') {
       body = <DocsFailureView answer={notOkOf(file)} onRetry={visit.retryFile} />;
     } else {
@@ -295,7 +301,7 @@ export function DocsLeaf(p: {
         case 'markdown':
           body = (
             <MarkdownBody
-              show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey)} link={link} parser={parser}
+              show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey, page.at !== null)} link={link} parser={parser}
               reader={reader} pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
             />
           );

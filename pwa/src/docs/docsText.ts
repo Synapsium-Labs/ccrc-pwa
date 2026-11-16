@@ -405,6 +405,7 @@ export const DOCS_VIEW_TEXT = {
   emptyListing: 'Nothing is listed here.',
   missing: 'Not in this listing at {short}.',
   sectionUnserved: "The fleet box does not serve this section yet; it appears once that box's ccrc is updated.",
+  versionUnknownCommit: "This box's copy of the repository has no commit {short}.",
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',
