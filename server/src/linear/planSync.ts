@@ -41,7 +41,7 @@ import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import {
-  adoptionVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
+  adoptionVerdict, directoryMissed, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
   type AdoptionAsk, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
@@ -326,7 +326,7 @@ export class PlanSync {
       const built = this.snapshot(slug, store);
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
       try { this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
-      const { steps, failedInputs, notices } = planSyncSteps(built.snap);
+      const { steps, failedInputs, notices, waits } = planSyncSteps(built.snap);
       for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
       let requeued = false;
       for (const f of failedInputs) {
@@ -340,7 +340,18 @@ export class PlanSync {
       const blocked = (ws: string | null): boolean => ws !== null && (waiting.has(ws) || this.notConfigured.has(ws) || (this.blockedUntil.get(ws) ?? 0) > this.deps.now());
       const runnable = actionable.filter((s) => !blocked(s.workspaceId));
       if (runnable.length === 0) {
-        if (actionable.length === 0) { plan.clearSyncDue(slug); this.attempts.delete(slug); return 'done'; }
+        if (actionable.length === 0) {
+          // An initiative waiting on the probe (it reads `unknown`): ask the refresher for a refill and come back on the
+          // backoff, so the programme is never settled without its initiative (fix round 1, F1). The refresher's own window
+          // bounds what the asks cost.
+          const waitsOn = waits.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
+          if (waitsOn.length > 0) {
+            for (const slot of waitsOn) this.deps.directoryMiss(slot.ref, slot.digest);
+            this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug));
+            return 'deferred';
+          }
+          plan.clearSyncDue(slug); this.attempts.delete(slug); return 'done';
+        }
         const until = actionable.flatMap((s) => (s.workspaceId === null ? [] : [this.blockedUntil.get(s.workspaceId) ?? 0]));
         if (actionable.some((s) => s.workspaceId !== null && waiting.has(s.workspaceId))) this.deferUntil(slug, this.deps.now() + DIRECTORY_WAIT_MS);
         else if (Math.max(0, ...until) > this.deps.now()) this.deferUntil(slug, Math.max(...until));
@@ -390,7 +401,10 @@ export class PlanSync {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
       const directory = this.deps.directory.get(slot.ref, slot.digest);
-      if (directory === null) { waiting.push(workspaceId); this.deps.directoryMiss(slot.ref, slot.digest); }
+      // D-8701: statuses never read wait for a refill as a missing directory does; they are never "no status of that type".
+      if (directoryMissed(directory, this.deps.directory.projectStatusesRead(slot.ref, slot.digest))) {
+        waiting.push(workspaceId); this.deps.directoryMiss(slot.ref, slot.digest);
+      }
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
     const goals = coord.goalsFor(slug);

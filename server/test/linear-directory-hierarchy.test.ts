@@ -84,7 +84,13 @@ describe('statusOfType', () => {
 });
 
 describe('the refresher since wave 3', () => {
-  async function refreshWith(probe: (q: string) => unknown, statusesBody: () => unknown = () => linearRecord('read-project-statuses').body): Promise<LinearDirectoryEntries | null> {
+  /** The last refresh's project-statuses mark (D-8701), read beside its entries. */
+  let statusesMark: 'read' | 'unread' | null = null;
+  /** One refresher over a fresh slot; each body of `statusesBodies` answers one refresh in turn (the first by a name miss,
+   *  each later one by `queueDirectory`, past the window). Answers the directory as the last refresh left it. */
+  async function refreshWith(probe: (q: string) => unknown, ...statusesBodies: (() => unknown)[]): Promise<LinearDirectoryEntries | null> {
+    const bodies = statusesBodies.length > 0 ? statusesBodies : [() => linearRecord('read-project-statuses').body];
+    let turn = 0;
     const dir = path.join(mkTmp('ccrc-linear-dirh-'), '.ccrc');
     mkdirSync(dir, { recursive: true });
     sent.length = 0;
@@ -96,7 +102,7 @@ describe('the refresher since wave 3', () => {
         : q === LINEAR_DIRECTORY_DOCUMENTS.labels ? { data: { issueLabels: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.projects ? { data: { projects: conn([]) } }
         : q === LINEAR_DIRECTORY_DOCUMENTS.users ? { data: { viewer: { id: VIEWER }, users: conn([]) } }
-        : q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses ? statusesBody()
+        : q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses ? bodies[Math.min(turn, bodies.length - 1)]!()
         : probe(q);
       return linearAnswer({ ok: true, status: 200, json: async () => body });
     };
@@ -109,6 +115,11 @@ describe('the refresher since wave 3', () => {
     const slot: LinearSlotRef = { source: 'file', id: WS_A };
     fx.refresher.nameMiss(slot, valueDigestHex(KEY));
     await fx.refresher.idle();
+    for (turn = 1; turn < bodies.length; turn += 1) {
+      fx.refresher.queueDirectory(slot);
+      await fx.refresher.idle();
+    }
+    statusesMark = fx.refresher.directory.projectStatusesRead(slot, valueDigestHex(KEY));
     return fx.refresher.directory.get(slot, valueDigestHex(KEY));
   }
   const sent: string[] = [];
@@ -120,6 +131,7 @@ describe('the refresher since wave 3', () => {
       LINEAR_HIERARCHY_DOCUMENTS.projectStatuses, LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe,
     ]);
     expect(held?.projectStatuses.map((s) => s.type)).toEqual(['planned', 'backlog', 'canceled', 'completed', 'started']);
+    expect(statusesMark).toBe('read');
   });
 
   it("the probe's answer lands in entries.initiatives", async () => {
@@ -135,11 +147,29 @@ describe('the refresher since wave 3', () => {
     expect(held?.projectStatuses).toHaveLength(5);
   });
 
-  it('a failed project-statuses page keeps the core collections, so names still resolve, with no statuses', async () => {
+  // D-8701 (statuses-unread-distinct) changed this wave-2 pin: a first fill whose statuses page failed holds NO statuses and
+  // says they were never read, so the plan sync waits for a refill rather than read "no status of that type".
+  it('a failed project-statuses page on a first fill keeps the core collections, with no statuses, marked unread (D-8701)', async () => {
     const held = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => ({ data: {} }));
     expect(held).not.toBeNull();
     expect(held?.viewerId).toBe(VIEWER);
     expect(held?.projectStatuses).toEqual([]);
+    expect(statusesMark).toBe('unread');
     expect(held?.initiatives).toBe('on');
+  });
+
+  it('a failed project-statuses page after a read keeps what was held for this key, its read mark included (D-8701)', async () => {
+    const held = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => linearRecord('read-project-statuses').body, () => ({ data: {} }));
+    expect(held?.projectStatuses).toHaveLength(5);
+    expect(statusesMark).toBe('read');
+    const refused = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => linearRecord('read-project-statuses').body, () => RATELIMITED_ERRORS);
+    expect(refused?.projectStatuses).toHaveLength(5);
+    expect(statusesMark).toBe('read');
+  });
+
+  it('an empty statuses page that was read is read, not unread (D-8701: "no status of that type" stays status-missing)', async () => {
+    const held = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => ({ data: { projectStatuses: { nodes: [] } } }));
+    expect(held?.projectStatuses).toEqual([]);
+    expect(statusesMark).toBe('read');
   });
 });

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, issueReadVerdict, plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  adoptionVerdict, directoryMissed, issueReadVerdict, plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
   requeueVerdict, requestIdOf, type AdoptionKind, type AdoptionNode, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -287,5 +287,52 @@ describe('final-review rulings: the pure verdicts (D-8182)', () => {
     if (link?.kind !== 'link') throw new Error('no link');
     const asFailed = { ...snapBound({ tickets: [tk()] }, [{ ...bound, state: 'failed' as const, failedAt: 1, failedInputs: 'x' }]), ticketPrs: pr };
     expect(planSyncSteps(asFailed).failedInputs.find((f) => f.bindingId === bound.id)!.inputs).toBe(link.inputs);
+  });
+});
+
+describe('fix round 1 (D-8182): the initiatives probe and the directory', () => {
+  it('D-8701: a directory is a miss when none is held or its statuses were never read; a read empty list is no miss', () => {
+    expect(directoryMissed(null, null)).toBe(true);
+    expect(directoryMissed(directory, 'unread')).toBe(true);
+    expect(directoryMissed(directory, null)).toBe(true);
+    expect(directoryMissed({ ...directory, projectStatuses: [] }, 'read')).toBe(false);
+    expect(directoryMissed(directory, 'read')).toBe(false);
+  });
+
+  it('a probe answering unknown defers the initiative: no step, and the workspace waits; the projects still go', () => {
+    const r = planSyncSteps(snap({ wsInitiatives: 'unknown' }));
+    expect(ops(r.steps)).toEqual(['create:projectCreate']);
+    expect(r.waits).toEqual([WS]);
+    expect(planSyncSteps(snap()).waits).toEqual([]);
+    expect(planSyncSteps(snap({ wsInitiatives: 'off' })).waits).toEqual([]);         // off is a statement, nothing to wait for
+    expect(planSyncSteps(snap({ wsInitiatives: 'unknown', initiatives: 'off' })).waits).toEqual([]);
+  });
+
+  /** A settled programme: its initiative and project bound and linked, at the fingerprints a first sync wrote. */
+  function linked(): BindingRow[] {
+    const created = planSyncSteps(snap()).steps;
+    const init = created.find((x) => x.kind === 'create' && x.op === 'initiativeCreate');
+    const proj = created.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (init?.kind !== 'create' || proj?.kind !== 'create') throw new Error('no creates');
+    const ib = bind({ localKind: 'programme', localId: 7, linearId: U(700), fingerprint: init.fingerprint });
+    const link = planSyncSteps(snap({ bindings: [boundEpic(proj.fingerprint), ib] })).steps[0];
+    if (link?.kind !== 'link') throw new Error('no link');
+    return [boundEpic(link.fingerprint), ib];
+  }
+
+  it('a probe answering unknown keeps the projects linked: nothing is sent and nothing waits for a current initiative', () => {
+    const r = planSyncSteps(snap({ wsInitiatives: 'unknown', bindings: linked() }));
+    expect(r.steps).toEqual([]);
+    expect(r.waits).toEqual([]);
+  });
+
+  it('A3: a failed initiative that has a Linear object keeps its projects linked: no projectUpdate, no second link', () => {
+    const [eb, ib] = linked();
+    const failed = { ...ib!, state: 'failed' as const, failedAt: 1, failedWord: 'linear-forbidden', failedInputs: 'x' };
+    expect(planSyncSteps(snap({ bindings: [eb!, failed] })).steps).toEqual([]);
+    // a project created while the initiative is failed is not linked to it, and is not sent again and again either
+    const proj = planSyncSteps(snap()).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (proj?.kind !== 'create') throw new Error('no create');
+    expect(planSyncSteps(snap({ bindings: [boundEpic(proj.fingerprint), failed] })).steps).toEqual([]);
   });
 });

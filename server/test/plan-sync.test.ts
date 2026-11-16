@@ -52,7 +52,7 @@ const tk = (key: string, over: Partial<NewTicket> = {}): NewTicket => ({
 type Respond = (ask: CcrcOpAsk, n: number) => CcrcOpOutcome | Promise<CcrcOpOutcome>;
 interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
-  asks: CcrcOpAsk[]; respond: { current: Respond }; dir: { entries: LinearDirectoryEntries | null; filledAt: number | null };
+  asks: CcrcOpAsk[]; respond: { current: Respond }; dir: { entries: LinearDirectoryEntries | null; filledAt: number | null; statuses: 'read' | 'unread' };
   rejected: { slot: unknown; digest: string }[]; misses: number[];
   sync: PlanSync; build: (over?: Partial<PlanSyncDeps>) => PlanSync;
 }
@@ -88,13 +88,13 @@ async function rig(o: { mode?: 'private' | 'public'; teamKey?: string; epicTitle
   const plan = planStorePort(db);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], respond: { current: defaultRespond },
-    dir: { entries: o.directory === undefined ? DIRECTORY : o.directory, filledAt: T - 1000 },
+    dir: { entries: o.directory === undefined ? DIRECTORY : o.directory, filledAt: T - 1000, statuses: 'read' },
     rejected: [] as Rig['rejected'], misses: [] as number[],
   } as Rig;
   r.build = (over = {}) => new PlanSync({
     coord, plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async (ask) => { r.asks.push(ask); return r.respond.current(ask, r.asks.length); },
-    directory: { get: () => r.dir.entries, filledAt: () => r.dir.filledAt },
+    directory: { get: () => r.dir.entries, filledAt: () => r.dir.filledAt, projectStatusesRead: () => (r.dir.entries === null ? null : r.dir.statuses) },
     directoryMiss: () => { r.misses.push(r.t.now); },
     markSlotRejected: async (slot, digest) => { r.rejected.push({ slot, digest }); },
     now: () => r.t.now, privateTrackerKeys: [], ...over,
@@ -574,6 +574,35 @@ describe('the pass around the edges', () => {
     expect(r.misses).toHaveLength(1);
     expect(dueAt(r)).toBeGreaterThan(r.t.now);
     expect(bindingsOf(r).every((b) => b.state !== 'failed')).toBe(true);
+  });
+
+  it('D-8701: project statuses never read are a directory miss: the refill is asked, the programme waits, no epic is failed status-missing', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    expect(r.asks).toHaveLength(0);
+    expect(r.misses).toHaveLength(1);
+    expect(dueAt(r)).toBeGreaterThan(r.t.now);
+    expect(bindingsOf(r).filter((b) => b.state === 'failed')).toEqual([]);
+    expect(mails(r)).toEqual([]);
+    r.dir.entries = DIRECTORY;                             // the refill read them
+    r.dir.statuses = 'read';
+    r.t.now = dueAt(r)! + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    expect(bindingOfKind(r, 'epic')?.state).toBe('bound');
+  });
+
+  it('a probe answering unknown defers the initiative step: the rest is sent, the refill is asked and the programme stays due', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, initiatives: 'unknown' } });
+    await r.sync.tick(afterDebounce(r));
+    expect(opsOf(r)).toEqual(['projectCreate', 'projectMilestoneCreate', 'issueCreate']);
+    expect(r.misses.length).toBeGreaterThan(0);
+    expect(dueAt(r)).toBeGreaterThan(r.t.now);                    // not settled without its initiative
+    r.dir.entries = DIRECTORY;                                      // the refill's probe answered on
+    r.t.now = dueAt(r)! + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    expect(opsOf(r).slice(3)).toEqual(['initiativeCreate', 'initiativeToProjectCreate']);
+    expect(dueAt(r)).toBeNull();
   });
 
   it('an upkeep key clears its due row and answers done, sending nothing (C9)', async () => {

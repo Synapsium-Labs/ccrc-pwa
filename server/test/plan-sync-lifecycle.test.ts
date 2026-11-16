@@ -373,7 +373,7 @@ async function rig(o: { epics?: 'one' | 'two'; ticket?: boolean; itemId?: number
   r.sync = new PlanSync({
     coord, plan: r.plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async (ask) => { r.asks.push(ask); return r.respond.current(ask); },
-    directory: { get: () => DIR, filledAt: () => T - 1000 },
+    directory: { get: () => DIR, filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
     directoryMiss: () => undefined, markSlotRejected: async () => undefined,
     now: () => r.t.now, privateTrackerKeys: [],
   });

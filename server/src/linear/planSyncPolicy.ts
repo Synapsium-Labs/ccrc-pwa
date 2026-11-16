@@ -152,10 +152,16 @@ type Place = { ok: true; fact: Fact; workspaceId: string; teamKey: string; teamI
 const statusId = (dir: LinearDirectoryEntries | null, kind: 'project' | 'issue', type: string, teamKey: string | null): string | null =>
   dir === null ? null : (statusOfType(dir, kind, type, teamKey)?.id ?? null);
 
-export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInputs: FailedInputs[]; notices: SyncNotice[] } {
+/** What the deciders answer: the steps in §5.2's order, the inputs of each failed binding, the coordinator's notices, and
+ *  `waits`: the workspaces whose initiative step waits for the probe to answer (it reads `unknown`), so the pass keeps the
+ *  programme due and asks the refresher again rather than settle without it. */
+export interface SyncDecision { steps: SyncStep[]; failedInputs: FailedInputs[]; notices: SyncNotice[]; waits: string[] }
+
+export function planSyncSteps(s: SyncSnapshot): SyncDecision {
   const phases: SyncStep[][] = [[], [], [], [], [], [], []]; // creates: initiative, project, milestone, issue; updates; links
   const failedInputs: FailedInputs[] = [];
   const notices: SyncNotice[] = [];
+  const waits: string[] = [];
   const bindingOf = (kind: BindingKind, id: number, ws: string): BindingRow | undefined =>
     s.bindings.find((b) => b.localKind === kind && b.localId === id && b.workspaceId === ws);
   const factOf = (project: string): Fact | undefined => s.projects.find((p) => p.project === project);
@@ -246,19 +252,27 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
   const initiativeStatus: LinearInitiativeStatus = s.program.end !== null
     ? (s.program.end.outcome === 'done' ? INITIATIVE.completed : INITIATIVE.canceled)
     : anyEpicState('active') || anyEpicState('done') ? INITIATIVE.active : INITIATIVE.planned;
-  const initiativeIdOf = new Map<string, string>();
+  /** The initiative each workspace's projects link to: its Linear id, and whether its binding is `bound` (`live`). A failed
+   *  initiative that has a Linear object keeps its projects' links as they are (A3: no update that unlinks, no second link
+   *  when it binds again), and no new link is made to it. */
+  const initiativeIdOf = new Map<string, { id: string; live: boolean }>();
   for (const wsId of wsIds) {
     const ws = s.workspaces.find((w) => w.workspaceId === wsId)!;
     const facts = [...places.values()].flatMap((p) => (p.ok && p.workspaceId === wsId ? [p.fact] : []));
     const b = bindingOf('programme', s.program.rowid, wsId);
-    if (b?.state === 'bound' && b.linearId !== null) initiativeIdOf.set(wsId, b.linearId);
+    if ((b?.state === 'bound' || b?.state === 'failed') && b.linearId !== null) initiativeIdOf.set(wsId, { id: b.linearId, live: b.state === 'bound' });
     const local: Local = { kind: 'programme', id: s.program.rowid };
     if (ws.initiatives === 'off' || !facts.some((f) => f.initiatives === 'on')) {
       phases[0]!.push({ kind: 'skip', local, why: 'initiatives-off', workspaceId: wsId, bindingId: b?.id ?? null, inputs: null, detail: null });
       continue;
     }
-    if (ws.initiatives === 'unknown') continue;
     const planned = { name: egress(s.program.title), description: initiativeDescription(s), status: initiativeStatus };
+    // A probe that has not answered (`unknown`) defers the initiative's step: nothing is sent for it, and the workspace waits
+    // for a refill unless its initiative is bound and current already (D-8182 fix round 1, F1).
+    if (ws.initiatives === 'unknown') {
+      if (!(b?.state === 'bound' && b.fingerprint === plannedFingerprint(planned))) waits.push(wsId);
+      continue;
+    }
     decide({
       phase: 0, kind: 'programme', id: s.program.rowid, workspaceId: wsId, teamKey: null, op: { create: 'initiativeCreate', update: 'initiativeUpdate' },
       b, ready: true, statusMissing: false, texts: [planned.name, planned.description], facts, planned, fp: plannedFingerprint(planned),
@@ -282,7 +296,8 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     const dir = pl.ws.directory;
     const pStatus = statusId(dir, 'project', PROJECT_STATUS_TYPE[eff.state], pl.teamKey);
     const off = pl.fact.initiatives === 'off' || pl.ws.initiatives === 'off';
-    const initiativeId = pl.fact.initiatives === 'on' && pl.ws.initiatives !== 'off' ? (initiativeIdOf.get(wsId) ?? null) : null;
+    const initiative = pl.fact.initiatives === 'on' && pl.ws.initiatives !== 'off' ? initiativeIdOf.get(wsId) : undefined;
+    const initiativeId = initiative?.id ?? null;
     const eb = bindingOf('epic', e.id, wsId);
     // An epic whose binding sits in another workspace than its project now resolves to: that binding fails, nothing is created
     // in the new workspace, and nothing under the epic is sent (the move is not ccrc's to make, §3).
@@ -309,11 +324,12 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
       b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned,
-      fp: fpNull, isCurrent: (st) => st === fpFull,
+      // A project not yet linked to a failed initiative is current unlinked: no link is made to it until it binds again.
+      fp: fpNull, isCurrent: (st) => st === fpFull || (initiative?.live === false && st === fpNull),
       create: () => ({ input: { name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       update: (id) => ({ input: { id, name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       link: () => {
-        if (initiativeId === null || eb === undefined || eb.fingerprint !== fpNull || fpNull === fpFull) return null;
+        if (initiative?.live !== true || eb === undefined || eb.fingerprint !== fpNull || fpNull === fpFull) return null;
         const requestId = requestIdOf('epic', e.id, wsId, 'link');
         return {
           kind: 'link', op: 'initiativeToProjectCreate', local: { kind: 'epic', id: e.id }, workspaceId: wsId, teamKey: pl.teamKey, bindingId: eb.id,
@@ -411,10 +427,20 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
       });
     }
   }
-  return { steps: phases.flat(), failedInputs, notices };
+  return { steps: phases.flat(), failedInputs, notices, waits };
 }
 
 // ── The pass's ruled verdicts (final review I-4): what the L4 pass reads, it asks here; it never decides itself ──
+
+/**
+ * D-8701 (statuses-unread-distinct): whether a workspace's directory is a miss for the sync, so the pass asks the refresher
+ * for a fill and waits, sending nothing in that workspace: none is held for the slot's key, or one is held whose project
+ * statuses were never read (`statuses` not `read`). An empty list that WAS read is no miss: a status type it lacks is
+ * `status-missing`, as before.
+ */
+export function directoryMissed(entries: LinearDirectoryEntries | null, statuses: 'read' | 'unread' | null): boolean {
+  return entries === null || statuses !== 'read';
+}
 
 /** What a Linear object is to the adoption rule: an initiative, a project, a milestone or an issue. */
 export type AdoptionKind = 'initiative' | 'project' | 'milestone' | 'issue';

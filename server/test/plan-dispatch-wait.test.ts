@@ -59,7 +59,7 @@ async function rig(o: { mode?: 'private' | 'public'; runs?: number; noSlot?: boo
   r.sync = new PlanSync({
     coord, plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async (ask) => { r.asks.push(ask); return r.respond.current(ask); },
-    directory: { get: () => (o.noDirectory === true ? null : DIR), filledAt: () => T - 1000 },
+    directory: { get: () => (o.noDirectory === true ? null : DIR), filledAt: () => T - 1000, projectStatusesRead: () => (o.noDirectory === true ? null : 'read') },
     directoryMiss: () => undefined, markSlotRejected: async () => undefined,
     now: () => r.t.now, privateTrackerKeys: [], prOfRun: o.fleet === undefined ? (id) => r.prs.get(id) ?? null : prOfRunFrom(coord, o.fleet as never),
   });

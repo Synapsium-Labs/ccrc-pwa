@@ -25,7 +25,7 @@
  */
 import { valueDigestHex } from '../token/files.js';
 import { callLinear, checkLinearKey, type FetchLike, type LinearKeyCheck } from './client.js';
-import { LinearDirectory, type LinearDirectoryRead } from './directory.js';
+import { LinearDirectory, type LinearDirectoryRead, type LinearStatusesRead } from './directory.js';
 import { readInitiativesProbe } from './hierarchyOps.js';
 import {
   LINEAR_DIRECTORY_COLLECTIONS, LINEAR_DIRECTORY_DOCUMENTS, LINEAR_DIRECTORY_MAX_PAGES, LINEAR_HIERARCHY_DOCUMENTS, linearErrorOf,
@@ -360,19 +360,21 @@ export class LinearRefresher {
     };
     if (digest === null) return;
     // The hierarchy's two reads never cost the session name lookups the four collections they rest on: a failed page keeps
-    // what the directory held for this key (or empty / `unknown`), and the whole is stored.
+    // what the directory held for this key (or empty / `unknown`), and the whole is stored. D-8701: so does the statuses'
+    // read mark, so a first fill whose statuses page failed says `unread`, never "this workspace has no status types".
     const held = this.names.get(ref, digest);
     entries.projectStatuses.push(...(held?.projectStatuses ?? []));
+    let statusesRead: LinearStatusesRead = this.names.projectStatusesRead(ref, digest) ?? 'unread';
     entries.initiatives = held?.initiatives ?? 'unknown';
     const statuses = await onePage(LINEAR_HIERARCHY_DOCUMENTS.projectStatuses);
     if (statuses.kind === 'moved') return;
     if (statuses.kind === 'body') {
       const sp = readLinearProjectStatusesPage(statuses.body);
-      if (sp.ok) entries.projectStatuses.splice(0, entries.projectStatuses.length, ...sp.statuses);
+      if (sp.ok) { entries.projectStatuses.splice(0, entries.projectStatuses.length, ...sp.statuses); statusesRead = 'read'; }
     }
     const probe = await onePage(LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe);
     if (probe.kind === 'moved') return;
     if (probe.kind === 'body' && linearErrorOf(probe.body)?.word !== 'rate-limited') entries.initiatives = readInitiativesProbe(probe.body);
-    this.names.put(ref, digest, entries, this.now());
+    this.names.put(ref, digest, entries, this.now(), statusesRead);
   }
 }

@@ -55,7 +55,7 @@ async function rig(o: { projectBInitiatives?: 'on' | 'off'; projectAInitiatives?
   r.sync = new PlanSync({
     coord, plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async () => ({ ok: false, word: 'unreachable', maybeSent: false }),
-    directory: { get: () => ({ ...OFF, initiatives: r.dir.initiatives }), filledAt: () => T - 1000 },
+    directory: { get: () => ({ ...OFF, initiatives: r.dir.initiatives }), filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
     directoryMiss: () => undefined, markSlotRejected: async () => undefined,
     queueDirectory: (slot) => { r.queued.push(slot); },
     now: () => r.t.now, privateTrackerKeys: [],

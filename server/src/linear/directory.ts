@@ -21,12 +21,20 @@ export interface LinearDirectoryRead {
   get(slot: LinearSlotRef, keyDigest: string): LinearDirectoryEntries | null;
   /** When the slot's entries for this key were filled, or null (the plan sync's requeue rule, C10). */
   filledAt(slot: LinearSlotRef, keyDigest: string): number | null;
+  /** D-8701 (statuses-unread-distinct): whether the slot's project statuses were ever read for this key. `unread` is a
+   *  directory whose statuses page failed on every refresh so far, so its empty `projectStatuses` says nothing about which
+   *  status types the workspace has; null when no entries are held for this key (as `get`). */
+  projectStatusesRead(slot: LinearSlotRef, keyDigest: string): LinearStatusesRead | null;
 }
+
+/** Whether a directory's project statuses were read (D-8701). `LinearDirectoryEntries` is `ops.ts`'s and frozen, so the mark
+ *  lives here, beside the entries, written by the one refresher. */
+export type LinearStatusesRead = 'read' | 'unread';
 
 /** The legacy slot's own fixed key; a file slot's id is a UUID, so the two never meet. */
 const slotKeyOf = (ref: LinearSlotRef): string => (ref.source === 'legacy' ? 'legacy' : `file:${ref.id}`);
 
-interface Held { keyDigest: string; entries: LinearDirectoryEntries; at: number }
+interface Held { keyDigest: string; entries: LinearDirectoryEntries; at: number; statuses: LinearStatusesRead }
 
 /** The one directory. Constructed by the refresher alone, which is its only writer. */
 export class LinearDirectory implements LinearDirectoryRead {
@@ -43,11 +51,20 @@ export class LinearDirectory implements LinearDirectoryRead {
     return held !== undefined && held.keyDigest === keyDigest ? held.at : null;
   }
 
-  /** The refresher's write: the whole directory of one slot, for the key it was read with. Replaces what was held. */
-  put(slot: LinearSlotRef, keyDigest: string, entries: LinearDirectoryEntries, at: number): void {
+  /** Whether this key's project statuses were ever read, or null when nothing is held for it (D-8701). */
+  projectStatusesRead(slot: LinearSlotRef, keyDigest: string): LinearStatusesRead | null {
+    const held = this.bySlot.get(slotKeyOf(slot));
+    return held !== undefined && held.keyDigest === keyDigest ? held.statuses : null;
+  }
+
+  /** The refresher's write: the whole directory of one slot, for the key it was read with, and whether its project statuses
+   *  were read (D-8701; the refresher always says; absent is `read`, the reading every directory had before the mark).
+   *  Replaces what was held. */
+  put(slot: LinearSlotRef, keyDigest: string, entries: LinearDirectoryEntries, at: number, statuses: LinearStatusesRead = 'read'): void {
     this.bySlot.set(slotKeyOf(slot), {
       keyDigest,
       at,
+      statuses,
       entries: Object.freeze({
         viewerId: entries.viewerId,
         states: Object.freeze([...entries.states]),
