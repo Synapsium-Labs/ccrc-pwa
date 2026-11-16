@@ -8658,8 +8658,13 @@ _acct_set() {
     [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
     _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
       ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} ${org:+--org "$org"} --recorded-at now
-    local -a w=(); [ -z "$billing" ] || w+=("billing fact"); [ -z "$continuity" ] || w+=("continuity record"); [ -z "$org" ] || w+=("organization label")
-    case ${#w[@]} in 1) v=${w[0]} ;; 2) v="${w[0]} and ${w[1]}" ;; *) v="${w[0]}, ${w[1]} and ${w[2]}" ;; esac
+    local -a facts_named=()   # its own name: shellcheck reads one name across functions, and `w` is a string elsewhere
+    [ -z "$billing" ] || facts_named+=("billing fact"); [ -z "$continuity" ] || facts_named+=("continuity record")
+    [ -z "$org" ] || facts_named+=("organization label")
+    case ${#facts_named[@]} in
+      1) v=${facts_named[0]} ;; 2) v="${facts_named[0]} and ${facts_named[1]}" ;;
+      *) v="${facts_named[0]}, ${facts_named[1]} and ${facts_named[2]}" ;;
+    esac
     _acct_projection "The roster records lane $id's $v."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"

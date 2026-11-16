@@ -67,6 +67,12 @@ agent's `account-argv`. `deviation-refs` and `single-definition/advance-switches
 load and passed alone. The server tests' typecheck (`tsc -p test/tsconfig.tests.json`) and `topology-clean` were
 killed by the test slice's memory cap on this box and are left to CI.
 
+**The first full CI run was red** (`shellcheck-ratchet`, which was not on the local list): `ccd/ccrc` read 64
+warnings against its pin of 62. Shellcheck reads one variable name across all of a file's functions, so the
+projection sentence's array, first named `w`, made two other functions' string `w` read as an array reassigned
+(SC2178). The array is now `facts_named`. Measured outside the slice, `ccd/ccrc` is back at 62. The ratchet's own run
+was killed by the slice's memory cap twice locally, so CI decides it again.
+
 `mutation-run.py` mutates Python modules only, so the mutants were applied by a script, one at a time, each file
 restored from a saved copy. All 19 were killed:
 
@@ -97,5 +103,5 @@ measures them. The B1, F3 and F6 tests were run red first.
 
 ## Growth
 
-Net code lines against `main`: `ccd/ccrc` +3, the account script +5 (1878 against its cap of 1879),
+Net code lines against `main`: `ccd/ccrc` +7, the account script +5 (1878 against its cap of 1879),
 `pwa/src/lib/api.ts` +1. Every other changed file is unlisted. `growth-check` runs green armed.
