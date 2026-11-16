@@ -298,11 +298,12 @@ describe('_spawn_start on a lane with no continuity record, for a set-side sessi
   });
 });
 
-// THE HOLD-DOWN'S CHARACTERIZATION (Overlord W1 ccd arms, Task 4 Step 1; the index's question 9). On `main` before the
-// hold-down, a standing stamp one second old on a lane that serves the intended class again is restored at the very next
-// settle, whatever the route's `profile`; `_route_stale_degrade_clear` restores at once on a new intended class. The
-// hold-down (`ccd/lib/long-lived.sh`, region `holddown`) changes the first for a long-lived profile only.
-describe('the settle restores a fresh stamp at once, for every profile (the hold-down\'s characterization)', () => {
+// THE HOLD-DOWN AT THE SETTLE (Overlord W1 ccd arms, Task 4; the index's question 9). On `main` before the hold-down, a
+// standing stamp one second old on a lane that serves the intended class again was restored at the very next settle,
+// whatever the route's `profile` (Step 1's characterization). The hold-down (`ccd/lib/long-lived.sh`, region `holddown`)
+// changes that for a long-lived profile only: it keeps composing the degraded class, the stamp stays, and no row is
+// written. `_route_stale_degrade_clear` still restores at once on a new intended class (question 4).
+describe('the settle holds a fresh stamp for a long-lived profile, and restores it at once for every other', () => {
   const restored = (id: string): void => {
     const [p] = spawnBoth(id);
     expect(p).toContain('--model fable ');
@@ -311,8 +312,22 @@ describe('the settle restores a fresh stamp at once, for every profile (the hold
     expect(rows).toHaveLength(1);
     expect(String(rows[0]!['detail'])).toBe('degraded: opus -> ∅');
   };
-  it.each([['coordinator'], ['plain'], [null]])('profile %s: a one-second degraded=opus on a lane serving fable composes --model fable, clears the stamp, one restore row', (profile) => {
+  it.each([['plain'], [null]])('profile %s: a one-second degraded=opus on a lane serving fable composes --model fable, clears the stamp, one restore row', (profile) => {
     seed('myid'); h.sh(`_reg_set myid class fable; _reg_set myid degraded opus${profile ? `; _reg_set myid profile ${profile}` : ''}`);
+    sweep({ claude: 0.1 });
+    restored('myid');
+  });
+  it.each([['coordinator'], ['overlord'], ['nosuchrole']])('profile %s: the same settle holds: --model opus on both lines, the stamp stays, no route row', (profile) => {
+    seed('myid'); h.sh(`_reg_set myid class fable; _reg_set myid degraded opus; _reg_set myid profile ${profile}`);
+    sweep({ claude: 0.1 });
+    const [p, r] = spawnBoth('myid');
+    expect(p).toContain('--model opus '); expect(r).toContain('--model opus ');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
+  });
+  it('profile coordinator: a stamp older than the hold-down is restored at the settle, as today', () => {
+    seed('myid'); h.sh('_reg_set myid class fable; _reg_set myid degraded opus; _reg_set myid profile coordinator');
+    h.sh(`touch -d @${now() - 3601} "$REG/myid.degraded"`);
     sweep({ claude: 0.1 });
     restored('myid');
   });

@@ -72,3 +72,44 @@ _keep_awake_ours() {   # id marker -> rc 0 iff $REG/<id>.<marker> is a regular, 
   KEEP_AWAKE_READ=foreign; [[ "${v%x}" == "$KEEP_AWAKE_STAMP" ]] || return 1
   KEEP_AWAKE_READ=ours
 }
+
+# @ccd-lib:holddown
+# THE HOLD-DOWN (spec §3.4 H16, "The return waits, and ccd owns the hold-down"; Table 11.5b; plan w1-ccd-arms, questions 3,
+# 4 and 5): a long-lived role keeps its fallback class this many seconds after its degraded stamp was written, though its
+# intended class is servable again, so a lane that serves on and off never flips the class each settle. Always longer than
+# a generation's least age (`shared/continuity.ts#LEAST_AGE_MS`; `ccd-route-holddown.test.ts` harvests both). ccd's alone:
+# the server's serviceability answer has no hold-down input (question 3), and it is asked only at the settle's servable arm
+# and the fresh pick's first step, never in `_route_restore`, so the stale-intent clear is never held (question 4).
+ROUTE_HOLD_DOWN_S=3600
+_role_long_lived() {   # id -> rc 0 long-lived | 1 not (no profile entry, or the row's longLived is false) | 2 undecidable
+  # FLEET_ROLES.longLived, projected into the launch row (slug long-lived-is-projected): ccd holds no role-name list. No
+  # entry at the route field `profile` is today's behaviour. An entry that is a link, not a regular file or not readable,
+  # bytes outside the field's `^[a-z]{1,16}$`, a row that is absent, a key that is absent or not a boolean, or a launch
+  # profiles file jq cannot read are all undecidable (rc 2), which every caller reads as long-lived: it fails safe (question
+  # 5). The read is bounded in size (17 bytes) and time (`_plat_timeout 2`: a FIFO swapped in after the -f test cannot block).
+  local LC_ALL=C IFS=' ' f="$REG/$1.profile" p v
+  [[ -e "$f" || -L "$f" ]] || return 1
+  [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
+  p=$( { _plat_timeout 2 head -c 17 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; p="${p%x}"
+  [[ "$p" =~ ^[a-z]{1,16}$ ]] || return 2
+  v=$(jq -r --arg r "$p" '.[$r].longLived | if type == "boolean" then . else error("no boolean") end' "$LAUNCH_PROFILES_JSON" 2>/dev/null) || return 2
+  case "$v" in true) return 0 ;; false) return 1 ;; *) return 2 ;; esac
+}
+_route_holddown_holds() {   # id -> rc 0 hold | 1 the return may land | 3 hold, and the stamp's time is later than ccd's clock
+  # THE DECIDER WRITES NOTHING (review 2148 F8), so the fresh pick's read of it touches nothing. Not long-lived: rc 1, today.
+  # Long-lived or undecidable: the age of `$REG/<id>.degraded` by its mtime (`_reg_set` renames a temp file over it, so the
+  # mtime is the write's time) against ccd's clock (`_now_s_to`). A time that cannot be read holds (unmeasured holds).
+  local LC_ALL=C IFS=' ' t now
+  _role_long_lived "$1"; (( $? == 1 )) && return 1
+  t=$(_plat_mtime "$REG/$1.degraded" 2>/dev/null); [[ "$t" =~ ^[0-9]{1,12}$ ]] || return 0
+  _now_s_to now; (( 10#$t > now )) && return 3
+  (( now - 10#$t < ROUTE_HOLD_DOWN_S )) && return 0; return 1
+}
+_route_holddown_settle() {   # id degraded-class -> rc 0 hold (the settle composes the degraded class) | rc 1 restore
+  # The settle's act on the decider's answer. A stamp whose time reads later than ccd's clock (a clock that stepped back)
+  # is written again, its value unchanged, so it ages from now: one more hold-down at most (Review Focus 5). It is a third
+  # writer of the stamp's TIME, never of its class (slug holddown-restamp-writes-the-same-value), and says so once.
+  _route_holddown_holds "$1"; case $? in 1) return 1 ;; 3) _reg_set "$1" degraded "$2" 2>/dev/null &&
+    echo "$(date '+%F %T') holddown-restamp $1: the degraded stamp's time read later than ccd's clock; $2 written again as now" >> "$REG/swap.log" ;; esac
+  return 0
+}

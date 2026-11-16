@@ -19897,9 +19897,13 @@ _class_gate() {   # wrapper class [id] -> rc 0 the lane may keep or take the cla
 # journals a caller's word: both read the standing value with `_route_get` and
 # journal THAT (ruling S3-R5), because a caller naming the wrong end would
 # otherwise write a false audit row nothing can red.
+# @ccd-lib:holddown — a long-lived role's hold-down before its class returns (the Overlord's W1, H16): `_role_long_lived`, `_route_holddown_holds` and `_route_holddown_settle` live in ccd/lib/long-lived.sh
 _route_degrade() {   # id from to why — stamp `degraded=<to>` and say so: one route journal row (actor ccd), one swap.log line
   # THE ONLY WRITERS OF `degraded` ARE THIS AND `_route_restore` (spec §5.1:
-  # ccd's own stamp; `cmd_route` refuses the field outright). `_swap_target`
+  # ccd's own stamp; `cmd_route` refuses the field outright), and the settle's
+  # hold-down re-stamp, `_route_holddown_settle`, which writes the SAME value
+  # again only when its time reads later than ccd's clock: its time, never its
+  # class (slug holddown-restamp-writes-the-same-value). `_swap_target`
   # writes NOTHING — its answer travels on rc and stdout, because its call site
   # is a command substitution and a variable set inside one is lost — so the
   # stamp, the journal row and the log line all happen HERE, at the caller,
@@ -26754,7 +26758,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # ladder bottoms out (`below` empty), nothing is stamped, and the
       # intended class is composed unchanged.
       case "$srv:$why" in
-        0:*) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
+        0:*) [[ -n "$rdeg" ]] && ! _route_holddown_settle "$id" "$rdeg" && { _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg=""; } ;;   # a long-lived role's hold-down keeps rdeg composed (ccd/lib/long-lived.sh)
         1:no-continuity|1:continuity-unread)   # F1/F4: no rung serves a lane with no record, so no stamp and no restore; the base answer (no id) rules what is composed
            _serviceable "$wrapper" "$rclass" >/dev/null && rdeg=""
            echo "$(date '+%F %T') continuity-unmet $id: $wrapper ($why); composing ${rdeg:-$rclass}, a standing degraded stamp left as it is" >> "$REG/swap.log" ;;
