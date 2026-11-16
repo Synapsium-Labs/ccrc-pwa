@@ -3318,19 +3318,36 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
+  // The Overlord authority journal's head row (spec §7.6, Table 7.6a; plan `w1-authority-journal.md` Task 3, question 5): the
+  // position of the last record of `~/.ccrc/overlord-authority.jsonl` whose row committed. ONE writer, the apply step of
+  // `overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx`, in the transaction of the authority row it records. Boot
+  // coherence compares the file's head with it. Responses A takes 81 at its landing, so this entry becomes 82 there (the
+  // coordinator's word). A NEW TABLE: an older build at `user_version 81` takes rule 3 and never names it. RE-MEASURE the slot:
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_authority_head (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence   INTEGER NOT NULL,
+    journalId  TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    at         INTEGER NOT NULL     -- the record's acceptedAt, as epoch milliseconds
+  );
+  `,
+
+  // ── 82: user_version 81 -> 82 ─────────────────────────────────────────────
   // What each goals version rests on (Overlord spec §3.8, Table 11.1a; W1, plan `w1-portfolio.md` Task 4): `ratifiedBy`
   // (a `RatifiedBy` word: `coordinator`, `item` or `operator`) and `ratifiedAt` on the pin (`programs`) and on each
   // modification, and `programs.doneWhenBy` (`pin` or `mod:<id>`), the version that wrote the current definition of done.
   // The source only: whether it ratifies is `goalRatification`'s, decided at every read. Writers, all in `ledgersStore.ts`:
   // `setSpecPin` and `ratifyGoalsVersion` on `programs`, `addModification` and `ratifyGoalsVersion` on the modifications,
   // and `doneWhenBy` only in the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). Nothing is back-filled:
-  // NULL is a version nobody recorded, read as `unrecorded`. PROVISIONAL SLOT: authority A (81) and responses A (82) land
-  // first, so this entry is renumbered 83 at landing, on the coordinator's word.
+  // NULL is a version nobody recorded, read as `unrecorded`. PROVISIONAL SLOT: responses A also holds 82 on its branch, so
+  // whichever lands second renumbers to 83 at its landing merge, on the coordinator's word.
   //
-  // FIVE NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 81` takes rule 3 (it warns,
+  // FIVE NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 82` takes rule 3 (it warns,
   // reads as-is and migrates nothing), names none of them and boots. Its re-pin or modification leaves these columns as they
   // stand, so after a rollback the stored source may describe an older text; the next write of this build records its own.
-  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 80 before this entry
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 81 before this entry
   // is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

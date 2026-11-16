@@ -31,6 +31,7 @@ import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
+import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -181,6 +182,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...CHAINED_JOURNAL_MUTANT_SETS,
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
+  ...OVERLORD_AUTHORITY_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

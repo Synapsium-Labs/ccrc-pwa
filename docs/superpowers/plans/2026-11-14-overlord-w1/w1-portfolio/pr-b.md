@@ -24,10 +24,12 @@ write.
 
 ## Measured
 
-- **Migration slot.** The ratification columns are one migration. `main` has 80 entries, so this branch writes it at its
-  real next slot, 81 (`COORD_SCHEMA_VERSION` is `MIGRATIONS.length`, so a slot cannot be written ahead of the entries
-  below it). It lands as 83 after authority A (81) and responses A (82), renumbered at landing on the coordinator's word;
-  the entry's header says so, and `coord-db.test.ts` finds it by its DDL.
+- **Migration slot.** The ratification columns are one migration. The branch was built when `main` had 80 entries, so it
+  wrote the entry at its real next slot, 81 (`COORD_SCHEMA_VERSION` is `MIGRATIONS.length`, so a slot cannot be written
+  ahead of the entries below it; 83 could not exist yet). Authority A (#2895) then landed 81, and on the coordinator's word
+  the branch merged `main` once and the entry is 82. Responses A also holds 82 on its branch, so whichever lands second
+  renumbers to 83 at its landing merge, on the coordinator's word. `coord-db.test.ts` finds the entry by its DDL, and
+  `run-close-switch.test.ts` undoes it and replays twenty-nine.
 - **Mutation floors:** `goalRatification` (9 mutants: R-1 to R-9) and `itemAnswered` (4: A-1 to A-4), every mutant
   killed, each floor 1. The plan's red checks are R-1 (the item arm ratifies a ticked item), R-2 (`unreadable` read as
   `operator`), R-3 (question 1: the `coordinator` case ignores the constant) and A-1 (an `open` item with a `tickedAt`).
