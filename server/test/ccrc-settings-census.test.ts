@@ -168,6 +168,7 @@ const ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_UPDATE_LOCK_HELD: { cls: 'handshake', why: '`_upd_lock` and `cmd_update`\'s restore arm read it as the marker a parent holding the update lock passes its child.' },
   CCRC_UPDATE_VERIFIED: { cls: 'handshake', why: '`_inst_installed` reads it as the mark a `ccrc … update` parent passes its install spine.' },
   CCRC_UPDATE_SPINE: { cls: 'handshake', why: '`_inst_installed` reads it as the pid of the `ccrc … update` parent that set CCRC_UPDATE_VERIFIED.' },
+  CCRC_WATCHDOG_CALLER: { cls: 'handshake', why: '`cmd_rollback` reads it as the pid `cmd_watchdog` passes its `rollback --from watchdog` child, refusing that word when it is not the run\'s parent.' },
   // constant: set in the file and read with a guard default, or overridden for one call.
   CCRC_EXPOSURE_FILE: { cls: 'constant', why: 'ccd/ccrc sets it once at the top, and `_box_unit_env` and the doctor\'s checks read it with a guard default or as one call\'s prefix assignment.' },
   CCRC_CADDYFILE: { cls: 'constant', why: 'ccd/ccrc sets it once at the top, and the doctor\'s caddy checks read it with a guard default.' },
