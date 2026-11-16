@@ -59,3 +59,7 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   designation live in `continuity/designationEpisode.ts`, so `watch.ts` grows by seven lines.
 - **`designation-kebabs-admitted-by-guard`**: the mail-routes kebab census admits the designate door's refusals through
   `OVERLORD_REFUSALS`' guard and the decider's and store's other words through `overlordDesignation.ts#isDesignationKebab`.
+- **`overlord-identity-never-a-registry-id`**: `identityOf` answers the reserved identity `overlord` (X5) beside
+  session ids in one namespace. No registry row can carry the bare id `overlord`: ccd composes every id as
+  `<wrapper>-<project>` (`cmd_start`) or `<project>-<slug>` (`shared/slug.ts#workspaceId`), each with a dash, so a
+  session's own id never meets the Overlord's generation rows.
