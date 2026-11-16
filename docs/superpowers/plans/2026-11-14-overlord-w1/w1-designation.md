@@ -721,9 +721,12 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   that is no longer pending (a retire got there first), with `{ ok: false, reason: 'not-pending' }`. No append.
 - `goLive(sessionId, generation, at)`: only for the pending id; anything else is `{ ok: true, changed: false }`. For a
   `designate` attempt it appends `authority-designate` with the raised term, the session id and the generation, then
-  moves the attempt into the binding with `term += 1` and `designatedTerm = term`, clears the pending slot, and calls
+  moves the attempt into the binding with `term += 1` and `designatedTerm = term`, clears the pending slot, clears the
+  last attempt (`attemptId`, `attemptOutcome` and `attemptAt`) in the same transaction, and calls
   `restampOverlordGeneration` (the body's live generation, when one is minted, takes identity `overlord` and the
-  raised term; X5). PR B's `rebind` arm is added in Task 6.
+  raised term; X5). PR B's `rebind` arm is added in Task 6. A last attempt is a failure that still stands, so a start
+  that goes live ends it: otherwise a failed start, a later good start and a retire would leave a stale outcome that
+  the console reads as a failed first start (home plan, review 2195 F6; slug `golive-clears-last-attempt`).
 - `failPending(sessionId, outcome, at, owesStop)`: only for the pending id. It clears the slot, writes the attempt's
   outcome, and adds the id to `stopsOwed` when `owesStop`. It never touches the term or the live binding. No append.
 - `retire(actor, at)`: three cases (question 8).
@@ -753,6 +756,8 @@ returning `{ ok: false, authority: error }` for its caller to map (X2):
   - `designatePending` refuses when a row is bound or pending. `bindPendingGeneration` refuses after a retire.
   - `goLive` raises the term once and re-stamps the body's live generation (`identity: 'overlord'`, the raised term).
     A resent `goLive` for a session that is no longer pending changes nothing.
+  - `goLive` clears the last attempt: designate, `failPending`, designate, `goLive`, then a live `retire`, and
+    `designationRead()`'s `lastAttempt` is null.
   - `failPending` keeps the term and the binding, and owes the stop only when asked.
   - `retire` on each of its three cases (question 8): the term, the past ids, the outcome and `stopsOwed`.
   - `stopDone` removes one id. A later failed attempt never drops an earlier owed id.
