@@ -450,6 +450,14 @@ export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; b
   ).run(...args);
   return Number(res.changes);
 }
+/** Every `operator-act` checkpoint of a programme that is still open and names an operator item: what the sync's tick checks
+ *  against the item's state (design §4.1: ccrc marks it met when that item is done). */
+export function openOperatorActs(db: DatabaseSync): { checkpointId: number; itemId: number; program: string }[] {
+  return (db.prepare(
+    "SELECT c.id AS checkpointId, c.itemId AS itemId, e.program AS program FROM plan_checkpoints c JOIN plan_epics e ON e.id = c.epicId "
+    + "WHERE c.state = 'open' AND c.kind = 'operator-act' AND c.itemId IS NOT NULL AND e.program IS NOT NULL ORDER BY c.id",
+  ).all() as Raw[]).map((r) => ({ checkpointId: r.checkpointId as number, itemId: r.itemId as number, program: r.program as string }));
+}
 /** The `programs` row's rowid: the key of the programme's own bindings (C6); null for a slug with no row. */
 export function programmeRowId(db: DatabaseSync, slug: string): number | null {
   const r = db.prepare('SELECT rowid AS rid FROM programs WHERE slug = ?').get(slug) as Raw | undefined;
@@ -548,7 +556,7 @@ const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
-  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId,
+  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

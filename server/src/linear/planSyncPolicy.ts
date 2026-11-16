@@ -8,7 +8,7 @@
  * reads `failedInputs` to see that a changed plan changed what that binding would send.
  */
 import { createHash } from 'node:crypto';
-import type { BindingKind, PlanEndOutcome } from '../../../shared/plan.js';
+import type { BindingKind, EpicState, PlanEndOutcome, TicketState } from '../../../shared/plan.js';
 import type { LinkingMode } from '../../../shared/linking.js';
 import { redactShapedCount } from '../coord/redact.js';
 import { publicTextVerdict } from '../linking/policy.js';
@@ -26,6 +26,8 @@ export interface SyncSnapshot {
     slug: string; /** The `programs` row's rowid: the key of the programme's own bindings (C6). */ rowid: number; title: string;
     end: { outcome: PlanEndOutcome; why: string | null; at: number } | null; inShort: string | null;
     doneWhen: { text: string; proved: boolean }[];
+    /** The programme reads `paused` (§5.3): the initiative's description notes it, its status unchanged. */
+    paused?: boolean;
   };
   plan: StoredPlan;
   bindings: BindingRow[];
@@ -39,7 +41,7 @@ export interface SyncSnapshot {
   privateTrackerKeys: string[];
 }
 
-export type SkipWhy = 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' | 'text-public';
+export type SkipWhy = 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' | 'ticket-workspace-mismatch' | 'text-public';
 export type Local = { kind: BindingKind; id: number };
 /** How a create that may have been sent is recovered (C2). */
 export type Recover = 'name-and-creator' | 'name-in-project' | 'request-id';
@@ -47,11 +49,19 @@ export type Recover = 'name-and-creator' | 'name-in-project' | 'request-id';
 interface StepBase { local: Local; workspaceId: string; teamKey: string | null; /** F(planned inputs, team key and workspace): what a `failed` binding stores. */ inputs: string }
 export type SyncStep =
   | (StepBase & { kind: 'create'; op: CcrcOpName; bindingId: number | null; input: CcrcOpInput; fields: string[]; requestId: string; recover: Recover; fingerprint: string })
-  | (StepBase & { kind: 'update'; op: CcrcOpName; bindingId: number; input: CcrcOpInput; fields: string[]; fingerprint: string })
+  | (StepBase & {
+    kind: 'update'; op: CcrcOpName; bindingId: number; input: CcrcOpInput; fields: string[]; fingerprint: string;
+    /** An issue update: the state TYPE the plan wants (C12: the pass reads Linear's before it sends a state). */
+    stateType?: string;
+    /** A cancel's comment, sent once BEFORE the update that cancels (C13); the update writes the fingerprint after its ok. */
+    comment?: { requestId: string; body: string };
+  })
   | (StepBase & { kind: 'link'; op: 'initiativeToProjectCreate'; bindingId: number; input: CcrcOpInput; fields: string[]; requestId: string; fingerprint: string })
   | { kind: 'skip'; local: Local; why: SkipWhy; workspaceId: string | null; bindingId: number | null; inputs: string | null; detail: string | null };
 export type SkipStep = Extract<SyncStep, { kind: 'skip' }>;
 export interface FailedInputs { bindingId: number; inputs: string }
+/** What the pass tells the coordinator beyond a step: a programme ended `done` with issues still open (§5.4). */
+export type SyncNotice = { kind: 'open-issues-left'; count: number };
 
 // ── Fingerprints and ids ──
 
@@ -65,7 +75,7 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
 }
 
 /** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
-export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link'): string {
+export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel'): string {
   const hex = createHash('sha256').update(`${kind}:${localId}:${workspaceId}${part === undefined ? '' : `:${part}`}`).digest('hex').slice(0, 32).split('');
   hex[12] = '4';
   hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16]!, 16) & 3]!;
@@ -92,6 +102,7 @@ export function initiativeDescription(s: SyncSnapshot): string {
   if (s.program.doneWhen.length > 0) parts.push(['Done when:', ...s.program.doneWhen.map((d) => `- [${d.proved ? 'x' : ' '}] ${d.text}`)].join('\n'));
   const end = s.program.end;
   if (end !== null && end.outcome === 'abandoned') parts.push(`Abandoned on ${dayOf(end.at)}: ${end.why ?? ''}`.trimEnd());
+  if (s.program.paused === true) parts.push('Paused: this programme is paused in ccrc.');
   return withCcrcProvenance(egress(parts.join('\n\n')));
 }
 
@@ -109,6 +120,7 @@ const evidenceText = (e: CheckpointRow['evidence']): string => e === null ? '' :
 
 export function milestoneDescription(cp: CheckpointRow): string {
   const parts = [`Kind: ${cp.kind}`];
+  if (cp.state === 'dropped') parts.push(`Dropped: ${cp.droppedWhy ?? ''}`.trimEnd());
   if (cp.state === 'met' && cp.metAt !== null) parts.push(`Met on ${dayOf(cp.metAt)}: ${evidenceText(cp.evidence)}`.trimEnd());
   return withCcrcProvenance(egress(parts.join('\n\n')));
 }
@@ -131,9 +143,10 @@ type Place = { ok: true; fact: Fact; workspaceId: string; teamKey: string; teamI
 const statusId = (dir: LinearDirectoryEntries | null, kind: 'project' | 'issue', type: string, teamKey: string | null): string | null =>
   dir === null ? null : (statusOfType(dir, kind, type, teamKey)?.id ?? null);
 
-export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInputs: FailedInputs[] } {
+export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInputs: FailedInputs[]; notices: SyncNotice[] } {
   const phases: SyncStep[][] = [[], [], [], [], [], [], []]; // creates: initiative, project, milestone, issue; updates; links
   const failedInputs: FailedInputs[] = [];
+  const notices: SyncNotice[] = [];
   const bindingOf = (kind: BindingKind, id: number, ws: string): BindingRow | undefined =>
     s.bindings.find((b) => b.localKind === kind && b.localId === id && b.workspaceId === ws);
   const factOf = (project: string): Fact | undefined => s.projects.find((p) => p.project === project);
@@ -157,7 +170,8 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     phase: number; kind: BindingKind; id: number; workspaceId: string; teamKey: string | null; op: { create: CcrcOpName; update: CcrcOpName };
     b: BindingRow | undefined; ready: boolean; statusMissing: boolean; texts: string[]; facts: Fact[];
     planned: Record<string, unknown>; fp: string; isCurrent: (stored: string | null) => boolean;
-    create: () => { input: CcrcOpInput; fields: string[] }; update: (linearId: string) => { input: CcrcOpInput; fields: string[] };
+    create: () => { input: CcrcOpInput; fields: string[] };
+    update: (linearId: string) => { input: CcrcOpInput; fields: string[]; extras?: { stateType?: string; comment?: { requestId: string; body: string } } };
     recover: Recover; link?: () => SyncStep | null;
   }
   const decide = (d: Decide): void => {
@@ -177,7 +191,7 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     if (refused !== null) { skip('text-public', refused); return; }
     if (bound) {
       const u = d.update(d.b!.linearId!);
-      phases[4]!.push({ ...base, kind: 'update', op: d.op.update, bindingId: d.b!.id, input: u.input, fields: u.fields, fingerprint: d.fp });
+      phases[4]!.push({ ...base, kind: 'update', op: d.op.update, bindingId: d.b!.id, input: u.input, fields: u.fields, fingerprint: d.fp, ...u.extras });
     } else {
       const requestId = requestIdOf(d.kind, d.id, d.workspaceId);
       const c = d.create();
@@ -185,9 +199,35 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     }
   };
 
+  // ── The programme's end (§5.4): what an epic and a ticket are for Linear once the programme has ended. `programs.state` is
+  // never read for it (D-51 sets it at every wave gap): only the snapshot's `end`.
+  const end = s.program.end;
+  const endDay = end === null ? '' : dayOf(end.at);
+  interface Eff { state: EpicState; why: string | null; by: 'own' | 'abandon' }
+  const effEpic = (e: EpicRow): Eff => {
+    if (e.state === 'dropped') return { state: 'dropped', why: e.droppedWhy, by: 'own' };
+    if (end === null || e.state === 'done') return { state: e.state, why: null, by: 'own' };
+    return end.outcome === 'done' ? { state: 'done', why: null, by: 'own' }
+      : { state: 'dropped', why: `Abandoned on ${endDay}: ${end.why ?? ''}`.trimEnd(), by: 'abandon' };
+  };
+  /** A ticket's state for Linear and the line its cancel comment carries: a dropped one, one of a dropped epic or one of an
+   *  abandoned programme (an open one) is canceled; a `done` ticket stays completed; a `done` programme leaves open ones as they are. */
+  const effTicket = (eff: Eff, t: TicketRow): { state: TicketState; comment: string | null } => {
+    if (t.state === 'dropped') return { state: 'dropped', comment: `Dropped: ${t.droppedWhy ?? ''}`.trimEnd() };
+    if (t.state === 'done' || eff.state !== 'dropped') return { state: t.state, comment: null };
+    return { state: 'dropped', comment: eff.by === 'abandon' ? `Canceled: ${eff.why ?? ''}`.trimEnd() : `Canceled: its epic was dropped: ${eff.why ?? ''}`.trimEnd() };
+  };
+  const hasEpicBinding = (e: EpicRow): boolean => s.bindings.some((b) => b.localKind === 'epic' && b.localId === e.id);
+  const effs = new Map<number, Eff>(s.plan.epics.map((e) => [e.id, effEpic(e)]));
   const places = new Map<number, Place>();
-  const liveEpics = s.plan.epics.filter((e) => e.state !== 'dropped' || s.bindings.some((b) => b.localKind === 'epic' && b.localId === e.id));
-  for (const e of liveEpics) places.set(e.id, placeOf(e.project));
+  // An epic nothing was ever created for stays uncreated when its programme's end would close it at once.
+  const placed = s.plan.epics.filter((e) => e.state !== 'dropped' || hasEpicBinding(e));
+  const liveEpics = placed.filter((e) => hasEpicBinding(e) || effs.get(e.id)!.state === e.state);
+  if (end !== null && end.outcome === 'done') {
+    const left = s.plan.epics.flatMap((e) => e.tickets).filter((t) => (t.state === 'open' || t.state === 'started') && s.bindings.some((b) => b.localKind === 'ticket' && b.localId === t.id)).length;
+    if (left > 0) notices.push({ kind: 'open-issues-left', count: left });
+  }
+  for (const e of placed) places.set(e.id, placeOf(e.project));
 
   // ── 1. initiatives: one per workspace the epics sit in
   const wsIds = [...new Set([...places.values()].flatMap((p) => (p.ok ? [p.workspaceId] : [])))];
@@ -222,18 +262,36 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
   const epicProject = new Map<number, string>(); // epic id -> bound project linear id
   for (const e of liveEpics) {
     const pl = places.get(e.id)!;
+    const eff = effs.get(e.id)!;
     if (!pl.ok) {
-      if (e.state !== 'dropped') phases[1]!.push({ kind: 'skip', local: { kind: 'epic', id: e.id }, why: 'no-team-key', workspaceId: null, bindingId: null, inputs: null, detail: null });
+      if (eff.state !== 'dropped') phases[1]!.push({ kind: 'skip', local: { kind: 'epic', id: e.id }, why: 'no-team-key', workspaceId: null, bindingId: null, inputs: null, detail: null });
       continue;
     }
     const wsId = pl.workspaceId;
     const dir = pl.ws.directory;
-    const pStatus = statusId(dir, 'project', PROJECT_STATUS_TYPE[e.state], pl.teamKey);
+    const pStatus = statusId(dir, 'project', PROJECT_STATUS_TYPE[eff.state], pl.teamKey);
     const off = pl.fact.initiatives === 'off' || pl.ws.initiatives === 'off';
     const initiativeId = pl.fact.initiatives === 'on' && pl.ws.initiatives !== 'off' ? (initiativeIdOf.get(wsId) ?? null) : null;
     const eb = bindingOf('epic', e.id, wsId);
+    // An epic whose binding sits in another workspace than its project now resolves to: that binding fails, nothing is created
+    // in the new workspace, and nothing under the epic is sent (the move is not ccrc's to make, §3).
+    const elsewhere = s.bindings.filter((b) => b.localKind === 'epic' && b.localId === e.id && b.workspaceId !== wsId);
+    if (eb === undefined && elsewhere.length > 0) {
+      const inputs = plannedFingerprint({ epic: e.id, workspaceId: wsId, teamKey: pl.teamKey });
+      for (const b of elsewhere) {
+        if (b.state === 'failed') failedInputs.push({ bindingId: b.id, inputs });
+        else phases[1]!.push({ kind: 'skip', local: { kind: 'epic', id: e.id }, why: 'workspace-mismatch', workspaceId: b.workspaceId, bindingId: b.id, inputs, detail: null });
+      }
+      continue;
+    }
+    // §5.2: the epic's team plus every team, in the same workspace, a ticket of the epic that is not dropped files into (C14).
+    const teamIds = [...new Set([pl.teamId, ...e.tickets.flatMap((t) => {
+      if (effTicket(eff, t).state === 'dropped') return [];
+      const tp = placeOf(t.project);
+      return tp.ok && tp.workspaceId === wsId ? [tp.teamId] : [];
+    })])].sort();
     const planned = {
-      name: fitProjectName(e.title), description: projectDescription(e, s.program.title, off), statusId: pStatus, teamIds: [pl.teamId], initiativeId,
+      name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, s.program.title, off), statusId: pStatus, teamIds, initiativeId,
     };
     const fpFull = plannedFingerprint(planned);
     const fpNull = plannedFingerprint({ ...planned, initiativeId: null });
@@ -281,19 +339,33 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
 
     for (const t of e.tickets) {
       const tb = bindingOf('ticket', t.id, wsId);
-      if (t.state === 'dropped' && tb === undefined) continue;
-      const tpl = placeOf(t.project);
+      const te = effTicket(eff, t);
       const tlocal: Local = { kind: 'ticket', id: t.id };
+      const tpl = placeOf(t.project);
+      // A binding in another workspace than the ticket's project resolves to now: it fails `ticket-workspace-mismatch`, once,
+      // and nothing is created in the new workspace.
+      const tElsewhere = s.bindings.filter((b) => b.localKind === 'ticket' && b.localId === t.id && b.workspaceId !== (tpl.ok ? tpl.workspaceId : wsId));
+      if (tpl.ok && tb === undefined && tElsewhere.length > 0) {
+        const inputs = plannedFingerprint({ ticket: t.id, workspaceId: tpl.workspaceId, teamKey: tpl.teamKey });
+        for (const b of tElsewhere) {
+          if (b.state === 'failed') failedInputs.push({ bindingId: b.id, inputs });
+          else phases[3]!.push({ kind: 'skip', local: tlocal, why: 'ticket-workspace-mismatch', workspaceId: b.workspaceId, bindingId: b.id, inputs, detail: null });
+        }
+        continue;
+      }
+      if (te.state === 'dropped' && tb === undefined) continue;
       if (!tpl.ok) { phases[3]!.push({ kind: 'skip', local: tlocal, why: 'no-team-key', workspaceId: wsId, bindingId: tb?.id ?? null, inputs: null, detail: null }); continue; }
-      if (tpl.workspaceId !== wsId) { phases[3]!.push({ kind: 'skip', local: tlocal, why: 'workspace-mismatch', workspaceId: wsId, bindingId: tb?.id ?? null, inputs: null, detail: null }); continue; }
+      if (tpl.workspaceId !== wsId) { phases[3]!.push({ kind: 'skip', local: tlocal, why: tb === undefined ? 'workspace-mismatch' : 'ticket-workspace-mismatch', workspaceId: wsId, bindingId: tb?.id ?? null, inputs: null, detail: null }); continue; }
       const milestoneId = t.checkpointId === null ? null : (msIds.get(t.checkpointId) ?? null);
-      const iStatus = statusId(tpl.ws.directory, 'issue', ISSUE_STATE_TYPE[t.state], tpl.teamKey);
+      const stateType = ISSUE_STATE_TYPE[te.state];
+      const iStatus = statusId(tpl.ws.directory, 'issue', stateType, tpl.teamKey);
       const ip = {
         title: egress(t.title), description: issueText(t), teamId: tpl.teamId, stateId: iStatus, projectId, projectMilestoneId: milestoneId,
       };
+      const cancelBody = te.comment === null ? null : withCcrcProvenance(egress(te.comment));
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
-        b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description], facts: [tpl.fact],
+        b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
         planned: ip, fp: plannedFingerprint(ip), isCurrent: (st) => st === plannedFingerprint(ip),
         create: () => ({
           input: { teamId: ip.teamId, title: ip.title, description: ip.description, stateId: iStatus, projectId, ...(milestoneId === null ? {} : { projectMilestoneId: milestoneId }) },
@@ -302,10 +374,11 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
         update: (id) => ({
           input: { id, teamId: ip.teamId, title: ip.title, description: ip.description, stateId: iStatus, projectId, projectMilestoneId: milestoneId },
           fields: ['title', 'description', 'state', 'project', 'milestone', 'team'],
+          extras: { stateType, ...(cancelBody === null ? {} : { comment: { requestId: requestIdOf('ticket', t.id, wsId, 'cancel'), body: cancelBody } }) },
         }),
         recover: 'request-id',
       });
     }
   }
-  return { steps: phases.flat(), failedInputs };
+  return { steps: phases.flat(), failedInputs, notices };
 }

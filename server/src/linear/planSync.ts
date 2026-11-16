@@ -107,11 +107,22 @@ export class PlanSync {
    *  debounce, one at a time, until the tick's deadline. A pass in flight (even the one a restarted tick left) is joined. */
   async tick(now: number): Promise<void> {
     this.notConfigured.clear();
+    try { this.meetOperatorActs(now); } catch { console.warn('ccrc-server: linear plan sync operator-act check failed'); }
     const deadlineAt = this.deps.now() + (this.deps.tickDeadlineMs ?? PLAN_SYNC_TICK_DEADLINE_MS);
     try { await this.requeueSweep(now); } catch { console.warn('ccrc-server: linear plan sync requeue failed'); }
     for (const key of this.deps.plan.dueSyncs(now - PLAN_SYNC_DEBOUNCE_MS)) {
       if (this.deps.now() >= deadlineAt) return;
       try { await this.passFor(key, deadlineAt); } catch { console.warn('ccrc-server: linear plan sync pass failed'); }
+    }
+  }
+
+  /** §4.1's design call: an `operator-act` checkpoint whose operator item is done is met, with the item as its evidence
+   *  (`markCheckpointMet` settles its epic and marks its programme due; the programme's pass then writes the milestone). */
+  private meetOperatorActs(now: number): void {
+    for (const c of this.deps.plan.openOperatorActs()) {
+      if (this.deps.coord.itemById(c.itemId)?.state !== 'done') continue;
+      this.deps.plan.markCheckpointMet(c.checkpointId, { itemId: c.itemId }, now);
+      this.deps.plan.markSyncDue(c.program, now - PLAN_SYNC_DEBOUNCE_MS);
     }
   }
 
@@ -196,7 +207,8 @@ export class PlanSync {
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
-      const { steps, failedInputs } = planSyncSteps(built.snap);
+      const { steps, failedInputs, notices } = planSyncSteps(built.snap);
+      for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
       let requeued = false;
       for (const f of failedInputs) {
         const b = built.snap.bindings.find((x) => x.id === f.bindingId);
@@ -267,7 +279,7 @@ export class PlanSync {
       program: {
         slug, rowid, title: prog.title, inShort: goals.inShort,
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
-        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen,
+        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.state === 'paused',
       },
       plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys],
     };
@@ -286,7 +298,7 @@ export class PlanSync {
         : plan.ensurePending(step.local.kind, step.local.id, ws, null);
       if (b === null) return 'next';
       const slot = built.slots.get(ws);
-      if (slot === undefined) return 'next';
+      if (slot === undefined) { this.notConfigured.add(ws); return 'next'; }
       this.fail({ slug, local: step.local, workspaceId: ws, bindingId: b.id, inputs: step.inputs ?? '', slot, plan: built.snap.plan }, step.why);
       return 'next';
     }
@@ -321,7 +333,23 @@ export class PlanSync {
 
     // an update or a link: the binding is bound
     if (b === null || b.linearId === null) return 'next';
-    const out = await this.deps.call(this.askOf(step, slot, b, 'plan-sync'));
+    let send = step;
+    if (step.kind === 'update' && step.stateType !== undefined) {
+      const held = await this.readIssue(step, b, subject(b.id), deadlineAt);
+      if (held === 'defer') return 'defer';
+      if (held === 'next') return 'next';
+      if (held === 'same') { this.bind(b, b.linearId, b.identifier, step.fingerprint); this.attempts.delete(slug); return 'next'; }
+      send = held === 'state-held' ? withoutState(step) : step;
+      if (step.comment !== undefined) {
+        const c = await this.deps.call({
+          op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey,
+          target: b.identifier ?? b.linearId, fields: ['comment'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
+        });
+        // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
+        if (!c.ok && !(c.word === 'linear-invalid' && c.detail === 'conflict')) return this.onFailure(c, subject(b.id));
+      }
+    }
+    const out = await this.deps.call(this.askOf(send, slot, b, 'plan-sync'));
     if (out.ok) {
       this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint);
       this.attempts.delete(slug);
@@ -333,6 +361,23 @@ export class PlanSync {
       return 'next';
     }
     return this.onFailure(out, subject(b.id));
+  }
+
+  /** C12: an issue's planned state is a TYPE, and Linear owns the name. Read the issue first: when it already reads the type
+   *  and everything else planned (a GitHub integration moved it), the fingerprint is all that is written (`same`); when only
+   *  the state agrees, the update goes without it (`state-held`); a read that cannot tell (`not-found`) sends the update as
+   *  planned and lets its own answer rule. */
+  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'state-held' | 'same' | 'next' | 'defer'> {
+    if (step.op !== 'issueUpdate') return 'send';
+    if (this.deps.now() >= deadlineAt) return 'defer';
+    const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id: b.linearId! }));
+    if (!out.ok) return out.word === 'not-found' ? 'send' : (this.onFailure(out, s) === 'defer' ? 'defer' : 'next');
+    const issue = out.value['issue'] as { stateType?: string; title?: string; description?: string | null; teamKey?: string; projectId?: string | null; milestoneId?: string | null };
+    if (issue.stateType !== step.stateType) return 'send';
+    const sameRest = issue.title === step.input['title'] && (issue.description ?? '').trim() === String(step.input['description'] ?? '').trim()
+      && issue.projectId === step.input['projectId'] && (issue.milestoneId ?? null) === (step.input['projectMilestoneId'] ?? null)
+      && typeof issue.teamKey === 'string' && step.teamKey !== null && issue.teamKey.toUpperCase() === step.teamKey.toUpperCase();
+    return sameRest ? 'same' : 'state-held';
   }
 
   /** C2: a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds. */
@@ -481,6 +526,17 @@ export class PlanSync {
     this.mailFailed(s, word);
   }
 
+  /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */
+  private mailOpenIssuesLeft(slug: string, count: number): void {
+    const owner = this.deps.plan.planOwnerOf(slug);
+    if (owner === null) return;
+    const subject = `Linear sync: programme ${slug} open-issues-left`;
+    const { coord } = this.deps;
+    if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
+    const body = `The programme ${slug} has ended as done with ${count} open ${count === 1 ? 'issue' : 'issues'} in Linear. The sync left ${count === 1 ? 'it' : 'them'} open: close or re-plan ${count === 1 ? 'it' : 'them'}.`;
+    tx(coord.db, () => { insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
+  }
+
   private mailFailed(s: Subject, word: string): void {
     const owner = this.deps.plan.planOwnerOf(s.slug);
     if (owner === null) return;
@@ -500,6 +556,12 @@ export class PlanSync {
     }
     return String(local.id);
   }
+}
+
+/** The update without its state: Linear already reads the planned type (C12). */
+function withoutState(step: Extract<SyncStep, { kind: 'update' }>): Extract<SyncStep, { kind: 'update' }> {
+  const { stateId: _drop, ...input } = step.input as Record<string, unknown>;
+  return { ...step, input: input as typeof step.input, fields: step.fields.filter((f) => f !== 'state') };
 }
 
 /** Each workspace's slot, the digest of the key in it and the teams its record learned for that key: what the sync reads
