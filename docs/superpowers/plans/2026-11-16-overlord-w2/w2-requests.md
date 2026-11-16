@@ -23,9 +23,9 @@
   and nothing raises an item before W3.
 - **What changes at merge.** Nothing a running session sees. PR A writes no row until a door exists. PR B's doors refuse
   `capability-missing` naming `overlord-route-v1` until the index's last piece ships that word.
-- **What the reader must check.** Seventeen open questions (§2), each with a recommendation, none for the operator. Two
-  need the coordinator's eye: the escalate act kind is missing from the act catalogue plan (question 13), and history's
-  `touched` has no server reader today, so PR B adds one (question 5).
+- **What the reader must check.** Seventeen open questions (§2): sixteen with a recommendation, and question 13, the
+  escalate door's act kind, ruled by the coordinator. None is for the operator. One needs the coordinator's eye:
+  history's `touched` has no server reader today, so PR B adds one (question 5).
 
 ## 1. Goal, scope and the rulings this plan builds on
 
@@ -166,12 +166,11 @@ operator: each is an implementation choice under a direction the spec already gi
   answer. The close of an `in-progress` request is the done-test lane's. **Recommendation:** PR B's close door moves
   `received` to `done` when `closeUnownedVerdict` allows: every act on the request is its own `open-request` or an
   answer kind (W3's), and it has no open child. On any other state it answers `bad-transition` until the done tests piece adds its arm to the same handler.
-- **RQ13. The escalate door's act kind is missing from the act catalogue plan** (index question 7: `escalate-request`,
-  class none, reversible, refused at `chat`, allowed at `advise` and `full`). The act catalogue plan in review (#2924,
-  Table 4) lists `escalate` and no `escalate-request`. **Recommendation:** act catalogue A adds the row, with its
-  ceiling in the `operator-reach` group (3 an hour per programme, 10 in all), because each escalation lands in front of
-  the operator. If the catalogue has landed without it, PR B adds the row in its first task. The coordinator rules
-  which.
+- **RQ13. The escalate door's act kind is `escalate-request`, a catalogue kind** (index question 7; **ruled by the
+  coordinator** on run 2263, from the act catalogue review, run 2271). It is class none and reversible, refused at
+  `chat` and allowed at `advise` and `full`, in the `request` ceiling group (6 an hour per programme, 30 in all). It is
+  not W3's `escalate`, which hands a held ask or item to the operator. The act catalogue piece carries the row. If the
+  catalogue has landed without it, PR B adds the row in Task B4, with those values.
 - **RQ14. `server/src/coord/requestRoutes.ts` is created with its first route** (slug
   `request-routes-file-with-its-first-route`). The index has PR B create it with every census site. But PR B's four
   doors are the Overlord's, and they belong in `overlordRoutes.ts` (index question 7). A lane source with no route
@@ -614,7 +613,7 @@ This section names what this plan takes from other pieces, and what it hands the
 | Sequence A, B | `stampSequenceInTx`, `SEQUENCE_KIND_MAP`, the stamp census; `INVARIANT_MAP`, its gatherer | takes; adds `request` and I12 |
 | Row revisions | The census of writers of revised tables | adds `overlord_requests`. Whichever lands second adds the row |
 | Gates A, B | `OVERLORD_DOORS`, `overlordGateRun`, `CallerIdentity` | takes; adds four rows |
-| Act catalogue A, B | The four kinds, their ceilings, `overlordMayAct` | takes; RQ13 asks for `escalate-request` |
+| Act catalogue A, B | The four kinds, their ceilings, `overlordMayAct` | takes; `escalate-request` is its row (RQ13) |
 | Act rows A | The act writer, the natural key, the operation key | takes |
 | Act journal A | The `open-request` record, appended through the act writer | takes |
 | Act journal B | The highest request id after a restore (RQ10) | hands it `nextRequestId`'s second argument |
@@ -963,8 +962,8 @@ export function citedMessagesForBoot(db: DatabaseSync): { cited: ReadonlySet<num
     `operator-has-it`. An unknown id is `not-found`. Every success writes one act row, one move row, and one line when
     the state word changes.
 - [ ] **Step 2: Run red:** `ccrc test -- ./node_modules/.bin/vitest run test/overlord-request-moves.test.ts`.
-- [ ] **Step 3: Implement.** If act catalogue A landed without `escalate-request` (RQ13), add its row first, with its
-  three tests' rows.
+- [ ] **Step 3: Implement.** If act catalogue A landed without `escalate-request` (RQ13), add its row first (class
+  none, reversible, refuse, allow, allow, the `request` ceiling group), with its three tests' rows.
 - [ ] **Step 4: Run green**, then `overlord-doors-census`, and the act catalogue's three tests (its single definition,
   its D-8126 class map and `overlord-act-compensators`).
 - [ ] **Step 5: Mutation.** Drop the `answered` guard: the drop-before-answer test reds. Skip the revision compare: the
@@ -1026,7 +1025,8 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
   in it (RQ14).
 - **Lane R's "The record" bullet** gains `server/src/coord/requestShortlist.ts`, `requestShortlistRead.ts`, and
   `shared/overlordHistory.ts` and `ccd/history/overlord-read.mjs` (the `touched` verb, shared with W1's board history).
-- **Question 7's table:** the escalate door's act kind `escalate-request` is in no catalogue plan yet (RQ13).
+- **Question 7's paragraph:** the escalate door's act kind `escalate-request` sits in the act catalogue's `request`
+  ceiling group, 6 and 30 (RQ13, ruled).
 - **The architecture spec's path table:** no row is needed for `coord/**` or a `shared/*.ts` sibling. The index's "the
   new `shared/*.ts` siblings among them" can drop that clause (measured: the table has no `shared/` rows).
 - **Table 11.5b's spec-fix list** gains the starting values of RQ16.
@@ -1046,11 +1046,11 @@ Each entry is a departure from the spec's or the index's text, by slug. The coor
 **Agreed:**
 - The index's ruling on the request record row, with F5, F6, Q2, Q5 as amended, Q7, Q13, Q27, Q28 and I12, built as
   stated.
+- RQ13: the escalate door's act kind is `escalate-request`, in the `request` ceiling group (the coordinator, run 2263).
 - One table of moves, keyed by move, in the shape of `ITEM_TRANSITIONS`.
 
 **Waiting on the coordinator** (at this plan's review):
-- RQ1 to RQ17, each with its recommendation.
-- RQ13: `escalate-request` in the act catalogue, and its ceiling group.
+- RQ1 to RQ17 but RQ13, each with its recommendation.
 - RQ5: building the `touched` reader in PR B rather than deferring it.
 
 **Waiting on the operator:** nothing.
