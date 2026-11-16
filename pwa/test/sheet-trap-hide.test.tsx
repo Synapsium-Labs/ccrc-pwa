@@ -1,5 +1,6 @@
 // Desktop polish Task C38 (D-8670): three of the Sheet's focus and hiding rules, each carried from the delegation broker
-// programme's reviews, at the owner (`ui/src/primitives/sheet.tsx`), so every `QuickConfirm` and every other sheet has them.
+// programme's reviews, at the owner (`ui/src/primitives/sheet.tsx`), so every `QuickConfirm` and every other sheet has them,
+// a sheet stacked on one or two others included (only the topmost sheet under a closing one is announced; review 2287).
 //
 // 1. THE PAGE IS NOT HIDDEN WHILE THE SHEET CLOSES. Radix hides everything outside an open modal (`hideOthers`, aria-hidden)
 //    from the content's mount to its unmount, and the content stays mounted through the exit animation, so a refusal's live
@@ -145,6 +146,95 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the confirm is closing, the sheet still open').toBe(2);
       expect(pageHidden(), 'the page behind the sheet still open was announced as the confirm closed').toBe(true);
       expect(hiddenUp(releaseButton), 'the sheet under the closing confirm stayed hidden').toBe(false);
+    } finally { release(); }
+  });
+
+  // Review 2287 L1-1: three layers (Session actions, then Swap over it, then the swap's target confirm). As the confirm
+  // closes, only the sheet directly under it is announced; the bottom sheet stays hidden behind the middle one, as on main.
+  it('a confirm closing over two sheets still open: only the top one is announced, the bottom one and the page stay hidden', async () => {
+    function ThreeDeep(): ReactNode {
+      const [actions, setActions] = useState(false);
+      const [swap, setSwap] = useState(false);
+      const [asking, setAsking] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setActions(true)}>Open it</button>
+          <Sheet open={actions} onClose={() => setActions(false)} title="Actions">
+            <button type="button" onClick={() => setSwap(true)}>Swap</button>
+          </Sheet>
+          <Sheet open={swap} onClose={() => setSwap(false)} title="Swap to">
+            <button type="button" onClick={() => setAsking(true)}>Pick lane-a</button>
+          </Sheet>
+          <QuickConfirm open={asking} onClose={() => setAsking(false)} title="Swap to lane-a?" consequence="It swaps."
+            confirmLabel="Yes, swap" onConfirm={() => undefined} />
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    try {
+      render(<ThreeDeep />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Swap' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Pick lane-a' }));
+      await settle();
+      const hiddenUp = (el: Element): boolean => {
+        for (let at: Element | null = el; at !== null; at = at.parentElement) if (at.getAttribute('aria-hidden') === 'true') return true;
+        return false;
+      };
+      const bottom = screen.getByRole('button', { name: 'Swap', hidden: true });
+      const middle = screen.getByRole('button', { name: 'Pick lane-a', hidden: true });
+      expect(hiddenUp(bottom) && hiddenUp(middle), 'CONTROL: the confirm hides both sheets under it').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the confirm is closing, both sheets still open').toBe(3);
+      expect(hiddenUp(middle), 'the sheet directly under the closing confirm stayed hidden').toBe(false);
+      expect(hiddenUp(bottom), 'the bottom sheet was announced while the middle sheet is open over it').toBe(true);
+      expect(pageHidden(), 'the page was announced behind two open sheets').toBe(true);
+    } finally { release(); }
+  });
+
+  // Review 2287 L1-2: a live region in the sheet under the confirm. Radix then keeps that region's ancestors visible and
+  // marks the sheet's own children instead, so the marks to lift sit INSIDE the sheet, not over it.
+  it('a confirm closing over a sheet with a live region: that sheet is announced', async () => {
+    function Live(): ReactNode {
+      const [open, setOpen] = useState(false);
+      const [asking, setAsking] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setOpen(true)}>Open it</button>
+          <Sheet open={open} onClose={() => setOpen(false)} title="Actions">
+            <p aria-live="polite">Ready.</p>
+            <button type="button" onClick={() => setAsking(true)}>Release</button>
+          </Sheet>
+          <QuickConfirm open={asking} onClose={() => setAsking(false)} title="Release?" consequence="It releases."
+            confirmLabel="Yes, release" onConfirm={() => undefined} />
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    try {
+      render(<Live />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      // Read before the confirm opens: Radix then marks this button itself, and a hidden button has no name.
+      const releaseButton = screen.getByRole('button', { name: 'Release' });
+      fireEvent.click(releaseButton);
+      await settle();
+      const hiddenUp = (el: Element): boolean => {
+        for (let at: Element | null = el; at !== null; at = at.parentElement) if (at.getAttribute('aria-hidden') === 'true') return true;
+        return false;
+      };
+      const parent = releaseButton.closest('[role="dialog"]');
+      expect(parent?.querySelector('[data-aria-hidden="true"][aria-hidden="true"]'),
+        'CONTROL: the confirm marked nodes inside the sheet, around its live region').not.toBeNull();
+      expect(hiddenUp(releaseButton), 'CONTROL: the confirm hides the sheet under it').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the confirm is closing, the sheet still open').toBe(2);
+      expect(hiddenUp(releaseButton), 'the sheet under the closing confirm stayed hidden').toBe(false);
+      expect(pageHidden(), 'the page behind the sheet still open was announced as the confirm closed').toBe(true);
     } finally { release(); }
   });
 
