@@ -6,6 +6,7 @@ import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
+import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
@@ -1095,6 +1096,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretRemoveAnswer>,
     /** `POST /api/items/:id/dismiss` (PL4): refused `programme-live` while the programme has an open run. */
     dismissItem: (id: number) => postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/dismiss`),
+    /** `POST /api/answer-marks` (Overlord W1, §9.2.1): one of the operator's two marks on a row, ticked or not; it answers the
+     *  mark's new value. `not-markable` (the row left the list) rejects with an `ApiError` like every non-2xx. Session-gated when
+     *  armed; it works dark too. */
+    setAnswerMark: (kind: AnswerMarkKind, id: number, mark: AnswerMarkName, value: boolean) =>
+      postJson<{ readonly ok: true; readonly mark: AnswerMarkName; readonly answerMark: AnswerMarkView }>('/api/answer-marks', { kind, id, mark, value }),
     /** `GET /api/sessions/:id/timers` (Overlord W1a, timers Task 13): the session's pending timers, notes masked and marked
      *  untrusted. `unknown`: `timersWords.ts`' `readTimers` is the one reader. Session-gated when armed. */
     sessionTimers: (id: string) => getJson<unknown>(`${sid(id)}/timers`),

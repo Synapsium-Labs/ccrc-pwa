@@ -6,7 +6,7 @@ import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { WAITS_ON_WORDS } from '../../shared/ledgers';
 import { fleetHues } from '../src/fleet/programmeBoxes';
-import { WaitingScreen } from '../src/ledgers/WaitingScreen';
+import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
@@ -845,5 +845,57 @@ describe('the grouped Recently cleared list and item references on a card (D-819
     expect(links.map((a) => [a.textContent, a.getAttribute('href')])).toEqual([['item 12', '/waiting/12'], ['item 13', '/waiting/13']]);
     for (const a of links) expect(a.closest('button')).toBeNull();
     expect(within(document.querySelector<HTMLElement>('li:has([data-item="6"])')!).queryByRole('link')).toBeNull();
+  });
+});
+
+describe('the answer marks on the list (Overlord W1)', () => {
+  const MARKS = { couldAnswer: { state: 'never' as const }, unsure: { state: 'marked' as const, id: 4, at: NOW - MIN, signedIn: true } };
+  const view = (withMarks: boolean) => waitingView({
+    items: [itemView({ id: 1, kind: 'decide', title: 'Pick a branch', ...(withMarks ? { answerMarks: MARKS } : {}) })],
+    cleared: [itemView({ id: 2, kind: 'value', state: 'done', title: 'Name the flag', closedAt: NOW - 60 * MIN, ...(withMarks ? { answerMarks: MARKS } : {}) })],
+  });
+  const groupsOf = () => screen.getAllByRole('group', { name: 'Your marks for the Overlord' });
+
+  it('an open item and a cleared item each draw both boxes when the view carries answerMarks', () => {
+    open({ view: view(true) });
+    const groups = groupsOf();
+    expect(groups.map((g) => g.getAttribute('data-item'))).toEqual(['1', '2']);
+    for (const g of groups) {
+      const boxes = within(g).getAllByRole('checkbox') as HTMLInputElement[];
+      expect(boxes.map((b) => b.checked)).toEqual([false, true]);
+    }
+  });
+
+  it('neither draws a box when the field is absent (an older server)', () => {
+    open({ view: view(false) });
+    expect(screen.queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('the boxes are not inside the row\'s button', () => {
+    open({ view: view(true) });
+    const row = document.querySelector('[data-item="1"].wl-item')!;
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).queryAllByRole('checkbox')).toEqual([]);
+  });
+
+  it('on the device\'s saved copy every box is disabled', () => {
+    open({ view: view(true), notCurrent: 'Saved on this device' });
+    for (const b of screen.getAllByRole('checkbox') as HTMLInputElement[]) expect(b.disabled).toBe(true);
+  });
+
+  // Review 2196 F5: an unset `rowActs` or `current` fails closed.
+  it('item rows drawn with no rowActs disable their boxes', () => {
+    const item = view(true).items[0]!;
+    render(<ItemRows rows={[{ kind: 'item', item }]} now={NOW} onOpenItem={() => undefined} onOpenSession={() => undefined} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+
+  it('a cleared trail drawn with no current disables its boxes', () => {
+    render(<ClearedTrail items={view(true).cleared} now={NOW} />);
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(2);
+    for (const b of boxes) expect(b.disabled).toBe(true);
   });
 });
