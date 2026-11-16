@@ -236,7 +236,9 @@ _account_deny_json() {
   done
   rules+=('Bash(ccd-account-auth:*)' 'Bash(ccd account-pane:*)')
   for p in '~/.cc-secrets/**' '~/.ccrc/auth-scratch/**' '~/.ccrc/codex/*/runtime.env' '~/.ccrc/agent.env' \
-           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**'; do
+           '~/.ccrc/linear/**' '~/.ccrc/linear.key' '~/.ccrc/operator-secrets/**' \
+           '~/.ccrc/operator-model.db*' '~/.ccrc/privacy-journal.log' '~/.ccrc/privacy-journal.torn/**' '~/ccrc-backups/*/operator-model.db*' \
+           '~/.ccrc/coordination-restore.stage/*/operator-model.db*' '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'; do
     rules+=("Read($p)")
   done
   for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done

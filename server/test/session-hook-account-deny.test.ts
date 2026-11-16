@@ -204,6 +204,28 @@ describe('the account arm denies on every session (D-6202)', () => {
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).toBeNull();
   });
 
+  it.each(CALLERS)('%s: the operator private store, its journal, quarantine, backup copy and restore leftovers are refused; the rest of ~/.ccrc stays open (Overlord W1 private store A, spec §9.4)', (_c, id, extra) => {
+    for (const command of [
+      'cat ~/.ccrc/operator-model.db', 'sqlite3 "$HOME/.ccrc/operator-model.db-wal"', 'cat ${HOME}/.ccrc/operator-model.db-shm', "cat '~/.ccrc/operator-model.db.tmp-journal'",
+      'cat ~/.ccrc//operator-model.db', 'cat "${HOME}"/.ccrc/operator-model.db', 'cp ~/.ccrc/operator-model.db /tmp/k',
+      'cat ~/ccrc-backups/20261115-120000/operator-model.db', 'cat "$HOME/ccrc-backups/20261115-120000/operator-model.db.tmp"', 'cat $HOME/ccrc-backups/20261115-120000/operator-model.db.tmp-journal',
+      'cat ~/.ccrc/privacy-journal.log', 'tail -f "$HOME/.ccrc/privacy-journal.log"', 'cat ~/.ccrc/privacy-journal.torn/20261115.torn', 'ls ~/.ccrc/privacy-journal.torn',
+      'cat ~/.ccrc/coordination-restore.stage/new/operator-model.db', 'cat "$HOME/.ccrc/coordination-restore.foreign/0123456789abcdef/operator-model.db-wal"',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: '~/.ccrc/operator-model.db' }], ['Read', { file_path: `${home}/.ccrc/operator-model.db-wal` }], ['Read', { file_path: '~/.ccrc/./operator-model.db-shm' }],
+      ['Read', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db' }], ['Read', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db.tmp' }],
+      ['Read', { file_path: '~/.ccrc/privacy-journal.log' }], ['Read', { file_path: '~/.ccrc/privacy-journal.torn/20261115.torn' }], ['Grep', { pattern: 'x', path: '~/.ccrc/privacy-journal.torn' }],
+      ['Read', { file_path: '~/.ccrc/coordination-restore.stage/new/operator-model.db' }], ['Read', { file_path: '~/.ccrc/coordination-restore.foreign/0123456789abcdef/operator-model.db' }],
+      ['Write', { file_path: '~/ccrc-backups/20261115-120000/operator-model.db', content: 'y' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+    for (const command of ['ls ~/.ccrc', 'cat ~/.ccrc/privacy-journal.log.md', 'ls ~/ccrc-backups', 'cat ~/ccrc-backups/20261115-120000/coord.db']) {
+      expect(fire(id, 'Bash', { command }, extra), command).toBeNull();
+    }
+    expect(fire(id, 'Read', { file_path: '~/.ccrc/coord.db' }, extra)).toBeNull();
+    expect(fire(id, 'Read', { file_path: '~/ccrc-backups/20261115-120000/coord.db' }, extra)).toBeNull();
+  });
+
   it.each(CALLERS)('%s: a name that only begins like the store, and the store\'s source, stay open (plan PL6)', (_c, id, extra) => {
     for (const command of ['cat ~/.ccrc/operator-secrets-notes.md', 'grep -n writeOperatorSecret server/src/coord/ledgersSecrets.ts']) {
       expect(fire(id, 'Bash', { command }, extra), command).toBeNull();

@@ -2766,6 +2766,7 @@ already running).
             session's prose is not configuration) unless [--purge-memory]
             is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, the
+            private store's (operator-model.db, 0600, in a 0700 directory), the
             delegation journal and checkpoint with their manifest
             (coordination-snapshot.json), dists, ccd and the units to
             ~/ccrc-backups/<ts>/ (never
@@ -24871,12 +24872,20 @@ _upd_backup() {
   # reordered floor sentences — a wording consistency, since the redacted
   # path (~/ccrc-backups/<ts>, about 30 characters) never comes close to
   # the 200-character cut.
-  mkdir "$UPD_BACKUP_DIR" \
+  # 0700 (Overlord W1 private store, Task 4): the directory holds the operator's private store, whose snapshot is 0600 too.
+  mkdir -m 700 "$UPD_BACKUP_DIR" \
     || _ccrc_die "already exists: $UPD_BACKUP_DIR (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
   if [ -f "$HOME/.ccrc/coord.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
+  fi
+  # The private store, by the same script, beside coord.db; the manifest names it, and a restore puts both back as one set.
+  # Never ~/.ccrc/privacy-journal.log: a restore leaves it in place, so a restored store never reissues a message id.
+  if [ -f "$HOME/.ccrc/operator-model.db" ]; then
+    node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
+      "$HOME/.ccrc/operator-model.db" "$UPD_BACKUP_DIR/operator-model.db" \
+      || _ccrc_die "the private store (operator-model.db) snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
   # THE COORDINATION SNAPSHOT RUNS LAST (delegation broker wave 3, O3). The two authoritative sidecars
@@ -24889,7 +24898,7 @@ _upd_backup() {
   local cerr=""
   cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
     || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, the private store's snapshot when it exists, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
   # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
   # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
   # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.

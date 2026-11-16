@@ -5133,6 +5133,13 @@ such a snapshot, make sure the legacy file is gone. A restore that rolls both fi
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
 
+The Overlord's private store, `operator-model.db` (the operator's messages and the read ledger), is snapshotted beside
+`coord.db` at mode 0600, in a backup directory made 0700, and `ccrc coordination-snapshot restore` puts both back as one set.
+A backup taken before the store existed has no `operatorModel` member in its manifest, and its restore leaves the live
+store in place; a manifest that names the store as absent moves the live store into `coordination-restore.foreign/<id>/`
+and deletes nothing. As with the landing journal, no backup copies `~/.ccrc/privacy-journal.log`: leave it in place when a
+snapshot goes back, so the next message id starts above every id it records and none is issued twice.
+
 **Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
 owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
 `.superpowers/worktrees/*` checkouts of any project. `ccd ws-audit --orphans` lists them by location class (a path

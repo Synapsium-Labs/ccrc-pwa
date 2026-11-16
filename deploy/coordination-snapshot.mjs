@@ -30,7 +30,7 @@
 // service: restore asks whether the server is running and refuses unless it MEASURES it inactive, and asks again once its marker is durable.
 // It writes only the directory it is given (capture), `~/.ccrc` (restore and recover) and, for `thin`, each backup directory it is told to thin.
 // What it deletes: capture, on failure, only files that run created (its partials, the members it placed and its own manifest); restore and recover, only inside `~/.ccrc`; `thin`, inside a backup directory it is told to
-// thin, only the five snapshot files (`SNAPSHOT_NAMES`, after writing that directory's record, `THINNED_FILE`), a stale thinning record and its own
+// thin, only the six snapshot files (`SNAPSHOT_NAMES`, after writing that directory's record, `THINNED_FILE`), a stale thinning record and its own
 // `.partial` temp. In the `--verified` directory it removes only a stale thinning record, never the snapshot files, and it refuses that directory
 // when it reads as anything but whole, stale or empty. Nothing else there, and nothing outside such a directory.
 // While the marker stands,
@@ -42,7 +42,7 @@
 // with its reasons: line 1 is `<word>: <reason>`, line 2 is `data: yes|no` (a v1 snapshot with any member present, or a legacy
 // one, holds data; the retention keeps the newest such snapshot beside the newest valid one, D-4641). `restore --from <dir>`: 0 done, 1 failed (the live set is the old one, or `recover` finishes it), 2 refused
 // before any live mutation (a `thinned` source is refused as `source-thinned`). `recover`: finishes an interrupted restore, 0 / 1 / 2 the same way. `thin --keep <n> --by <update|backup> ...`: drops the
-// data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the five snapshot files (D-6346, D-6348): 0 every directory was handled,
+// data set of the backup directories past the newest `n` valid ones, writing each directory's record before it deletes the six snapshot files (D-6346, D-6348): 0 every directory was handled,
 // 3 one or more was refused or the verification budget stopped the walk (the others were still handled; 3, not 1, because node itself exits 1 when it cannot load this file). 70: usage, or the helper itself
 // failed (an exception it did not name). `--until <unix seconds>` is the update path's time budget (D-6464): a walk that reaches it ends
 // there, its untouched dirs left for the next update, and exits 0 unless a dir was refused, one behind the stop included.
@@ -59,11 +59,15 @@ export const JOURNAL_FILE = 'delegation-events.log';
 export const CARRIED_FILE = 'delegation-carried.log';
 export const CHECKPOINT_FILE = 'delegation-checkpoint.json';
 export const DB_FILE = 'coord.db';
+/** The Overlord's private store (Overlord W1 private store A): an ADDITIVE, optional member, snapshotted by `backup-coord.mjs` beside
+ *  coord.db and restored with it as one set. The privacy journal is never a member: a restore leaves it in place. */
+export const OPERATOR_MODEL_FILE = 'operator-model.db';
+const STORE_NAMES = Object.freeze([`${OPERATOR_MODEL_FILE}-wal`, `${OPERATOR_MODEL_FILE}-shm`, OPERATOR_MODEL_FILE]);
 export const MANIFEST_FILE = 'coordination-snapshot.json';
 /** The record a thinning writes BEFORE it deletes the snapshot files below (D-6348): it says the data set was dropped by design. */
 export const THINNED_FILE = 'coordination-thinned.json';
 /** The five names a thinning may remove. Also the order in which a leftover is named. */
-export const SNAPSHOT_NAMES = Object.freeze([MANIFEST_FILE, JOURNAL_FILE, CHECKPOINT_FILE, DB_FILE, CARRIED_FILE]);
+export const SNAPSHOT_NAMES = Object.freeze([MANIFEST_FILE, JOURNAL_FILE, CHECKPOINT_FILE, DB_FILE, CARRIED_FILE, OPERATOR_MODEL_FILE]);
 /** Live restore bookkeeping, in the coordination directory itself. Delegation recovery refuses to run while the marker exists, and so does the server's boot (it exits 1 before opening coord.db). */
 export const RESTORE_MARKER_FILE = 'coordination-restore.json';
 export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
@@ -71,7 +75,7 @@ export const RESTORE_STAGE_DIR = 'coordination-restore.stage';
  *  `<this>/<restore id>/<member name>`, never overwriting (a second file of one name gets `.1`, `.2`, ...). */
 export const RESTORE_FOREIGN_DIR = 'coordination-restore.foreign';
 /** The files a restore replaces as one set. WAL and SHM are not manifest members: a restored DB must never meet an old WAL. */
-export const RESTORE_SET = Object.freeze([JOURNAL_FILE, CHECKPOINT_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, DB_FILE, CARRIED_FILE]);
+export const RESTORE_SET = Object.freeze([JOURNAL_FILE, CHECKPOINT_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, DB_FILE, CARRIED_FILE, ...STORE_NAMES]);
 /** Exactly five attempts, with these pauses between them. */
 export const CAPTURE_RETRY_DELAYS_MS = Object.freeze([10, 25, 50, 100]);
 export const SERVICE_UNIT = 'ccrc.service';
@@ -776,6 +780,7 @@ export function capture(opts) {
   const dir = opts.dir;
   const names = {
     journal: path.join(dir, JOURNAL_FILE), carried: path.join(dir, CARRIED_FILE), checkpoint: path.join(dir, CHECKPOINT_FILE), db: path.join(dir, DB_FILE), manifest: path.join(dir, MANIFEST_FILE),
+    store: path.join(dir, OPERATOR_MODEL_FILE),
   };
   const owned = [];     // files this run created (finals), removed on failure
   const partials = [`${names.journal}.partial`, `${names.checkpoint}.partial`, `${names.manifest}.partial`, `${names.carried}.partial`];
@@ -890,11 +895,24 @@ export function capture(opts) {
     } else if (snap !== null) {
       refuse('db-snapshot-unexpected', 'there is a coord.db snapshot but no live coord.db');
     }
+    // The private store's snapshot, by the same rule: expected exactly when the live store exists, a whole SQLite file it can read.
+    const liveStore = fs.lstat(path.join(ccrcDir, OPERATOR_MODEL_FILE));
+    const storeSnap = fs.lstat(names.store);
+    let store = null;
+    if (liveStore !== null) {
+      if (storeSnap === null || !storeSnap.isFile()) refuse('store-snapshot-missing', `${OPERATOR_MODEL_FILE} exists but its snapshot was not taken`);
+      const state = inspectDb(names.store);
+      if (!state.ok) refuse('store-snapshot-invalid', `the ${OPERATOR_MODEL_FILE} snapshot ${state.why}`);
+      store = measureFile(fs, names.store);
+    } else if (storeSnap !== null) {
+      refuse('store-snapshot-unexpected', `there is a ${OPERATOR_MODEL_FILE} snapshot but no live store`);
+    }
     // Make every member durable, THEN name them, THEN write the manifest last.
     if (carried !== null) { fs.rename(partials[3], names.carried); owned.push(names.carried); }
     if (journal !== null) { fs.rename(partials[0], names.journal); owned.push(names.journal); }
     if (checkpoint !== null) { fs.rename(partials[1], names.checkpoint); owned.push(names.checkpoint); }
     if (db !== null) fs.fsyncFile(names.db);
+    if (store !== null) fs.fsyncFile(names.store);
     fs.fsyncDir(dir);
     fs.fsyncDir(path.dirname(dir));
     const manifest = {
@@ -906,6 +924,8 @@ export function capture(opts) {
         ...(carried === null ? {} : { delegationCarried: memberOf(CARRIED_FILE, carried) }),
         delegationCheckpoint: memberOf(CHECKPOINT_FILE, checkpoint),
         coordDb: memberOf(DB_FILE, db),
+        // ADDITIVE: written only when the store's snapshot exists, so a backup of a box with no store stays readable by an older helper.
+        ...(store === null ? {} : { operatorModel: memberOf(OPERATOR_MODEL_FILE, store) }),
       },
       delegation: delegationOf(verdict, tailOmitted),
     };
@@ -917,7 +937,9 @@ export function capture(opts) {
 
 // ── Classify ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-const MEMBER_KEYS = { delegationJournal: JOURNAL_FILE, delegationCheckpoint: CHECKPOINT_FILE, coordDb: DB_FILE, delegationCarried: CARRIED_FILE };
+const MEMBER_KEYS = { delegationJournal: JOURNAL_FILE, delegationCheckpoint: CHECKPOINT_FILE, coordDb: DB_FILE, delegationCarried: CARRIED_FILE, operatorModel: OPERATOR_MODEL_FILE };
+/** The members a version-1 manifest may omit: absence is a fact of its own (an older capture, or no store on the box). */
+const OPTIONAL_MEMBERS = Object.freeze(['delegationCarried', 'operatorModel']);
 
 function readManifest(fs, p) {
   const bytes = fs.readFile(p);
@@ -933,8 +955,8 @@ function readManifest(fs, p) {
   if (m.format !== MANIFEST_FORMAT || m.version !== 1) refuse('manifest-invalid', 'the manifest is not a ccrc-coordination-snapshot version 1');
   if (typeof m.capturedAt !== 'string' || Number.isNaN(Date.parse(m.capturedAt))) refuse('manifest-invalid', 'capturedAt is not an instant');
   if (!isRecord(m.members)) refuse('manifest-invalid', 'members is not an object');
-  // ADDITIVE: old version-1 manifests omit carried evidence; the original three members remain required.
-  exactKeys2(m.members, Object.keys(MEMBER_KEYS).filter((key) => key !== 'delegationCarried' || Object.hasOwn(m.members, key)), 'members');
+  // ADDITIVE: old version-1 manifests omit carried evidence and the private store; the original three members remain required.
+  exactKeys2(m.members, Object.keys(MEMBER_KEYS).filter((key) => !OPTIONAL_MEMBERS.includes(key) || Object.hasOwn(m.members, key)), 'members');
   for (const [key, filename] of Object.entries(MEMBER_KEYS)) {
     if (!Object.hasOwn(m.members, key)) continue;
     const mem = m.members[key];
@@ -979,7 +1001,7 @@ function exactKeys2(o, keys, what, code = 'manifest-invalid') {
 }
 
 /** The members a v1 manifest can hold, in the order a record lists them (the manifest file itself follows them). */
-const THIN_MEMBERS = [['coordDb', DB_FILE], ['delegationJournal', JOURNAL_FILE], ['delegationCheckpoint', CHECKPOINT_FILE], ['delegationCarried', CARRIED_FILE]];
+const THIN_MEMBERS = [['coordDb', DB_FILE], ['delegationJournal', JOURNAL_FILE], ['delegationCheckpoint', CHECKPOINT_FILE], ['delegationCarried', CARRIED_FILE], ['operatorModel', OPERATOR_MODEL_FILE]];
 /** The order a thinning deletes its files in, and so the only order a record's `dropped` may list them in (D-6348): the manifest goes last.
  *  Derived from `THIN_MEMBERS`, so the two cannot disagree. */
 const DROP_ORDER = Object.freeze([...THIN_MEMBERS.map(([, f]) => f), MANIFEST_FILE]);
@@ -1021,7 +1043,7 @@ function readThinned(fs, p) {
   for (const d of t.dropped) {
     if (!isRecord(d)) bad('a dropped entry is not an object');
     exactKeys2(d, ['filename', 'bytes', 'sha256'], 'a dropped entry', 'thinned-invalid');
-    if (!SNAPSHOT_NAMES.includes(d.filename)) bad(`dropped names ${JSON.stringify(d.filename)}, which is not one of the five snapshot files`);
+    if (!SNAPSHOT_NAMES.includes(d.filename)) bad(`dropped names ${JSON.stringify(d.filename)}, which is not one of the six snapshot files`);
     if (seen.has(d.filename)) bad(`dropped names ${d.filename} twice`);
     seen.add(d.filename);
     const rank = DROP_ORDER.indexOf(d.filename);
@@ -1058,6 +1080,10 @@ function verifyV1(fs, from) {
     const state = inspectDb(path.join(from, DB_FILE));
     if (!state.ok) refuse('db-invalid', `coord.db ${state.why}`);
   }
+  if (manifest.members.operatorModel?.present) {
+    const state = inspectDb(path.join(from, OPERATOR_MODEL_FILE));
+    if (!state.ok) refuse('db-invalid', `${OPERATOR_MODEL_FILE} ${state.why}`);
+  }
   const cp = manifest.members.delegationCheckpoint.present ? fs.readFile(path.join(from, CHECKPOINT_FILE)) : null;
   const verdict = validateSidecars(fs, { checkpointBytes: cp, journalPath: path.join(from, JOURNAL_FILE) });
   if (verdict.journalPresent !== manifest.members.delegationJournal.present) refuse('member-undeclared', 'the journal member disagrees with the manifest');
@@ -1068,7 +1094,7 @@ function verifyV1(fs, from) {
 /**
  * Classifies a timestamp directory. `v1`: a valid manifest and everything it names. `legacy`: no manifest and no sidecars, a valid
  * coord.db with no `delegation_*` table. `none`: no coordination snapshot at all. `thinned`: a valid thinning record and none of the
- * five snapshot files, by design (D-6349). `invalid`: anything else that claims to be one. A PRESENT manifest that is invalid is
+ * six snapshot files, by design (D-6349). `invalid`: anything else that claims to be one. A PRESENT manifest that is invalid is
  * `invalid` and never falls back to the DB beside it. A thinning record is read FIRST: an unreadable one is `invalid`, one beside the
  * whole set it lists is a thinning that never started (the dir classifies as it would without it), one beside part of that set is
  * a thinning that did not finish (`invalid`).
@@ -1127,7 +1153,7 @@ function classifyBody({ from, fs }) {
       throw err;
     }
   }
-  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]) {
+  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE, OPERATOR_MODEL_FILE]) {
     if (fs.lstat(path.join(from, f)) !== null) return { kind: 'invalid', reason: `${f} is present without a manifest`, manifest: null };
   }
   const db = fs.lstat(path.join(from, DB_FILE));
@@ -1168,7 +1194,7 @@ function quickBody(fs, dir) {
     const any = Object.values(manifest.members).some((m) => m.present);
     return { word: any ? 'full' : 'none', source: 'v1', manifest, detail: any ? 'a manifest and every member it names, by presence and size' : 'a manifest that names no member' };
   }
-  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]) {
+  for (const f of [JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE, OPERATOR_MODEL_FILE]) {
     if (fs.lstat(path.join(dir, f)) !== null) return bad(`${f} is present without a manifest`);
   }
   const db = fs.lstat(path.join(dir, DB_FILE));
@@ -1187,7 +1213,7 @@ function quickBody(fs, dir) {
  * What a backup directory holds, by presence and size: no hashing, no `quick_check`, no journal read (D-6350). A manifest-less coord.db
  * is opened read-only for its header and table list (D-6364), outside the `fs` seam, as `classify`'s own legacy reading is.
  * `full` (a v1 manifest with a member, or a legacy coord.db; `source` says which), `none` (nothing to thin), `thinned` (a valid record and
- * none of the five names), `stale` (a record beside every name it lists), `interrupted` (a record beside some of them) and `damaged`.
+ * none of the six names), `stale` (a record beside every name it lists), `interrupted` (a record beside some of them) and `damaged`.
  * A record that cannot be read is `damaged` with the `error` that said so, which a walk refuses the dir with. `record` rides the three record words.
  * @returns {{word: 'full' | 'none' | 'thinned' | 'interrupted' | 'stale' | 'damaged', source?: 'v1' | 'legacy', manifest?: object, record?: object, error?: Error, detail: string}}
  */
@@ -1522,6 +1548,10 @@ export function probeService(env = process.env) {
 const stageOf = (ccrcDir) => path.join(ccrcDir, RESTORE_STAGE_DIR);
 const markerOf = (ccrcDir) => path.join(ccrcDir, RESTORE_MARKER_FILE);
 
+/** Names a marker's `old` may lack: an older marker did not stage carried evidence, and a marker of a restore whose manifest has no
+ *  `operatorModel` key never names the store (the absent-member rule), so `recover` of either still reads it. */
+const OPTIONAL_OLD = Object.freeze([CARRIED_FILE, ...STORE_NAMES]);
+
 function readMarker(fs, ccrcDir) {
   const bytes = fs.readFile(markerOf(ccrcDir));
   if (bytes === null) return null;
@@ -1533,7 +1563,7 @@ function readMarker(fs, ccrcDir) {
     if (canonicalJson(m) !== text.slice(0, -1)) throw new Error('noncanonical');
   } catch { return refuse('marker-invalid', 'the restore marker cannot be read; nothing can say which set is live', { exit: 2 }); }
   if (!isRecord(m) || m.format !== MARKER_FORMAT || m.version !== 1 || (m.state !== 'replacing' && m.state !== 'committed')
-      || !isRecord(m.old) || !RESTORE_SET.every((n) => (n === CARRIED_FILE && !Object.hasOwn(m.old, n)) || typeof m.old[n] === 'boolean') || !isRecord(m.placed) || typeof m.id !== 'string' || !/^[0-9a-f]{16}$/.test(m.id)) {
+      || !isRecord(m.old) || !RESTORE_SET.every((n) => (OPTIONAL_OLD.includes(n) && !Object.hasOwn(m.old, n)) || typeof m.old[n] === 'boolean') || !isRecord(m.placed) || typeof m.id !== 'string' || !/^[0-9a-f]{16}$/.test(m.id)) {
     refuse('marker-invalid', 'the restore marker is not a version-1 marker', { exit: 2 });
   }
   return m;
@@ -1543,13 +1573,18 @@ function writeMarker(fs, ccrcDir, marker) {
   writeAtomic(fs, markerOf(ccrcDir), asBytes(`${canonicalJson(marker)}\n`));
 }
 
-/** Preserves carried bytes omitted by a committed restore, then removes its stage and marker. Idempotent, including after the rename. */
+/** The old names a committed restore moves to quarantine, never deletes, when it placed no replacement: carried evidence, and the private
+ *  store's three names when the manifest said `present: false` (the absent-member rule). */
+const keptAsideOf = (marker) => [...(marker.placed[CARRIED_FILE] === undefined ? [CARRIED_FILE] : []),
+  ...(marker.placed[OPERATOR_MODEL_FILE] === undefined ? STORE_NAMES : [])].filter((n) => marker.old[n] === true);
+
+/** Preserves carried bytes and a store omitted by a committed restore, then removes its stage and marker. Idempotent, including after the rename. */
 function finalizeRestore(fs, ccrcDir, marker = null) {
   const stage = stageOf(ccrcDir);
-  if (marker?.state === 'committed' && marker.old[CARRIED_FILE] && marker.placed[CARRIED_FILE] === undefined) {
+  const kept = marker?.state === 'committed' ? keptAsideOf(marker) : [];
+  if (kept.length > 0) {
     const oldDir = path.join(stage, 'old');
-    const aside = path.join(oldDir, CARRIED_FILE);
-    if (fs.lstat(aside) !== null) quarantine(fs, ccrcDir, marker.id, CARRIED_FILE, aside);
+    for (const name of kept) if (fs.lstat(path.join(oldDir, name)) !== null) quarantine(fs, ccrcDir, marker.id, name, path.join(oldDir, name));
     // A previous pass may have renamed it and died before either directory was synced.
     const foreign = path.join(foreignRootOf(ccrcDir), marker.id);
     if (fs.lstat(foreign) !== null) {
@@ -1603,10 +1638,10 @@ function quarantine(fs, ccrcDir, id, name, source = path.join(ccrcDir, name)) {
 }
 
 /** The order a rollback puts the asides back in: the database BEFORE its WAL and SHM (8B N9), then the delegation pair. */
-const PUT_BACK_ORDER = Object.freeze([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]);
+const PUT_BACK_ORDER = Object.freeze([DB_FILE, `${DB_FILE}-wal`, `${DB_FILE}-shm`, OPERATOR_MODEL_FILE, `${OPERATOR_MODEL_FILE}-wal`, `${OPERATOR_MODEL_FILE}-shm`, JOURNAL_FILE, CHECKPOINT_FILE, CARRIED_FILE]);
 
 /**
- * Puts the OLD set back from what the marker recorded, so that afterwards the five members are exactly the old set: whole, never mixed
+ * Puts the OLD set back from what the marker recorded, so that afterwards the members are exactly the old set: whole, never mixed
  * (a SQLite database is never left beside a WAL that belongs to another one). Safe to run again from any point. TWO PASSES (8B N9):
  *   1. CLEAR every member path that is to be put back or that the restore placed: a live file is DELETED only when it is provably the
  *      member this restore placed (the marker holds each placed member's size and SHA-256); any other file there, one that is neither
@@ -1686,8 +1721,11 @@ export function restore(opts) {
   const oldDir = path.join(stage, 'old');
   const wanted = {};          // member filename -> manifest member, for those the snapshot has
   for (const [key, filename] of Object.entries(MEMBER_KEYS)) if (manifest.members[key]?.present) wanted[filename] = manifest.members[key];
+  // THE ABSENT-MEMBER RULE: a manifest with no `operatorModel` key (written before the store, or on a box without one) has no authority
+  // over the live store, so this restore neither stages nor removes its three names; an explicit `present: false` quarantines them.
+  const set = Object.hasOwn(manifest.members, 'operatorModel') ? RESTORE_SET : RESTORE_SET.filter((n) => !STORE_NAMES.includes(n));
   const old = {};
-  for (const name of RESTORE_SET) old[name] = fs.lstat(path.join(ccrcDir, name)) !== null;
+  for (const name of set) old[name] = fs.lstat(path.join(ccrcDir, name)) !== null;
   const restoreId = randomBytes(8).toString('hex');   // names this restore's quarantine directory; recorded in the FIRST marker write
   let published = false;
   let moved = false;     // set immediately before the first live member is renamed into the stage
@@ -1727,7 +1765,7 @@ export function restore(opts) {
     // about to be set aside. Not inactive: the catch below rolls back (nothing has moved yet), clears the marker and re-throws this.
     requireInactive(probe);
     // 6. Set the old files aside, then place the new ones.
-    for (const name of RESTORE_SET) {
+    for (const name of set) {
       if (old[name]) {
         moved = true;
         fs.rename(path.join(ccrcDir, name), path.join(oldDir, name));
@@ -1735,12 +1773,12 @@ export function restore(opts) {
     }
     fs.fsyncDir(oldDir);
     fs.fsyncDir(ccrcDir);
-    for (const name of RESTORE_SET) {
+    for (const name of set) {
       if (wanted[name] !== undefined) fs.rename(path.join(newDir, name), path.join(ccrcDir, name));
     }
     fs.fsyncDir(ccrcDir);
-    // 7. Verify the placed set against the manifest: the five members, and the WAL/SHM absent.
-    for (const name of RESTORE_SET) {
+    // 7. Verify the placed set against the manifest: its members, and the WAL/SHM absent.
+    for (const name of set) {
       const st = fs.lstat(path.join(ccrcDir, name));
       const mem = wanted[name];
       if (mem === undefined) {
@@ -1781,7 +1819,7 @@ export function restore(opts) {
   }
   // 9. Clean up. A failure here leaves a committed marker that `recover` finalizes.
   finalizeRestore(fs, ccrcDir, readMarker(fs, ccrcDir));
-  return { restored: Object.keys(wanted), removed: RESTORE_SET.filter((n) => old[n] && wanted[n] === undefined) };
+  return { restored: Object.keys(wanted), removed: set.filter((n) => old[n] && wanted[n] === undefined) };
 }
 
 /** A restore that failed before it published its marker never touched the live set: remove its stage. */

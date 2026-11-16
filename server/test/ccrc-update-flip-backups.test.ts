@@ -1507,7 +1507,7 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     // Afterwards: the manifest, the checkpoint sidecar, and a snapshot that validates.
     expect(readdirSync(dir)).toEqual(expect.arrayContaining([...present, 'coordination-snapshot.json', 'delegation-checkpoint.json']));
     expect(helper(home, ['classify', '--from', dir])).toMatchObject({ code: 0, stdout: 'v1\n' });
-    expect(r.stdout).toMatch(/\(coord\.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed\)/);
+    expect(r.stdout).toMatch(/\(coord\.db snapshot, the private store's snapshot when it exists, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed\)/);
     expect(JSON.parse(readFileSync(manifestOf(dir), 'utf8'))).toMatchObject({
       members: { delegationCheckpoint: { present: true }, delegationJournal: { present: false }, coordDb: { present: true } },
       delegation: { state: 'initialized', checkpointRevision: 1 },
@@ -3770,6 +3770,54 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     } finally {
       if (holder.pid !== undefined) killGroup(holder.pid);   // the group this test itself started
     }
+  });
+
+  // Overlord W1 private store A (plan w1-private-store.md, Task 4): the private store rides the same backup, at 0600, in a
+  // 0700 directory, named by the manifest only when it exists.
+  const plantStore = (home: string, marker: number): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const db = new DatabaseSync(join(home, '.ccrc', 'operator-model.db'));
+    db.exec(`CREATE TABLE operator_messages (id INTEGER PRIMARY KEY, text TEXT); INSERT INTO operator_messages VALUES (1, 'row ${marker}');`);
+    db.close();
+  };
+  it('private store A: ccrc backup snapshots operator-model.db beside coord.db, 0600 in a 0700 directory, rows equal, named by the manifest', () => {
+    const home = freshUpdateBox('ccrc-fx-store-backup-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    plantStore(home, 7);
+    const r = runBackup(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = ownDir(r);
+    expect(statSync(dir).mode & 0o777).toBe(0o700);
+    expect(statSync(join(dir, 'operator-model.db')).mode & 0o777).toBe(0o600);
+    expect(statSync(join(dir, 'coord.db')).mode & 0o777).toBe(0o600);
+    const copy = new DatabaseSync(join(dir, 'operator-model.db'), { readOnly: true });
+    expect(copy.prepare('SELECT id, text FROM operator_messages').all()).toEqual([{ id: 1, text: 'row 7' }]);
+    copy.close();
+    const manifest = JSON.parse(readFileSync(manifestOf(dir), 'utf8'));
+    expect(manifest.members.operatorModel).toMatchObject({ filename: 'operator-model.db', present: true });
+    expect(helper(home, ['classify', '--from', dir])).toMatchObject({ code: 0, stdout: 'v1\n' });
+    expect(readdirSync(dir)).not.toContain('privacy-journal.log');
+  });
+  it('private store A: with no store, the backup succeeds and its manifest has no operatorModel key', () => {
+    const home = freshUpdateBox('ccrc-fx-store-none-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    const r = runBackup(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = ownDir(r);
+    expect(JSON.parse(readFileSync(manifestOf(dir), 'utf8')).members).not.toHaveProperty('operatorModel');
+    expect(existsSync(join(dir, 'operator-model.db'))).toBe(false);
+  });
+  it('private store A: a store that fails its snapshot stops the backup with its own sentence', () => {
+    const home = freshUpdateBox('ccrc-fx-store-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'operator-model.db'), 'this is not a database');
+    const r = runBackup(home);
+    expect(r.code).not.toBe(0);
+    expect(`${r.stdout}${r.stderr}`).toContain('the private store (operator-model.db) snapshot failed');
   });
 });
 
