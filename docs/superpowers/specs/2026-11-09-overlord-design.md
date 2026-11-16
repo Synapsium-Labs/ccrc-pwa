@@ -3075,7 +3075,7 @@ each is defined once, where the table says. A part from a later wave is not draw
 - **Waiting on you stays where it is.** It shows what the Overlord escalated, and what reached the operator without a
   hold (§6.7). Each escalated item carries its brief (§6.6) and the reason it was raised, such as "O3: this changes
   the definition of done". Each question the operator was shown carries two boxes, "The Overlord could answer
-  this" and "I'm not sure of my answer", the answer marks (§9.2.1).
+  this" and "I'm not sure of my answer", the answer marks, and each task one, "The Overlord could handle this" (§9.2.1).
 - **Nothing held is hidden.** Rows held for the Overlord sit on Waiting on you in one collapsed group, "Held for the
   Overlord (n), until hh:mm". A hold delays the push, never the row (§6.7).
 - **Pause sits on the Overlord place.** What it does, and why it needs no step-up, is in §7.5.
@@ -5864,25 +5864,28 @@ one word for one thing.
 - **A detail needs no grant.** It reaches acting through its cell's record and the operator's arming of its kind (H44,
   §7.5). Grants stay for the operator-only classes, so "details first" never names a grant scope.
 
-- **C70. Two boxes on each question the operator was shown.** Waiting on you draws two boxes on each row it lists, and
-  on an item's own page: "The Overlord could answer this" (`could-answer`) and "I'm not sure of my answer" (`unsure`).
-  The first time a box is used on a device, one line explains both: they tell the Overlord which questions the
-  operator would hand over and which answers are no yardstick, and they give it no authority.
+- **C70. Two boxes on each question the operator was shown, and one on each task.** Waiting on you draws two boxes on
+  each question it lists, and on a question's own page: "The Overlord could answer this" (`could-answer`) and "I'm not
+  sure of my answer" (`unsure`). On a task (a `do` item) it draws the first alone, worded for a task: "The Overlord could
+  handle this", still `could-answer`. The first time a box is used on a device, one line explains them: they tell the
+  Overlord which questions and tasks the operator would hand over and which answers are no yardstick, and they give it
+  no authority.
   - **Two marks, not one three-way choice.** They are independent facts with different readers. An operator can be
     sure of an answer and still hand the question over, or unsure and still keep it. A three-way choice would make
     them pick one.
   - **Which rows.** A `decide` or `value` item the operator has been shown, while it is open or in Recently cleared
-    (`CLEARED_WINDOW_MS`, 48 hours). An ask that reached the operator: released or declined to them, or answered by
+    (`CLEARED_WINDOW_MS`, 48 hours), carries both boxes. A `do` item carries `could-answer` alone, under the same hold
+    rule, open states and window (the operator's direction of 2026-11-16, #2900): handing a task over is the same signal
+    as handing a question over. It carries no `unsure`, because a task has no answer that could serve as a yardstick. An ask that reached the operator: released or declined to them, or answered by
     them (`answeredBy` the operator's principal). An ask that reached them stays theirs whoever answers it later: a
     released ask may still be taken into `answering`, answered late by its parent, or go `stale` with its dialog, and
     its reach stamp (`reachedOperatorAt`, written once when it reached them) says so. It is listed while it is live, or
     within 48 hours of its release, of its answer or of the time it went stale. Live means its child's newest hook state is waiting on that ask's own `askKey`, read through the live-ask port the
     portfolio already uses, and an unmeasured live read counts as not live. A live ask's boxes sit on its child's
     question row, and every other listed ask is a row of Recently cleared (the delegation marks plan, question 3, and its
-    answer marks B notes). So a mark can be set before the answer or after it. A `do` item records the
-    operator's own act and a `secret` item is never seen by a session (Table 6.1a), so neither carries a box. Neither
-    does a root session's own ask or a permission prompt, which have no row for a mark to name ("Where things stand",
-    Later).
+    answer marks B notes). So a mark can be set before the answer or after it. A `secret` item is never seen by a
+    session (Table 6.1a), so it carries no box. Neither does a root session's own ask or a permission prompt, which
+    have no row for a mark to name ("Where things stand", Later).
   - **One value a mark, reversible at any time.** A tick or an untick writes one record, with its time and actor, and
     the newest record stands. A write equal to the standing value records nothing.
   - **An unticked box is no label.** A row never marked and a row whose mark was withdrawn are told apart. Neither one
@@ -5912,6 +5915,9 @@ one word for one thing.
     (Table 6.9c), the Overlord says so with a link that opens the profile in Settings (§9.3). The operator's own tap
     there changes it. A mark never changes a cell's rule or bound, and never sets the profile.
   - **A grant proposal**, which shows the marks in its effect and scope beside its evidence (§7.2).
+  - **A mark on a task is an act the operator would hand over.** It feeds the same three readers as a mark on a
+    question, grouped by the task's kind and programme. It is never an arming: the Overlord acts on a task only once
+    the operator has armed that kind of act (§7.5), and a mark neither arms one nor stands in for the operator's tap.
 - **What `unsure` changes: an unsure answer is no yardstick.** The operator's answer is the reference for agreement in
   this design: the gates of §9.5, the evidence of a grant (§7.2), a cell's record (§6.3, H43) and M1 (§12). An answer
   the operator marked unsure is not. It is neither a hit nor a miss in any record of agreement, it is never an agreeing
@@ -5960,7 +5966,8 @@ one word for one thing.
   them, as every operator door is then (Table 11.6, `auth-off`; the delegation marks plan,
   `coordinator-read-carries-no-marks`).
 - **Refusals.** A mark on a row that carries no box, or that is not on the operator's list, is refused
-  `not-markable` (409), and its detail says which: `no-box` (the item is not a `decide` or `value` item), `not-shown`
+  `not-markable` (409), and its detail says which: `no-box` (the item carries no box for that mark: a `secret` item,
+  or `unsure` on a `do` item), `not-shown`
   (never shown to the operator, held, or settled inside its hold), `past-window` (cleared past the window) or
   `not-listed` (any other state). An absent item is `unknown-item` and an absent ask `unknown-ask`, both 404. The
   pull request that builds the door adds `not-markable` to Table 11.6 (the delegation marks plan, question 13).
@@ -7429,7 +7436,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `timer-not-yours` | The timer cancel doors | The timer belongs to another identity: at the setter's cancel, another identity's; at the operator's, another session's than the path names, or, for a role timer, a designation that is not `designated` with the path's session. At the setter's cancel an id that names no row answers the same word, so the door is no oracle for which ids exist | C61 |
 | `timer-not-found` | The operator's timer cancel door | The id names no timer, answered 404. The signed-in operator may know which ids exist, so only the operator's cancel answers it | C61 |
 | `timer-not-pending` | The timer cancel doors | The timer has already fired or been cancelled | C61 |
-| `not-markable` | The answer-mark door | The row carries no box, or is not on the operator's list: past the Recently cleared window, or in no list's state. The detail names which. A row the operator was never shown is `unknown-item`, as at the item read, or `unknown-ask` for an ask that never reached the operator | C70 |
+| `not-markable` | The answer-mark door | The row carries no box for that mark (a `secret` item, or `unsure` on a `do` item, which carries `could-answer` alone), or is not on the operator's list: past the Recently cleared window, or in no list's state. The detail names which (`no-box` for the first). A row the operator was never shown is `unknown-item`, as at the item read, or `unknown-ask` for an ask that never reached the operator | C70 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |
 | `server-gap` | A hold's release reason | The deadline passed while the server was down | H18, H32 |
 | `released:<cause>` | A hold's release reason | A cause of Table 6.7c other than a readiness word let a standing hold go: `rung`, `disarmed`, `engagement`, `class-raised`, `grant-ended`, `bypassed` or `deaf` | H18, H39 |
@@ -7642,7 +7649,7 @@ the hardening calls that changed a call from its rev 8 form. §13.1 lists every 
 | C67 | How delivery, shows and opens are measured | assume them, build them | Built in W1, and `unmeasured` until built. Today the push path returns no verdict, a push lives ten minutes and may never reach an offline device, and a tap carries nothing that names the push. W1 writes the response row `pending` before each send, with a random push id stored on the outbox row so a resend keeps it; a per-send verdict from `PushService` names the subscriptions that accepted. Response receipts: the service worker reports `shown` when it shows a push, and at a tap issues `opened` first without awaiting it before the open; the console reports `opened` for the messages it shows; one session-gated door writes `response_receipts`, ignoring a receipt for a subscription outside the accepted set or from the wrong source. A push is `not-opened` only on a `shown` receipt from every accepted subscription and no `opened`; a missing receipt, an older worker, a push replaced by a later one with its tag, or a change of the server's build or restore generation inside the window reads `unmeasured`. An `opened` lost after a `shown` is a known undercount | Approved | R20 |
 | C68 | How the budget uses the figures | not at all, a weight on each push, a state per class | A state per class, `quiet` or `interrupting`, and a pin, in `response_classes`. A class is one of H35's kinds of push that a state can change: escalation, released hold, brief. A batch push is no class: it always waits for a briefing time, and each push it carries counts for its own class, so a quiet class is still measured. New classes start quiet, a Setting on by default and read as on when unreadable: a quiet class waits for the briefing time, never past its urgency's deferral limit. The operator's "Let it interrupt" or "Keep it quiet" pins the class until the operator changes it again (the coordinator's ruling). The acted share counts every delivered row with a verdict, less those settled elsewhere, not actionable, or unread, because acts need no receipts (the coordinator's ruling). The server may only move an unpinned interrupting class to quiet, under 20% acted over 30 measured messages; at the defaults no class is unpinned and interrupting, so it acts only once "start quiet" is off or a class is released with "Let the figures decide". It proposes "let it interrupt" when half of a quiet class's messages were acted on, withheld while more than half of the rows not acted on are unmeasured, and only the operator decides. Evidence counts only messages admitted after the class's last change of state, a carried push by the time it was deferred. Only the pushes the budget rules on are affected, so I9 holds. Shadow first, with the budget. Not a feed of the operator model. Narrowing alone follows ruling 4's direction by the author's analogy, not by the operator's words | Approved | R20, H35, H37 |
 | C69 | Where the operator sees it, and corrects it | Settings only, the Week page and Settings | The figures per class on the Week page, split by delivery at once or in a batch, with the pushes outside the classes and digest corrections shown apart. In Settings, each class's state and pin with "Let it interrupt", "Keep it quiet" and "Let the figures decide". "I handled this elsewhere" on any measured message, kept in a column of its own and read ahead of the lane's seal. None needs the step-up | Approved | R20, H36 |
-| C70 | What the operator's ticks on Waiting on you are | a grant in waiting, a blind answer, one three-way choice, two stated facts | Two stated facts, the answer marks "could answer this" and "not sure of my answer": independent, each one reversible value a row with every change kept, on `decide` and `value` items and asks the operator was shown, open or recently cleared. They grant nothing and count in no bound, cell or grant's evidence. `could-answer` feeds the operator model through S1, decides which kinds are briefed first, and sits beside a grant proposal's evidence. An answer marked `unsure` is no yardstick: never a hit, a miss or an agreeing blind answer. One append-only table that copies no fact from the row it names, written by one session-gated operator door that confers nothing (§9.2.1). The proposal on tech detail is apart, in §9.5.1 | Proposed with R21 | H40, H43, H44 |
+| C70 | What the operator's ticks on Waiting on you are | a grant in waiting, a blind answer, one three-way choice, two stated facts | Two stated facts, the answer marks "could answer this" and "not sure of my answer": independent, each one reversible value a row with every change kept, on `decide` and `value` items and asks the operator was shown, open or recently cleared, and the first alone ("could handle this") on `do` items, under the same rule (#2900). They grant nothing and count in no bound, cell or grant's evidence. `could-answer` feeds the operator model through S1, decides which kinds are briefed first, and sits beside a grant proposal's evidence. An answer marked `unsure` is no yardstick: never a hit, a miss or an agreeing blind answer. One append-only table that copies no fact from the row it names, written by one session-gated operator door that confers nothing (§9.2.1). The proposal on tech detail is apart, in §9.5.1 | Proposed with R21 | H40, H43, H44 |
 
 *Table 13a. The author's calls in their final form, and the hardening calls that shaped each one.*
 
