@@ -503,7 +503,11 @@ export class PlanSync {
       const verdict = typeof held === 'object' ? held.verdict : held;
       if (verdict === 'defer') return 'defer';
       if (verdict === 'next') return 'next';
-      if (verdict === 'same') { this.bind(b, b.linearId, b.identifier, step.fingerprint, step.teamKey); this.attempts.delete(slug); return 'next'; }
+      // A10 (§5.5): the read's identifier is the issue's now (a move whose reply was lost has a new one).
+      if (verdict === 'same') {
+        this.bind(b, b.linearId, typeof held === 'object' && held.identifier !== null ? held.identifier : b.identifier, step.fingerprint, step.teamKey);
+        this.attempts.delete(slug); return 'next';
+      }
       send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
@@ -546,13 +550,16 @@ export class PlanSync {
    *  `issueReadVerdict` what to send (`same`: the fingerprint only; `state-held`: the update without its state; `send`: as
    *  planned, a move's state with it); a read that cannot tell (`not-found`) sends the update as planned and lets its own
    *  answer rule. */
-  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | { verdict: 'send' | 'state-held' | 'same'; team: string | null }> {
+  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | { verdict: 'send' | 'state-held' | 'same'; team: string | null; identifier: string | null }> {
     if (step.op !== 'issueUpdate') return 'send';
     if (this.deps.now() >= deadlineAt) return 'defer';
     const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id: b.linearId! }));
     if (!out.ok) return out.word === 'not-found' ? 'send' : (this.onFailure(out, s) === 'defer' ? 'defer' : 'next');
-    const issue = out.value['issue'] as IssueRead;
-    return { verdict: issueReadVerdict(issue, step), team: typeof issue.teamKey === 'string' ? issue.teamKey : null };
+    const issue = out.value['issue'] as IssueRead & { identifier?: unknown };
+    return {
+      verdict: issueReadVerdict(issue, step), team: typeof issue.teamKey === 'string' ? issue.teamKey : null,
+      identifier: typeof issue.identifier === 'string' ? issue.identifier : null,
+    };
   }
 
   /** C2': a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds and adopt

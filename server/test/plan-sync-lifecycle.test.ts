@@ -832,6 +832,22 @@ describe('final-review fixes: a team move (D-8182)', () => {
     expect(upd.fields).toContain('state');
   });
 
+  it('A10: a team move whose reply was lost: the next read finds the issue moved, and binds its new identifier (§5.5)', async () => {
+    const { r, t2Binding } = await moving();
+    const created = r.asks.filter((a) => a.op === 'issueCreate').find((a) => a.input['title'] === 'Ticket t2')!.input as Record<string, unknown>;
+    r.respond.current = (ask) => (ask.op === 'issueUpdate' ? { ok: false, word: 'timeout', maybeSent: true } : read('AAA')(ask) ?? defaultRespond(ask));
+    due(r); await tick(r);                                              // the move is sent; its reply is lost
+    expect(r.asks.filter((a) => a.op === 'issueUpdate')).toHaveLength(1);
+    r.respond.current = (ask) => (ask.op === 'issueOwned'
+      ? ok({ issue: { id: ask.input['id'], identifier: 'CCC-9', stateType: 'unstarted', teamKey: 'CCC', title: created['title'], description: created['description'],
+        projectId: created['projectId'], milestoneId: null } })
+      : defaultRespond(ask));
+    r.t.now += 31_000;
+    await tick(r);
+    expect(r.asks.filter((a) => a.op === 'issueUpdate')).toHaveLength(1);          // `same`: nothing more is sent
+    expect(t2Binding()).toMatchObject({ state: 'bound', identifier: 'CCC-9', teamKey: 'CCC' });
+  });
+
   it('I-2 (C17): a refused team move, requeued, sends one issueUpdate with the move and no create', async () => {
     const { r, t2Binding, linearId } = await moving();
     r.respond.current = (ask) => read('AAA')(ask) ?? (ask.op === 'issueUpdate' ? { ok: false, word: 'policy-denied', maybeSent: false } : defaultRespond(ask));
