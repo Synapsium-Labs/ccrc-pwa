@@ -3868,6 +3868,44 @@ recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced 
 `deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
 **Rollback.** A plain revert; nothing ships.
 
+### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
+
+**Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
+(15 columns), is drawn once per ROW SEGMENT of a key, so the head of a key a program broke across rows, a whole short
+shape key or a short tail followed by text could run past the right edge, and every later redraw landed a row off,
+over tmux's status row too. Each claim below is labelled measured or inferred in `c39.md`, with the measurements, the
+options and the screenshots.
+
+**What was done.**
+- **Measured** (a real tmux at the drawer's 220 x 51 and a deterministic sweep over every start column, on headless
+  xterm, synthetic keys). Other rows move exactly when a mark is wider than the text it replaces and the excess reaches
+  the row's last column: a head under 15 columns starting at columns 207 to 220 (14 of 44 placements), a short tail
+  whose row's text is pushed past the edge, a whole 11-character `sk-` key ending at columns 217 to 220. Up to 48 of 51
+  rows differ on the pane's last rows, and tmux's relative move down writes over the status row. A key on one row
+  never moves another row (0 of 316 placements at each of three rows). C36's departure note is corrected in `c39.md`.
+- **Ruled.** No mark keeps the row's width without showing the key's length, so the options went to the coordinator
+  before any build: A (exact width) shows the length, B (never wider than 15) shows a short segment's width, G (the
+  label at 15 columns or wider, else one column) shows one bit per segment; all three were declined for that reason.
+  C, a constant one-column mark, shows nothing beyond today's constant mark and was ruled.
+- **The change.** The drawer draws `DRAWER_SECRET_MASK` (U+2327 `⌧`, East Asian Width Neutral, one column in xterm's
+  width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
+  parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
+  unchanged. No `ccd`, tmux window size or PWA change.
+- **Tests.** Six cases in `drawer-mask-screen.test.ts`, red on `main` (heads at 207 to 220 at the edge and 7 columns
+  before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
+  ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
+  by digest from `main`). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
+
+- **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
+  (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
+  never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its six C39 cases are red on `main`'s masker;
+`secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
+fixture.
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
