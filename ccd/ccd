@@ -21902,6 +21902,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
       || echo "$(date '+%F %T') pin-hold $id: pinned to $wrapper by hand; the return-home/ceiling arm stands down (a limit still evacuates)" >> "$REG/swap.log"
     return 0
   fi
+  # THE ORDERED LIST STANDS THE ARM DOWN (the Overlord's W1, spec §3.4 C57; ccd arms question 2): a row whose route carries
+  # `acctorder` is placed by the renewal's pick from that list, never relocated between renewals. `-e || -L`: an entry that
+  # cannot be read stands it down too. The rescue above is untouched, so a limit still evacuates the row.
+  [[ -e "$REG/$id.acctorder" || -L "$REG/$id.acctorder" ]] && { _standdown_note "$id" ordered-list; return 0; }
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && { _standdown_note "$id" hold; return 0; }   # D-6180: a move ccd wanted, held

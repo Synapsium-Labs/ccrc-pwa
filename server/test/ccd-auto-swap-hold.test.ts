@@ -21,6 +21,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
@@ -125,13 +126,48 @@ describe('_auto_swap_check and a held workspace', () => {
   });
 });
 
-// THE ORDERED LIST'S STAND-DOWN (Overlord W1 ccd arms, Task 5; spec §3.4 C57, question 2). Step 1's characterization: on
-// `main` before the stand-down, a row whose route carries `acctorder` is moved by the affinity arm like any other.
+// THE ORDERED LIST'S STAND-DOWN (Overlord W1 ccd arms, Task 5; spec §3.4 C57, question 2, slug
+// affinity-stands-down-on-the-ordered-list). A row whose route carries `acctorder` is placed by the renewal's pick from
+// that list, so the affinity arm stands down for it, right after the manual-swap pin; an entry that cannot be read stands
+// it down too, and the rescue above it still evacuates a hard-blocked row. On `main` before the arm such a row was moved
+// like any other (Step 1's characterization, now flipped).
 describe('_auto_swap_check and a row with an ordered account list', () => {
   const order = (v = 'claude,claude9'): void => { fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.acctorder`), v); };
-  it('characterization: an acctorder row with a target that has room is moved at a clean boundary', () => {
+  const standdowns = (): string[] => {
+    const f = path.join(h.home, '.cc-sessions', 'swap.log');
+    return (fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '').split('\n').filter((l) => l.includes(`stand-down ${ID}: ordered-list`));
+  };
+
+  it('an acctorder row stands down: no move, one stand-down line per episode across two ticks', () => {
     seed(); idleStatus(); order();
     h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
+    h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
+    expect(h.calls().join('\n')).not.toContain('dispatch');
+    expect(standdowns()).toHaveLength(1);
+    expect(h.reg(ID, 'lastswap'), 'a stood-down tick stamps nothing').toBeNull();
+  });
+
+  it.each([
+    ['a FIFO', () => { execFileSync('mkfifo', [path.join(h.home, '.cc-sessions', `${ID}.acctorder`)]); }],
+    ['a dangling link', () => { fs.symlinkSync(path.join(h.home, 'nowhere'), path.join(h.home, '.cc-sessions', `${ID}.acctorder`)); }],
+    ['a directory', () => { fs.mkdirSync(path.join(h.home, '.cc-sessions', `${ID}.acctorder`)); }],
+  ])('an acctorder entry that cannot be read (%s) stands it down too', (_what, set) => {
+    seed(); idleStatus(); set();
+    h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
+    expect(h.calls().join('\n')).not.toContain('dispatch');
+    expect(standdowns()).toHaveLength(1);
+  });
+
+  it('a hard-blocked acctorder row is still rescued: the rescue sits above the stand-down', () => {
+    seed(); order();
+    h.sh(`${RESCUE_STUBS} _auto_swap_check ${ID}`);
     expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
+  });
+
+  it('control: the same fixture without acctorder moves', () => {
+    seed(); idleStatus();
+    h.sh(`${AFFINITY_STUBS} _auto_swap_check ${ID}`);
+    expect(h.calls().join('\n')).toContain(`dispatch ${ID} -> claude9`);
+    expect(standdowns()).toEqual([]);
   });
 });
