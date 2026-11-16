@@ -2265,7 +2265,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
   registerFaceRoutes(app, { coord: deps.coord });
-  registerResponseRoutes(app, { coord: deps.coord, time: deps.time });
+  registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off') });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };

@@ -22,12 +22,16 @@ export interface ContinuityRecord {
 export interface RosterFactsWire {
   readonly fableBilling?: FableBilling;
   readonly continuity?: ContinuityRecord;
+  /** The organization label (plan 2026-11-16-account-organization.md), absent when unset. */
+  readonly org?: string;
 }
 
 /** The door's body: a change to either fact. */
 export interface RosterFactsChange {
   readonly fableBilling?: FableBilling;
   readonly continuity?: 'on' | 'off';
+  /** A label, or `none` to clear it. A preference only: it widens nothing, so it never counts below. */
+  readonly org?: string;
 }
 
 /**
@@ -43,8 +47,10 @@ export function factsChangeWidens(c: RosterFactsChange): boolean {
 export function rosterFactsWireOf(a: {
   readonly fableBilling: FableBilling | null;
   readonly continuity: ContinuityRecord | null;
+  readonly org: string | null;
 }): RosterFactsWire {
   return {
+    ...(a.org !== null ? { org: a.org } : {}),
     ...(a.fableBilling !== null ? { fableBilling: a.fableBilling } : {}),
     ...(a.continuity !== null ? { continuity: { recordedAt: a.continuity.recordedAt } } : {}),
   };

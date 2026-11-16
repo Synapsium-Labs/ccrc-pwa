@@ -46,6 +46,8 @@ describe('README: the roster mirror table', () => {
       '`exec.bridge`', '`exec.upstream`',
       // Overlord W1 serviceability, Task 1: the two account facts.
       '`fableBilling`', '`continuity`',
+      // Account organization, Task A1: the organization label.
+      '`org`',
     ]);
   });
 

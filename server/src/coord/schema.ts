@@ -3402,7 +3402,23 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN ratifiedActor TEXT;               -- the operator's ratify: the gate's actor; else NULL
   ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT; -- the operator's ratify: the gate's actor; else NULL
   `,
+
   // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
+  // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
+  // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
+  // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE response_settings (id INTEGER PRIMARY KEY CHECK (id = 1), retentionDays INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL);
+  INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
+  `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
   // The decision-model records and day counts (Overlord spec §3.7 H6, Table 11.1a; W2, plan `w2-decision-model.md` Task 4):
   // `decision_records`, one answer per key ("never asked twice"; the key holds the host kind and origin and the line the row
   // was gathered under, review 2262 F20), refs and non-private inline fields only, never an operator message's text
@@ -3410,8 +3426,7 @@ export const MIGRATIONS: readonly string[] = [
   // in flight, and M19's time unavailable. Writers in `decisionModelStore.ts` alone: `recordDecision`, and
   // `reserveDecisionCalls` and `settleDecisionCalls` (the anchor columns are PR B's `recordAnchorRun`). NEW TABLES, nothing
   // on an existing table: an older build ignores them (Table 11.1a). Nothing reads or writes them until PR B wires the caller.
-  // The slot is positional: portfolio B took 83, so this is 84 (the coordinator's word, 2026-11-16, mail 21993); other open
-  // pull requests also hold 84, and whoever lands second renumbers at landing, on the coordinator's word.
+  // The slot is positional: responses B (#2914) took 84, so this is 85 (the coordinator's word, 2026-11-16, mail 22094).
   `
   CREATE TABLE decision_records (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, modelId TEXT NOT NULL,
     hostKind TEXT NOT NULL, origin TEXT NOT NULL, stateHash TEXT NOT NULL, lineGen INTEGER NOT NULL, verdict TEXT NOT NULL,

@@ -14,7 +14,7 @@
 //
 // Pure: no `node:*`, no Buffer. It imports the sub union from `./api.js` and the roster's grammars from `./roster.js`.
 import { ACCOUNT_SUBS, type AccountSub } from './api.js';
-import { ACCOUNT_ID_RE, HUES, MODEL_ID_RE } from './roster.js';
+import { ACCOUNT_ID_RE, HUES, MODEL_ID_RE, ORG_CLEAR_WORD, orgLabelVerdict } from './roster.js';
 import { FABLE_BILLINGS } from './rosterFacts.js';
 
 /** Why the builder refused, each its own word. `bad-sub`: off `ACCOUNT_SUBS`. `bad-id`: the lane id is off the
@@ -47,7 +47,7 @@ const MODELS_MAX = 16;
 type FieldRule =
   | { kind: 'enum'; values: readonly string[]; spell?: Readonly<Record<string, string>> }
   | { kind: 'label' } | { kind: 'dollars' } | { kind: 'attempt' } | { kind: 'models' }
-  | { kind: 'flag' };
+  | { kind: 'flag' } | { kind: 'org' };
 
 interface FieldSpec { readonly flag: string; readonly rule: FieldRule; readonly required?: true }
 
@@ -111,6 +111,8 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
     fields: {
       placement, limit, limitReset,
       fableBilling: { flag: '--fable-billing', rule: e(...FABLE_BILLINGS) }, continuity: { flag: '--continuity', rule: e('on', 'off') },
+      // The organization label, or the clear word (account organization A3); its gate is the roster's, never respelled.
+      org: { flag: '--org', rule: { kind: 'org' } },
     },
   },
   'check': { cli: ['check'], lane: true, stdin: 'none', fields: {} },
@@ -176,6 +178,7 @@ function valueOk(rule: FieldRule, v: string): boolean {
       return ids.length <= MODELS_MAX && ids.every((m) => MODEL_ID_RE.test(m)) && new Set(ids).size === ids.length;
     }
     case 'flag': return v === 'true';
+    case 'org': return v === ORG_CLEAR_WORD || orgLabelVerdict(v) === 'ok';
   }
 }
 
