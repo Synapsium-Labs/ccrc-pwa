@@ -848,6 +848,13 @@ describe('every definition-shaped line is one the ledger reads (Task C33)', () =
     expect(one(`- **D-${n}**: a colon`)).toEqual([]);
     expect(one(`- Issued to this task, **D-${n}**: a citation`)).toEqual([]);
     expect(one(`- **D-${n} sweep:** a bolded citation`)).toEqual([]);
+    // The dot form (Task C33b): the full stop inside the bold, which DEFINITION does not read.
+    expect(one(`- **D-${n}.** a subject after the dot`)).toEqual([n]);
+    expect(one(`- **D-${n}.** \`a-slug\`: the dot form with a slug`)).toEqual([n]);
+    expect(one(`- **D-${n}.** — a dot, then an em dash`)).toEqual([n]);
+    expect(one(['```', `- **D-${n}.** quoted inside a fence`, '```'].join('\n'))).toEqual([]);
+    expect(one(`- **D-${n}.1** a decimal sub-number`)).toEqual([]);
+    expect(one(`  - **D-${n}.** indented, not at column 0`)).toEqual([]);
     expect(one(['```', `- **D-${n}** - quoted inside a fence`, '```'].join('\n'))).toEqual([]);
     expect(one(['```', '```', `- **D-${n}** - after a closed fence`].join('\n'))).toEqual([n]);
     // A number unreadable on two lines counts twice, so a baseline that lists it once
