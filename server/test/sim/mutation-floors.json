@@ -115,5 +115,12 @@
   "server/src/coord/overlordAuthority.ts#authorityDirection": 1,
   "server/src/coord/overlordAuthority.ts#authorityFold": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
-  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1
+  "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
+  "server/src/coord/decisionModel.ts#planDecision": 1,
+  "server/src/coord/decisionModel.ts#serveCap": 1,
+  "server/src/coord/decisionModel.ts#maintainCap": 1,
+  "server/src/coord/decisionModel.ts#isPrivateAddress": 1,
+  "server/src/coord/decisionModel.ts#encodeDecisionRequest": 1,
+  "server/src/coord/decisionModel.ts#readDecisionAnswers": 1,
+  "server/src/coord/decisionModel.ts#bandOf": 1
 }
