@@ -15,18 +15,20 @@
     call, the records, and the server's one caller, which gathers answers before an act's transaction. Every row
     stays off, and nothing in A is reachable.
   - **PR B** (Tasks 6 to 9) needs PR A and authority journal A (#2895, merged). It adds per-row arming
-    (`off`, `shadow`, `live`), a daily ceiling for each row, and the operator's arm, key and read doors behind the
-    step-up. Each arming move is journalled through `OverlordAuthorityJournal.appendInTx`. It also adds line
+    (`off`, `shadow`, `armed`, ruled F7), a daily ceiling for each row, and the operator's shadow-and-arm,
+    switch-off, key and read doors, every write behind the step-up. Each arming move is journalled through `OverlordAuthorityJournal.appendInTx`. It also adds line
     admission by a one-sided 95% bound, the injection canary, and the daily anchor-set lane with its drift hold.
-- **Index Q10 is built:** a `private-state` row is never asked of a `hosted` adapter, in shadow or live. It answers
+- **Index Q10 is built:** a `private-state` row is never asked of a `hosted` adapter, in shadow or armed. It answers
   `not-asked`, writes no record and gathers no label.
-- **Nothing changes at merge.** Every row ships `off`. A model is called only after the operator sets a host and a
-  key and turns a row on, both behind the step-up. Turning a row on is spend (O2), so it is the operator's act.
+- **Nothing changes at merge.** Every row ships `off`. A model is called only after the operator sets the key, then
+  switches a row to `shadow`, both behind the step-up. Shadow is spend (O2), under the row's daily ceiling. The
+  order is the coordinator's ruling (F7): the key first, then admission's asks in shadow, then arming.
+- **`programme.pick` takes code's shortlist as input** (ruling F5). Request record B's pure decider makes it.
 - **For the coordinator to approve at review (index Q19's pattern):** the starting values in question 10 (the daily
   ceilings, drift, bands, candidate lines and request caps). Nothing here waits on the operator.
 
 **Goal:** a typed, bounded and recorded way to ask a decision model, which can only narrow what the Overlord does, with
-W2's routing rows running in shadow from the day the operator arms them, so that they gather answers and their lines
+W2's routing rows running in shadow from the day the operator switches them to shadow, so that they gather answers and their lines
 can be admitted on evidence.
 
 **Why:** H5 and H6 (§3.7). The operator directed: "we can also leverage Jev for the binary questions where
@@ -110,7 +112,7 @@ answer is worth. No model is called inside a transaction.*
 The index's questions this plan builds on, as ruled by the coordinator (brief of run 2254):
 
 - **Index Q10, `private-state-rows-never-asked-hosted`: built** (Task 2's first-match row 4 and Task 7's arm
-  refusal). A `private-state` row is never asked of a `hosted` adapter, in shadow or live. It answers `not-asked`
+  refusal). A `private-state` row is never asked of a `hosted` adapter, in shadow or armed. It answers `not-asked`
   (why `private-state-hosted`), writes no record and gathers no label.
 - **Index Q11, `shadow-flags-record-only`: honoured.** In shadow, `applyDecision` answers `shadow`, which the caller
   records on its act row and shows nowhere. The read-back piece writes no inbox row for it.
@@ -142,19 +144,21 @@ otherwise.
    in the tree (no host-and-path string is committed). The builder re-reads the vendor's own reference at build time.
    A field name that differs is fixed in the codec and in the recorded fixture, in the same commit, and the PR body
    says so. A resolved model id other than the pinned one answers `malformed` (H6).
-3. **Each row's switch has three positions: `off`, `shadow` and `live`** (slug `decision-row-off-shadow-live`).
-   Ruling 5 says "armed in shadow first". H6 says a row stays in shadow until a line is admitted, and the operator
-   can arm it only once a line has been admitted. A row in shadow must be asked, to gather the answers its line is
-   admitted on, and asking is spend. **Recommendation:** the operator's door sets `off`, `shadow` or `live`, as
-   `shared/lane-arm.ts`'s Shadow lanes card does for lanes.
-   - `off` is never asked, and its checks answer `disarmed`.
-   - `shadow` is asked and recorded, and gates nothing. A gate in shadow is skipped, never shut: it was never armed.
-   - `live` needs an admitted line under the current key and a canary that held.
-   - The server can put a `live` row on hold (`held`, below). It never moves the switch itself.
+3. **A row's states are `off`, `shadow` and `armed`. Ruled** (the coordinator, F7 of the W2 index review, run
+   2253; slug `decision-row-off-shadow-armed`). The spec treats shadow as a state of its own, and never said who
+   switches a row into it. The ruling:
+   - Every row ships `off`. An `off` row is never asked, and its checks answer `disarmed`.
+   - The operator switches a row to `shadow`, from a session, behind the step-up, under the row's daily ceiling. It
+     is spend (O2). Only then is the row asked. In shadow it is asked and recorded, and gates nothing. A gate in
+     shadow is skipped, never shut, because it was never armed.
+   - The order is: set the key, then admission asks in shadow, then arm. `armed` needs an admitted line under the
+     current key and a canary that held, so the arm door refuses a row that has not been through shadow.
+   - Switching off is its own door (ruling F14, question 11).
+   - The server can put an `armed` row on hold (`held`, below). It never moves the switch itself.
 4. **Only the operator moves a gate's line; the server only holds** (slug `gate-line-moves-by-the-operator`). H6: a refit
    that makes a gate easier to pass needs the operator's tap, and a gate sent back to shadow stays shut.
    **Recommendation:**
-   - A live gate keeps the line it was armed on (`armedLine`). The server never changes it. When the lane admits a
+   - An armed gate keeps the line it was armed on (`armedLine`). The server never changes it. When the lane admits a
      newer line, the Settings read offers it, and the operator's arm door takes it with the step-up and a journal
      record.
    - When the armed line no longer holds, the server sets `held` on the row. That happens on drift, a changed line
@@ -168,8 +172,8 @@ otherwise.
    `authority-decision-row`, `{row, gate, from, to}`. Each side is `{mode, ceiling, armedLine, held}`. The operator's
    door and the server's hold both write it. `decisionRowDirection` (L1, Task 8) says which way it moves, from the
    entry alone:
-   - It **widens** when the ceiling rises; when the mode goes from `off` to `shadow` or `live` (new spend); when a gate
-     gets less strict (`held` to `live`, `live` to `shadow` or `off`, `held` to `shadow` or `off`); or when a live
+   - It **widens** when the ceiling rises; when the mode goes from `off` to `shadow` or `armed` (new spend); when a gate
+     gets less strict (`held` to `armed`, `armed` to `shadow` or `off`, `held` to `shadow` or `off`); or when an armed
      gate's `armedLine` becomes looser.
    - It **narrows** otherwise, the server's hold included.
 
@@ -229,11 +233,18 @@ otherwise.
     | Drift | at least 4 of a row's 20 anchors in another band than at the line's admission | The vendor reports a few per cent of identical requests differ, so one or two moves are noise |
     | Canary | five fixed override strings, crossing at most 5% | H6 |
 
-11. **A read door and a key removal** (slug `decision-model-read-and-remove`). Q7 names only the arm and key doors. The
-    Settings piece needs a read, and a key the operator can set should be one they can remove. **Recommendation:** add
-    `GET /api/decision-model` (session, `view`, no step-up), which answers each row's state, the host and the key's
-    `setAt`, never any part of the key. Add `DELETE /api/decision-model/key` (session, step-up). With no key, every
-    row answers `unavailable` (why `no-key`), and the door holds every live gate in the same transaction.
+11. **A switch-off door, a read door and a key removal** (slug `decision-model-read-and-remove`). Q7 names only the arm
+    and key doors.
+    - **The switch-off door is ruled** (the coordinator, F14 of the W2 index review). §11.2 gives "switching an armed
+      gate row off" the step-up. `POST /api/decision-model/rows/:id/off` (session, step-up) moves a row of any state
+      to `off`, so the arm door takes only `shadow` and `armed`. Both doors share one decider, `decideRowArm`, and
+      one writer, `moveDecisionRowInTx`. They are two doors, not two mechanisms. Switching an armed gate off widens,
+      and is journalled as such (question 5).
+    - **Recommendation:** add `GET /api/decision-model` (session, `view`, no step-up). It answers each row's state,
+      the host and the key's `setAt`, never any part of the key. The Settings piece needs it.
+    - **Recommendation:** add `DELETE /api/decision-model/key` (session, step-up), because a key the operator can set
+      should be one they can remove. With no key, every row answers `unavailable` (why `no-key`), and the door holds
+      every armed gate in the same transaction.
 12. **The restore row waits for authority journal C** (slug `decision-rows-restore-after-c`). §7.6: after a restore,
     authority takes the stricter of the row and the journal. Measured: `restoreStricter` does not exist on `main`.
     Authority journal C owns it. **Recommendation:** PR B extends `authorityFold` with `decisionRows`, the fold
@@ -285,7 +296,7 @@ Measured on `main` at `9cf263d44` (2026-11-16), by reading the files.
 | The account gate and the step-up | `server/src/accounts/gate.ts#createAccountGate` (`{cap: null, stepUp: true}`), `server/src/auth/stepup.ts#createStepUp`; refusals `auth-off` (501, sign-in dark), `insecure-origin`, `unauthenticated`, `step-up-required` (403) | The arm and key doors call it exactly as `PUT /api/items/:id/secret` does. While sign-in is dark they answer `auth-off` |
 | The operator-secrets store | `server/src/coord/ledgersSecrets.ts#writeOperatorSecret`, `#removeOperatorSecret`, `#operatorSecretRows`; slots keyed `(programme, slot)`; masker floor 20 bytes | No server-level slot and no value reader exist. Question 6 adds both |
 | A credential body route | `server/src/accounts/gate.ts#credentialBodyRoute` | The key door's route options |
-| A three-way Settings switch | `shared/lane-arm.ts#LANE_ARM_LANES`, `server/src/coord/store.ts#setLaneArm`, `lane_arm_settings` | The model for `off`, `shadow` and `live`, but with no ceiling, no step-up and no journal. So it is not reused: a new table is needed, and question 3 says why |
+| A three-way Settings switch | `shared/lane-arm.ts#LANE_ARM_LANES`, `server/src/coord/store.ts#setLaneArm`, `lane_arm_settings` | The model for `off`, `shadow` and `armed`, but with no ceiling, no step-up and no journal. So it is not reused: a new table is needed, and question 3 says why |
 | A daily lane | `server/src/laneSchedule.ts#LANE_SCHEDULE` (row `quiz`, `QUIZ_LANE_PERIOD_MS`), `server/src/continuity/quizLane.ts#runQuizLane`, called from `FleetWatcher.sweepQuiz` | The anchor-set lane follows it, row `decisionAnchors` |
 | Per-feature store modules | `server/src/coord/portfolioStore.ts#setPortfolioRank`, pinned by `server/test/single-definition/writers-map.test.ts`'s `TABLES` | `decisionModelStore.ts` holds its tables' only writers, each pinned there |
 | The untrusted renderer | `server/src/coord/untrusted.ts#untrustedBlock` | Not used: the model gets `quoted` fields, never a preface, because it writes no text |
@@ -330,9 +341,9 @@ Measured on `main` at `9cf263d44` (2026-11-16), by reading the files.
 
 ## Review Focus
 
-- **Can any path widen authority?** A clear yes on a gate must need a live switch, no hold, the armed line under the
-  current key, and both orders agreeing. Every other combination must answer `shut` for a live gate and `skipped` for a
-  gate that was never armed live.
+- **Can any path widen authority?** A clear yes on a gate must need an armed switch, no hold, the armed line under the
+  current key, and both orders agreeing. Every other combination must answer `shut` for an armed gate and `skipped` for a
+  gate that was never armed.
 - **Q10, end to end:** a `private-state` row on a `hosted` host. The arm door refuses it. If the host changes after
   arming, the call-time check still answers `not-asked`, writes no record, and counts no call against the ceiling.
 - **The journal's direction:** check each `decisionRowDirection` case against question 5. Pay most attention to the
@@ -352,7 +363,7 @@ authority journal A, which is merged.
 | PR | Tasks | What it ships | Needs first | Growth-checked files, estimate (net code lines) |
 |---|---|---|---|---|
 | A | 1 to 5 | `DECISION_QUESTIONS` (W2's seven rows) and the L0 words; `planDecision`, `encodeDecisionRequest`, `readDecisionAnswers`; the `DecisionModel` port and its HTTP adapter; `decision_records` and `decision_days` with their writers; `gatherDecisions`, the one caller, tested with doubles and not wired. Every row is off, nothing is reachable | nothing: **ready to build** | `schema.ts` +24 (one migration: two tables and an index) |
-| B | 6 to 9 | `decision_rows`, `decision_host` and `decision_lines`; `authority-decision-row` in the grammar; the server-level key slot; the arm, key and read doors behind the step-up; `admitLine`, `canaryVerdict`, `anchorDrift`, `applyDecision` live; the egress, labels and state-read ports; the anchor-set lane with its fixtures; M19's read; `deps.decisions` wired | PR A, authority journal A (#2895, merged): **ready once A lands** | `schema.ts` +31 (one migration: three tables, no seed); `server.ts` +3 (one import, one registration call); `watch.ts` +8 (`sweepDecisionAnchors` and its poll line) |
+| B | 6 to 9 | `decision_rows`, `decision_host` and `decision_lines`; `authority-decision-row` in the grammar; the server-level key slot; the arm, key and read doors behind the step-up; `admitLine`, `canaryVerdict`, `anchorDrift`, `applyDecision` over arming; the egress, labels and state-read ports; the anchor-set lane with its fixtures; M19's read; `deps.decisions` wired | PR A, authority journal A (#2895, merged): **ready once A lands** | `schema.ts` +31 (one migration: three tables, no seed); `server.ts` +3 (one import, one registration call); `watch.ts` +8 (`sweepDecisionAnchors` and its poll line) |
 
 Each pull request merges `main` once before merge and re-measures its migration slot (the index's "Where lanes meet").
 If B's migration measures over 40, its `decision_lines` canary columns move to `decision_days` (one row per row and
@@ -385,6 +396,8 @@ flowchart LR
   DMA["decision model A<br/>Tasks 1 to 5"] --> DMB
   DMB --> LQ["label queue<br/>(fills LabelledCases)"]
   DMB --> PNB["private names B<br/>(fills DecisionEgress)"]
+  RRB["request record B<br/>(the shortlist decider)"] -->|"candidates"| PP["the open door<br/>(asks programme.pick)"]
+  DMA --> PP
   DMA --> RLB["relay B<br/>(asks relay.method)"]
   DMA --> CD["coordinator doors<br/>(ask readback.*)"]
   DMA --> OVB["overlaps B<br/>(asks goals.conflict)"]
@@ -392,7 +405,8 @@ flowchart LR
 ```
 *Figure 2. The order. PR A starts now. PR B starts when A lands. The pieces on the right each ask or fill something
 this plan defines. A caller needs only PR A, because a check gathered with every row off answers `disarmed` and the
-caller records it. The label queue and private names B fill PR B's ports. The restore row is question 12's follow-up.*
+caller records it. The open door asks `programme.pick` with request record B's shortlist (ruling F5). The label queue
+and private names B fill PR B's ports. The restore row is question 12's follow-up.*
 
 ---
 
@@ -443,7 +457,7 @@ export interface DecisionQuestionRow {
   readonly fields: readonly DecisionField[];
   readonly askedWith: readonly DecisionRowId[];  // the request shape: rows always asked together, in this order
   readonly orders: 'one' | 'both';
-  readonly direction: 'advice' | 'gate';         // fail open, or fail closed while live
+  readonly direction: 'advice' | 'gate';         // fail open, or fail closed while armed
   readonly costlyError: 'false-mark' | 'false-yes';
   readonly target: 0.1 | 0.05;
   readonly labelSources: readonly (typeof DECISION_LABEL_SOURCES)[number][];
@@ -473,13 +487,19 @@ export function decisionMarkOf(check: DecisionCheck): DecisionMark;
 
 | Row | Type, orders | Fields | Direction | Costly error, target | Label sources | Private state | Attacker fields, what they want, why that is safe |
 |---|---|---|---|---|---|---|---|
-| `programme.pick` | choice among code's shortlist (at most six) and `none`, both orders, asked with `programme.any` | `request` (fact: the request's outcome line), `candidates` (refs: programme slugs, each with its ratified goals version), `goals` (quoted: each candidate's goals text) | advice | false mark, 10% | `routed-to` | No | `goals`; an option of their choosing; every option is code's shortlist and the Overlord sees all of them, so no answer grants anything |
+| `programme.pick` | choice among code's shortlist (at most six) and `none`, both orders, asked with `programme.any` | `request` (fact: the request's outcome line), `candidates` (refs: the programme slugs of request record B's shortlist, at most six, each with its ratified goals version; ruling F5), `goals` (quoted: each candidate's goals text) | advice | false mark, 10% | `routed-to` | No | `goals`; an option of their choosing; every option is code's shortlist and the Overlord sees all of them, so no answer grants anything |
 | `programme.any` | yes or no, one order | as `programme.pick` | advice | false mark, 10% | `routed-to` | No | `goals`; `no`, which leaves the shortlist standing alone, as disarmed |
 | `scope.widens` | yes or no, one order | `cited` (refs: the operator message ids), `goals` (ref: the ratified goals version; quoted text) | gate | false yes, 5% | `label-queue` | Yes | `goals`; `yes`, which only lets the code rule's own verdict stand, as disarmed. Anything short of a clear yes sends the widening to the operator |
 | `relay.method` | yes or no, one order | `part` (quoted: the Overlord's part of the relay) | advice | false mark, 10% | `label-queue` | No | `part`; `no`, which lets the relay pass as if the row were off |
 | `readback.omits` | yes or no, both orders (the two texts swapped) | `request` (refs: the cited message ids; fact: the done test), `readback` (ref: the mail id; quoted text) | advice | false mark, 10% | `label-queue` | Yes | `readback`; `no`, which raises no flag, as disarmed |
 | `readback.adds` | as `readback.omits` | as `readback.omits` | advice | false mark, 10% | `label-queue` | Yes | as `readback.omits` |
 | `goals.conflict` | yes or no, both orders (the two programmes swapped) | `a`, `b` (refs: programme slugs and goals versions; quoted texts), `signal` (fact: the code signal that put the pair here) | advice | false mark, 10% | `operator-answer` | No | both goals texts; `no`, which leaves the code signals standing, as disarmed |
+
+**The shortlist is an input, never made here** (ruling F5, the W2 index review). Code names at most six candidates by
+matching the request's `expectedPaths` against live claims and history's `touched`, and an empty `expectedPaths` matches
+on live claims alone (§5.3, Table 3.7a). That pure decider is request record B's, and its open door returns the
+shortlist to the Overlord. A caller asking `programme.pick` passes that shortlist as `candidates`. `planDecision`
+answers `not-asked` (`missing-field`) for an empty shortlist, and the encoder refuses more than six (Task 2's tests).
 
 The instruction text of each row is fixed in the file. It states one condition. A yes-or-no row's `criteria` name the
 two sides in plain words. A choice row's options are opaque ids that the encoder assigns (Task 2).
@@ -519,7 +539,7 @@ two sides in plain words. A choice row's options are opaque ids that the encoder
 // server/src/coord/decisionModel.ts (C5, L1)
 export interface PlanInput {
   row: DecisionRowId;
-  mode: 'off' | 'shadow' | 'live';           // PR A: always 'off' from its caller
+  mode: 'off' | 'shadow' | 'armed';           // PR A: always 'off' from its caller
   host: { kind: DecisionHostKind; modelId: string } | null;
   keySet: boolean;
   fields: Readonly<Record<string, string | readonly string[]>>;   // after state build
@@ -559,7 +579,7 @@ export function readDecisionAnswers(keys: /* as above */ ReadonlyMap<string, unk
 | 2 | no host | skip, `unavailable`, `host-unset` |
 | 3 | no key | skip, `unavailable`, `no-key` |
 | 4 | the row is `privateState` and the host is `hosted` | skip, `not-asked`, `private-state-hosted` (index Q10) |
-| 5 | a required field is missing | skip, `not-asked`, `missing-field` |
+| 5 | a required field is missing, an empty `programme.pick` shortlist included | skip, `not-asked`, `missing-field` |
 | 6 | a field over `DECISION_FIELD_MAX_CHARS`, or the request over `DECISION_REQUEST_MAX_BYTES` | skip, `over-size` |
 | 7 | the host is `hosted` and the egress screen says `hit` | skip, `not-asked`, `egress-hit` |
 | 8 | a record exists whose `lineGen` equals the row's current one | reuse |
@@ -735,7 +755,7 @@ export function decisionDay(db: DatabaseSync, row: DecisionRowId, day: string): 
 // server/src/coord/decisionModelAsk.ts (C5, L4)
 export interface DecisionAskDeps {
   db: DatabaseSync; model: DecisionModel | null; time: TimePorts;
-  arming(row: DecisionRowId): { mode: 'off' | 'shadow' | 'live'; ceiling: number };   // PR A: always off
+  arming(row: DecisionRowId): { mode: 'off' | 'shadow' | 'armed'; ceiling: number };   // PR A: always off
   host(): { kind: DecisionHostKind; modelId: string } | null;
   keySet(): boolean;
   lineGen(row: DecisionRowId): number;
@@ -795,9 +815,9 @@ It refuses to run inside a transaction (`db.isTransaction`), which is H6's rule 
 ```sql
 CREATE TABLE decision_rows (
   row        TEXT PRIMARY KEY,
-  mode       TEXT NOT NULL CHECK (mode IN ('off','shadow','live')),
+  mode       TEXT NOT NULL CHECK (mode IN ('off','shadow','armed')),
   ceiling    INTEGER NOT NULL,
-  armedLine  INTEGER,                 -- decision_lines.id a live gate was armed on; NULL otherwise
+  armedLine  INTEGER,                 -- decision_lines.id an armed gate was armed on; NULL otherwise
   heldCause  TEXT,                    -- 'drift' | 'line-key' | 'canary' | 'bound' | 'no-key'; NULL when not held
   heldAt     INTEGER,
   updatedAt  INTEGER NOT NULL,
@@ -830,7 +850,7 @@ row's line generation is 0.
 // server/src/coord/overlordAuthority.ts (L1): one more member of OverlordAuthorityMove
 | { kind: 'authority-decision-row'; opKey: string; row: DecisionRowId; gate: boolean;
     from: DecisionRowSide; to: DecisionRowSide }
-// DecisionRowSide = { mode: 'off' | 'shadow' | 'live'; ceiling: number; armedLine: number | null; held: boolean }
+// DecisionRowSide = { mode: 'off' | 'shadow' | 'armed'; ceiling: number; armedLine: number | null; held: boolean }
 ```
 
 `authorityDirection` delegates to `decisionRowDirection` (Task 8's decider, created here with its tests so that this
@@ -881,14 +901,16 @@ refuses `row-changed` when it is not `expected`, then calls
 - Modify (census): `server/test/auth-gate.test.ts` (`scanRoutes` list and its file count),
   `server/test/box-token-census.test.ts` (a new lane source, `DECISION_MODEL_DOORS`, both directions, and the prose
   numerals), `server/test/rings/fastify-l4.data.ts` (the file's reason and date), `CLAUDE.md` (the session-gated
-  paragraph names the four doors), `README.md` (the auth paragraph, if the census counts it)
+  paragraph names the five doors), `README.md` (the auth paragraph, if the census counts it)
 
-**The doors** (index Q7 and question 11; every one session-gated, none in `EXEMPT`):
+**The doors** (index Q7 and question 11; every one session-gated, none in `EXEMPT`; every write calls the account gate
+with the step-up, so it refuses `auth-off` while sign-in is dark):
 
 | Door | Gate | Body | Answer |
 |---|---|---|---|
-| `GET /api/decision-model` | session (`view`), no step-up | none | each row: mode, ceiling, held and why, today's serve and maintain counts, the current line (admitted or not, labelled, errors, bound, canary), the newest line offered to a live gate, `privateState`, `direction`; the host's kind, endpoint and model id; the key's `setAt` and masked flag. Never any part of the key |
-| `POST /api/decision-model/rows/:id/arm` | session, account gate with step-up | `{mode, ceiling, line?, expected: {mode, ceiling, armedLine, held}}` | the row, or a refusal |
+| `GET /api/decision-model` | session (`view`), no step-up | none | each row: mode, ceiling, held and why, today's serve and maintain counts, the current line (admitted or not, labelled, errors, bound, canary), the newest line offered to an armed gate, `privateState`, `direction`; the host's kind, endpoint and model id; the key's `setAt` and masked flag. Never any part of the key |
+| `POST /api/decision-model/rows/:id/arm` | session, account gate with step-up | `{mode: 'shadow' or 'armed', ceiling, line?, expected: {mode, ceiling, armedLine, held}}` | the row, or a refusal |
+| `POST /api/decision-model/rows/:id/off` (ruling F14) | session, account gate with step-up | `{expected: {mode, ceiling, armedLine, held}}` | the row, now `off`, or a refusal |
 | `PUT /api/decision-model/key` | session, step-up, `credentialBodyRoute` | `{kind, endpoint, modelId, key?}` | the host and the key's meta |
 | `DELETE /api/decision-model/key` | session, step-up | none | the host, `keySetAt: null` |
 
@@ -897,31 +919,36 @@ refuses `row-changed` when it is not `expected`, then calls
 | # | When | Answer |
 |---|---|---|
 | 1 | `:id` is not a catalogue row | `decision-row-unknown` |
-| 2 | the body is malformed | `bad-request` |
+| 2 | the body is malformed, or the arm door is asked for `off` | `bad-request` |
 | 3 | `ceiling` outside 50 to 5,000 | `bad-ceiling` |
 | 4 | `mode` is not `off`, and there is no host or no key | `key-unset` |
 | 5 | `mode` is not `off`, the row is `privateState`, and the host is `hosted` | `private-state-host` (index Q10) |
-| 6 | `mode` is `live` and the row has no admitted line under today's key, or `line` names another | `line-not-admitted` |
-| 7 | `mode` is `live` and the line's canary has not run, or crossed over 5% | `canary-unmet` |
-| 8 | otherwise | the move: `to.held` is false, and `armedLine` is the line for a live gate, else `NULL` |
+| 6 | `mode` is `armed` and the row has no admitted line under today's key, or `line` names another | `line-not-admitted` |
+| 7 | `mode` is `armed` and the line's canary has not run, or crossed over 5% | `canary-unmet` |
+| 8 | otherwise | the move: `to.held` is false, and `armedLine` is the line for an armed gate, else `NULL` |
 
 The door then calls `moveDecisionRowInTx`, mapping `row-changed` to its word and the journal's refusals to
 `authority-rolled-back` or `authority-unmeasured` (503). A change writes one record-only feed row naming the device
 actor, as the Settings switches do.
 
 The key door writes the secret first (`writeServerSecret`, under its slot serialiser). Then, in one transaction, it
-writes the host row and holds every live row whose line key no longer matches (`heldCause: 'line-key'`) through
+writes the host row and holds every armed row whose line key no longer matches (`heldCause: 'line-key'`) through
 `moveDecisionRowInTx`. A failure after the secret is stored answers `stored-not-applied`, as the item secret door's
-`stored-not-ticked` does. The delete door removes the slot and holds every live gate with `no-key` in one
+`stored-not-ticked` does. The delete door removes the slot and holds every armed gate with `no-key` in one
 transaction.
 
 - [ ] **Step 1: Failing tests** (`decision-model-routes.test.ts`):
   - Each row of the table.
-  - Sign-in dark: `auth-off` on all three writes. No fresh step-up: `step-up-required`.
+  - Sign-in dark: `auth-off` on all four writes. No fresh step-up: `step-up-required`.
+  - The switch-off door turns an armed gate `off` with one `authority-decision-row` record that widens. Over a
+    rolled-back journal it answers `authority-rolled-back`, and the gate stays armed (or held). The arm door refuses
+    `off` with `bad-request`.
+  - The arm door refuses `armed` for a row still `off` (no admitted line), so the order is the key, then shadow, then
+    arm (ruling F7).
   - The read never contains the key's text, or its last four characters unless the masker caught it, matching the
     existing secret door. The test scans every answer and the feed row.
-  - A host change to `hosted` holds a live gate and leaves a `private-state` row's mode as it was, so the row is
-    still `not-asked` at call time (Task 2, row 4). A key delete holds every live gate.
+  - A host change to `hosted` holds an armed gate and leaves a `private-state` row's mode as it was, so the row is
+    still `not-asked` at call time (Task 2, row 4). A key delete holds every armed gate.
   - A widening over a rolled-back journal answers `authority-rolled-back` and writes nothing.
 - [ ] **Step 2: Run red**, then implement, then run green: `decision-model-routes`, then the census files (`auth-gate`,
   `box-token-census`, `coord-pause-route`, `rings/fastify-l4`, `secret-mask`), one at a time.
@@ -958,7 +985,7 @@ export function decisionRowDirection(gate: boolean, from: DecisionRowSide, to: D
 // server/src/coord/decisionModel.ts (L1), called inside the act's transaction
 export type DecisionEffect = 'clear-yes' | 'clear-no' | 'unsure' | { pick: string } | 'none-picked'
   | 'shadow' | 'skipped' | 'shut';
-export function applyDecision(check: DecisionCheck, now: { row: DecisionQuestionRow; mode: 'off' | 'shadow' | 'live';
+export function applyDecision(check: DecisionCheck, now: { row: DecisionQuestionRow; mode: 'off' | 'shadow' | 'armed';
   held: boolean; armedLine: { id: number; line: number } | null; currentLine: { id: number; line: number } | null }):
   DecisionEffect;
 
@@ -975,8 +1002,8 @@ export interface DecisionStateReads { fieldsOf(row: DecisionRowId, refs: Record<
 | # | When | Effect |
 |---|---|---|
 | 1 | `mode` is `off` | `skipped` |
-| 2 | a gate, `live`, and `held` | `shut` |
-| 3 | `mode` is `shadow`, or an advice row `live` and `held` | `shadow` (a record only, index Q11) |
+| 2 | a gate, `armed`, and `held` | `shut` |
+| 3 | `mode` is `shadow`, or an advice row `armed` and `held` | `shadow` (a record only, index Q11) |
 | 4 | the check is not `answered` | a gate: `shut`; advice: `skipped` |
 | 5 | the line used is none, or its id is not the check's `lineGen` | a gate: `shut`; advice: `skipped` (I16: "gathered under its current key and line") |
 | 6 | the verdict is `unsure` | a gate: `shut`; advice: `unsure` |
@@ -1018,18 +1045,18 @@ The line a gate uses is its `armedLine`. An advice row uses its `currentLine`.
 
 **The lane's pass**, per row that is not `off`, within the maintenance half of the row's ceiling:
 
-1. **Line key.** If a live row's line key no longer matches, hold it (`line-key`). This is a narrowing, journalled
+1. **Line key.** If an armed row's line key no longer matches, hold it (`line-key`). This is a narrowing, journalled
    through `moveDecisionRowInTx`.
 2. **Anchors.** Re-ask the row's 20 anchors, never from the record. Write today's bands to `decision_days`. If the
-   current line has a baseline and `anchorDrift` fires, hold a live row (`drift`). A line with no baseline takes
+   current line has a baseline and `anchorDrift` fires, hold an armed row (`drift`). A line with no baseline takes
    today's bands as its baseline.
 3. **Admission.** When the labelled cases changed since the last admission, or the key did, re-ask every labelled case,
    never from the record. Each case's state is rebuilt through `DecisionStateReads`, and a case is skipped when that
-   answers `unresolvable`. Then run `admitLine`. An admitted line is written with `admitDecisionLine`. For a live
+   answers `unresolvable`. Then run `admitLine`. An admitted line is written with `admitDecisionLine`. For an armed
    gate, a looser line is only offered: the read shows it, and the operator's tap takes it (question 4). If the armed
    line's own bound now fails, hold the gate (`bound`).
 4. **Canary.** For a newly admitted line, re-ask each labelled case with each of the five override strings in the row's
-   `attackerFields`. Record crossings on the line. A canary that does not fit today resumes tomorrow. For a live row
+   `attackerFields`. Record crossings on the line. A canary that does not fit today resumes tomorrow. For an armed row
    whose line's canary is `unmet`, hold it (`canary`).
 
 Rows that are `private-state` on `hosted` are skipped whole (index Q10). The lane writes nothing else and sends no mail.
@@ -1045,10 +1072,10 @@ This is the read M19's report uses. The report itself belongs to the measures wo
 
 - [ ] **Step 1: Failing tests** (`decision-model-lane.test.ts`, with a double port and `fakeTime`):
   - An `off` row is never asked.
-  - Drift at 4 of 20 holds a live gate, and the next serve check answers `shut`.
-  - A changed model id holds a live row.
+  - Drift at 4 of 20 holds an armed gate, and the next serve check answers `shut`.
+  - A changed model id holds an armed row.
   - An empty labels source admits nothing, so every row stays in shadow.
-  - A labelled set of 29 clean cases admits 10% rows and offers, never applies, a looser line to a live gate.
+  - A labelled set of 29 clean cases admits 10% rows and offers, never applies, a looser line to an armed gate.
   - The canary resumes across days at the maintenance half.
   - A `private-state` row on `hosted` is not asked.
   - The lane's row passes `lane-schedule.test.ts`.
@@ -1072,7 +1099,7 @@ This is the read M19's report uses. The report itself belongs to the measures wo
   argued there. No new floor row is needed, because W2 adds no capability word to `CAP_FLOOR_ROWS` (index Q14).
 - **The key** stays in its `.server` slot under an older build, which never reads it.
 - **A restore** of `coord.db` alone can return a row to an older arming. Question 12's follow-up adds the restore row,
-  so the stricter of the row and the journal wins. Until it lands, the next lane pass re-measures each live row's line
+  so the stricter of the row and the journal wins. Until it lands, the next lane pass re-measures each armed row's line
   key, drift and canary, and holds what no longer holds.
 
 ## What the label queue reads
@@ -1085,6 +1112,8 @@ The label queue (index row "Label queue", planned later) builds on these, and ch
   card's text through `DecisionStateReads`.
 - `decision_lines` and `admitLine`'s `best`: how near each row is to its line, to order "the row nearest its line".
 - `decision_rows`: whether a row is `off`. An off row gets no card.
+- **Its label door calls the account gate** (ruling F14), so it refuses `auth-off` while sign-in is dark: a label
+  must come from an event under the sign-in cookie (H6). That door is the label queue's, not this plan's.
 - `LabelledCases`, the port it implements, so its labels reach admission. An outcome label outranking and retiring an
   answer or overturn label is its own rule, applied before it answers the port.
 
@@ -1100,8 +1129,8 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
   "no new code" asks for (question 1).
 - **`decision-wire-from-the-vendor-reference`:** the spec gives no wire shape. The plan fixes it from the published
   reference (question 2).
-- **`decision-row-off-shadow-live`:** the spec says "armed" and "in shadow" without a switch. Each row has three
-  positions (question 3).
+- **`decision-row-off-shadow-armed`:** the spec says "armed" and "in shadow" without a switch. Each row has three
+  states, and the operator switches a row to shadow (ruled, F7; question 3).
 - **`gate-line-moves-by-the-operator`:** the server never moves a gate's line, and only holds it (question 4).
 - **`decision-row-authority-kind`:** §7.6's arming records get one kind, and spend counts as widening (question 5).
 - **`server-level-secret-slot`:** the operator-secrets store had no server-level slot. The plan adds `.server`
@@ -1109,7 +1138,8 @@ Each entry is a departure from the spec's text, by slug. The coordinator mints n
 - **`decision-records-hold-refs`:** records keep refs, never operator text (question 7).
 - **`labels-reach-lines-through-a-port`:** admission reads labels through a C6 port (question 8).
 - **`decision-egress-is-a-port`:** the hosted egress screen is a port, filled by private names B (question 9).
-- **`decision-model-read-and-remove`:** two doors beyond Q7 (question 11).
+- **`decision-model-read-and-remove`:** three doors beyond Q7: the switch-off door (ruled, F14), the read and the key
+  removal (question 11).
 - **`decision-rows-restore-after-c`:** the restore row is a follow-up after authority journal C (question 12).
 - **`decision-model-in-coord`:** the files go in `server/src/coord/`, not a new directory (question 14).
 - **`attacker-answer-equals-disarmed`:** "the safe direction" is pinned as "no wider than the row disarmed"
@@ -1138,6 +1168,10 @@ The coordinator passes these to the index's fix round.
 - **The label queue's row:** it implements `LabelledCases`, and needs decision model B (unchanged).
 - **The private names B row:** it implements `DecisionEgress` for the hosted screen (§3.8) and wires it in
   `index.ts`.
+- **The request record B row** (ruling F5): it owns the shortlist decider (L1, at most six candidates, an empty
+  `expectedPaths` matching live claims alone), and its open door returns the shortlist. The open door asks
+  `programme.pick` with it as `candidates`, so it needs decision model A too.
+- **Q7's door table** also gains `POST /api/decision-model/rows/:id/off` (session, step-up; ruling F14).
 - **The relay B, coordinator doors and overlaps B rows:** each needs only decision model A to ask its row and record
   the check. It records `disarmed` until B lands and the operator arms the row.
 - **A follow-up after authority journal C:** the decision-model row in `restoreStricter`'s table (question 12).
@@ -1152,13 +1186,17 @@ The coordinator passes these to the index's fix round.
 ## Where things stand
 
 **Agreed:**
+- The coordinator's rulings from the W2 index review: F7 (the states `off`, `shadow` and `armed`; the order key,
+  then shadow's admission asks, then arm), F5 (`programme.pick` takes request record B's shortlist), and F14 (the
+  switch-off door, behind the step-up).
 - The two pull requests, their tasks and their order, and that both are built before W1 closes (index Q23).
 - Index Q10 is built: a `private-state` row is never asked of a `hosted` adapter.
-- Every row ships `off`. Nothing calls a model until the operator sets a host and a key and turns a row on.
+- Every row ships `off`. Nothing calls a model until the operator sets a host and a key and switches a row to
+  `shadow`.
 
 **Waiting on the coordinator** (at this plan's review):
 - The starting values in question 10, as index Q19 rules for act ceilings.
-- Questions 1 to 16's recommendations.
+- The recommendations of questions 1, 2 and 4 to 16 (question 3 and the switch-off door are ruled).
 
 **Waiting on the operator:** nothing. Arming a row and setting the key are later acts of theirs, below.
 
@@ -1166,5 +1204,5 @@ The coordinator passes these to the index's fix round.
 - The label queue, which fills `LabelledCases`. Until it lands, no line is admitted and every row stays in shadow.
 - Private names B, which fills `DecisionEgress`.
 - The restore row after authority journal C (question 12).
-- The operator's acts once B lands: setting a host and its key, turning a row to `shadow` (spend), and arming it
-  `live` once its line is admitted and its canary holds. A hosted row is spend.
+- The operator's acts once B lands: setting a host and its key, switching a row to `shadow` (spend), and arming it
+  once its line is admitted and its canary holds. A hosted row is spend.
