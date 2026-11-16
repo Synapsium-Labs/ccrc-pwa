@@ -24774,9 +24774,12 @@ _upd_floor_check() {
 # `standing-set-is-a-poolset-entry`). The word is read from the target stamp's `ccdCaps` (`BOX_BUILD[5]`). The remedy
 # leads the refusal, because the update control plane keeps only a report detail's first 200 characters. It names only a
 # way out that exists: today the operator clears the set from their own shell (`ccd route` refuses inside a session), and
-# PR B2 adds `--below-cap`. The designation piece rewrites the `poolset` remedy when its Settings doors land.
+# PR B2 adds `--below-cap`. The designation piece rewrites the `poolset` and `profiledigest` remedies when its Settings
+# doors land. The `profiledigest` row is the sandbox piece's (PR A2): a ccd without `launch-surface-v1` ignores the field
+# and renders the Overlord's row fail-open.
 CAP_FLOOR_ROWS=(
   'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
+  'profiledigest|launch-surface-v1|the operator clears the launch digest from their own shell, never a session: ccd route --session <id> --set profiledigest='
 )
 _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable
   local LC_ALL=C IFS=' ' reg="$_SVC_REG" row e n ids

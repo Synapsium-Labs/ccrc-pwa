@@ -9431,6 +9431,10 @@ EOF
   # (`ccd/lib/pool-set.sh#cmd_pool_answer`), and the word that says this box has all of the set: the session side, the
   # route fields `poolset` and `acctorder`, and that verb. Added last among them, so no build lacking a part says it.
   echo pool-answer; echo pool-set
+  # `launch-surface-v1` (the Overlord W1 sandbox, PR A2): a route's `profiledigest` makes this ccd render the row's whole
+  # surface (flags, settings, environment and the workspace entries) or refuse the spawn, and refuse a swap or a start
+  # that would end a pane it then cannot respawn. Printed only by a build that has every part; designation needs it.
+  echo launch-surface-v1
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -26220,6 +26224,35 @@ _profile_digest_ok() {   # id -> 0 iff no `profiledigest` stands, or the row `pr
   else PROFILE_DIGEST_P="$p" PROFILE_DIGEST_D="$d" PROFILE_DIGEST_ROW="$row"; return 0; fi
   return 1
 }
+# THE WORKSPACE (Overlord W1 sandbox PR A2, Task 6; question 2, slug workspace-links-for-skill-and-constitution). For a
+# surfaced row, after the digest check, before the pane: every `stagedSkills` entry (`.claude/skills/<name>`) and the
+# `memory` entry (`CLAUDE.md`) is checked by shape (a name of `[a-z0-9-]`; a target of `[a-z0-9.-]` segments under `$REG`,
+# no `.` or `..` segment), and one that stands must already be ccd's link to `$REG/<target>`. The workspace may hold no
+# other project source Claude Code reads under `--setting-sources project` (anything under a `.claude` but those links,
+# `.mcp.json`, `CLAUDE.local.md`, a `CLAUDE.md` below the top: one bounded `find`, `.git` pruned), and no directory above
+# it, to `/`, a `CLAUDE.md` or `CLAUDE.local.md`: Task 1's M2 measured the pinned launch loading both, and M1 and M2 links
+# loading. Only then are the missing links made, and each name is added once to the repository's `info/exclude`, so it is
+# never committed. Every check comes before the first write, so a refusal makes nothing. rc 1 and PROFILE_DIGEST_WHY.
+_profile_workspace() {   # id row -> 0 iff the entries are ccd's links and no other project source stands; else 1
+  local LC_ALL=C IFS=' ' wd n t l ok=" " ex out e d found
+  PROFILE_DIGEST_WHY="workspace entries could not be made"; wd=$(_reg_get "$1" workdir); [[ -d "$wd" ]] || return 1
+  out=$(jq -r '[(.stagedSkills | to_entries[] | [".claude/skills/" + .key, .value]), ["CLAUDE.md", .memory]][] | map(strings) | if length == 2 then join("\t") else error("shape") end' <<<"$2" 2>/dev/null) || return 1
+  while IFS=$'\t' read -r n t; do
+    [[ "$n" =~ ^(\.claude/skills/[a-z0-9-]+|CLAUDE\.md)$ && "$t" =~ ^[a-z0-9.-]+(/[a-z0-9.-]+)*$ && "/$t/" != */../* && "/$t/" != */./* ]] || return 1
+    l="$wd/$n"; ok+="$l "
+    [[ ! -e "$l" && ! -L "$l" ]] || { [[ -L "$l" && "$(readlink "$l")" == "$REG/$t" ]] || { PROFILE_DIGEST_WHY="$n is not ccd's link"; return 1; }; }
+  done <<<"$out"
+  found=$(_plat_timeout 10 find "$wd" -mindepth 1 -name .git -prune -o \( -name .claude -o -path '*/.claude/*' -o -name .mcp.json -o -name CLAUDE.local.md -o -name CLAUDE.md \) -print 2>/dev/null) || return 1
+  while IFS= read -r e; do
+    [[ -z "$e" || "$ok" == *" $e "* || "$e" == "$wd/.claude" || "$e" == "$wd/.claude/skills" ]] || { PROFILE_DIGEST_WHY="a project source stands: ${e#"$wd/"}"; return 1; }
+  done <<<"$found"
+  d="$wd"; while [[ -n "$d" ]]; do d="${d%/*}"; for e in CLAUDE.md CLAUDE.local.md; do [[ ! -e "$d/$e" && ! -L "$d/$e" ]] || { PROFILE_DIGEST_WHY="a CLAUDE.md stands above the workspace: $d/$e"; return 1; }; done; done
+  ex=$(git -C "$wd" rev-parse --path-format=absolute --git-path info/exclude 2>/dev/null) && [[ "$ex" == /* ]] && mkdir -p "${ex%/*}" || return 1
+  while IFS=$'\t' read -r n t; do
+    [[ -L "$wd/$n" ]] || { mkdir -p "$(dirname "$wd/$n")" && ln -s "$REG/$t" "$wd/$n"; } || return 1
+    grep -qxF "/$n" "$ex" 2>/dev/null || printf '/%s\n' "$n" >> "$ex" || return 1
+  done <<<"$out"
+}
 _profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
   echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
 }
@@ -26227,7 +26260,7 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
   if [[ -e "$REG/$id.profiledigest" || -L "$REG/$id.profiledigest" ]]; then
-    _profile_digest_ok "$id" || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
+    _profile_digest_ok "$id" && _profile_workspace "$id" "$PROFILE_DIGEST_ROW" || { _profile_refused "$id" "$PROFILE_DIGEST_WHY"; return 1; }
     sf=1 p="$PROFILE_DIGEST_P" d="$PROFILE_DIGEST_D" src=/dev/stdin   # render the row the digest covered: one read (F7)
   fi
   [[ -n "$sf" || -e "$REG/$id.profile" || -L "$REG/$id.profile" ]] || return 0
@@ -27934,6 +27967,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
     fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
+  # The launch digest (sandbox A2): a start that would be refused at its spawn refuses here, before it writes anything.
+  _profile_digest_ok "$id" || { _profile_refused "$id" "start: $PROFILE_DIGEST_WHY"; return 1; }
   # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
   # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
   # this verb dies with a retryable message naming the lock and leaves NOTHING
@@ -30033,6 +30068,9 @@ _swap_refuse() {   # id cur target reason restart(0|1) — a swap that cannot ca
   # window that reads `lastswap` is minutes wide, so deleting a genuinely old one costs
   # nothing either.
   rm -f "$REG/$id.lastswap"
+  # The launch digest (sandbox A2): a restart over a digest that no longer matches would be refused at its spawn, so it is
+  # not attempted; the session stays down, journalled, as a refused supervised respawn does.
+  [[ "$restart" != 1 ]] || _profile_digest_ok "$id" || { _profile_refused "$id" "restart on $cur after a refused swap: $PROFILE_DIGEST_WHY"; restart=0; }
   if [[ "$restart" == 1 ]]; then
     # Registry `wrapper` was never touched, so this puts the session back exactly where
     # it was: same account, same unit, still holding its file. Same `|| cmd_ensure`
@@ -31813,6 +31851,12 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
       "--force does not move it: --force accepts a transcript that cannot be found, and this is the opposite hazard — two writers. Swap again once the job has ended."
     return 1
   fi
+  # THE LAUNCH DIGEST (Overlord W1 sandbox A2, question 5: never end what cannot be respawned). A route whose
+  # `profiledigest` the row it reads does not hash to cannot spawn (`_spawn_start` refuses it), so the swap ends nothing:
+  # refused here with the other pre-flights, before the act gates, the session left running on $cur, `wrapper` unmoved.
+  # Through `_swap_refuse` too, so the row shows it and the auto-swap backs off for SWAPBLOCK_COOLDOWN. --force does not
+  # move it. A route without the field passes (`_profile_digest_ok`'s first test).
+  _profile_digest_ok "$id" || { _profile_refused "$id" "swap to $target: $PROFILE_DIGEST_WHY"; _swap_refuse "$id" "$cur" "$target" "launch profile: $PROFILE_DIGEST_WHY" 0 "--force does not move it: the launch profile this box installed is not the one the route names; retire or rebind the session first, or let the two builds agree."; return 1; }
   # ── THE AUTOMATIC GATES, AT THE ACT (D-5240) ───────────────────────────
   # Last before the first write the stop path makes (`.choicekept`, then the
   # stop), so a refusal leaves nothing behind but the `lastswap` it restores.

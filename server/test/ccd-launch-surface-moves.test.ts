@@ -79,37 +79,44 @@ describe('a supervised respawn over a digest that differs stays refused (the rul
   });
 });
 
-describe('the moves, over a digest that differs: today (characterization, green on main before A2)', () => {
-  it('cmd_start of an existing row clears the stop marker and dies at the spawn: no pane, one journal line', () => {
+describe('the moves, over a digest that differs', () => {
+  it('cmd_start of an existing row refuses before it writes anything: the stop marker stays, no pane', () => {
     seed(OTHER);
     h.sh(`: > "$HOME/.cc-sessions/${ID}.stopped"`);
     const r = run(`CCD_IN_UNIT=1 cmd_start ${ID}`);
     expect(r.code).not.toBe(0);
     expect(panesMade()).toEqual([]);
-    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stopped`))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stopped`))).toBe(true);
     expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('start');
   });
-  it('cmd_swap ends the pane, moves wrapper and journals the swap, then its respawn dies', () => {
+  it('cmd_swap refuses before the teardown: the pane is not killed, wrapper stays, no swap line', () => {
     seed(OTHER);
     const r = run(`cmd_swap ${ID} claude-d`);
     expect(r.code).not.toBe(0);
-    expect(kills()).toHaveLength(1);
-    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
-    expect(swappedLines()).toHaveLength(1);
+    expect(kills()).toEqual([]);
+    expect(calls().filter((c) => c.startsWith('_svc_stop'))).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(swappedLines()).toEqual([]);
     expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('swap to claude-d');
+    expect(h.reg(ID, 'swapblocked')).toContain('launch profile');
   });
-  it('the auto-swap (a rescue dispatch) passes its act gates and ends the pane the same way', () => {
+  it('the auto-swap (a rescue dispatch) refuses the same way, before its act gates', () => {
     seed(OTHER);
     const r = run(`_swap_rescue_act_gate() { echo "act-gate" >> "$HOME/ccd-calls"; return 0; };
       CCD_SWAP_AUTO=1 CCD_SWAP_ARM=rescue cmd_swap ${ID} claude-d`);
     expect(r.code).not.toBe(0);
-    expect(calls()).toContain('act-gate');
-    expect(kills()).toHaveLength(1);
-    expect(h.reg(ID, 'wrapper')).toBe('claude-d');
+    expect(calls()).not.toContain('act-gate');
+    expect(kills()).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(swappedLines()).toEqual([]);
     expect(refusedLines()).toHaveLength(1);
   });
-  it("_swap_refuse's restart, once the pane is gone and the digest moved under it, starts the unit and its spawn dies", () => {
+  it("_swap_refuse's restart, once the pane is gone and the digest moved under it, starts nothing", () => {
     seed(DIGEST);
+    // The carry finds nothing after the flush (the uuid rotates at the kill), so the swap is refused with a restart;
+    // the kill also moves the digest, so the restart is the move the probe must stop.
     const r = run(`tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
         case "\${1:-}" in
           kill-session) _reg_set ${ID} uuid ${UUID_B}; _reg_set ${ID} profiledigest ${OTHER} ;;
@@ -118,10 +125,11 @@ describe('the moves, over a digest that differs: today (characterization, green 
       cmd_swap ${ID} claude-d`);
     expect(r.code).not.toBe(0);
     expect(kills()).toHaveLength(1);
-    expect(calls().filter((c) => c.startsWith('_svc_start'))).toHaveLength(1);
+    expect(calls().filter((c) => c.startsWith('_svc_start'))).toEqual([]);
     expect(panesMade()).toEqual([]);
     expect(h.reg(ID, 'wrapper')).toBe('claude');
     expect(refusedLines()).toHaveLength(1);
+    expect(refusedLines()[0]).toContain('restart');
   });
 });
 
