@@ -3651,6 +3651,47 @@ before and after and the brief's one misquoted line ending are in `c25.md`.
 **Acceptance.** `docs-compact-head.browser.test.ts` passes in full at the PR's tip in both skins, and the four ring cases are
 red on the fix with the mutant in place. **Rollback.** A plain revert.
 
+### Task C34: the three tests on the flake watch list, each cured or shown cured (D-8657) — now
+
+Placed after C25's section, before the acceptance matrix. Test code only; no product behaviour changes, and the shipped locale
+pins of D-3833 and D-3979 are unchanged.
+
+**Why.** Three tests on the programme's flake watch list: the linearity case in `pwa/test/chat-marks-negation.test.ts`
+(dequeued #2692 once, a ratio of 8.25 against 8), the `/digest` row of "every route says where you are" in
+`pwa/test/instrument-shell.test.tsx` (dequeued #2762 once), and R14(i)'s Linux case in `server/test/platform-hazards.test.ts`
+(red in every run on the fleet box's bash 5.3.9, green on CI's 5.2.21). Root cause first, measured, for each.
+
+**What was found and done.**
+
+- **The linearity case.** Reproduced: under six busy loops in the fleet's 4-CPU test slice, the shipped wall-clock form was red
+  in 12 of 40 and then 5 of 40 runs, ratios up to 15.8. The 200k run waits off the CPU far longer than the 50k run on a loaded
+  box (its fastest wall time rose to 88 to 112 ms while its CPU time stayed near 17 to 29 ms), and equal-work wall-clock
+  batches did not help. The case now compares CPU time (`process.cpuUsage()`), after an untimed warm-up of each size, over five
+  alternating turns, the least of each kept, bound still `< 8`; every run keeps its 400 ms wall bound. Under the same load it
+  was green in 100 of 100 runs (ratio at most 6.10), and 40 of 40 beside a looping pwa suite. The quadratic mutants still
+  fail: the two that rebuild per label hit the wall bound, and two with a small constant, which pass the wall bound, are
+  caught by the ratio 3 of 3 each, where the shipped form caught the milder one 2 of 3.
+- **The `/digest` row.** Already cured by #2780 (`166aa21ee`); no code change. The failing queue run's test file is
+  byte-identical to the one before #2780, it had no part of the fix, and its message is the one #2780's mutant "without the
+  wait" records. #2780's mutant on today's file reds with that message, and the file is green as it is.
+- **R14(i) on Linux.** Bash 5.3 reads bytes correctly under a UTF-8 locale. Measured on 5.1.16, 5.2.15 and 5.2.37 (misread)
+  and 5.3.9 and 5.3.20 (no misread), on glibc and musl alike. The case now asserts the misread on a bash below 5.3 and records
+  the answer on a later one, failing only if a probe does not run or the version cannot be read. On bash 5.2.15 it still reds
+  when the probe reads bytes, and dropping a locale pin still reds U4n (T4-M32) and U4u (T1-1); on 5.3.9 both mutants survive,
+  which the case now prints.
+
+The runs, the tables and the mutants are in `c34.md`. Departures by slug: `plugin-bound-under-load` (another case in the
+same file went over its 400 ms wall bound once in 100 loaded runs; not changed) and `locale-pins-hollow-on-bash-5-3` (on bash
+5.3 the locale pins guard nothing these probes show, so T4-M32, T4-M31 and T1-1 cannot red there).
+
+- **D-8657** — `flake-watch-three`: Task C34, issued on 2026-11-16. The linearity guard's wall-clock ratio inflated on a
+  loaded runner because the 200k run waits off the CPU, so it now compares CPU time after a warm-up over five alternating
+  turns; the `/digest` row was already cured by #2780; R14(i)'s Linux case asserts the UTF-8 misread on a bash below 5.3 and
+  records it on 5.3 and later, where bash no longer misreads. Departures are named by slug in `c34.md`.
+
+**Acceptance.** Each changed test file passes alone, repeated, at the PR's tip; pwa's whole suite passes once; the
+whole-tree guards (deviation-refs, dtbd, topology-clean, single-definition, the test tsc) pass. **Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
