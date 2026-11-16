@@ -5,7 +5,7 @@
 // frame there is no row to read, and the section renders nothing. The words are `routingLine`'s `parts`: this file maps
 // them to markup and spells none of the sentence.
 import type { ReactNode } from 'react';
-import { accountLabel, accountProvider } from '../lib/accounts';
+import { accountLabel, accountProvider, entryFor } from '../lib/accounts';
 import { useLaneModels } from '../lib/useLaneModels';
 import { metaChipTone } from '../session/chipTones';
 import { routeView } from '../session/routeView';
@@ -25,9 +25,10 @@ export function RoutingSection(): ReactNode {
   // D-8406: the lane's model files name the asked class's model; read before the early return, as every hook is.
   const laneModels = useLaneModels(row?.wrapper ?? null);
   if (row === null) return null;
+  const entry = entryFor(roster, row.wrapper);
   const line = routingLine(
-    row, routeView(row, row.wrapper, accountProvider(roster, row.wrapper), laneModels), accountLabel(roster, row.wrapper),
-    laneModels,
+    row, routeView(row, row.wrapper, entry, accountProvider(roster, row.wrapper), laneModels),
+    accountLabel(roster, row.wrapper), laneModels,
   );
   // Named by its field: the words around a door are text, so a reader moving by buttons would hear the value alone.
   const part = (p: RoutingPart, i: number): ReactNode => {

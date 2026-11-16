@@ -102,7 +102,7 @@ describe('generateAccountsSh', () => {
       // Required on `AccountDef` — this object is deliberately built by hand
       // rather than parsed, so the compiler is the only thing that can ask it
       // for every field. Untagged: this case is about `dqEscape`, not pools.
-      pool: null, fableBilling: null, continuity: null,
+      pool: null, fableBilling: null, continuity: null, org: null,
     };
     const hostileRoster = {
       version: 1 as const,
@@ -297,7 +297,7 @@ describe('generateAccountsSh — the pool projection', () => {
       // `shared/generate.d.mts` types the parameter as `Roster`, so the cast is
       // what lets an unvalidated value past the compiler here the way an
       // untypechecked `.mjs` caller would let one past in production.
-      pool: 7 as unknown as string, fableBilling: null, continuity: null,
+      pool: 7 as unknown as string, fableBilling: null, continuity: null, org: null,
     };
     const junkRoster = {
       version: 1 as const,
@@ -382,7 +382,7 @@ describe('generateAccountsSh — the billing and continuity projections', () => 
   it('emits NO arm for a value that reached the generator unvalidated', () => {
     const junk = {
       id: 'junk', label: 'Junk', configDirSuffix: '.junk', exec: { kind: 'upstream' as const }, homeAble: true,
-      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null, org: null,
       fableBilling: 'free; rm -rf x' as unknown as 'included',
       continuity: { recordedAt: '1; echo hi' } as unknown as { recordedAt: number },
     };
@@ -460,7 +460,7 @@ describe('generateAccountsSh — the credential-file projection (D-3524)', () =>
     const acct = {
       id: 'h', label: 'H', configDirSuffix: '.h',
       exec: { kind: 'upstream' as const, secretsFile: hostile }, homeAble: true,
-      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null, fableBilling: null, continuity: null,
+      hue: 'cyan' as const, telemetry: 'anthropic' as const, hidden: false, pool: null, fableBilling: null, continuity: null, org: null,
     };
     const hostileRoster = {
       version: 1 as const, accounts: [acct], byId: new Map([['h', acct]]),

@@ -737,11 +737,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[79] (answer_marks, the operator's answer marks, Overlord W1)
     // and MIGRATIONS[80] (overlord_authority_head, the Overlord authority journal's head row, Overlord W1)
     // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, the response record, Overlord W1)
-    // and MIGRATIONS[82] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1).
-    // and MIGRATIONS[83] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
+    // and MIGRATIONS[82] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1)
+    // and MIGRATIONS[83] (response_settings, the response record's retention, Overlord W1 responses B)
+    // and MIGRATIONS[84] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(84);
-    expect(MIGRATIONS.length).toBe(84);
+    expect(COORD_SCHEMA_VERSION).toBe(85);
+    expect(MIGRATIONS.length).toBe(85);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -850,8 +851,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[80] (overlord_authority_head, Overlord W1)
     // and MIGRATIONS[81] (operator_responses, response_receipts and response_boots, Overlord W1)
     // and MIGRATIONS[82] (the goals versions' ratification columns, Overlord W1)
-    // and MIGRATIONS[83] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(84);
+    // and MIGRATIONS[83] (response_settings, Overlord W1 responses B)
+    // and MIGRATIONS[84] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(85);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

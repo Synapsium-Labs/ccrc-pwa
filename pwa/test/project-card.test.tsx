@@ -1886,6 +1886,20 @@ describe('worktree controls on a project card (delegation broker wave 5, PR10)',
     expect(within(rowOf(container)).getByRole('alert'), 'the region stays mounted while the row offers none').toBe(alert);
   });
 
+  it('C38 (review 1624): the box the focus goes to while an act is in flight says it is busy, and stops saying so once the act settles', async () => {
+    let release: (r: Response) => void = () => undefined;
+    const r = recorder(() => new Promise<Response>((done) => { release = done; }));
+    const { container } = renderCard(worldWithLease({ disposition: 'retained', expiresAt: '2026-11-17T12:00:00.000Z' }), { fetch: r.fetch });
+    const box = container.querySelector('.proj-work-controls')!;
+    expect(box.getAttribute('aria-busy'), 'CONTROL: the box is not busy before an act').toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(document.activeElement, 'CONTROL: the act took the focus to the box').toBe(box);
+    expect(box.getAttribute('aria-busy'), 'the box holding the focus does not say its act is in flight').toBe('true');
+    await act(async () => { release(accepted()); });
+    await screen.findByText('Worktree kept until 24 Nov');
+    expect(box.getAttribute('aria-busy'), 'the box still says busy once its act settled').toBeNull();
+  });
+
   it('F3 (a) (review 1623): in a delegation group, the focus goes to the group\'s toggle, the nearest heading still drawn', async () => {
     const r = recorder();
     const world = (disposition: 'retained' | 'transferring') =>

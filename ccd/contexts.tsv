@@ -86,6 +86,8 @@ _is_codex_backend	C1
 _is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
+_acct_org	C1
+_org_rel	C1
 _pool_sync_installed	C1
 _acct_pool_state	C1
 _pool_ok	C1
@@ -965,3 +967,7 @@ _pool_set_start_warn	C1
 cmd_pool_answer	C1
 cmd_keep_awake	C4
 _keep_awake_ours	C4
+_role_long_lived	C3
+_route_holddown_holds	C1
+_route_holddown_settle	C1
+_fresh_crossing_end	C1

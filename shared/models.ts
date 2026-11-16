@@ -198,6 +198,10 @@ export type ModelWindows = Readonly<Record<string, number>>;
 export interface LaneClassModel {
   readonly model: string | null;
   readonly label: string | null;
+  /** D-8686 (re-plan R1): the effort levels the catalogue row for `model` lists, as `parseCatalogue` kept them (`[]`:
+   *  the row lists none). `null` when there is no catalogue, no row for the model, or no model. An older server omits
+   *  the field, and its one reader (`asLaneModelsRead`, `pwa/src/lib/models.ts`) reads that as `null`. */
+  readonly efforts: readonly string[] | null;
 }
 export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
 

@@ -177,6 +177,15 @@ export function askForMark(store: Pick<CoordStore, 'askMarkRead'>, id: number, n
   return store.askMarkRead(id, now, liveAsk);
 }
 
+/** The response lane's reads (Overlord W1 responses B, `responses/lane.ts#ownerFactsOf`): the ask a Waiting on you row or a
+ *  push is about, and a digest line's ask or approval row with its correction mark, each through the store's own read,
+ *  answered unchanged. */
+export function askForResponse(store: Pick<CoordStore, 'askById'>, id: number): ReturnType<CoordStore['askById']> { return store.askById(id); }
+export function askCorrectionForResponse(store: Pick<CoordStore, 'askForCorrection'>, id: number): ReturnType<CoordStore['askForCorrection']> {
+  return store.askForCorrection(id);
+}
+export function approvalForResponse(store: Pick<CoordStore, 'approvalById'>, id: number): ReturnType<CoordStore['approvalById']> { return store.approvalById(id); }
+
 // ── the owner of question state ──────────────────────────────────────────────────────────────────────────────────
 
 /** What a `Questions` instance is made from: the composition's own store (`Deps.coord`) and, for the hold's claimant

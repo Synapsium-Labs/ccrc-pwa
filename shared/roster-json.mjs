@@ -213,6 +213,13 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
  *  over-the-cap and shell-metacharacter rows run the literal end to end through
  *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
+/** Mirrors `shared/roster.ts`'s organization-label gate (`ORG_ID_SHAPES`, `orgLabelVerdict`), held equal by
+ *  `roster-org.test.ts` by text and by behaviour. Exported for the verb's `set-facts` op and the generator. */
+export const ORG_ID_SHAPES = [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, /^[0-9a-f]{32}$/i];
+export function orgLabelVerdict(v) {
+  if (ORG_ID_SHAPES.some((re) => re.test(v))) return 'looks-like-an-id';
+  return POOL_NAME_RE.test(v) && v !== 'none' ? 'ok' : 'off-shape';
+}
 
 // Mirrors `shared/roster.ts`'s `EXEC_KINDS`, the one definition of `exec.kind`'s closed set, IN ORDER: this
 // validator runs under bare Node and cannot import TypeScript, so it keeps this one copy, and
@@ -536,6 +543,14 @@ function checkAccount(raw, index) {
     continuityAt = at;
   }
 
+  // Mirrors `parseRoster`'s organization-label gate, a written `null` refused. RETURNED: `_ccrc_org` emits it.
+  const org = raw['org'];
+  if (org !== undefined && (typeof org !== 'string' || orgLabelVerdict(org) !== 'ok')) {
+    bad(`account "${id}" has an invalid org ${JSON.stringify(org)}.`,
+      `Set "org" for account "${id}" to a name matching ^[a-z][a-z0-9-]{0,31}$, other than "none" and never the `
+      + "organization's id, or remove the key to leave it unset.");
+  }
+
   const telemetry = raw['telemetry'];
   if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     bad(`account "${id}" has an invalid telemetry ${JSON.stringify(telemetry)}.`,
@@ -585,6 +600,7 @@ function checkAccount(raw, index) {
     pool: pool === undefined ? null : pool,
     fableBilling: fableBilling === undefined ? null : fableBilling,
     continuity: continuityAt === undefined ? null : { recordedAt: continuityAt },
+    org: org === undefined ? null : org,
     ...codexTopology,
   };
 }

@@ -50,6 +50,8 @@ import { readAuthStatus } from '../lib/auth';
 import { onPageHidden } from '../lib/pageClock';
 import { apiErrorText, LEDGER_REFUSAL_TEXT, refusalText } from '../lib/refusalWords';
 import { AnswerMarkBoxes } from './AnswerMarkBox';
+import { HandledElsewhere } from '../responses/HandledElsewhere';
+import { useOpenedReceipt } from '../responses/useOpenedReceipt';
 import { SECRET_INPUT } from '../lib/secretInput';
 import { SpecLink } from './GoalsPanel';
 import { linkRuns } from './ledgerLinks';
@@ -518,12 +520,16 @@ function Panel({ item, programmeLive, onTick, onDismiss, saveSecret = saveItemSe
           <Button variant="ghost" size="fit" disabled={busy || !current} onClick={() => void run(onDismiss)}>Dismiss</Button>
         )}
       </div>
+      {/* The operator's own response (Overlord W1, C69): apart from the answer marks' boxes above, off on a saved copy. */}
+      {current && <HandledElsewhere target={{ kind: 'item', id: item.id }} />}
     </section>
   );
 }
 
 export function ItemView({ item, onTick, onDismiss, programmeLive, now, programme, saveSecret, removeSecret, stepUpDeps, authStatus, current = true, runs = null, sessions = null, onActed, itemHref }: ItemViewProps): ReactNode {
   const { acts, sheets } = useItemActs(sessions, onActed);
+  const opened = useMemo(() => [{ kind: 'item' as const, id: item.id }], [item.id]);
+  useOpenedReceipt(opened);
   const pills = itemPills(item);
   const name = programme?.name ?? item.program;
   const href = programme?.href ?? null;
