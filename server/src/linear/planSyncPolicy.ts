@@ -178,7 +178,9 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
     planned: Record<string, unknown>; fp: string; isCurrent: (stored: string | null) => boolean;
     create: () => { input: CcrcOpInput; fields: string[] };
     update: (linearId: string) => { input: CcrcOpInput; fields: string[]; extras?: { stateType?: string; comment?: { requestId: string; body: string } } };
-    recover: Recover; link?: () => SyncStep | null;
+    recover: Recover;
+    /** A link step on the bound object; its `inputs` are the object's own (what a failed binding reports), set by `decide`. */
+    link?: () => Omit<Extract<SyncStep, { kind: 'link' }>, 'inputs'> | null;
   }
   const decide = (d: Decide): void => {
     const local: Local = { kind: d.kind, id: d.id };
@@ -190,7 +192,7 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
       phases[d.phase]!.push({ kind: 'skip', local, why, workspaceId: d.workspaceId, bindingId: d.b?.id ?? null, inputs, detail });
     };
     const bound = d.b?.state === 'bound' && d.b.linearId !== null;
-    if (bound && d.link !== undefined) { const l = d.link(); if (l !== null) { phases[5]!.push(l); return; } }
+    if (bound && d.link !== undefined) { const l = d.link(); if (l !== null) { phases[5]!.push({ ...l, inputs }); return; } }
     if (bound && d.isCurrent(d.b!.fingerprint)) return;
     if (d.statusMissing) { skip('status-missing'); return; }
     const refused = textRefusal(d.texts, d.facts);
@@ -313,7 +315,6 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
         return {
           kind: 'link', op: 'initiativeToProjectCreate', local: { kind: 'epic', id: e.id }, workspaceId: wsId, teamKey: pl.teamKey, bindingId: eb.id,
           input: { requestId, initiativeId, projectId: eb.linearId! }, fields: ['project'], requestId, fingerprint: fpFull,
-          inputs: plannedFingerprint({ ...planned, teamKey: pl.teamKey, workspaceId: wsId }),
         };
       },
       recover: 'name-and-creator',
@@ -392,7 +393,6 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
           return {
             kind: 'link', op: 'issueLink', local: tlocal, workspaceId: wsId, teamKey: tpl.teamKey, bindingId: tb.id,
             input: { requestId, issueId: tb.linearId, url: pr.url, title: `PR #${pr.number}` }, fields: ['url', 'title'], requestId, fingerprint: fpFull,
-            inputs: plannedFingerprint({ ...ip, prUrl: pr.url, teamKey: tpl.teamKey, workspaceId: wsId }),
           };
         },
         create: () => ({

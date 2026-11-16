@@ -737,4 +737,19 @@ describe('final-review fixes (D-8182)', () => {
     expect(opsOf(r)).not.toContain('projectsByName');
     expect(bindingOfKind(r, 'epic')).toMatchObject({ state: 'bound', linearId: before.linearId });
   });
+
+  it('I-3 (C18): an unreadable Linear store defers the pass with the backoff and keeps the due row', async () => {
+    const r = await rig();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const unreadable = r.build({ readLinearStore: async () => ({ kind: 'unreadable', code: 'unreadable' }) });
+    await unreadable.tick(afterDebounce(r));
+    expect(r.asks).toHaveLength(0);
+    expect(dueAt(r)).toBe(r.t.now + PLAN_SYNC_BACKOFF_MS[0]);
+    r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+    const throwing = r.build({ readLinearStore: async () => { throw new Error('the store cannot be read'); } });
+    await throwing.tick(r.t.now);
+    expect(r.asks).toHaveLength(0);
+    expect(dueAt(r)).toBe(r.t.now + PLAN_SYNC_BACKOFF_MS[0]);
+    expect(bindingsOf(r)).toEqual([]);
+  });
 });

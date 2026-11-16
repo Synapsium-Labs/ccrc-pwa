@@ -287,14 +287,16 @@ export class PlanSync {
     if (found === null) return { identifier: null };
     const { plan } = this.deps;
     const slug = found.run.program;
+    const boundNow = (): string | null => plan.bindingsOf(slug).find((x) => x.localKind === 'ticket' && x.localId === found.ticket.id && x.state === 'bound' && x.identifier !== null)?.identifier ?? null;
+    const already = boundNow();
+    if (already !== null) return { identifier: already };          // M-5: bound already, so the wait is for nothing
     plan.markSyncDue(slug, this.deps.now() - PLAN_SYNC_DEBOUNCE_MS);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, budgetMs); });
     try {
       await Promise.race([this.passFor(slug, this.deps.now() + budgetMs).then(() => undefined, () => undefined), waited]);
     } finally { clearTimeout(timer); }
-    const b = plan.bindingsOf(slug).find((x) => x.localKind === 'ticket' && x.localId === found.ticket.id && x.state === 'bound' && x.identifier !== null);
-    return { identifier: b?.identifier ?? null };
+    return { identifier: boundNow() };
   }
 
   private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
@@ -317,6 +319,8 @@ export class PlanSync {
       if (this.deps.now() >= deadlineAt || taken >= MAX_STEPS_PER_PASS) return 'deferred';
       let store: LinearStoreRead;
       try { store = await this.deps.readLinearStore(); } catch { store = { kind: 'unreadable', code: 'unreadable' }; }
+      // C18: a store that cannot be read is not "no Linear": the pass waits on the backoff and its due row stays.
+      if (store.kind === 'unreadable') { this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug)); return 'deferred'; }
       // Everything from here to the decision is synchronous: a plan write cannot land between the snapshot and the
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
@@ -502,6 +506,16 @@ export class PlanSync {
       this.bind(b, b.linearId, b.identifier, step.fingerprint);
       return 'next';
     }
+    // C16: a PR link refused with a failing word is given up for that URL: the issue stays bound, its fingerprint records the
+    // URL as settled (a new URL is tried again), and the coordinator is told once. A deferring word defers as for any step.
+    if (step.kind === 'link' && step.op === 'issueLink') {
+      const linked = b;
+      const issueId = b.linearId;
+      return this.onFailure(out, subject(b.id), (word) => {
+        this.bind(linked, issueId, linked.identifier, step.fingerprint);
+        this.mailLinkGivenUp(subject(linked.id), word);
+      });
+    }
     return this.onFailure(out, subject(b.id));
   }
 
@@ -596,7 +610,8 @@ export class PlanSync {
 
   // ── Outcomes: the table, one row each ──
 
-  private onFailure(out: Failure, s: Subject): Flow {
+  /** `failWith` is what a failing word does (by default the binding fails with it, C16's link gives the URL up instead). */
+  private onFailure(out: Failure, s: Subject, failWith: (word: string) => void = (word) => this.fail(s, word)): Flow {
     switch (out.word) {
       case 'rate-limited': this.deferUntil(s.slug, this.deps.now() + Math.max('retryAfterS' in out ? out.retryAfterS * 1000 : 0, this.nextBackoff(s.slug))); return 'defer';
       case 'unreachable': case 'timeout': case 'policy-unavailable': case 'journal-unavailable':
@@ -605,7 +620,7 @@ export class PlanSync {
         // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
         const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
         if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
-        if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { this.fail(s, 'malformed'); return 'next'; }
+        if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
         this.deferUntil(s.slug, this.deps.now() + this.nextBackoff(s.slug)); return 'defer';
       }
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
@@ -616,7 +631,7 @@ export class PlanSync {
         this.deferUntil(s.slug, until);
         return 'defer';
       }
-      default: this.fail(s, out.word); return 'next';
+      default: failWith(out.word); return 'next';
     }
   }
 
@@ -676,14 +691,24 @@ export class PlanSync {
   }
 
   private mailFailed(s: Subject, word: string): void {
-    const owner = this.deps.plan.planOwnerOf(s.slug);
-    if (owner === null) return;
     const key = s.local.kind === 'programme' ? s.slug : this.planKeyOf(s.plan, s.local);
-    const subject = `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`;
+    this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`,
+      `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`);
+  }
+
+  /** C16: a refused PR link, told once per ticket and word, in a fixed sentence (never the URL). */
+  private mailLinkGivenUp(s: Subject, word: string): void {
+    const key = this.planKeyOf(s.plan, s.local);
+    this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} pr-link ${word} (${s.slug})`,
+      `The Linear sync could not link the pull request to the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It does not try that link again; the issue stays in sync, and a later pull request is linked as usual.`);
+  }
+
+  private mailOnce(slug: string, subject: string, body: string): void {
+    const owner = this.deps.plan.planOwnerOf(slug);
+    if (owner === null) return;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
-    const body = `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`;
-    tx(coord.db, () => { insertSystemMailTx(coord, { program: s.slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
+    tx(coord.db, () => { insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
   }
 
   private planKeyOf(plan: StoredPlan, local: Local): string {

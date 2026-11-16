@@ -238,3 +238,46 @@ describe('the dispatch wait (D-8182, §5.6)', () => {
     }
   });
 });
+
+describe('final-review fixes (D-8182)', () => {
+  const mails = (r: Rig): { subject: string; body: string }[] =>
+    r.db.prepare("SELECT subject, body FROM mail WHERE subject LIKE 'Linear sync%' ORDER BY id").all() as { subject: string; body: string }[];
+
+  it('C-1 (C16): a PR link refused policy-denied is given up: one issueLink, no issueCreate, one mail, the issue stays bound, nothing on the next tick', async () => {
+    const r = await rig({ mode: 'public' });
+    await tick(r);
+    const bound = ticketBinding(r)!;
+    r.prs.set(r.runs[0]!, { number: 7, branch: null });
+    const base = r.respond.current;
+    r.respond.current = (ask) => (ask.op === 'issueLink' ? { ok: false, word: 'policy-denied', maybeSent: false } : base(ask));
+    const from = r.asks.length;
+    await tick(r);
+    expect(ops(r).slice(from)).toEqual(['issueLink']);
+    expect(ticketBinding(r)).toMatchObject({ state: 'bound', linearId: bound.linearId, identifier: bound.identifier });
+    expect(mails(r)).toHaveLength(1);
+    expect(mails(r)[0]!.subject).toContain('policy-denied');
+    expect(mails(r)[0]!.body).not.toContain('github.com');             // a fixed sentence, never the URL
+    const after = r.asks.length;
+    await tick(r);
+    await tick(r);
+    expect(r.asks).toHaveLength(after);                                 // given up: no further call
+    expect(mails(r)).toHaveLength(1);
+    r.prs.set(r.runs[0]!, { number: 8, branch: null });                 // a new URL is tried again
+    await tick(r); await tick(r);
+    expect(links(r).map((a) => a.input['url'])).toEqual(['https://github.com/owner/repo/pull/7', 'https://github.com/owner/repo/pull/8']);
+    expect(ops(r).filter((o) => o === 'issueCreate')).toHaveLength(1);   // the first tick's, never another
+  });
+
+  it('M-5: ensureTicketBound answers at once for a ticket already bound with an identifier, sending nothing', async () => {
+    const r = await rig();
+    await tick(r);
+    const bound = ticketBinding(r)!;
+    expect(bound.identifier).not.toBeNull();
+    r.db.prepare("UPDATE plan_tickets SET title = 'Renamed' WHERE runId = ?").run(r.runs[0]!);   // a pass would have work to send
+    r.plan.markSyncDue(SLUG, r.t.now - PLAN_SYNC_DEBOUNCE_MS - 1);
+    r.respond.current = () => new Promise<CcrcOpOutcome>(() => undefined);
+    const from = r.asks.length;
+    expect(await r.sync.ensureTicketBound(r.runs[0]!, 200)).toEqual({ identifier: bound.identifier });
+    expect(r.asks).toHaveLength(from);
+  });
+});

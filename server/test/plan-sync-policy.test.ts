@@ -275,4 +275,17 @@ describe('final-review rulings: the pure verdicts (D-8182)', () => {
   it.each(REQUEUES)('requeueVerdict: $name', (row) => {
     expect(requeueVerdict(row.b, row.why)).toBe(row.verdict);
   });
+
+  it("C16: a PR link step's inputs are the inputs the issue's binding reports when failed", () => {
+    const base = snapBound({ tickets: [tk()] });
+    const create = planSyncSteps(base).steps.find((x) => x.kind === 'create' && x.op === 'issueCreate');
+    if (create?.kind !== 'create') throw new Error('no issue create');
+    const pr = { 1: { url: 'https://github.com/owner/repo/pull/7', number: 7, branch: null } };
+    const bound = bind({ localKind: 'ticket', localId: 1, identifier: 'AAA-1', fingerprint: create.fingerprint });
+    const linked = { ...snapBound({ tickets: [tk()] }, [bound]), ticketPrs: pr };
+    const link = planSyncSteps(linked).steps.find((x) => x.kind === 'link' && x.op === 'issueLink');
+    if (link?.kind !== 'link') throw new Error('no link');
+    const asFailed = { ...snapBound({ tickets: [tk()] }, [{ ...bound, state: 'failed' as const, failedAt: 1, failedInputs: 'x' }]), ticketPrs: pr };
+    expect(planSyncSteps(asFailed).failedInputs.find((f) => f.bindingId === bound.id)!.inputs).toBe(link.inputs);
+  });
 });
