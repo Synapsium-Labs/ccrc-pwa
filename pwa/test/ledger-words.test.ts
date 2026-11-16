@@ -6,6 +6,8 @@ import {
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
   type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
 } from '../src/ledgers/ledgerWords';
+import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlacement, ratificationWords, ratifyFailureOf, ratifyOffered } from '../src/ledgers/ledgerWords';
+import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import type { AskMarkRow } from '../../shared/answerMarks';
 import { isWaitingView } from '../src/ledgers/waitingView';
@@ -404,5 +406,104 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
 
   it('an item\'s number is its id after a #', () => {
     expect(itemNumber(itemView({ id: 129 }))).toBe('#129');
+  });
+});
+
+describe('ratificationWords', () => {
+  it('words both ratified sources', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'operator' } }, null)).toBe('Ratified by you');
+    expect(ratificationWords({ ratified: true, source: { kind: 'coordinator' } }, null)).toBe('Ratified by the coordinator');
+  });
+  it('words every reason a version is not ratified, naming the item where there is one', () => {
+    const words: Record<RatificationWhy, string> = {
+      'source-does-not-ratify': 'Not ratified: written by the coordinator',
+      'effect-unmeasured': "Not ratified: rests on item 9's answer, which does not ratify goals yet",
+      'item-not-answered': 'Not ratified: item 9 has not been answered',
+      unreadable: 'Not ratified: what it rests on could not be read',
+      unrecorded: 'Not recorded',
+      absent: 'Not recorded',
+    };
+    for (const [why, text] of Object.entries(words)) {
+      const r: Ratification = { ratified: false, why: why as RatificationWhy, source: null };
+      expect(ratificationWords(r, 9), why).toBe(text);
+    }
+  });
+});
+
+describe('ratifyFailureOf: what a failed ratify means to the Goals card', () => {
+  it('a 404 (an older server), not-configured and auth-off take the button away, each with its words', () => {
+    expect(ratifyFailureOf(404, { ok: false, error: 'not-found' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-found'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'not-configured' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['not-configured'] });
+    expect(ratifyFailureOf(501, { ok: false, error: 'auth-off' })).toEqual({ kind: 'unavailable', text: RATIFY_UNAVAILABLE_TEXT['auth-off'] });
+  });
+  it('goals-changed reads again; anything else is only said', () => {
+    expect(ratifyFailureOf(409, { ok: false, error: 'goals-changed' })).toEqual({ kind: 'changed' });
+    expect(ratifyFailureOf(400, { ok: false, error: 'bad-request' })).toEqual({ kind: 'other' });
+    expect(ratifyFailureOf(null, null)).toEqual({ kind: 'other' });
+    for (const inherited of ['toString', '__proto__', 'constructor']) expect(ratifyFailureOf(400, { ok: false, error: inherited }), inherited).toEqual({ kind: 'other' });
+  });
+  it('a version resting on an item\'s answer, ratified (from W3), has its own words', () => {
+    expect(ratificationWords({ ratified: true, source: { kind: 'item' } }, 4)).toBe('Ratified by the answer to the item it cites');
+  });
+});
+
+describe('ratificationWords and ratifyOffered: a word from a newer server (review 2240 F5)', () => {
+  const FIXED = 'Could not read whether this is ratified';
+  const bad = (r: unknown): Ratification => r as Ratification;
+  it('the fixed word is the one constant', () => { expect(RATIFICATION_UNREADABLE_WORDS).toBe(FIXED); });
+  it.each(['future-reason', 'toString', '__proto__', 'constructor', ''])('an unknown why %j reads the fixed word and offers no Ratify', (why) => {
+    const r = bad({ ratified: false, why, source: null });
+    expect(ratificationWords(r, 3)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it.each(['future-kind', 'toString', '__proto__'])('an unknown source kind %j on a ratified verdict reads the fixed word', (kind) => {
+    const r = bad({ ratified: true, source: { kind } });
+    expect(ratificationWords(r, null)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it.each(['future-kind', 'toString', '__proto__'])('an unknown source kind %j on a not-ratified verdict reads the fixed word and offers no Ratify', (kind) => {
+    const r = bad({ ratified: false, why: 'unrecorded', source: { kind } });
+    expect(ratificationWords(r, null)).toBe(FIXED);
+    expect(ratifyOffered(r)).toBe(false);
+  });
+  it('a ratified verdict with no source reads the fixed word', () => {
+    expect(ratificationWords(bad({ ratified: true, source: null }), null)).toBe(FIXED);
+  });
+  it('offers Ratify only to an unratified, readable verdict that is not absent', () => {
+    const no = (why: RatificationWhy, source: Ratification['source'] = null): Ratification => ({ ratified: false, why, source });
+    for (const why of ['unrecorded', 'unreadable', 'source-does-not-ratify', 'effect-unmeasured', 'item-not-answered'] as const) {
+      expect(ratifyOffered(no(why)), why).toBe(true);
+    }
+    expect(ratifyOffered(no('item-not-answered', { kind: 'item' }))).toBe(true);
+    expect(ratifyOffered(no('absent'))).toBe(false);
+    expect(ratifyOffered({ ratified: true, source: { kind: 'operator' } })).toBe(false);
+  });
+});
+
+describe('doneWhenPlacement: where the stored definition of done is drawn (review 2240 F4)', () => {
+  const g = (over: Partial<GoalsView> = {}): GoalsView => ({
+    program: 'prog-a', specPath: null, inShort: 'In short', inShortAt: 1000,
+    modifications: [{ id: 5, at: 2000, text: 'change', ruling: null, itemId: null, pr: null, merged: true }], doneWhen: ['one'], ...over,
+  });
+  it('is null with no list: null, absent or empty', () => {
+    expect(doneWhenPlacement(g({ doneWhen: null }))).toBeNull();
+    expect(doneWhenPlacement(g({ doneWhen: undefined }))).toBeNull();
+    expect(doneWhenPlacement(g({ doneWhen: [] }))).toBeNull();
+  });
+  it('the pin when its stamp is the one shown', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: { pin: { inShortAt: 1000 } } }))).toEqual({ at: 'pin' });
+  });
+  it('a modification when it is one listed', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: { modification: 5 } }))).toEqual({ at: 'modification', id: 5 });
+  });
+  it('alone when the writer is null, absent, a stale pin stamp, a modification not shown, or unreadable', () => {
+    expect(doneWhenPlacement(g({ doneWhenVersion: null }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g())).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: { pin: { inShortAt: 999 } } }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: { modification: 6 } }))).toEqual({ at: 'alone' });
+    expect(doneWhenPlacement(g({ doneWhenVersion: {} as never }))).toEqual({ at: 'alone' });
+  });
+  it('alone when the pin is the writer but none is drawn', () => {
+    expect(doneWhenPlacement(g({ inShort: null, inShortAt: null, doneWhenVersion: { pin: { inShortAt: 1000 } } }))).toEqual({ at: 'alone' });
   });
 });
