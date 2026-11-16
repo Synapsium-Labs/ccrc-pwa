@@ -43,6 +43,51 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
 - `org-read-at-the-lane-pass`: the relation uses the roster the server holds when the lane reads the row, as Table 3
   says. A label changed after a resume changes the reading on the next pass; the reading is never stored.
 
+## Peer grants
+
+- `server/src/continuity/continuityStore.ts`, `generationsLane.ts`, `shared/continuity.ts` and the lane test's import pin
+  (claim 4570, run 2244): additive co-edits as described above. Run 2244's #2934 changes the same `renewalInputsOf` call
+  (a sixth argument, `renewNow`) and the same import list (three entries), so whoever lands second keeps both sides.
+- `server/test/sim/renewalDeciderSets.ts` (claim 4574, run 2246): the renewalDue section only.
+- Run 2244 asked in turn for `schema.ts`, `watch.ts` and `coord-db.test.ts` (this run's claim 4668), and was granted. Its
+  hand-offs migration also takes a slot after 84, so one of the two renumbers at landing, on the coordinator's word.
+
 ## Tests and mutation
 
-To be filled in with the measured runs before the push.
+The new `continuity-generations-org.test.ts` holds D1 (the migration, the mint's `prevLane`, an older row), every row of
+Table 3, the row's class, place and roles, its blindness apart from `resumed-other-class` and `resumed-long`, the feed's
+word, and the watcher reading the labels from the roster it holds. It was red first (18 of 18 cases that touch the change).
+
+Green: the new file, `continuity-renewal-due`, `continuity-vocabulary`, `continuity-generations-store`,
+`continuity-generations-lane`, `continuity-renewal-acts`, `continuity-renewal-feed`, `continuity-soft-renewal`,
+`run-close-switch`, `rings/*`, `single-definition/*`, `sim/mutation-floors` (the `renewalDue` floor), `growth-check`
+armed, `topology-clean`, `anchors`, `citations`, `deviation-refs`, the server and pwa type checks, and the whole `coord*`
+set, 29 files, one at a time. Under load (15 to 20) four cases timed out at their 20 s limit and passed alone with a longer
+one: two in `coord-db` (each about 21 s, a fresh chain of 85 migrations) and two in `coord-store` (the delegation identity
+table and the outstanding-mail clamp, which inserts 510 rows, about 27 s). None touches this change. The full test-tree type check was killed by the
+test slice's shared memory cap, so the touched test files were type-checked through a scratch config, and CI runs the whole.
+
+`mutation-run.py` mutates Python modules only, so the mutants were applied one at a time by a script that saves the file,
+applies one replacement, runs the named test file and restores the saved copy. All 12 were killed:
+
+| Mutant | Killed by |
+|---|---|
+| an unmeasured `startOtherOrg` folds to false (the predicate) | `continuity-renewal-due` |
+| the row classed soft | `continuity-renewal-due` |
+| the row in the coordinator's list | `continuity-renewal-due` |
+| `unknown` folds to "same" (the lane) | `continuity-generations-org` |
+| previous account unknown folds to false | `continuity-generations-org` |
+| own account unknown folds to false | `continuity-generations-org` |
+| a start that did not resume is read by the relation | `continuity-generations-org` |
+| the mint writes null for `prevLane` | `continuity-generations-org` |
+| the mint writes its own lane for `prevLane` | `continuity-generations-org` |
+| the read drops `prevLane` | `continuity-generations-org` |
+| the watcher passes no labels | `continuity-generations-org` |
+| the pass drops `orgOf` | `continuity-generations-org` |
+
+## Growth
+
+Lines added and removed against `main`, all far within the 40-line limit with no waiver:
+`server/src/continuity/generationsLane.ts` +20 −3, `server/src/coord/schema.ts` +17 (comment and one statement),
+`server/src/continuity/renewalDue.ts` +11 −5, `server/src/continuity/continuityStore.ts` +10 −7, `server/src/watch.ts` +2,
+`shared/continuity.ts` +1. `growth-check` runs green armed.
