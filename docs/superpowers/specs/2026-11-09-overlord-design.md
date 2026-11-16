@@ -368,7 +368,9 @@ one beside it.
   - The door creates the replacement the way "Start the Overlord" creates the first body (C2): in the `overlord`
     project, with the `overlord` launch profile from its first launch, never a session that already runs.
   - The door writes the replacement as `pending`, as designation does (C2). If its sandbox check fails, the
-    replacement is stopped, the old binding stands and the door answers `overlord-sandbox-unmet`.
+    replacement is stopped and the old binding stands. The door answered `pending` at once, and the settle step
+    records `overlord-sandbox-unmet` as that attempt's outcome on the designation row, with the stopped session's id
+    (the sandbox plan, question 3, `sandbox-unmet-is-an-outcome`).
   - When the check passes, one transaction makes the row `live`, raises the term, releases standing holds by the
     retention table (§6.7), re-targets outstanding mail and latches every grant (§7.2). The old body's powers end in the
     same write that grants the new one's.
@@ -441,7 +443,9 @@ is one call, by number, so the operator can approve or overturn it.
     launch profile and it never runs as `plain`. The sandbox check runs on that first start (§3.6). The row goes
     `live` only when the check passes. If it fails, the new session is stopped, the row goes back to binding no session
     (designate) or the
-    old binding stands (rebind), and the door answers `overlord-sandbox-unmet`.
+    old binding stands (rebind). The door answered `pending` at once, and the settle step records
+    `overlord-sandbox-unmet` as the attempt's outcome on the designation row, with the stopped session's id (the
+    sandbox plan, question 3).
   - **A start that never reports fails the check.** The door writes the first start's deadline on the
     `pending` row, once, at the create: the `clearing`, `carded` and `probing` deadlines together
     (`shared/continuity.ts#STATE_DEADLINE_S`), derived and never a new literal. A healthy first start settles inside it
@@ -461,7 +465,7 @@ is one call, by number, so the operator can approve or overturn it.
     plan, its question 33 and review M1). A `ccd pool-answer` that did not run or could not be parsed refuses it too,
     naming `pool-set`, with the detail "the agent's pool answer could not be read". Both refusals run before the session is
     created, so a refused start leaves no session behind. It picks the first account from the set, through C32's
-    placement policy. It writes the session's route record in two steps (§3.4): the route class rides the create, and the
+    placement policy. It writes the session's route record in two steps (§3.4): the route class, with the lane-only `profile` and `profiledigest` of the launch profile (§3.6), rides the create, and the
     account set and the ordered account list follow through `ccd route --session`, because ccd refuses them on a
     `--route`. The first placement is the server's pick inside the set, and the set binds every later start (the
     designation plan, `set-written-after-the-create`). It sets the two box-side accident guards on the
@@ -512,8 +516,13 @@ is one call, by number, so the operator can approve or overturn it.
   - **Reads are not acts.** A read changes nothing. It needs no grant, is allowed at every rung from `chat` up, and
     writes no act row (§7.1).
   - **Every read leaves a ledger line (H10).** Each read door appends one line to the read ledger in the private store:
-    the door, the scope, the count and the generation. Rate ceilings apply (Table 11.5b). A read with no turn behind it
-    is counted.
+    the door, the scope, the count, the generation and the reading session's turn state. Rate ceilings apply (Table 11.5b).
+    A read with no turn behind it is counted: its turn state is null, which has one meaning, a read by the operator's
+    console, tied by a `CHECK` to the caller being the operator. A session's read always carries one of the turn
+    marker reader's eight words: `working`, `done` or `failed`, or `absent`, `unmeasured`, `malformed`, `foreign` or
+    `stale`, so no reader state is folded into another. W1 deletes no line: the read ceilings bound the rate, and W4's
+    privacy controls take the ledger with the rest of the store (the private store plan, questions 11 and 12,
+    `read-ledger-kept-in-w1` and `null-turn-state-is-a-console-read`).
   - **The operator-model read is narrow.** It serves the top entries for a query and nothing else: no dump, and no
     export behind the box token.
   - **Why reads leave a trace.** Any process that forges the Overlord's attribution can call these doors (§7.4). A
@@ -1346,20 +1355,20 @@ minutes of observed time in which no soft trigger starts a renewal (Table 11.5b)
 | Turns: more than 40 operator messages and answered holds | soft | overlord | Counted from rows. Multi-turn loss grows with turns, not only with tokens |
 | Two compactions in one generation | soft | overlord, coordinator | The compactions journal the hook already writes, read through the agent |
 | Idle for 45 minutes, with context above a quarter of the hard cap | soft | overlord | The turn marker. Comes before Claude Code's idle compaction at about 55 minutes |
-| Daily backstop | soft | overlord | An hour and a time zone set in Settings. Never learned from the operator model |
-| A new ccrc install | soft | overlord, coordinator | The roll's own "behind" test: the session's process start against the completed-install record on the host that runs it, read through that host's agent. The Claude Code build trigger waits for the binary-lifecycle programme |
+| Daily backstop | soft | overlord | An hour and a time zone set in Settings, 04:00 `UTC` until W3's quiet hours (Table 11.5b). Never learned from the operator model |
+| A new ccrc install | soft | overlord, coordinator | The roll's own "behind" test: the session's process start against the completed-install record on the host that runs it, read through that host's agent. The Claude Code build trigger waits for the binary-lifecycle programme. For the Overlord it also reads true when the start's launch-profile digest differs from the server's while the builds agree, and it is unmeasured under build skew, so a fresh start that ccd would refuse is never asked for. The row stays soft (the readings plan, question 5, `digest-mismatch-rides-new-install`) |
 | A probe failed mid-generation, and a re-read did not fix it | soft | overlord, coordinator | Probe rows |
 | Model drift: the running model is not the one the generation row records | hard | overlord | The model-switch journal, and the sidecar's model id. A fallback generation records the fallback class, so it does not drift |
 | A start that resumed the conversation on another model class | hard | overlord | The start report, against the previous generation's model |
 | An entry it was served was retired, edited, superseded or wiped | hard | overlord | The privacy journal |
 | The operator confirmed a restore, which raised the term | hard | overlord | The designation's term, against the term the generation carries |
-| The generation's account is outside its set: the operator changed the set, or the account's pool changed (C46) | hard | overlord | The renewal lane's sweep asks ccd for the generation's pool answer, `ccd pool-answer <id>`, behind the `pool-set` capability (C46): `_pool_ok`'s verdict for the account it runs on, and `_crosspool_valid`'s answer for that account. Due only on a mismatch with no valid crossing, and only when an account in the set can serve it. Not due where no account in the set can serve it: no renewal starts, and the word reads `stranded`, its item naming the cause that holds (C57). Not due for an account a valid crossing marker names: the operator's deliberate move stands until the next renewal, which clears the marker (C46). Not due on an undecidable verdict (a stale pool projection, or a bad set on the route record), on an unreadable crossing record, or when the read itself fails; the lane records the reason on the sweep. Otherwise a renewal lands inside the set, so it is not due again at once |
+| The generation's account is outside its set: the operator changed the set, or the account's pool changed (C46) | hard | overlord | An account held out of the ordered list (§3.6) reads as outside the set (the readings plan, F7, `held-account-is-outside-the-set`). The renewal lane's sweep asks ccd for the generation's pool answer, `ccd pool-answer --session <id>`, behind the `pool-set` capability (C46): `_pool_ok`'s verdict for the account it runs on, and `_crosspool_valid`'s answer for that account. Due only on a mismatch with no valid crossing, and only when an account in the set can serve it. Not due where no account in the set can serve it: no renewal starts, and the word reads `stranded`, its item naming the cause that holds (C57). Not due for an account a valid crossing marker names: the operator's deliberate move stands until the next renewal, which clears the marker (C46). Not due on an undecidable verdict (a stale pool projection, or a bad set on the route record), on an unreadable crossing record, or when the read itself fails; the lane records the reason on the sweep. Otherwise a renewal lands inside the set, so it is not due again at once |
 | The generation's class is no longer servable on its account | hard | overlord | ccd's serviceability answer, asked by the renewal lane on each sweep. Where no account can serve it at all, no renewal starts: a renewal needs an account to land on, and the word reads `stranded` (Table 3.4b) |
 | Account load: the account's load is past the harder line, 85%, the session is idle, and another listed account that can serve it is under the soft line (C57) | hard | overlord | The limit samples and the turn marker (§3.4). It moves before a limit can hit in the middle of a turn |
 | A proactive compaction the PreCompact arm refused | soft | overlord, coordinator | The events file's `refused` line (`$REG/<id>.compactevents`, written by the refusal arm before it prints its block), read by `server/src/continuity/compactions.ts#refusedSince` |
-| The operator changed the designated class in Settings | soft | overlord | The designation row's class, changed after the generation was minted |
+| The operator changed the designated class in Settings | soft | overlord | The designation row's class against the class the generation was stamped with at its mint (`designatedClass`, a column of the generation row, written by the mint alone; the readings plan, `designated-class-stamped-at-mint`) |
 | Evaluation due: the skill, the card template or the model id is not the one this generation was minted with | soft | overlord | A digest of the three, stored on the generation row at its mint. One renewal clears the trigger. Answers stay in shadow until the replay passes that digest (§9.5). The replay lane waits while a renewal is due, so it runs once this one has landed |
-| Not local: the conversation is absent on the host that wakes the session | hard | overlord, coordinator | The host's report |
+| Not local: the conversation is absent on the host that wakes the session | hard | overlord, coordinator | The server's transcript resolver (§5.1's ladder over the agent), asked for the start's conversation on the host that runs the session. For a `startup` or `clear` start, only after the generation's first turn: a fresh conversation has no transcript file until it has a message, so it reads true only when the resolver finds no file and the turn marker shows a turn in this generation, false with no turn yet, and unmeasured when the marker is unreadable (the readings plan, question 4, `not-local-needs-a-written-conversation`) |
 | A lost door process: a refused act-key claim or lost tools on the live generation. A door process that dies takes its key with it, and a restarted one's claim answers `stale-generation` (`nonce-spent`), so it serves reads only | hard | overlord | `claimsRefused` on the act-key row, and a tool server the generation no longer offers. Proposed by the door process plan (its question 7, F12) and adopted by the coordinator; until W1 reads it, the remedy is the operator's Renew now |
 | A resumed long conversation | hard | overlord, coordinator | The start report says it resumed, and the context is above half the hard cap |
 | A wave boundary | soft | coordinator | Wave N+1's run is open and wave N's is closed, and the context is above a quarter of the hard cap |
@@ -1373,7 +1382,8 @@ starting values (Table 11.5b).*
   existing visibility frame for the bound session, at most once a minute (the home plan, question 4). The operator's own
   session screen for the Overlord counts as the place visible; or the operator's quiet hours. While the operator is in a live exchange a soft trigger waits however long the
   exchange lasts. The hard rows bound the context meanwhile, and they still fire. The daily backstop's hour defaults
-  to one inside the quiet hours.
+  to 04:00 `UTC` until W3 adds quiet hours (Table 11.5b), and a row still marked default then moves inside them. An
+  operator's choice is left alone (the readings plan, question 2, `backstop-default-is-a-starting-value`).
   - **Early, while away.** At a break, the lane renews a generation that is past half of any soft row's threshold
     (the soft ceiling, turns, and the account load past the soft line), so the renewal is spent while the operator is
     away rather than later, inside a conversation. It counts against the soft budget.
@@ -1820,8 +1830,11 @@ operator names the account pools it may draw from. Other sessions keep using eve
       it is today. The fixture table gains the set's rows, and pins that equivalence in both spellings.
     - What cannot be read stays undecidable, in the same order as today. A set is never "untagged", so an empty set
       is not the unconstrained case.
-    - For a session whose route record carries a set, that set is its side. For every other session, its side is
-      its project's file, as today. The server writes the set on the Overlord's row in the same route write as its
+    - For a session whose route record carries a set, that set is its side. The set and the ordered list are the route
+      fields `poolset` and `acctorder`, stored as `$REG/<id>.poolset` and `$REG/<id>.acctorder` like every route field
+      (the pool-set plan, its question 1). `acctorder` is checked for shape only: account ids, comma-joined, no
+      repeats, at most `ROUTE_LIST_MAX_BYTES`, never for membership of the roster (its question 9). For every other
+      session, its side is its project's file, as today. The server writes the set on the Overlord's row in the same route write as its
       class and its ordered list (C56), and again at each renewal and on each change. The replay lane writes it on
       the replay body's row (§9.5).
     - **One reader of the session's side.** ccd gains one function that answers a session's side from its id: the
@@ -1836,9 +1849,13 @@ operator names the account pools it may draw from. Other sessions keep using eve
       through `_route_get`, which answers "the validated value, or nothing" and so folds an unreadable or malformed
       value into absent. Folded into "no set", the side would fall back to the untagged `overlord` project, which
       every account serves: an overloaded null at a seam that fails open.
-      - A set field that is present but cannot be read answers `unreadable`, and one that does not parse answers
-        `malformed`. `_pool_ok` answers both rc 2, "nobody decides", with a side word of their own,
-        `POOL_OK_SIDE=set`, never `project`. On the `project` side every renderer names the project's tag file,
+      - A set field that is present but cannot be read answers `set-unreadable`, and one that does not parse answers
+        `set-malformed`. They are two words of their own, because bare `unreadable` and `malformed` cannot tell
+        `_pool_ok` which side failed, and `set unreadable` is the valid spelling of the one-pool set `{unreadable}`.
+        `_pool_ok` answers both rc 2, "nobody decides", sets `POOL_OK_SIDE=set` and sets `POOL_OK_STATE` to
+        `unreadable` or `malformed`, never `project`. Every site that matches the side word uses the quoted `"set "*`
+        form, with the space, or an exact word, never a bare `set*`, which would match `set-unreadable` (the pool-set
+        plan, its question 2, `set-side-undecidable-words`). On the `project` side every renderer names the project's tag file,
         which for the Overlord is the healthy, untagged `$POOLS_DIR/overlord`: the wrong file, and the wrong remedy.
       - The `set` side's sentence names the route record and its remedy: the server writes the record again at its
         next sweep, or the operator saves the set again in Settings. It is the fourth cause of `stranded` (C57).
@@ -1852,13 +1869,23 @@ operator names the account pools it may draw from. Other sessions keep using eve
     projection is fresh (`$REG/pool-epoch`, which only ccd reads as `stale`), and whether the set on the route record
     reads. The pool rule stays the one decider, so the lane asks ccd rather than copying `_crosspool_valid` or
     `_pool_ok` onto the server.
-    - **The read.** One read-only ccd verb, `ccd pool-answer <id>`, which the server composes through `CcdArgv` and
-      the agent runs on the box that places the session. It prints one line: the session's side word, the verdict of
-      `_pool_ok` for the account the session runs on (serve, mismatch or undecidable, with `POOL_OK_SIDE` and
-      `POOL_OK_STATE`), and the answer of `_crosspool_valid` for that account (valid, none or unreadable). It writes
-      nothing.
+    - **The read.** One read-only ccd verb, `ccd pool-answer --session <id>`, which the server composes through
+      `CcdArgv` and the agent runs on the box that places the session. The flag form is built because a positional id
+      would need a one-token whitelist grant, which admits every positional form the verb might grow:
+      `pool-answer` is in `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`), bound to `--session`, as `route` and
+      `win-size` are (the pool-set plan, `pool-answer-takes-session-flag`). It prints one line of `key=value` tokens
+      with no space: `pool-answer side=<side> verdict=<serve|mismatch|undecidable> pool-side=<project|account|set>
+      pool-state=<state> crossing=<valid|none|unreadable> account=<id>`. A value that holds a space carries `:` for it,
+      so `side=set:pool-a,pool-b`, `side=named:pool-a`, `side=untagged` or `side=set-unreadable`. Exit codes: 0 with
+      the line, 1 for `no such session`, 2 for usage (any other argument, or an id outside the registry-id grammar), 3
+      when the session's uuid, wrapper or project field could not be read, with a reason on stderr and no line. It
+      writes nothing. A caller narrows on the runner's `ran` before its `code`: `ran: false`, an older agent's
+      `forbidden` or a spawn failure, is "the read did not happen", never rc 1's `no such session`, and only `ran:
+      true` with code 0 and a line that parses is an answer (`server/src/poolrule.ts#parsePoolAnswer`).
     - **Its gate.** It is part of the `pool-set` capability (Table 11.1d): the lane asks it only of a box that
-      advertises `pool-set`, and designate and rebind already refuse without it.
+      advertises `pool-set`, and designate and rebind already refuse without it. They also require the placing agent's
+      own answer to `ccd pool-answer`, so an older agent's `forbidden` (`ran: false`) refuses the designation
+      (the pool-set plan, its question 8, `older-agent-reads-unmeasured`).
     - **How the lane reads it.** The trigger is due only on a mismatch with no valid crossing, and only when an
       account in the set can serve it. On an undecidable verdict, an unreadable crossing record, or a read that
       itself fails (the agent unreachable, a refusal, a line that does not parse), the trigger is not due. The lane
@@ -1872,17 +1899,17 @@ operator names the account pools it may draw from. Other sessions keep using eve
 
 | User in ccd | What it does today | What the set changes |
 |---|---|---|
-| `_swap_target`, `_auto_swap_check`, `cmd_swap`, `cmd_start` | Ask `_pool_ok` with the project's side, for a swap target, a tick, a manual swap and a start | They read the session's side, so the Overlord's rescue, its manual swap and its start honour the set. For a row with an ordered account list, the Overlord's, the affinity arm of the tick stands down (C57) |
+| `_swap_target`, `_auto_swap_check`, `cmd_swap`, `cmd_start` | Ask `_pool_ok` with the project's side, for a swap target, a tick, a manual swap and a start | They read the session's side, so the Overlord's rescue, its manual swap and its start honour the set. For a row with an ordered account list, the Overlord's, the affinity arm of the tick stands down (C57). A new row outside its set is refused. An existing row outside its set, or one whose set cannot be decided, warns on start and the tick moves it back at its next idle boundary, and a session without a set stays silent on an undecided project side, as today (the pool-set plan, `existing-row-warns-the-tick-relocates`). On the swap, tick and prefer paths the unreadable-project-field guard runs before the side is read, so a session with a readable set whose project field cannot be read is held, stranded or refused: that matches today and fails closed, and `cmd_start`'s existing-row path lets the set win (`unreadable-project-field-holds-a-set-session`) |
 | The home re-seed in `_auto_swap_check` (the step before the affinity arm) | When `_pool_ok` refuses the session's `home`, it asks `_ws_least_loaded <project>` for a new home and writes it, logging `rehome` | Stands down for a session whose side is a set, as the affinity arm does. `_ws_least_loaded` reads the project's side, which for the Overlord is the untagged `overlord` project, so it would pick from every account and could write a home outside the set, and flip it as loads change. The Overlord's home moves nothing: its renewals pick from the ordered list (C56). Passing the session's side into `_ws_least_loaded` was the other way, but it would make a project-keyed placer session-keyed for one caller |
 | `cmd_prefer` | Sets a session's home account, refusing a pool mismatch unless `--cross-pool`, which writes a crossing marker | Reads the session's side. For the Overlord a `prefer --cross-pool` is not a lasting crossing: the marker names its home, which moves nothing, and the next renewal clears it (C46) |
 | The three callers of `_crosspool_mark`: `cmd_start`, `cmd_swap`, `cmd_prefer` | Pass `${pps#named }`, the project's pool name, as the marker's pool field | Write the field with its kind: a plain pool name for a `named` side, as today, and `set:<spelling>` for a `set` side, stripping the side word `set ` first |
 | `_crosspool_valid` | Accepts the marker only while the project's side reads `named <pool>`, and only for an account the marker names | For a `set` side it accepts a field `set:<spelling>` only while the side reads `set <that spelling>`. A crossing therefore lapses when the set changes, and not when the operator only reorders it |
 | `_crosspool_tick` | Ends a marker that no longer holds: it removes it and logs `crosspool-ended` with the reason. A side that is not `named` or `untagged` returns before that, as undecided | A decided `set` side is ended like `named`: the reason names the new spelling ("account set is now …") or the move off the marked account. Without this a set-side marker is never removed, and one that lapsed would come back to life if the set returned to its old spelling |
 | `_default_pool` | Admits a pay-per-use lane (D-8098) by its own equality test: the project reads `named <p>` and the lane's pool reads the same | Routed through the pool rule: a pay-per-use lane joins when `_pool_ok` answers rc 0 with `POOL_OK_SIDE=account` and `POOL_OK_STATE=named …`, that is, served because its pool is named on the session's side, never through an untagged arm. That is D-8098's "only when a pool names it" in the rule's own terms. For a one-name project it answers what the equality test answers today, and for the Overlord it admits a pay-per-use lane whose pool is in the set |
-| `_pool_undecidable_why` | Renders rc 2 by side: `project` names the tag file under `$POOLS_DIR`, and the account arms name the projection and the pool sync | Gains the `set` arm: the route record's set is unreadable or malformed, and the remedy is the server's next sweep or the operator saving the set again. The project's tag is not involved |
+| `_pool_undecidable_why` | Renders rc 2 by side: `project` names the tag file under `$POOLS_DIR`, and the account arms name the projection and the pool sync | Gains the `set` arm: the route record's set is unreadable or malformed, and the remedy is the server's next sweep or the operator saving the set again. The project's tag is not involved. Where a set decides the side, each account arm (`stale`, `malformed`, `unreadable`) ends "the session pool set decided; the project tag is not involved", and a `$REG` that is not a searchable directory reads `unreadable` whatever the project argument (the pool-set plan, the second pool-set piece's `set-decided-account-arm-names-the-set` and `unsearchable-reg-reads-unreadable`) |
 | `_pool_mismatch_why` | Renders rc 1 with the account's pool and the project's pool, `${4#named }` | For a `set` side it names the set's spelling, and says the account's pool is not in it |
-| `_strand_why`, `_strand_mark` | Say why no account can take a blocked session, and record it in `swap.log`, naming the project's pool. `_strand_why`'s undecidable arm answers `tag:<state> $POOLS_DIR/<project>` for a bad project side, and `projection:<state> $REG/pool-epoch` for a bad account side | Read the session's side, and name the set's spelling where they name a pool today. The undecidable arm gains `set:<state>` naming the route record |
-| `_undecidable_cause`, and its caller on the tick and rescue path | Turns the tick's undecided word into the `stranded` sentence. `_swap_target`'s rc 4 sets the word `pool`, whose sentence names the project's tag file whatever side was undecided, so a stale account projection also reaches `_strand_mark` as "the project's pool tag could not be read" | The rc-4 caller picks the word from `POOL_OK_SIDE`: `pool` for the project side, as today, a new `projection` for the account side, whose sentence names `$REG/pool-epoch` and the pool sync, and a new `set` for the set side, whose sentence names the route record. So the remedy C46 and C57 name holds on this path too, not only on `cmd_start`'s |
+| `_strand_why`, `_strand_mark` | Say why no account can take a blocked session, and record it in `swap.log`, naming the project's pool. `_strand_why`'s undecidable arm answers `tag:<state> $POOLS_DIR/<project>` for a bad project side, and `projection:<state> $REG/pool-epoch` for a bad account side | Read the session's side, and name the set's spelling where they name a pool today. The undecidable arm gains `set:<state>` naming the route record, and `_strand_mark` names an undecidable set by its word, `set-unreadable` or `set-malformed`, never as `(untagged)`. `_strand_why` lists an untagged account that a set without `+untagged` refuses as `<account>:pool=untagged`, which today never appears because an untagged account always serves (the third pool-set piece, `strand-names-an-untagged-account-a-set-refuses` and `strand-mark-names-a-bad-set`) |
+| `_undecidable_cause`, and its caller on the tick and rescue path | Turns the tick's undecided word into the `stranded` sentence. `_swap_target`'s rc 4 sets the word `pool`, whose sentence names the project's tag file whatever side was undecided, so a stale account projection also reaches `_strand_mark` as "the project's pool tag could not be read" | The word is picked from the side, and `_swap_target` runs inside `$( )`, so `POOL_OK_SIDE` dies with its subshell and its caller cannot read it. Its rc 6 is taken ("a name, chosen one rung down"), so its rc says the side: rc 4 stays the project side, word `pool`, as today, rc 7 is the account side, a new word `projection` whose sentence names `$REG/pool-epoch` and the pool sync, and rc 8 is the set side, a new word `set` whose sentence names the route record. The tick's own verdict site (`stuck=pool`, inside `_auto_swap_check`, where `POOL_OK_SIDE` is in scope) picks the same three words from the side, and `_rescue_target`'s undecided test widens from `rc >= 2 && rc <= 5` to `rc >= 2 && rc != 6`. So the remedy C46 and C57 name holds on this path too, not only on `cmd_start`'s. The `projection` sentence changes the stranded text for every session whose account side is undecidable, not only the Overlord's (the pool-set plan, question 5, `swap-target-rc-by-side`, and `projection-word-fleet-wide`) |
 | `_ws_wrapper_why`, `_ws_pool_read`, `_ws_lane_why` | Re-validate a lane named by `ws-add --wrapper` against the project's side | Unchanged. They judge the Overlord's first placement, on the account designate or rebind picked from the set through C32's placement policy, against the untagged `overlord` project, so they pass it. The set binds every later start |
 | `_place_for_class`, `_ws_least_loaded` | Place a new workspace, keyed by project and class, with no session id | Unchanged. They are not the Overlord's placer: its first account is the server's pick, and every later start is a renewal that picks from the ordered list (C56). The re-seed's call stands down (above) |
 
@@ -1913,7 +1940,11 @@ operator names the account pools it may draw from. Other sessions keep using eve
     - Why a yes or no, and not a word in the list: `untagged` is a valid pool name (`POOL_NAME_RE`), so a word would
       collide with a real pool.
   - **An empty set serves nothing.** No names, and `untagged` off, admits no account. It is never "unconstrained",
-    as an untagged project is. Why: a forgotten setting must never be the widest one. Tied to R14: the designate and
+    as an untagged project is. It has no route spelling: `poolSetSpelling` refuses it, `parsePoolSet` and
+    `_poolset_parse` read an empty names list without `+untagged` as `malformed`, and a malformed set is undecidable,
+    which also places nothing. `poolRule` itself is total over the empty set and answers a mismatch for every
+    account, so the server's count reads zero. No door writes one: an empty route value means "clear the field"
+    (the pool-set plan, its question 3, `empty-set-has-no-spelling`). Why: a forgotten setting must never be the widest one. Tied to R14: the designate and
     rebind doors count the accounts that can serve it under the set (C56). An empty set counts none, so there is no
     designation. The designate door takes the set with the class, so the first designation names one.
   - **When the set changes.**
@@ -1943,10 +1974,22 @@ operator names the account pools it may draw from. Other sessions keep using eve
     - M32 leaves crossed generations out of its zero target and counts them apart.
     - Why: a move the operator makes by hand is never refused (the ruling of 2026-10-19), and the manual-swap pin
       already holds it.
-  - **What it is.** An accident guard while sessions share a user, as every pool rule is. Any session's shell can
-    still write a route record with `ccd route`, as it can write a project's tag. The server writes the Overlord's
+  - **What it is.** An accident guard while sessions share a user, as every pool rule is. A set is written only
+    through `ccd route --session <id> --set …`, the designate door's write. `_route_argv_check` refuses `poolset` and
+    `acctorder` as it refuses `degraded` and `inert`, so no `--route` on `ws-add`, `start` or `enable` carries one, and
+    on the server both fields are lane-only (`ROUTE_LANE_ONLY_FIELDS`), so no route door forwards them. `ccd route`
+    also refuses a `poolset` or `acctorder` write, a clear included, when `CLAUDECODE` is set (`pool-set-operator-only:
+    a Claude Code session may not write <field>`), as `_route_fable_shell` refuses its field: clearing a set drops the
+    session to its project, which for the Overlord serves every account. That is an accident guard, not a wall: an
+    unset or empty `CLAUDECODE` passes, and any other shell can still write a route record, as it can write a
+    project's tag (the pool-set plan, question 10, `route-argv-refuses-the-set`, and its second piece,
+    `a-session-shell-cannot-write-its-own-set`). The server writes the Overlord's
     again at each renewal and on each change, and the start report names the set ccd placed it under. In a
     container the same rule is the account chooser's (§3.6).
+  - **How a set is cleared.** `cmd_route` refuses an empty value for every field except `compact` and
+    `compactwindow`, and `poolset` and `acctorder` join that exemption, so `ccd route --session <id> --set poolset=
+    --set acctorder=` removes both files. That is how retire clears the retired row's set, and how rebind clears the
+    old row's set after writing the new row's (the pool-set plan, question 13, `poolset-empty-value-clears`).
   - **How many.** At least two accounts that can serve it (C56). Which pools, and how many accounts are in them, is
     the operator's choice in Settings. The spec names none. Account management stays the operator's (§8.1).
   - **The coordinators it starts are placed like any other session.** Their own projects' pools place them (C32), on
@@ -2149,8 +2192,8 @@ The line is held five ways, from the softest to the hardest:
   - Like every deny rule on this fleet, it stops an accident, not a determined shell (`bash -c` with an assembled
     string runs past it).
   - Claude Code's documentation says deny rules hold when permissions are bypassed and bind subagents. There is one
-    exception: with no managed settings, an installed mod can approve a denied call. So the start report lists loaded
-    mods (§3.6), and doctor checks every account that can serve it.
+    exception: with no managed settings, an installed mod can approve a denied call. The report does not list mods:
+    doctor's `overlord-mods` check is what sees one (§3.6), and it checks every account that can serve it.
 
 What is counted, and what it buys:
 - **Every execution refusal is counted (M12).** A denial made by the settings file never reaches the hook. So M12 counts
@@ -2196,12 +2239,35 @@ repository, no git credential and no file on any other session's disk.
     cannot add a tool. Other sessions run with a shell in the same account config directory, because its accounts are
     shared (§3.4). So the profile loads
     nothing from that directory but the sign-in: no account-level settings, memory file, agent, mod or tool server.
-    The start report lists the settings sources, hooks, tool servers, mods, agents and skills the session loaded,
-    beside its instruction files. One that the profile does not list refuses `launch-profile-unmet`. The server then
-    leaves that account out of the Overlord's ordered list until the operator clears the item, and renews. W0
+    The loads report lists the hooks, tool servers, agents and skills the session loaded, beside its instruction
+    files. A settings source is refused at the spawn rather than listed: no project settings file can stand in the
+    workspace, so the report lists none (the sandbox plan, `settings-sources-refused-at-spawn-not-listed`). One that
+    the profile does not list refuses `launch-profile-unmet`. The server then
+    leaves that account out of the Overlord's ordered list until the operator clears the item. An account held out
+    reads as outside the set, so the hard row of Table 3.3.11b renews it. The hold is a row of its own,
+    `overlord_account_holds`, written by the generations pass behind `holdOfStart` and cleared by the operator's
+    session-gated door, `POST /api/continuity/account-holds/:lane/clear`, which records who cleared it. The readings'
+    wiring writes nothing, and the hold's fact never depends on an item's state (the readings plan, question 6,
+    `ordered-list-hold-is-a-row`). W0
     measures that the skill and the hook still load this way.
   - **It names what is loaded.** Skills enabled: `ccrc-overlord` only. The workspace memory file that carries the
     constitution (§3.3.3). Its account set and its ordered account list (§3.4).
+  - **How ccd renders and holds it.** The surface is a typed field of `LaunchProfile`, `null` on every row but
+    `overlord`. ccd links the staged skill and the installed constitution into the workspace at every spawn, excluded
+    from git, and refuses a workspace holding any other project source. Pinned sources drop the account's status line
+    with its hooks, so the profile registers both, and the context sidecar keeps its writer. A route carrying
+    `profiledigest` that cannot be rendered whole refuses the spawn instead of failing open, so the Overlord never runs
+    as a session with a shell. The hook refuses, at the call, any tool, agent type or skill the profile does not list,
+    and refuses on an unreadable row, opposite to its fail-open header. The expected digest is the lane-only route field
+    `profiledigest`, which the server writes, and ccd refuses the spawn when the row it reads does not hash to it: the
+    field, not a role word, makes a spawn fail closed (the sandbox plan, questions 2 and 14 and index question 12,
+    `workspace-links-for-skill-and-constitution`, `surfaced-profile-fails-closed`, `surface-arm-refuses-what-the-profile-lacks`,
+    `statusline-registered-by-the-profile`, `launch-profile-gains-typed-surface` and `expected-digest-rides-the-route`).
+    Designate and rebind write `profile` and `profiledigest` into the `ws-add --route` argv at the create, a second
+    writer of those two lane-only fields beside the lane: only a create-time write stands before the first spawn, and the
+    lane converges after it (`profile-fields-written-at-create`). The lane writes `profiledigest` only while the
+    fleet node's build equals the server's (`profile-change-needs-a-start`). The automatic-model-switch arm reads the
+    pin from the session's environment, not from the profile, and names no role (`no-model-arm-reads-the-pin`).
   - **The door process (H9).** One small local process, started by Claude Code as the session's stdio tool server, from the `--mcp-config` file ccd writes at every spawn with a fresh nonce (the door process plan, question 1, `claude-code-starts-the-door-process`). A crashed door process's restart is Claude Code's behaviour, not ccd's.
     - It serves every Overlord door to the main thread as a typed tool, and one read tool to readers.
     - It holds the credential, the identity and the fence (§3.3.11). The model never sees a token or a key.
@@ -2257,10 +2323,12 @@ repository, no git credential and no file on any other session's disk.
 | the anchor-owed mark (`<id>.anchor-owed`; plan-driven consistency, the W1a plans) | the hook, after the PreCompact refusal decision | a main-scope automatic compaction whose start brought no anchor | the next prompt carries no anchor; the card still stands |
 | the fresh-start marker (`<id>.fresh`, one-shot; plan-driven consistency, the W1a plans) | `ccd hibernate --roll --fresh`, its one writer, before the wake, with the row's uuid written after it | the new conversation's id, which the in-unit spawn starts with and consumes; it holds no authority and no switch | stale when it does not name the row's current uuid or does not parse: the spawn then resumes as before, removes it and names it on stderr |
 | the model-switch journal (server rows from the hook's `model-switch` report, beside the sidecar's model, not a fleet file) | the server, from the hook's report | each model switch Claude Code made by itself, and each typed one refused | the model-drift trigger is blind |
-| the route record on the registry row: the model class, the account set and the ordered account list | the server's route write, through ccd | the designation's model class and account set, and the Overlord's account order | ccd places by the last set and list written; the server writes them again at each renewal and on each change of the set |
+| the route record on the registry row: the model class, the account set and the ordered account list (and, for the Overlord, the lane-only `profile` and `profiledigest`) | the server's route write, through ccd: at the create, by the lane, and before each `renew` of an Overlord generation, where designation B's step recomputes the ordered list with the holds and writes the set and the list through the body adapter's `writeSet` (the readings plan, question 9, `renewal-writes-the-list-before-renew`) | the designation's model class and account set, and the Overlord's account order | ccd places by the last set and list written; the server writes them again at each renewal and on each change of the set |
 | the act key file, W0's fallback only | `ccrc-api`, at the generation's mint | the current generation's act key, 0600, in a directory of the session's own | `stale-generation` |
 | the tool-server config `$REG/.door/<id>/mcp.json` | ccd's spawn step | the door process's launch nonce, which it holds until the claim spends it | `stale-generation` |
-| the profile digest | ccd | the launch profile it rendered for this start | `launch-profile-unmet` |
+| the profile digest, which is an environment variable on the spawn line, `CCRC_LAUNCH_PROFILE=<role>:<digest>` with `CCRC_LAUNCH_RC=on\|off`, and no file (the sandbox plan, `profile-digest-rides-the-environment`) | ccd | the launch profile it rendered for this start, carried by the running process and read by the hook | cannot go stale, and needs no lease |
+| the expected digest (`<id>.profiledigest`, the lane-only route field `profiledigest`) | the server's route write, through ccd (the lane, and designate and rebind at the create) | the digest the row on this box must hash to | ccd refuses the spawn when the row does not hash to it |
+| the loads spool and mark (`<id>.loadpending`, `<id>.loadlast`) | the hook, without the registry lock; `_reg_purge` removes both again after `generation` | the pending loads report's id and byte offset, and the last reported `startup`'s id, digest, build, window offsets and transcript path for a resume's carry | nothing reads them as truth: a report the server did not take is resent, and a `Stop` with no profile over a stale mark removes it |
 | the loaded-file report | the hook | what the running session loaded | `launch-profile-unmet` |
 | the door process's delta cache | the door process, or `ccrc-api` in W0's fallback | canaries and counts, in a directory of the session's own | "unknown" |
 | `.no-hibernate`, `.no-roll` | one whitelisted ccd verb this design adds, `ccd keep-awake --session <id> --state on\|off` (capability word `keep-awake-v1`): designate and rebind set them on the new body, and rebind and retire clear them on the old one | nothing: accident guards | the server-side holds still stand |
@@ -2305,27 +2373,73 @@ authority or a switch. The act key file, W0's fallback only, holds a credential 
     refused start leaves no session behind.
   - **The first start decides.** The row goes `live` only when the sandbox check passes on that first start. If it
     fails, the door stops the session it created, the pending row is cleared (designate) or the old binding stands
-    (rebind), and the door answers `overlord-sandbox-unmet`. That session stays stopped, and the board shows it with
+    (rebind). The door answered `pending` at once, and the settle step records `overlord-sandbox-unmet` as the
+    attempt's outcome on the designation row, with the stopped session's id. That session stays stopped, and the board shows it with
     the properties that failed. The next "Start the Overlord" creates a fresh session (§3.2). While the row is
     pending, generation 1 is starting: only the card, probe and note doors answer, and every other door answers
     `renewing` (§11.2).
-  - **What the hook reports.** At each start the hook reports the profile digest and every instruction file the
-    session loaded, by name and hash. Beside them it lists the settings sources, hooks, tool servers, mods, agents and
-    skills the session loaded (H1). It reports through the hook's report door (Table 11.2), with a short timeout.
-    Anything loaded that the profile does not list refuses `launch-profile-unmet`.
+  - **What the hook reports, and in which report.** The start report carries the profile digest, which the hook reads
+    from its own environment (`CCRC_LAUNCH_PROFILE=<role>:<digest>`, an environment variable ccd composes on the spawn
+    line, not a file, so it cannot go stale and needs no lease), the build and the `permission_mode` of its own
+    payload. What the session loaded cannot be read at that moment, because the attachments exist only after the first
+    request. So it arrives at the first `Stop` after a `startup` or `resume` start, in a report of its own that names
+    the start it completes, through `POST /api/sessions/:id/start/loads` (the loads door, stored in
+    `continuity_start_loads`, with a short timeout and the start report's resend rules). The hook reads the loaded
+    sets from the transcript's start attachments over a bounded window, by a `transcript.jq` entry, and every
+    instruction file by name and hash. The kind `tools`, and `toolServers` derived from it, is read from the first
+    tool-bearing prompt snapshot after the first request. The tools the transcript cannot show are covered by Claude
+    Code's own enforcement (`--tools` and the deny rules) and by the digest. The report carries the build
+    (`claudeVersion`) and its own `reportId`. Anything loaded that the profile does not list refuses
+    `launch-profile-unmet` (the sandbox plan, question 1, `loaded-sets-read-from-the-transcript`,
+    `start-loads-is-its-own-report` and `tools-read-from-the-prompt-snapshot`).
+  - **A resume carries its own start.** A resume writes no start attachment, so at a resume the hook carries
+    `instructions` and `hooks` from the newest reported `startup` of the same transcript, only when that report's
+    digest and build equal this session's, and names it `carriedFrom`. Otherwise both read `unmeasured`. The verdict
+    re-checks the carry on the server: `carriedFrom` must resolve to a `startup` start of the same session with a
+    non-conflicted report and an equal digest and build (`resume-carries-its-own-start`).
   - **Drift is refused.** A settings or skills change shows at the Overlord's next start as a report that does
     not match the profile, and every door but the card, probe and note doors refuses `launch-profile-unmet` until it
-    matches.
+    matches. A release that changes the row holds the running Overlord there until its next start (the sandbox plan,
+    question 5, `profile-change-needs-a-start`).
+  - **The properties, and how the verdict is computed.** Nothing stores a verdict. Every reader computes it from the
+    report of the session's newest `startup` or `resume` start (a `clear` or `compact` start reads through the newest
+    one before it) and the server's own profile, and the profile is engaged only when every property is `held`
+    (`SANDBOX_PROPERTIES`, `shared/overlord-sandbox.ts`): `profile` (the role is `overlord` and the digest is the
+    profile's), `tools` (exactly the tool server's tools, at least one present), `tool-servers` (exactly one, the
+    door), `instructions` (exactly one file, in the workspace, named `CLAUDE.md`, with the constitution's sha256),
+    `skills` and `agents` (within the profile's names and the build's own lists, and the profile's names present),
+    `hooks` (every SessionStart hook is ccrc's, and ccrc's is present), `remote-control` (off, by attachment or by
+    ccd's `CCRC_LAUNCH_RC`, which says what ccd spliced, not what the session did) and `permission-mode`
+    (`bypassPermissions`), and `workspace` (the registry row's project is `overlord`, the report's `cwdInWorkspace`
+    is true and every instruction file lies in the workspace). `unmeasured` is never `held`: no report, an older hook,
+    a door an older server lacks, a transcript that cannot be read, a report the hook dropped after five tries, an
+    attachment of a shape this build does not know, a conflicted report (a second, different body for one start) and
+    a Claude Code build ccrc holds no lists for (`CLAUDE_CODE_OWN_LISTS`, keyed by build, reading `unmeasured` and
+    naming the build until a release carries it) each read the property `unmeasured`, and a start with no report
+    reads not engaged. An older start's report never stands in for it (the sandbox plan, questions 3 to 5,
+    `verdict-computed-on-read` and `claude-code-own-lists-are-keyed-by-build`).
+  - **A fleet box and a server on different builds** compute different digests, so the profile reads not engaged until
+    both run one build and the Overlord starts again, and a digest mismatch is a renewal reading only when the builds
+    agree. Never kill what cannot be respawned: every path that ends a pane before it respawns it (`cmd_swap` and its
+    auto-swap on a rate limit, `_swap_refuse` and `cmd_start`'s resume) checks the digest first, and on a mismatch
+    refuses the move, leaves the running session alone and journals why. A supervised respawn that is refused stays
+    refused: the unit's start limit leaves it failed. The server then raises one operator notice naming the two builds.
+    So while the two boxes run different builds an Overlord that dies stays dead until they agree, and a live one is
+    never killed by a swap in that window (`dead-overlord-waits-for-build-agreement`).
   - **What the workspace must lack.** A repository checkout, a git-host credential it can read, an editing tool, a web
     tool, a path to the private store, other sessions' files, an open peer channel, and Remote Control.
   - **Two modes.** On a box where sessions share a user, it proves the guards are engaged. In a container it proves
     absence: no repository volume, no host token, and egress only to the server and the model provider.
   - **What a failure does.** A failed property at the first start of a designation or rebind refuses
-    `overlord-sandbox-unmet`. At a later start, a launch profile that is not engaged is a live condition on the
+    `overlord-sandbox-unmet`, recorded as the attempt's outcome. At a later start, a launch profile that is not engaged is a live condition on the
     ladder: every door but the card, probe and note doors refuses `launch-profile-unmet` until it is (§7.5).
     `launch-profile-unmet` sits early in the gate order (§11.2).
   - **A generation can still finish starting.** The card, probe and note doors skip `launch-profile-unmet`, so the
-    session can read its card and report while the operator fixes the profile.
+    session can read its card and report while the operator fixes the profile. Inbox work waits for the next nudge,
+    because mail is held until the card is read, so the first-turn hold costs no deadlock (the sandbox plan, Task 8).
+  - **Doctor's `overlord-mods` check.** It FAILs only on the accounts that can serve the Overlord, the designated set,
+    and only while a `profiledigest` stands. On every other account, and before any designation, it reports a WARN or
+    nothing, so an ordinary box with plugins never turns doctor red (the sandbox plan, question 6).
   - **Each property is a fact on the board.** The check records every property it measured, and the board shows them
     (§5.2).
   - **What must persist for the session itself.** Its Claude Code config directory (the sign-in and the settings state)
@@ -2555,7 +2669,25 @@ holds private data and can change state, so it must never take untrusted text ra
   typed words arrive under the sign-in cookie. Today it records nothing.
   - **The record.** For the designated session only, the route first writes a row in `operator_messages`. The row holds
     an id, the time, the gate's actor, a sha256 hash, the term and a state. It holds the text too: masked, capped, and
-    cut whole with a mark when too long. The row commits, and only then does delivery start.
+    cut whole with a mark when too long: 16,384 UTF-8 bytes, `[cut: <n> more bytes]` (Table 11.5b), and the hash is of the
+    stored text, which a request will cite (§5.1). The row commits, and only then does delivery start.
+  - **What the route does before any record.** Its decider is one L1 function, `promptTargetVerdict(designation,
+    sessionId, body)`, which answers `record`, `type` or `refuse`. When the designation cannot be read, the route
+    refuses 502 `unmeasured` for every prompt, before any typing. A chat send carries `overlordTerm`, the term it was
+    composed under, and while the designation is not bound to this session at that term the route refuses
+    `stale-designation` (409), and nothing is typed or recorded. A prompt to the designated session that names an
+    attachment is refused `bad-attachment` (400) before any record. The console generates a send key for each message
+    it composes (16 to 64 characters of `[A-Za-z0-9_-]`), and the route records it: the same key with a different stored
+    hash refuses `bad-request` with the detail `send-key-reused`, and on a replay the route queues no nudge, moves
+    nothing and answers the first record's id, cut and current state (the private store plan, questions 6, 16, 17 and
+    18, `overlord-prompt-takes-no-attachment`, `designation-read-three-arms`, `send-key-dedupes-a-retry` and
+    `chat-send-names-its-target`).
+  - **The route also writes the Overlord's operator mark.** It makes W1a's operator mark for the designated session
+    too, through W1a's own mark writer, in the `coord.db` transaction that queues the nudge, under a key no programme
+    slug can take (`@overlord`), and the generations lane advances it as it advances every mark. So the reset of
+    `quiet` has one owner: the renewal readings take the Overlord's `operatorQuietObservedMs` from that mark's
+    `quiet`, never from a second accumulator (question 13, `operator-quiet-is-observed-by-the-lane` and
+    `overlord-mark-key`).
   - **A tap on a next-step control is the operator's own prompt to a coordinator,** never a message to the Overlord.
     Where a request's linked pull request shows one obvious next step, the server renders a control on the request
     (§5.4, W2). The fixed texts are three: "Fix the checks", "Address the comments" and "Land it". A tap sends that
@@ -2571,10 +2703,23 @@ holds private data and can change state, so it must never take untrusted text ra
     in `coord.db` and the message's state never share a transaction. The boot pass re-derives `settled` from the
     citing rows, both ways (I8): a message that reads `settled` while no row cites it, no `acknowledge` settled it
     and the prompt route did not mark it is unsettled again, so it heads the next card. The pass adds `spent` where
-    a root request cites the message, and never takes it away.
+    a root request cites the message, and never takes it away. The citing doors are W2 and W3, so W1 has no citing
+    table: the pass takes a citation reader as a port, and its W1 adapter answers `not-applicable`. A row settled by
+    `acknowledge` or the mark stays settled, because the row records that. A row settled by `cite` can appear only
+    after a rollback from a later build, whose citing rows this build cannot read: under `not-applicable` it reads
+    `unjudged`, which is unmeasured, never unsettled, because unsettling it would fold "cannot read the citations" into
+    "no row cites it" and offer again an instruction a later build already acted on. An unmeasured citation read
+    changes nothing, and the pass reports how many rows it could not judge (the private store plan, question 9,
+    `cite-is-unjudged-in-w1`).
   - **Delivery is like mail.** The pane gets a one-line nudge naming the message id. The Overlord reads the words
     through its `messages` tool, so they arrive as tool output. W0 measures the latency and the feel of nudge-and-read
-    against typed text.
+    against typed text. The nudge is system mail from `operator`, kind `status`, subject `operator-message:<id>`, with a
+    body that names the id and the `messages` door and never the words (§9.4 rule 5). On the nudge's first delivery
+    the lane's dedicated operator-message branch moves the row to `delivered` through the private store, then acks the
+    delivery through the existing delivery writer, so it is never replayed and never parked `undeliverable`: the
+    lane, not the reader, acks this one mail, because the Overlord has no mail verb. "Picked up" stays the hook's report
+    of the id. The nudge is record-only for pushes, so the operator's phone is not pushed about the operator's own
+    message (the private store plan, question 3, `message-nudge-rides-the-mail-lane` and `nudge-acked-on-delivery`).
   - **Nothing typed in a pane is ever the operator's words.** That covers the terminal drawer, tmux, Remote Control and
     a peer message. Each reaches the pane without the prompt route, and so can any process of the fleet user. So no
     label file exists, and no "Confirm" control attests pane text. To make pane text count, the operator sends it from
@@ -2614,7 +2759,8 @@ holds private data and can change state, so it must never take untrusted text ra
     a command (H8). Clause 22 says so (§11.4).
   - **The chat shows what each message bound.** Under each operator message, the console lists the request ids the
     server bound to it, and any project or programme name the server matched in it (§4).
-  - **Attachments are content, never words.**
+  - **Attachments are content, never words.** In W1 no door serves a file to the Overlord, and the prompt route refuses
+    a message that names one (`bad-attachment`, above).
   - **Text ccrc types is tagged.** One L0 list, `INJECTED_PROMPTS`, holds every fixed string the server or ccd types
     into a pane. That is the mail nudge, the idle nudge, `/clear`, the resume prompt, `/model` and `/effort`. Each is a
     referenced constant. The list is a builtin-free `shared/*.mjs` file with a `.d.mts`, so history's `.mjs` code can
@@ -2653,7 +2799,11 @@ holds private data and can change state, so it must never take untrusted text ra
     still expires 24 hours after it was filed.
   - **One live command per proposal.** A unique index holds it, so a second tap returns the first command.
   - **Typing "I command" or `/icommand` in the chat opens the list of open proposals.** With none open, it records on
-    the message row that a disagreement about a class-none act is settled. That authorises nothing operator-only.
+    the message row that a disagreement about a class-none act is settled. The mark is a whole message that is, after
+    trimming, exactly `/icommand`, or `I command` in any letter case with single spaces: a message that merely
+    contains the words is an ordinary message. The mark settles the row in the transaction that records it
+    (`settledBy: 'mark'`), and the nudge is still sent (the private store plan, question 8,
+    `settlement-mark-is-a-whole-message`). Proposals are W3, so in W1 none is ever open. That authorises nothing operator-only.
   - **A command is spent once.** When it is spent is stated once, in §10.1. A retry with the same operation key
     reuses it. Each consumed command is a record in the authority journal (§7.6).
   - **Live commands are band 1 of the inbox (§6.8).** A command that expires unused is told to the operator. So is
@@ -5232,6 +5382,14 @@ nothing rebuilds from the row it exists to distrust (`server/src/coord/collectLa
     never returns a left-out answer to a gate.
   - Where a witness holds a head the privacy journal lacks (the whole volume came back), the records since are lost.
     The store then serves no entry and learns nothing until the operator has wiped it again or ruled that it stands.
+  - **At boot the store asks the journal whether it is coherent.** `privacyCoherence(journal, store)` answers
+    `coherent`, `fresh`, `re-anchor` or `refuse`. On `re-anchor` the store appends a `privacy-anchor` record carrying
+    its highest id and logs one `ccrc-server:` line, and where a witness off the volume holds the old head, the
+    authority journal's witness check refuses `authority-rolled-back` (§7.6), which is the right answer to a lost
+    journal. On `refuse` the server still starts, every record of a message answers `journal-unreadable` (503), and the
+    boot line names the file and says to move it aside, after which the next boot re-anchors. The boot pass also warns
+    when any `operator-message:<n>` mail in `coord.db` names an `n` above the store's highest id (the private store
+    plan, question 10, `privacy-journal-coherence`).
   - "Wipe everything" also removes the copies under the backups directory, or names the ones it leaves. The wipe
     sheet also names what stays on the fleet host: the Overlord's transcripts and its history family (§9.2).
   - The feeds' cursors carry the restore generation, and rewind to the snapshot's positions, or to a later wipe's.
@@ -5397,7 +5555,7 @@ was learned from it, in a place no fleet session can reach.
 | Table | What it holds | Writer | Wave |
 |---|---|---|---|
 | `operator_messages` | every message the operator sends the Overlord from the console: id, time, actor, hash, the masked and capped text, term, `offRecord`, `sendKey`, state | Insert: the console's prompt route, for the designated session only. State: one function of the private store, called by the delivery lane, the hook's pick-up report, the prompt route's settlement mark and each citing door after its own commit. The boot pass re-derives `settled` from the citing rows (I8) | W1 |
-| the read ledger | one line per read: door, scope, count, generation, and the ids of any entries served | the Overlord's read doors | W1 |
+| the read ledger | one line per read: door, scope, count, generation, the turn state (null only for the console's reads), the caller, and the ids of any entries served | the Overlord's read doors | W1 |
 | `entries` | what is known about the operator, one statement a row | the one apply function, reached by `model-write` (§9.2) and About you (§9.3) | W4 |
 | `entry_events` | every change to an entry, with its actor (`overlord` or `operator`) and a note: the entries' journal | the server, with each change | W4 |
 | `cursors` | one per feed, so each source is read once | the server's feed and history doors, moved only when the main thread's next read names the last id it applied (`after=`); a wipe, which moves each to the end of its feed; a restore, which rewinds each (§7.6) | W4 |
@@ -6458,7 +6616,7 @@ name that owner.
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| `overlord_designation` (singleton; session id, registry generation, `term`, `designatedTerm` (the term the last designate raised, which rebind and Confirm the restore never raise: R20's timer stamp, §3.3.12), model class, the account set `accountPools`, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, the Settings account-set row, and Confirm the restore, which raises the term, takes the stricter of the row and the authority journal, and binds no session where the journal names another (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row. The renewal lane writes it in one case: it fails a `pending` binding whose deadline passed (§3.2) | The `pending` row's deadline, which the renewal lane enforces | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
+| `overlord_designation` (singleton; session id, registry generation, `term`, `designatedTerm` (the term the last designate raised, which rebind and Confirm the restore never raise: R20's timer stamp, §3.3.12), model class, the account set `accountPools`, past ids, actor, and the binding's state, `pending` or `live`; a retired row binds no session and keeps the rest) | C5, L3 | `coord.db` | The designate, rebind and retire doors, the Settings model row, the Settings account-set row, and Confirm the restore, which raises the term, takes the stricter of the row and the authority journal, and binds no session where the journal names another (§7.6). Designate and rebind each create the session they bind, in the same door, and write `pending`, and `live` once that start's sandbox check passes; retire keeps the row. The loads door's settle step writes `live`, and the failed attempt (`overlord-sandbox-unmet` with the stopped session's id), by calling the designation module's own writers, never a second writer of the row. The renewal lane writes it in one case: it fails a `pending` binding whose deadline passed, and retries a stop that failed (§3.2) | The `pending` row's deadline, which the renewal lane enforces | W1 | yes; the authority journal rules after a restore | Ignores it: no Overlord, today's routing |
 | `operator_messages` | OM, L3 | the private store | Insert: the console's prompt route, for the designated session only, with `offRecord` and `sendKey`, the columns of its one insert. State: one function of the private store, moving through the message moves table (Table 11.1b), called by the delivery lane (delivered, queued), the hook's pick-up report (picked up), the prompt route's settlement mark and each citing door after its own commit (settled, spent). The boot pass re-derives `settled` from the citing rows (I8). The private store is a second SQLite file, so a citing door's commit in `coord.db` and the message's state never share a transaction | none | W1 | yes | Records nothing: pane text is content, never operator words |
 | The read ledger | OM, L3 | the private store | The Overlord's read doors, one line per read | none | W1 | yes | Ignores it |
 | `continuity_generations` (the generation row only. Each generation's act key is a table of its own, `continuity_act_keys`, written by the claim door, which issues it once, on the first claim that presents the launch nonce ccd wrote into the door process's config; the nonce binds through the newest start's hash, `continuity_starts.doorNonceSha256`, and voiding is derived from the generation's state; W0's fallback has no door process and no nonce, so `ccrc-api` writes the key file at the mint, §3.6) | C3, L3 | `coord.db` | The renewal lane | The renewal lane; deadlines are columns | W1a | yes | Ignores it: sessions roll and resume as today |
@@ -6584,7 +6742,7 @@ tested over its whole input domain (§11.7).*
 | ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake-v1`, the sleep markers' verb (W1); and `launch-surface-v1`, `project-add`, `ws-title-v1` and `ws-wrapper-v1`, which the designation's create needs | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without any of them, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable`, as it does for a call that never ran (`unsupported`, `not-started`, `lost`, `timeout`). An outcome the agent answered is never that word |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
-| Settings, in a sixth section of the console's Settings, `overlord`, drawn only under `overlord-v1`: when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the daily backstop hour and time zone (W1, where the Overlord's backstop row first reads them; plan-driven consistency, the W1a plans); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); "New kinds of push start quiet", on by default (W3, with H35; each class's state and pin live in `response_classes`, written through this door, §4.3); the response rows' retention, 180 days (W1, under §9.4's controls); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
+| Settings, in a sixth section of the console's Settings, `overlord`, drawn only under `overlord-v1`: when soft renewals happen, "when I'm away" or "on schedule" (W1a, R19); the daily backstop hour and time zone (W1, where the Overlord's backstop row first reads them; plan-driven consistency, the W1a plans), through `GET` and `POST /api/continuity/renewal-backstop`, the operator's door, session-gated when sign-in is armed and never exempt, consulting no box token, with no step-up because the backstop grants no authority, and not journalled (§7.6 journals authority only), and the clear door of the account hold, `POST /api/continuity/account-holds/:lane/clear` (the readings plan); the designated model class (W1; selecting `fable` keeps the step-up, and `opus` needs none); the designation's account set (W1; widening it keeps the step-up, and narrowing it needs none); `lambda` (W3, because its one reader, `askOrAct`, ships then); `operatorProfile`, with its `takesIn` line (W3, with the briefs; set at designation from then on); the push budget, briefing times, quiet hours, "away until", and the repeat push for an unseen blocking item, two hours (W3, with H35); "New kinds of push start quiet", on by default (W3, with H35; each class's state and pin live in `response_classes`, written through this door, §4.3); the response rows' retention, 180 days (W1, under §9.4's controls); the blind sample's switch (W3); the retention period (W4); `overlordLiveProgrammes`, `portfolioFocus` (W5) | K settings, L3 | `coord.db` settings | The Settings door, on the operator's own tap, behind the step-up where the change widens authority. For a stated preference that is a setting, the Overlord answers with a link that opens it with the value filled in; it never writes a setting, and files nothing (§9.3) | none | as listed | yes | Ignores them |
 
 *Table 11.1d. Capability words, switches and settings. Every switch that changes authority is journalled (§7.6).*
 
@@ -6601,7 +6759,7 @@ tested over its whole input domain (§11.7).*
 | The operator's timer read and cancel: `GET /api/sessions/:id/timers` (that session's timers, and the `overlord` timers for the session the designation binds) and `POST /api/sessions/:id/timers/:timerId/cancel`, session-gated, registered from the continuity routes file and named in the census's hand-kept list (§3.3.12) | C3, L4 | `continuity_timers` | the cancel, with the reason `operator` | n/a | W1a | n/a | No route |
 | The receipts door, `POST /api/responses/receipts` (`shown` and `opened`, from the service worker and the console), session-gated, registered from `server/src/responses/routes.ts`, which `server.ts` calls in one line (five routes in all: this door, the handled door, the read the console's control needs and the retention pair; the responses plan, `response-doors-in-their-own-routes-file`). It writes no coordination state, so it stays outside the box-token census, as `POST /api/push/subscribe` does (§4.3) | C6, L4 | `response_receipts` | it | n/a | W1 | n/a | No route: pushes read `unmeasured` |
 | "I handled this elsewhere", the operator's correction of a response row, `POST /api/responses/:id/handled`, session-gated, registered from the same file as the receipts door. It writes no coordination state, so it stays outside the box-token census too (§4.3) | C6, L4 | `operator_responses` | it | n/a | W1 | n/a | No route |
-| The hook's reports: start (profile digest; the instruction files, settings sources, hooks, tool servers, mods, agents and skills the session loaded), witness (PreToolUse), reader start and stop, model switch, and the pick-up report, which writes an operator message's picked up (the message moves table, §3.8), all on one report door, `POST /api/sessions/:id/report`, with a kind each (the door process plan, `hook-reports-share-one-door`) | C3, L4 | the start record and counters; the renewal lane mints the generation from the start record; picked up on `operator_messages` | the hook, by direct call | n/a | W1a, W1 | n/a | No route: unmeasured |
+| The hook's reports: start (the profile digest, read from the hook's environment), the loads report (the instruction files, hooks, tool servers, agents and skills the session loaded, which arrives at the first `Stop` and has a door of its own, `POST /api/sessions/:id/start/loads`, the sandbox plan, `start-loads-is-its-own-report`), witness (PreToolUse), reader start and stop, model switch, and the pick-up report, which writes an operator message's picked up (the message moves table, §3.8), all on one report door, `POST /api/sessions/:id/report`, with a kind each (the door process plan, `hook-reports-share-one-door`) | C3, L4 | the start record and counters; the renewal lane mints the generation from the start record; picked up on `operator_messages` | the hook, by direct call | n/a | W1a, W1 | n/a | No route: unmeasured |
 | `acknowledge` | C5, L4 | in W1, only the message row's state, through the private store's one message writer; act rows begin in W2, with `overlord_acts` | it | n/a | W1 (act row W2) | n/a | No route |
 | The ladder: rung, Pause, per-kind arming, engagement | K, L4 | ladder state | it | n/a | W1, W3 | n/a | No route |
 | The rank door, `POST /api/portfolio/rank`, in the programme ledgers' operator registration (`ledgersRoutes.ts`), working while sign-in is dark | C5, L4 | `portfolio_rank`, `portfolio_rank_revision` | it | n/a | W1 | n/a | No route |
@@ -6900,6 +7058,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | A quarter of the hard cap | The context floor of the idle trigger | W1a | n/a |
 | 70% of either the five-hour or the weekly window | The soft line of an account's load: ccd's pick at a renewal passes over an account past it, and the target of a pre-emptive move must be under it (C57) | W1 | n/a |
 | 85% | The harder line of an account's load: past it, an idle Overlord is renewed at once onto a listed account under the soft line (C57, Table 3.3.11b) | W1 | n/a |
+| 04:00 `UTC`, a seeded value marked default, changeable in Settings with no operator question | The daily backstop's hour and zone, until W3's quiet hours add a Setting, which then moves a row still marked default inside them and leaves an operator's choice alone (§3.3.11) | W1 | wall |
 | One hour, and always longer than the least age of a generation | The hold-down before ccd restores the designated class | W1 | ccd's clock |
 | Two in an hour | Restarts before the readiness word stops reading `restarting` | W1 | wall |
 | One sweep of the readiness lane, 10 seconds, a `LANE_SCHEDULE` row added in W1 | How long after boot the word reads `unmeasured` | W1 | wall |
@@ -6908,6 +7067,7 @@ values too. They are values of the renewal triggers' record, keyed by role, and 
 | 90 days | How long readiness rows are kept, never the newest, the newest `ready` or an open `dead` episode's first | W1 | wall |
 | 90 days | How long `overlord_sequence` is kept | W1 | wall |
 | 200 notes of 500 characters | The caps on `continuity_notes` for one identity | W1a | n/a |
+| 16,384 UTF-8 bytes (`MESSAGE_TEXT_MAX_BYTES`), a starting value beside the handover note's | The cap on one operator message's stored text: `capMessageText` cuts the masked text at the last whole code point that fits with the mark `[cut: <n> more bytes]`, and the hash is of the stored text, which a request will cite (§3.8, §5.1) | W1 | n/a |
 | 50 for the Overlord, 20 for a coordinator, 5 for any other session | Pending timers one identity may hold | W1a (the Overlord's W1) | n/a |
 | 30 an hour | Timers one identity may set | W1a | wall |
 | Five minutes, and 30 days | The shortest and the longest due time of a timer | W1a | wall |
@@ -6966,8 +7126,46 @@ reversible, so no act reads the two `reversible` weights in version 1.
   only while the server's capability file carries `overlord-v1`. A later wave's doors and verbs act only while its own
   word stands (Table 11.1d). After a rollback to an older server, everything takes today's path by itself.
 - **An older fleet build.** The `pool-set` capability (Table 11.1d) is checked again on every capability
-  refresh, for every agent that can place sessions. Losing it raises an operator item and a doctor failure.
-  `ccrc rollout` and `ccrc rollback` refuse to go below a capability that a standing fact needs, unless forced.
+  refresh, for every agent that can place sessions. `agent/src/server.ts#refreshVerbs` runs `ccd caps` again whenever
+  the stat of the ccd entry or body changes, and on every request of the server's 60 s `caps` lane. Losing it raises
+  a push to the operator and a doctor failure.
+  - **The standing fact is a `poolset` entry.** It is measured on the box, where ccd reads it: any entry at a path
+    `$REG/<id>.poolset` for any registry row, tested with `-e` or `-L`. A regular file, a dangling link, a directory
+    and a FIFO all count, because the new ccd reads each as `set-unreadable` and fails closed, while an older ccd
+    would ignore it and fail open. A registry that exists but cannot be listed is unmeasured and refuses. The update's
+    check and the doctor's run on every role. A server-role box has no registry rows, so it reads "nothing stands"
+    (the pool-set plan, question 7, `standing-set-is-a-poolset-entry`).
+  - **The floor reads the build's own stamp.** `build.json` gains `ccdCaps`, the built tree's whole `ccd caps` list,
+    and the one build-stamp parser, `ccd/ccrc#_box_build_fields`, reads it. A field-level answer is `<absent>` (a build
+    from before the field, a `deploy/deploy.sh` stamp, a kept tree from before it), `<malformed>`, or the space-joined
+    list, where `[]` lists no `pool-set` and refuses. The floor is a table of rows (`CAP_FLOOR_ROWS`: fact, word,
+    remedy), not a hard-coded check (question 11, `ccd-caps-ride-build-json`, and `cap-floor-is-a-table`).
+  - **The override is a typed flag, not "forced".** `--force` already means "reinstall a converged box" on the update
+    verb and "move a converged fleet anyway" on the rollout verb, and the rollback verb takes no `--force` by design.
+    The override is `--below-cap pool-set`, accepted by the update, rollback and rollout verbs, naming the one
+    capability it passes, and carried through every re-exec. Any other word after it is a usage error, and `--force`
+    never crosses the floor. The rollout verb forwards the flag only to a box whose check line advertises the cap word
+    `below-cap`, and refuses up front, before any box moves, naming every box that lacks it. `--check` names the words
+    a standing fact needs (`needs=`), and the rollout verb refuses up front when a box that is not first needs one (or
+    could not say), naming the order as the remedy. The console's rollback tap (`POST /api/updates/rollback`,
+    `--from pwa`) passes no such flag, so it refuses while a set stands, and its sentence puts the remedy first: run the
+    rollback from the box's shell with `--below-cap pool-set`, or retire or rebind the Overlord in Settings, which
+    clears the set (question 12, `below-cap-is-a-typed-flag`).
+  - **The unattended paths put health first.** The watchdog's rollback (`--from watchdog`) and the gate-failure
+    restore (`--from restore`) never refuse. They read the previous build's `ccdCaps` where a stamp exists. When it
+    lacks `pool-set` and a set stands, they still roll back, print the `WARN`, and the operator is pushed, naming every
+    standing set. Restore arm 3 has no stamp to read, so it reads no capability and, while a set stands, prints the
+    "could not be read" `WARN` (question 14, `pool-set-floor-unattended-warn-and-push`).
+  - **The push comes from the caps lane.** On each watcher tick a lane file (`server/src/poolSetLossLane.ts`) asks
+    one L1 decider, `poolSetLoss`, whether the box lacks `pool-set` in the caps the `caps` lane last recorded while any
+    session on it carries a `poolset` route field, readable or listed but unreadable. It raises one notice through the
+    notice funnel (`server/src/notice.ts#notify`, mode `push`, kind `coord`). The operator item the designation piece
+    may raise for a lost word reads the same decider (question 15, `pool-set-loss-push-from-the-caps-lane`).
+  - **A rollback below the field.** `shared/api.ts#reviveRoute` rejects a whole cached session whose `route.fields`
+    names a field it does not know, so a server rolled back below the first pool-set piece after a `poolset` exists
+    drops that session from `state-cache.json` until the live read re-measures it, as `precompact` does today. A
+    `set:<spelling>` crossing marker read by a ccd below the second piece matches nothing, and its tick ends the
+    crossing, which fails closed (the pool-set plan's notes, N2 and F12).
 - **The agent link stays additive.** Every new field on it (the witness epoch, a capability word)
   is additive, and `FLEET_PROTO` does not change.
 
@@ -6997,7 +7195,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `overlord-single-account` | Designate, rebind, the account set's Settings row | Fewer than two accounts that its set admits can serve it. At designate and rebind it is checked before the session is created, so a refused start leaves no session behind. At the Settings row it is checked only while an Overlord is designated | C46, C56 |
 | `auth-off` | Every operator door | Sign-in is dark, so the door would be open to any local process | H28 |
 | `server-not-isolated` | Grants, commands, learning; `overlordMayAct` | The server shares a user with fleet sessions | H28 |
-| `overlord-sandbox-unmet` | Designate, rebind | A property of the sandbox check failed at the pending start, and the door stops the session it created. Designate removes only the pending binding: a retired row stays retired, with its past ids, and the term never goes down. Rebind keeps the old binding. The stopped session stays stopped, and the board shows the properties that failed. At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
+| `overlord-sandbox-unmet` | Recorded on the designation row as the failed attempt's outcome, with the stopped session's id. Designate and rebind answer `pending` at once and never this word (the sandbox plan, question 3) | A property of the sandbox check failed at the pending start, and the door stops the session it created. Designate removes only the pending binding: a retired row stays retired, with its past ids, and the term never goes down. Rebind keeps the old binding. The stopped session stays stopped, and the board shows the properties that failed. At a later start a failure is `launch-profile-unmet` (§3.6) | H4 |
 | `launch-profile-unmet` | Every Overlord door but card, probe and note; designate and rebind | The launch profile is not engaged. That is computed on read, never stored, from the report of the session's newest `startup` or `resume` start and the server's own profile: no such start, no report, a conflicted report (a second, different body for one start), or any property `failed` or `unmeasured`, because `unmeasured` is never held. The `profile` property fails when the running session's digest, which covers `compactText` too, is not the server's profile's: after a release that changes the row, or while the fleet node and the server run different builds, a running Overlord reads it until its next start. A loaded file, hook, tool server, agent or skill the profile does not list fails its property, and a Claude Code build ccrc has no lists for reads `unmeasured`, naming the build. A resume carries `instructions` and `hooks` from the newest `startup` of the same transcript only when that report's digest and build equal this session's, and its tools and tool servers read `unmeasured`, so a resumed Overlord stays unmet until a fresh start. Settings sources are refused at the spawn rather than listed, and mods are doctor's `overlord-mods` check, not this word's. At designate and rebind: the server's and the fleet node's builds do not agree, the detail `skewed` naming both builds, or their agreement is `unmeasured` (the sandbox plan; the designation plan, its question 3) | H1, H4 |
 | `authority-rolled-back` | Every Overlord door but card, probe and note | Boot coherence failed (the authority journal against the rows, or the act journal against the act rows), or a witness holds a higher epoch or a journal head the server's journals lack, or the authority writer's guard is not coherent: an uncertain append, a trailing record, a diverged or unreadable file, answered with the guard's cause in the body (503) | H27 |
 | `stale-designation` | Every Overlord write door; the console's prompt route | The caller's live generation row has a term other than the designation's, or a term is missing on either side (the detail names the side). On the prompt route, the send's `overlordTerm` differs from the designation's | H12 |
@@ -7043,7 +7241,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `probe-none-open` | The probe door | The session has no open probe round (plan-driven consistency, the W1a plans) | C41 |
 | `probe-closed` | The probe door | The round was already answered (plan-driven consistency, the W1a plans) | C41 |
 | `card-changed` | The card door | A later page names a card hash that no longer matches the current render; the caller starts again at page 1 (plan-driven consistency, the W1a plans) | C38 |
-| `unknown-start` | The loads door | The report's id names no startup or resume start this session has recorded yet; the hook keeps the report and resends it (plan-driven consistency, the W1 sandbox plan) | H1, H4 |
+| `unknown-start` | The loads door | Answered 404. The report's id names no startup or resume start this session has recorded yet; the hook keeps the report and resends it (plan-driven consistency, the W1 sandbox plan) | H1, H4 |
 | `note-key-unknown` | The note door | The note's key names no live programme, open item or non-terminal run of the caller's, or a revision's `revises` names no live note of the caller's (plan-driven consistency). A key or revised note that cannot be measured now is no refusal of the key: the door answers `unmeasured` (502), unless another fact already refuses the note | C37 |
 | `note-cap` | The note door | The identity holds its cap of live notes (Table 11.5b) (plan-driven consistency) | C37 |
 | `note-too-long` | The note door | A field is over its length cap (Table 11.5b); or, for the handover note, its tone is over 300 characters, it has more threads or cautions than the note count cap, or its whole JSON is over `HANDOVER_MAX_BYTES` (16,384 bytes), measured as sent and as it would be stored (plan-driven consistency) | C37 |
@@ -7951,6 +8149,20 @@ coordinator ruled the matter, the row says so.
 | Receipts, retention and the response doors (§4.3, Table 11.1e) | Receipts dropped by the accepted set at once; retention a Setting; doors from `server.ts` | The set is checked once the verdict has landed, with eight receipts kept before it; retention is 14 to 3,650 days, lowering takes the step-up and an unreadable value reads as a lowering; two deleters by cause; five routes in `server/src/responses/routes.ts`. The responses plan, questions 7, 14, 16 and 19, F9, F14 |
 | The sequence's lines (§10.4, Table 11.1a) | "Row kind and id, state, actor" | An opaque id per kind and the actor's kind in a column of its own; the prune records its floor in `overlord_sequence_pruned` and keeps the newest `designation` line; a cursor past the head answers `ahead`, and every answer carries `restoreGeneration`. The sequence plan, questions 5 to 8, F4 |
 | The invariant monitor (§10.4) | Ships in W1, a latch and one item per violation | Ships in shadow, on an `invariants` row of the Shadow lanes card; one findings row per episode; the item under the programme `overlord`, `blocking`; I7 reads only a coherent journal. The sequence plan, questions 11, 12, 14 and 18, F2, F6 to F8 |
+| The set's side words and fields (C46) | The reader answers `unreadable` or `malformed`; the fields unnamed; an empty set "serves nothing" | The reader answers `set-unreadable` and `set-malformed`, and `_pool_ok` sets `POOL_OK_STATE` to the spec's two words. The fields are `poolset` and `acctorder` (`acctorder` checked for shape only), and the empty set has no route spelling. The pool-set plan, questions 1, 2, 3 and 9 |
+| `ccd pool-answer` (C46) | `ccd pool-answer <id>`, a one-line answer in prose | `ccd pool-answer --session <id>`, bound in `REQUIRED_VERB_FLAG`; one line of `key=value` tokens, exits 0 to 3, a caller reads `ran` before `code`. The pool-set plan, question 4, `pool-answer-takes-session-flag` |
+| `_swap_target`'s side words (Table 3.4d) | "The rc-4 caller picks the word from `POOL_OK_SIDE`" | A subshell loses `POOL_OK_SIDE`, so rc 4 is the project side, rc 7 the account side (`projection`) and rc 8 the set side, and the tick's verdict site picks the same words. The pool-set plan, question 5, `swap-target-rc-by-side` |
+| The rest of Table 3.4d (existing rows, strand, undecidable arms) | A new row and an existing row alike refused; the strand and undecidable arms as listed | An existing row outside its set warns and the tick moves it; only a new row is refused. `_strand_mark` names `set-unreadable` and `_strand_why` lists an untagged account a set refuses. Account arms under a set name the set, and an unsearchable `$REG` reads `unreadable`. The unreadable-project guard stands. The pool-set plan, `existing-row-warns-the-tick-relocates`, `strand-names-an-untagged-account-a-set-refuses` and `unreadable-project-field-holds-a-set-session` |
+| Who writes a set, and clearing it (C46) | "Any session's shell can still write a route record with `ccd route`" | `_route_argv_check` refuses both fields, `ccd route` refuses them from a Claude Code session (a clear included), an accident guard still, and an empty value clears them. The pool-set plan, questions 10 and 13, `a-session-shell-cannot-write-its-own-set` and `poolset-empty-value-clears` |
+| An older fleet build (§11.5) | "Refuse to go below a capability that a standing fact needs, unless forced"; an operator item on loss | The standing fact is a `poolset` entry, the stamp carries `ccdCaps`, the override is `--below-cap pool-set` and never `--force`, the unattended paths warn and push, and the caps lane raises the push. A rollback below the field drops the cached session. The pool-set plan, questions 7, 11, 12, 14 and 15 and its notes |
+| `overlord-sandbox-unmet` and `unknown-start` (§3.2 C2, §3.6, Table 11.6) | The door answers `overlord-sandbox-unmet`; `unknown-start` has no status | The door answers `pending`, and the word is the failed attempt's recorded outcome on the designation row; `unknown-start` is answered 404. The sandbox plan, question 3, `sandbox-unmet-is-an-outcome` |
+| What the hook reports at a start (§3.6 H1 and H4, Tables 3.6a and 11.1e) | One start report lists the settings sources, hooks, tool servers, mods, agents and skills; the profile digest is a file ccd writes | The digest is an environment variable. The lists come in a loads report at the first `Stop`, on a door of its own, read from the transcript and the prompt snapshot, with `claudeVersion` and `reportId`, and a resume carries its own start. Settings sources are refused at the spawn and mods are doctor's check. Table 3.6a gains the expected digest and the loads spool. The sandbox plan, questions 1 and 2, `profile-digest-rides-the-environment`, `start-loads-is-its-own-report`, `resume-carries-its-own-start` and `settings-sources-refused-at-spawn-not-listed` |
+| How the launch profile is rendered and held (§3.2 C2, §3.6 H1 and H4) | Rendered fail open; the route written once; swaps unguarded | A typed surface, links of the skill and constitution, an arm that refuses what the profile lacks, `profiledigest` as a lane-only field written at the create and by the lane (only under build agreement), a spawn that refuses an unrenderable row, and no swap or resume ends a pane it cannot respawn. The sandbox plan, `expected-digest-rides-the-route`, `profile-fields-written-at-create`, `surfaced-profile-fails-closed` and `dead-overlord-waits-for-build-agreement` |
+| The sandbox verdict (§3.6 H4, Table 11.1a) | "Anything loaded that the profile does not list refuses"; the writer of `live` unstated | Computed on read from the newest `startup` or `resume` start over nine properties, `unmeasured` never held, an unlisted build `unmeasured`; doctor's `overlord-mods` fails only on the designated set; the loads door's settle step writes `live` and the failed attempt through the designation module. The sandbox plan, questions 3 to 6, `verdict-computed-on-read` and `claude-code-own-lists-are-keyed-by-build` |
+| Table 3.3.11b's four rows (Not local, A new ccrc install, account outside the set, the designated class) | The host's report; the roll's "behind" test alone; the set alone; a class "changed after the generation was minted" | The transcript resolver, after a first turn for a `startup` or `clear` start; a digest differing from the server's while the builds agree (soft), unmeasured under skew; an account held out of the list counts as outside the set; the class against the stamp the mint wrote. The readings plan, its "Spec fixes" list, questions 4 and 5 and F7 |
+| The hold of an account, the backstop and the second writer of the route (§3.6, §3.3.11, Tables 3.6a, 11.1d and 11.5b) | "Until the operator clears the item"; the backstop at "an hour inside the quiet hours"; "again at each renewal" with no writer named | A row of its own, `overlord_account_holds`, with a session-gated clear door; the backstop defaults to 04:00 `UTC` and has its own `GET` and `POST` door; designation B's step before each `renew` writes the set and the list. The readings plan, questions 2, 6 and 9 and its "Spec fixes" list |
+| The operator's messages (§3.8 H7, H8, Tables 9.1a and 11.5b) | A capped text with no cap; "the boot pass re-derives `settled`"; a nudge the reader acks; the settlement mark by the words | 16,384 bytes; a citation reader that answers `not-applicable` and rows read `unjudged`; the lane acks the nudge on its first delivery; the mark is a whole message. Also `bad-attachment`, 502 `unmeasured` on an unread designation, the send key, the term on a chat send, and the Overlord's `@overlord` operator mark. The private store plan, questions 3, 5, 6, 8, 9, 13, 16, 17 and 18 |
+| The read ledger and the privacy journal (§3.8, §9.4, Table 9.1a) | A line per read with no turn state; a witness-only answer to a lost journal | A nullable turn state meaning a console read, and eight turn words for a session's read; no line deleted in W1; `privacyCoherence` answers `coherent`, `fresh`, `re-anchor` or `refuse`. The private store plan, questions 10, 11 and 12 |
 
 *Table B7. The corrections from the W1 plans.*
 
