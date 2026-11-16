@@ -28,6 +28,12 @@ export type DecisionUnavailableWhy = (typeof DECISION_UNAVAILABLE_WHY)[number];
 export const DECISION_NOT_ASKED_WHY = ['held', 'missing-field', 'private-state-hosted', 'egress-hit',
   'egress-unreadable'] as const;
 export type DecisionNotAskedWhy = (typeof DECISION_NOT_ASKED_WHY)[number];
+/** Why an answer read `malformed` before it was parsed: a body over the cap, or not JSON. */
+export const DECISION_MALFORMED_WHY = ['not-json', 'too-large'] as const;
+export type DecisionMalformedWhy = (typeof DECISION_MALFORMED_WHY)[number];
+/** A row's question type: a yes-or-no question, or a choice among options. */
+export const DECISION_QUESTION_TYPES = ['yes-no', 'choice'] as const;
+export type DecisionQuestionType = (typeof DECISION_QUESTION_TYPES)[number];
 
 /** Four fixed bands, so the anchor set's shares compare from day to day (question 10). A session sees a band, never `p`. */
 export const DECISION_BANDS = ['unlikely', 'doubtful', 'likely', 'very-likely'] as const;
@@ -107,7 +113,7 @@ export interface DecisionField {
 export interface DecisionQuestionRow {
   readonly id: DecisionRowId;
   readonly wave: 'W2';
-  readonly type: 'yes-no' | 'choice';
+  readonly type: DecisionQuestionType;
   /** Fixed text stating one condition (H6, "Asked well"). */
   readonly instructions: string;
   /** A yes-or-no row's two sides in plain words; null for a choice row, whose options the encoder makes. */

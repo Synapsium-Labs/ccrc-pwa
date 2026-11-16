@@ -3,7 +3,7 @@
 // only. Declared by its consumer, the one caller (`decisionModelAsk.ts#gatherDecisions`); its one adapter is
 // `decisionModelHttp.ts#createHttpDecisionModel`, one wire for the three host kinds (plan question 1).
 import type {
-  DecisionBand, DecisionHostKind, DecisionRowId, DecisionVerdict,
+  DecisionBand, DecisionHostKind, DecisionMalformedWhy, DecisionRowId, DecisionVerdict,
 } from '../../../shared/decisionModel.js';
 import type { DecisionUsage, DecisionWireRequest } from './decisionModel.js';
 
@@ -17,7 +17,7 @@ export type DecisionCall =
   | { ok: false; outcome: 'unavailable'; why: 'timeout' | 'unreachable' | 'server-error' | 'endpoint-not-private' | 'no-key';
       status: number | null; ms: number; attempts: number }
   | { ok: false; outcome: 'auth-failed' | 'refused' | 'over-size'; status: number; ms: number; attempts: number }
-  | { ok: false; outcome: 'malformed'; why: 'not-json' | 'too-large'; ms: number; attempts: number };
+  | { ok: false; outcome: 'malformed'; why: DecisionMalformedWhy; ms: number; attempts: number };
 
 export interface DecisionModel {
   /** The host kind this adapter was built from (question 1): the caller refuses one that differs from its plan's. */

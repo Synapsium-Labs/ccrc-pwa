@@ -14,8 +14,9 @@
 // orders, the lower of the two for `yes` and `unsure`, the higher for `no`; for a choice, the lower of the two orders'
 // probabilities for the option named.
 import {
-  DECISION_BAND_CUTS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_QUESTIONS, DECISION_REQUEST_MAX_BYTES,
-  DECISION_RESERVE_PER_REQUEST, DECISION_SHORTLIST_MAX,
+  DECISION_BAND_CUTS, DECISION_BANDS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_HOST_KINDS,
+  DECISION_MALFORMED_WHY, DECISION_NOT_ASKED_WHY, DECISION_OUTCOMES, DECISION_QUESTION_TYPES, DECISION_QUESTIONS,
+  DECISION_REQUEST_MAX_BYTES, DECISION_RESERVE_PER_REQUEST, DECISION_SHORTLIST_MAX, DECISION_UNAVAILABLE_WHY,
   type DecisionBand, type DecisionCheck, type DecisionHostKind, type DecisionRowId, type DecisionRowSide,
   type DecisionVerdict,
 } from '../../../shared/decisionModel.js';
@@ -29,7 +30,17 @@ export type DecisionUsage =
   | { measured: false };
 
 /** What the hosted egress screen said, or `not-hosted` when the host is not `hosted` and no screen ran (question 9). */
-export type DecisionEgressWord = 'clear' | 'hit' | 'no-list' | 'unreadable' | 'not-hosted';
+export const DECISION_EGRESS_WORDS = ['clear', 'hit', 'no-list', 'unreadable', 'not-hosted'] as const;
+export type DecisionEgressWord = (typeof DECISION_EGRESS_WORDS)[number];
+/** The egress word an answered check records (`egressWordOf`). */
+export const DECISION_RECORDED_EGRESS = ['clear', 'skipped-no-list', 'not-hosted'] as const;
+
+/** Every word the decision-model files spell as a literal, from the lists that declare them. `mail-routes.test.ts`'s code
+ *  scan admits a word of these files through this guard: none is a mail or run refusal. */
+const DECISION_MODEL_WORDS: ReadonlySet<string> = new Set<string>([...DECISION_HOST_KINDS, ...DECISION_OUTCOMES,
+  ...DECISION_UNAVAILABLE_WHY, ...DECISION_NOT_ASKED_WHY, ...DECISION_MALFORMED_WHY, ...DECISION_BANDS,
+  ...DECISION_QUESTION_TYPES, ...DECISION_EGRESS_WORDS, ...DECISION_RECORDED_EGRESS]);
+export const isDecisionModelWord = (w: string): boolean => DECISION_MODEL_WORDS.has(w);
 
 export interface PlanInput {
   row: DecisionRowId;
@@ -126,7 +137,7 @@ export function decisionLineGen(row: DecisionRowId, side: DecisionRowSide, curre
 
 /** The egress word an answered check records: `not-hosted` when no screen ran, `skipped-no-list` when no list was ever
  *  uploaded (Q9). A hit and an unreadable list never reach an answer (plan rows 8 and 9), so they are not arguments. */
-export function egressWordOf(egress: Exclude<DecisionEgressWord, 'hit' | 'unreadable'>): 'clear' | 'skipped-no-list' | 'not-hosted' {
+export function egressWordOf(egress: Exclude<DecisionEgressWord, 'hit' | 'unreadable'>): (typeof DECISION_RECORDED_EGRESS)[number] {
   return egress === 'no-list' ? 'skipped-no-list' : egress;
 }
 
