@@ -324,3 +324,35 @@ describe('poolrule.ts is the pure L1 module its own docstring says it is', () =>
       ]);
   });
 });
+
+// The widening to a session's side (Overlord W1 designation A, plan Task 2; review F8). A project side answers as the
+// rows above; a set side answers from the set.
+describe('poolEligible and poolUndecidable over a session side (C46)', () => {
+  const r = parseRoster(POOLED_TEST_ROSTER);
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const ids = (side: Parameters<typeof poolEligible>[1]): string[] => poolEligible(r, side, NO_EDGES).map((a) => a.id);
+
+  it('a set admits the accounts in its pools, and an untagged account only by its +untagged', () => {
+    expect(ids({ state: 'set', set: { pools: ['pool-a'], untagged: false } })).toEqual(['claude', 'claude-a']);
+    expect(ids({ state: 'set', set: { pools: ['pool-a'], untagged: true } })).toEqual(['claude', 'claude-a', 'claude-d']);
+    expect(ids({ state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: false } })).toEqual(['claude', 'claude-a', 'claude-b']);
+    expect(ids({ state: 'set', set: { pools: [], untagged: false } })).toEqual([]);
+  });
+  it('an unreadable or malformed set admits nobody', () => {
+    expect(ids({ state: 'set-unreadable' })).toEqual([]);
+    expect(ids({ state: 'set-malformed' })).toEqual([]);
+  });
+  it('a set is undecidable only when it could not be read, never because an untagged account mismatches', () => {
+    expect(poolUndecidable({ state: 'set', set: { pools: ['pool-a'], untagged: false } })).toBe(false);
+    expect(poolUndecidable({ state: 'set', set: { pools: [], untagged: false } })).toBe(false);
+    expect(poolUndecidable({ state: 'set-unreadable' })).toBe(true);
+    expect(poolUndecidable({ state: 'set-malformed' })).toBe(true);
+  });
+  it('a project side still answers byte for byte as before', () => {
+    expect(poolUndecidable({ state: 'unreadable' })).toBe(true);
+    expect(poolUndecidable({ state: 'malformed' })).toBe(true);
+    expect(poolUndecidable({ state: 'untagged' })).toBe(false);
+    expect(poolUndecidable({ state: 'tagged', name: 'pool-a' })).toBe(false);
+    expect(ids({ state: 'tagged', name: 'pool-b' })).toEqual(['claude-b', 'claude-d']);
+  });
+});

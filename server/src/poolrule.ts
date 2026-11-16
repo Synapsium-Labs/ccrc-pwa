@@ -1,5 +1,5 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
-import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
+import type { AccountPoolWire, ProjectPoolVerdict, SessionPoolSide } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire, RouteField } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
@@ -161,7 +161,7 @@ export function poolVerdict(
  * not because either side reads the other's.
  */
 export function poolEligible(
-  roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
+  roster: Roster, pool: SessionPoolSide, edges: ReadonlyMap<string, readonly string[]>,
 ): AccountDef[] {
   return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a.id, a, edges), pool).ok);
 }
@@ -176,8 +176,12 @@ export function poolEligible(
  * `state === 'unreadable' || state === 'malformed'` here would be the second
  * copy that drifts the day a fifth state is added.
  */
-export function poolUndecidable(pool: ProjectPoolWire): boolean {
-  return !poolRule(declaredAccountPool(null), pool).ok;
+export function poolUndecidable(pool: SessionPoolSide): boolean {
+  // The verdict's REASON decides, not `!ok` (Overlord W1 designation A, review F8). For a project side the two are one
+  // fact: an untagged account never mismatches, so its only refusal is `pool-undecidable`. For a set without
+  // `+untagged` the same untagged account DOES mismatch, and that is a decided "no", never an undecidable one.
+  const v = poolRule(declaredAccountPool(null), pool);
+  return !v.ok && v.reason === 'pool-undecidable';
 }
 
 /**

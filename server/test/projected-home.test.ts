@@ -840,3 +840,39 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     expect(shH('_account_measured a && echo yes || echo no')).toBe('no');
   });
 });
+
+// A set side (Overlord W1 designation A, plan Task 2; the index's Q5). TypeScript-only rows: ccd's placer is unchanged
+// (Table 3.4d), so the parity harness above stays on the project rows.
+describe('projectHome and projectPlacement over a session set (C46)', () => {
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const acct = (id: string, pool?: string) => ({
+    id, label: id, configDirSuffix: `.${id}`, exec: id === 'lane-a' ? { kind: 'upstream' } : { kind: 'generated' },
+    homeAble: true, hue: 'cyan', telemetry: 'anthropic', continuity: { recordedAt: 1 }, ...(pool === undefined ? {} : { pool }),
+  });
+  const r = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), acct('lane-b', 'pool-b'), acct('lane-c')] });
+  const L = (five: number, seven: number): AccountLimits =>
+    ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
+  const lim = { 'lane-a': L(30, 30), 'lane-b': L(10, 10), 'lane-c': L(5, 5) };
+
+  it('a set without +untagged leaves the untagged account out, and +untagged brings it in', () => {
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: false } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-b', score: 10 });
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: true } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-c', score: 5 });
+  });
+  it('a set no account is in answers none carrying the set; an unreadable or malformed one answers unmeasurable', () => {
+    const set = { pools: ['pool-z'], untagged: false };
+    expect(projectPlacement(r, lim, { state: 'set', set }, NO_EDGES)).toEqual({ kind: 'none', set });
+    expect(projectPlacement(r, lim, { state: 'set-unreadable' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectPlacement(r, lim, { state: 'set-malformed' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectHome(r, lim, { state: 'set-malformed' }, NO_EDGES)).toBeNull();
+  });
+  it('the Overlord\'s class is asked as a set-side session: an account with no continuity record is not placed for it', () => {
+    const noCont = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), { ...acct('lane-b', 'pool-a'), continuity: undefined }] });
+    const set = { state: 'set', set: { pools: ['pool-a'], untagged: false } } as const;
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, set, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-a', score: 50 });
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, { state: 'tagged', name: 'pool-a' }, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-b', score: 1 });
+  });
+});
