@@ -715,7 +715,19 @@ _plat_timeout() {   # <seconds> <cmd> [args...]
   # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
   stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
-  "$@" &
+  # `<&0` ON THE COMMAND, AND IT IS WHAT GIVES THIS ARM THE BINARY'S STDIN
+  # (D-8658). A shell without job control gives a background job /dev/null for
+  # stdin unless the job carries a stdin redirection of its own, so the command
+  # here used to read nothing where the binary arm's read the caller's stdin:
+  # C28 found it on the sign-in mint, whose pasted code never arrived. `<&0` is
+  # a redirection of the job's own, and it names the caller's fd 0, so the
+  # command now reads what it would under `timeout`: a redirect on the call, a
+  # here-string, the shell's inherited stdin, the rest of a read loop's input.
+  # Not a copy through a spare descriptor: with fd 0 closed that copy fails and
+  # the command never runs, while `<&0` runs it with fd 0 closed, as the binary
+  # does. MEASURED on bash 5.3, `--posix` too; `ccd-plat-timeout.test.ts` pins
+  # all four copies. The watcher below keeps its /dev/null: it reads nothing.
+  "$@" <&0 &
   pid=$!
   # `|| exit 0` ON THE SLEEP (via `wait`), and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
