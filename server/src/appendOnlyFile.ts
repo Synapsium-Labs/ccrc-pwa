@@ -19,14 +19,21 @@
 //   never truncates, unlinks or retries. Every failure once it is entered carries `mayApply: true`.
 // - `cutAside` is the port's ONE cut, and its only caller is the chained-journal file adapter's `cutAside` (the torn-tail
 //   heal, and Confirm the restore setting a whole `malformed` file aside). It re-proves the snapshot, creates the
-//   quarantine directory (one name inside this file's directory, mode 0700) when absent, writes the bytes past `offset`
-//   there under a temporary name, fsyncs them, renames them into place and fsyncs that directory and the parent, and
-//   only THEN truncates the file to `offset`, fsyncs it and the parent, and re-proves the shorter bytes. The bytes it
-//   cuts are on disk elsewhere before a single one is removed. It never unlinks.
+//   quarantine directory (one name inside this file's directory) when absent and sets it to mode 0700 through its
+//   descriptor, writes the bytes past `offset` there under a temporary name (mode 0600 through its descriptor), fsyncs
+//   them, renames them into place, proves the quarantine path still denotes the directory it holds, fsyncs that
+//   directory and the parent, and only THEN truncates the file to `offset`, fsyncs it and the parent, and re-proves the
+//   shorter bytes. The bytes it cuts are on disk elsewhere before a single one is removed. A kept file never replaces
+//   different bytes: an existing kept name holding other bytes is `changed`, and the same bytes are an idempotent retry.
+//   It never unlinks.
+// - ONE WRITER PROCESS PER FILE. The port re-proves before and after each act, but holds no lock: a second writer that
+//   appends between a re-proof and the act it guards is caught only afterwards (`changed`), never prevented. Each journal
+//   that binds this port has exactly one writer, a synchronous in-process call (the landing journal's store, the chained
+//   journals' own classes), so the window is never entered by this tree.
 // - No answer carries a path or an error message; only the closed words below.
 import {
-  closeSync, constants as FS, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readSync, renameSync, writeSync,
-  type BigIntStats,
+  closeSync, constants as FS, fchmodSync, fstatSync, fsyncSync, ftruncateSync, mkdirSync, openSync, readSync, renameSync,
+  writeSync, type BigIntStats,
 } from 'node:fs';
 import path from 'node:path';
 
@@ -57,8 +64,9 @@ export interface AppendOnlyFile {
   /** One line, LF included, appended after re-proving the snapshot: never truncates, never retries. */
   appendLine(s: AppendOnlySnapshot, line: Uint8Array): { ok: true } | { ok: false; error: AppendOnlyAppendError; mayApply: true };
   /** The one cut: keeps the bytes past `offset` in `asideDir` (written, fsynced, renamed into place), truncates the
-   *  file to `offset`, and fsyncs the file and both directories. Re-proves the snapshot first, and spends it. An argument
-   *  outside this contract, or an absence snapshot, is a `RangeError`, thrown before any I/O. */
+   *  file to `offset`, and fsyncs the file and both directories. Re-proves the snapshot first, and spends it on every
+   *  path: an argument outside this contract, or an absence snapshot, spends it and then throws `RangeError`, before
+   *  any I/O. A kept name that already holds other bytes is `changed`, and nothing is removed. */
   cutAside(s: AppendOnlySnapshot, cut: AppendOnlyCut): { ok: true } | { ok: false; error: AppendOnlyCutError; mayApply: true };
 }
 
@@ -72,8 +80,9 @@ export interface AppendOnlyIoOps {
   fsyncSync(fd: number): void;
   closeSync(fd: number): void;
 }
-/** Every operation the port performs: the read and append ones, and the three only its cut uses. */
+/** Every operation the port performs: the read and append ones, and the four only its cut uses. */
 export interface AppendOnlyFsOps extends AppendOnlyIoOps {
+  fchmodSync(fd: number, mode: number): void;
   ftruncateSync(fd: number, len: number): void;
   mkdirSync(path: string, mode: number): void;
   renameSync(from: string, to: string): void;
@@ -85,6 +94,7 @@ export const NODE_APPEND_ONLY_FS: AppendOnlyFsOps = {
   writeSync: (fd, b, o, l) => writeSync(fd, b, o, l),
   fsyncSync: (fd) => fsyncSync(fd),
   closeSync: (fd) => closeSync(fd),
+  fchmodSync: (fd, mode) => fchmodSync(fd, mode),
   ftruncateSync: (fd, len) => ftruncateSync(fd, len),
   mkdirSync: (p, mode) => { mkdirSync(p, mode); },
   renameSync: (from, to) => renameSync(from, to),
@@ -104,6 +114,7 @@ const OPEN_CREATE = FS.O_RDWR | FS.O_APPEND | FS.O_CREAT | FS.O_EXCL | FS.O_NOFO
 const OPEN_DIR = FS.O_RDONLY | FS.O_DIRECTORY;
 const OPEN_ASIDE_DIR = FS.O_RDONLY | FS.O_DIRECTORY | FS.O_NOFOLLOW;
 const OPEN_KEPT = FS.O_WRONLY | FS.O_CREAT | FS.O_TRUNC | FS.O_NOFOLLOW | FS.O_NONBLOCK;
+const OPEN_KEPT_READ = FS.O_RDONLY | FS.O_NOFOLLOW | FS.O_NONBLOCK;
 const OPEN_CUT = FS.O_RDWR | FS.O_NOFOLLOW | FS.O_NONBLOCK;
 /** The kept bytes' name before the rename puts them in place. A kept name may not end in it. */
 const PARTIAL = '.partial';
@@ -125,12 +136,18 @@ class Refusal extends Error {
   constructor(readonly word: AppendOnlyAppendError) { super(word); }
 }
 
-/** The word an open, create or rename failure becomes: a permission or read-only refusal is `unwritable`, a refusal of
- *  this port's own proof keeps its word, anything else is `unreadable`. */
+/** The word an open failure becomes, as the landing journal's append has always mapped it: a permission or read-only
+ *  refusal is `unwritable`, a refusal of this port's own proof keeps its word, anything else is `unreadable`. */
 const writeFailure = (err: unknown): AppendOnlyAppendError => {
   if (err instanceof Refusal) return err.word;
   const code = errnoOf(err);
   return code === 'EACCES' || code === 'EPERM' || code === 'EROFS' ? 'unwritable' : 'unreadable';
+};
+/** The cut's create failures: `writeFailure`, and a full disk or quota is `unwritable` too, as is a directory where a file
+ *  is made. Only the cut maps these: the append's words stay as they were before the move. */
+const cutCreateFailure = (err: unknown): AppendOnlyCutError => {
+  const code = errnoOf(err);
+  return code === 'ENOSPC' || code === 'EDQUOT' || code === 'EISDIR' ? 'unwritable' : writeFailure(err);
 };
 
 // `ops` is a TEST SEAM (fault injection and observation of the open flags): production passes only the directory and name.
@@ -140,9 +157,9 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
 
   const close = (fd: number): void => { try { ops.closeSync(fd); } catch { /* the answer stands */ } };
 
-  const identOf = (fd: number): { id: Ident; isFile: boolean; isDir: boolean; size: bigint } => {
+  const identOf = (fd: number): { id: Ident; isFile: boolean; isDir: boolean; size: bigint; mode: number } => {
     const st = ops.fstatSync(fd, { bigint: true });
-    return { id: { dev: st.dev, ino: st.ino }, isFile: st.isFile(), isDir: st.isDirectory(), size: st.size };
+    return { id: { dev: st.dev, ino: st.ino }, isFile: st.isFile(), isDir: st.isDirectory(), size: st.size, mode: Number(st.mode & 0o7777n) };
   };
 
   /** Every byte behind `fd`, from offset 0. */
@@ -293,10 +310,7 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
           if (ev.leaf !== null && !sameIdent(opened.id, ev.leaf.id)) return fail('changed');
           if (ev.leaf !== null && !readAll(fd).equals(ev.bytes)) return fail('changed');
         } catch (err) {
-          if (errnoOf(err) === 'EEXIST') return fail('changed');
-          const code = errnoOf(err);
-          if (code === 'EACCES' || code === 'EPERM' || code === 'EROFS') return fail('unwritable');
-          return fail(err instanceof Refusal ? err.word : 'unreadable');
+          return fail(errnoOf(err) === 'EEXIST' ? 'changed' : writeFailure(err));
         }
         // 3. one line, short writes continued
         try {
@@ -340,16 +354,17 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
     },
 
     cutAside(snapshot, cut) {
-      if (!Number.isSafeInteger(cut.offset) || cut.offset < 0) throw new RangeError('a cut offset is a nonnegative safe integer');
-      if (!isOneName(cut.asideDir)) throw new RangeError('a quarantine directory is one name inside the file\'s directory');
-      if (!isOneName(cut.asideName) || cut.asideName.endsWith(PARTIAL)) throw new RangeError('a kept name is one name, not a temporary one');
       const fail = (error: AppendOnlyCutError): { ok: false; error: AppendOnlyCutError; mayApply: true } =>
         ({ ok: false, error, mayApply: true });
       const ev = evidenceOf(snapshot);
       if (ev === null) return fail('unreadable');
+      const refuse = (why: string): never => { spend(ev); throw new RangeError(why); };
+      if (!Number.isSafeInteger(cut.offset) || cut.offset < 0) refuse('a cut offset is a nonnegative safe integer');
+      if (!isOneName(cut.asideDir)) refuse('a quarantine directory is one name inside the file\'s directory');
+      if (!isOneName(cut.asideName) || cut.asideName.endsWith(PARTIAL)) refuse('a kept name is one name, not a temporary one');
       const leaf = ev.leaf;
-      if (leaf === null) throw new RangeError('a cut needs a present file');
-      if (cut.offset > ev.bytes.length) throw new RangeError('a cut offset lies inside the file');
+      if (leaf === null) return refuse('a cut needs a present file');
+      if (cut.offset > ev.bytes.length) refuse('a cut offset lies inside the file');
       let asideFd = -1;
       let keptFd = -1;
       let fd = -1;
@@ -358,28 +373,47 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
         let proved: boolean;
         try { proved = reprove(ev); } catch { return fail('unreadable'); }
         if (!proved) return fail('changed');
-        // 2. the quarantine directory: created 0700 when absent, a directory and never a symlink
+        // 2. the quarantine directory: created when absent, a directory and never a symlink, mode 0700 through its descriptor
         const asidePath = path.join(dir, cut.asideDir);
         try {
           ops.mkdirSync(asidePath, 0o700);
         } catch (err) {
-          if (errnoOf(err) !== 'EEXIST') return fail(writeFailure(err));
+          if (errnoOf(err) !== 'EEXIST') return fail(cutCreateFailure(err));
         }
+        let aside: Ident;
         try {
           asideFd = ops.openSync(asidePath, OPEN_ASIDE_DIR);
-          if (!identOf(asideFd).isDir) return fail('unwritable');
+          const st = identOf(asideFd);
+          aside = st.id;
+          if (st.mode !== 0o700) ops.fchmodSync(asideFd, 0o700);
         } catch (err) {
           const code = errnoOf(err);
-          return fail(code === 'ELOOP' || code === 'ENOTDIR' ? 'unwritable' : writeFailure(err));
+          return fail(code === 'ELOOP' || code === 'ENOTDIR' ? 'unwritable' : cutCreateFailure(err));
         }
-        // 3. the kept bytes: written under the temporary name, fsynced, then renamed into place, and the directory fsynced
+        // 3. the kept bytes. A kept name that already holds OTHER bytes is never replaced; the same bytes are a retry.
         const kept = ev.bytes.subarray(cut.offset);
+        const keptPath = path.join(asidePath, cut.asideName);
+        try {
+          const prior = ops.openSync(keptPath, OPEN_KEPT_READ);
+          try {
+            if (!identOf(prior).isFile) return fail('unwritable');
+            if (!readAll(prior).equals(kept)) return fail('changed');
+          } finally {
+            close(prior);
+          }
+        } catch (err) {
+          const code = errnoOf(err);
+          if (code !== 'ENOENT') return fail(code === 'ELOOP' ? 'unwritable' : cutCreateFailure(err));
+        }
+        // written under the temporary name, mode 0600 through its descriptor, fsynced, then renamed into place
         const partialPath = path.join(asidePath, `${cut.asideName}${PARTIAL}`);
         try {
           keptFd = ops.openSync(partialPath, OPEN_KEPT, 0o600);
-          if (!identOf(keptFd).isFile) return fail('unwritable');
+          const st = identOf(keptFd);
+          if (!st.isFile) return fail('unwritable');
+          if (st.mode !== 0o600) ops.fchmodSync(keptFd, 0o600);
         } catch (err) {
-          return fail(errnoOf(err) === 'ELOOP' ? 'unwritable' : writeFailure(err));
+          return fail(errnoOf(err) === 'ELOOP' ? 'unwritable' : cutCreateFailure(err));
         }
         try {
           let done = 0;
@@ -394,7 +428,14 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
         try { ops.fsyncSync(keptFd); } catch { return fail('durability'); }
         close(keptFd);
         keptFd = -1;
-        try { ops.renameSync(partialPath, path.join(asidePath, cut.asideName)); } catch { return fail('unwritable'); }
+        try { ops.renameSync(partialPath, keptPath); } catch { return fail('unwritable'); }
+        // the quarantine path still denotes the directory the bytes went into
+        try {
+          const again = ops.openSync(asidePath, OPEN_ASIDE_DIR);
+          try { if (!sameIdent(identOf(again).id, aside)) return fail('changed'); } finally { close(again); }
+        } catch {
+          return fail('changed');
+        }
         // the kept file's entry, then the quarantine directory's own entry in the parent: both durable before the cut
         try {
           ops.fsyncSync(asideFd);
@@ -402,14 +443,19 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
         } catch {
           return fail('durability');
         }
-        // 4. the cut: the proven leaf, its bytes unchanged, truncated to `offset`; the file, then the parent
+        // 4. the cut: the proven leaf, its bytes and size unchanged, truncated to `offset`; the file, then the parent
         try {
           const opened = openLeaf(OPEN_CUT);
           if (opened === null) return fail('changed');
           fd = opened.fd;
           if (!sameIdent(opened.id, leaf.id) || !readAll(fd).equals(ev.bytes)) return fail('changed');
         } catch (err) {
-          return fail(writeFailure(err));
+          return fail(errnoOf(err) === 'ELOOP' ? 'changed' : writeFailure(err));
+        }
+        try {
+          if (identOf(fd).size !== BigInt(ev.bytes.length)) return fail('changed');
+        } catch {
+          return fail('unreadable');
         }
         try { ops.ftruncateSync(fd, cut.offset); } catch { return fail('unwritable'); }
         try {

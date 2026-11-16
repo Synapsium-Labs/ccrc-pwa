@@ -5,7 +5,7 @@
 // fs-operations seam. Also `chainNext`, the kernel's next-record arithmetic.
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  closeSync, constants as FS, ftruncateSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync,
+  chmodSync, closeSync, constants as FS, fchmodSync, ftruncateSync, fstatSync, fsyncSync, mkdirSync, openSync, readFileSync, readSync, readdirSync,
   renameSync, statSync, symlinkSync, writeFileSync, writeSync, appendFileSync, type BigIntStats,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -13,7 +13,7 @@ import path from 'node:path';
 import {
   buildChainedRecord, chainNext, chainedTailHealPlan, encodeChainedRecord, parseChainedBytes, type ChainedJournalRecord,
 } from '../src/chainedJournal.js';
-import { chainedJournalFileAt, type ChainedFileSeen } from '../src/chainedJournalFile.js';
+import { chainedJournalFileAt, wholeCutName, type ChainedFileSeen } from '../src/chainedJournalFile.js';
 import { appendOnlyFileAt, NODE_APPEND_ONLY_FS, type AppendOnlyFsOps } from '../src/appendOnlyFile.js';
 import { PROBE_JOURNAL_FORMAT, ProbeJournalError, type ProbeEntry } from './sim/chainedJournalSets.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -55,9 +55,15 @@ type Fault = Partial<{
   fsync: (label: string) => void;
   mkdir: (p: string) => void;
   rename: (from: string, to: string) => void;
+  /** Runs after the real rename: another writer acting in the window before the truncate. */
+  afterRename: (from: string, to: string) => void;
   ftruncate: (label: string) => void;
+  /** Runs after the real truncate: another writer acting in the window before the post-proof. */
+  afterTruncate: (label: string) => void;
+  fstat: (label: string) => void;
+  fchmod: (label: string, mode: number) => void;
 }>;
-/** A tracing fs over all nine operations: each call one word line, by the role of the path it touches. */
+/** A tracing fs over all ten operations: each call one word line, by the role of the path it touches. */
 const tracing = (f: Fx, fault: Fault = {}): { ops: AppendOnlyFsOps; trace: string[] } => {
   const trace: string[] = [];
   const role = new Map<number, string>();
@@ -77,7 +83,7 @@ const tracing = (f: Fx, fault: Fault = {}): { ops: AppendOnlyFsOps; trace: strin
       role.set(fd, name(p));
       return fd;
     },
-    fstatSync: (fd, o): BigIntStats => fstatSync(fd, o),
+    fstatSync: (fd, o): BigIntStats => { fault.fstat?.(role.get(fd) ?? ''); return fstatSync(fd, o); },
     readSync: (fd, b, o, l, p) => readSync(fd, b, o, l, p),
     writeSync(fd, b, o, l) {
       trace.push(`write ${role.get(fd)}`);
@@ -86,9 +92,20 @@ const tracing = (f: Fx, fault: Fault = {}): { ops: AppendOnlyFsOps; trace: strin
     },
     fsyncSync(fd) { trace.push(`fsync ${role.get(fd)}`); fault.fsync?.(role.get(fd) ?? ''); fsyncSync(fd); },
     closeSync(fd) { trace.push(`close ${role.get(fd)}`); closeSync(fd); },
-    ftruncateSync(fd, len) { trace.push(`ftruncate ${role.get(fd)} ${len}`); fault.ftruncate?.(role.get(fd) ?? ''); ftruncateSync(fd, len); },
+    ftruncateSync(fd, len) {
+      trace.push(`ftruncate ${role.get(fd)} ${len}`);
+      fault.ftruncate?.(role.get(fd) ?? '');
+      ftruncateSync(fd, len);
+      fault.afterTruncate?.(role.get(fd) ?? '');
+    },
     mkdirSync(p, mode) { trace.push(`mkdir ${name(p)} ${mode.toString(8)}`); fault.mkdir?.(p); mkdirSync(p, mode); },
-    renameSync(from, to) { trace.push(`rename ${name(from)} ${name(to)}`); fault.rename?.(from, to); renameSync(from, to); },
+    renameSync(from, to) {
+      trace.push(`rename ${name(from)} ${name(to)}`);
+      fault.rename?.(from, to);
+      renameSync(from, to);
+      fault.afterRename?.(from, to);
+    },
+    fchmodSync(fd, mode) { trace.push(`fchmod ${role.get(fd)} ${mode.toString(8)}`); fault.fchmod?.(role.get(fd) ?? '', mode); fchmodSync(fd, mode); },
   };
   return { ops, trace };
 };
@@ -282,7 +299,7 @@ describe('cutAside: the one cut', () => {
     expect(j.cutAside({ kind: 'tail', plan }, ASIDE)).toEqual({ ok: false, error: 'changed', mayApply: false });
   });
 
-  it('the call order: kept bytes written, fsynced and renamed, both directories fsynced, then the truncate, the file and the parent', () => {
+  it('the call order: no kept file yet, kept bytes written, fsynced and renamed, the quarantine path re-proved, both directories fsynced, then the truncate, the file and the parent', () => {
     const { f } = tornFile();
     const { ops, trace } = tracing(f);
     const j = chainedJournalFileAt(FMT, f.dir, BASE, ops);
@@ -292,35 +309,55 @@ describe('cutAside: the one cut', () => {
     // the re-proofs' opens and closes of the parent and the leaf are left out: what is pinned is the order of the effects
     const t = trace.slice(mark).filter((x) => /^(mkdir|rename|ftruncate|fsync|write)/.test(x) || x.includes('aside'));
     expect(t).toEqual([
-      'mkdir aside 700', 'open aside', 'open aside/partial', 'write aside/partial', 'fsync aside/partial', 'close aside/partial',
-      'rename aside/partial aside/kept', 'fsync aside', 'fsync dir',
+      'mkdir aside 700', 'open aside', 'failed-open aside/kept',
+      'open aside/partial', 'write aside/partial', 'fsync aside/partial', 'close aside/partial',
+      'rename aside/partial aside/kept', 'open aside', 'close aside', 'fsync aside', 'fsync dir',
       `ftruncate leaf ${plan.offset}`, 'fsync leaf', 'fsync dir',
       'close aside',
     ]);
     balanced(trace);
   });
 
-  it('whole keeps every byte under the caller\'s name and leaves an empty file, even a malformed one', () => {
+  it('whole keeps every byte under its content-addressed name and leaves an empty file, even a malformed one', () => {
     const rs = chain(3);
     const bytes = cat(enc(rs[0]!), enc(rs[2]!), new TextEncoder().encode('torn'));
     const f = fx(bytes);
     const j = chainedJournalFileAt(FMT, f.dir, BASE);
     expect(j.read().kind).toBe('malformed');
-    expect(j.cutAside({ kind: 'whole', asideName: 'whole-1.jsonl' }, ASIDE)).toEqual({ ok: true });
-    expect(readFileSync(path.join(f.aside, 'whole-1.jsonl')).equals(bytes)).toBe(true);
+    expect(j.cutAside({ kind: 'whole' }, ASIDE)).toEqual({ ok: true });
+    const name = `${bytes.length}-${sha(bytes)}.whole`;
+    expect(wholeCutName(bytes)).toBe(name);
+    expect(readdirSync(f.aside)).toEqual([name]);
+    expect(readFileSync(path.join(f.aside, name)).equals(bytes)).toBe(true);
     expect(readFileSync(f.leaf).length).toBe(0);
     expect(j.read()).toEqual({ kind: 'records', records: [], tail: null });
     // a new chain starts at record 1
     expect(j.appendNext(() => go(1))).toEqual({ ok: true, record: chain(1)[0] });
   });
 
-  it('an existing quarantine directory is reused, its mode left alone; a symlink at its name is unwritable', () => {
+  it('two whole cuts of different bytes keep two files; the same bytes again are an idempotent retry', () => {
+    const f = fx('first\n');
+    const j = chainedJournalFileAt(FMT, f.dir, BASE);
+    expect(j.cutAside({ kind: 'whole' }, ASIDE)).toEqual({ ok: true });
+    writeFileSync(f.leaf, 'second\n');
+    expect(j.cutAside({ kind: 'whole' }, ASIDE)).toEqual({ ok: true });
+    writeFileSync(f.leaf, 'first\n');
+    expect(j.cutAside({ kind: 'whole' }, ASIDE)).toEqual({ ok: true });
+    const names = [wholeCutName(Buffer.from('first\n')), wholeCutName(Buffer.from('second\n'))].sort();
+    expect(readdirSync(f.aside).sort()).toEqual(names);
+    expect(readFileSync(path.join(f.aside, wholeCutName(Buffer.from('first\n'))), 'utf8')).toBe('first\n');
+    expect(readFileSync(path.join(f.aside, wholeCutName(Buffer.from('second\n'))), 'utf8')).toBe('second\n');
+    expect(readFileSync(f.leaf).length).toBe(0);
+  });
+
+  it('an existing quarantine directory is reused and set to 0700 through its descriptor; a symlink at its name is unwritable', () => {
     const { f, torn } = tornFile();
     mkdirSync(f.aside, 0o755);
+    chmodSync(f.aside, 0o755);
     const j = chainedJournalFileAt(FMT, f.dir, BASE);
     const plan = planOf(j);
     expect(j.cutAside({ kind: 'tail', plan }, ASIDE)).toEqual({ ok: true });
-    expect(statSync(f.aside).mode & 0o777).toBe(0o755);
+    expect(statSync(f.aside).mode & 0o777).toBe(0o700);
     expect(readFileSync(path.join(f.aside, plan.name)).equals(Buffer.from(torn))).toBe(true);
 
     const second = tornFile();
@@ -347,22 +384,43 @@ describe('cutAside: the one cut', () => {
     const f = fx();
     const plan = { offset: 0, bytes: 1, sha256: 'a'.repeat(64), code: 'torn-tail' as const, name: 'x.tail' };
     expect(chainedJournalFileAt(FMT, f.dir, BASE).cutAside({ kind: 'tail', plan }, ASIDE)).toEqual({ ok: false, error: 'changed', mayApply: false });
-    expect(chainedJournalFileAt(FMT, path.join(f.dir, 'nope'), BASE).cutAside({ kind: 'whole', asideName: 'w' }, ASIDE))
+    expect(chainedJournalFileAt(FMT, path.join(f.dir, 'nope'), BASE).cutAside({ kind: 'whole' }, ASIDE))
       .toEqual({ ok: false, error: 'unreadable', mayApply: false });
   });
 
   // Each step's fault answers its word with mayApply true; every one before the truncate leaves the journal's bytes whole.
+  let asideOpens = 0;
+  const firstAsideOpen = (code: string) => (p: string): void => { if (p.endsWith(ASIDE) && asideOpens++ === 0) throw errno(code); };
+  const opensWith = (want: (p: string, flags: number) => boolean, code: string) => (p: string, flags: number): void => {
+    if (want(p, flags)) throw errno(code);
+  };
+  const cutOpen = (p: string, flags: number): boolean => p.endsWith(BASE) && (flags & FS.O_RDWR) !== 0 && (flags & FS.O_APPEND) === 0;
+  let cutDone = false;
   const STEPS: readonly (readonly [string, Fault, string, boolean])[] = [
     ['the directory\'s create (EACCES)', { mkdir: () => { throw errno('EACCES'); } }, 'unwritable', true],
+    ['the directory\'s create (ENOSPC)', { mkdir: () => { throw errno('ENOSPC'); } }, 'unwritable', true],
+    ['the directory\'s create (EDQUOT)', { mkdir: () => { throw errno('EDQUOT'); } }, 'unwritable', true],
+    ['the directory\'s create (EIO)', { mkdir: () => { throw errno('EIO'); } }, 'unreadable', true],
+    ['the directory\'s open (EACCES)', { open: firstAsideOpen('EACCES') }, 'unwritable', true],
+    ['the directory\'s open (EIO)', { open: firstAsideOpen('EIO') }, 'unreadable', true],
+    ['the directory\'s fchmod', { mkdir: (p) => { mkdirSync(p, 0o755); chmodSync(p, 0o755); throw errno('EEXIST'); }, fchmod: (l) => { if (l === 'aside') throw errno('EPERM'); } }, 'unwritable', true],
+    ['the kept file\'s open (EACCES)', { open: opensWith((p) => p.endsWith('.partial'), 'EACCES') }, 'unwritable', true],
+    ['the kept file\'s open (ENOSPC)', { open: opensWith((p) => p.endsWith('.partial'), 'ENOSPC') }, 'unwritable', true],
+    ['the kept file\'s open (EIO)', { open: opensWith((p) => p.endsWith('.partial'), 'EIO') }, 'unreadable', true],
     ['the kept file\'s write', { write: (l) => (l === 'aside/partial' ? 0 : undefined) }, 'unwritable', true],
     ['the kept file\'s fsync', { fsync: (l) => { if (l === 'aside/partial') throw errno('EIO'); } }, 'durability', true],
     ['the rename into place', { rename: () => { throw errno('EIO'); } }, 'unwritable', true],
     ['the quarantine directory\'s fsync', { fsync: (l) => { if (l === 'aside') throw errno('EIO'); } }, 'durability', true],
+    ['the parent\'s fsync before the truncate', { fsync: (l) => { if (l === 'dir') throw errno('EIO'); } }, 'durability', true],
+    ['the leaf\'s open for the cut (EIO)', { open: opensWith(cutOpen, 'EIO') }, 'unreadable', true],
     ['the truncate', { ftruncate: () => { throw errno('EIO'); } }, 'unwritable', true],
     ['the file\'s fsync after the truncate', { fsync: (l) => { if (l === 'leaf') throw errno('EIO'); } }, 'durability', false],
+    ['the post-proof\'s open', { ftruncate: () => { cutDone = true; }, open: (p) => { if (cutDone && p.endsWith(BASE)) throw errno('EIO'); } }, 'unreadable', false],
   ];
   for (const [what, fault, word, whole] of STEPS) {
     it(`a failure at ${what} is ${word}, with mayApply`, () => {
+      asideOpens = 0;
+      cutDone = false;
       const { f, all, rs } = tornFile();
       const plan = planOf(chainedJournalFileAt(FMT, f.dir, BASE));
       const { ops, trace } = tracing(f, fault);
@@ -381,6 +439,92 @@ describe('cutAside: the one cut', () => {
       fsync: (l) => { if (l === 'dir' && truncated) throw errno('EIO'); },
     });
     expect(chainedJournalFileAt(FMT, f.dir, BASE, ops).cutAside({ kind: 'tail', plan }, ASIDE)).toEqual({ ok: false, error: 'durability', mayApply: true });
+  });
+
+  // Another writer in the windows the cut re-proves: each answers `changed`, and nothing it wrote is cut away.
+  const cutWith = (f: Fx, fault: Fault): unknown => {
+    const plan = planOf(chainedJournalFileAt(FMT, f.dir, BASE));
+    return chainedJournalFileAt(FMT, f.dir, BASE, tracing(f, fault).ops).cutAside({ kind: 'tail', plan }, ASIDE);
+  };
+  const replaceLeaf = (f: Fx, bytes: Uint8Array): void => {
+    const other = path.join(f.dir, 'other');
+    writeFileSync(other, bytes);
+    renameSync(other, f.leaf);
+  };
+  const CHANGED = { ok: false, error: 'changed', mayApply: true };
+
+  it('an append to the leaf after the rename (before the truncate) is changed, and the file is untouched', () => {
+    const { f, all } = tornFile();
+    expect(cutWith(f, { afterRename: () => appendFileSync(f.leaf, 'late\n') })).toEqual(CHANGED);
+    expect(readFileSync(f.leaf).equals(Buffer.concat([all, Buffer.from('late\n')]))).toBe(true);
+  });
+
+  it('the leaf replaced after the rename, by the same bytes, is changed, and the replacement is untouched', () => {
+    const { f, all } = tornFile();
+    expect(cutWith(f, { afterRename: () => replaceLeaf(f, all) })).toEqual(CHANGED);
+    expect(readFileSync(f.leaf).equals(all)).toBe(true);
+  });
+
+  it('the leaf replaced by a symlink after the rename is changed at the cut\'s open (ELOOP), and nothing is truncated', () => {
+    const { f, all } = tornFile();
+    const copy = path.join(f.dir, 'copy');
+    writeFileSync(copy, all);
+    expect(cutWith(f, { afterRename: () => { renameSync(f.leaf, path.join(f.dir, 'was')); symlinkSync(copy, f.leaf); } })).toEqual(CHANGED);
+    expect(readFileSync(copy).equals(all)).toBe(true);
+  });
+
+  it('an append between the compare and the truncate is caught by the size check: changed, and the appended bytes stand', () => {
+    const { f, all } = tornFile();
+    let renamed = false;
+    let leafStats = 0;
+    expect(cutWith(f, {
+      afterRename: () => { renamed = true; },
+      fstat: (l) => { if (renamed && l === 'leaf' && ++leafStats === 2) appendFileSync(f.leaf, 'late\n'); },
+    })).toEqual(CHANGED);
+    expect(readFileSync(f.leaf).equals(Buffer.concat([all, Buffer.from('late\n')]))).toBe(true);
+  });
+
+  it('an append after the truncate is changed by the post-proof, and the appended bytes stand', () => {
+    const { f, rs } = tornFile();
+    expect(cutWith(f, { afterTruncate: () => appendFileSync(f.leaf, 'late\n') })).toEqual(CHANGED);
+    expect(readFileSync(f.leaf).equals(Buffer.concat([Buffer.from(enc(rs[0]!)), Buffer.from('late\n')]))).toBe(true);
+  });
+
+  it('the leaf replaced after the truncate, by the cut bytes, is changed by the post-proof\'s identity check', () => {
+    const { f, rs } = tornFile();
+    expect(cutWith(f, { afterTruncate: () => replaceLeaf(f, enc(rs[0]!)) })).toEqual(CHANGED);
+  });
+
+  it('the quarantine directory swapped after the rename is changed, and nothing is truncated', () => {
+    const { f, all } = tornFile();
+    expect(cutWith(f, { afterRename: () => { renameSync(f.aside, `${f.aside}-moved`); mkdirSync(f.aside); } })).toEqual(CHANGED);
+    expect(readFileSync(f.leaf).equals(all)).toBe(true);
+  });
+
+  it('a leftover temporary file keeps no wider mode: the kept file is 0600; a failed fchmod of it is unwritable', () => {
+    const { f, all } = tornFile();
+    const plan = planOf(chainedJournalFileAt(FMT, f.dir, BASE));
+    mkdirSync(f.aside, 0o700);
+    writeFileSync(path.join(f.aside, `${plan.name}.partial`), 'stale', { mode: 0o644 });
+    chmodSync(path.join(f.aside, `${plan.name}.partial`), 0o644);
+    expect(chainedJournalFileAt(FMT, f.dir, BASE, tracing(f, { fchmod: () => { throw errno('EPERM'); } }).ops).cutAside({ kind: 'tail', plan }, ASIDE))
+      .toEqual({ ok: false, error: 'unwritable', mayApply: true });
+    expect(readFileSync(f.leaf).equals(all)).toBe(true);
+    expect(chainedJournalFileAt(FMT, f.dir, BASE).cutAside({ kind: 'tail', plan }, ASIDE)).toEqual({ ok: true });
+    expect(statSync(path.join(f.aside, plan.name)).mode & 0o777).toBe(0o600);
+  });
+
+  it('a temporary name that is a directory, a kept name that is a directory, and one that is a symlink are each unwritable', () => {
+    for (const plant of ['partial-dir', 'kept-dir', 'kept-link'] as const) {
+      const { f, all } = tornFile();
+      const plan = planOf(chainedJournalFileAt(FMT, f.dir, BASE));
+      mkdirSync(f.aside, 0o700);
+      if (plant === 'partial-dir') mkdirSync(path.join(f.aside, `${plan.name}.partial`));
+      if (plant === 'kept-dir') mkdirSync(path.join(f.aside, plan.name));
+      if (plant === 'kept-link') symlinkSync(path.join(f.dir, 'nowhere'), path.join(f.aside, plan.name));
+      expect(chainedJournalFileAt(FMT, f.dir, BASE).cutAside({ kind: 'tail', plan }, ASIDE), plant).toEqual({ ok: false, error: 'unwritable', mayApply: true });
+      expect(readFileSync(f.leaf).equals(all), plant).toBe(true);
+    }
   });
 });
 
@@ -420,6 +564,24 @@ describe('the port\'s cut operation', () => {
     expect(readFileSync(path.join(f.aside, 'w'), 'utf8')).toBe('b\n');
   });
 
+  it('a kept name that holds other bytes is changed and is never replaced; the same bytes are an idempotent retry', () => {
+    const f = fx('a\nb\n');
+    const file = appendOnlyFileAt(f.dir, BASE);
+    mkdirSync(f.aside, 0o700);
+    writeFileSync(path.join(f.aside, 'w'), 'other\n');
+    const r = file.read();
+    if (!r.ok) throw new Error('read');
+    expect(file.cutAside(r.snapshot, { offset: 2, asideDir: ASIDE, asideName: 'w' })).toEqual({ ok: false, error: 'changed', mayApply: true });
+    expect(readFileSync(path.join(f.aside, 'w'), 'utf8')).toBe('other\n');
+    expect(readFileSync(f.leaf, 'utf8')).toBe('a\nb\n');
+    writeFileSync(path.join(f.aside, 'w'), 'b\n');
+    const r2 = file.read();
+    if (!r2.ok) throw new Error('read');
+    expect(file.cutAside(r2.snapshot, { offset: 2, asideDir: ASIDE, asideName: 'w' })).toEqual({ ok: true });
+    expect(readFileSync(path.join(f.aside, 'w'), 'utf8')).toBe('b\n');
+    expect(readFileSync(f.leaf, 'utf8')).toBe('a\n');
+  });
+
   it('a file changed since the snapshot is changed, before anything is created', () => {
     const f = fx('a\nb');
     const file = appendOnlyFileAt(f.dir, BASE);
@@ -431,28 +593,33 @@ describe('the port\'s cut operation', () => {
     expect(readFileSync(f.leaf, 'utf8')).toBe('a\nbc');
   });
 
-  it('refuses arguments outside its contract as a RangeError, before any I/O', () => {
+  it('refuses arguments outside its contract as a RangeError before any I/O, and spends the snapshot first', () => {
     const f = fx('a\n');
     const file = appendOnlyFileAt(f.dir, BASE);
-    const r = file.read();
-    if (!r.ok) throw new Error('read');
+    const line = new TextEncoder().encode('b\n');
     for (const bad of [
       { offset: -1, asideDir: ASIDE, asideName: 'w' }, { offset: 3, asideDir: ASIDE, asideName: 'w' },
       { offset: 0.5, asideDir: ASIDE, asideName: 'w' }, { offset: 0, asideDir: '../out', asideName: 'w' },
       { offset: 0, asideDir: ASIDE, asideName: 'a/b' }, { offset: 0, asideDir: '..', asideName: 'w' },
       { offset: 0, asideDir: ASIDE, asideName: '' }, { offset: 0, asideDir: ASIDE, asideName: 'w.partial' },
-    ]) expect(() => file.cutAside(r.snapshot, bad), JSON.stringify(bad)).toThrow(RangeError);
-    expect(file.cutAside(r.snapshot, { offset: 0, asideDir: ASIDE, asideName: 'w' })).toEqual({ ok: true });
+    ]) {
+      const r = file.read();
+      if (!r.ok) throw new Error('read');
+      expect(() => file.cutAside(r.snapshot, bad), JSON.stringify(bad)).toThrow(RangeError);
+      expect(file.appendLine(r.snapshot, line), JSON.stringify(bad)).toEqual({ ok: false, error: 'unreadable', mayApply: true });
+    }
+    expect(() => statSync(f.aside)).toThrow();
     const missing = appendOnlyFileAt(f.dir, 'missing');
     const absent = missing.read();
     if (!absent.ok) throw new Error('read');
     expect(() => missing.cutAside(absent.snapshot, { offset: 0, asideDir: ASIDE, asideName: 'w' })).toThrow(RangeError);
-    absent.snapshot.release();
+    expect(missing.appendLine(absent.snapshot, line)).toEqual({ ok: false, error: 'unreadable', mayApply: true });
+    expect(readFileSync(f.leaf, 'utf8')).toBe('a\n');
   });
 
   it('the default fs operations are node:fs', () => {
     expect(Object.keys(NODE_APPEND_ONLY_FS).sort()).toEqual([
-      'closeSync', 'fstatSync', 'fsyncSync', 'ftruncateSync', 'mkdirSync', 'openSync', 'readSync', 'renameSync', 'writeSync',
+      'closeSync', 'fchmodSync', 'fstatSync', 'fsyncSync', 'ftruncateSync', 'mkdirSync', 'openSync', 'readSync', 'renameSync', 'writeSync',
     ]);
     expect(FS.O_NOFOLLOW).toBeGreaterThan(0);
   });
