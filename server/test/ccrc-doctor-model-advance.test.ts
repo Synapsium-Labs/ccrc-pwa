@@ -41,16 +41,17 @@ afterEach(() => { for (const h of homes.splice(0)) fs.rmSync(h, { recursive: tru
 
 /** A box: `ccd/ccrc`, its check table and the wrapper-shape contract linked one by one, and `deploy` and `shared`
  *  linked whole (node resolves models-op's imports from their real path, this checkout's), then the roster.
- *  `laneB` makes lane-b codex-kind too; `stuckOp` puts a real `deploy/` in place whose `models-op.mjs` never answers. */
-function box(o: { laneB?: boolean; stuckOp?: boolean } = {}): string {
+ *  `laneB` makes lane-b codex-kind too; `stuckOp` puts a real `deploy/` in place whose `models-op.mjs` never answers,
+ *  and `opScript` one whose `models-op.mjs` is that script (an op that answers what a case needs). */
+function box(o: { laneB?: boolean; stuckOp?: boolean; opScript?: string } = {}): string {
   const h = mkTmp('doctor-model-advance-');
   homes.push(h);
   const ccd = join(h, 'ccrc', 'ccd');
   fs.mkdirSync(ccd, { recursive: true });
   for (const f of ['ccrc', 'ccrc-doctor-checks', 'ccrc-wrapper-shape']) fs.symlinkSync(join(REPO, 'ccd', f), join(ccd, f));
-  if (o.stuckOp) {
+  if (o.stuckOp || o.opScript !== undefined) {
     fs.mkdirSync(join(h, 'ccrc', 'deploy'));
-    fs.writeFileSync(join(h, 'ccrc', 'deploy', 'models-op.mjs'), 'setTimeout(() => {}, 120_000);\n');
+    fs.writeFileSync(join(h, 'ccrc', 'deploy', 'models-op.mjs'), o.opScript ?? 'setTimeout(() => {}, 120_000);\n');
   } else {
     fs.symlinkSync(join(REPO, 'deploy'), join(h, 'ccrc', 'deploy'));
   }
@@ -124,18 +125,36 @@ interface Run { code: number; out: string; err: string; ms: number }
 /** One check, as `cmd_doctor` runs it. A runner's own knobs never steer a case; `CCRC_MODELS_NOW` fixes the op's
  *  clock. Ended at 30 s, in a process group of its own (`spawnSyncGroup`), so a check that hangs reds its case, never
  *  the suite, and takes its children with it; a timeout comes back as `error` (ETIMEDOUT). */
-function check(h: string, name: Check, extra: NodeJS.ProcessEnv = {}): Run {
+function check(h: string, name: Check, extra: NodeJS.ProcessEnv = {}, o: { pre?: string; noJq?: boolean } = {}): Run {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ['CCRC_MODELS_NOW', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_MODELS_LOCK_S', 'CCRC_ROLE', 'CCD_TIMEOUT_KILL_AFTER']) {
     delete inherited[k];
   }
   const env = { ...ghContainedEnv(h, { ...inherited, HOME: h }, { systemd: true }), CCRC_MODELS_NOW: NOW, ...extra };
+  if (o.noJq) env['PATH'] = pathWithoutJq(h, env['PATH'] ?? '');
   const script = ['umask 022', `. "${join(h, 'ccrc', 'ccd', 'ccrc')}"`, '. "$CCRC_HERE/ccrc-doctor-checks"', SVC_FAKE,
-    `_check_${name}`].join('\n');
+    ...(o.pre === undefined ? [] : [o.pre]), `_check_${name}`].join('\n');
   const t0 = Date.now();
   const r = spawnSyncGroup(BASH, ['-c', script], { env, encoding: 'utf8', input: '', timeout: 30_000 });
   expect(r.error, `_check_${name} was ended at the suite's 30 s bound`).toBeUndefined();
   return { code: r.status ?? -1, out: r.stdout ?? '', err: r.stderr ?? '', ms: Date.now() - t0 };
+}
+/** PATH as one directory of links to every program `path` finds, first one winning as PATH's own order does, but no
+ *  `jq`: the same box with jq absent, and nothing else moved. */
+function pathWithoutJq(h: string, pathVar: string): string {
+  const farm = join(h, 'no-jq-bin');
+  fs.mkdirSync(farm);
+  const seen = new Set<string>(['jq']);
+  for (const d of pathVar.split(':').filter(Boolean)) {
+    let names: string[];
+    try { names = fs.readdirSync(d); } catch { continue; }
+    for (const n of names) {
+      if (seen.has(n)) continue;
+      seen.add(n);
+      fs.symlinkSync(join(d, n), join(farm, n));
+    }
+  }
+  return farm;
 }
 const asked = (h: string): string[] => {
   const p = join(h, 'svc-asked');
@@ -271,7 +290,7 @@ describe('model-sessions-behind', () => {
     + 'with \'ccd stop lane-a-demo\' then \'ccd start lane-a-demo\'; it resumes its conversation, and one with no class '
     + 'in its routing record may come back on its old model';
   const BEHIND_DEMO = 'WARN model-sessions-behind: lane-a session lane-a-demo last replied on model-5.6-gamma at '
-    + '2026-10-22T09:12Z, in a turn begun 09:11Z, 42 h after opus moved to model-6.1-gamma';
+    + '2026-10-22T09:12Z, in a turn begun 2026-10-22T09:11Z, after opus moved to model-6.1-gamma 42 h ago';
 
   it('WARNs a running session still on the replaced model, naming the evidence, and PASSes once it renders the new one', () => {
     const h = box();
@@ -342,6 +361,24 @@ describe('model-sessions-behind', () => {
       + `could not be measured (sidecar-absent 1)\n${RELAUNCH}\n`);
   });
 
+  // R2 review spec-3: the in-loop WARN (every lane but the last) carries the box-wide tail too (D-5220).
+  it('two lanes WARN on two lines, and each line carries the same box-wide tail', () => {
+    const h = box({ laneB: true });
+    plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
+    plantLane(h, { id: 'lane-b', registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
+    plantSession(h);
+    plantSession(h, { sid: 'lane-b-demo', lane: 'lane-b' });
+    plantSession(h, { sid: 'lane-a-two', svc: 'inactive' });
+    const TAIL = '; 1 listed session(s) not running';
+    const lines = check(h, 'model-sessions-behind').out.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toBe(`${BEHIND_DEMO}${TAIL}`);
+    expect(lines[1]).toBe(RELAUNCH);
+    expect(lines[2]).toBe('WARN model-sessions-behind: lane-b session lane-b-demo last replied on model-5.6-gamma at '
+      + `2026-10-22T09:12Z, in a turn begun 2026-10-22T09:11Z, after opus moved to model-6.1-gamma 42 h ago${TAIL}`);
+    expect(lines[3]).toMatch(/'ccd stop lane-b-demo' then 'ccd start lane-b-demo'/);
+  });
+
   it('the remedy says a running session does not always pick up a re-pin by itself, and names the relaunch ccd has (D-5223)', () => {
     const h = box();
     plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
@@ -406,6 +443,17 @@ describe('model-advance-blocked', () => {
     expect(fs.lstatSync(fifo).isFIFO()).toBe(true);
   });
 
+  // R2 review tests-2: a detail carries file text (a registry's unknown field is echoed as written), so `clean`
+  // turns each control character into a space: a newline or a field separator in it never forges a row or a line.
+  it('a control character in a finding is a space: one WARN line, never a forged row', () => {
+    const h = box();
+    plantLane(h, { registry: { ...STEP_REGISTRY, 'bad\nfie\u001fld': 1 } });
+    const lines = check(h, 'model-advance-blocked').out.split('\n').filter(Boolean);
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toMatch(/^WARN model-advance-blocked: lane-a: registry-invalid \(unknown field "bad fie ld" in the class registry\. /);
+    expect(lines[1]).toMatch(/^ {2}remedy: per cause: registry — /);
+  });
+
   it('the advance-file clause never says rm, and warns that a removed file refills an emptied class', () => {
     const h = box();
     plantLane(h, { advance: null });
@@ -438,6 +486,58 @@ describe('the four checks SKIP when there is nothing to measure', () => {
     fs.rmSync(join(h, '.ccrc', 'accounts.json'));
     expect(check(h, 'model-advance-blocked').out).toBe('SKIP model-advance-blocked: deploy/models-op.mjs advance-health '
       + 'refused (roster-absent), so no lane\'s advance state was read — the \'models\' check above owns the roster\n');
+  });
+
+  // R2 review tests-3: each of _dr_ma_read's own SKIPs and its one FAIL, and each check's own shape SKIP.
+  it('an op that crashes or prints no JSON is a SKIP naming its exit status', () => {
+    const r = check(box({ opScript: 'process.stdout.write("not an answer\\n"); process.exit(1);\n' }), 'model-advance-blocked');
+    expect(r.out).toBe('SKIP model-advance-blocked: deploy/models-op.mjs advance-health printed no answer (exit 1), so '
+      + 'no lane\'s advance state was read\n');
+    expect(r.code).toBe(3);
+  });
+
+  it('an answer in a shape the read does not know is a SKIP, never a box with no lane', () => {
+    const r = check(box({ opScript: 'process.stdout.write(\'{"ok":true}\\n\');\n' }), 'model-advance-blocked');
+    expect(r.out).toBe('SKIP model-advance-blocked: deploy/models-op.mjs advance-health answered in a shape this check '
+      + 'does not read, so no lane\'s advance state was read\n');
+    expect(r.code).toBe(3);
+  });
+
+  // Each lane entry lacks exactly the one list that read iterates, so each guard is the only one that can SKIP it.
+  const ALL_LISTS = { heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const without = (k: keyof typeof ALL_LISTS): Json => {
+    const lane: Json = { id: 'lane-a', ...ALL_LISTS };
+    delete lane[k];
+    return lane;
+  };
+  it.each([
+    ['model-advance-held-back', 'heldBack'], ['model-held-behind', 'heldBehind'], ['model-advance-blocked', 'blocked'],
+    ['model-sessions-behind', 'sessionsBehind'], ['model-sessions-behind', 'sessionsUnmeasured'],
+  ] as [Check, keyof typeof ALL_LISTS][])('%s SKIPs a lane entry with no %s list, never a PASS', (name, list) => {
+    const answer = { ok: true, op: 'advance-health', now: NOW, sessions: 'read', sessionsUnmeasured: [], lanes: [without(list)] };
+    const r = check(box({ opScript: `process.stdout.write(${JSON.stringify(`${JSON.stringify(answer)}\n`)});\n` }), name);
+    const what = name === 'model-sessions-behind' ? 'no session was measured' : 'no lane\'s advance state was read';
+    expect(r.out).toBe(`SKIP ${name}: deploy/models-op.mjs advance-health answered in a shape this check does not read, `
+      + `so ${what}\n`);
+    expect(r.code).toBe(3);
+  });
+
+  it('with no jq on PATH it SKIPs, and names the check that owns jq', () => {
+    const h = box();
+    plantLane(h);
+    const r = check(h, 'model-advance-blocked', {}, { noJq: true });
+    expect(r.out).toBe('SKIP model-advance-blocked: jq is not on PATH, so deploy/models-op.mjs\'s advance-health answer '
+      + 'could not be read — the \'jq\' check above owns that\n');
+    expect(r.code).toBe(3);
+  });
+
+  it('sourced without ccrc\'s own library it FAILs, the block\'s one FAIL', () => {
+    const h = box();
+    plantLane(h);
+    const r = check(h, 'model-advance-blocked', {}, { pre: 'unset -f _models_node' });
+    expect(r.out.split('\n')[0]).toBe('FAIL model-advance-blocked: ccrc\'s own library is not loaded (_models_node, '
+      + 'CCRC_HERE or _SVC_REG is missing), so no lane\'s advance state was read');
+    expect(r.code).toBe(1);
   });
 
   it('an answer that never comes is a SKIP within the bound (D-5224)', () => {

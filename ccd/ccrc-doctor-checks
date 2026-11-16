@@ -12530,8 +12530,8 @@ _check_model-sessions-behind() {
       (.now | fromdateiso8601) as $now
       | .lanes[] | .id as $id | .sessionsBehind[]
       | [$id, .session,
-         ("\($id) session \(.session) last replied on \(.from) at \(.renderAt[0:16])Z, in a turn begun \(.turnAt[11:16])Z, "
-          + "\((($now - (.movedAt | fromdateiso8601)) / 3600) | floor) h after \(.class) moved to \(.to // "none")" | clean)]
+         ("\($id) session \(.session) last replied on \(.from) at \(.renderAt[0:16])Z, in a turn begun \(.turnAt[0:16])Z, "
+          + "after \(.class) moved to \(.to // "none") \((($now - (.movedAt | fromdateiso8601)) / 3600) | floor) h ago" | clean)]
       | join("\u001f")' 2>/dev/null)"; then
     _dr_skip model-sessions-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no session was measured"
     return 3
