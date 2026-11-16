@@ -171,6 +171,13 @@ describe('recordMessage', () => {
     expect(f.journal.records).toEqual([]);
   });
 
+  it('refuses an empty session id, and writes nothing', () => {
+    const f = fixture();
+    expect(record(f, { sessionId: '' })).toEqual({ ok: false, error: 'refused', detail: 'sessionId: empty' });
+    expect(rowCount(f)).toBe(0);
+    expect(f.journal.records).toEqual([]);
+  });
+
   it('a journal that refused at the open answers journal-unreadable and records nothing', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const db = openOperatorModelDb(p);

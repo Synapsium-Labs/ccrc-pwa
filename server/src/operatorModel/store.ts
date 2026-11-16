@@ -108,7 +108,7 @@ export class OperatorModelStore {
    *  other text refuses `send-key-reused`. */
   recordMessage(m: MessageRecordInput): StoreWrite<MessageRecorded> {
     if (!isMintedActor(m.actor)) return { ok: false, error: 'refused', detail: 'actor: not one the account gate minted' };
-    if (typeof m.sessionId !== 'string' || m.sessionId === '') return { ok: false, error: 'refused', detail: 'sessionId: empty' };
+    if (typeof m.sessionId !== 'string' || !m.sessionId) return { ok: false, error: 'refused', detail: 'sessionId: empty' };
     if (!isCount(m.term)) return { ok: false, error: 'refused', detail: 'term: not a non-negative safe integer' };
     if (!isCount(m.at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
     if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
