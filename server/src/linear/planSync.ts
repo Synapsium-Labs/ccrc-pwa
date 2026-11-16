@@ -24,10 +24,12 @@
 import type { CoordStore } from '../coord/store.js';
 import { planViewOf } from '../coord/planRoutes.js';
 import { programmeEnd } from '../coord/planPolicy.js';
-import type { BindingRow, PlanStorePort, StoredPlan } from '../coord/planStore.js';
+import type { BindingRow, PlanStorePort, StoredPlan, TicketRow } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
 import type { BindingKind } from '../../../shared/plan.js';
+import type { FleetSession } from '../../../shared/api.js';
+import { slugForTicket } from '../linking/policy.js';
 import { markLinearRejected } from './connection.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from './ccrcCall.js';
 import type { LinearDirectoryRead } from './directory.js';
@@ -48,6 +50,9 @@ export const PLAN_SYNC_BACKOFF_MS = [30_000, 120_000, 600_000, 1_800_000] as con
  *  `staleAfterMs`, so a tick the runner restarts as stuck has nothing left of the first to overlap. */
 export const PLAN_SYNC_TICK_DEADLINE_MS = 60_000;
 export const PLAN_SYNC_CALL_TIMEOUT_MS = 15_000;
+/** How long a dispatch waits for its ticket's issue (§5.6): past it the dispatch goes with today's slug, and the sync links
+ *  the PR once the issue appears. */
+export const PLAN_SYNC_DISPATCH_WAIT_MS = 12_000;
 /** How long a programme waits for its workspace's directory to be filled by the refresher (a miss queues it). */
 const DIRECTORY_WAIT_MS = 10_000;
 /** A runaway guard: one pass never takes more steps than this. */
@@ -71,6 +76,9 @@ export interface PlanSyncDeps {
   markSlotRejected: (slot: LinearSlotRef, digest: string, now: number) => Promise<void>;
   now: () => number;
   privateTrackerKeys: readonly string[];
+  /** §5.6: the pull request a run opened, as far as the server knows it (synchronous, a read of what it holds); null when
+   *  none is known. Absent: no PR is ever linked. */
+  prOfRun?: (runId: number) => { number: number; branch: string | null } | null;
   /** A test's shorter tick budget. */
   tickDeadlineMs?: number;
 }
@@ -190,6 +198,49 @@ export class PlanSync {
     });
   }
 
+  // ── The dispatch (§5.6) ──
+
+  /** The workspace slug a dispatch of `runId` takes (the route's whole rule): a ticket slug when the run is a fresh `work`
+   *  spawn for a ticket in a `private` project and the ticket's issue is bound within {@link PLAN_SYNC_DISPATCH_WAIT_MS};
+   *  otherwise `undefined`, and the dispatch goes as it would without the sync (a resumed run's branch is its session's, a
+   *  public project's never carries the identifier). `given` is the slug the caller sent: kept after the identifier; a
+   *  value that is not a string is the dispatch's to refuse, so it answers `undefined`. It never throws. */
+  async dispatchSlug(runId: number, given: unknown): Promise<string | undefined> {
+    try {
+      if (given !== undefined && typeof given !== 'string') return undefined;
+      const found = this.ticketOfRun(runId);
+      if (found === null || found.run.kind !== 'work' || found.run.sessionId !== null) return undefined;
+      if (this.deps.coord.linkingOf(found.ticket.project).mode !== 'private') return undefined;
+      const { identifier } = await this.ensureTicketBound(runId, PLAN_SYNC_DISPATCH_WAIT_MS);
+      return identifier === null ? undefined : slugForTicket(identifier, given, found.ticket.title);
+    } catch { return undefined; }
+  }
+
+  /** Join the pass in flight for the run's programme, or start one (`passFor`: a wave's parallel dispatches share it), and
+   *  wait for it at most `budgetMs` (a joined pass keeps its first caller's deadline, so the wait is bounded here, and the
+   *  timer is cleared whichever side settles). The answer is the run's ticket's binding as it stands. */
+  async ensureTicketBound(runId: number, budgetMs: number): Promise<{ identifier: string | null }> {
+    const found = this.ticketOfRun(runId);
+    if (found === null) return { identifier: null };
+    const { plan } = this.deps;
+    const slug = found.run.program;
+    plan.markSyncDue(slug, this.deps.now() - PLAN_SYNC_DEBOUNCE_MS);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, budgetMs); });
+    try {
+      await Promise.race([this.passFor(slug, this.deps.now() + budgetMs).then(() => undefined, () => undefined), waited]);
+    } finally { clearTimeout(timer); }
+    const b = plan.bindingsOf(slug).find((x) => x.localKind === 'ticket' && x.localId === found.ticket.id && x.state === 'bound' && x.identifier !== null);
+    return { identifier: b?.identifier ?? null };
+  }
+
+  private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
+    const read = this.deps.coord.run(runId);
+    if (!read.ok || read.run === null) return null;
+    const ticket = this.deps.plan.planOf(read.run.program).epics.flatMap((e) => e.tickets).find((t) => t.runId === runId);
+    return ticket === undefined ? null : { run: read.run, ticket };
+  }
+
   // ── One pass ──
 
   private async runPass(slug: string, deadlineAt: number): Promise<'done' | 'deferred'> {
@@ -275,15 +326,33 @@ export class PlanSync {
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
     const goals = coord.goalsFor(slug);
+    const ticketPrs = this.ticketPrsOf(tickets, bindings);
     const snap: SyncSnapshot = {
       program: {
         slug, rowid, title: prog.title, inShort: goals.inShort,
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
         doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.state === 'paused',
       },
-      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys],
+      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
     };
     return { snap, slots, waiting };
+  }
+
+  /** §5.6: the PR of each bound ticket's run, as a URL on the project's measured repository (an unmeasured repository has no
+   *  URL to give, so its tickets are not linked). A port that throws is no PR. */
+  private ticketPrsOf(tickets: readonly TicketRow[], bindings: readonly BindingRow[]): NonNullable<SyncSnapshot['ticketPrs']> {
+    const out: NonNullable<SyncSnapshot['ticketPrs']> = {};
+    const { prOfRun, coord } = this.deps;
+    if (prOfRun === undefined) return out;
+    for (const t of tickets) {
+      if (t.runId === null || !bindings.some((b) => b.localKind === 'ticket' && b.localId === t.id && b.state === 'bound')) continue;
+      try {
+        const pr = prOfRun(t.runId);
+        const m = coord.linkingOf(t.project).measured;
+        if (pr !== null && m.state === 'measured') out[t.id] = { number: pr.number, branch: pr.branch, url: `https://github.com/${m.slug}/pull/${pr.number}` };
+      } catch { /* no PR known */ }
+    }
+    return out;
   }
 
   // ── One step ──
@@ -335,7 +404,7 @@ export class PlanSync {
     if (b === null || b.linearId === null) return 'next';
     let send = step;
     // An issue update asks the policy and the journal with the issue's CURRENT team (`LinearWriteAsk.resource.teamKey`), read
-    // by C12's read; the destination team of a move is not policy-checked (no field carries a second team: a follow-up).
+    // by C12's read; a move's destination team rides `destinationTeamKey` (C15).
     let currentTeam: string | null = b.teamKey ?? step.teamKey;
     if (step.kind === 'update' && step.stateType !== undefined) {
       const held = await this.readIssue(step, b, subject(b.id), deadlineAt);
@@ -355,7 +424,10 @@ export class PlanSync {
       }
     }
     const ask = this.askOf(send, slot, b, 'plan-sync');
-    const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate' ? { ...ask, teamKey: currentTeam } : ask);
+    // C15: a move writes into the destination team, so the policy is asked about it too (the journal keeps the current one).
+    const moves = step.kind === 'update' && step.op === 'issueUpdate' && step.teamKey !== null && currentTeam !== null && currentTeam.toUpperCase() !== step.teamKey.toUpperCase();
+    const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate'
+      ? { ...ask, teamKey: currentTeam, ...(moves ? { destinationTeamKey: step.teamKey } : {}) } : ask);
     if (out.ok) {
       this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && step.op === 'issueUpdate' ? step.teamKey : undefined);
       this.attempts.delete(slug);
@@ -516,7 +588,7 @@ export class PlanSync {
   }
 
   private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: 'plan-sync' | RestorePass): CcrcOpAsk {
-    const target = step.kind === 'create' ? null : step.op === 'issueUpdate' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
+    const target = step.kind === 'create' ? null : step.op === 'issueUpdate' || step.op === 'issueLink' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
     return {
       op: step.op, pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
     };
@@ -592,6 +664,8 @@ function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
 export function planSyncFor(o: {
   coord: CoordStore; plan: PlanStorePort; ccrcDir: string; rate: LinearRateService; journal: LinearJournal; policy: LinearWritePolicy;
   refresher: LinearRefresher; privateTrackerKeys: readonly string[]; readLinearStore: PlanSyncDeps['readLinearStore'];
+  /** The watcher's newest fleet listing: where a run's open PR is read before its close folds the lineage. */
+  currentFleet?: () => readonly FleetSession[] | null;
 }): PlanSync {
   return new PlanSync({
     coord: o.coord, plan: o.plan, ccrcDir: o.ccrcDir, readLinearStore: o.readLinearStore, directory: o.refresher.directory,
@@ -600,6 +674,20 @@ export function planSyncFor(o: {
     markSlotRejected: async (slot, digest, now) => {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
-    now: Date.now, privateTrackerKeys: o.privateTrackerKeys,
+    now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
   });
+}
+
+/** §5.6: a run's pull request as the server knows it: the newest of its folded `.prhistory` lineage (written when the run
+ *  closes), else its session's PR in the newest fleet listing. Synchronous; null when neither names one. */
+export function prOfRunFrom(coord: CoordStore, fleet: () => readonly FleetSession[] | null): NonNullable<PlanSyncDeps['prOfRun']> {
+  return (runId) => {
+    const read = coord.run(runId);
+    if (!read.ok || read.run === null) return null;
+    const last = read.run.prLineage.at(-1);
+    if (last !== undefined) return { number: last.pr, branch: last.branch };
+    const sid = read.run.sessionId;
+    const s = sid === null ? undefined : fleet()?.find((f) => f.id === sid);
+    return s?.pr?.number != null ? { number: s.pr.number, branch: s.branch } : null;
+  };
 }

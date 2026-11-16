@@ -1,6 +1,7 @@
 // The linking standard's deciders (D-8147). L1: pure; every rule about the convention is decided here and nowhere
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
 import { LINEAR_TEAM_KEY_SHAPE } from '../../../shared/linear.js';
+import { WS_SLUG_MAX, fitSlug, slugifyWords } from '../../../shared/slug.js';
 import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
 
@@ -115,4 +116,19 @@ export function publicTextVerdict(text: string, teamKey: string | null, mode: Li
     }
   }
   return { ok: true };
+}
+
+/** D-8182 (design §5.6): the workspace slug of a ticket's run in a private project: `key-123-<words>`, lowercase, at most
+ *  `WS_SLUG_MAX`. The words are the slug the caller gave, else the ticket's title; a given slug that already starts with the
+ *  identifier and a dash (or is the identifier) is kept, fitted. The words are cut to what the identifier leaves, so the
+ *  identifier is never the part dropped. */
+export function slugForTicket(identifier: string, given: string | undefined, title: string): string {
+  const id = slugifyWords(identifier);
+  const g = slugifyWords(given ?? '');
+  if (g === id || g.startsWith(`${id}-`)) return fitSlug(g, WS_SLUG_MAX).slug;
+  const words = g !== '' ? g : slugifyWords(title);
+  if (words === '') return id;
+  const room = WS_SLUG_MAX - id.length - 1;
+  const fitted = room > 0 ? fitSlug(words, room).slug : '';
+  return fitted === '' ? id : `${id}-${fitted}`;
 }

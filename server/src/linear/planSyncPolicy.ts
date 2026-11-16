@@ -11,7 +11,7 @@ import { createHash } from 'node:crypto';
 import type { BindingKind, EpicState, PlanEndOutcome, TicketState } from '../../../shared/plan.js';
 import type { LinkingMode } from '../../../shared/linking.js';
 import { redactShapedCount } from '../coord/redact.js';
-import { publicTextVerdict } from '../linking/policy.js';
+import { publicTextVerdict, ticketRefOfBranch } from '../linking/policy.js';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../coord/planStore.js';
 import { LINEAR_INITIATIVE_STATUSES, withCcrcProvenance, type CcrcOpInput, type CcrcOpName, type LinearInitiativeStatus } from './hierarchyOps.js';
 import { statusOfType, type LinearDirectoryEntries } from './ops.js';
@@ -39,6 +39,10 @@ export interface SyncSnapshot {
   projects: { project: string; teamKey: string | null; workspaceId: string | null; mode: LinkingMode; initiatives: 'on' | 'off' }[];
   /** The installer's private tracker keys, for the public-text check. */
   privateTrackerKeys: string[];
+  /** D-8182 (§5.6): the pull request each ticket's run opened, by ticket id (the sync builds the URL from the project's
+   *  measured repository): the issue is linked to it unless the branch already carries the issue's identifier, in which
+   *  case Linear's own GitHub integration links it. Absent: no PR is known. */
+  ticketPrs?: Record<number, { url: string; number: number; branch: string | null }>;
 }
 
 export type SkipWhy = 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' | 'ticket-workspace-mismatch' | 'text-public';
@@ -56,7 +60,7 @@ export type SyncStep =
     /** A cancel's comment, sent once BEFORE the update that cancels (C13); the update writes the fingerprint after its ok. */
     comment?: { requestId: string; body: string };
   })
-  | (StepBase & { kind: 'link'; op: 'initiativeToProjectCreate'; bindingId: number; input: CcrcOpInput; fields: string[]; requestId: string; fingerprint: string })
+  | (StepBase & { kind: 'link'; op: 'initiativeToProjectCreate' | 'issueLink'; bindingId: number; input: CcrcOpInput; fields: string[]; requestId: string; fingerprint: string })
   | { kind: 'skip'; local: Local; why: SkipWhy; workspaceId: string | null; bindingId: number | null; inputs: string | null; detail: string | null };
 export type SkipStep = Extract<SyncStep, { kind: 'skip' }>;
 export interface FailedInputs { bindingId: number; inputs: string }
@@ -75,7 +79,7 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
 }
 
 /** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
-export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel'): string {
+export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel' | 'pr'): string {
   const hex = createHash('sha256').update(`${kind}:${localId}:${workspaceId}${part === undefined ? '' : `:${part}`}`).digest('hex').slice(0, 32).split('');
   hex[12] = '4';
   hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16]!, 16) & 3]!;
@@ -369,10 +373,26 @@ export function planSyncSteps(s: SyncSnapshot): { steps: SyncStep[]; failedInput
         title: egress(t.title), description: issueText(t), teamId: tpl.teamId, stateId: iStatus, projectId, projectMilestoneId: milestoneId,
       };
       const cancelBody = te.comment === null ? null : withCcrcProvenance(egress(te.comment));
+      // §5.6: the PR link rides on the bound issue; its URL enters the planned inputs only once the link was sent (the same
+      // two-fingerprint mechanism as the project's initiative link, C4), so a sent link is never sent again.
+      const pr = s.ticketPrs?.[t.id];
+      const ident = tb?.state === 'bound' ? tb.identifier : null;
+      const wantPr = pr !== undefined && ident !== null && ticketRefOfBranch(pr.branch ?? '', tpl.teamKey) !== ident.toUpperCase();
+      const fpNull = plannedFingerprint(ip);
+      const fpFull = wantPr ? plannedFingerprint({ ...ip, prUrl: pr.url }) : fpNull;
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
         b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
-        planned: ip, fp: plannedFingerprint(ip), isCurrent: (st) => st === plannedFingerprint(ip),
+        planned: ip, fp: fpNull, isCurrent: (st) => st === fpFull,
+        link: () => {
+          if (!wantPr || tb === undefined || tb.linearId === null || tb.fingerprint !== fpNull) return null;
+          const requestId = requestIdOf('ticket', t.id, wsId, 'pr');
+          return {
+            kind: 'link', op: 'issueLink', local: tlocal, workspaceId: wsId, teamKey: tpl.teamKey, bindingId: tb.id,
+            input: { requestId, issueId: tb.linearId, url: pr.url, title: `PR #${pr.number}` }, fields: ['url', 'title'], requestId, fingerprint: fpFull,
+            inputs: plannedFingerprint({ ...ip, prUrl: pr.url, teamKey: tpl.teamKey, workspaceId: wsId }),
+          };
+        },
         create: () => ({
           input: { teamId: ip.teamId, title: ip.title, description: ip.description, stateId: iStatus, projectId, ...(milestoneId === null ? {} : { projectMilestoneId: milestoneId }) },
           fields: ['team', 'title', 'description', 'state', 'project', ...(milestoneId === null ? [] : ['milestone'])],

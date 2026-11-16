@@ -571,6 +571,7 @@ describe('the pass: moves and closes', () => {
     const upd = r.asks.slice(from).find((a) => a.op === 'issueUpdate')!;
     expect(upd.input['teamId']).toBe(CCC_TEAM.id);
     expect(upd.teamKey).toBe('AAA');                                    // the ask carries the issue's CURRENT team, read from Linear
+    expect(upd.destinationTeamKey).toBe('CCC');                         // C15: and the team it moves into, for the policy
     expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2.id)).toMatchObject({ state: 'bound', identifier: 'CCC-9', teamKey: 'CCC' });
   });
 

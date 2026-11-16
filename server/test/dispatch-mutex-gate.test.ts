@@ -111,7 +111,7 @@ function nextNonWs(code: string, from: number): string {
  *  still-open openers above it — tracked with a plain parenthesis stack,
  *  the identifier chain immediately preceding each `(` — is
  *  `coordMutex.run`. */
-function scanMutexCallSites(text: string, file: string): Site[] {
+function scanMutexCallSites(text: string, file: string, isTarget: (head: string) => boolean = (h) => TARGETS.has(h)): Site[] {
   const code = blankCommentsAndStrings(text);
   const lineOf = (i: number): number => code.slice(0, i).split('\n').length;
   const openers: string[] = [];
@@ -124,7 +124,7 @@ function scanMutexCallSites(text: string, file: string): Site[] {
       let k = j;
       while (k >= 0 && /[A-Za-z0-9_$.]/.test(code[k]!)) k--;
       const head = code.slice(k + 1, j + 1);
-      if (TARGETS.has(head)) {
+      if (isTarget(head)) {
         const nxt = nextNonWs(code, matchingCloseParen(code, i) + 1);
         const isDeclaration = nxt === '{' || nxt === ':';
         if (!isDeclaration) {
@@ -225,5 +225,24 @@ describe('D-46: dispatchRun/closeRun are never invoked outside CoordMutex', () =
       expect(ALL_SITES.some((s) => s.name === t), `no call site found for target ${t}`).toBe(true);
     }
     expect(ALL_SITES.filter((s) => !s.guarded).map(show)).toEqual([]);
+  });
+});
+
+// D-8182 (§5.6): the opposite rule for the dispatch's ticket wait. `PlanSync#dispatchSlug` waits up to 12 s on Linear, so it
+// must run BEFORE `coordMutex.run(...)` takes the lock: inside it, one slow Linear would hold close, reclaim, settle and
+// every other dispatch behind it.
+const isWait = (head: string): boolean => /(^|\.)dispatchSlug$/.test(head);
+describe('D-8182: the dispatch wait never runs inside coordMutex', () => {
+  it('the scanner tells a wait outside the lock from one inside it', () => {
+    const outside = "async function f() {\n  const s = await deps.planSync?.dispatchSlug(id, body.slug);\n  return coordMutex.run(() => dispatchRun(d, id));\n}\n";
+    const inside = "async function f() {\n  return coordMutex.run(async () => { const s = await planSync.dispatchSlug(id, undefined); });\n}\n";
+    expect(scanMutexCallSites(outside, 'f.ts', isWait).map((x) => [x.name, x.guarded])).toEqual([['.dispatchSlug', false]]);
+    expect(scanMutexCallSites(inside, 'f.ts', isWait).map((x) => [x.name, x.guarded])).toEqual([['planSync.dispatchSlug', true]]);
+  });
+
+  it('the route calls it, and no call site under server/src sits inside coordMutex.run(...)', () => {
+    const sites = tsFilesUnder(srcRoot).sort().flatMap((f) => scanMutexCallSites(readFileSync(f, 'utf8'), path.relative(srcRoot, f), isWait));
+    expect(sites.some((x) => x.file === path.join('coord', 'routes.ts'))).toBe(true);
+    expect(sites.filter((x) => x.guarded).map(show)).toEqual([]);
   });
 });

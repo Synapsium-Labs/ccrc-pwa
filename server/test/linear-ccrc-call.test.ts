@@ -76,6 +76,16 @@ describe('runCcrcOp (D-8180)', () => {
     expect(seen.map((a) => a.resource.issue)).toEqual(['KEY-12', null, null]);
   });
 
+  it('C15: a cross-team issue move asks the policy about both teams; the journal keeps the current one', async () => {
+    const seen: LinearWriteAsk[] = [];
+    const r = await rig(() => created, { policy: async (a) => { seen.push(a); return { allow: false, why: 'denied', decisionId: 'd-1' }; } });
+    await runCcrcOp(r.deps, { ...WRITE, op: 'issueUpdate', teamKey: 'AAA', destinationTeamKey: 'BBB', target: 'AAA-12', fields: ['team'] });
+    await runCcrcOp(r.deps, { ...WRITE, op: 'issueUpdate', teamKey: 'AAA', target: 'AAA-12', fields: ['title'] });
+    await runCcrcOp(r.deps, { ...WRITE, op: 'issueUpdate', teamKey: 'AAA', destinationTeamKey: null, target: 'AAA-12', fields: ['title'] });
+    expect(seen.map((a) => [a.resource.teamKey, a.resource.destinationTeamKey ?? null])).toEqual([['AAA', 'BBB'], ['AAA', null], ['AAA', null]]);
+    expect(rows(r.fx)[0]).toMatchObject({ teamKey: 'AAA' });
+  });
+
   it('a refused journal row sends nothing', async () => {
     const r = await rig(() => created);
     // A target outside the journal's grammar makes its pending row refuse.
