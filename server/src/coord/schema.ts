@@ -3292,16 +3292,42 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 80: user_version 79 -> 80 ─────────────────────────────────────────────
+  // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
+  // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
+  // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
+  // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
+  // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
+  // Sandbox A took 78 and the renewal act (#2852) 79, so this entry is 80, the next free slot (the coordinator's word).
+  //
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
+  // before the PR and before merge (it must print 79 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE answer_marks (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind   TEXT NOT NULL,                       -- AnswerMarkKind; read through isAnswerMarkKind, never a cast
+    rowId  INTEGER NOT NULL,                    -- operator_items.id or asks.id, by kind; no copy of either row
+    mark   TEXT NOT NULL,                       -- AnswerMarkName; read through isAnswerMarkName, never a cast
+    value  INTEGER NOT NULL CHECK (value IN (0, 1)),
+    at     INTEGER NOT NULL,                    -- wall ms of the change
+    actor  TEXT NOT NULL                        -- the session's device actor, or flag-off
+  );
+  CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
+  `,
+
+  // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
   // The response record (Overlord spec §4.3 C66, C67; W1, plan `w1-responses.md` Task 2): `operator_responses`, one row per
   // message ccrc put in front of the operator, sealed once by the response lane; `response_receipts`, what a device reported
   // of it, written only by the receipts door; `response_boots`, one row per boot of this server (question 17). One writer
   // for each fact, named in `responsesStore.ts` and `writers-map.test.ts`. Each kind's reference is one partial unique index
   // over columns its own CHECKs make non-null, and every insert names its conflict, so a repeat is nothing and a CHECK throws.
-  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 80` takes rule 3, never names
-  // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too (the renewal act and answer marks A are
-  // queued); the renewal act (#2852) took 79, so this is 80 (the coordinator's word, 2026-11-16); whoever lands later
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 81` takes rule 3, never names
+  // them, and records nothing (Table 11.1a). Sibling W1 pieces add migrations too: the renewal act (#2852) took 79 and
+  // answer marks A (#2879) 80, so this is 81 (the coordinator's word, 2026-11-16); whoever lands later
   // renumbers on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it
-  // must print 79 before this entry is counted):
+  // must print 80 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

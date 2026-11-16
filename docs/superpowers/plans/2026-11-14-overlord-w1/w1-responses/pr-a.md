@@ -61,9 +61,9 @@ ledger. The brief named this note `w1-responses-a.md`; the plan's Global Constra
 - Growth (`server/test/growthCheck.ts#netGrowth`, against the merge base with `origin/main`): `server/src/coord/schema.ts`
   +24 (the plan's measured +24), `server/src/coord/store.ts` +4, `server/src/server.ts` +2, `server/src/watch.ts` 0 (one
   field on an existing line), `pwa/src/lib/api.ts` 0. `growth-check.test.ts` armed: green.
-- Migration: 80, the coordinator's word after the renewal act (#2852) took 79. Answer marks A also takes 80 in its fix
-  round; whichever lands second renumbers to 81 at its landing merge. The auth gate's counts (244 routes, 241 HTTP, 146 gated) and
-  `gate.ts`'s docstring count move with answer marks A's on the same lines: the second to land re-derives them.
+- Migration: 81, the coordinator's word at the landing merge: the renewal act (#2852) took 79 and answer marks A (#2879)
+  took 80. The auth gate's counts move past answer marks A's: 245 routes, 242 HTTP, 147 gated, and `gate.ts`'s docstring
+  names 242.
 - Hand mutations: Task 1, rule 5's `delivered` test dropped and a console `shown` let through, each red; rules 1 and 2
   swapped, no change. Task 2, all five of the plan's and the three partial indexes folded into one, each red. Task 3,
   all five of the plan's, each red. Task 4, the receipt awaited before `openApp` and the push id dropped from

@@ -154,6 +154,16 @@
 .wl-cleared ul { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
 .wl .wl-cleared-row { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wl .wl-cleared-row s { color: var(--ink-secondary); }
+/* The operator's two answer marks (Overlord W1): their own controls under the row, never inside its button. */
+.wl-marks { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); align-items: center; font-size: var(--fs-meta); }
+.wl-li > .wl-marks { grid-column: 1 / -1; padding: 0 var(--sp-2); }
+.wl-cleared-row > .wl-marks { margin-top: var(--sp-1); }
+.wl-mark { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+/* The label holds its box, so the whole line at the tap floor toggles it. */
+.wl-mark-hit { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); cursor: pointer; }
+.wl-mark-note { font-style: italic; }
+.wl-mark-refusal, .wl-marks-explainer { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
+.wl-mark-refusal { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
 .wl-cleared .wl-cleared-more { justify-self: start; }
 /* D-8194: the whole trail, by programme. A heading per programme, its swatch in the programme's hue (the list groups' rule: the
    hue paints the non-text swatch, the name stays in ink), its name, its count and a chevron that turns when the group is open.

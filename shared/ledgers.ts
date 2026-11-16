@@ -14,6 +14,7 @@ import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, is
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';
+import type { AnswerMarksView } from './answerMarks.js';
 
 /** What the operator is asked to do. `decide` and `value` carry an answer; `do` carries none; a
  *  `secret`'s value goes to its slot, never through the answer (spec §5). */
@@ -267,6 +268,10 @@ export interface ItemView {
   /** The typed action the server wrote for the item (spec 2026-11-04 §10): `end-run`, `close-refused` or `release-review` (D-8293). `null` on an ordinary item, and
    *  absent from a server from before it, so a reader goes through `isEndRunAction(item.action ?? null)`, never the field. */
   action?: ItemAction | null;
+  /** The operator's two answer marks (Overlord W1, spec §9.2.1, C70), on a `decide` or `value` item they were shown while it is
+   *  listed. ABSENT means this server cannot mark this row (an older server, or a row with no box), never "never marked"
+   *  (plan question 14): a reader goes through the console's one reader, `answerMarkWords.ts#answerMarksOf`. */
+  answerMarks?: AnswerMarksView;
   history: { at: number; act: ItemAct | 'raise' | 'block' | 'unblock'; note: string | null; actor?: ItemActor }[];
 }
 
