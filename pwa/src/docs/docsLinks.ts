@@ -153,8 +153,9 @@ export function docsLocation(page: DocsPageLocation, to: DocsPageTarget): DocsPa
 /** What `DocLink` renders for one link (spec 4.11). `in-app`: a Docs page of the same project at the page's ref
  *  (`href` is that page's URL, never with a fragment; `fragment: null` means the link names none). `fragment`: an
  *  anchor in this page. `external`: an http, https or mailto URL, opened on tap only. `github`: an in-repo file outside
- *  the docs sections, on GitHub through `githubBlobUrl`, with that builder's `note` (`may-differ` is the caution View on
- *  GitHub carries too). `inert`: everything else, with the span's whole title. */
+ *  the docs sections, on GitHub through `githubBlobUrl`, with that builder's `note`, except on a version page, where the
+ *  note is always `may-differ`: the link names the branch, which may have moved past the version shown (`may-differ` is
+ *  the caution View on GitHub carries too). `inert`: everything else, with the span's whole title. */
 export type DocLinkTarget =
   | { kind: 'in-app'; href: string; fragment: string | null }
   | { kind: 'fragment'; fragment: string }

@@ -1540,7 +1540,7 @@ No configuration change is needed. `navigateFallback: '/index.html'` gives `/doc
 | an `at` or path segment is empty, `.` or `..` (amended 2026-10-13) | no link (`bad-target`) |
 | `relation === 'local-only'`, or `via` is `default:local-main` / `default:local-master` | no link; note "not pushed" (`not-on-origin`) |
 | the leaf opens a new draft with no committed entry | no link (`uncommitted`) |
-| `side === 'origin'`, or `relation === 'equal'` | link; on a version page (rich-docs G6), View on GitHub and a `repo` link carry the note "GitHub's copy may differ from this view" too, because the branch may have moved past the version shown (amended 2026-11-16; W5b-2) |
+| `side === 'origin'`, or `relation === 'equal'` | link; on a version page (rich-docs G6), View on GitHub and a `repo` link carry the note "GitHub's copy may differ from this view" too, because the branch may have moved past the version shown. The builder itself is unchanged and answers no note here; its callers add the note on a version page: View on GitHub in the head, and `docLinkTarget`'s `repo` arm (amended 2026-11-16; W5b-2) |
 | `side === 'local'` with `relation` in `local-ahead`, `local-behind`, `diverged`, `unmeasured` | link, plus the note "GitHub's copy may differ from this view" |
 
 The link is `https://github.com/<slug>/blob/<ref.name>/<repoPath>` for a leaf or a `repo` target, `.../tree/<ref.name>/<sectionPath>` for a section or directory, and `.../tree/<ref.name>` for the `root` target, each path segment encoded. **View on GitHub uses branch URLs, per the durable-link convention; Share uses a commit permalink (below; operator, 2026-10-06 and 2026-10-13).** The PWA never offers a docs page URL as a share link, and no docs page URL is written into tracked text.

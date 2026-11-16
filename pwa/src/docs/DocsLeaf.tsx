@@ -196,12 +196,12 @@ function RasterBody(p: {
 }
 
 /** What a Markdown body is keyed by: a value that changes only when the bytes can. A draft is keyed by its pin (every
- *  field, its fingerprint among them, so a new fingerprint asks the render gate again). A committed body is keyed by
- *  the blob the ANSWER carries, so a re-list that moves the commit but not the file keeps the formatted body (and its
- *  scroll), and an answer with no blob falls back to the commit-bearing pin. */
+ *  field, its fingerprint among them, so a new fingerprint asks the render gate again). A version page's body
+ *  (`version`) is keyed by its pin too, so it remounts the reader with its own sha (rich-docs spec 4.1) even when its
+ *  blob is the latest's (refinement (p)). Any other committed body is keyed by the blob the ANSWER carries, so a re-list
+ *  that moves the commit but not the file keeps the formatted body (and its scroll), and an answer with no blob falls
+ *  back to the commit-bearing pin. */
 function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string, version: boolean): string {
-  // A version is keyed by its pin, so it remounts the reader with its own sha (rich-docs spec 4.1) even when its blob is
-  // the latest's.
   if (pin.kind === 'draft' || version || show.blob === undefined) return pinKey;
   return ['blob', show.blob, show.section, show.path].join('\u0000');
 }
