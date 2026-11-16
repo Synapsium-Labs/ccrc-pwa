@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CCD, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_LIBS, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, ccdSource, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
+  CCD, CCD_LEASE_LIB, CCD_LEASE_LIB_PIN_PLACEHOLDER, CCD_LIBS, CCD_POOLSET_LIB, CCD_POOLSET_LIB_PIN_PLACEHOLDER, CCD_LONGLIVED_LIB, CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, ccdSource, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_TRAIN_LIB_PIN_PLACEHOLDER, ghContainedEnv, installDirectEntry, installedCcdBody,
   makeCcdHarness, type CcdHarness,
 } from './ccdWsHelpers.js';
 import { markGenerated } from '../../shared/mark.mjs';
@@ -38,6 +38,11 @@ const LEASE_MOVED: string[] = [...fs.readFileSync(LEASE_LIB, 'utf8').matchAll(/^
 const POOLSET_LIB = CCD_POOLSET_LIB;
 const POOLSET_DEFINED: string[] = [...fs.readFileSync(POOLSET_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
 const POOLSET_VARS: string[] = [...fs.readFileSync(POOLSET_LIB, 'utf8').matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1]!);
+/** The fifth library (the Overlord's ccd arms), the long-lived arms: NEW code too, read the same way: its functions and its
+ *  plain variable assignments, named from the file itself. */
+const LONGLIVED_LIB = CCD_LONGLIVED_LIB;
+const LONGLIVED_DEFINED: string[] = [...fs.readFileSync(LONGLIVED_LIB, 'utf8').matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
+const LONGLIVED_VARS: string[] = [...fs.readFileSync(LONGLIVED_LIB, 'utf8').matchAll(/^([A-Z_][A-Z0-9_]*)=/gm)].map((m) => m[1]!);
 const sha = (b: Buffer | string): string => createHash('sha256').update(b).digest('hex');
 
 let h: CcdHarness;
@@ -45,13 +50,13 @@ let dir: string;
 beforeEach(() => { h = makeCcdHarness('ccrc-lib-load-'); dir = path.join(h.home, 'tree'); });
 afterEach(() => { h.cleanup(); });
 
-/** A copy of ccd and its libraries at `<home>/tree/{ccd,lib/disk-retention.sh,lib/train-proof.sh,lib/delegation-lease.sh,lib/pool-set.sh}`, the first library
- *  through `mutate`, the second through `mutateTrain`, the third through `mutateLease` and the fourth through `mutatePoolset` (`null` leaves one out). The body is the INSTALLED form by default
+/** A copy of ccd and its libraries at `<home>/tree/{ccd,lib/disk-retention.sh,lib/train-proof.sh,lib/delegation-lease.sh,lib/pool-set.sh,lib/long-lived.sh}`, the first library
+ *  through `mutate`, the second through `mutateTrain`, the third through `mutateLease`, the fourth through `mutatePoolset` and the fifth through `mutateLonglived` (`null` leaves one out). The body is the INSTALLED form by default
  *  (its pins rendered to the shipped libraries, then stamped, as ccd-entry-install.py publishes it), so a mutation is a
  *  library changed after install; `body: 'source'` plants the committed file as it stands, every placeholder in place, and a
  *  function plants what it returns. */
 function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'installed' | 'source' | ((src: string) => string) = 'installed',
-  mutateTrain: (t: string) => string | null = (t) => t, mutateLease: (t: string) => string | null = (t) => t, mutatePoolset: (t: string) => string | null = (t) => t): string {
+  mutateTrain: (t: string) => string | null = (t) => t, mutateLease: (t: string) => string | null = (t) => t, mutatePoolset: (t: string) => string | null = (t) => t, mutateLonglived: (t: string) => string | null = (t) => t): string {
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
   const ccd = path.join(dir, 'ccd');
   const src = fs.readFileSync(CCD, 'utf8');
@@ -64,6 +69,8 @@ function plant(mutate: ((t: string) => string | null) = (t) => t, body: 'install
   if (lease !== null) fs.writeFileSync(path.join(dir, 'lib', 'delegation-lease.sh'), lease);
   const poolset = mutatePoolset(fs.readFileSync(POOLSET_LIB, 'utf8'));
   if (poolset !== null) fs.writeFileSync(path.join(dir, 'lib', 'pool-set.sh'), poolset);
+  const longlived = mutateLonglived(fs.readFileSync(LONGLIVED_LIB, 'utf8'));
+  if (longlived !== null) fs.writeFileSync(path.join(dir, 'lib', 'long-lived.sh'), longlived);
   return ccd;
 }
 const MARK = (): string => path.join(h.home, 'lib-ran');
@@ -76,7 +83,7 @@ function driver(name: string, body: string): string {
   fs.writeFileSync(file, `${body}\n`, { mode: 0o644 });
   return file;
 }
-const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_DEFINED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done; for v in ${POOLSET_VARS.join(' ')}; do [[ -v $v ]] && echo "has $v"; done`;
+const SOURCED = `source "$1"; rc=$?; echo "rc=$rc"; for f in ${[...MOVED, ...TRAIN_MOVED, ...LEASE_MOVED, ...POOLSET_DEFINED, ...LONGLIVED_DEFINED].join(' ')}; do declare -F "$f" >/dev/null && echo "has $f"; done; for v in ${[...POOLSET_VARS, ...LONGLIVED_VARS].join(' ')}; do [[ -v $v ]] && echo "has $v"; done`;
 function sourced(ccd: string, extra: NodeJS.ProcessEnv = {}): { out: string; err: string } {
   const r = spawnSync('bash', [driver('sourced.sh', SOURCED), ccd],
     { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(extra), { systemd: true, tmux: true, net: true }) });
@@ -127,8 +134,27 @@ describe('the library and the pin', () => {
     expect(bytes.includes(0), 'no NUL byte').toBe(false);
   });
 
-  it('ccd and its libraries are four, and ccdSource() splices the pool-set region in place of its pointer (the Overlord W1)', () => {
-    expect(CCD_LIBS, 'four libraries, in load order').toEqual([LIB, TRAIN_LIB, LEASE_LIB, POOLSET_LIB]);
+  it('the fifth library\'s pin is a placeholder too, and the file has the same one shape (the Overlord W1 ccd arms)', () => {
+    const ccdText = fs.readFileSync(CCD, 'utf8');
+    expect(ccdText.match(/^__CCD_LIB_LONGLIVED_SHA256=.*$/gm), 'ccd/ccd carries exactly one long-lived pin line, the placeholder')
+      .toEqual([CCD_LONGLIVED_LIB_PIN_PLACEHOLDER]);
+    const bytes = fs.readFileSync(LONGLIVED_LIB);
+    const text = bytes.toString('utf8');
+    expect(text.endsWith('\n') && !text.endsWith('\n\n'), 'exactly one trailing newline').toBe(true);
+    expect(bytes.includes(0), 'no NUL byte').toBe(false);
+  });
+
+  it('ccd and its libraries are five, and ccdSource() splices the keepawake region in place of its pointer (the Overlord W1 ccd arms)', () => {
+    expect(CCD_LIBS, 'five libraries, in load order').toEqual([LIB, TRAIN_LIB, LEASE_LIB, POOLSET_LIB, LONGLIVED_LIB]);
+    expect(LONGLIVED_VARS, 'the library\'s stamp').toEqual(expect.arrayContaining(['KEEP_AWAKE_STAMP']));
+    expect(LONGLIVED_DEFINED, 'the verb and its marker reader').toEqual(expect.arrayContaining(['cmd_keep_awake', '_keep_awake_ours']));
+    const src = ccdSource();
+    expect(src).toContain("KEEP_AWAKE_STAMP='keep-awake v1'");
+    expect(src).not.toContain('# @ccd-lib:keepawake —');
+    expect(fs.readFileSync(CCD, 'utf8'), 'the bare file holds the pointer, not the region').not.toContain("KEEP_AWAKE_STAMP='keep-awake v1'");
+  });
+
+  it('ccdSource() splices the pool-set region in place of its pointer (the Overlord W1)', () => {
     expect(POOLSET_VARS, 'the library\'s two bounds').toEqual(expect.arrayContaining(['POOL_SET_SPELLING_MAX_BYTES', 'ROUTE_LIST_MAX_BYTES']));
     const src = ccdSource();
     expect(src).toContain('POOL_SET_SPELLING_MAX_BYTES=1024');
@@ -240,7 +266,8 @@ describe('installed or source checkout: only a body with BOTH placeholders skips
       src.replace(CCD_LIB_PIN_PLACEHOLDER, `__CCD_LIB_SHA256=${sha(fs.readFileSync(LIB))}`)
         .replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`)
         .replace(CCD_LEASE_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LEASE_SHA256=${sha(fs.readFileSync(LEASE_LIB))}`)
-        .replace(CCD_POOLSET_LIB_PIN_PLACEHOLDER, `__CCD_LIB_POOLSET_SHA256=${sha(fs.readFileSync(POOLSET_LIB))}`);
+        .replace(CCD_POOLSET_LIB_PIN_PLACEHOLDER, `__CCD_LIB_POOLSET_SHA256=${sha(fs.readFileSync(POOLSET_LIB))}`)
+        .replace(CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LONGLIVED_SHA256=${sha(fs.readFileSync(LONGLIVED_LIB))}`);
     expect(sourced(plant((t) => t, pinnedOnly)).out).toContain('rc=0');
     const r = sourced(plant((t) => t + RAN, pinnedOnly));
     expect(r.err).toContain('ccd: refused (lib-digest)');
@@ -254,8 +281,9 @@ describe('installed or source checkout: only a body with BOTH placeholders skips
       (src: string): string => src.replace(CCD_TRAIN_LIB_PIN_PLACEHOLDER, `__CCD_LIB_TRAIN_SHA256=${sha(fs.readFileSync(TRAIN_LIB))}`),
       (src: string): string => src.replace(CCD_LEASE_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LEASE_SHA256=${sha(fs.readFileSync(LEASE_LIB))}`),
       (src: string): string => src.replace(CCD_POOLSET_LIB_PIN_PLACEHOLDER, `__CCD_LIB_POOLSET_SHA256=${sha(fs.readFileSync(POOLSET_LIB))}`),
+      (src: string): string => src.replace(CCD_LONGLIVED_LIB_PIN_PLACEHOLDER, `__CCD_LIB_LONGLIVED_SHA256=${sha(fs.readFileSync(LONGLIVED_LIB))}`),
     ]) {
-      const r = sourced(plant((t) => t + RAN, half, (t) => t + RAN, (t) => t + RAN, (t) => t + RAN));
+      const r = sourced(plant((t) => t + RAN, half, (t) => t + RAN, (t) => t + RAN, (t) => t + RAN, (t) => t + RAN));
       expect(r.err).toContain('ccd: refused (lib-digest)');
       expect(r.out).toContain('rc=125');
       expect(r.out).not.toContain('has ');
@@ -430,6 +458,31 @@ describe('a library that is not the pinned one refuses the start and runs nothin
     });
   }
 
+  // THE FIFTH LIBRARY (the Overlord's ccd arms) refuses as the fourth does, before ANY library is evaluated.
+  const longlivedRefusals: Array<[string, (t: string) => string | null, string]> = [
+    ['one appended line', (t) => t + RAN, 'lib-digest'],
+    ['one byte changed', (t) => t.replace('KEEP_AWAKE_STAMP', 'KEEP_AWAKE_STAMp'), 'lib-digest'],
+    ['an empty file', () => '', 'lib-digest'],
+    ['no file at all', () => null, 'lib-missing'],
+  ];
+  for (const [name, mutate, word] of longlivedRefusals) {
+    it(`the long-lived library, ${name}: sourced, status 125 with the ${word} line, no library's names defined`, () => {
+      const r = sourced(plant((t) => t, 'installed', (t) => t, (t) => t, (t) => t, mutate));
+      expect(r.err).toContain(`ccd: refused (${word})`);
+      expect(r.err).toContain('long-lived.sh');
+      expect(r.out).toContain('rc=125');
+      expect(r.out).not.toContain('has ');
+      expect(fs.existsSync(MARK())).toBe(false);
+    });
+    it(`the long-lived library, ${name}: executed, exit 125 for a verb that never touches it`, () => {
+      const ccd = plant((t) => t, 'installed', (t) => t, (t) => t, (t) => t, mutate);
+      const r = spawnSync('bash', [ccd, 'version'], { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, h.env(), { systemd: true, tmux: true, net: true }) });
+      expect(r.status).toBe(125);
+      expect(r.stderr).toContain(`ccd: refused (${word})`);
+      expect(r.stdout).toBe('');
+    });
+  }
+
   it('a symbolic link in the library\'s place is refused, even to the right bytes', () => {
     const ccd = plant(() => null);
     const real = path.join(h.home, 'elsewhere.sh');
@@ -482,6 +535,27 @@ describe('a library that is not the pinned one refuses the start and runs nothin
   it('through the installed direct entry: a tampered pool-set library refuses before any verb runs, status 125 (the Overlord W1)', () => {
     const e = installDirectEntry(h.home);
     fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'pool-set.sh'), RAN);
+    const r = spawnSync(e.entry, ['version'], { encoding: 'utf8', cwd: h.home, env: h.env() });
+    expect(r.status).toBe(125);
+    expect(r.stderr).toContain('ccd: refused (lib-digest)');
+    expect(fs.existsSync(MARK())).toBe(false);
+  });
+
+  it('a symbolic link in the long-lived library\'s place is refused, even to the right bytes (the Overlord W1 ccd arms)', () => {
+    const ccd = plant((t) => t, 'installed', (t) => t, (t) => t, (t) => t, () => null);
+    const real = path.join(h.home, 'elsewhere-longlived.sh');
+    fs.copyFileSync(LONGLIVED_LIB, real);
+    fs.symlinkSync(real, path.join(dir, 'lib', 'long-lived.sh'));
+    const r = sourced(ccd);
+    expect(r.err).toContain('ccd: refused (lib-missing)');
+    expect(r.err).toContain('long-lived.sh');
+    expect(r.out).toContain('rc=125');
+    expect(r.out).not.toContain('has ');
+  });
+
+  it('through the installed direct entry: a tampered long-lived library refuses before any verb runs, status 125 (the Overlord W1 ccd arms)', () => {
+    const e = installDirectEntry(h.home);
+    fs.appendFileSync(path.join(path.dirname(e.body), 'lib', 'long-lived.sh'), RAN);
     const r = spawnSync(e.entry, ['version'], { encoding: 'utf8', cwd: h.home, env: h.env() });
     expect(r.status).toBe(125);
     expect(r.stderr).toContain('ccd: refused (lib-digest)');

@@ -31,6 +31,7 @@ import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -129,6 +130,11 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
+// its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
+// the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
 // The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
 // belongs to a process that died.
@@ -415,6 +421,7 @@ const masker = new SecretMasker({
 deps.masker = masker;
 deps.responseStamp = () => responseStampNow(responseBoot);
 push?.setMasker(masker);
+deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
 // ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
 // lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).

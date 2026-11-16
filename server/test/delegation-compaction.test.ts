@@ -41,11 +41,9 @@ import {
   DELEGATION_CHECKPOINT_FILE,
   encodeDelegationCheckpoint,
   delegationRecordNaming,
-  recoverDelegation,
-  repairDelegationProjection,
-  type DelegationProjectionPort,
-  type DelegationProjectionRepairReport,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
+import { repairDelegationProjection, type DelegationProjectionPort, type DelegationProjectionRepairReport } from '../src/coord/delegation-db-projection.js';
 import { DELEGATION_COMPACTION_EDGES, DelegationDurability, recoverDelegationFromFiles, type DelegationCompactionOutcome, type DelegationDurabilityDeps, type DelegationDurabilityEdge } from '../src/coord/delegation-durability.js';
 import {
   DELEGATION_CARRY_REASONS,

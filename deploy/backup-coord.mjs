@@ -19,6 +19,12 @@
 // complete snapshot or nothing. The pre-clean removes BOTH a stale tmp (a
 // fresh VACUUM INTO refuses an existing file) and its -journal (a stale hot
 // journal must never be rolled into a new snapshot).
+//
+// MODE 0600 (Overlord W1 private store, Task 4): the same script snapshots
+// `operator-model.db`, the operator's private words, beside coord.db. The umask
+// is narrowed to 0o077 before VACUUM INTO, so the temp file is never wider than
+// 0600 and the rename keeps that mode. It holds for every snapshot this script
+// takes, coord.db's included.
 import { DatabaseSync } from 'node:sqlite';
 import { renameSync, rmSync } from 'node:fs';
 
@@ -27,6 +33,7 @@ if (!src || !dest) {
   console.error('usage: node backup-coord.mjs <src.db> <dest.db>');
   process.exit(2);
 }
+process.umask(0o077);
 const tmp = `${dest}.tmp`;
 rmSync(tmp, { force: true });
 rmSync(`${tmp}-journal`, { force: true });

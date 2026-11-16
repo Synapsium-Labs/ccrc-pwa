@@ -204,13 +204,25 @@ describe('the push when a placing box loses pool-set while a set stands (Task 10
   it('the table: a second row on a copy is honoured by the push with no code change', async () => {
     const s = await setup(['pool-set']);
     // A fictional word on a route field no floor row uses, so a row a later piece ships never collides with it.
-    const rows = [...CAP_FLOOR_FACTS, { fact: 'acctorder' as const, word: 'table-word-v1' }];
+    // (`acctorder` became the keep-awake-v1 row's fact in the Overlord W1 ccd arms, so the fictional row moved to `profile`.)
+    const rows = [...CAP_FLOOR_FACTS, { fact: 'profile' as const, word: 'table-word-v1' }];
     const lane = new PoolSetLossLane(() => s.deps, rows);
-    lane.check([rec('lane-a-overlord', { poolset: 'pool-a', acctorder: 'lane-a' })]);
+    lane.check([rec('lane-a-overlord', { poolset: 'pool-a', profile: 'overlord' })]);
     expect(s.sent).toHaveLength(1);
     expect(s.sent[0]!.title).toBe('The fleet box lost table-word-v1');
-    expect(s.sent[0]!.body).toContain('a acctorder stands for lane-a-overlord');
+    expect(s.sent[0]!.body).toContain('a profile stands for lane-a-overlord');
     expect(s.sent[0]!.body).not.toContain('pool-set');
+  });
+
+  it('the keep-awake-v1 row (Overlord W1 ccd arms): an ordered list standing on a box that lacks the word pushes, and with it nothing', async () => {
+    const lacks = await setup(['pool-set']);
+    new PoolSetLossLane(() => lacks.deps).check([rec('lane-a-overlord', { poolset: 'pool-a', acctorder: 'lane-a' })]);
+    expect(lacks.sent).toHaveLength(1);
+    expect(lacks.sent[0]!.title).toBe('The fleet box lost keep-awake-v1');
+    expect(lacks.sent[0]!.body).toContain('a acctorder stands for lane-a-overlord');
+    const holds = await setup(['pool-set', 'keep-awake-v1']);
+    new PoolSetLossLane(() => holds.deps).check([rec('lane-a-overlord', { poolset: 'pool-a', acctorder: 'lane-a' })]);
+    expect(holds.sent).toEqual([]);
   });
 
   it('CAP_FLOOR_FACTS is the twin of ccd/ccrc\'s CAP_FLOOR_ROWS, fact and word, row for row', () => {

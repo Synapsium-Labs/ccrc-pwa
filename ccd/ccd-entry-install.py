@@ -90,6 +90,10 @@
 # `__CCD_LIB_POOLSET_SHA256`, rendered by `render_lib_pin`, held to the same shape, staged in `lib/` and renamed right
 # after the third, before the body (the updater's backup carries it as ccd-lib-pool-set.sh).
 #
+# THE FIFTH LIBRARY (the Overlord's ccd arms): `lib/long-lived.sh` is the fourth's twin in every respect: pinned as
+# `__CCD_LIB_LONGLIVED_SHA256`, rendered by `render_lib_pin`, held to the same shape, staged in `lib/` and renamed right
+# after the fourth, before the body (the updater's backup carries it as ccd-lib-long-lived.sh).
+#
 # The library HALF also holds the docs redactor (D-7077, OA-C11 (a)):
 # `shared/redact.mjs` and `shared/redact-cli.mjs`, published into `shared/`
 # beside the body and pinned by digest in its text like the library
@@ -97,7 +101,7 @@
 # one placeholder line, or the install refuses before anything moves). The
 # half's three files are staged together and renamed in the order
 # shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh,
-# lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, before the body; a failure after any of them moved is the
+# lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, before the body; a failure after any of them moved is the
 # library half's failure.
 #
 # The library must end in exactly one newline and carry no NUL byte. The body
@@ -135,13 +139,15 @@ LEASE_LIB_PIN = re.compile(rb'^__CCD_LIB_LEASE_SHA256=([0-9a-f]{64})$', re.M)
 LEASE_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_LEASE_SHA256=stamp-at-install$', re.M)
 POOLSET_LIB_PIN = re.compile(rb'^__CCD_LIB_POOLSET_SHA256=([0-9a-f]{64})$', re.M)
 POOLSET_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_POOLSET_SHA256=stamp-at-install$', re.M)
+LONGLIVED_LIB_PIN = re.compile(rb'^__CCD_LIB_LONGLIVED_SHA256=([0-9a-f]{64})$', re.M)
+LONGLIVED_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$', re.M)
 REDACT_PINS = ('__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256')
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
 RESIDUE = re.compile(r'@CCRC_[A-Z0-9_]+@')
 
 STAGE_PREFIX = '.ccd.ccrc-stage.'
-STAGE_RE = re.compile(r'^\.ccd\.ccrc-stage\.[0-9]+(?:\.[123])?$')
+STAGE_RE = re.compile(r'^\.ccd\.ccrc-stage\.[0-9]+(?:\.[1234])?$')
 SELFTEST_PREFIX = '.ccd-selftest.'
 SELFTEST_RE = re.compile(r'^\.ccd-selftest\.[A-Za-z0-9_]+$')
 
@@ -169,6 +175,8 @@ LEASE_LIB_SOURCE = 'ccd/lib/delegation-lease.sh'
 LEASE_LIB_DEST = '.local/libexec/ccrc/lib/delegation-lease.sh'
 POOLSET_LIB_SOURCE = 'ccd/lib/pool-set.sh'
 POOLSET_LIB_DEST = '.local/libexec/ccrc/lib/pool-set.sh'
+LONGLIVED_LIB_SOURCE = 'ccd/lib/long-lived.sh'
+LONGLIVED_LIB_DEST = '.local/libexec/ccrc/lib/long-lived.sh'
 REDACT_SOURCE = 'shared/redact.mjs'
 REDACT_DEST = '.local/libexec/ccrc/shared/redact.mjs'
 REDACT_CLI_SOURCE = 'shared/redact-cli.mjs'
@@ -527,6 +535,8 @@ def install(tree, home):
     lease_digest = hashlib.sha256(lease_data).hexdigest()
     poolset_data = read_lib(tree, POOLSET_LIB_SOURCE)
     poolset_digest = hashlib.sha256(poolset_data).hexdigest()
+    longlived_data = read_lib(tree, LONGLIVED_LIB_SOURCE)
+    longlived_digest = hashlib.sha256(longlived_data).hexdigest()
     redact_data = read_regular(os.path.join(tree, *REDACT_SOURCE.split('/')))
     cli_data = read_regular(os.path.join(tree, *REDACT_CLI_SOURCE.split('/')))
     # The pins first, then the stamp over them, then the launcher's digest over all (THE LIBRARY, above).
@@ -559,6 +569,13 @@ def install(tree, home):
                       ' cannot verify would refuse every ccd start; %s must carry exactly one'
                       ' `__CCD_LIB_POOLSET_SHA256=stamp-at-install` line, which this install renders'
                       % (POOLSET_LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
+    pinned = render_lib_pin(pinned, longlived_digest, LONGLIVED_LIB_PIN_PLACEHOLDER, b'__CCD_LIB_LONGLIVED_SHA256')
+    pins = LONGLIVED_LIB_PIN.findall(pinned)
+    if len(pins) != 1 or pins[0].decode('ascii') != longlived_digest:
+        raise Refused('%s is not the library %s pins once rendered (%d pin line(s)): a body published ahead of a library it'
+                      ' cannot verify would refuse every ccd start; %s must carry exactly one'
+                      ' `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install` line, which this install renders'
+                      % (LONGLIVED_LIB_SOURCE, BODY_SOURCE, len(pins), BODY_SOURCE))
     body_data = stamp_body(pinned)
     template = read_regular(os.path.join(tree, *TEMPLATE_SOURCE.split('/'))).decode('utf-8')
     digest = hashlib.sha256(body_data).hexdigest()
@@ -570,6 +587,7 @@ def install(tree, home):
     train_dest = os.path.join(home, *TRAIN_LIB_DEST.split('/'))
     lease_dest = os.path.join(home, *LEASE_LIB_DEST.split('/'))
     poolset_dest = os.path.join(home, *POOLSET_LIB_DEST.split('/'))
+    longlived_dest = os.path.join(home, *LONGLIVED_LIB_DEST.split('/'))
     redact_dest = os.path.join(home, *REDACT_DEST.split('/'))
     cli_dest = os.path.join(home, *REDACT_CLI_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
@@ -586,7 +604,7 @@ def install(tree, home):
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
-    for dest in (redact_dest, cli_dest, lib_dest, train_dest, lease_dest, poolset_dest, body_dest, entry_dest):
+    for dest in (redact_dest, cli_dest, lib_dest, train_dest, lease_dest, poolset_dest, longlived_dest, body_dest, entry_dest):
         destination_kind(dest)
     for d in (bindir, libexec, libdir, shareddir):
         os.makedirs(d, mode=0o755, exist_ok=True)
@@ -604,10 +622,11 @@ def install(tree, home):
     train_state = converged(train_dest, train_data, BODY_MODE)
     lease_state = converged(lease_dest, lease_data, BODY_MODE)
     poolset_state = converged(poolset_dest, poolset_data, BODY_MODE)
+    longlived_state = converged(longlived_dest, longlived_data, BODY_MODE)
     body_state = converged(body_dest, body_data, BODY_MODE)
     entry_state = converged(entry_dest, entry_data, ENTRY_MODE)
 
-    staged_lib = staged_train = staged_lease = staged_poolset = staged_body = staged_entry = None
+    staged_lib = staged_train = staged_lease = staged_poolset = staged_longlived = staged_body = staged_entry = None
     staged_half = [None, None]
     moved = []
     lib_moved = []
@@ -625,6 +644,7 @@ def install(tree, home):
         staged_train = stage(libdir, train_data, BODY_MODE, '.1') if train_state == 'differ' else None
         staged_lease = stage(libdir, lease_data, BODY_MODE, '.2') if lease_state == 'differ' else None
         staged_poolset = stage(libdir, poolset_data, BODY_MODE, '.3') if poolset_state == 'differ' else None
+        staged_longlived = stage(libdir, longlived_data, BODY_MODE, '.4') if longlived_state == 'differ' else None
         staged_body = stage(libexec, body_data, BODY_MODE) if body_state == 'differ' else None
         staged_entry = stage(bindir, entry_data, ENTRY_MODE) if entry_state == 'differ' else None
         # The pair the self-test runs is the pair that will be live: each half
@@ -633,9 +653,9 @@ def install(tree, home):
         # the kernel has started its launcher (review 216, F4).
         self_test(home, staged_entry or entry_dest, staged_body or body_dest,
                   live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
-        if (staged_half == [None, None] and staged_lib is None and staged_train is None and staged_lease is None and staged_poolset is None and staged_body is None
+        if (staged_half == [None, None] and staged_lib is None and staged_train is None and staged_lease is None and staged_poolset is None and staged_longlived is None and staged_body is None
                 and staged_entry is None and [h[4] for h in half] == ['same', 'same']
-                and lib_state == train_state == lease_state == poolset_state == body_state == entry_state == 'same'):
+                and lib_state == train_state == lease_state == poolset_state == longlived_state == body_state == entry_state == 'same'):
             say('converged — the launcher, the body and the library already carry these bytes')
             return 0
         # The library goes FIRST: the body that lands next pins it. A standing body from before the library does not read it;
@@ -706,6 +726,19 @@ def install(tree, home):
             lib_moved.append(beside(POOLSET_LIB_DEST))
             postcondition(poolset_dest, poolset_data, BODY_MODE, 'library')
             say('library published at %s (replaced: %s)' % (poolset_dest, kind))
+        # The fifth library right after the fourth (THE FIFTH LIBRARY, above).
+        if longlived_state == 'mode':
+            repair_mode(longlived_dest, BODY_MODE)
+            say_repaired(longlived_dest, BODY_MODE)
+        if staged_longlived is not None:
+            kind = destination_kind(longlived_dest)
+            os.replace(staged_longlived, longlived_dest)
+            staged_longlived = None
+            if 'library' not in moved:
+                moved.append('library')
+            lib_moved.append(beside(LONGLIVED_LIB_DEST))
+            postcondition(longlived_dest, longlived_data, BODY_MODE, 'library')
+            say('library published at %s (replaced: %s)' % (longlived_dest, kind))
         if body_state == 'mode':
             repair_mode(body_dest, BODY_MODE)
             say_repaired(body_dest, BODY_MODE)
@@ -739,7 +772,7 @@ def install(tree, home):
                      ' starts as it did; but a standing body that pins a DIFFERENT library now refuses every ccd start'
                      ' (lib-digest) until the new body lands. Re-run this install to converge the pair, or restore the'
                      ' previous library (ccrc update\'s backup carries it as ccd-lib-disk-retention.sh, and the second as'
-                     ' ccd-lib-train-proof.sh, the third as ccd-lib-delegation-lease.sh, and the fourth as ccd-lib-pool-set.sh)'
+                     ' ccd-lib-train-proof.sh, the third as ccd-lib-delegation-lease.sh, the fourth as ccd-lib-pool-set.sh, and the fifth as ccd-lib-long-lived.sh)'
                      '; of the library half, these were renamed: %s' % ', '.join(lib_moved))
         elif 'launcher' in moved and entry_proved:
             state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
@@ -766,7 +799,7 @@ def install(tree, home):
         quiet_stdout()
         return 2
     finally:
-        for p in staged_half + [staged_lib, staged_train, staged_lease, staged_poolset, staged_body, staged_entry]:
+        for p in staged_half + [staged_lib, staged_train, staged_lease, staged_poolset, staged_longlived, staged_body, staged_entry]:
             if p is not None:
                 try:
                     os.unlink(p)

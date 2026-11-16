@@ -315,14 +315,15 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings'] as const;
 
-/** Each table's writers, `file#Class.method`, sorted and unique. */
-export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
-  const out: Record<string, Set<string>> = Object.fromEntries(TABLES.map((t) => [t, new Set<string>()]));
-  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${TABLES.join('|')})\\b`, 'g');
+/** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
+ *  and the private store's for its own describe (Overlord W1 private store A). */
+export const tableWriters = (files: readonly string[], tables: readonly string[] = TABLES): Record<string, string[]> => {
+  const out: Record<string, Set<string>> = Object.fromEntries(tables.map((t) => [t, new Set<string>()]));
+  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${tables.join('|')})\\b`, 'g');
   for (const f of files) {
     // Comment lines blanked to spaces, so prose naming a statement is not a writer and offsets still hold.
     const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-    if (!TABLES.some((t) => text.includes(t))) continue;
+    if (!tables.some((t) => text.includes(t))) continue;
     const hits = [...text.matchAll(verb)];
     if (hits.length === 0) continue;
     const syms = parseFile(f).symbols;
@@ -630,6 +631,40 @@ describe(CAPS_PIN, () => {
   });
 });
 
+// THE PRIVATE STORE'S TABLES (Overlord W1, private store A; spec §9.1, C29). `operator-model.db` is a second SQLite file with
+// one owner, `OperatorModelStore`: `recordMessage` is the one INSERT of a message, `moveMessage` the one writer of its state and
+// stamps (by the message moves table), and `recordRead` the one writer of the read ledger. MAY ONLY SHRINK.
+const PRIVATE_TABLES = ['operator_messages', 'read_ledger'] as const;
+describe('the private store\'s tables: every SQL write is an OperatorModelStore method, by name, may only shrink', () => {
+  it('CONTROL: a second UPDATE of operator_messages in another function is named, beside the store\'s own', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-private-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        'export class OperatorModelStore {',
+        "  moveMessage(): void { this.db.prepare('UPDATE operator_messages SET state = ? WHERE id = ?'); }",
+        '}',
+        "export function sneak(): void { db.prepare('UPDATE operator_messages SET text = ? WHERE id = ?'); }",
+        "export function look(): void { db.prepare('SELECT * FROM read_ledger'); }",
+      ].join('\n'));
+      const w = tableWriters([f], PRIVATE_TABLES);
+      expect(Object.fromEntries(Object.entries(w).map(([t, ws]) => [t, ws.map((s) => s.replace(/^.*#/, ''))])))
+        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each table\'s writers, by name', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const S = 'server/src/operatorModel/store.ts#OperatorModelStore.';
+    expect(tableWriters(files, PRIVATE_TABLES)).toEqual({
+      operator_messages: [`${S}moveMessage`, `${S}recordMessage`],
+      read_ledger: [`${S}recordRead`],
+    });
+  });
+});
+
 // THE COORDINATOR CALL RECORD (D-8126, migration 55). Its table has one writer per column, all in `coordCallsStore.ts`:
 // `insertCall` the only INSERT, `markCallSeen` the only writer of `seenAt`, `overturnCallTx` of `overturnedAt` and
 // `overturnNote`, `markBlockWoken` of `wokenAt`. MAY ONLY SHRINK: a statement from another function, or a SET naming one
@@ -683,5 +718,88 @@ describe('coordinator_calls: one writer per column, every write in coordCallsSto
       seenAt: [`${F}markCallSeen`],
       wokenAt: [`${F}markBlockWoken`],
     });
+  });
+});
+
+// Overlord W1, portfolio B (plan `w1-portfolio.md` Task 4; Table 11.1a, "`ratifiedBy` on each goals version"): the goals
+// versions' ratification columns have the writers the plan names and no other. `ratifiedBy` and `ratifiedAt` are written
+// by `setSpecPin` (a re-pin records its own source) and the operator's `ratifyGoalsVersion` on `programs`, and by
+// `addModification` and `ratifyGoalsVersion` on `programme_modifications`; `ratifiedActor` (review 2240 F7) by the same
+// writers of `programs` and by `ratifyGoalsVersion` alone on a modification (an insert leaves it NULL); `doneWhenBy` only in
+// the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). Review 2240 F2 widened it to the TEXT the source
+// describes: the pin's `specPath`, `inShort`, `inShortAt` and `doneWhen`, and a modification's `text`, `ruling` and
+// `itemId` (keyed by table, since those names are common), so a writer of the text that skips the source is a new entry.
+// MAY ONLY SHRINK. KNOWN WIDTH: a statement split from its verb across string pieces is not seen, as in the census above.
+describe('the goals versions\' ratification columns: every write in ledgersStore.ts, by the plan\'s writers', () => {
+  const COLS = /\b(ratifiedBy|ratifiedAt|ratifiedActor|doneWhenBy|doneWhen|inShort|inShortAt|specPath)\b/g;
+  const MOD_TEXT = /\b(text|ruling|itemId)\b/g;
+  const writes = (files: readonly string[]): Record<string, string[]> => {
+    const out: Record<string, Set<string>> = {};
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!/ratifiedBy|ratifiedAt|ratifiedActor|doneWhen|inShort|specPath|programme_modifications/.test(text)) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+        const lit = m[0];
+        if (!/\b(?:UPDATE|INSERT)\b/.test(lit)) continue;
+        const at = m.index!;
+        const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        const by = `${rel(f)}#${inner?.name ?? '(module)'}`;
+        for (const c of lit.matchAll(COLS)) (out[c[1]!] ??= new Set()).add(by);
+        if (/\bprogramme_modifications\b/.test(lit)) for (const c of lit.matchAll(MOD_TEXT)) (out[`programme_modifications.${c[1]!}`] ??= new Set()).add(by);
+      }
+    }
+    return Object.fromEntries(Object.entries(out).sort(([a], [b]) => a.localeCompare(b)).map(([k, s]) => [k, [...s].sort()]));
+  };
+  const STORE = 'server/src/coord/ledgersStore.ts';
+  const F = `${STORE}#`;
+  // `addModification.insert` is the insert closure inside `addModification` (the row and a new list are one act there).
+  const EXPECTED = {
+    doneWhen: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    doneWhenBy: [`${F}setDoneWhen`, `${F}setSpecPin`],
+    inShort: [`${F}setSpecPin`],
+    inShortAt: [`${F}setSpecPin`],
+    'programme_modifications.itemId': [`${F}addModification.insert`],
+    'programme_modifications.ruling': [`${F}addModification.insert`],
+    'programme_modifications.text': [`${F}addModification.insert`],
+    ratifiedActor: [`${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    ratifiedAt: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    ratifiedBy: [`${F}addModification.insert`, `${F}ratifyGoalsVersion`, `${F}setSpecPin`],
+    specPath: [`${F}setSpecPin`],
+  };
+
+  it('CONTROL: an UPDATE and an INSERT naming a column are found by their function; a SELECT and a comment are not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        "export function upd(): void { db.prepare(\"UPDATE programs SET doneWhenBy = 'pin' WHERE slug = ?\"); }",
+        'export function ins(): void { db.prepare(`INSERT INTO programme_modifications (ratifiedBy) VALUES (?)`); }',
+        "export function sel(): void { db.prepare('SELECT ratifiedAt FROM programs'); }",
+        "// UPDATE programs SET ratifiedAt = 1",
+      ].join('\n'));
+      const w = writes([f]);
+      expect(w).toEqual({ doneWhenBy: [`${rel(f)}#upd`], ratifiedBy: [`${rel(f)}#ins`] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('CONTROL: a planted fifth writer in ledgersStore.ts is a further entry', async () => {
+    const real = readFileSync(path.join(ccrcRoot, STORE), 'utf8');
+    const planted = `${real}\nexport function plantedWriter(db: DatabaseSync): void { db.prepare("UPDATE programs SET ratifiedBy = 'operator' WHERE slug = ?").run('x'); }\n`;
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-ratified-plant-'));
+    try {
+      const f = path.join(d, 'ledgersStore.ts');
+      writeFileSync(f, planted);
+      expect(writes([f])['ratifiedBy']).toContain(`${rel(f)}#plantedWriter`);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each column\'s writers, by name, under server/src', () => {
+    const files = ALL.filter((f) => rel(f).startsWith('server/src/'));
+    expect(writes(files)).toEqual(EXPECTED);
   });
 });

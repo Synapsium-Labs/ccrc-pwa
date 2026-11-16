@@ -3372,13 +3372,44 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // What each goals version rests on (Overlord spec §3.8, Table 11.1a; W1, plan `w1-portfolio.md` Task 4): `ratifiedBy`
+  // (a `RatifiedBy` word: `coordinator`, `item` or `operator`) and `ratifiedAt` on the pin (`programs`) and on each
+  // modification, `ratifiedActor` beside them (the account gate's actor of the operator's ratify, its device label and
+  // session hash, because an act that confers authority keeps its device; NULL for every other source, review 2240 F7), and
+  // `programs.doneWhenBy` (`pin` or `mod:<id>`), the version that wrote the current definition of done.
+  // The source only: whether it ratifies is `goalRatification`'s, decided at every read. Writers, all in `ledgersStore.ts`:
+  // `setSpecPin` and `ratifyGoalsVersion` on `programs`, `addModification` and `ratifyGoalsVersion` on the modifications,
+  // and `doneWhenBy` only in the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). The pin's source counts only
+  // when `ratifiedAt >= inShortAt` (`pinSource`, review 2240 F2), so an older build's re-pin reads unrecorded. Nothing is back-filled:
+  // NULL is a version nobody recorded, read as `unrecorded`. Responses A (#2884) landed 82, so this is 83 (the coordinator's
+  // word, 2026-11-16).
+  //
+  // SEVEN NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 83` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), names none of them and boots. Its re-pin or modification leaves these columns as they
+  // stand. For the pin that is closed (the stamp rule above). For the definition of done it is ACCEPTED: an older build's
+  // modification with a list leaves `doneWhenBy` naming the version before it, so after a roll-forward that list reads that
+  // version's verdict until this build's next write (slug done-when-provenance-survives-a-rollback).
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;                  -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER;               -- wall ms the pin's source was recorded
+  ALTER TABLE programs ADD COLUMN doneWhenBy TEXT;                  -- 'pin' or 'mod:<id>'; NULL is unrecorded
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT;   -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER;
+  ALTER TABLE programs ADD COLUMN ratifiedActor TEXT;               -- the operator's ratify: the gate's actor; else NULL
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT; -- the operator's ratify: the gate's actor; else NULL
+  `,
+
+  // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
   // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
   // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
   // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
-  // nothing on an existing table: an older build at `user_version 83` takes rule 3, never names it, and keeps no response
-  // rows. Entry 83 here by position only: its slot is the next free one at landing (84 once portfolio B's #2904 has
-  // merged), and the coordinator renumbers it then (review 2260's ruling).
-  // RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry is counted):
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

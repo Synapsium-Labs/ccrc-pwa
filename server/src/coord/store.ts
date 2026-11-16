@@ -7,7 +7,7 @@ import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
-import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
@@ -11249,9 +11249,10 @@ export class CoordStore {
     return bound === undefined ? res : { ...res, row: row as outbox.BoundRowRef | null };
   }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
-  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
-  setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null, source: WrittenSource): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen, source); }
+  setDoneWhen(program: string, doneWhen: readonly string[], now: number, modId: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now, modId); }
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  ratifyGoalsVersion(program: string, version: GoalsVersion, now: number, actor: string): ledgers.RatifyResult { return ledgers.ratifyGoalsVersion(this.db, program, version, now, actor); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */

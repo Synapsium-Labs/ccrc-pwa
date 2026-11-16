@@ -7,8 +7,8 @@ plan's deviation ledger.
 ## Departures
 
 - **migration-written-at-its-position**. The brief asked for migration 84 positionally, behind portfolio B's 83. On this
-  branch `main` has 82 entries and portfolio B has not landed, so `response_settings` is entry 83, at its position; it is
-  renumbered at the landing on the coordinator's word, as PR A's was.
+  branch `main` had 82 entries until portfolio B landed, so `response_settings` was entry 83, at its position. After
+  #2904 merged, the one merge of `main` the coordinator allowed moved it to entry 84 (`user_version 84`), keeping both.
 - **owner-facts-in-the-lane**. The plan puts `ownerFactsOf` in `responsesStore.ts`. The owners' reads it must go through
   (`askById`, `askForCorrection`, `approvalById`, `callById`, `itemHistory`, `itemById`) are `CoordStore` methods, not
   module functions a store module can call with the handle, so `ownerFactsOf` is in `server/src/responses/lane.ts` (L4),
@@ -104,8 +104,8 @@ The console (Task 9):
   direct store case, since the lane never re-reads a sealed row; an unreadable setting falling back to the default; the
   deleter in two transactions); Task 8's three (the handled door writing `outcome`, the bounds dropped, the gate compared
   the wrong way).
-- The auth gate's counts move past responses A's: 249 routes, 246 HTTP, 151 gated, and `gate.ts`'s docstring names 246.
-  Portfolio B lands first at 246 / 243, so the landing merge adds its one route to each.
+- The auth gate's counts move past portfolio B's: 250 routes, 247 HTTP, 152 gated, and `gate.ts`'s docstring names 247
+  (taken in the merge of `main` after #2904 landed at 246 / 243 / 148).
 - Fix round 1 (review 2260). Mutation floors, the same runner: `responseOutcome` 1 (36 of 36: O29 rewritten for the
   replay, O33 to O37 added for F1 and F2, O28 moved to the window's set as W11, where it is not equivalent),
   `responseWindowEnd` 1 (10 of 10), `responseSealDue` 1 (7 of 7, S5 and S6 now on `responseWindowEnded`), `responsesFor`

@@ -36,8 +36,8 @@ import { nodeDelegationFilePort } from '../src/coord/delegation-file-port.js';
 import {
   DelegationCheckpointBuilder,
   encodeDelegationCheckpoint,
-  recoverDelegation,
 } from '../src/coord/delegation-checkpoint.js';
+import { recoverDelegation } from '../src/coord/delegation-recovery.js';
 import { DelegationDurability } from '../src/coord/delegation-durability.js';
 import { correlateDelegation, indexDelegationDropped, type DelegationCorrelationInput } from '../src/coord/delegation-correlation.js';
 import * as modelNs from '../src/coord/delegation-model.js';
