@@ -150,6 +150,7 @@ _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, a
   [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
   v=$( { _plat_timeout 2 head -c "$4" -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${v%x}"
 }
+# shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by the fresh start in PR C2
 _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|none; rc 1, var empty, FRESH_PICK_WHY = the cause
   # CALLED BY NOTHING YET (PR C1): PR C2 adds step 3 and `stay` and calls it last in the fresh start's re-measure. It
   # WRITES NOTHING: no registry field, no stamp, no route row, no log line (the hold-down is read through its decider,
