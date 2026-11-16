@@ -204,6 +204,10 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The loads door's own word (Overlord W1 sandbox, Task 5): a report whose `reportId` names no start the server has recorded
+ *  for that session yet. 404, and the hook keeps the report and resends it, as it does for the start report's door. */
+export const START_LOADS_REFUSALS = { unknownStart: 'unknown-start' } as const;
+export type StartLoadsRefusal = (typeof START_LOADS_REFUSALS)[keyof typeof START_LOADS_REFUSALS];
 /** The note door's own words (Overlord W1a, the notes piece; spec Table 13.2): a key that names no live row of the caller's,
  *  a cap of live notes reached, a field over its length cap, a handover thread whose reference names no live row of the
  *  caller's, and a handover sent while no handover was asked. A key the door could not read is the generic `unmeasured`
@@ -304,6 +308,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The loads door (Overlord W1 sandbox): its one word of its own.
+  | StartLoadsRefusal
   // The note door (Overlord W1a): its five words of its own.
   | NoteRefusal
   // The probe door (Overlord W1a, the probes piece): its two words of its own.
@@ -517,6 +523,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
+  // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
+  [START_LOADS_REFUSALS.unknownStart]: 404,
   // The note door (Overlord W1a): CHOSEN, not measured. 403 for a key that is not a live row of the caller's (as `not-owner`);
   // 409 for a cap held and for a handover nobody asked (a state of the world, not a fault in the body); 400 for a field over
   // its cap and for a handover thread naming no live row (the caller's text to fix).

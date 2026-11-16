@@ -321,3 +321,78 @@ def agent_end:
           else "open" end
         end)
   | . // "none";
+
+# WHAT A START LOADED (Overlord W1 sandbox, Task 4; the measurement is
+# docs/superpowers/plans/2026-11-14-overlord-w1/w1-sandbox/load-path.md). The hook's loads report reads the start
+# attachments Claude Code writes before a start's first request. `$h` is the transcript before the start's recorded byte
+# offset, `$w` the transcript from it, `$c` the window of the newest reported fresh start of this same transcript when the
+# hook may carry from it (a resume whose digest and build equal that start's report, slug resume-carries-its-own-start),
+# else "", and `$last` true on the hook's last try. The answer is `{state: "wait"}` until the window holds the first-request
+# marker (an `api-request` row of `querySource` `repl_main_thread`) and, after it, the first `prompt_snapshot` that carries
+# `tools` or a second marker; on the last try it does not wait for the snapshot. Then `{state: "ready", ...}` with, per
+# kind, its list or "unmeasured" (never an empty list for a kind that was not seen):
+#   instr      the window's newest `instructions` before the marker: [{type, path}] (the hook hashes each file);
+#   hookCmds   the window's SessionStart `hook_success` and `hook_non_blocking_error` commands (the hook hashes each);
+#   skills     the newest `skill_listing` names at or before the marker, in the window or, at a resume, before it;
+#   agents     `agent_listing_delta` folded from the newest `isInitial` one: added types less removed ones;
+#   tools      the first tool-bearing `prompt_snapshot` after the marker: each tool's name (slug
+#              tools-read-from-the-prompt-snapshot); toolServers: the servers its tools name.
+# A shape this build does not know reads that kind "unmeasured".
+def sl_rows: split("\n") | map(select(length > 0) | [turn_row] | .[] | select(type == "object" and .isSidechain != true));
+def sl_marker: .type == "api-request" and .querySource == "repl_main_thread";
+def sl_att($k): select(.type == "attachment" and (.attachment | type) == "object" and .attachment.type == $k) | .attachment;
+def sl_every(f): (map(f) | index(false)) == null;
+def sl_names: if type == "array" and sl_every(type == "string") then sort | unique else "unmeasured" end;
+def sl_hooks: [.[] | (sl_att("hook_success"), sl_att("hook_non_blocking_error")) | select(.hookEvent == "SessionStart") | .command]
+  | if length == 0 then "unmeasured" elif sl_every(type == "string") then . else "unmeasured" end;
+def sl_instr: [.[] | sl_att("instructions")] | if length == 0 then "unmeasured" else .[-1].files
+  | if type == "array" and sl_every(type == "object" and (.path | type) == "string" and (.type | type) == "string")
+    then map({type, path}) else "unmeasured" end end;
+# The byte length of `$w` before its first main-thread request marker (the start's window end, relative to the window's
+# start): `loadlast` records it, so a resume's carry reads that start's own window only (review 2135 F4).
+def sl_end($w): ($w | split("\n")) as $L
+  | ([range(0; $L | length) | select([$L[.] | select(length > 0) | turn_row | select(type == "object" and .isSidechain != true and sl_marker)] | length > 0)] | .[0]) as $i
+  | [$L[:$i][] | utf8bytelength + 1] | add // 0;
+def start_loads($h; $w; $c; $src; $last):
+  ($w | sl_rows) as $W | ($h | sl_rows) as $H
+  | ([$W | to_entries[] | select(.value | sl_marker) | .key]) as $ms
+  | if ($ms | length) == 0 then {state: "wait"} else $ms[0] as $m
+  | ([$W[($m + 1):][] | sl_att("prompt_snapshot") | select(.tools != null)] | .[0]) as $snap
+  | if $snap == null and ($ms | length) < 2 and ($last | not) then {state: "wait"} else
+    ($W[:$m]) as $pre | ($c | sl_rows) as $C | ($H + $pre) as $hist
+    | ([$hist[] | sl_att("skill_listing")] | .[-1]) as $sk
+    | ([$hist[] | sl_att("agent_listing_delta")]) as $ad
+    | ([$ad | to_entries[] | select(.value.isInitial == true) | .key] | .[-1]) as $ai
+    | {state: "ready", end: sl_end($w),
+       instr: (($pre | sl_instr) as $i | if $i == "unmeasured" and $c != "" then ($C | sl_instr) else $i end),
+       hookCmds: (($pre | sl_hooks) as $k | if $k == "unmeasured" and $c != "" then ($C | sl_hooks) else $k end),
+       skills: (if $sk == null or ($src != "resume" and ([$pre[] | sl_att("skill_listing")] | length) == 0) then "unmeasured" else $sk.names | sl_names end),
+       agents: (if $ai == null then "unmeasured"
+                else reduce $ad[$ai:][] as $d ([]; if ($d.addedTypes | type) != "array" then "unmeasured" elif . == "unmeasured" then .
+                  else (. + $d.addedTypes) - (if ($d.removedTypes | type) == "array" then $d.removedTypes else [] end) end) | sl_names end),
+       tools: (if $snap == null or ($snap.tools | type) != "array" then "unmeasured" else [$snap.tools[] | .name] | sl_names end),
+       toolServers: (if $snap == null or ($snap.tools | type) != "array" then "unmeasured" else [$snap.tools[] | .server | select(. != null)] | sl_names end),
+       carried: ($c != "" and ((($pre | sl_instr) == "unmeasured") or (($pre | sl_hooks) == "unmeasured")))}
+    end end;
+
+# The loads report's two helpers for ccd/session-hook.sh (W1 sandbox, Task 4). `loads_hash_items`: over `start_loads`'s
+# ready answer, each instruction file as `F<path>` and each SessionStart hook command as `C<command>`, NUL-terminated, in
+# that order, for the hook to hash (jq has no digest). `loads_body`: over the hook payload, the report's body, with the
+# digests in `$x` in the same order (a digest not of sha256's shape reads its kind "unmeasured"); `carriedFrom` only when
+# the answer carried a kind from the earlier start `$cf` names.
+def loads_hash_items: (.instr | arrays | .[] | "F" + .path + "\u0000"), (.hookCmds | arrays | .[] | "C" + . + "\u0000");
+def loads_body($o; $x; $id; $rid; $lp; $rc; $ver; $wd; $cf; $at):
+  ($o.instr | if type == "array" then length else 0 end) as $n
+  | def inws: $wd != "" and (. == $wd or startswith($wd + "/"));
+    def bad: test("\\A[0-9a-f]{64}\\z") | not;
+  {fromId: $id, fromUuid: (.session_id // "" | tostring), reportId: $rid,
+   profileRole: ($lp | split(":")[0] | if . == "" then null else . end),
+   profileDigest: ($lp | if contains(":") then split(":")[1] else null end),
+   launchRc: (if $rc == "on" or $rc == "off" then $rc else null end), claudeVersion: (if $ver == "" then null else $ver end),
+   permissionMode: (.permission_mode | strings // null),
+   cwdInWorkspace: (if $wd == "" or (.cwd | type) != "string" then null else (.cwd | inws) end), reportedAt: $at,
+   loaded: {instructions: (if $o.instr == "unmeasured" or ($x[:$n] | sl_every(bad | not) | not) then "unmeasured"
+              else [range(0; $n) as $i | $o.instr[$i] | {type, name: (.path | split("/") | .[-1]), inWorkspace: (.path | inws), sha256: $x[$i]}] | sort_by(.name) end),
+            hooks: (if $o.hookCmds == "unmeasured" or ($x[$n:] | sl_every(bad | not) | not) then "unmeasured" else $x[$n:] | sort end),
+            skills: $o.skills, agents: $o.agents, tools: $o.tools, toolServers: $o.toolServers}}
+  + (if $cf != "" and $o.carried == true then {carriedFrom: $cf} else {} end);

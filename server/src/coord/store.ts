@@ -34,10 +34,10 @@ import type { CaseDue } from './practiceCases.js';
 import {
   advanceCursor, advanceObserved, appendNote, cardReadOfStart, clearShadowWalk, generationsCursor, handoverBefore, insertCardRead,
   insertSnapshot, insertStart, liveGenerations, liveNotes, mintGeneration, noteById, putHandover, setGenerationDue, setHoldOff,
-  startsOf, startsSince, stepGeneration,
+  startsOf, startsSince, stepGeneration, insertStartLoads, startLoadsOfNewestStart,
   type CardReadInsert, type CardReadRead, type CursorAdvance, type CursorRead, type DueWrite, type SnapshotInsert,
   type GenExpect, type GenerationsRead, type MintInput, type MintResult, type StartInsert, type StartInsertResult, type StartsRead,
-  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead,
+  type HandoverRead, type NoteByIdRead, type NoteInsert, type NotesRead, type StartLoadsInsertResult, type NewestStartLoadsRead, type StartLoadsReport,
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
@@ -5399,6 +5399,8 @@ export class CoordStore {
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
+  insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
+  startLoadsOfNewestStart(sessionId: string): NewestStartLoadsRead { return startLoadsOfNewestStart(this.db, sessionId); }
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }

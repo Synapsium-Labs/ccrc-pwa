@@ -3213,17 +3213,52 @@ export const MIGRATIONS: readonly string[] = [
     baseline      INTEGER NOT NULL      -- 1 for M13's baseline (quizBaseline), else 0
   );
   `,
+
   // ── 78: user_version 77 -> 78 ─────────────────────────────────────────────
+  // The loads report (Overlord spec §3.6 H4, Table 11.1e; W1 sandbox, plan `w1-sandbox.md` Task 5): `continuity_start_loads`,
+  // what a session's `startup` or `resume` start loaded, one row per start, joined by `startId`. ONE writer,
+  // `insertStartLoads` (`continuityStore.ts`), from the loads door: the first body for a start is kept, a resend of the same
+  // body changes nothing, and a second body that differs sets `conflicted`, which every reader reads as every property
+  // unmeasured. No verdict is stored: every reader computes one from the newest start's row and the server's own profile.
+  // `carriedFrom` is the `reportId` of the start a resume carried instructions and hooks from (slug
+  // resume-carries-its-own-start).
+  //
+  // A NEW TABLE, nothing on an existing one: an older build opening a file at `user_version 78` takes rule 3 (it warns, reads
+  // as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. Sibling W1 pieces add
+  // migrations too: whoever lands later renumbers on the coordinator's word; the push outbox (#2838) took 75, the portfolio (#2842) 76
+  // and the replay quiz (#2839) 77, so this is 78 (the coordinator's word at landing, 2026-11-15). RE-MEASURE the slot
+  // before the PR and before merge (it must print 77 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_start_loads (
+    startId        INTEGER PRIMARY KEY REFERENCES continuity_starts(id),
+    profileRole    TEXT,               -- from CCRC_LAUNCH_PROFILE, or NULL when the session had none
+    profileDigest  TEXT,               -- 64 lowercase hex, or NULL
+    launchRc       TEXT,               -- CCRC_LAUNCH_RC: on | off, or NULL
+    claudeVersion  TEXT,               -- the build, or NULL
+    permissionMode TEXT,               -- the hook payload's word, or NULL
+    cwdInWorkspace INTEGER,            -- 1 | 0, or NULL when unmeasured
+    loaded         TEXT NOT NULL,      -- JSON: per known kind, its sorted list or "unmeasured"
+    carriedFrom    TEXT,               -- the reportId a resume carried from, or NULL
+    bodySha256     TEXT NOT NULL,      -- the first report's narrowed body, reportedAt left out
+    conflicted     INTEGER NOT NULL DEFAULT 0,  -- 1 once a second, different body arrived for this start
+    reportedAt     INTEGER NOT NULL,   -- the hook's clock, ms
+    receivedAt     INTEGER NOT NULL    -- the server's clock, ms
+  );
+  `,
+
+  // ── 79: user_version 78 -> 79 ─────────────────────────────────────────────
   // The answer marks (Overlord spec §9.2.1 C70; W1, plan `w1-delegation-marks.md` Task 2): `answer_marks`, every change of
   // the operator's two marks (`could-answer`, `unsure`) on a row of Waiting on you, append-only; the newest record of a row's
   // mark is its value. ONE writer, `answerMarkStore.ts#recordAnswerMark`, reached only from the operator's door. A record
   // names its row by kind and id and copies no fact of it (plan question 10). `kind` and `mark` carry no CHECK on purpose: a
   // later build may name another kind or mark, and every reader takes them through `isAnswerMarkKind`/`isAnswerMarkName`.
-  // Sandbox A and the renewal act hold 78 and 79 in the queue, so this entry renumbers at landing (the coordinator's word).
+  // Sandbox A took 78; the renewal act takes 79 in its landing merge, so this entry renumbers to 80 on the coordinator's word.
   //
-  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 78` takes rule 3 (it warns,
+  // A NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 79` takes rule 3 (it warns,
   // reads as-is and migrates nothing), never names the table, and boots. Every earlier entry is frozen. RE-MEASURE the slot
-  // before the PR and before merge (it must print 77 before this entry is counted):
+  // before the PR and before merge (it must print 78 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

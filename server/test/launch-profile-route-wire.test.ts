@@ -46,8 +46,8 @@ const LAUNCH = { profile: 'coordinator', automem: 'off', compactwindow: '350000'
 
 describe('the launch profile route fields on the server (H1)', () => {
   it('are writable route fields, last, and so read fields too; the lane-only ones, which the door parse refuses', () => {
-    expect(ROUTE_WRITABLE_FIELDS.slice(-6, -3)).toStrictEqual(Object.keys(LAUNCH));
-    expect(ROUTE_LANE_ONLY_FIELDS).toStrictEqual([...Object.keys(LAUNCH), 'precompact', 'poolset', 'acctorder']);
+    expect(ROUTE_WRITABLE_FIELDS.slice(-7, -4)).toStrictEqual(Object.keys(LAUNCH));
+    expect(ROUTE_LANE_ONLY_FIELDS).toStrictEqual([...Object.keys(LAUNCH), 'precompact', 'poolset', 'acctorder', 'profiledigest']);
     for (const f of Object.keys(LAUNCH)) expect(ROUTE_READ_FIELDS, f).toContain(f);
     expect(parseRouteFields({ ...LAUNCH })).toStrictEqual({ ok: false, why: 'lane-only', field: 'profile' });
     expect(parseRouteFields({ class: 'opus', compactwindow: '350000' })).toStrictEqual({ ok: false, why: 'lane-only', field: 'compactwindow' });
@@ -57,9 +57,11 @@ describe('the launch profile route fields on the server (H1)', () => {
       .toStrictEqual(['route', '--session', ID, '--set', 'profile=coordinator', '--set', 'automem=off', '--set', 'compactwindow=350000']);
   });
   // Overlord W1a compaction, Task 4: `precompact`, the PreCompact refusal arm's switch, written by the generations lane.
-  // The pool set's two fields (the Overlord's W1) follow it; `pool-set-route-wire.test.ts` pins them.
+  // The pool set's two fields (the Overlord's W1) follow it, then the W1 sandbox's profiledigest; `pool-set-route-wire.test.ts`
+  // pins the pool set's.
   it('precompact is the last field before the pool set\'s two, lane-only; routeSet builds its argv and the registry reads it back', async () => {
-    expect(ROUTE_WRITABLE_FIELDS.at(-3)).toBe('precompact');
+    expect(ROUTE_WRITABLE_FIELDS.at(-4)).toBe('precompact');
+    expect(ROUTE_WRITABLE_FIELDS.at(-1)).toBe('profiledigest');
     expect(parseRouteFields({ precompact: 'refuse' })).toStrictEqual({ ok: false, why: 'lane-only', field: 'precompact' });
     expect([...CCD_ARGV.routeSet(ID, { precompact: 'refuse' })]).toStrictEqual(['route', '--session', ID, '--set', 'precompact=refuse']);
     field('precompact', 'refuse');

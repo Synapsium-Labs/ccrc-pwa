@@ -24,9 +24,41 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
     for (const r of ['overlord', 'coordinator'] as const) {
       expect(FLEET_ROLES[r].launchProfile.compaction).toStrictEqual({ settings: { idleCompaction: false }, aboveHardCapPts: 10 });
     }
-    expect(FLEET_ROLES.overlord.launchProfile.env).toStrictEqual({ CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1' });
+    // W1 sandbox Task 2: the subagent-model pin (C55, W0-11) joins the overlord's env, and its settings carry the surface's
+    // switches (proposal 5's acceptance, measured by Task 1's M3; inbound peer messages refused, §3.6 H1).
+    expect(FLEET_ROLES.overlord.launchProfile.env).toStrictEqual({ CLAUDE_CODE_FORK_SUBAGENT: '0', CLAUDE_CODE_DISABLE_AGENT_VIEW: '1',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', CLAUDE_CODE_SUBAGENT_MODEL_FORCE: '1' });
+    expect(FLEET_ROLES.overlord.launchProfile.settings).toStrictEqual({ enableWorkflows: false, switchModelsOnFlag: true,
+      skipDangerousModePermissionPrompt: true, crossSessionInbound: 'refuse', remoteControlAtStartup: false });
     for (const r of FLEET_ROLE_NAMES.filter((x) => x !== 'overlord')) expect(FLEET_ROLES[r].launchProfile.env, r).toStrictEqual({});
-    for (const r of FLEET_ROLE_NAMES) expect(FLEET_ROLES[r].launchProfile.settings, r).toStrictEqual({});
+    for (const r of FLEET_ROLE_NAMES.filter((x) => x !== 'overlord')) expect(FLEET_ROLES[r].launchProfile.settings, r).toStrictEqual({});
+  });
+  it('only the overlord has a surface, and every word of it is argv-safe (W1 sandbox Task 2, index question 12)', () => {
+    expect(FLEET_ROLE_NAMES.filter((r) => FLEET_ROLES[r].launchProfile.surface !== null)).toEqual(['overlord']);
+    const s = FLEET_ROLES.overlord.launchProfile.surface!;
+    for (const w of [...s.tools, ...s.deny, ...s.skills]) expect(w).toMatch(/^[A-Za-z0-9_-]+$/);
+    for (const w of [...s.tools, ...s.deny]) expect(w).toMatch(/^[A-Za-z0-9_]+$/);
+    const target = /^[a-z0-9-]+(\/[a-z0-9.-]+)*$/;
+    for (const [name, t] of Object.entries(s.stagedSkills)) {
+      expect(name).toMatch(/^[a-z0-9-]+$/);
+      expect(t).toMatch(target);
+      expect(t.split('/')).not.toContain('..');
+    }
+    expect(s.memory).toMatch(target);
+    expect(s.memory.split('/')).not.toContain('..');
+    expect(s.toolServer).toBe('door');
+    expect(Object.keys(s.readerTypes).length).toBeGreaterThan(0);
+    for (const [t, rt] of Object.entries(s.readerTypes)) {
+      expect(rt.model, t).toBe('sonnet');
+      expect(rt.tools, t).toStrictEqual(['mcp__door__read']);
+    }
+    expect(s.skills).toStrictEqual(['ccrc-overlord']);
+    expect(Object.keys(s.stagedSkills)).toStrictEqual(s.skills);
+    expect(s.settingSources).toStrictEqual(['project']);
+    // The cron tools are denied (proposal 3), with every command, edit, web, peer-message and workflow tool.
+    expect(s.deny).toEqual(expect.arrayContaining(['Bash', 'Edit', 'Write', 'NotebookEdit', 'WebFetch', 'WebSearch', 'SendMessage',
+      'ListAgents', 'Workflow', 'CronCreate', 'CronList', 'CronDelete']));
+    expect(FLEET_ROLES.overlord.launchProfile.settings.crossSessionInbound).toBe('refuse');
   });
   it('every role carries its compaction text; auditor and replay take plain\'s (C51)', () => {
     for (const r of FLEET_ROLE_NAMES) expect(typeof FLEET_ROLES[r].compactInstructions, r).toBe('string');
@@ -51,7 +83,7 @@ describe('FLEET_ROLES (Overlord spec §3.3.9, C49)', () => {
   });
   it('a row must carry every column (a compile-time pin, read by the test typecheck)', () => {
     // @ts-expect-error a row with no sessionRole is not a FleetRoleRow
-    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null }, cardRenderer: 'plain', compactInstructions: '', probeSet: [], timerCap: 5 };
+    const partial: FleetRoleRow = { longLived: false, launchProfile: { env: {}, settings: {}, autoMemory: 'off', compaction: null, surface: null }, cardRenderer: 'plain', compactInstructions: '', probeSet: [], timerCap: 5 };
     expect(partial.longLived).toBe(false);
   });
   it('isFleetRole accepts exactly the table keys', () => {

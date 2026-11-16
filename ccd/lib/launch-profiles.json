@@ -23,9 +23,187 @@
     },
     "env": {
       "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
-      "CLAUDE_CODE_FORK_SUBAGENT": "0"
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
     },
-    "settings": {}
+    "flags": [
+      "--setting-sources",
+      "project",
+      "--tools",
+      "Agent,Skill",
+      "--strict-mcp-config",
+      "--agents",
+      "{\"overlord-reader\":{\"description\":\"Reads one record through the door and reports what it found\",\"model\":\"sonnet\",\"prompt\":\"You read records through the door read tool and report what they say. You change nothing.\",\"tools\":[\"mcp__door__read\"]}}"
+    ],
+    "memory": "lib/overlord-constitution.md",
+    "remoteControl": "off",
+    "settings": {
+      "crossSessionInbound": "refuse",
+      "enableWorkflows": false,
+      "remoteControlAtStartup": false,
+      "skipDangerousModePermissionPrompt": true,
+      "switchModelsOnFlag": true
+    },
+    "stagedSkills": {
+      "ccrc-overlord": "overlord-skill"
+    },
+    "surfaceSettings": {
+      "hooks": {
+        "PermissionRequest": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "PostCompact": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "PostToolUse": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "PreCompact": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "PreToolUse": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ],
+            "matcher": "*"
+          }
+        ],
+        "SessionEnd": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "SessionStart": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "Stop": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "StopFailure": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "SubagentStart": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "SubagentStop": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ],
+        "UserPromptSubmit": [
+          {
+            "hooks": [
+              {
+                "command": "bash \"$HOME/.cc-sessions/session-hook.sh\"",
+                "timeout": 600,
+                "type": "command"
+              }
+            ]
+          }
+        ]
+      },
+      "permissions": {
+        "deny": [
+          "Bash",
+          "Edit",
+          "Write",
+          "NotebookEdit",
+          "WebFetch",
+          "WebSearch",
+          "SendMessage",
+          "ListAgents",
+          "Workflow",
+          "CronCreate",
+          "CronList",
+          "CronDelete"
+        ]
+      },
+      "statusLine": {
+        "command": "bash \"$HOME/.claude/statusline-command.sh\"",
+        "type": "command"
+      }
+    }
   },
   "plain": {
     "autoMemory": "switch",

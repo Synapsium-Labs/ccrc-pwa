@@ -9,7 +9,7 @@ you (R21, spec §9.2.1, C70). The coordinator folds these into the ledger; depar
 - `shared/answerMarks.ts` (L0): the row kinds, the two marks, the wire view (`never`, `marked`, `withdrawn`, `unmeasured`) and
   `parseAnswerMarkWrite`. `ItemView` gains an optional `answerMarks`, whose absence means "this server cannot mark".
 - `server/src/coord/answerMarks.ts` (L1): `itemMarkable`, `markViewOf` and `itemMarksView`, pure.
-- Migration 78: `answer_marks`, append-only, and its index. `answerMarkStore.ts` (L3): `recordAnswerMark`, the one writer, and
+- Migration 79: `answer_marks`, append-only, and its index. `answerMarkStore.ts` (L3): `recordAnswerMark`, the one writer, and
   `answerMarksOf`, which skips and counts a mark this build does not know and answers a throw as `{ ok: false }`.
 - `POST /api/answer-marks` in `registerLedgerOperatorRoutes`: session-gated, no box token, no step-up, no `ccrc-api` row; it
   works dark and records `flag-off`. `not-markable` (409) carries the reason; Table 11.6 gains its row.
@@ -44,10 +44,10 @@ Nothing changes at merge but the boxes. No W1 code reads a mark beyond the waiti
 - **`settle-rule-as-fixed`**: Task 4 builds the settle rule in the plan's fix-round wording (F14): pending clears when the call
   resolves, the box keeps the door's answer as `settled`, shows the newer of `settled` and the view's mark by `at`, and drops
   `settled` once the view's mark is at least as new. A view of `never` or `unmeasured` loses to a settled record.
-- **`migration-renumbers-at-landing`**: the migration is 78 by position on this branch. Sandbox A and the renewal act hold 78
-  and 79 in the queue, so it renumbers at landing on the coordinator's word.
+- **`migration-renumbers-at-landing`**: the migration is 79 by position on this branch, after sandbox A's 78. The renewal act
+  takes 79 in its landing merge, so this one renumbers to 80 when that lands, on the coordinator's word.
 - **`run-close-switch-word-remeasured`**: `run-close-switch.test.ts`'s count word read "twenty-three" while its reopen already
-  replayed twenty-four migrations (54 to 77). With 78 it replays twenty-five, and the word now says so.
+  replayed twenty-four migrations (54 to 77). With sandbox A's 78 and this 79 it replays twenty-six, and the word now says so.
 - **`writers-map-call-sites-by-name`**: `writers-map.test.ts`'s call-site census, written for the portfolio's writer, takes the
   callee's name, so the answer marks' writer is pinned by route the same way, with a planted second call in the tick door.
 - **`done-without-a-closing-time`**: a `done` item with no `closedAt` (a corrupt row; no writer makes one) is `past-window`,

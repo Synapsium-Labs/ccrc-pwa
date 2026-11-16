@@ -311,7 +311,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'lifecycle_gaps', 'asks', 'approvals', 'practice_cases', 'continuity_starts', 'continuity_generations', 'continuity_cursor',
   'continuity_snapshots', 'continuity_card_reads', 'continuity_timers', 'continuity_notes', 'continuity_handovers',
   'continuity_probes', 'continuity_reads', 'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
-  'answer_marks'] as const;
+  'continuity_start_loads', 'answer_marks'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. */
 export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
@@ -383,6 +383,7 @@ describe(TABLES_PIN, () => {
       // The probes (Overlord W1a): one writer per fact, the lane's round and the door's answers; the card and note GETs' stamp.
       continuity_probes: ['answerRound', 'openRound'].map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_reads: ['server/src/continuity/continuityStore.ts#stampContinuityRead'],
+      continuity_start_loads: ['server/src/continuity/continuityStore.ts#insertStartLoads'],
       // The push outbox (Overlord W1): one writer per move of `OUTBOX_TRANSITIONS`, and the purge of terminal unbound rows.
       push_outbox: ['armBoundRowInTx', 'claimOutboxRow', 'insertBoundRowInTx', 'insertUnboundRow', 'markOutboxVerdict', 'purgeOutbox',
         'sealAtBoot', 'silenceOutboxRow'].map((f) => `server/src/coord/pushOutboxStore.ts#${f}`),
