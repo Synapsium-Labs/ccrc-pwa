@@ -18,6 +18,8 @@ import { docLinkTarget, type DetachedUrls } from './docsLinks';
 export interface DocLinkContextValue {
   readonly project: string;
   readonly pageRef: DocsRefSpec | null;
+  /** The page's version (`at=`, rich-docs spec G6); `null` has one meaning, the latest. Its links and images follow it. */
+  readonly pageAt: string | null;
   readonly view: 'effective' | 'committed';
   readonly section: DocSectionSlug;
   readonly path: string;

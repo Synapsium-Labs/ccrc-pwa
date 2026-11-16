@@ -173,13 +173,13 @@ describe('pinFor: the leaf the tree implies (spec 4.3 item 5)', () => {
 describe('fileKey: a committed body by its blob, a draft by its whole pin (spec 4.3 item 2)', () => {
   it('a committed key names the blob and its place, never the commit', () => {
     const tree = treeOk();
-    expect(fileKey(committedPin('a.md'), tree)).toBe(['blob', BLOB_1, 'specs', 'a.md'].join(NUL));
-    expect(fileKey(committedPin('a.md', COMMIT_B), tree)).toBe(fileKey(committedPin('a.md'), tree));
+    expect(fileKey(committedPin('a.md'), tree, false)).toBe(['blob', BLOB_1, 'specs', 'a.md'].join(NUL));
+    expect(fileKey(committedPin('a.md', COMMIT_B), tree, false)).toBe(fileKey(committedPin('a.md'), tree, false));
   });
 
   it('a draft key names branch, head, section, path and fingerprint', () => {
     const pin: DocPin = { kind: 'draft', branch: 'main', head: COMMIT_A, section: 'specs', path: 'a.md', fp: FP_1 };
-    expect(fileKey(pin, treeOk())).toBe(['draft', 'main', COMMIT_A, 'specs', 'a.md', FP_1].join(NUL));
+    expect(fileKey(pin, treeOk(), false)).toBe(['draft', 'main', COMMIT_A, 'specs', 'a.md', FP_1].join(NUL));
   });
 });
 

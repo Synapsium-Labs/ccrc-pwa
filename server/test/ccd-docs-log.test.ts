@@ -481,6 +481,41 @@ describe('docs-log: a walk that ends short is truncated', () => {
     // The list is full, yet a change (the second root) was read past: the answer says so.
     expect(o['truncated']).toBe(true);
   });
+
+  it('a shallow walk with a full list that reads past a parentless record holding only other files is not truncated', () => {
+    const dir = freshRepo();
+    const mainRoot = touch(dir, `${SPECS}/a.md`, 'root', 'the main root');
+    many(dir, `${SPECS}/a.md`, 100, 'old');
+    // A true second root holding only another doc of the section, made after the hundred `old` commits and merged with
+    // the first parent on its side, as in the case above: the walk meets it ahead of every `old` commit.
+    h.git(dir, 'checkout', '-q', '--orphan', 'side');
+    h.git(dir, 'rm', '-rq', '--cached', '.');
+    fs.rmSync(path.join(dir, 'docs'), { recursive: true, force: true });
+    const orphan = touch(dir, `${SPECS}/b.md`, 'orphan', 'the second root');
+    fs.writeFileSync(path.join(dir, SPECS, 'a.md'), 'merged\n');
+    h.git(dir, 'add', '--', `${SPECS}/a.md`);
+    const merge = h.git(dir, 'commit-tree', h.git(dir, 'write-tree'), '-p', orphan, '-p', 'main', '-m', 'merge main');
+    h.git(dir, 'update-ref', 'refs/heads/side', merge);
+    touch(dir, `${SPECS}/a.md`, 'one', 't1');
+    const t2 = touch(dir, `${SPECS}/a.md`, 'two', 't2');
+    fs.writeFileSync(path.join(dir, '.git', 'shallow'), `${mainRoot}\n`);
+    expect(h.git(dir, 'rev-parse', '--is-shallow-repository')).toBe('true');
+    const o = answer(t2, 'specs', 'a.md');
+    const es = entriesOf(o);
+    expect(es).toHaveLength(100);
+    // CONTROL: git prints the second root as a parentless record with only the other doc's name, ahead of the list's
+    // last entry, so the parser reads past it before the list is full: only the doc test of the skip count keeps it out.
+    const raw = h.git(dir, '-c', 'log.showRoot=true', 'log', '--no-merges', '--format=%H%x00%P%x00%cI%x00%an%x00%s', '-z', '--name-only', '--', SPECS);
+    const at = raw.indexOf(`${orphan}\0\0`);
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(at).toBeLessThan(raw.indexOf(`${es[99]!.sha}\0`));
+    const rec = raw.slice(at, raw.indexOf('\0', raw.indexOf('\n', at) + 1));
+    expect(rec).toContain(`\n${SPECS}/b.md`);
+    expect(rec).not.toContain(`${SPECS}/a.md`);
+    expect(es.map((e) => e.sha)).not.toContain(orphan);
+    // The record touched no part of the doc, so the full list hides nothing: the answer is not truncated.
+    expect(o['truncated']).toBe(false);
+  });
 });
 
 describe('docs-log: output the helper refuses to read', () => {

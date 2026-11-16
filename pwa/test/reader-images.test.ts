@@ -45,7 +45,7 @@ const leaf = leafAt('/docs/demo/specs/a.md');
 
 function ctxOf(tree: DocsTreeOk): DocLinkContextValue {
   return {
-    project: leaf.project, pageRef: leaf.ref, view: leaf.view, section: leaf.section, path: leaf.path, tree,
+    project: leaf.project, pageRef: leaf.ref, pageAt: null, view: leaf.view, section: leaf.section, path: leaf.path, tree,
     pageSource: 'committed', urls: new WeakMap(), onFragment: vi.fn(),
   };
 }
