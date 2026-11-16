@@ -7,6 +7,8 @@ import {
 } from '../../shared/docs';
 import { ApiError, createApi } from '../src/lib/api';
 import { authLost, clearAuthLost } from '../src/lib/auth';
+import type { DocsLoaders } from '../src/docs/failures';
+import { fakeLoaders } from './docsFixtures';
 
 const jsonResponse = (status: number, body: unknown, contentType: string | null = 'application/json; charset=utf-8'): Response =>
   new Response(JSON.stringify(body), { status, headers: contentType === null ? {} : { 'content-type': contentType } });
@@ -323,5 +325,22 @@ describe('api.docs.history: the history loader beside DocsLoaders (refinement (s
     const { api } = apiOver(async () => jsonResponse(401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }));
     expect(await api.docs.history('demo', ASK)).toEqual({ s: 'auth' });
     expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
+  });
+
+  it('a fetch that rejects with a TypeError (offline) answers unreachable', async () => {
+    const { api } = apiOver(async () => { throw new TypeError('Failed to fetch'); });
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'unreachable' });
+  });
+
+  it('a 404 {error: not-found} with no failure is a server with no history route: no-docs-route', async () => {
+    const { api } = apiOver(async () => jsonResponse(404, { ok: false, error: 'not-found' }));
+    expect(await api.docs.history('demo', ASK)).toEqual({ s: 'no-docs-route' });
+  });
+
+  it('the ordinary visit fakes carry no history loader: DocsLoaders names none, and fakeLoaders builds none', () => {
+    // Compile-time: a `history` member on `DocsLoaders` makes this type `never`, and the compiler refuses the `true`.
+    const beside: 'history' extends keyof DocsLoaders ? never : true = true;
+    expect(beside).toBe(true);
+    expect(Object.keys(fakeLoaders().loaders).sort()).toEqual(['file', 'projects', 'raster', 'refresh', 'tree']);
   });
 });
