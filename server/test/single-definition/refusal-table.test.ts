@@ -230,9 +230,17 @@ describe('Table 11.6 and the code agree, both ways (spec §11.6, Appendix B)', (
     it('a W2 word put back on the wave map under W2', () => {
       const f = tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'act-ceiling': 'W2' } });
       expect(f).toContain('act-ceiling: on the wave map with W2, which is not one of W1a, W3, W4, W4b, W5, W6');
+      expect(f).toContain('act-ceiling: a route refusal now; take it off the wave map in this pull request');
     });
-    it('a route word put on the wave map', () => red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'rung-below': 'W2' } })));
-    it('a map entry the table no longer has', () => red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'no-such-word': 'W2' } })));
+    // Each plants a wave still in WAVES, and asserts its own finding, so neither reds through the wave-list finding alone.
+    it('a route word put on the wave map', () => {
+      expect(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'rung-below': 'W3' } }))
+        .toEqual(['rung-below: a route refusal now; take it off the wave map in this pull request']);
+    });
+    it('a map entry the table no longer has', () => {
+      expect(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, 'no-such-word': 'W3' } }))
+        .toEqual(['no-such-word: on the wave map, and Table 11.6 has no such row']);
+    });
     it('a map entry under a wave outside the closed list, W1 included', () => {
       red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, defer: 'W1' } }));
       red(tableFindings(table, route, overlordWords(), { ...d, waveMap: { ...d.waveMap, defer: 'W9' } }));

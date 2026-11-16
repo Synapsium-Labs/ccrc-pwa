@@ -236,8 +236,8 @@ export type TimerRefusal = keyof typeof TIMER_REFUSALS;
 /** The Overlord's W1 and W2 refusal words (Overlord W1 and W2, the vocabulary pieces; spec §11.6 and Table 11.6), grouped
  *  by door, each with its one status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). A
  *  word is declared before its door: each W1 and W2 piece ships its door and reads its word from here, and no W2 door sends
- *  one until its piece lands. Each status is CHOSEN, not measured, by this
- *  file's family rule: 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
+ *  one until its piece lands. Each status is CHOSEN, not measured, by this file's family rule: 400 for a body the caller
+ *  can fix (as `timer-too-soon`), 403 for a caller that is not allowed (as `not-owner`), 409 for a state of the world (as
  *  `note-not-asked`), 429 for a rate (as `timer-rate`), 501 for a build that lacks what the door needs (as `unsupported`
  *  and `auth-off`), 503 for a box fault (as `journal-unreadable`). Later waves' words join this group with their doors. */
 export const OVERLORD_REFUSALS = {
@@ -283,15 +283,17 @@ export const OVERLORD_REFUSALS = {
   // The W2 words (the W2 vocabulary plan, Table V1). Every Overlord write door: the act kind's ceiling for its window is
   // reached (the act catalogue piece). 429, a rate.
   'act-ceiling': 429,
-  // `overlordMayAct` and grants: the caller's identity strength is under the act's least (the act catalogue piece). 403.
+  // `overlordMayAct` and grants: the caller's identity strength is under the act's or the grant's least (the act
+  // catalogue piece). 403.
   'identity-too-weak': 403,
   // `overlordMayAct`: a member of the act's effective class is not covered (C25, C26; the act catalogue piece). 403.
   'operator-only': 403,
   // Grants, commands, learning and `overlordMayAct`: the server shares a user with fleet sessions (the act catalogue
   // piece). 409, a state of the world: how the box is installed.
   'server-not-isolated': 409,
-  // The answer doors and the Overlord's request moves: the row reached the operator, or moved since the caller read it
-  // (the request record and doors pieces). 409.
+  // The answer doors, `return-over-asked` and the Overlord's request moves: the row has already reached the operator, or
+  // the operator took the request (`takenFrom` is set), or the Overlord would drop a `needs-you` request the operator has
+  // not answered (the request record and doors pieces). 409.
   'operator-has-it': 409,
   // Open request, relay, kickoff and start, `acknowledge` and `messages`: a cited message is not on record, spent or
   // changed (the request record piece; the W1 inbox plan chose 409 too). 409.
@@ -300,8 +302,8 @@ export const OVERLORD_REFUSALS = {
   'request-not-yours': 403,
   // The owner's `blocked` door: the dependency would close a cycle (the coordinator request doors piece). 409.
   'dependency-cycle': 409,
-  // The relay: the Overlord's part quotes an `overlord-only` entry or hits the private-name list (the relay piece). 403,
-  // one word with no detail, so the status says nothing a fix could use.
+  // Relay, answer, kickoff and brief: the body quotes an `overlord-only` entry or hits the private-name list (the relay
+  // piece). 403, one word with no detail, counted and throttled, so the status says nothing a fix could use.
   'egress-refused': 403,
   // The relay: the decision model flags the Overlord's part as prescribing a method (the relay piece). 400, a body the
   // caller can fix.
