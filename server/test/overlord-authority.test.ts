@@ -5,7 +5,8 @@ import { buildChainedRecord, chainNext, decodeChainedLine, encodeChainedRecord, 
 import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
 import { DELEGATION_JOURNAL_FORMAT, DelegationJournalError } from '../src/coord/delegation-journal.js';
 import {
-  OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_KINDS, OverlordAuthorityError, authorityDirection, authorityEntry, authorityFold,
+  OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_KINDS, OverlordAuthorityError, authorityAgainstFold, authorityDirection, authorityEntry,
+  authorityFold, canonicalAuthorityMove,
   type OverlordAuthorityEntry, type OverlordAuthorityKind, type OverlordAuthorityMove,
 } from '../src/coord/overlordAuthority.js';
 
@@ -186,5 +187,52 @@ describe('authorityFold', () => {
     expect(v.accountSet).toEqual({ pools: ['pool-a'], untagged: false });
     expect(v.lastConfirm).toEqual({ sequence: 4, epochAtConfirm: 7, privacySequenceAtConfirm: null, restoreGeneration: 1 });
     expect(authorityFold(chain([{ ...CONFIRM, binding: { kind: 'cleared' } }])).designation).toEqual({ term: 4, sessionId: null, generation: null });
+  });
+});
+
+// Review 2219, fix round 1: the two deciders the writer runs before the grammar and on a coherent journal.
+describe('canonicalAuthorityMove (F1, the-writer-canonicalises)', () => {
+  it('sorts and de-duplicates both pool lists of an account set, and the grammar then takes it', () => {
+    const raw = { ...SAMPLES['authority-account-set'], from: { pools: ['pool-b', 'pool-a', 'pool-a'], untagged: true }, to: { pools: ['pool-a'], untagged: false } };
+    const c = canonicalAuthorityMove(raw);
+    expect(c).toEqual({ ...raw, from: { pools: ['pool-a', 'pool-b'], untagged: true } });
+    expect(authorityEntry(c)).toEqual(c);
+    expect(() => authorityEntry(raw)).toThrow(/sorted and unique/);
+  });
+  it('returns any other kind, and a list that is not all strings, as it came, for the grammar to judge', () => {
+    const rung = SAMPLES['authority-rung'];
+    expect(canonicalAuthorityMove(rung)).toBe(rung);
+    const odd = { ...SAMPLES['authority-account-set'], from: { pools: ['pool-a', 7], untagged: true } };
+    expect(canonicalAuthorityMove(odd)).toEqual(odd);
+    expect(() => authorityEntry(canonicalAuthorityMove(odd))).toThrow(/pool name/);
+  });
+});
+
+describe('authorityAgainstFold (F2, stated-from-against-the-fold)', () => {
+  const view = (over: Partial<ReturnType<typeof authorityFold>>) => ({ ...authorityFold([]), ...over });
+  it('null when the fold holds no value for the field, or the move states no from', () => {
+    expect(authorityAgainstFold(SAMPLES['authority-rung'], authorityFold([]))).toBeNull();
+    expect(authorityAgainstFold(SAMPLES['authority-latch-raise'], view({ operatorRung: 'chat' }))).toBeNull();
+  });
+  it('a rung: matches, or the direction from the fold\'s value', () => {
+    expect(authorityAgainstFold({ ...SAMPLES['authority-rung'], from: 'chat', to: 'advise' }, view({ operatorRung: 'chat' })))
+      .toEqual({ matches: true, direction: 'widens' });
+    expect(authorityAgainstFold({ ...SAMPLES['authority-rung'], from: 'full', to: 'advise' }, view({ operatorRung: 'chat' })))
+      .toEqual({ matches: false, direction: 'widens' });
+    expect(authorityAgainstFold({ ...SAMPLES['authority-rung'], from: 'advise', to: 'chat' }, view({ operatorRung: 'full' })))
+      .toEqual({ matches: false, direction: 'narrows' });
+  });
+  it('an account set compares pools and untagged; a model class its word', () => {
+    const set = SAMPLES['authority-account-set'];
+    expect(authorityAgainstFold(set, view({ accountSet: { pools: ['pool-a', 'pool-b'], untagged: true } })))
+      .toEqual({ matches: true, direction: 'narrows' });
+    expect(authorityAgainstFold(set, view({ accountSet: { pools: ['pool-a', 'pool-b'], untagged: false } })))
+      .toEqual({ matches: false, direction: 'narrows' });
+    expect(authorityAgainstFold(set, view({ accountSet: { pools: ['pool-a'], untagged: true } })))
+      .toEqual({ matches: false, direction: 'narrows' });
+    expect(authorityAgainstFold({ ...set, to: { pools: ['pool-c'], untagged: false } }, view({ accountSet: { pools: ['pool-a'], untagged: false } })))
+      .toEqual({ matches: false, direction: 'widens' });
+    expect(authorityAgainstFold(SAMPLES['authority-model-class'], view({ modelClass: 'opus' })))
+      .toEqual({ matches: false, direction: 'narrows' });
   });
 });

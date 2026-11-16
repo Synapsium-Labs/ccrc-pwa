@@ -1565,7 +1565,10 @@ def w1_events(s, c):
         if a.fail > 0:
             nf = s._replace(auth=a._replace(cont=None, fail=a.fail - 1))
             if m != 'writer_failure_unfenced':
-                nf = w1_to_rb(nf, 'trailing')           # F1: the writer calls writerFailed('trailing') at once
+                # F1: the writer calls writerFailed('trailing') at once, writer-side. A caller's own row or commit that
+                # fails after the writer answered is seen only at the next append or boot (trailing-narrowing-window,
+                # review 2219 F3); the model does not explore that window.
+                nf = w1_to_rb(nf, 'trailing')
             out.append(('the row fails after the append: the transaction rolls back, the record stays, the '
                         'server keeps running (F1)', nf))
 

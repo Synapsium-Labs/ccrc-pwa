@@ -14,7 +14,30 @@ the ledger should learn into the plan.
 - **`bad-entry-is-a-callers-error`.** `appendInTx` re-checks its entry through the grammar before anything else and answers
   `{ ok: false, error: 'bad-entry' }` for an entry the grammar refuses (or a Confirm record, which is `appendConfirmInTx`'s).
   The plan's error union has no word for it; like `not-in-transaction`, it is a caller's defect, never a journal state, so NL
-  still holds: a narrowing is never refused by the journal's state.
+  still holds: a narrowing is never refused by the journal's state. Narrowed by review 2219 (F1) to truly malformed entries:
+  an account set's pool order or a duplicate pool is canonicalised first (`the-writer-canonicalises`). The designation door
+  must still map any remaining `bad-entry` (for the index and the designation brief).
+- **`the-writer-canonicalises`** (review 2219, F1, the coordinator's ruling). `appendInTx` sorts and de-duplicates both pool
+  lists of an account-set entry (`canonicalAuthorityMove`, L1) before the grammar runs, so an operator narrowing is never
+  refused `bad-entry` for order alone. A pure reorder journals as no change of membership (it reads `narrows`); the order lives
+  in the designation row, never in the journal.
+- **`stated-from-against-the-fold`** (review 2219, F2, the coordinator's ruling). While the journal is coherent, the writer
+  holds a move's stated `from` against the fold's current value (`authorityAgainstFold`, L1). When they differ, the direction
+  is read from the fold's value, the guard is told `diverged`, a widening against the fold is refused `authority-rolled-back`,
+  and a move narrower than the fold lands `row-only`. A field no record has named yet has no fold value, so the stated `from`
+  stands for its first record. While the journal is not coherent the stated `from` stands, as the plan says; `appendInTx`'s
+  doc states the caller's duty (pass the row's own value, read in the same `tx()`), and a test documents the residual (a
+  lying `from` over a rolled-back guard lands row-only). The ladder and designation briefs carry a test of the duty.
+- **`remeasure-heals-first`** (review 2219, F4). The guard takes the boot step's own port (`AuthorityBootPort`), and
+  `remeasure()` heals a torn tail, then measures, as the boot step does, so a crash-left tail is not read `malformed` there.
+- **`writer-keeps-the-rows-word`** (review 2219, F6). The writer tells the guard which read failed (`journal-unreadable` or
+  `rows-unreadable`, `AUTHORITY_UNREADABLE`), so a head row the append check could not read keeps `unmeasured: rows`. A
+  widening that throws before the append is refused `authority-unmeasured` and the guard is not told (row 5w).
+- **`append-before-listed-rows`** (review 2219, F9). `appendInTx`'s doc states the caller appends before writing any row of a
+  table in `OVERLORD_AUTHORITY_TABLES` in the same transaction; a listed table's row with no record before it reads `missing`.
+- **`backup-set-runs-over-a-fixture-home`** (review 2219, F8). Beside the text pin, the snapshot suite sources `ccd/ccrc` and
+  runs `_upd_backup_set` and `_upd_backup_pairs` over a fixture home holding the journal, its torn directory and a memory
+  directory: only the memory directory is copied, and the listing names neither.
 - **`writer-reports-missing`.** `AuthorityGuardPort.writerFailed` takes every coherence cause, `missing` included, beside
   `unreadable`. The plan's list omits `missing`, but the writer measures Table 7.6a at every append, and an absent file beside a
   head row reads `missing` there as it does at boot.
@@ -60,6 +83,15 @@ the ledger should learn into the plan.
   has answered since boot (Q8's first window, F7b), and `off` is not a rung target (a rolled-back guard acts at the `chat`
   latch). A third limit, the told narrowings dropped at Confirm, is now an open item the coordinator ruled on (below).
 
+## Later
+
+- **`trailing-narrowing-window`** (review 2219, F3, the coordinator's ruling: no code change). The writer's "at once" fence is
+  writer-side. When the caller's own row or commit fails after `appendInTx` answered `appended`, the head row rolls back and
+  the guard stays `coherent` until the next append or boot reads the file one record past the head row (`trailing`). If that
+  record narrows, the rows are wider than the file's fold in that window while the guard reads `coherent`, against the amended
+  I7w's inequality (its told clause is untouched: the door threw, so the operator was never told). Gates B's step 3 must know
+  it; the coordinator carries it into the gates B brief. The plan's and the model's "at once" now say writer-side.
+
 ## Open for PR B and PR C
 
 - **`told-narrowings-survive-confirm`** (the coordinator's ruling). The model's case: the operator narrows the rung to
@@ -88,3 +120,7 @@ the append; appending over a head mismatch; appending a narrowing over a rolled-
 X3b withdrew); dropping `writerFailed('trailing')` after a failed head-row write; `remeasure()` clearing a rollback;
 `writerFailed` leaving a coherent guard as it is; a boot verdict overriding a rollback; the boot skipping the heal. The L1
 deciders' sets are in `server/test/sim/overlordAuthoritySets.ts` (34 mutants, every one killed, floors at 1).
+
+Fix round 1 (review 2219), each reddening its new case and restored from a saved copy: the writer not canonicalising (3 red);
+the fold check dropped (4 red); the append check reporting `journal-unreadable` for a head row (1 red); a widening that throws
+before the append telling the guard (1 red); `remeasure()` measuring without the heal (1 red).

@@ -22,7 +22,7 @@ import type { Clock } from '../time/ports.js';
 import { appendThenApply, type JournalPhase } from '../journalKernel.js';
 import {
   OVERLORD_AUTHORITY_BASENAME, OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_KINDS, OVERLORD_AUTHORITY_TORN_DIR, OverlordAuthorityError,
-  authorityDirection, authorityEntry,
+  authorityAgainstFold, authorityDirection, authorityEntry, authorityFold, canonicalAuthorityMove,
   type OverlordAuthorityEntry, type OverlordAuthorityMove,
 } from './overlordAuthority.js';
 import {
@@ -41,9 +41,15 @@ export function overlordAuthorityFileAt(ccrcDir: string, ops?: AppendOnlyFsOps):
  *  in its own pull request. Names only: each is a table this build's migrations create. */
 export const OVERLORD_AUTHORITY_TABLES: readonly string[] = [];
 
-/** What the writer tells the guard: a failure at or after the append (`trailing`), or the verdict of a head mismatch it
- *  measured, or a file or head row it could not read. */
-export type AuthorityWriterFailure = CoherenceCause | 'unreadable';
+/** A read the writer could not make, named by what it could not read (review F6: a head row it could not read keeps the
+ *  `rows` word), and the guard's `unmeasured` word for each. */
+export type AuthorityUnreadable = 'journal-unreadable' | 'rows-unreadable';
+export const AUTHORITY_UNREADABLE: Readonly<Record<AuthorityUnreadable, 'journal' | 'rows'>> = {
+  'journal-unreadable': 'journal', 'rows-unreadable': 'rows',
+};
+/** What the writer tells the guard: a failure at or after the append (`trailing`), the verdict of a head mismatch it measured
+ *  (or `diverged` for a stated `from` the fold contradicts), or a file or head row it could not read. */
+export type AuthorityWriterFailure = CoherenceCause | AuthorityUnreadable;
 
 /** L2, declared here by its consumer; the guard implements it (review F10). */
 export interface AuthorityGuardPort {
@@ -87,7 +93,8 @@ const AUTHORITY_HEAL_KINDS: Readonly<Record<AuthorityHeal['kind'], true>> = {
 export function isOverlordAuthorityKebab(w: string): boolean {
   const own = (o: object): boolean => Object.hasOwn(o, w);
   return own(OVERLORD_AUTHORITY_KINDS) || own(AUTHORITY_APPEND_ERRORS) || own(AUTHORITY_APPEND_KINDS) || own(AUTHORITY_HEAL_KINDS)
-    || own(AUTHORITY_STATE_WORDS) || own(AUTHORITY_STATE_CAUSES) || own(AUTHORITY_STATE_WHYS) || w === OVERLORD_AUTHORITY_TORN_DIR;
+    || own(AUTHORITY_STATE_WORDS) || own(AUTHORITY_STATE_CAUSES) || own(AUTHORITY_STATE_WHYS) || own(AUTHORITY_UNREADABLE)
+    || w === OVERLORD_AUTHORITY_TORN_DIR;
 }
 
 /** Why `appendThenApply`'s append step stopped: the caller's answer, carried out of the kernel by a throw it rethrows unchanged. */
@@ -161,11 +168,22 @@ export class OverlordAuthorityJournal {
    * | 2 | unmeasured | any | widens | authority-unmeasured |
    * | 3 | rolled-back | any | narrows | row-only |
    * | 4 | rolled-back | any | widens | authority-rolled-back |
-   * | 5 | coherent | unreadable | narrows | row-only, and writerFailed('unreadable') |
+   * | 5 | coherent | unreadable | narrows | row-only, and writerFailed('journal-unreadable' or 'rows-unreadable') |
    * | 5w | coherent | unreadable | widens | authority-unmeasured; the guard is not told |
    * | 6 | coherent | they disagree | narrows | row-only, and writerFailed(verdict) |
    * | 7 | coherent | they disagree | widens | authority-rolled-back, and writerFailed(verdict) |
    * | 8 | coherent | they agree | any | append, then the head row: appended; on a failure at or after the append, writerFailed('trailing'), then row-only for a narrowing and journal-append for a widening |
+   *
+   * Row 8 holds a stated `from` against the journal's fold first (review F2, `stated-from-against-the-fold`): when the fold
+   * holds a value for the field and `from` differs, the move's direction is read from the fold's value, the guard is told
+   * `diverged`, and the move answers as rows 6 and 7 do (row-only for a narrowing against the fold, authority-rolled-back for a
+   * widening). While the guard is not coherent (rows 1 to 4) no fold is trusted and the stated `from` decides the direction.
+   *
+   * THE CALLER'S DUTIES. Pass as `from` the row's own value, read in the same `tx()`: over an incoherent journal nothing else
+   * checks it, so a `from` stated wider than the row reads a widening as a narrowing and lands it row-only (a documented
+   * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
+   * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
+   * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
    */
   appendInTx(db: DatabaseSync, entry: OverlordAuthorityMove): AuthorityAppend {
     let inTx: boolean;
@@ -173,21 +191,23 @@ export class OverlordAuthorityJournal {
     if (!inTx) return { ok: false, error: 'not-in-transaction', detail: 'an authority record is appended only inside the caller\'s tx()' };
     let move: OverlordAuthorityMove;
     try {
-      const e = authorityEntry(entry);
+      const e = authorityEntry(canonicalAuthorityMove(entry));
       if (e.kind === 'authority-restore-confirmed') throw new OverlordAuthorityError('bad-field', 'the Confirm record is appendConfirmInTx\'s');
       move = e;
     } catch (err) {
       return { ok: false, error: 'bad-entry', detail: err instanceof Error ? err.message : String(err) };
     }
-    const narrows = authorityDirection(move) === 'narrows';
+    let narrows = authorityDirection(move) === 'narrows';
+    let fromDiverged = false;
     // A narrowing always lands (X3b): its answer carries the guard's state, or, should the guard not have moved, the state the
     // writer just reported, so a narrowing is never answered with a refusal.
     const failed = (cause: AuthorityWriterFailure, widenError: AuthorityAppendError, detail: string): AuthorityAppend => {
       this.guard.writerFailed(cause);
       if (!narrows) return { ok: false, error: widenError, detail };
       const s = this.guard.state();
-      const reported: Exclude<AuthorityState, { kind: 'coherent' }> =
-        cause === 'unreadable' ? { kind: 'unmeasured', why: 'journal' } : { kind: 'rolled-back', cause };
+      const reported: Exclude<AuthorityState, { kind: 'coherent' }> = Object.hasOwn(AUTHORITY_UNREADABLE, cause)
+        ? { kind: 'unmeasured', why: AUTHORITY_UNREADABLE[cause as AuthorityUnreadable] }
+        : { kind: 'rolled-back', cause: cause as CoherenceCause };
       return { ok: true, kind: 'row-only', state: s.kind === 'coherent' ? reported : s };
     };
 
@@ -208,6 +228,12 @@ export class OverlordAuthorityJournal {
           const r = this.file.appendNext<CoherenceVerdict>((seen) => {
             const verdict = authorityCoherence(seen, this.readRows(db));
             if (verdict.kind !== 'coherent') return { stop: verdict };
+            const held = seen.kind === 'records' ? authorityAgainstFold(m, authorityFold(seen.records)) : null;
+            if (held !== null && !held.matches) {
+              narrows = held.direction === 'narrows';
+              fromDiverged = true;
+              return { stop: { kind: 'rolled-back', cause: 'diverged' } };
+            }
             const acceptedAt = new Date(this.time.clock.wall()).toISOString();
             appendEntered = true;
             return { go: { entry: m, acceptedAt } };
@@ -216,18 +242,19 @@ export class OverlordAuthorityJournal {
           if ('stopped' in r) {
             const v = r.stopped;
             if (v.kind === 'unmeasured') {
-              throw new Halt(narrows ? failed('unreadable', 'authority-unmeasured', '') : {
+              throw new Halt(narrows ? failed(v.why === 'rows' ? 'rows-unreadable' : 'journal-unreadable', 'authority-unmeasured', '') : {
                 ok: false, error: 'authority-unmeasured', detail: `the ${v.why === 'rows' ? 'head row' : 'journal'} could not be read`,
               }, false);
             }
             if (v.kind === 'rolled-back') {
-              throw new Halt(failed(v.cause, 'authority-rolled-back', `the journal against the head row reads ${v.cause}`), false);
+              throw new Halt(failed(v.cause, 'authority-rolled-back', fromDiverged
+                ? 'the stated from differs from the journal\'s fold' : `the journal against the head row reads ${v.cause}`), false);
             }
             throw new Halt({ ok: false, error: 'journal-append', detail: 'the check stopped on a coherent verdict' }, false);
           }
           if (!r.mayApply) {
             // The file could not be read (or, past a coherent check, was not appendable): nothing was written.
-            throw new Halt(narrows ? failed('unreadable', 'authority-unmeasured', '') : {
+            throw new Halt(narrows ? failed('journal-unreadable', 'authority-unmeasured', '') : {
               ok: false, error: 'authority-unmeasured', detail: `the journal could not be read (${r.error})`,
             }, false);
           }
@@ -249,7 +276,10 @@ export class OverlordAuthorityJournal {
       // may stand with no head row, so the guard reads it as trailing at once.
       const detail = err instanceof Error ? err.message : String(err);
       if (phase.at === 'apply' || appendEntered) return failed('trailing', 'journal-append', `failed after the append: ${detail}`);
-      return failed('unreadable', 'authority-unmeasured', `failed before the append: ${detail}`);
+      // Before the append nothing was written: a narrowing lands row-only and tells the guard; a widening is refused and the
+      // guard is not told (row 5w, review F6).
+      if (!narrows) return { ok: false, error: 'authority-unmeasured', detail: `failed before the append: ${detail}` };
+      return failed('journal-unreadable', 'authority-unmeasured', `failed before the append: ${detail}`);
     }
   }
 }

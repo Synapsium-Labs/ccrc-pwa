@@ -233,9 +233,10 @@ const rank = (r: OverlordRungWord): number => OVERLORD_AUTHORITY_RUNGS.indexOf(r
 const within = (to: OverlordAccountSet, from: OverlordAccountSet): boolean =>
   to.pools.every((p) => from.pools.includes(p)) && (!to.untagged || from.untagged);
 
-/** Which way an entry moves authority, from the entry alone: over an incoherent journal no fold can be trusted to say. A move
- *  that grants nothing new (a rung to the same rung, an account set to itself) is not a widening, so it reads `narrows`. The
- *  Confirm record is neither, and never reaches here. */
+/** Which way an entry moves authority, from the entry alone: over an incoherent journal no fold can be trusted to say. A rung
+ *  to the same rung, or an account set to itself, grants nothing new and reads `narrows`; a model-class record reads `widens`
+ *  whenever its `to` is `fable`, `fable` to `fable` included (the plan's table, the conservative side). The Confirm record is
+ *  neither, and never reaches here. */
 export function authorityDirection(entry: OverlordAuthorityMove): 'narrows' | 'widens' {
   switch (entry.kind) {
     case 'authority-designate': case 'authority-rebind': case 'authority-latch-clear': return 'widens';
@@ -243,6 +244,43 @@ export function authorityDirection(entry: OverlordAuthorityMove): 'narrows' | 'w
     case 'authority-rung': return rank(entry.to) > rank(entry.from) ? 'widens' : 'narrows';
     case 'authority-account-set': return within(entry.to, entry.from) ? 'narrows' : 'widens';
     case 'authority-model-class': return entry.to === 'fable' ? 'widens' : 'narrows';
+  }
+}
+
+/** An account-set move's two pool lists sorted and de-duplicated, before the grammar reads them (`the-writer-canonicalises`):
+ *  the designation door keeps the operator's order in its row, and a reorder is no change of membership, so an operator
+ *  narrowing is never refused for order alone. Anything else, or a list that is not all strings, is returned as it came, for
+ *  the grammar to judge. */
+export function canonicalAuthorityMove(raw: unknown): unknown {
+  if (!isRecord(raw) || raw['kind'] !== 'authority-account-set') return raw;
+  const sortedPools = (v: unknown): unknown => {
+    if (!isRecord(v) || !Array.isArray(v['pools']) || !v['pools'].every((p) => typeof p === 'string')) return v;
+    return { ...v, pools: [...new Set(v['pools'] as string[])].sort() };
+  };
+  return { ...raw, from: sortedPools(raw['from']), to: sortedPools(raw['to']) };
+}
+
+/** A move's stated `from` held against the journal's fold, while the journal is coherent (`stated-from-against-the-fold`):
+ *  `null` when the move states no `from` or the fold holds no value for its field yet (no record named it), so the stated
+ *  `from` stands; otherwise whether it equals the fold's value, and the move's direction from the fold's value to its `to`. */
+export function authorityAgainstFold(
+  move: OverlordAuthorityMove, view: AuthorityView,
+): { matches: boolean; direction: 'narrows' | 'widens' } | null {
+  switch (move.kind) {
+    case 'authority-rung':
+      return view.operatorRung === null ? null
+        : { matches: view.operatorRung === move.from, direction: authorityDirection({ ...move, from: view.operatorRung }) };
+    case 'authority-model-class':
+      return view.modelClass === null ? null
+        : { matches: view.modelClass === move.from, direction: authorityDirection({ ...move, from: view.modelClass }) };
+    case 'authority-account-set': {
+      const f = view.accountSet;
+      if (f === null) return null;
+      const same = f.untagged === move.from.untagged && f.pools.length === move.from.pools.length
+        && f.pools.every((p, i) => p === move.from.pools[i]);
+      return { matches: same, direction: authorityDirection({ ...move, from: f }) };
+    }
+    default: return null;
   }
 }
 

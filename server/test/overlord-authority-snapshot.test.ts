@@ -40,6 +40,26 @@ describe('the Overlord authority journal is never in a snapshot (Task 4)', () =>
     }
   });
 
+  it('the update\'s backup set, run over a fixture home that holds both, copies neither and lists neither (review F8)', () => {
+    const home = mkTmp('ccrc-fx-authority-backup-');
+    const live = path.join(home, '.ccrc');
+    mkdirSync(path.join(live, OVERLORD_AUTHORITY_TORN_DIR), { recursive: true });
+    mkdirSync(path.join(live, 'memory'), { recursive: true });
+    writeFileSync(path.join(live, OVERLORD_AUTHORITY_BASENAME), 'the journal\n');
+    writeFileSync(path.join(live, OVERLORD_AUTHORITY_TORN_DIR, 'a-torn-tail'), 'kept\n');
+    writeFileSync(path.join(live, 'memory', 'note.md'), 'memory\n');
+    const out = mkTmp('ccrc-fx-authority-backup-out-');
+    // `ccd/ccrc` sources without running (its main is guarded); HOME is the fixture's, the one isolation boundary.
+    const r = spawnSync('bash', ['-c', 'source "$1" && UPD_BACKUP_DIR="$2" && _upd_backup_set && _upd_backup_pairs', '_',
+      path.join(REPO_ROOT, 'ccd/ccrc'), out], { encoding: 'utf8', env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
+    expect(r.status, r.stderr).toBe(0);
+    // Not vacuous: the set did read this home (it copied the memory directory beside the two files).
+    expect(readdirSync(out)).toEqual(['memory']);
+    expect(r.stdout).toContain(path.join(live, 'memory'));
+    for (const n of NAMES) expect(r.stdout, n).not.toContain(n);
+    expect(readFileSync(path.join(live, OVERLORD_AUTHORITY_BASENAME), 'utf8')).toBe('the journal\n');
+  });
+
   it('the SQLite snapshot step and the coordination snapshot helper name neither', () => {
     for (const f of [BACKUP_COORD_PATH, HELPER_PATH]) {
       expect(existsSync(f), `${f} is gone: a moved file must turn this red`).toBe(true);

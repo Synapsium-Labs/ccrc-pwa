@@ -24,7 +24,7 @@ import { Viewers } from './viewer.js';
 import { KeyedQueue } from './inject/queue.js';
 import { systemTimePorts } from './time/system.js';
 import { OverlordAuthorityJournal, overlordAuthorityFileAt } from './coord/overlordAuthorityJournal.js';
-import { OverlordAuthorityGuard, runOverlordAuthorityBoot } from './coord/overlordAuthorityGuard.js';
+import { OverlordAuthorityGuard, runOverlordAuthorityBoot, type AuthorityBootPort } from './coord/overlordAuthorityGuard.js';
 import { bootBoxToken } from './token/boot.js';
 import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
@@ -136,11 +136,13 @@ bootPushOutbox(coord, time.clock);
 // passed to the writer as its port, and its boot coherence (Table 7.6a, after the torn-tail heal) run before the fleet link,
 // the HTTP server, the watchers and every timer. A detected rollback fences the doors, never the boot: the server starts
 // whatever the verdict, and the boot step logs it.
-const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(() => overlordAuthority.measure(coordDb));
+const overlordAuthorityPort: AuthorityBootPort = {
+  healTornTail: () => overlordAuthority.healTornTail(coordDb), measure: () => overlordAuthority.measure(coordDb),
+};
+const overlordAuthorityGuard: OverlordAuthorityGuard = new OverlordAuthorityGuard(overlordAuthorityPort);
 const overlordAuthority: OverlordAuthorityJournal = new OverlordAuthorityJournal(
   overlordAuthorityFileAt(cfg.ccrcDir), { clock: time.clock }, overlordAuthorityGuard);
-runOverlordAuthorityBoot({ healTornTail: () => overlordAuthority.healTornTail(coordDb), measure: () => overlordAuthority.measure(coordDb) },
-  overlordAuthorityGuard, (line) => console.warn(line));
+runOverlordAuthorityBoot(overlordAuthorityPort, overlordAuthorityGuard, (line) => console.warn(line));
 
 // The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
 // `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`

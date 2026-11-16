@@ -44,7 +44,7 @@ interface Fx {
 }
 
 /** A fixture: its own `coord.db`, its own `~/.ccrc` stand-in, a guard told the boot verdict, and a fault switch on the port. */
-function fx(opts: { content?: string } = {}): Fx {
+function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
   const dir = mkTmp('ccrc-overlord-authority-');
   const leaf = path.join(dir, OVERLORD_AUTHORITY_BASENAME);
   if (opts.content !== undefined) writeFileSync(leaf, opts.content);
@@ -65,9 +65,10 @@ function fx(opts: { content?: string } = {}): Fx {
   const file = overlordAuthorityFileAt(dir, ops);
   const failures: AuthorityWriterFailure[] = [];
   let journal!: OverlordAuthorityJournal;
-  const guard = new OverlordAuthorityGuard(() => journal.measure(db));
+  const guard = new OverlordAuthorityGuard({ healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) });
   const spy = { state: () => guard.state(), writerFailed: (c: AuthorityWriterFailure) => { failures.push(c); guard.writerFailed(c); } };
-  journal = new OverlordAuthorityJournal(file, { clock: fakeTime({ wallMs: Date.parse('2026-11-16T10:00:00.000Z') }).ports.clock }, spy);
+  const clock = fakeTime({ wallMs: Date.parse('2026-11-16T10:00:00.000Z') }).ports.clock;
+  journal = new OverlordAuthorityJournal(file, { clock: opts.wall === undefined ? clock : { ...clock, wall: opts.wall } }, spy);
   guard.bootVerdict(journal.measure(db));
   return {
     dir, leaf, db, guard, failures, journal, fault,
@@ -128,7 +129,7 @@ describe('appendInTx: inside the caller\'s transaction, never outside', () => {
 describe('appendInTx\'s decision table, the guard in each state', () => {
   it('1 and 2: an unmeasured guard: a narrowing is row-only, a widening authority-unmeasured; neither appends', () => {
     const f = fx();
-    f.guard.writerFailed('unreadable');
+    f.guard.writerFailed('journal-unreadable');
     expect(f.guard.state()).toEqual({ kind: 'unmeasured', why: 'journal' });
     expect(f.inTx(NARROW)).toEqual({ ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'journal' } });
     expect(f.inTx(WIDEN)).toMatchObject({ ok: false, error: 'authority-unmeasured' });
@@ -148,7 +149,7 @@ describe('appendInTx\'s decision table, the guard in each state', () => {
     f.inTx(WIDEN);
     unreadable(f);
     expect(f.inTx(NARROW)).toEqual({ ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'journal' } });
-    expect(f.failures).toEqual(['unreadable']);
+    expect(f.failures).toEqual(['journal-unreadable']);
   });
   it('5w: a coherent guard over an unreadable file: a widening is authority-unmeasured and the guard is not told', () => {
     const f = fx();
@@ -161,7 +162,7 @@ describe('appendInTx\'s decision table, the guard in each state', () => {
   it.each(['behind', 'ahead', 'diverged'] as const)('6 and 7: a file %s of the head row reports that verdict; a narrowing is row-only, a widening refused', (cause) => {
     for (const e of [NARROW, WIDEN]) {
       const f = fx();
-      f.inTx(WIDEN); f.inTx(WIDEN);
+      f.inTx(WIDEN); f.inTx(NARROW);
       if (cause === 'behind') f.db.prepare('UPDATE overlord_authority_head SET sequence = 3').run();
       if (cause === 'ahead') f.db.prepare('UPDATE overlord_authority_head SET sequence = 0').run();
       if (cause === 'diverged') f.db.prepare(`UPDATE overlord_authority_head SET digest = '${'e'.repeat(64)}'`).run();
@@ -214,7 +215,7 @@ describe('the post-append failure in a running server (review F1)', () => {
 
 describe('NL: a narrowing is never refused, in any row of the table (X3, X3b)', () => {
   const states: Array<[string, (f: Fx) => void]> = [
-    ['1 unmeasured', (f) => f.guard.writerFailed('unreadable')],
+    ['1 unmeasured', (f) => f.guard.writerFailed('journal-unreadable')],
     ['3 rolled-back', (f) => f.guard.witnessRefused('witness-heads')],
     ['5 unreadable file', (f) => { f.inTx(WIDEN); unreadable(f); }],
     ['6 disagree', (f) => { f.inTx(WIDEN); f.db.prepare('DELETE FROM overlord_authority_head').run(); f.inTx(WIDEN); }],
@@ -247,7 +248,7 @@ describe('the torn-tail heal through A0\'s cutAside (Task 4)', () => {
   });
   it('refuses a tail when the head row differs, which then reads malformed', () => {
     const f = fx();
-    f.inTx(WIDEN); f.inTx(WIDEN);
+    f.inTx(WIDEN); f.inTx(NARROW);
     f.db.prepare('DELETE FROM overlord_authority_head').run();
     appendFileSync(f.leaf, '{"v":1,"seq');
     expect(f.journal.healTornTail(f.db)).toEqual({ kind: 'not-healable' });
@@ -255,7 +256,7 @@ describe('the torn-tail heal through A0\'s cutAside (Task 4)', () => {
   });
   it('a tail after a broken chain is no tail to heal: the file reads malformed', () => {
     const f = fx();
-    f.inTx(WIDEN); f.inTx(WIDEN);
+    f.inTx(WIDEN); f.inTx(NARROW);
     const [l1, l2] = f.lines();
     writeFileSync(f.leaf, `${l2}\n${l1}\n{"v":1`);
     expect(f.journal.healTornTail(f.db)).toEqual({ kind: 'no-tail' });
@@ -265,5 +266,119 @@ describe('the torn-tail heal through A0\'s cutAside (Task 4)', () => {
     const f = fx();
     f.inTx(WIDEN);
     expect(f.journal.healTornTail(f.db)).toEqual({ kind: 'no-tail' });
+  });
+});
+
+// Review 2219, fix round 1 (the coordinator's rulings F1, F2, F6, F7).
+const SET = (pools: string[], untagged = false) => ({ pools, untagged });
+const ACCOUNTS = (from: ReturnType<typeof SET>, to: ReturnType<typeof SET>, opKey = 'op-a'): OverlordAuthorityMove =>
+  ({ kind: 'authority-account-set', opKey, from, to });
+type Appended = Extract<AuthorityAppend, { kind: 'appended' }>;
+
+describe('F1: the writer canonicalises an account set\'s pool lists (the-writer-canonicalises)', () => {
+  it('an unsorted narrowing, with a duplicate, lands, and the record holds the sorted, de-duplicated lists', () => {
+    const f = fx();
+    const a = f.inTx(ACCOUNTS(SET(['pool-b', 'pool-a', 'pool-b'], true), SET(['pool-b'])));
+    expect(a).toMatchObject({ ok: true, kind: 'appended' });
+    expect((a as Appended).record.entry).toEqual(ACCOUNTS(SET(['pool-a', 'pool-b'], true), SET(['pool-b'])));
+    expect(f.failures).toEqual([]);
+  });
+  it('a reorder alone lands as no change of membership (a narrowing), held against the fold', () => {
+    const f = fx();
+    f.inTx(ACCOUNTS(SET(['pool-a', 'pool-b']), SET(['pool-a', 'pool-b'])));
+    const a = f.inTx(ACCOUNTS(SET(['pool-b', 'pool-a']), SET(['pool-b', 'pool-a']), 'op-r'));
+    expect(a).toMatchObject({ ok: true, kind: 'appended', record: { sequence: 2 } });
+    expect((a as Appended).record.entry).toEqual(ACCOUNTS(SET(['pool-a', 'pool-b']), SET(['pool-a', 'pool-b']), 'op-r'));
+  });
+  it('an unsorted narrowing over a rolled-back guard is row-only, never bad-entry', () => {
+    const f = fx();
+    f.guard.witnessRefused('witness-epoch');
+    expect(f.inTx(ACCOUNTS(SET(['pool-b', 'pool-a']), SET(['pool-b'])))).toEqual(
+      { ok: true, kind: 'row-only', state: { kind: 'rolled-back', cause: 'witness-epoch' } });
+  });
+  it('a truly malformed account set is still bad-entry: a value that is not a pool name', () => {
+    const f = fx();
+    expect(f.inTx(ACCOUNTS(SET(['pool-a', 'Not A Pool']), SET(['pool-a'])))).toMatchObject({ ok: false, error: 'bad-entry' });
+    expect(f.lines()).toEqual([]);
+  });
+});
+
+describe('F2: a stated from is held against the fold while the journal is coherent (stated-from-against-the-fold)', () => {
+  const RUNG = (from: string, to: string, opKey = 'op-x') => ({ kind: 'authority-rung', opKey, from, to }) as OverlordAuthorityMove;
+  it('a from the fold contradicts, on a move that widens against the fold, is refused and tells the guard diverged', () => {
+    const f = fx();
+    f.inTx(RUNG('advise', 'chat'));                      // the fold reads chat
+    const a = f.inTx(RUNG('full', 'advise'));            // states a narrowing; chat to advise widens
+    expect(a).toMatchObject({ ok: false, error: 'authority-rolled-back', detail: expect.stringMatching(/fold/) });
+    expect(f.failures).toEqual(['diverged']);
+    expect(f.guard.state()).toEqual({ kind: 'rolled-back', cause: 'diverged' });
+    expect(f.lines()).toHaveLength(1);
+  });
+  it('a from the fold contradicts, on a move narrower than the fold, lands row-only', () => {
+    const f = fx();
+    f.inTx(RUNG('advise', 'full'));                      // the fold reads full
+    expect(f.inTx(RUNG('advise', 'chat'))).toEqual({ ok: true, kind: 'row-only', state: { kind: 'rolled-back', cause: 'diverged' } });
+    expect(f.failures).toEqual(['diverged']);
+    expect(f.lines()).toHaveLength(1);
+  });
+  it('an account set whose from the fold contradicts is refused when it widens against the fold', () => {
+    const f = fx();
+    f.inTx(ACCOUNTS(SET(['pool-a', 'pool-b']), SET(['pool-a'])));
+    expect(f.inTx(ACCOUNTS(SET(['pool-a', 'pool-b']), SET(['pool-a', 'pool-b']), 'op-y'))).toMatchObject(
+      { ok: false, error: 'authority-rolled-back' });
+    expect(f.failures).toEqual(['diverged']);
+  });
+  it('a model class whose from the fold contradicts is held the same way', () => {
+    const f = fx();
+    f.inTx({ kind: 'authority-model-class', opKey: 'op-m', from: 'fable', to: 'opus' });
+    expect(f.inTx({ kind: 'authority-model-class', opKey: 'op-m2', from: 'fable', to: 'opus' })).toEqual(
+      { ok: true, kind: 'row-only', state: { kind: 'rolled-back', cause: 'diverged' } });
+  });
+  it('a from that matches the fold appends; a field no record named yet takes the stated from', () => {
+    const f = fx();
+    expect(f.inTx(RUNG('off', 'chat'))).toMatchObject({ ok: true, kind: 'appended' });
+    expect(f.inTx(RUNG('chat', 'full'))).toMatchObject({ ok: true, kind: 'appended' });
+    expect(f.failures).toEqual([]);
+  });
+  it('the documented residual: while the guard is not coherent the stated from stands, so a lying from lands row-only', () => {
+    const f = fx();
+    f.inTx(RUNG('advise', 'chat'));                      // the row and the fold read chat
+    f.guard.witnessRefused('witness-heads');
+    // The caller's duty is to pass the row's own value (chat); a from stated as full reads chat-to-advise as a narrowing.
+    expect(f.inTx(RUNG('full', 'advise'))).toEqual({ ok: true, kind: 'row-only', state: { kind: 'rolled-back', cause: 'witness-heads' } });
+    expect(f.lines()).toHaveLength(1);
+  });
+});
+
+describe('F6 and F7: a head row that cannot be read keeps the rows word; a widening that throws first is not told', () => {
+  it('F7: a head row holding sequence 0, left in place, reads unmeasured (rows); so does a digest that is not 64-hex', () => {
+    const f = fx();
+    f.inTx(WIDEN);
+    f.db.prepare('UPDATE overlord_authority_head SET sequence = 0').run();
+    expect(f.journal.measure(f.db)).toEqual({ kind: 'unmeasured', why: 'rows' });
+    const g = fx();
+    g.inTx(WIDEN);
+    g.db.prepare(`UPDATE overlord_authority_head SET digest = 'zz'`).run();
+    expect(g.journal.measure(g.db)).toEqual({ kind: 'unmeasured', why: 'rows' });
+  });
+  it('F6: a head row the append check cannot read: a narrowing is row-only with unmeasured (rows); a widening does not tell the guard', () => {
+    const f = fx();
+    f.inTx(WIDEN);
+    f.db.prepare('UPDATE overlord_authority_head SET sequence = 0').run();
+    expect(f.inTx(WIDEN)).toMatchObject({ ok: false, error: 'authority-unmeasured', detail: expect.stringMatching(/head row/) });
+    expect(f.failures).toEqual([]);
+    expect(f.inTx(NARROW)).toEqual({ ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'rows' } });
+    expect(f.failures).toEqual(['rows-unreadable']);
+    expect(f.guard.state()).toEqual({ kind: 'unmeasured', why: 'rows' });
+  });
+  it('F6: a throw before the append: a widening is authority-unmeasured and the guard is not told (row 5w); a narrowing lands row-only', () => {
+    const wall = (): number => { throw new Error('the clock is gone'); };
+    const f = fx({ wall });
+    expect(f.inTx(WIDEN)).toMatchObject({ ok: false, error: 'authority-unmeasured', detail: expect.stringMatching(/before the append/) });
+    expect(f.failures).toEqual([]);
+    expect(f.guard.state()).toEqual({ kind: 'coherent' });
+    expect(f.inTx(NARROW)).toEqual({ ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'journal' } });
+    expect(f.failures).toEqual(['journal-unreadable']);
+    expect(f.lines()).toEqual([]);
   });
 });
