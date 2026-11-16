@@ -7946,6 +7946,11 @@ body now states the plan's ruling, in its words. Appendix B's Table B7 lists eac
   should not need the operator's answer when the Overlord's confidence is high (§2). The first four are built here:
   two answer marks, and an unsure answer is no yardstick (§9.2.1). C70 carries them. The fifth is the proposal of
   §9.5.1.
+- **The W1 plans' corrections (2026-11-16).** The merged W1 piece plans ruled questions this spec left open or stated
+  otherwise, and the body now states each ruling in the plan's words (Appendix B, Table B7). They are corrections, not
+  the operator's rulings. Two came from the coordinator rather than a plan's own question: H16's hold-down is ccd's
+  alone, with three inputs to the serviceability answer (the ccd arms plan, question 3), and the hard renewal trigger
+  for a lost door process (the door process plan, F12). Each is open to overrule by the operator on its pull request.
 - **The operator approved this spec on 2026-11-10:** the author's calls C1 to C60 as §13 restates them, and the
   hardening calls H1 to H39 (§13.1), subject to the rulings below. C47 is where "everything" stops: it keeps the
   credential stores closed.
