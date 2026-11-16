@@ -2,7 +2,8 @@
 // counting rules of 5.6.2). `prescanMockup` is one linear pass over the raw text that decides, before the browser's
 // uncancellable parse, whether the page may be parsed at all: the depth of a stack of open names, the count of every
 // start and end tag, and a multiset of open formatting elements that only each element's own end tag decrements. Every
-// limit is inclusive, and every fixture here is built from the constants `policy.ts` exports, never from a literal.
+// limit is inclusive, and every fixture here is built from the constants `policy.ts` exports, never from a literal, except
+// the absolute pins of the limits' measured values (fix round 1, A6), which red when any limit is raised.
 // A fixture that quotes a limit's value would stay green when the value moved.
 // v2 (D-8661) changes WHEN a push, a pop and a formatting decrement happen: an end tag the parser ignores no longer pops
 // or decrements, and no start tag pushes inside a comment, a bogus comment or a tag's attribute section. Rows that
@@ -1313,6 +1314,45 @@ describe('M5.EX4: the limits refuse no committed page and no page of a realistic
 
   it('the generator is exact: one tag over the limit is refused, so the page above sits at the limit', () => {
     expect(prescanMockup(generated(9, T + 1))).toMatchObject({ ok: false, why: 'too-many-tags', tags: T + 1 });
+  });
+});
+
+describe('K1 (fix round 1, A1): the committed mockups\' attributes and desk-nav-mockup.html\'s depth', () => {
+  const REPO = path.join(import.meta.dirname, '..', '..');
+
+  it('each committed mockup\'s most attributes on one element is within MOCKUP_MAX_ATTRIBUTES, and desk-nav stands at depth 12', () => {
+    const docs = htmlFiles(path.join(REPO, 'docs')).filter((f) => statSync(f).size <= DOCS_MAX_DOC_BYTES);
+    expect(docs.length).toBeGreaterThan(0);
+    const rows = docs.map((f) => {
+      // jsdom's parser, an oracle independent of the pre-scan: the attributes an element keeps (a duplicated name once).
+      const doc = new DOMParser().parseFromString(readFileSync(f, 'utf8'), 'text/html');
+      let most = 0;
+      for (const el of doc.querySelectorAll('*')) most = Math.max(most, el.attributes.length);
+      return { file: path.relative(REPO, f).split(path.sep).join('/'), most };
+    });
+    for (const r of rows) process.stderr.write(`PRESCAN-DOCS-ATTRS ${r.file} most_attributes=${r.most}\n`);
+    expect(rows.filter((r) => r.most > MOCKUP_MAX_ATTRIBUTES)).toEqual([]);
+    const desk = docs.filter((f) => f.endsWith(`${path.sep}2026-11-06-desk-nav-mockup.html`));
+    expect(desk).toHaveLength(1);
+    expect(prescanMockup(readFileSync(desk[0]!, 'utf8'))).toMatchObject({ ok: true, depth: 12 });
+  });
+});
+
+describe('the limits\' values are pinned in absolute numbers (fix round 1, A6): raising any one reds here', () => {
+  it('depth 256, tags 15 000, open formatting 32, attributes 64 on a start tag', () => {
+    expect({ depth: D, tags: T, formatting: F, attributes: A }).toEqual({ depth: 256, tags: 15_000, formatting: 32, attributes: 64 });
+  });
+
+  it('each boundary at its literal value: admitted at the value, refused one past it', () => {
+    const attrs = (n: number): string => Array.from({ length: n }, (_, k) => ` a${k}`).join('');
+    expect(prescanMockup(`<b${attrs(64)}>x</b>`).ok).toBe(true);
+    expect(prescanMockup(`<b${attrs(65)}>x</b>`)).toMatchObject({ ok: false, why: 'too-many-attributes' });
+    expect(prescanMockup('<div>'.repeat(256)).ok).toBe(true);
+    expect(prescanMockup('<div>'.repeat(257))).toMatchObject({ ok: false, why: 'too-deep' });
+    expect(prescanMockup('<br>'.repeat(15_000)).ok).toBe(true);
+    expect(prescanMockup('<br>'.repeat(15_001))).toMatchObject({ ok: false, why: 'too-many-tags' });
+    expect(prescanMockup('<b>'.repeat(32)).ok).toBe(true);
+    expect(prescanMockup('<b>'.repeat(33))).toMatchObject({ ok: false, why: 'too-many-formatting' });
   });
 });
 

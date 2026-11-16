@@ -6,7 +6,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { prescanMockup } from '../src/docs/mockup/prescan';
-import { MOCKUP_MAX_DEPTH, MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS } from '../src/docs/mockup/policy';
+import {
+  MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH, MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS,
+} from '../src/docs/mockup/policy';
 
 const RealDOMParser = DOMParser;
 let constructed = 0;
@@ -61,6 +63,8 @@ describe('a refusal constructs no parser and parses nothing (M5.22)', () => {
     ['foreign-markup (a start tag inside an svg foreignObject)', '<svg><foreignObject><span></foreignObject></svg>'],
     ['foreign-markup (a comment inside an svg style)', '<svg><style><!--</style></b>--></svg>'],
     ['foreign-markup (a start tag inside a math mi)', '<math><mi><b data-i=1></mi></math>'],
+    ['too-many-attributes (one start tag past MOCKUP_MAX_ATTRIBUTES; fix round 1, A6)',
+      `<b${Array.from({ length: MOCKUP_MAX_ATTRIBUTES + 1 }, (_, k) => ` a${k}`).join('')}>x</b>`],
   ])('%s', (name, text) => {
     const answer = parseMockup(text);
     expect(answer.ok).toBe(false);

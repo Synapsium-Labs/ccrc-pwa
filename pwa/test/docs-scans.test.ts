@@ -1569,3 +1569,80 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
     expect(parserHits(source, 'planted.ts')).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause C1 origins (native Docs reader, completion plan Task 7, C1 fix round 1, review run 2259's A4). An
+// `HttpsOrigin` is the only value `mockupCsp` appends to the frame's policy, and its type promises it was accepted by
+// `parseMockupOrigin` (https, the LDH host grammar, no IP literal, no `localhost`, not the console's own host). The
+// promise is a brand, so a cast anywhere else would put an unchecked origin into the CSP. Across every `.ts` and `.tsx`
+// file under `pwa/src`, TypeScript's parser finds each type assertion to `HttpsOrigin` (`x as HttpsOrigin`,
+// `<HttpsOrigin>x`, and the `HttpsOrigin` of `x as unknown as HttpsOrigin`), and the only one allowed is a single
+// assertion inside the function `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
+// NOT EXHAUSTIVE: an alias of the type (`type H = HttpsOrigin`), a structural object literal of the brand's shape, a
+// generic helper that casts to its type parameter, and `any` flowing into an `HttpsOrigin` slot are not seen.
+// ---------------------------------------------------------------------------------------------------------------
+
+const ORIGIN_HOME = 'src/docs/mockup/origins.ts';
+
+/** Every assertion to `HttpsOrigin` in one module, as `<file> <enclosing function or (top level)>`. */
+function originCasts(source: string, file: string): string[] {
+  const hits: string[] = [];
+  const named = (t: ts.TypeNode): boolean => ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'HttpsOrigin';
+  const enclosing = (n: ts.Node): string => {
+    for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) {
+      if (ts.isFunctionDeclaration(p) && p.name !== undefined) return p.name.text;
+      if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) {
+        return p.parent.name.text;
+      }
+      if (ts.isMethodDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+    }
+    return '(top level)';
+  };
+  const visit = (n: ts.Node): void => {
+    if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) && named(n.type)) hits.push(`${file} ${enclosing(n)}`);
+    ts.forEachChild(n, visit);
+  };
+  visit(parse(source, file));
+  return hits;
+}
+
+/** What is left after the one allowed assertion (the first in `parseMockupOrigin` in origins.ts), and how much was. */
+function originCensus(sources: ReadonlyMap<string, string>): { hits: string[]; allowed: number } {
+  const hits: string[] = [];
+  let allowed = 0;
+  for (const [file, source] of [...sources].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const hit of originCasts(source, file)) {
+      if (allowed === 0 && hit === `${ORIGIN_HOME} parseMockupOrigin`) allowed += 1;
+      else hits.push(hit);
+    }
+  }
+  return { hits, allowed };
+}
+
+describe('clause C1 origins: an HttpsOrigin is made only in parseMockupOrigin (M5.21, fix round 1 A4)', { timeout: 30_000 }, () => {
+  const real = treeSources(PWA);
+  const planted = (rel: string, text: string): ReadonlyMap<string, string> => new Map([...real, [rel, `${real.get(rel) ?? ''}${text}`]]);
+
+  it('the real tree has exactly the one assertion, inside parseMockupOrigin', () => {
+    expect(real.has(ORIGIN_HOME)).toBe(true);
+    expect(originCensus(real)).toEqual({ hits: [], allowed: 1 });
+  });
+
+  it.each([
+    ['a cast in policy.ts', 'src/docs/mockup/policy.ts', "export const planted = 'https://a.example' as HttpsOrigin;", 'src/docs/mockup/policy.ts (top level)'],
+    ['a double cast in load.ts', 'src/docs/mockup/load.ts', "export const planted = (s: string) => s as unknown as HttpsOrigin;", 'src/docs/mockup/load.ts planted'],
+    ['an angle-bracket assertion', 'src/docs/mockup/policy.ts', "export function planted(s: string) { return <HttpsOrigin>s; }", 'src/docs/mockup/policy.ts planted'],
+    ['a second cast in origins.ts outside the function', ORIGIN_HOME, "export const planted = (s: string) => s as HttpsOrigin;", `${ORIGIN_HOME} planted`],
+    ['a cast in another Docs file', 'src/docs/DocsLeaf.tsx', "export const planted = (s: string) => s as HttpsOrigin;", 'src/docs/DocsLeaf.tsx planted'],
+  ])('planted: %s is red', (_name, rel, text, hit) => {
+    expect(originCensus(planted(rel, `\n${text}\n`))).toEqual({ hits: [hit], allowed: 1 });
+  });
+
+  it('the allowance is counted, not assumed: an origins.ts without the cast finds none', () => {
+    expect(originCensus(new Map([...real, [ORIGIN_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 0 });
+  });
+
+  it('does not count a mention in a comment, a string or a type annotation', () => {
+    expect(originCasts("// x as HttpsOrigin\nexport const a = 'as HttpsOrigin';\nexport const f = (o: HttpsOrigin): HttpsOrigin => o;\n", 'p.ts')).toEqual([]);
+  });
+});
