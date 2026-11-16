@@ -850,8 +850,8 @@ describe('the direct callers of PushService.notify in server/src (the consolidat
     return out;
   };
 
-  it('are the funnel alone, once, and no others', () => {
-    expect(callers()).toEqual({ 'notice.ts': 1 });
+  it('are the one sender alone (the push outbox, Task 4), once, and no others', () => {
+    expect(callers()).toEqual({ 'pushSender.ts': 1 });
   });
 
   it('the banner\'s bus frames have one writer, notice.ts: no other file emits a `notice` event or a `type: \'notice\'` session frame (ARCH-59, #794)', () => {

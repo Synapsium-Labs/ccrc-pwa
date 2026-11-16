@@ -164,6 +164,10 @@ fi
 # page would; Docs W2 adds that budget and the test that holds the two equal.
 # Overridable for the gh knob's reason above.
 : "${CCRC_DOCTOR_DOCS_TIMEOUT:=20}"
+# The two `ccd caps` words the Docs screen's W5b features need (rich-docs spec A12): per-doc history and the vision and
+# promise sections. One literal, held equal to server/src/ccdargv.ts's DOCS_LOG_CAP and DOCS_SECTIONS_CAP by
+# server/test/docs-parity.test.ts.
+CCRC_DOCTOR_DOCS_CAPS='docs-log-v1 docs-sections-v2'
 
 # How long `playwright` watches one browser build (D-8047). A loader failure is
 # immediate and a healthy chromium exits inside a second, so this is only the time a
@@ -7109,6 +7113,18 @@ _check_docs() {
       if [ "$d" -gt 0 ]; then
         _dr_warn docs "$line" \
           "the index walk stopped at its time budget; re-run when the box is quieter: ccrc doctor"
+        return 2
+      fi
+      # Rich-docs spec A12 (W5b): the tokens are read from `ccd caps`, as the server reads them; words only, never a
+      # project name. A caps read that fails names both, since neither was measured.
+      local caps="" tok missing=""
+      caps="$(_plat_timeout "$CCRC_DOCTOR_DOCS_TIMEOUT" "$ccd" caps </dev/null 2>/dev/null)" || caps=""
+      for tok in $CCRC_DOCTOR_DOCS_CAPS; do
+        case $'\n'"$caps"$'\n' in *$'\n'"$tok"$'\n'*) ;; *) missing="$missing $tok" ;; esac
+      done
+      if [ -n "$missing" ]; then
+        _dr_warn docs "$line; this ccd does not list$missing, so Docs here has no per-doc history or no vision and promise sections" \
+          "ccrc update"
         return 2
       fi
       _dr_pass docs "$line"

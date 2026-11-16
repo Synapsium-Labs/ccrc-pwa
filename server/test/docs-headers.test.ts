@@ -18,7 +18,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
 import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
 import { buildServer, type Deps } from '../src/server.js';
-import { DOCS_CAP } from '../src/ccdargv.js';
+import { DOCS_CAP, DOCS_LOG_CAP } from '../src/ccdargv.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { ExecResult, Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
@@ -456,16 +456,20 @@ describe('W3 T3: hooks.ts spells none of the response-policy headers (it sets wh
 /** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
 const M54_PASSPHRASE = 'correct horse battery staple';
 const M54_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** The four docs routes as `METHOD path` keys (section 3.4): what the derived set must equal. */
+/** The five docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4): what the derived set
+ *  must equal. */
 const M54_DOCS_KEYS = [
-  'GET /api/docs/:project/file', 'GET /api/docs/:project/tree', 'GET /api/docs/projects',
-  'POST /api/docs/:project/refresh',
+  'GET /api/docs/:project/file', 'GET /api/docs/:project/history', 'GET /api/docs/:project/tree',
+  'GET /api/docs/projects', 'POST /api/docs/:project/refresh',
 ];
 /** The bytes the fixture show answers, and the committed pin the file route is read through. */
 const M54_MD = new TextEncoder().encode('# a\n');
 const M54_PIN: DocPin = {
   kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
 };
+
+/** The history ask the history recipe makes (the ok line for it is built where the runner answers). */
+const M54_LOG_ASK = { commit: FIXTURE_COMMIT, section: 'specs', path: 'a.md' } as const;
 
 /** One request: its method, URL and, for the POST, a JSON body. */
 interface M54Req { method: 'GET' | 'POST'; url: string; payload?: string }
@@ -482,6 +486,10 @@ const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>> = {
   'GET /api/docs/:project/file': {
     ok: { method: 'GET', url: docsApi.file('demo', M54_PIN) },
     refused: { method: 'GET', url: `${docsApi.file('demo', M54_PIN)}&branch=main` },
+  },
+  'GET /api/docs/:project/history': {
+    ok: { method: 'GET', url: docsApi.history('demo', M54_LOG_ASK) },
+    refused: { method: 'GET', url: `${docsApi.history('demo', M54_LOG_ASK)}&commit=x` },
   },
   'POST /api/docs/:project/refresh': {
     ok: { method: 'POST', url: docsApi.refresh('demo'), payload: JSON.stringify({ ref: null, reason: 'manual' }) },
@@ -541,6 +549,12 @@ async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{
     if (args[0] === 'docs-index') return m54Exit(0, line(indexOk()));
     if (args[0] === 'docs-tree') return m54Exit(0, line(treeOk()));
     if (args[0] === 'docs-show') return m54Exit(0, showLine(M54_PIN, M54_MD));
+    if (args[0] === 'docs-log') {
+      return m54Exit(0, line({
+        v: 1, verb: 'docs-log', ok: true, elapsedMs: 3, ...M54_LOG_ASK, truncated: false,
+        entries: [{ sha: FIXTURE_COMMIT, parent: null, date: '2026-11-01T10:00:00+00:00', author: 'demo', subject: 'add a' }],
+      }));
+    }
     if (args[0] === 'docs-fetch') {
       return m54Exit(0, line({
         v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
@@ -555,7 +569,9 @@ async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'),
       `${await hashLine(M54_PASSPHRASE, M54_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
   }
-  const state: FleetState = { connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP], rosterFp: null, build: null };
+  const state: FleetState = {
+    connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP, DOCS_LOG_CAP], rosterFp: null, build: null,
+  };
   const deps: Deps = {
     ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false }, fleetState: state,
   };
@@ -587,7 +603,7 @@ function expectDecorated(key: string, res: { statusCode: number; headers: Record
 }
 
 describe('M5.4 — every docs route in the real server\'s table carries the four headers (section 5.3, section 5.8)', () => {
-  it('the derived set: the real table under /api/docs is exactly the four docs routes, and the walk read every row', async () => {
+  it('the derived set: the real table under /api/docs is exactly the five docs routes, and the walk read every row', async () => {
     const { app } = await m54Server();
     expect(derivedDocsRoutes(app)).toEqual(M54_DOCS_KEYS);
   });
@@ -614,7 +630,7 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     const { app, state } = await m54Server({ fault: true });
     for (const key of derivedDocsRoutes(app)) {
       const req = recipeFor(key).ok;
-      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP];
+      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP, DOCS_LOG_CAP];
       const res = await sendM54(app, req, PWA);
       expect(res.statusCode, key).toBe(req.method === 'POST' ? 503 : 502);
       expectDecorated(key, res);

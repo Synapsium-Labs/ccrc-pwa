@@ -2047,14 +2047,292 @@ export interface DocsHistoryLoader { history(project: string, ask: DocsLogAsk): 
 - [ ] **Step 6: Public-repo scan**, as Task 13 Step 6.
 - [ ] **Step 7: Commit the results, last**, with the `Ledger-Edit:` trailer; push; open the ONE PR; measure the fingerprint, wait for CI on the exact tip, list mail, send the wave-done.
 
+## Results (W5b-1)
+
+Run 2124, worker session `ccrc-pwa-docs-reader-w5b-1`, workspace branch `ws/docs-reader-w5b-1`. Base `f6bdbf153` (origin/main at dispatch, holding the take-up's merge #2806). Every Find block of Tasks 2-12 matched exactly once at that base (90 blocks; the blocks marked "as Task N left it" matched after their task). Execution: superpowers:subagent-driven-development, with Sonnet/high implementers and per-task reviewers on Opus/high (Tasks 3, 6, 9, 10), Sonnet/high (Tasks 2, 4, 5, 7, 8, 11) and Sonnet/medium (Task 12). The main loop ran on Opus at xhigh, per the brief.
+
+### Commits
+
+| Task | Commit(s) | Task review |
+|---|---|---|
+| 2 six sections in L0 and ccd, `docs-sections-v2` | `9d3f7e707` | Sonnet/high: approved |
+| 3 the server's section gate | `f74b3d901` | Opus/high: approved |
+| 4 the PWA over four or six sections | `ebe5a1e0a` | Sonnet/high: approved |
+| 5 the log vocabulary in L0 | `2e47a3bce` | Sonnet/high: approved |
+| 6 the ccd verb `docs-log` | `e9ef1cca3`; fix round 1 `08c5ebe68`, `2e7b9c10f`, `325d994d5` | Opus/high: one important finding (a shallow boundary listed with a null parent), fixed and re-reviewed |
+| 7 the agent's grant | `11091de3e` | Sonnet/high: approved |
+| 8 builder, cap row, runner budget | `47b83c98c` | Sonnet/high: approved |
+| 9 port, adapter, policy | `61fbad1bb` | Opus/high: approved |
+| 10 the history route and the censuses | `6085cb446` | Opus/high: approved |
+| 11 the doctor's token WARN | `a427f6491` | Sonnet/high: approved |
+| 12 the waiver and the spec text | `6ccb62db8` | Sonnet/medium: approved |
+| 13 close fix wave | `aea77002f` … `a4c8dde12` (10 commits) | Opus/high re-review: all addressed |
+| 13 the suites' one branch red | `39289ee19` (`ledger-links.test.ts`'s example) | — |
+
+### The held-out whole-branch review (Task 13 Step 1)
+
+There were three lenses on Opus at high effort; each self-reported `claude-opus-5-5` (the runtime reports no effort):
+- (1) ccd's verb and helper, plus the waiver and the ccd tests;
+- (2) skew and gates, plus the censuses, the spec text and privacy;
+- (3) the server half, plus its rows and censuses.
+
+**Confirmed findings, each refuted by three independent Sonnet/high refuters (self-reported `claude-sonnet-5-5`), majority adjudicated:**
+- **A record git prints without names breaks the walk.**
+  - Trigger: a gitlink-only commit under `diff.ignoreSubmodules=all`, or a committed `.gitmodules` with `ignore = all`.
+  - Effect: `git-failed {step:'log'}` for the whole history.
+  - Refuters: confirmed 3 of 3, Important 2 of 3, fix sound 3 of 3.
+  - Fix: `parse_log` reads names only after the newline. The next record's sha check still guards alignment, and the refuters checked every byte prefix.
+  - Case: `'a commit that git prints without names (a submodule ignored by .gitmodules) is read past, not a failure'`. Row W5B-T6-M17.
+- **A cut inside the `?token=***` mask was refused by the server.**
+  - Effect: a cut leaving `?token=*` failed `redactDocsText(v) === v`, so the doc's history answered 502 `malformed-answer` permanently.
+  - Lenses 1 and 3 found it independently. The refuters confirmed it 3 of 3, rating it Minor 2 of 3 and Important 1 of 3; it was fixed before merge by ruling.
+  - Fix: the server check re-applies the transform ccd applies, redact and then cut to the cap (`server/src/docs/policy.ts#redactedText`).
+  - Strength: rows W5B-T9-M2 (drop the redact comparison) and W5B-T9-M6 (the old fixed-point form) both go red, so the check is pinned from both sides.
+  - Cases: in `docs-policy` and end to end in `ccd-docs-log` (`'a token mask cut at the cap still passes the server's shape check'`). Row W5B-T9-M6.
+
+**Minor findings fixed in the same wave:**
+- the doctor's whole-line caps match, pinned with a `docs-log-v10` stub (row W5B-T11-M3);
+- parse validation (M18);
+- the full-100 arm of `truncated` (M19);
+- the redactor line-count check (M20);
+- the docs-log front's first and fifth flag checks (M21, M22);
+- zero file reads on an unserved page;
+- a history GET whose client left while queued;
+- an uppercase commit refused as `bad-commit`;
+- A23's reason, the G1 and G4 row endings, and the base spec's `log` item;
+- stale prose in tests and in `routes.ts`;
+- the waiver's reason.
+
+### Named, without a number
+
+- **Shallow repositories.** In a shallow repository, `docs-log` lists no commit without a parent: git prints the shallow boundary as a root, so it would look like a change to every doc, with `parent: null`.
+  - This only ADDS the shallow case. The rich-docs spec's G4 and refinement (e) say nothing about a shallow boundary's parent.
+  - It keeps L0's rule that `parent: null` means only a root commit, and (e)'s rule that a short shallow walk is `truncated`.
+  - G4's amended row says so, beside Task 12's dictated sentence and fix round 1's skip rule (below).
+  - Case: `'a shallow repository never lists its boundary commit, and every listed parent is a full sha'`, plus case (13)'s expectation `[c3]`. Row W5B-T6-M15.
+  - Cost: a shallow clone deep enough to reach a doc's creation omits that commit and says `truncated`.
+- **The server's redaction check.** It is `cut(redact(v)) === v`, not refinement (f)'s `redactDocsText(v) === v`.
+  - (f) contradicted (e) and L0, which both say "redacted, then cut".
+  - The G4 sentence this run wrote now says the server re-applies the same transform. No earlier spec sentence changes.
+- **The waiver file's name** is `D-8642-ccd-ccd.json`. The brief read the plan's placeholder as `8642-ccd-ccd.json`, and growth-check requires the name to start with its `d`.
+- **The bypass fixture's number.** `g28-docs-log-without-project.ts` shares the number 28 with `g28-delegation-adopt-without-state.ts`, as g26 and g27 already did. Registration is keyed by filename.
+- **One entry moved from Task 8 to Task 9.** `'docs-log'` joined verb-gate's NEW_GENERATION list in Task 9, when its call site existed. `ccd-can-sites`' docs-log case runs through the adapter from Task 9 on.
+- **Files the plan did not list:**
+  - `pwa/test/ledger-links.test.ts` (its outside-the-sections example, from the suites);
+  - `ccd/contexts.tsv` (one `cmd_docs_log C9` row);
+  - `server/test/id-argv-census.test.ts` (one typed row);
+  - `server/src/auth/gate.ts` (its route-count docstring 236→237);
+  - three more literals in `ccd-docs-index.test.ts`;
+  - two hand-written stubs in `ccrc-doctor-exposure.test.ts`.
+
+  Each was co-edited by grant where another run held the path.
+- **A plan claim corrected.** A cached older PWA's `hasDocs` uses `Object.values(row.sections)`, so it DOES count `vision` and `promise` index keys. A project with docs only in `vision` is listed among the projects with docs while its text reads `0 specs · 0 plans · 0 design · 0 conventions`. This is harmless and transitional; the plan said such a PWA ignores those keys.
+
+### BASE and end figures
+
+| Figure | Base `f6bdbf153` | End `39289ee19` |
+|---|---|---|
+| `ccd/ccd` code lines (`growthCheck.ts#codeLines`) | 21829 | 21988 (+159; waiver `D-8642-ccd-ccd.json`, `maxDelta` 159) |
+| `ccd/ccrc-doctor-checks` net code lines | — | +11 |
+| `auth-gate.test.ts` `ROUTES.length` | 239 | 240 (HTTP 236→237, gated 142→143, exempt-HTTP 93) |
+| `ccd caps \| wc -l` on a fixture HOME | 111 | 114 (+`docs-sections-v2`, `docs-log`, `docs-log-v1`) |
+| Deviations defined from the issued block | 2 (8642, 8643) | 2 (8642, 8643); reserve 8644, 8645, 8646 unused |
+| `GROWTH_CHECK=1 growth-check` | green (95) | green (95), with the waiver |
+
+How each figure was taken: the code lines by `GROWTH_CHECK=1 growth-check`, which CI runs armed; `ROUTES.length` by `auth-gate`. The `ccd caps | wc -l` figure is one local run of ccd on a fixture HOME seeded with the test roster, and no committed test repeats it; the review reproduced its +3 by counting `cmd_caps`' `echo` lines (68 to 71). Fix round 1's end figures are in its section below.
+
+### Suites (end state)
+
+| Package | Run | Result |
+|---|---|---|
+| agent | whole suite; agent tsc | 44 files passed, 1 skipped; 1025 tests passed, 3 skipped; tsc rc 0 |
+| server | whole suite in pieces through `ccrc test` | 1645 files, 79390 tests passed, 99 failed, 354 skipped on the first run. Each of the 23 files with a red was re-run alone; none is this branch's (below) |
+| server | `typecheck-tests` alone; `GROWTH_CHECK=1 growth-check` alone; server tsc | green (12); green (95) with the waiver; rc 0 |
+| pwa | whole suite in pieces; pwa tsc | 525 files, 15621 tests passed, 1 failed; tsc rc 0. The one red is `ledger-links.test.ts`, this branch's: its example of a path outside the sections was `docs/vision/a.md`. Fixed in `39289ee19` (26/26) |
+| pwa browser | `docs-headers`, `docs-compact-head`, `docs-export`, `reader-frame`, each alone | 13, 109, 18, 24 passed |
+
+How these were taken: local runs on the fleet box through `ccrc test`, the agent and pwa suites whole and the server suite in directory slices of `vitest run --maxWorkers=2`. The committed tests reproduce each file's count, not these totals; the pull request's CI is the arbiter.
+
+**Reds that passed when re-run alone** (load flakes, at load 9-12):
+- `approvals-routes`
+- `child-reclaim`
+- `collect-lane-route`
+- `delegation-watch`
+- `mail-inbox-store`
+- `run-binding-bind-records`
+- `run-stuck-closes`
+
+**Reds that also fail alone**, all in files this branch does not touch:
+- `ccd-docs-fetch` (4, `ref-locked` read under local git 2.53)
+- `ccrc-install-landing` (1) and `ccrc-install-codex` (2): a host browser-MCP process WARN
+- `ccrc-containment` (1): a curl exit code
+- `ccrc-test-wrapper` (16) and `testbox-wrapper` (38), which test the very scope they ran in
+- `testbox-box-package`
+- `ccd-tool-adj` (an inherited oom score of 800)
+- `platform-hazards` (the host's bash and locale probe)
+- `shellcheck-ratchet`: shellcheck was killed inside the slice while measuring the untouched `ccd/ccrc`. Measured directly, this branch adds no finding: `ccrc-doctor-checks` has the same 34 findings at base and at head, and `cmd_docs_log` has 0.
+- `ccrc-account-codex-add` (6)
+- `tmp-sweep` (`claude` processes running)
+- `child-reclaim-paused-at-server`
+- `retire-executors-pin` (8; 20 s timeouts)
+- `delegation-recovery` and `shadow-journal` (20 s timeouts when run alone)
+
+The base `f6bdbf153` passed the merge queue's full run, and this pull request's CI is the arbiter. The first full run was red, because of `ledger-links`.
+
+### The mutation table (end state, Task 13 Step 3)
+
+All 47 rows were run in the workspace at `39289ee19`, sequentially. Every row went red. Every restore matched its saved sha256, and `git status --porcelain` was empty after each row. The fence below is the table as measured; its `red` is what each row turned red.
+
+```json
+{"id": "W5B-T2-M1", "spec": "M9.2", "pkg": "server", "file": "../shared/docs.ts", "old": "  vision: 'docs/vision',\n  promise: 'docs/promise',\n} as const;", "new": "  vision: 'docs/vision',\n} as const;", "tests": ["test/docs-parity.test.ts", "test/ccd-docs-tree.test.ts"], "red": "2 failed: the helper parity block equals shared/docs.ts, by value and in both directions (row 48) > SECTIONS equals DOC_; the helper parity block equals shared/docs.ts, by value and in both directions (row 48) > SECTION_RE in the he"}
+{"id": "W5B-T2-M2", "spec": "M9.2", "pkg": "server", "file": "../ccd/ccd", "old": ",'vision':'docs/vision','promise':'docs/promise'}", "new": ",'vision':'docs/vision'}", "tests": ["test/docs-parity.test.ts", "test/ccd-docs-tree.test.ts"], "red": "10 failed: docs draft snapshot (docs W1a Task 14) > budgets and bounds (rows 40, 64) > row 64: the recorded status argv i; docs listing: list_committed at a commit (\u00a72 (f) Committed steps 2-3, \u00a72 (h) 7) > answers a commit with no doc; docs listing: list_committed at a commit (\u00a72 (f) Committed steps 2-3, \u00a72 (h) 7) > answers a section committed ; docs listing: list_committed at a commit (\u00a72 (f) Comm"}
+{"id": "W5B-T2-M3", "spec": "(d)", "pkg": "server", "file": "../ccd/ccd", "old": "  echo docs-sections-v2   # native Docs reader W5b", "new": "  : docs-sections-v2   # native Docs reader W5b", "tests": ["test/ccd-archive.test.ts", "test/ccd-docs-index.test.ts"], "red": "2 failed: ccd caps > advertises exactly the verbs the dispatcher implements, plus the known capability tokens; docs verbs: advertised, dispatched, and every well-shaped call is one JSON line (rows 6, 45) > ccd caps lists"}
+{"id": "W5B-T3-M1", "spec": "M9.3", "pkg": "server", "file": "src/docs/ccdsource.ts", "old": "  if (section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {", "new": "  if (false && section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {", "tests": ["test/docs-source-w5b.test.ts"], "red": "3 failed: the log read (rich-docs spec G4) > a log of a vision doc without docs-sections-v2 is unsupported, with zero ex; the sections gate (rich-docs spec G1, M9.3) > a promise draft pin, the same; the sections gate (rich-docs spec G1, M9.3) > a vision pin without docs-sections-v2 is unsupported, with zero"}
+{"id": "W5B-T3-M2", "spec": "M9.3", "pkg": "server", "file": "src/docs/policy.ts", "old": "conventions: false, vision: true, promise: true,", "new": "conventions: false, vision: false, promise: true,", "tests": ["test/docs-source-w5b.test.ts"], "red": "2 failed: the log read (rich-docs spec G4) > a log of a vision doc without docs-sections-v2 is unsupported, with zero ex; the sections gate (rich-docs spec G1, M9.3) > a vision pin without docs-sections-v2 is unsupported, with zero"}
+{"id": "W5B-T3-M3", "spec": "(d)", "pkg": "server", "file": "src/ccdargv.ts", "old": "export const DOCS_SECTIONS_CAP = 'docs-sections-v2';", "new": "export const DOCS_SECTIONS_CAP = 'docs-sections-v1';", "tests": ["test/ccd-archive.test.ts", "test/capsupported.test.ts"], "red": "2 failed: capSupported > spells the docs sections token exactly once in server/src, and refuses on no evidence (docs W5b; ccd caps > advertises exactly the verbs the dispatcher implements, plus the known capability tokens"}
+{"id": "W5B-T3-M4", "spec": "M9.3", "pkg": "server", "file": "src/docs/ccdsource.ts", "old": "  const can = ccdCan(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'", "new": "  const can = ((_s: unknown, _r: string): boolean => true)(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'", "tests": ["test/verb-gate.test.ts"], "red": "2 failed: every ccd call site in server/src answers the version-skew question > gates every verb this branch added, at e; every ccd call site in server/src answers the version-skew question > has no ungated call site outside UNGATED"}
+{"id": "W5B-T4-M1", "spec": "M9.3", "pkg": "pwa", "file": "src/docs/docsTree.ts", "old": "    return n === undefined ? [] : [[slug, n] as const];", "new": "    return [[slug, n ?? null] as const];", "tests": ["test/docs-sections.test.tsx", "test/docs-tree.test.ts"], "red": "7 failed: the index over a four- or six-section fleet (M9.3) > a ready row whose only docs are in vision is listed with ; the index over a four- or six-section fleet (M9.3) > an index row from a four-section fleet counts four sectio; the section tables are derived from DOC_SECTION_SLUGS > a count of one takes the singular noun (D-5502); the section tables are derived from DOC_SECTION_SLUGS > a nul"}
+{"id": "W5B-T4-M2", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsTreeView.tsx", "old": "      {sectionFacts(tree, section) === null\n", "new": "      {false\n", "tests": ["test/docs-sections.test.tsx"], "red": "1 failed: the project, section and leaf pages over a four- or six-section tree > a vision page over a four-section tree"}
+{"id": "W5B-T4-M3", "spec": "(d)", "pkg": "pwa", "file": "src/docs/DocsTreeView.tsx", "old": "  const unserved = sectionFacts(p.tree, p.section) === null;", "new": "  const unserved = false;", "tests": ["test/docs-sections.test.tsx"], "red": "1 failed: the project, section and leaf pages over a four- or six-section tree > a vision leaf over a four-section tree"}
+{"id": "W5B-T6-M1", "spec": "M9.4", "pkg": "server", "file": "../ccd/ccd", "old": "  [[ $# -eq 8 && \"${1-}\" == --project && \"${3-}\" == --commit", "new": "  [[ $# -ge 8 && \"${1-}\" == --project && \"${3-}\" == --commit", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: refusals and the argument shape (M9.4) > a ninth token, a missing flag or flags out of order is a us"}
+{"id": "W5B-T6-M2", "spec": "M9.5", "pkg": "server", "file": "../ccd/ccd", "old": "LOG_ROW = ('log', '--no-show-signature', '--encoding=UTF-8', '--no-merges',", "new": "LOG_ROW = ('log', '--no-show-signature', '--encoding=UTF-8',", "tests": ["test/ccd-docs-log.test.ts"], "red": "2 failed: docs-log: the listing (M9.4 through M9.7) > git log runs once with exactly the fixed flags, the commit and the; docs-log: the runner refuses any other tail (M9.5) > the runner refuses log with any other tail"}
+{"id": "W5B-T6-M3", "spec": "M9.13", "pkg": "server", "file": "../ccd/ccd", "old": "LOG_ROW = ('log', '--no-show-signature', '--encoding=UTF-8', '--no-merges',", "new": "LOG_ROW = ('log', '--max-count=100', '--no-show-signature', '--encoding=UTF-8', '--no-merges',", "tests": ["test/ccd-docs-log.test.ts"], "red": "3 failed: docs-log: the listing (M9.4 through M9.7) > a doc whose last change is older than the newest 100 commits in it; docs-log: the listing (M9.4 through M9.7) > git log runs once with exactly the fixed flags, the commit and the; docs-log: the runner refuses any other tail (M9.5) > the runner refuses log with any other tail"}
+{"id": "W5B-T6-M4", "spec": "M9.6", "pkg": "server", "file": "../ccd/ccd", "old": "['--end-of-options', a.commit, '--', sec],", "new": "['--end-of-options', a.commit, '--', sec + '/' + a.path],", "tests": ["test/ccd-docs-log.test.ts"], "red": "27 failed: docs-log: a walk that ends short is truncated > a buffer cut inside a name keeps only the whole records before; docs-log: a walk that ends short is truncated > a buffer cut right after the fifth NUL of a record keeps only ; docs-log: a walk that ends short is truncated > a non-zero rc from the log call with no cut answers git-failed; docs-log: a walk that ends short is truncated > a sha"}
+{"id": "W5B-T6-M5", "spec": "M9.6", "pkg": "server", "file": "../ccd/ccd", "old": "            hit = hit or buf[i:j] == want", "new": "            hit = hit or buf[i:j].startswith(want)", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: the listing (M9.4 through M9.7) > a doc whose name prefixes another lists only its own commits"}
+{"id": "W5B-T6-M6", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "    red = redact('\\n'.join(texts)).split('\\n') if texts else []", "new": "    red = '\\n'.join(texts).split('\\n') if texts else []", "tests": ["test/ccd-docs-log.test.ts"], "red": "5 failed: docs-log: output the helper refuses to read > a redactor that changes the line count answers helper-failed; docs-log: the listing (M9.4 through M9.7) > a subject holding a token is redacted, then cut to 200 code points; docs-log: the listing (M9.4 through M9.7) > a token mask cut at the cap still passes the server's shape check; docs-log: the listing (M9.4 through M9.7) > a token straddl"}
+{"id": "W5B-T6-M7", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "'subject': red[2 * k + 1][:DOCS_LOG_SUBJECT_MAX_CHARS]})", "new": "'subject': red[2 * k + 1]})", "tests": ["test/ccd-docs-log.test.ts"], "red": "3 failed: docs-log: the listing (M9.4 through M9.7) > a subject holding a token is redacted, then cut to 200 code points; docs-log: the listing (M9.4 through M9.7) > a token mask cut at the cap still passes the server's shape check; docs-log: the listing (M9.4 through M9.7) > a token straddling the subject and author caps is redacted before"}
+{"id": "W5B-T6-M8", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "'parent': first.decode('ascii') if first else None,", "new": "'parent': None,", "tests": ["test/ccd-docs-log.test.ts"], "red": "2 failed: docs-log: a walk that ends short is truncated > a shallow repository never lists its boundary commit, and ever; docs-log: the listing (M9.4 through M9.7) > lists the commits that changed the doc, newest first, with sha, pa"}
+{"id": "W5B-T6-M9", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow)", "new": "    truncated = False", "tests": ["test/ccd-docs-log.test.ts"], "red": "6 failed: docs-log: a walk that ends short is truncated > a buffer cut inside a name keeps only the whole records before; docs-log: a walk that ends short is truncated > a buffer cut right after the fifth NUL of a record keeps only ; docs-log: a walk that ends short is truncated > a shallow repository never lists its boundary commit, and ever; docs-log: a walk that ends short is truncated > a shal"}
+{"id": "W5B-T6-M10", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "    if count <= DOCS_LOG_MAX_ENTRIES and size <= DOCS_LOG_MAX_WIRE_BYTES:", "new": "    if count <= DOCS_LOG_MAX_ENTRIES:", "tests": ["test/ccd-docs-log.test.ts"], "red": "2 failed: docs-log: the final guard (M9.7) > a hundred entries of four-byte authors and subjects answer too-many-entries; docs-log: the final guard (M9.7) > over the wire cap answers too-many-entries {count, bytes}"}
+{"id": "W5B-T6-M11", "spec": "M9.5", "pkg": "server", "file": "../ccd/ccd", "old": "    if sub[0] == 'log' and (tuple(cflags) != LOG_CFLAGS", "new": "    if False and sub[0] == 'log' and (tuple(cflags) != LOG_CFLAGS", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: the runner refuses any other tail (M9.5) > the runner refuses log with any other tail"}
+{"id": "W5B-T6-M12", "spec": "M9.5", "pkg": "server", "file": "../ccd/ccd", "old": "OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list', 'log')", "new": "OBJECT_NAME_VERBS = ('cat-file', 'ls-tree', 'rev-parse', 'merge-base', 'rev-list')", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: the runner refuses any other tail (M9.5) > the runner refuses log with any other tail"}
+{"id": "W5B-T6-M13", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "LOG_CFLAGS = ('-c', 'log.showSignature=false', '-c', 'log.follow=false', '-c', 'log.mailmap=false',\n              '-c', 'log.showRoot=true')", "new": "LOG_CFLAGS = ('-c', 'log.showSignature=false', '-c', 'log.follow=false', '-c', 'log.mailmap=false')", "tests": ["test/ccd-docs-log.test.ts"], "red": "3 failed: docs-log: history git config would hide (refinement (e)) > a repository whose config sets log.showRoot=false s; docs-log: the listing (M9.4 through M9.7) > git log runs once with exactly the fixed flags, the commit and the; docs-log: the runner refuses any other tail (M9.5) > the runner refuses log with any other tail"}
+{"id": "W5B-T6-M14", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "            while i < n and (buf.startswith(prefix, i) or buf.startswith(bare, i)):", "new": "            while i < n and buf.startswith(prefix, i):", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: history git config would hide (refinement (e)) > a section path that was once a file still lists the"}
+{"id": "W5B-T6-M15", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "        if hit and not (shallow and not parent):", "new": "        if hit:", "tests": ["test/ccd-docs-log.test.ts"], "red": "2 failed: docs-log: a walk that ends short is truncated > a shallow repository never lists its boundary commit, and ever; docs-log: a walk that ends short is truncated > a shallow repository whose walk ends short answers truncated"}
+{"id": "W5B-T6-M16", "spec": "M9.7", "pkg": "server", "file": "../ccd/ccd", "old": "        texts.append(row[3].decode('utf-8', 'replace'))\n        texts.append(row[4].decode('utf-8', 'replace'))", "new": "        texts.append(row[3].decode('utf-8', 'replace')[:DOCS_LOG_AUTHOR_MAX_CHARS])\n        texts.append(row[4].decode('utf-8', 'replace')[:DOCS_LOG_SUBJECT_MAX_CHARS])", "tests": ["test/ccd-docs-log.test.ts"], "red": "3 failed: docs-log: the listing (M9.4 through M9.7) > a subject holding a token is redacted, then cut to 200 code points; docs-log: the listing (M9.4 through M9.7) > a token straddling the subject and author caps is redacted before ; docs-log: the listing (M9.4 through M9.7) > an author is the name only, redacted, at most 100 code points"}
+{"id": "W5B-T6-M17", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "        hit = False\n        if buf[i:i + 1] == b'\\n':\n            i += 1\n            while i < n", "new": "        hit = False\n        if buf[i:i + 1] != b'\\n':\n            raise fail('git-failed', step='log', detail='unexpected log output')\n        if True:\n            i += 1\n            while i < n", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: history git config would hide (refinement (e)) > a commit that git prints without names (a submodule"}
+{"id": "W5B-T6-M18", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "        if (not LOG_SHA_RE.fullmatch(fields[0])\n                or (parent and not LOG_SHA_RE.fullmatch(parent))):", "new": "        if False and (not LOG_SHA_RE.fullmatch(fields[0])\n                or (parent and not LOG_SHA_RE.fullmatch(parent))):", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: output the helper refuses to read > a record whose sha or parent is not a full object id answers git"}
+{"id": "W5B-T6-M19", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "    truncated = len(entries) < DOCS_LOG_MAX_ENTRIES and (cut or repo.shallow)", "new": "    truncated = cut or repo.shallow", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: the listing (M9.4 through M9.7) > a shallow repository with more than 100 matching commits above its"}
+{"id": "W5B-T6-M20", "spec": "(e)", "pkg": "server", "file": "../ccd/ccd", "old": "    if len(red) != len(texts):\n        raise RuntimeError('docs-log: the redactor changed the line count')\n", "new": "", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: output the helper refuses to read > a redactor that changes the line count answers helper-failed"}
+{"id": "W5B-T6-M21", "spec": "M9.4", "pkg": "server", "file": "../ccd/ccd", "old": "$# -eq 8 && \"${1-}\" == --project && \"${3-}\" == --commit", "new": "$# -eq 8 && \"${3-}\" == --commit", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: refusals and the argument shape (M9.4) > a ninth token, a missing flag or flags out of order is a us"}
+{"id": "W5B-T6-M22", "spec": "M9.4", "pkg": "server", "file": "../ccd/ccd", "old": "\"${3-}\" == --commit && \"${5-}\" == --section && \"${7-}\" == --path", "new": "\"${3-}\" == --commit && \"${7-}\" == --path", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: docs-log: refusals and the argument shape (M9.4) > a ninth token, a missing flag or flags out of order is a us"}
+{"id": "W5B-T7-M1", "spec": "M9.4", "pkg": "agent", "file": "src/whitelist.ts", "old": "'docs-fetch': '--project', 'docs-log': '--project',", "new": "'docs-fetch': '--project',", "tests": ["test/whitelist-structural.test.ts"], "red": "2 failed: mechanism 1+2 \u2014 granting gh fails to COMPILE, wherever it is written > g28-docs-log-without-project.ts; mechanism 3, values \u2014 a prefix that grants more than it names is a boot failure > throws on a docs verb with n"}
+{"id": "W5B-T7-M2", "spec": "M9.4", "pkg": "agent", "file": "src/whitelist.ts", "old": "    ['docs-log',   '--project'],", "new": "    ['docs-log'],", "tests": ["test/whitelist-structural.test.ts"], "red": "file failed, no tests ran: test/whitelist-structural.test.ts [ test/whitelist-structural.test.ts ]"}
+{"id": "W5B-T8-M1", "spec": "M9.9", "pkg": "server", "file": "src/ccdargv.ts", "old": "  docsLog: capRow(DOCS_LOG_CAP),", "new": "  docsLog: verbRow('docs-log'),", "tests": ["test/ccd-can-sites.test.ts", "test/verb-gate.test.ts"], "red": "2 failed: the docs verbs (D-5866, Step 1) > docs-log over a list with docs-log-v1 execs once; CCD_CAN agrees with the verb-gate vocabulary (D-5866) > every CAP_GATED_VERBS verb's CCD_CAN rows default to r"}
+{"id": "W5B-T8-M2", "spec": "M9.12", "pkg": "server", "file": "src/remote/runner.ts", "old": "  'docs-log': 20_000,", "new": "  'docs-log': 17_000,", "tests": ["test/docs-budget.test.ts"], "red": "3 failed: docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > docs-log: helper deadline + KILL; docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets) > the five CCD_VERB_TIMEOUT_MS row; the docs redactor's per-verb budget fits inside every runner margin (D-7077; C5h) > docs-log: helper deadline"}
+{"id": "W5B-T9-M1", "spec": "M9.7", "pkg": "server", "file": "src/docs/ccdsource.ts", "old": "        return answer.commit === ask.commit && answer.section === ask.section && answer.path === ask.path", "new": "        return true", "tests": ["test/docs-source-w5b.test.ts"], "red": "3 failed: the log read (rich-docs spec G4) > an answer for another path, section or commit is malformed-answer {why:pin}; the log read (rich-docs spec G4) > an answer for another path, section or commit is malformed-answer {why:pin}; the log read (rich-docs spec G4) > an answer for another path, section or commit is malformed-answer {why:pin}"}
+{"id": "W5B-T9-M2", "spec": "(f)", "pkg": "server", "file": "src/docs/policy.ts", "old": "  return isText(v) && [...v].length <= max && [...redactDocsText(v)].slice(0, max).join('') === v;", "new": "  return isText(v) && [...v].length <= max;", "tests": ["test/docs-policy.test.ts", "test/ccd-docs-log.test.ts"], "red": "3 failed: W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7) > a token mask that the cap cut inside still pass; W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7) > an unredacted author is schema; W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7) > an unredacted subject is schema"}
+{"id": "W5B-T9-M3", "spec": "M9.7", "pkg": "server", "file": "src/docs/policy.ts", "old": "  return Array.isArray(entries) && entries.length <= DOCS_LOG_MAX_ENTRIES && entries.every(logEntryOk)", "new": "  return Array.isArray(entries) && entries.every(logEntryOk)", "tests": ["test/docs-policy.test.ts"], "red": "1 failed: W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7) > one entry over the cap is schema"}
+{"id": "W5B-T9-M4", "spec": "M9.3", "pkg": "server", "file": "src/docs/ccdsource.ts", "old": ": call.verb === 'docs-log' ? call.log.section : null;", "new": ": null;", "tests": ["test/docs-source-w5b.test.ts"], "red": "1 failed: the log read (rich-docs spec G4) > a log of a vision doc without docs-sections-v2 is unsupported, with zero ex"}
+{"id": "W5B-T9-M5", "spec": "(f)", "pkg": "server", "file": "src/docs/policy.ts", "old": "    if (!isText(commit) || !isDocsCommit(commit)) return refused('bad-commit');\n    const place = parsePinPlace(query);\n    return place.ok ? { ok: true, req: { route, ask:", "new": "    if (!isText(commit)) return refused('bad-commit');\n    const place = parsePinPlace(query);\n    return place.ok ? { ok: true, req: { route, ask:", "tests": ["test/docs-policy.test.ts"], "red": "3 failed: W5b-1 T9: parseDocsApiQuery history (rich-docs spec G4) > a short commit is bad-commit; W5b-1 T9: parseDocsApiQuery history (rich-docs spec G4) > an uppercase commit of 40 hex digits is bad-commit; W5b-1 T9: parseDocsApiQuery history (rich-docs spec G4) > the first fault wins in ccd's argv order: commit, th"}
+{"id": "W5B-T9-M6", "spec": "(f)", "pkg": "server", "file": "src/docs/policy.ts", "old": "  return isText(v) && [...v].length <= max && [...redactDocsText(v)].slice(0, max).join('') === v;", "new": "  return isText(v) && [...v].length <= max && redactDocsText(v) === v;", "tests": ["test/docs-policy.test.ts", "test/ccd-docs-log.test.ts"], "red": "2 failed: docs-log: the listing (M9.4 through M9.7) > a token mask cut at the cap still passes the server's shape check; W5b-1 T9: docsAnswerShape docs-log (rich-docs spec G4, M9.7) > a token mask that the cap cut inside still pass"}
+{"id": "W5B-T10-M1", "spec": "M9.8", "pkg": "server", "file": "src/docs/routes.ts", "old": "  app.get('/api/docs/:project/history', { exposeHeadRoute: false }", "new": "  app.get('/api/docs/:project/log', { exposeHeadRoute: false }", "tests": ["test/box-token-census.test.ts", "test/auth-gate.test.ts", "test/docs-headers.test.ts", "test/docs-routes.test.ts"], "red": "15 failed: the scanner is looking at something > found the specific registrations this file reasons about; the docs surface: five session-gated doors, no box token, no /docs route (spec 2026-10-01 \u00a73.13) > DOCS_DOORS ; M5.4 \u2014 every docs route in the real server's table carries the four headers (section 5.3, section 5.8) > a 200; M5.4 \u2014 every docs route in the real server's table carries the four h"}
+{"id": "W5B-T10-M2", "spec": "(f)", "pkg": "server", "file": "src/docs/routes.ts", "old": "async () => believeLog(await reader.log(src, ask))", "new": "async () => await reader.log(src, ask)", "tests": ["test/docs-routes.test.ts"], "red": "1 failed: W5b-1 T10: GET /api/docs/:project/history (rich-docs spec G4, M9.8) > a log answer that fails its shape is 502"}
+{"id": "W5B-T11-M1", "spec": "(c)", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "      if [ -n \"$missing\" ]; then", "new": "      if false; then", "tests": ["test/ccrc-doctor-exposure.test.ts"], "red": "3 failed: ccrc doctor: docs > a ccd whose caps hold only a longer word starting with docs-log-v1 still WARNs naming docs; ccrc doctor: docs > a ccd whose caps read fails WARNs naming both; ccrc doctor: docs > a ccd without docs-log-v1 WARNs naming it, remedy ccrc update"}
+{"id": "W5B-T11-M2", "spec": "(c)", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "CCRC_DOCTOR_DOCS_CAPS='docs-log-v1 docs-sections-v2'", "new": "CCRC_DOCTOR_DOCS_CAPS='docs-log-v1'", "tests": ["test/docs-parity.test.ts"], "red": "1 failed: CCRC_DOCTOR_DOCS_CAPS is one literal, equal to ccdargv's two docs cap constants > is assigned on exactly one l"}
+{"id": "W5B-T11-M3", "spec": "(c)", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "        case $'\\n'\"$caps\"$'\\n' in *$'\\n'\"$tok\"$'\\n'*) ;; *) missing=\"$missing $tok\" ;; esac", "new": "        case \"$caps\" in *\"$tok\"*) ;; *) missing=\"$missing $tok\" ;; esac", "tests": ["test/ccrc-doctor-exposure.test.ts"], "red": "1 failed: ccrc doctor: docs > a ccd whose caps hold only a longer word starting with docs-log-v1 still WARNs naming docs"}
+```
+
+### Restated rows (a measured red that differs from the plan's prediction)
+
+These were measured against the plan's predictions. A row added since its prediction, or a task's extra case, explains each difference. No row stayed green.
+- **W5B-T2-M1:** 2, both in `docs-parity`. ccd's `SECTIONS` does not depend on L0's, so the `ccd-docs-tree` six-sections case stays green under it.
+- **W5B-T2-M2:** 10 (predicted 2+).
+- **W5B-T3-M1** 3 and **W5B-T3-M2** 2 (predicted 2 and 1): Task 9's vision-log case adds one each.
+- **W5B-T4-M1:** 7 (predicted 6); case (7), the vision-only ready row, is the seventh.
+- **W5B-T6-M2:** 2. These are the argv case and the runner case. The case "a merge commit is not listed" no longer goes red, because since the fix wave a merge record without names is read past.
+- **W5B-T6-M3:** 3 (predicted 2+).
+- **W5B-T6-M4:** 27 (predicted 10+); case (3) asserts that a log call was recorded.
+- **W5B-T6-M5:** 1 (predicted 2). Case (4) cannot catch a prefix match, since `xy.md` does not start with `x*.md`, and case (5) pins it.
+- **W5B-T6-M6** 5, **M7** 3, **M8** 2 and **M9** 6 (predicted 2, 1, 1 and 3): the fix round's straddle, shallow and cut-buffer cases add to each.
+- **W5B-T6-M13:** 3 (predicted 2); case (18)'s accepted control row also goes red.
+- **W5B-T7-M2:** `whitelist-structural` fails to load (`refuseToBoot` throws at module load), so no test runs.
+- **W5B-T8-M1:** 2 (predicted 1+).
+- **W5B-T9-M1** 3 and **W5B-T9-M5** 3 (predicted 1 each): the per-field echo `it.each`, and the argv-order and uppercase cases.
+- **W5B-T9-M2:** 3 (predicted 1); after the fix wave it mutates the new comparison.
+- **W5B-T10-M1:** 15 (predicted 4+).
+- **W5B-T11-M1:** 3 (predicted 2); the fix wave's anchor case adds one.
+- **New rows** since the plan: W5B-T6-M15 to M22, W5B-T9-M6 and W5B-T11-M3. Each measured as its fence line says.
+
+### Carried, not fixed
+
+- **"Four sections" prose** remains outside this run's files:
+  - `pwa/src/lib/chatRefs.ts` and `pwa/src/ledgers/ledgerLinks.ts` (W7);
+  - `pwa/src/docs/docsLinks.ts`, two hits (W5b-2 edits that file; otherwise W7);
+  - `auth-gate.test.ts`'s dated history line "The docs four are HTTP routes" (history, left).
+- **`DOCS_FAILURE_SENTENCE['unsupported']`** says the box's ccd "predates Docs". It is also the answer for a ccd that lacks a W5b token. The PWA reaches it only in the 60 s caps-refresh window after a ccd swap, while W8b's history consumer will reach it routinely. For W5b-2 or W8b.
+- **G1's "Why" column** still credits the `--server-first` break to the PWA; the cause is the W5-era server's `entryOk`. For W5b-2's Task 21, which edits the rich-docs spec.
+- **`diff.ignoreSubmodules` beyond gitlinks.** Nothing else is known to change the record's shape. The parse now reads a nameless record past instead of failing.
+- **Two minors left for later:**
+  - `logEntryOk` does not redaction-check `date` or unknown extra keys, the tree's `entryOk` rule; this is now named in its docstring.
+  - Merge exclusion is pinned by the argv cases (row M2) only, since a merge record without names is read past either way.
+- **Pre-existing local reds on this box, not this branch's:**
+  - `ccd-docs-fetch.test.ts`: four `ref-locked` cases, under local git 2.53;
+  - `ccrc-install-landing` (1), `ccrc-install-codex` (2) and `ccrc-containment` (1): a host browser-MCP process WARN, and one curl exit code.
+
+  The PR's CI is the arbiter.
+
+### Fix round 1 (review run 2153, at `b4a08dcf8`)
+
+The coordinator returned the run for one round: 2 Important findings confirmed, 3 rulings, 5 advisory notes. One commit per item:
+
+| Item | Commit | What changed |
+|---|---|---|
+| Step 0, the measured conflict | `6010877ad` | Merged `origin/main` `866b2bd91` once, on the coordinator's word, after #2842 landed. The conflicts were only the shared count lines in `server/src/auth/gate.ts` and `server/test/auth-gate.test.ts`; both sides' routes are kept. `auth-gate` measures `ROUTES.length` 242, of which 239 are HTTP routes and 93 of those exempt, and gate.ts's docstring says 239. |
+| F1, the plan | `b043fd36b` | The Results commit had pasted a second copy of the W5b-1 half (lines 1386-2675 repeated 86-1375) and cut Task 13's Step 5 off mid-sentence. The copy is gone: against base, the plan differs only by Results and the one reworded reserve line, and each heading occurs once. Results and the PR body cite no plan line by number. |
+| F2, CodeQL alert 296 | `52b3d7de9` | `docs-budget.test.ts`'s extra-key case spells its whole input instead of a first-occurrence `.replace`. The alert was not dismissed by hand. |
+| F3, a skip behind a full list | `49ce3c6df`; its review's fixes `4a559f61f` (the shallow arm, row W5B-T6-M24), `1d0a38e37`, `1261a2a00`, `0aea9918b` | Ruling: `truncated` is also true whenever a shallow walk read past a parentless record that touched the doc. `parse_log` counts those skips, and `verb_log` ORs the count into `truncated`. L0's `DocsLogOk` comment says so. L1 checks `truncated` only as a boolean, and no pre-existing spec sentence ties it to a short list (base G4 and M9.7 name cases that make it true), so no number is used. Case `'a shallow walk that reads past a parentless record touching the doc is truncated, even with a full list'`, row W5B-T6-M23. |
+| F4, G4's shallow text | `911b05dbb` | G4 again carries Task 12 Step 3's sentence, "A shallow repository's walk that ends short is `truncated` too.", beside the boundary rule and F3's rule. |
+| F6, nameless commits at both ends | `10637a494` | End-to-end cases for a nameless commit at the newest position and a nameless root as the last record. Row W5B-T6-M17 restated below. |
+| F7, the waiver's delta | `d07117d56` | Refinement (a)'s entry under Deviations found and the waiver file say the measured delta, +167 (below), not "about 140". |
+| F8, how figures were taken | this commit | The BASE and end figures and the suites now say how each was taken. The 400k fuzz is dropped: it was a reviewer's unsaved script, so nothing committed reproduces it. |
+
+Accepted with no change: F5 (the redaction check `cut(redact(v)) === v` is a correction toward L0, named without a number and pinned by W5B-T9-M6), F9 and F10 (recorded in the ledger), and the brief's three named departures and six files outside the plan's list.
+
+**End figures after the round** (at this commit; merge base `866b2bd91`):
+
+| Figure | Value | How taken |
+|---|---|---|
+| `ccd/ccd` code lines | 21833 to 22000, +167 (waiver `maxDelta` 167; +159 at the first close, the round's +8 being the skip count) | `GROWTH_CHECK=1 growth-check`, 95 passed |
+| `ccd/ccrc-doctor-checks` code lines | +11 | the same run |
+| `ROUTES.length`; HTTP routes; exempt-HTTP | 242; 239; 93 | `auth-gate` |
+
+**Suites in the round**, each in the foreground through `ccrc test` at this round's tip:
+- `ccd-docs-log` 37, `ccd-docs-helper-redactor` 61, `ccd-docs-show` 86, `ccd-docs-tree` 191 and `ccd-docs-index` 259, all passed. `ccd-docs-fetch`: 27 passed, 4 failed, the same four `ref-locked` cases under this box's git 2.53 that CI passed at `b4a08dcf8`.
+- `auth-gate`, `box-token-census`, `id-argv-census`, `docs-budget`, `docs-shared`, `docs-policy`, `docs-source-w5b`, `docs-routes` and `docs-parity`: 1574 passed. `single-definition`: 33 files, 1423 passed.
+- `tsc`: server, agent and pwa, rc 0.
+- `typecheck-tests` alone: 12 passed on the second try. The first try was red in its two coverage cases, because the test slice's 6G memory cap killed the tests-inclusive `tsc` it runs (exit 137). That `tsc`, run alone, is rc 0.
+- After `git fetch origin main`: `deviation-refs`, `dtbd`, `citations`, `anchors` and `topology-clean`, 106 passed.
+
+**Mutation rows re-run**: 29 rows, sequentially at `d07117d56`, each restored from a sha256-checked copy with the tree clean after it. They are every row on `ccd/ccd` (the merge changed that file), the T10 rows, W5B-T2-M1 (the round touched `shared/docs.ts`) and the new W5B-T6-M23 and M24. All 29 went red.
+
+Restated against the first close:
+- **W5B-T6-M3** 4 (was 3), **M4** 31 (was 27) and **M8** 4 (was 2): the round's new cases add to each.
+- **W5B-T6-M9** 5 (was 6). With the skip term in place, `truncated = False or skipped > 0` still marks the two shallow cases whose boundary holds the doc, and the new shallow-arm case goes red.
+- **W5B-T6-M15** 3 (was 2): the skip case's `orphan` is then listed.
+- **W5B-T6-M17** 2 (was 1): the newest-position nameless case. The nameless-root case cannot go red under it, because the parser returns at the buffer's end before the newline check.
+
+```json
+{"id": "W5B-T6-M23", "spec": "G4 (fix round 1, F3)", "pkg": "server", "file": "../ccd/ccd", "old": " or skipped > 0", "new": "", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: a shallow walk that reads past a parentless record touching the doc is truncated, even with a full list"}
+{"id": "W5B-T6-M24", "spec": "G4 (fix round 1, F3 review)", "pkg": "server", "file": "../ccd/ccd", "old": "(cut or repo.shallow)", "new": "(cut)", "tests": ["test/ccd-docs-log.test.ts"], "red": "1 failed: a shallow walk that ends short is truncated when its boundary does not hold the doc"}
+```
+
 ## Deviations found
 
 Known departures are allocated and defined by the coordinator in one act at each run-open, then included in the brief. Each close copies those definitions and reconciles its already issued reserve (W5b-1: refinement (a), then (b), then any found; W5b-2: refinement (m), then (n), (p), (q) and (t), then any found).
 
-- **D-8642 (2026-11-15)** — ccd-growth-waiver. Refinement (a): departs from ARCH-01's growth limit (`server/test/growth-check.test.ts`). `ccd/ccd` grows by about 140 net code lines (the docs-log front, its embedded helper, the runner's log row and shape check, the parity literals and the caps lines); the helper stays embedded for `_pr_py`'s reason, since a sibling file would be a second deployment step. Task 12 adds one waiver file for `ccd/ccd`, tagged with this number, its `maxDelta` the measured delta. Issued to run 2124 at its opening.
+- **D-8642 (2026-11-15)** — ccd-growth-waiver. Refinement (a): departs from ARCH-01's growth limit (`server/test/growth-check.test.ts`). `ccd/ccd` grows by 167 net code lines, measured by `GROWTH_CHECK=1` against the merge base (21833 to 22000 after fix round 1's merge of `main`; 159 at the first close, 21829 to 21988) (the docs-log front, its embedded helper, the runner's log row and shape check, the parity literals and the caps lines); the helper stays embedded for `_pr_py`'s reason, since a sibling file would be a second deployment step. Task 12 adds one waiver file for `ccd/ccd`, tagged with this number, its `maxDelta` the measured delta. Issued to run 2124 at its opening.
 - **D-8643 (2026-11-15)** — no-ccd-restamp. Refinement (b): departs from the rich-docs spec §8's W5b row ("`ccd/ccd` is restamped"). The run edits `ccd/ccd` and never restamps it: the stamp is written at install time, and `ccrc restamp ccd/ccd` is refused. Task 12 amends the sentence. Issued to run 2124 at its opening.
 
-Reserve issued to run 2124 and unused at its opening: 8644, 8645, 8646.
+Reserve issued to run 2124 and unused at its close: 8644, 8645, 8646.
+
+- **D-8648 (2026-11-15)** — version-ref-in-url. Refinement (m): departs from the rich-docs spec's G6 ("'Back to the latest' its ref, in `history.state` for the visit, not in the URL") and RD19 ("`only` and `latest` stay in-visit state"). `ref` stays in the URL beside `at`, as the operator answered Q1 (a), and W5b writes nothing into `history.state`; the spec's Later item loses its `latest` half. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8649 (2026-11-15)** — version-images-at-version. Refinement (n): departs from base §4.11's pin rule (a committed page gives `CommittedPin{commit: ref.commit, servedRef: ref.served, section, path}`). A version page's images are read at the version. Task 21 amends the sentence. Issued to run 2178 at its opening.
+- **D-8650 (2026-11-15)** — version-needs-listed-file. Refinement (p): departs from four sentences of base §2 (e) (a gc'd pinned commit answers `unknown-commit` and the PWA re-lists once; a commit reaches a request only from a tree answer of the same visit; the tree is re-fetched after `unknown-commit` with one automatic retry; the failure table's `unknown-commit | 404 | auto | re-list`) and from §4.3 item 2 ("Committed bodies are keyed by `blob`"). The version view needs the doc in the served listing, as a committed file. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8651 (2026-11-15)** — version-head-and-banner. Refinement (q): departs from base §3.1 (`view=committed` survives on a leaf "only together with `ref`") and from §4.5's banner and truth-line rows on a version page. The header and one banner name the version. Task 21 amends the sentences. Issued to run 2178 at its opening.
+- **D-8652 (2026-11-15)** — version-export-links-inert. Refinement (t): departs from base §4.17's link table, whose `doc` and `repo` rows give `githubPermalink` at C. An Export of a version page writes its body's doc and repo links inert. Task 21 amends the table. Issued to run 2178 at its opening.
+
+Reserve issued to run 2178: 8653, 8654, 8655.
 
 ## Where things stand
 

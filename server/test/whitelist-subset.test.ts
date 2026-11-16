@@ -373,6 +373,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
     const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
       ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
+      ['docs-log', '--project'],
     ];
     for (const [verb, flag] of GRANTS) {
       expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
@@ -393,6 +394,9 @@ describe('layer 3 — the list never drifts wider than the code', () => {
       'c'.repeat(64), 2097152)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', null)])).toBe(true);
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsFetch('demo', 'ws/a')])).toBe(true);
+    // The history verb's 8-token argv, as the builder writes it.
+    expect(isExecAllowed('ccd', [...CCD_ARGV.docsLog('demo', 'a'.repeat(40), 'specs', 'a.md')])).toBe(true);
+    expect(isExecAllowed('ccd', ['docs-log', '--all'])).toBe(false);
   });
 
   // The other half of the same decision, and the half a `not.toContain(
@@ -642,6 +646,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     docsShowDraft: ['docs-show', '--project', 'demo', '--draft-branch', 'main', '--head', 'b'.repeat(40),
                     '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'],
     docsFetch: ['docs-fetch', '--project', 'demo'],
+    docsLog: ['docs-log', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs', '--path', 'a.md'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

@@ -187,7 +187,9 @@ import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js'
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
-import { notify, noticeSink, notifyPushOnly } from './notice.js';
+import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
+import { itemBoundOf, outboxSettledOf, senderFor, type SettledOf } from './pushSender.js';
+import type { ItemReachOf } from './coord/pushOutboxStore.js';
 import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
 import { landedPass } from './coord/landedLane.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_LANES, LANE_ARM_MARKER, type LaneArmImport, type LaneArmLane } from '../../shared/lane-arm.js';
@@ -253,7 +255,7 @@ import {
   recordDeadCoordinatorFeed, recordDeadCoordinatorThrew, rereadDeadCoordinatorJournalTrust,
 } from './coord/endDeadCoordinator.js';
 import type { CoordRoutesHandle } from './coord/routes.js';
-import { createQuestions, type Questions, type RaiseVerdict } from './coord/questions.js';
+import { createQuestions, type QuestionOutbox, type Questions, type RaiseVerdict } from './coord/questions.js';
 import { localIO } from './io.js';
 import { measureFleetReadiness, type FleetReadiness } from './readiness.js';
 import { FLEET_LABEL, SERVER_LABEL, printableDetail, sweepInventory, type InventoryDeps, type SweepOutcome } from './update/inventory.js';
@@ -1450,11 +1452,18 @@ export class FleetWatcher {
   /** D-7026: this watcher's ONE owner of question state (`coord/questions.ts#createQuestions`), made here and read by
    *  `buildServer` (`watcher.questions`), so the routes and the watcher reach the same instance. Never module scope. */
   readonly questions: Questions;
+  /** The push outbox's view for asks and items (Overlord W1, Task 5): an ask's record and send go through `pushOne`. */
+  private readonly outboxSettled: SettledOf;
+  private readonly askOutbox: QuestionOutbox;
+  private readonly itemReach: ItemReachOf = (item) => itemBoundOf(this.deps, item, 'reach');
 
   constructor(private deps: WatcherDeps, private bus: Bus, private intervalMs = 2000, cachePath?: string) {
     // W3 Q3f (D-7030): the doors' sink, this watcher's: the door cores push through `pushOne` as the lapse sinks do, and
     // read the two pane-edge facts a door-in needs (the painted dialog, the child's project) at the call, never copied.
-    this.questions = createQuestions(deps, { heldFor, doors: {
+    this.outboxSettled = outboxSettledOf({ askSettled: (id) => this.questions.askSettled(id) }, deps.coord);
+    this.askOutbox = questionOutboxOf(deps, () => this.questions, () => this.activeProjects,
+      (ev, bound) => { this.pushOne({ ...ev, bound }, this.activeProjects); });
+    this.questions = createQuestions(deps, { heldFor, outbox: this.askOutbox, doors: {
       push: (ev) => this.pushOne(ev, this.activeProjects),
       paintedDialogOf: (childId) => this.dialogIds.get(childId),
       projectOf: (childId) => this.lastFleet?.find((f) => f.id === childId)?.project ?? '',
@@ -1823,6 +1832,9 @@ export class FleetWatcher {
    * The send starts only AFTER the mark committed, is `void`ed and is never retried
    * (D-3295): at most once, because a repeated "vX is out" is the noise the persisted
    * mark exists to stop, and a missed one is still shown by the fleet's update line and the settings screen.
+   * Since the push outbox (Overlord W1) "at most once" reads "shown at most once": a rejected send is `unknown` and
+   * not retried, and a send that every subscription refused is retried inside its ten minutes, since no device took it.
+   * (slug release-push-shown-at-most-once)
    *
    * Sessionless (D-3296): no `sessionId`, no presence gate, no `NotifyLog` or feed record —
    * `pushOne` is about a session and this is about the fleet. So it goes through `notifyPushOnly`, the funnel's
@@ -1876,7 +1888,7 @@ export class FleetWatcher {
     const copy = releasePushCopy(n, summary);
     const payload: PushPayload = { title: copy.title, body: copy.body, tag: copy.tag, url: copy.url };
     const tag = n.tag;
-    notifyPushOnly({ push: sender }, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
+    notifyPushOnly(this.deps, payload, `ccrc-server: update: the release push for ${tag} did not send — it is not retried; the fleet's update line and the settings screen still show the release`);
     return { did: 'pushed', tag, payload };
   }
 
@@ -2806,6 +2818,7 @@ export class FleetWatcher {
       void this.sweepLaunchProfile(records).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
       void this.sweepQuiz().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
@@ -3606,6 +3619,8 @@ export class FleetWatcher {
     url?: string;
     /** D-5860: the notice's once-only key, archived beside its row for `CoordStore.hasNotice`. It decides nothing here. */
     dedupeKey?: string;
+    /** The push outbox (Overlord W1): an ask's bound row, written by its move; the funnel sends that row. */
+    bound?: NoticeOpts['bound'];
   } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
@@ -3623,6 +3638,7 @@ export class FleetWatcher {
         ...(e.actions ? { actions: e.actions } : {}),
         ...(e.url !== undefined ? { url: e.url } : {}),
         ...(e.dedupeKey !== undefined ? { dedupeKey: e.dedupeKey } : {}),
+        ...(e.bound !== undefined ? { bound: e.bound } : {}),
       });
   }
 
@@ -4817,7 +4833,7 @@ export class FleetWatcher {
     }
     this.childReclaimJudged = judged;
     // D-8293: a review child past its ceiling is a Waiting on you item whose Release is the operator's (`coord/reviewRelease.ts`).
-    routeReviewReleases({ coord }, staleReviews, judged, now);
+    routeReviewReleases({ coord, itemReach: this.itemReach }, staleReviews, judged, now);
     // The list's second publish, and the kept feed row: judging passes only, so a paused or capability-less
     // pass lists what it kept and writes nothing (spec §5.9). Recorded, never pushed.
     for (const a of this.childReclaimPublishAttention(mirrorArms, live)) {
@@ -6045,6 +6061,7 @@ export class FleetWatcher {
       childMark: (sid) => this.childMarkFor(sid),
       branchOpenPr: (project, branch) => readBranchOpenPr({ runCcd: this.deps.runCcd, fleetState: this.deps.fleetState }, project, branch),
       abandonRefusal: (runId) => abandonRefusal(coord, runId),
+      itemReach: this.itemReach,
       serial: this.deadCoordinatorSerial,
     }));
   }
@@ -6161,6 +6178,12 @@ export class FleetWatcher {
     const port = this.deps.quiz;
     if (!port) return;
     await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
+  }
+
+  /** The push outbox lane (Overlord W1, `pushSender.ts`): the held items' reach, every due row sent once per claim, the purge. */
+  async sweepPushOutbox(): Promise<void> {
+    if (!this.deps.coord) return;
+    await this.runLane('pushOutbox', () => senderFor(this.deps).drain(this.deps.time.clock.wall(), this.outboxSettled));
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
@@ -9435,6 +9458,7 @@ export class FleetWatcher {
     // The hold's answer, sent here: `raise` answers what to send now and never pushes (W3 Q3d, D-7028).
     const pushRaised = (v: RaiseVerdict): RaiseVerdict => {
       if (v.kind === 'held') this.pushOne(v.record, this.activeProjects);
+      else if (v.kind === 'released' && v.bound !== null) this.askOutbox.sent(v.push, v.bound.askId, v.bound.row);
       else if (v.kind === 'released') this.pushOne(v.push, this.activeProjects);
       return v;
     };
@@ -9726,7 +9750,9 @@ export class FleetWatcher {
     // rather than as license to keep holding new asks. The switch comes from the tick's listing (D-5864): it gates
     // the hold on later ticks, so nothing here acts on it at once. The instance holds it (W3 Q3d, D-7028).
     this.questions.noteAsksSwitch((await this.fleetFor(fleet)).switches[ASKS_DISABLED_MARKER] !== 'clear');
-    this.questions.lapseAsks(now, (ev) => this.pushOne(ev, this.activeProjects));
+    this.questions.lapseAsks(now, (ev, bound) => {
+      if (bound === undefined) this.pushOne(ev, this.activeProjects); else this.askOutbox.sent(ev, bound.askId, bound.row);
+    });
   }
 
   /**
@@ -11342,7 +11368,7 @@ class DelegationLane {
           }
           // PR7 (Task 5.7.3): adoption, between native-removed and the carriers, so an adopted lease's carrier is marked in this pass.
           if (durable.state().phase === 'ready' && !pass.signal.aborted) {
-            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push };
+            const deps = this.deps, sink = { notifyLog: deps.notifyLog, coord: deps.coord, push: deps.push, time: deps.time, masker: deps.masker };
             const before = this.adoptMemory.watch;                       // review 1622 F1: replaced only when the decider ran
             try {                                                         // PR7b: a throw here never skips PR6's carrier step
               await runAdoptStep({ io: deps.io, registryDir: deps.cfg.registryDir, signal: pass.signal, runCcd: deps.runCcd, fleetState: deps.fleetState, durable, mail: sink,

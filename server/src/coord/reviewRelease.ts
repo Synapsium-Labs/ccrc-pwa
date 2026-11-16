@@ -21,6 +21,7 @@ import { CHILD_RECLAIM_SKIP, type ChildReclaimSweepVerdict } from '../childRecla
 import { readCoordinatorOfRun } from './bindingReads.js';
 import type { WatcherCoordPort } from './ports.js';
 import { insertSystemMailTx } from './rundefsTx.js';
+import type { ItemReachOf } from './pushOutboxStore.js';
 
 /** One review child the pass judged `review-report-stale`: the child, the review run that minted it and the run it reviewed. */
 export interface ReviewReleaseSighting {
@@ -104,6 +105,8 @@ export const reviewReleaseOrigin = (held: boolean): string => (held ? 'Its coord
 
 export interface ReviewReleaseDeps {
   readonly coord: WatcherCoordPort;
+  /** The push outbox (Overlord W1): an item shown at its raise gets its reach stamp and one `silent` row in the raise's tx. */
+  readonly itemReach?: ItemReachOf | undefined;
 }
 
 /** What a pass did, for its tests and its log. */
@@ -152,7 +155,7 @@ export function routeReviewReleases(
           reviewName, graceSeconds: askGraceSeconds() });
         return insertSystemMailTx(coord, null, { fromId: 'operator', toId: coordinator, runId: null, kind: 'status',
           subject: mail.subject, body: mail.body, wake: 'never' });
-      });
+      }, deps.itemReach?.(input));
       raised.push(out);
     } catch (err) {
       console.warn(`ccrc-server: reviewRelease: the item for review run ${s.reviewRunId} could not be raised `

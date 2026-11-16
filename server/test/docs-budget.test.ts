@@ -37,7 +37,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..', '..');
 const readRel = (rel: string): string => readFileSync(path.join(ROOT, rel), 'utf8');
 
-const DOCS_BUDGET_VERBS = ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch'] as const;
+const DOCS_BUDGET_VERBS = ['docs-index', 'docs-tree', 'docs-show', 'docs-fetch', 'docs-log'] as const;
 type DocsBudgetVerb = (typeof DOCS_BUDGET_VERBS)[number];
 
 /** The one match of `re` (a `g` regex) in `text`; throws on zero or on more than one. */
@@ -54,7 +54,7 @@ function runnerMsIn(src: string, verb: DocsBudgetVerb): number {
   return Number(m[1]!.replace(/_/g, ''));
 }
 
-/** ccd's `HELPER_DEADLINE_S` dict literal, parsed. Throws unless it is `{'<verb>':<int>,...}` naming exactly the four
+/** ccd's `HELPER_DEADLINE_S` dict literal, parsed. Throws unless it is `{'<verb>':<int>,...}` naming exactly the
  *  docs verbs, each once. */
 function helperDeadlinesIn(helperSrc: string): Record<DocsBudgetVerb, number> {
   const lit = pyLiteral(helperSrc, 'HELPER_DEADLINE_S');
@@ -64,7 +64,7 @@ function helperDeadlinesIn(helperSrc: string): Record<DocsBudgetVerb, number> {
   const pairs = [...lit.matchAll(/'([a-z-]+)':(\d+)/g)].map((m) => [m[1]!, Number(m[2]!)] as const);
   const keys = pairs.map(([k]) => k).sort();
   if (keys.join(',') !== [...DOCS_BUDGET_VERBS].sort().join(',')) {
-    throw new Error(`HELPER_DEADLINE_S names ${JSON.stringify(keys)}; the contract is exactly the four docs verbs`);
+    throw new Error(`HELPER_DEADLINE_S names ${JSON.stringify(keys)}; the contract is exactly the docs verbs`);
   }
   return Object.fromEntries(pairs) as Record<DocsBudgetVerb, number>;
 }
@@ -114,13 +114,14 @@ const helperSrc = (): string => docsHelperSource();
 const HEADROOM_S = 5;
 
 describe('docs runner budgets outlast the helper (row 47, spec section 2 (a) Budgets)', () => {
-  it('the four CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 ms', () => {
+  it('the five CCD_VERB_TIMEOUT_MS rows are 20 000 / 20 000 / 15 000 / 60 000 / 20 000 ms', () => {
     expect(DOCS_BUDGET_VERBS.map((v) => [v, runnerMs(v)])).toEqual([
       ['docs-index', 20_000], ['docs-tree', 20_000], ['docs-show', 15_000], ['docs-fetch', 60_000],
+      ['docs-log', 20_000],
     ]);
   });
 
-  it('the helper deadline table names exactly the four docs verbs, and the grace is a whole-second integer', () => {
+  it('the helper deadline table names exactly the docs verbs, and the grace is a whole-second integer', () => {
     const deadlines = helperDeadlinesIn(helperSrc());
     expect(Object.keys(deadlines).sort()).toEqual([...DOCS_BUDGET_VERBS].sort());
     expect(Number.isInteger(pyIntIn(helperSrc(), 'KILL_GRACE_S'))).toBe(true);
@@ -218,11 +219,13 @@ describe('CONTROL: each extractor refuses zero and two, so no case above can pas
   });
 
   it('helperDeadlinesIn: a missing verb, an extra key, a non-integer and a second binding', () => {
-    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}\n";
-    expect(helperDeadlinesIn(ok)).toEqual({ 'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45 });
-    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7}\n"))
-      .toThrow(/exactly the four docs verbs/);
-    expect(() => helperDeadlinesIn(ok.replace('}', ",'docs-x':1}"))).toThrow(/exactly the four docs verbs/);
+    const ok = "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}\n";
+    expect(helperDeadlinesIn(ok)).toEqual({ 'docs-index': 12, 'docs-tree': 12, 'docs-show': 7, 'docs-fetch': 45, 'docs-log': 10 });
+    expect(() => helperDeadlinesIn("HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45}\n"))
+      .toThrow(/exactly the docs verbs/);
+    expect(() => helperDeadlinesIn(
+      "HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-x':1}\n",
+    )).toThrow(/exactly the docs verbs/);
     expect(() => helperDeadlinesIn(ok.replace(':7,', ':7.5,'))).toThrow(/integer seconds/);
     expect(() => helperDeadlinesIn(`${ok}HELPER_DEADLINE_S={}\n`)).toThrow(/bound 2 times/);
   });
