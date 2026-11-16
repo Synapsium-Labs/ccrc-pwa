@@ -72,10 +72,10 @@ const childLine = (id: string, settings: string, sidflag: string): string =>
   + `CLAUDE_CODE_SHELL=/bin/bash ${sessionPanePath(h)} '${h.home}/.local/bin/claude' --effort high --settings '${settings}' ${sidflag} --dangerously-skip-permissions`;
 
 describe('CHILD_DENY_RULES (spec §6.6)', () => {
-  it('is Task 12\'s forbidden ccd verbs, then ccrc update and rollback, then claude install and update; the path-qualified forms wait on Task 13', () => {
+  it('is Task 12\'s forbidden ccd verbs, then ccrc update, rollback and rollout, then claude install and update; the path-qualified forms wait on Task 13', () => {
     expect(CHILD_DENY_PATH_QUALIFIED).toBe(false);
     expect(CHILD_DENY_RULES).toEqual([
-      ...FORBIDDEN_CCD_VERBS.map((v) => `Bash(ccd ${v}:*)`), 'Bash(ccrc update:*)', 'Bash(ccrc rollback:*)',
+      ...FORBIDDEN_CCD_VERBS.map((v) => `Bash(ccd ${v}:*)`), 'Bash(ccrc update:*)', 'Bash(ccrc rollback:*)', 'Bash(ccrc rollout:*)',
       'Bash(claude install:*)', 'Bash(claude update:*)',
     ]);
   });
