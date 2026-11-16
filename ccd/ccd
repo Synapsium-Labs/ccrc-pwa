@@ -2564,7 +2564,7 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
-# The organization label (`_ccrc_org`), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
+# The organization label (accounts.sh's _ccrc_org), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
 # of `shared/accountOrg.ts#orgRelation` (org-relation.test.ts). One account is `same`; a missing label is `unknown`.
 _acct_org() { declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
 _org_rel() { local a b; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
