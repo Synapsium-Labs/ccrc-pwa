@@ -52,6 +52,13 @@ Nothing changes at merge but the boxes. No W1 code reads a mark beyond the waiti
   callee's name, so the answer marks' writer is pinned by route the same way, with a planted second call in the tick door.
 - **`done-without-a-closing-time`**: a `done` item with no `closedAt` (a corrupt row; no writer makes one) is `past-window`,
   never markable. `itemsFor` lists no such row either.
+- **`answer-mark-words-admitted`**: `mail-routes.test.ts` scans every quoted kebab word in `server/src/coord`, and the answer
+  marks name theirs as literals (a mark's name, the four reasons, `ask-marks-not-yet`). `answerMarks.ts` exports
+  `isAnswerMarkKebab`, derived from its own reason map and L0's name guard, and the scan admits it as it admits the other
+  lanes' words, never through `NOT_CODES`. The fast run measured the miss first.
+- **`mark-label-holds-box`**: each checkbox sits inside its own label, `.wl-mark-hit`, whose rule carries the tap floor, so the
+  whole line toggles it; `control-census.test.ts` registers it as `SELECTOR .wl-mark-hit`. `.wl-marks` sets no colour of its
+  own, so no rule of the sheet joins `contrast.test.ts`'s uncovered census.
 - **`cleared-trail-current`**: `ClearedTrail` gains an optional `current` (default true), so the cleared rows' boxes are off on
   the device's saved copy, as the list's own acts are.
 
@@ -70,5 +77,6 @@ Each was measured red, then restored from a saved copy:
   answer_marks` in `ledgersStore.ts` (`writers-map`).
 - Task 3: a `checkMailToken` call in the door (`box-token-census`); the gate's actor while dark; no `itemMarkable` in the door;
   `waitingViewOf` throwing on a failed mark read; the coordinator's read passing the marks (F13).
+- The fix round: `'past-window'` dropped from `isAnswerMarkKebab`'s map (`mail-routes.test.ts`).
 - Task 4: `pending` left set after a refusal; boxes drawn when `answerMarks` is absent; the view always winning over the
   settled answer (F14).

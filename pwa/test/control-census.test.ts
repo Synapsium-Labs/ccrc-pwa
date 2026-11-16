@@ -528,6 +528,10 @@ const CONTROLS: Record<string, string> = {
   'docs/DocLink.tsx <a> (none)':
     'INLINE. The links inside a rendered document, react-markdown\'s `a` for Docs (in-app, fragment and external). '
     + 'WCAG 2.2 SC 2.5.8 exempts a target in a sentence or block of text, as for chat\'s `lib/markdown.tsx <a> (none)`.',
+  // Overlord W1, answer marks: each box sits inside its own label, the hit area.
+  'ledgers/AnswerMarkBox.tsx <input> (none)':
+    'SELECTOR .wl-mark-hit. One of the operator\'s two answer marks on a Waiting on you question: a checkbox inside its '
+    + 'label, whose rule carries the floor, so the whole label line toggles it.',
   'docs/export/exportMarkdown.tsx <a> (none)':
     'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
     + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',

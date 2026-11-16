@@ -7,7 +7,7 @@
 // same call: so the box shows the operator's tap at once (pending, disabled so a second tap waits), keeps the door's answer
 // as `settled` when the call resolves, and rolls back to the server's value on any refusal or failure, with the reason beside
 // it. The one settle rule (`settledMark`) decides what shows after that: the newer of `settled` and the view's mark.
-import { useEffect, useId, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { ANSWER_MARK_NAMES, type AnswerMarkName, type AnswerMarkView } from '../../../shared/answerMarks';
 import type { ItemView } from '../../../shared/ledgers';
 import { api } from '../lib/api';
@@ -23,7 +23,6 @@ function AnswerMarkBox({ id, mark, view, current, onUse }: {
   const [pending, setPending] = useState<boolean | null>(null);
   const [settled, setSettled] = useState<AnswerMarkView | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
-  const htmlId = useId();
   const { shown, drop } = settledMark(view, settled);
   useEffect(() => { if (drop) setSettled(null); }, [drop]);
   const box = shownMark(shown, pending, current);
@@ -38,9 +37,10 @@ function AnswerMarkBox({ id, mark, view, current, onUse }: {
   };
   return (
     <span className="wl-mark" data-mark={mark} data-state={shown.state}>
-      <input id={htmlId} type="checkbox" checked={box.checked} disabled={box.disabled}
-             onChange={(e) => tap(e.currentTarget.checked)} />
-      <label htmlFor={htmlId}>{ANSWER_MARK_LABEL[mark]}</label>
+      <label className="wl-mark-hit">
+        <input type="checkbox" checked={box.checked} disabled={box.disabled} onChange={(e) => tap(e.currentTarget.checked)} />
+        {ANSWER_MARK_LABEL[mark]}
+      </label>
       {box.note !== null && <span className="wl-mark-note">{box.note}</span>}
       {refusal !== null && <span className="wl-mark-refusal" role="alert">{refusal}</span>}
     </span>

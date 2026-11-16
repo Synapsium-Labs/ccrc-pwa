@@ -52,7 +52,7 @@ import { portfolioFor } from './portfolio.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
-import { DARK_MARK_ACTOR, itemMarkable, itemMarksView, markViewOf } from './answerMarks.js';
+import { ASK_MARKS_NOT_YET, DARK_MARK_ACTOR, itemMarkable, itemMarksView, markViewOf } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
@@ -791,7 +791,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     if (!parsed.ok) return bad(reply, parsed.detail);
     const { write } = parsed;
     // An ask's marks are PR B's (plan Task 5).
-    if (write.kind !== 'item') return bad(reply, 'ask-marks-not-yet');
+    if (write.kind !== 'item') return bad(reply, ASK_MARKS_NOT_YET);
     const now = deps.now();
     const item = coord.itemById(write.id);
     if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${write.id}` });

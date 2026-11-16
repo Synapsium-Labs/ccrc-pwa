@@ -8,7 +8,7 @@
 // `value` item the list shows carries boxes exactly when the door accepts a mark on it. `answer-marks.test.ts` pins that
 // agreement over one fixture set in a real `coord.db`.
 import { CLEARED_WINDOW_MS, OPEN_ITEM_STATES, operatorShownAt, type ItemKind } from '../../../shared/ledgers.js';
-import type { AnswerMarkView, AnswerMarksView } from '../../../shared/answerMarks.js';
+import { isAnswerMarkName, type AnswerMarkView, type AnswerMarksView } from '../../../shared/answerMarks.js';
 
 /** Why a row carries no box (plan question 13, the `not-markable` refusal's `detail`):
  *  `no-box`: a `do` or `secret` item, which is not a question the Overlord could answer (Table 6.1a);
@@ -16,6 +16,13 @@ import type { AnswerMarkView, AnswerMarksView } from '../../../shared/answerMark
  *  `past-window`: done longer ago than the Recently cleared window;
  *  `not-listed`: in no list's state (withdrawn, dismissed, or a state this build does not know). */
 export type NotMarkableReason = 'no-box' | 'not-shown' | 'past-window' | 'not-listed';
+const NOT_MARKABLE_REASON_MAP: Readonly<Record<NotMarkableReason, true>> = { 'no-box': true, 'not-shown': true, 'past-window': true, 'not-listed': true };
+/** The door's `bad-request` detail for a mark on an ask, which W1 does not take yet. */
+export const ASK_MARKS_NOT_YET = 'ask-marks-not-yet';
+/** The answer marks' own words, for `mail-routes.test.ts`'s code scan: a mark's name, a reason and the ask detail. None is
+ *  a mail or run refusal; the door's refusal is `not-markable`, sent by `refuseRoute`. */
+export const isAnswerMarkKebab = (tok: string): boolean =>
+  isAnswerMarkName(tok) || Object.hasOwn(NOT_MARKABLE_REASON_MAP, tok) || tok === ASK_MARKS_NOT_YET;
 export type Markable = { markable: true } | { markable: false; reason: NotMarkableReason };
 
 /** The kinds that carry an answer the Overlord could give, and so the two boxes. */

@@ -155,10 +155,12 @@
 .wl .wl-cleared-row { font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wl .wl-cleared-row s { color: var(--ink-secondary); }
 /* The operator's two answer marks (Overlord W1): their own controls under the row, never inside its button. */
-.wl-marks { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); align-items: center; font-size: var(--fs-meta); color: var(--ink-secondary); }
+.wl-marks { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); align-items: center; font-size: var(--fs-meta); }
 .wl-li > .wl-marks { grid-column: 1 / -1; padding: 0 var(--sp-2); }
 .wl-cleared-row > .wl-marks { margin-top: var(--sp-1); }
-.wl-mark { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); }
+.wl-mark { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1); }
+/* The label holds its box, so the whole line at the tap floor toggles it. */
+.wl-mark-hit { display: inline-flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); cursor: pointer; }
 .wl-mark-note { font-style: italic; }
 .wl-mark-refusal, .wl-marks-explainer { flex-basis: 100%; margin: 0; overflow-wrap: anywhere; }
 .wl-mark-refusal { padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); background: var(--status-dead-tint-solid); color: var(--status-dead-text); }
