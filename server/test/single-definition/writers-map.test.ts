@@ -315,14 +315,15 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots'] as const;
 
-/** Each table's writers, `file#Class.method`, sorted and unique. */
-export const tableWriters = (files: readonly string[]): Record<string, string[]> => {
-  const out: Record<string, Set<string>> = Object.fromEntries(TABLES.map((t) => [t, new Set<string>()]));
-  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${TABLES.join('|')})\\b`, 'g');
+/** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
+ *  and the private store's for its own describe (Overlord W1 private store A). */
+export const tableWriters = (files: readonly string[], tables: readonly string[] = TABLES): Record<string, string[]> => {
+  const out: Record<string, Set<string>> = Object.fromEntries(tables.map((t) => [t, new Set<string>()]));
+  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${tables.join('|')})\\b`, 'g');
   for (const f of files) {
     // Comment lines blanked to spaces, so prose naming a statement is not a writer and offsets still hold.
     const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-    if (!TABLES.some((t) => text.includes(t))) continue;
+    if (!tables.some((t) => text.includes(t))) continue;
     const hits = [...text.matchAll(verb)];
     if (hits.length === 0) continue;
     const syms = parseFile(f).symbols;
@@ -622,6 +623,40 @@ describe(CAPS_PIN, () => {
       'server/src/watch.ts',             // calls the writer, and names the file in its warning
       'shared/api.ts',                   // spells the name, SERVER_CAPS_FILE
     ]);
+  });
+});
+
+// THE PRIVATE STORE'S TABLES (Overlord W1, private store A; spec §9.1, C29). `operator-model.db` is a second SQLite file with
+// one owner, `OperatorModelStore`: `recordMessage` is the one INSERT of a message, `moveMessage` the one writer of its state and
+// stamps (by the message moves table), and `recordRead` the one writer of the read ledger. MAY ONLY SHRINK.
+const PRIVATE_TABLES = ['operator_messages', 'read_ledger'] as const;
+describe('the private store\'s tables: every SQL write is an OperatorModelStore method, by name, may only shrink', () => {
+  it('CONTROL: a second UPDATE of operator_messages in another function is named, beside the store\'s own', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-private-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        'export class OperatorModelStore {',
+        "  moveMessage(): void { this.db.prepare('UPDATE operator_messages SET state = ? WHERE id = ?'); }",
+        '}',
+        "export function sneak(): void { db.prepare('UPDATE operator_messages SET text = ? WHERE id = ?'); }",
+        "export function look(): void { db.prepare('SELECT * FROM read_ledger'); }",
+      ].join('\n'));
+      const w = tableWriters([f], PRIVATE_TABLES);
+      expect(Object.fromEntries(Object.entries(w).map(([t, ws]) => [t, ws.map((s) => s.replace(/^.*#/, ''))])))
+        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [] });
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('each table\'s writers, by name', () => {
+    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
+    const S = 'server/src/operatorModel/store.ts#OperatorModelStore.';
+    expect(tableWriters(files, PRIVATE_TABLES)).toEqual({
+      operator_messages: [`${S}moveMessage`, `${S}recordMessage`],
+      read_ledger: [`${S}recordRead`],
+    });
   });
 });
 

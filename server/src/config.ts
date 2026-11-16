@@ -2,6 +2,7 @@ import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node
 import os from 'node:os';
 import path from 'node:path';
 import { defaultCoordDbPath } from './coord/db.js';
+import { defaultOperatorModelDbPath } from './operatorModel/db.js';
 import { defaultSessionsPath } from './auth/paths.js';
 import { defaultPasskeysPath } from './auth/credentials.js';
 import { parseRoster, RosterError, type Roster } from '../../shared/roster.js';
@@ -200,6 +201,9 @@ export interface CcrcConfig {
   /** The coordination database, on THIS box (see coord/db.ts). Overridable so
    *  a test can point at a fixture home without exporting CCRC_HOME. */
   coordDbPath: string;
+  /** The Overlord's private store, `operator-model.db`, beside `coordDbPath` on THIS box (operatorModel/db.ts).
+   *  Built once, from the same home. */
+  operatorModelDbPath: string;
   /** Where THIS box keeps its copy of the box token (coord/token.ts). The
    *  fleet host keeps the same value at `~/.cc-secrets/ccrc-mail.token`;
    *  neither box can read the other's, which is why there are two copies of
@@ -589,6 +593,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CcrcConfig {
     // built twice, once tested and once not, is how a rename in one place
     // silently opens a different (or brand-new, empty) database in the other.
     coordDbPath: env.CCRC_COORD_DB ?? defaultCoordDbPath(home),
+    operatorModelDbPath: defaultOperatorModelDbPath(home),
     mailTokenPath: env.CCRC_MAIL_TOKEN_PATH ?? path.join(home, '.ccrc', 'mail.token'),
     buildInfoPath: path.join(home, '.ccrc', 'build.json'),
     ccrcDir: path.join(home, '.ccrc'),

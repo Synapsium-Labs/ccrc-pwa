@@ -150,7 +150,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `check`, `enable`, `disable`, `credential`, `remove`, `seed`), `openrouter-management` with any sub (`ceiling`
   included), `ccd-account-auth` or `ccd account-pane`; reads `~/.cc-secrets/`, `~/.ccrc/auth-scratch/`,
   `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
-  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
+  `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714), or the Overlord's private store and every copy of it (`~/.ccrc/operator-model.db*`, `~/.ccrc/privacy-journal.log`, `~/.ccrc/privacy-journal.torn/`, `~/ccrc-backups/*/operator-model.db*`, `~/.ccrc/coordination-restore.stage/*/operator-model.db*`, `~/.ccrc/coordination-restore.foreign/*/operator-model.db*`); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
   the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
@@ -433,7 +433,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   timer is a deadline inside one adapter call when its handle is a local of that call or is not kept at all; a
   timer whose handle is stored on an object field or at module scope is a scheduler or poller. PWA: `*Words.ts`, policy and pure lib
   modules are L1; `lib/api.ts` is L3; stores, hooks, components and screens are L4. Every `server/src` and
-  `pwa/src` file has one ring and one of contexts C1–C9 or K, decided by the spec's "Deciding a file's ring and
+  `pwa/src` file has one ring and one of contexts C1–C9, C11 or K, decided by the spec's "Deciding a file's ring and
   context" rules and table. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
   collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
@@ -525,6 +525,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `~/ccrc-backups/<ts>/` (`pool-edges.log` is never replayed). The landing line has an authority-recovery exception:
   `~/.ccrc/landing.log` restores no-run creation evidence, order edges, `fixesMain` and setter attribution before
   service starts. Leave it in place when restoring coord.db; no backup copies it or restores an older copy over it.
+  The privacy journal, `~/.ccrc/privacy-journal.log` (the Overlord's private store, `operator-model.db`, which every backup
+  snapshots and every restore puts back with coord.db as one set), is never copied into a snapshot or restored with one
+  either: leave it in place, so a restored store never reissues a message id.
   Replay never fabricates a measured pin, landed state or current run association. Missing projections and
   contradictory surviving binding observations remain visible as unmeasured and hold their project's line;
   identity conflicts hold every affected project without deleting or rekeying either identity. Only a verified
