@@ -33,9 +33,13 @@ let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-launch-surface-'); });
 afterEach(() => { h.cleanup(); });
 
+/** The row's workspace: a git repository of its own (PR A2's workspace step links into it and writes its exclude file). */
+const wsDir = (): string => path.join(h.home, 'projects', 'overlord');
 const seed = (route: readonly (readonly [string, string])[]): void => {
+  fs.mkdirSync(wsDir(), { recursive: true });
+  execFileSync('git', ['-C', wsDir(), 'init', '-q']);
   h.sh(`_reg_set ${ID} wrapper claude
-        _reg_set ${ID} workdir '${h.home}'
+        _reg_set ${ID} workdir '${wsDir()}'
         _reg_set ${ID} uuid ${UUID}
         ${route.map(([f, v]) => `_reg_set ${ID} ${f} '${v}'`).join('\n        ')}`);
 };
@@ -180,6 +184,129 @@ describe('each failure refuses the spawn: no pane, one journal line naming its r
     expect(out.lines).toHaveLength(1);
     expect(fs.readFileSync(log, 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
   });
+});
+
+describe('the workspace entries and the workspace refusal (PR A2, Task 6; question 2, slug workspace-links-for-skill-and-constitution)', () => {
+  const SKILL = '.claude/skills/ccrc-overlord';
+  const exclude = (): string[] => fs.readFileSync(path.join(wsDir(), '.git', 'info', 'exclude'), 'utf8').split('\n').filter((l) => l.startsWith('/'));
+  const linkOf = (rel: string): string => fs.readlinkSync(path.join(wsDir(), rel));
+  const refused = (out: ReturnType<typeof spawn>, why: string): void => {
+    expect(out.status).not.toBe(0);
+    expect(out.lines).toStrictEqual([]);
+    expect(out.journal).toHaveLength(1);
+    expect(out.journal[0]).toContain(`launch-profile-refused ${ID}: ${why}`);
+  };
+  it('a first spawn links the staged skill and the constitution, and excludes both names once', () => {
+    seed(OVERLORD);
+    expect(spawn('new').lines).toHaveLength(1);
+    expect(linkOf(SKILL)).toBe(path.join(h.home, '.cc-sessions', 'overlord-skill'));
+    expect(linkOf('CLAUDE.md')).toBe(path.join(h.home, '.cc-sessions', 'lib', 'overlord-constitution.md'));
+    expect(exclude().sort()).toStrictEqual([`/${SKILL}`, '/CLAUDE.md']);
+  });
+  it('a respawn finds its own links and makes nothing new', () => {
+    seed(OVERLORD);
+    spawn('new');
+    const before = fs.lstatSync(path.join(wsDir(), 'CLAUDE.md')).ino;
+    expect(spawn('resume').status).toBe(0);
+    expect(fs.lstatSync(path.join(wsDir(), 'CLAUDE.md')).ino).toBe(before);
+    expect(exclude().sort()).toStrictEqual([`/${SKILL}`, '/CLAUDE.md']);
+  });
+  it('the check every move asks writes nothing; only the spawn (make) links and excludes (fix round 1 F1)', () => {
+    seed(OVERLORD);
+    h.sh(`_profile_launch_ok ${ID}`);
+    expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+    expect(fs.existsSync(path.join(wsDir(), '.claude'))).toBe(false);
+    expect(fs.existsSync(path.join(wsDir(), '.git', 'info', 'exclude')) ? exclude() : []).toStrictEqual([]);
+    h.sh(`_profile_launch_ok ${ID} make`);
+    expect(linkOf('CLAUDE.md')).toBe(path.join(h.home, '.cc-sessions', 'lib', 'overlord-constitution.md'));
+    expect(exclude().sort()).toStrictEqual([`/${SKILL}`, '/CLAUDE.md']);
+  });
+  it('a route without profiledigest makes no entry (Review Focus 1)', () => {
+    seed([['profile', 'overlord']]);
+    expect(spawn('new').status).toBe(0);
+    expect(fs.existsSync(path.join(wsDir(), '.claude'))).toBe(false);
+    expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+  });
+  const planted: [string, (ws: string) => void, string][] = [
+    ['a CLAUDE.md that is a regular file', (ws) => fs.writeFileSync(path.join(ws, 'CLAUDE.md'), 'mine\n'), 'CLAUDE.md is not ccd\'s link'],
+    ['a skill link that points elsewhere', (ws) => { fs.mkdirSync(path.join(ws, '.claude', 'skills'), { recursive: true }); fs.symlinkSync('/elsewhere', path.join(ws, SKILL)); }, `${SKILL} is not ccd's link`],
+    ...['settings.json', 'settings.local.json', 'agents/a.md', 'commands/c.md', 'hooks/h.sh', 'rules/r.md', 'other'].map((rel) =>
+      [`.claude/${rel}`, (ws: string) => { fs.mkdirSync(path.dirname(path.join(ws, '.claude', rel)), { recursive: true }); fs.writeFileSync(path.join(ws, '.claude', rel), '{}\n'); }, 'a project source stands'] as [string, (ws: string) => void, string]),
+    ['a second skill beside ccd\'s', (ws) => fs.mkdirSync(path.join(ws, '.claude', 'skills', 'mine'), { recursive: true }), 'a project source stands'],
+    ['.mcp.json', (ws) => fs.writeFileSync(path.join(ws, '.mcp.json'), '{}\n'), 'a project source stands'],
+    ['CLAUDE.local.md', (ws) => fs.writeFileSync(path.join(ws, 'CLAUDE.local.md'), 'x\n'), 'a project source stands'],
+    ['a nested CLAUDE.md', (ws) => { fs.mkdirSync(path.join(ws, 'sub'), { recursive: true }); fs.writeFileSync(path.join(ws, 'sub', 'CLAUDE.md'), 'x\n'); }, 'a project source stands'],
+    ['a nested .claude', (ws) => { fs.mkdirSync(path.join(ws, 'sub', '.claude'), { recursive: true }); }, 'a project source stands'],
+    ['a .claude that is a link to a directory holding settings', (ws) => { const d = path.join(ws, '..', 'elsewhere'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'settings.json'), '{}\n'); fs.symlinkSync(d, path.join(ws, '.claude')); }, 'a project source stands: .claude'],
+    ['a linked directory, which find does not follow', (ws) => { const d = path.join(ws, '..', 'elsewhere'); fs.mkdirSync(d, { recursive: true }); fs.writeFileSync(path.join(d, 'CLAUDE.md'), 'x\n'); fs.symlinkSync(d, path.join(ws, 'sub')); }, 'a project source stands: sub'],
+    ['a linked .claude/skills', (ws) => { const d = path.join(ws, '..', 'skills'); fs.mkdirSync(path.join(d, 'mine'), { recursive: true }); fs.mkdirSync(path.join(ws, '.claude'), { recursive: true }); fs.symlinkSync(d, path.join(ws, '.claude', 'skills')); }, 'a project source stands: .claude/skills'],
+    ['a CLAUDE.md in a directory above the workspace', (ws) => fs.writeFileSync(path.join(ws, '..', 'CLAUDE.md'), 'x\n'), 'a CLAUDE.md stands above the workspace'],
+    ['a CLAUDE.local.md in a directory above the workspace', (ws) => fs.writeFileSync(path.join(ws, '..', '..', 'CLAUDE.local.md'), 'x\n'), 'a CLAUDE.md stands above the workspace'],
+  ];
+  for (const [name, plant, why] of planted) {
+    it(`refuses, with no pane and no new entry: ${name}`, () => {
+      seed(OVERLORD);
+      plant(wsDir());
+      refused(spawn('new'), why);
+      expect(fs.existsSync(path.join(wsDir(), '.git', 'info', 'exclude')) ? exclude() : []).toStrictEqual([]);
+    });
+  }
+  it('a file under .git is not a project source (the bounded find prunes .git)', () => {
+    seed(OVERLORD);
+    fs.writeFileSync(path.join(wsDir(), '.git', 'CLAUDE.md'), 'x\n');
+    expect(spawn('new').lines).toHaveLength(1);
+  });
+  it('refuses a workspace that is not a git repository (no exclude file to write)', () => {
+    seed(OVERLORD);
+    fs.rmSync(path.join(wsDir(), '.git'), { recursive: true });
+    refused(spawn('new'), 'the workspace is not its own repository');
+  });
+  it('refuses a linked worktree, whose exclude file is the parent repository\'s, and writes nothing there (fix round 1 F5)', () => {
+    seed(OVERLORD);
+    const parent = path.join(h.home, 'projects', 'parent');
+    const wt = path.join(h.home, 'projects', 'overlord-wt');
+    fs.mkdirSync(parent, { recursive: true });
+    execFileSync('git', ['-C', parent, 'init', '-q']);
+    execFileSync('git', ['-C', parent, '-c', 'user.name=t', '-c', 'user.email=t@example.invalid', 'commit', '-q', '--allow-empty', '-m', 'x']);
+    execFileSync('git', ['-C', parent, 'worktree', 'add', '-q', wt]);
+    h.sh(`_reg_set ${ID} workdir '${wt}'`);
+    refused(spawn('new'), 'the workspace is not its own repository: .git is not a directory');
+    const ex = path.join(parent, '.git', 'info', 'exclude');
+    expect(fs.existsSync(ex) ? fs.readFileSync(ex, 'utf8').split('\n').filter((l) => l.startsWith('/')) : []).toStrictEqual([]);
+    expect(fs.existsSync(path.join(wt, 'CLAUDE.md'))).toBe(false);
+  });
+  it('a workspace reached through a link is walked through it: a source behind the link refuses (fix round 1 F3)', () => {
+    seed(OVERLORD);
+    const via = path.join(h.home, 'projects', 'overlord-via');
+    fs.symlinkSync(wsDir(), via);
+    fs.writeFileSync(path.join(wsDir(), '.mcp.json'), '{}\n');
+    h.sh(`_reg_set ${ID} workdir '${via}'`);
+    refused(spawn('new'), 'a project source stands: .mcp.json');
+  });
+  for (const [name, wd] of [['a relative workdir', 'projects/overlord'], ['a workdir with a trailing slash', 'TRAILING']] as const) {
+    it(`refuses ${name} before the walk above it (fix round 1 F4)`, () => {
+      seed(OVERLORD);
+      h.sh(`_reg_set ${ID} workdir '${wd === 'TRAILING' ? `${wsDir()}/` : wd}'`);
+      refused(spawn('new'), 'workspace entries could not be made');
+      expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+    });
+  }
+  const shapes: [string, (rows: Record<string, any>) => unknown][] = [
+    ['a skill name of a bad shape', (rows) => { rows.overlord.stagedSkills = { 'Bad Name': 'overlord-skill' }; return rows; }],
+    ['a skill target with a .. segment', (rows) => { rows.overlord.stagedSkills = { 'ccrc-overlord': '../overlord-skill' }; return rows; }],
+    ['an absolute memory target', (rows) => { rows.overlord.memory = '/etc/passwd'; return rows; }],
+    ['a memory target with a .. segment', (rows) => { rows.overlord.memory = 'lib/../../x.md'; return rows; }],
+  ];
+  for (const [name, edit] of shapes) {
+    it(`refuses ${name} (fed through a doctored profiles file), making nothing`, () => {
+      seed([['profile', 'overlord']]);
+      const pre = altFile(edit);
+      h.sh(`_reg_set ${ID} profiledigest '${altDigest()}'`);
+      refused(spawn('new', pre), 'workspace entries could not be made');
+      expect(fs.existsSync(path.join(wsDir(), 'CLAUDE.md'))).toBe(false);
+      expect(fs.existsSync(path.join(wsDir(), '.claude'))).toBe(false);
+    });
+  }
 });
 
 describe('no field, no change (Review Focus 1)', () => {
