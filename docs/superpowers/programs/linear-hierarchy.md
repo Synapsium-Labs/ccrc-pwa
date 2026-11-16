@@ -107,6 +107,11 @@ They decide every question the plan leaves open.
   - the advisories A2 (a mismatch with no old slot fails once), A5 (`item-act-mismatch`'s sentence), A7/A12 (a
     failure's backoff holds) and A8 (the note's record).
 
+  D-8701's exit, ruled in the round: after 3 consecutive directory refills that read the initiatives probe as
+  `unknown`, the pass settles without the initiative step and mails the programme's coordinator once per workspace
+  and episode. It raises no "Turn on initiatives" item, because the probe never answers `off` and an unreadable probe
+  is not a feature that is off. An `on` reading later creates the initiative and links the projects.
+
   F4 is ledgered as D-8699 (ownership-by-name-first-page): proving ownership of an initiative or project with ten or
   more same-named objects can fail. The fix needs `creator { id }` on the by-id documents in the frozen `ops.ts`, so it
   waits for the next capture, on the operator's go. A1, A3, A4, A6, A10 and A11 are carried to wave 4.
