@@ -70,6 +70,17 @@ export interface FailedInputs { bindingId: number; inputs: string }
 /** What the pass tells the coordinator beyond a step: a programme ended `done` with issues still open (§5.4). */
 export type SyncNotice = { kind: 'open-issues-left'; count: number };
 
+/** Task 3.1 (F5 of fix round 1): the plan as the sync reads it: every epic, checkpoint and ticket whose `putBackAt` is set
+ *  left out (a record *Put back* dropped, Task 2.2), so no step is ever emitted for one. Pure: the input is not changed. */
+export function withoutPutBack(plan: StoredPlan): StoredPlan {
+  return {
+    ...plan,
+    epics: plan.epics.filter((e) => e.putBackAt === null).map((e) => ({
+      ...e, checkpoints: e.checkpoints.filter((c) => c.putBackAt === null), tickets: e.tickets.filter((t) => t.putBackAt === null),
+    })),
+  };
+}
+
 // ── Fingerprints and ids ──
 
 /** What `rfc8785Json` refuses is a fact about the fields: an `undefined` member means "not sent", as `JSON.stringify` read it, so it is dropped here, at every depth, before the canonical writer sees the value. */

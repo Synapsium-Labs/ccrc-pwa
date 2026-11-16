@@ -605,6 +605,20 @@ describe('the pass around the edges', () => {
     expect(dueAt(r)).toBeNull();
   });
 
+  it('F5: the snapshot leaves out every record whose putBackAt is set: no step for a put-back checkpoint, ticket or epic', async () => {
+    const r = await rig();
+    const e1 = r.plan.planOf(SLUG).epics[0]!;
+    r.db.prepare('UPDATE plan_checkpoints SET putBackAt = ? WHERE id = ?').run(T, e1.checkpoints[0]!.id);
+    r.db.prepare('UPDATE plan_tickets SET putBackAt = ? WHERE id = ?').run(T, e1.tickets[0]!.id);
+    await r.sync.tick(afterDebounce(r));
+    expect(opsOf(r)).toEqual(['initiativeCreate', 'projectCreate', 'initiativeToProjectCreate']);
+    const r2 = await rig();
+    r2.db.prepare('UPDATE plan_epics SET putBackAt = ? WHERE id = ?').run(T, r2.plan.planOf(SLUG).epics[0]!.id);
+    await r2.sync.tick(afterDebounce(r2));
+    expect(r2.asks).toEqual([]);
+    expect(dueAt(r2)).toBeNull();
+  });
+
   it('an upkeep key clears its due row and answers done, sending nothing (C9)', async () => {
     const r = await rig();
     markSyncDue(r.db, 'upkeep:project-a', T);

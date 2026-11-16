@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, directoryMissed, issueReadVerdict, plannedFingerprint, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  adoptionVerdict, directoryMissed, issueReadVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
   requeueVerdict, requestIdOf, type AdoptionKind, type AdoptionNode, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -334,5 +334,19 @@ describe('fix round 1 (D-8182): the initiatives probe and the directory', () => 
     const proj = planSyncSteps(snap()).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
     if (proj?.kind !== 'create') throw new Error('no create');
     expect(planSyncSteps(snap({ bindings: [boundEpic(proj.fingerprint), failed] })).steps).toEqual([]);
+  });
+});
+
+describe('fix round 1 (D-8182): put back', () => {
+  it('F5: withoutPutBack leaves out every epic, checkpoint and ticket whose putBackAt is set, and nothing else', () => {
+    const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [
+      { ...epic(), checkpoints: [cp(), cp({ id: 2, key: 'c2', putBackAt: 5 })], tickets: [tk(), tk({ id: 2, key: 't2', putBackAt: 5 })] },
+      { ...epic({ id: 2, key: 'e2', putBackAt: 5 }), checkpoints: [], tickets: [] },
+    ] };
+    const kept = withoutPutBack(plan);
+    expect(kept.epics.map((e) => e.id)).toEqual([1]);
+    expect(kept.epics[0]!.checkpoints.map((c) => c.id)).toEqual([1]);
+    expect(kept.epics[0]!.tickets.map((t) => t.id)).toEqual([1]);
+    expect(plan.epics).toHaveLength(2);                                   // pure: the input is untouched
   });
 });

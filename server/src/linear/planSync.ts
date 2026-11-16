@@ -42,7 +42,7 @@ import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import {
   adoptionVerdict, directoryMissed, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
-  type AdoptionAsk, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, type AdoptionAsk, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -376,7 +376,7 @@ export class PlanSync {
     const rowid = plan.programmeRowId(slug);
     const prog = coord.programs().find((p) => p.slug === slug);
     if (rowid === null || prog === undefined) return null;
-    const stored = plan.planOf(slug);
+    const stored = withoutPutBack(plan.planOf(slug));            // Task 3.1: a record Put back dropped is never in the snapshot
     const bindings = plan.bindingsOf(slug);
     const planEnd = plan.planEndOf(slug);
     const tickets = stored.epics.flatMap((e) => e.tickets);
