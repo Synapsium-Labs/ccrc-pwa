@@ -301,6 +301,21 @@ describe('the team-key rule (Review Focus 3)', () => {
     expect(steps).toEqual([expect.objectContaining({ kind: 'skip', why: 'ticket-workspace-mismatch', bindingId: tb.id, workspaceId: 'ws-old' })]);
   });
 
+  // F3: the ticket below is on a SECOND team (proj-b, team KEY), so the epic's project carries [AAA, KEY]; a rig whose two
+  // projects share one team could not see a stray projectUpdate.
+  it("F3: a bound ticket on a second team whose project key is cleared keeps its team on the epic's project: no projectUpdate", () => {
+    const s = settle(snap({ tickets: [tk({ project: 'proj-b' })] }));
+    s.projects[1] = { ...s.projects[1]!, teamKey: null, workspaceId: null };
+    expect(ops(planSyncSteps(s).steps)).toEqual(['skip:no-team-key']);
+  });
+
+  it("F3: a bound ticket on a second team whose project key moved to another workspace keeps its team on the epic's project", () => {
+    const s = settle(snap({ tickets: [tk({ project: 'proj-b' })] }));
+    s.workspaces.push({ workspaceId: 'ws-b', initiatives: 'on', directory, teams: [{ id: U(2), key: 'BBB' }] });
+    s.projects[1] = { ...s.projects[1]!, teamKey: 'BBB', workspaceId: 'ws-b' };
+    expect(ops(planSyncSteps(s).steps)).toEqual(['skip:ticket-workspace-mismatch']);
+  });
+
   it("F2: the epic's project key moved to another workspace creates nothing there; the old workspace's initiative is still updated and closed", () => {
     const s = settle(snap({ cps: [cp()], tickets: [tk()] }));
     s.workspaces.push({ workspaceId: 'ws-b', initiatives: 'on', directory, teams: [{ id: U(2), key: 'BBB' }] });
@@ -595,6 +610,33 @@ describe('the pass: moves and closes', () => {
     await tick(r);
     expect(r.asks.slice(ended).filter((a) => a.op.endsWith('Create'))).toEqual([]);
     expect(r.asks.slice(ended).find((a) => a.op === 'initiativeUpdate')).toMatchObject({ workspaceId: WS.a.id, input: { status: 'Completed' } });
+  });
+
+  /** F3's pass rig: t2 in project-b on a SECOND team (CCC, the slot's extra team), so the epic's project carries [AAA, CCC]. */
+  async function secondTeam(slotB = false): Promise<{ r: Rig; t2: number }> {
+    const r = await rig({ extraTeam: true, slotB });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await tick(r);
+    expect(sentInput(r, 'projectCreate')['teamIds']).toEqual([WS.a.teams[0].id, CCC_TEAM.id].sort());
+    return { r, t2: epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id };
+  }
+
+  it("F3: a second team's ticket whose project key is cleared sends no projectUpdate (the team stays on the epic's project)", async () => {
+    const { r } = await secondTeam();
+    r.db.prepare('UPDATE project_linking SET teamKey = NULL WHERE project = ?').run('project-b');
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.asks.slice(from)).toEqual([]);
+  });
+
+  it("F3: a second team's ticket whose project key moved to another workspace sends no projectUpdate, and its binding fails once", async () => {
+    const { r, t2 } = await secondTeam(true);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'BBB' WHERE project = 'project-b'").run();
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual([]);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'failed', failedWord: 'ticket-workspace-mismatch' });
   });
 
   it('a ticket re-projected inside the workspace moves teams, and the identifier is refreshed from the answer', async () => {

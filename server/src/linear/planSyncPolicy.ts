@@ -328,10 +328,16 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       continue;
     }
     // §5.2: the epic's team plus every team, in the same workspace, a ticket of the epic that is not dropped files into (C14).
+    // F3 (Review Focus 3): a ticket bound here whose project key was cleared or moved to another workspace is not moved, so
+    // its issue stays in its team, and that team stays on the project, whatever the ticket's project key does now.
     const teamIds = [...new Set([pl.teamId, ...e.tickets.flatMap((t) => {
       if (effTicket(eff, t).state === 'dropped') return [];
       const tp = placeOf(t.project);
-      return tp.ok && tp.workspaceId === wsId ? [tp.teamId] : [];
+      if (tp.ok && tp.workspaceId === wsId) return [tp.teamId];
+      const tb = bindingOf('ticket', t.id, wsId);
+      const kept = tb === undefined || tb.linearId === null || tb.teamKey === null ? undefined
+        : pl.ws.teams.find((k) => k.key.toLowerCase() === tb.teamKey!.toLowerCase());
+      return kept === undefined ? [] : [kept.id];
     })])].sort();
     const planned = {
       name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, s.program.title, off), statusId: pStatus, teamIds, initiativeId,
