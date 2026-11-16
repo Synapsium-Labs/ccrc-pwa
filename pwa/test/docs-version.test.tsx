@@ -7,7 +7,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ReactNode } from 'react';
 import { act, cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
-import { DOCS_CLASS_CAP, entryView, resolveDocRef, type DocPin, type DocsPageLocation, type DocsShowOk } from '../../shared/docs';
+import {
+  DOCS_CLASS_CAP, DOCS_RASTER_TYPES, entryView, resolveDocRef, type DocPin, type DocsPageLocation, type DocsShowOk,
+} from '../../shared/docs';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { DocsBanners } from '../src/docs/DocsBanners';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
@@ -19,7 +21,7 @@ import {
 } from '../src/docs/docsText';
 import { exportLinkTarget } from '../src/docs/export/exportMarkdown';
 import { pinFor, useDocsVisit } from '../src/docs/useDocsVisit';
-import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
+import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import type { FileSlot } from '../src/docs/useDocsVisit';
 import { clearAuthLost } from '../src/lib/auth';
 import { parseMarkdown } from '../src/lib/markdownParse';
@@ -293,6 +295,33 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     expect(await screen.findByText(fillSentence(DOCS_VIEW_TEXT.noPreview, {}))).toBeInTheDocument();
     expect(container.textContent).not.toContain(kib(cap + 1));
     expect(f.file).not.toHaveBeenCalled();
+  });
+});
+
+/** A PNG's own magic from L0's table (never spelled here) and two bytes of body. */
+const okPng = (): DocsRasterAnswer =>
+  ({ s: 'ok', value: { bytes: new Uint8Array([...DOCS_RASTER_TYPES.png.magic[0][0].bytes, 0, 255]), mime: 'image/png' } });
+
+describe('a rendered version page keeps the version in its body (Task 4\'s proof list, refinements (m) and (n))', () => {
+  // The page-level wiring: `DocsLeaf` hands the page's `at` to the link context (`pageAt`), and the body's doc link,
+  // its image read and the image's own leaf link all read it there. docs-links and docs-images build that context by
+  // hand, so only a rendered page shows the leaf passing it on.
+  it('a doc link and an image in the body of a ?ref=&at= page keep the ref and the version', async () => {
+    const f = fakeLoaders({
+      tree: okTree(treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'b.md'), entry('specs', 'i.png')] })),
+    });
+    f.file.mockImplementation(answerByPin('# A\n\n[B](b.md)\n\n![i](i.png)\n'));
+    f.raster.mockImplementation(async () => okPng());
+    const { container } = open(`/docs/demo/specs/a.md?ref=ws/a&at=${VERSION}`, f);
+    expect(await screen.findByRole('heading', { name: 'A' })).toBeInTheDocument();
+    const body = container.querySelector<HTMLElement>('.docs-leaf article.doc-body')!;
+    expect(within(body).getByRole('link', { name: 'B' })).toHaveAttribute('href', `/docs/demo/specs/b.md?ref=ws/a&at=${VERSION}`);
+    await waitFor(() => expect(body.querySelectorAll('img')).toHaveLength(1));
+    expect(f.raster).toHaveBeenCalledTimes(1);
+    expect(f.raster.mock.calls[0]?.slice(0, 2))
+      .toEqual(['demo', { kind: 'committed', commit: VERSION, servedRef: SERVED, section: 'specs', path: 'i.png' }]);
+    fireEvent.click(body.querySelector('button.doc-img-link')!);
+    expect(here()).toBe(`/docs/demo/specs/i.png?ref=ws/a&at=${VERSION}`);
   });
 });
 
