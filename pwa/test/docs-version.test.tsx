@@ -149,6 +149,23 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     expect(container.textContent).not.toContain(DOCS_VIEW_TEXT.changing);
   });
 
+  it.each([['git-failed', { step: 'show' }], ['docs-busy', {}]] as const)(
+    'a version page whose read fails with %s shows that failure and Retry, not the missing-commit sentence',
+    async (word, ctx) => {
+      const f = versionLoaders();
+      f.file.mockResolvedValue(failedAnswer(word, ctx));
+      const { container } = open(`/docs/demo/specs/a.md?at=${VERSION}`, f);
+      const own = fillSentence(DOCS_FAILURE_SENTENCE[word], ctx);
+      await screen.findByText(own);
+      // A word the visit retries by itself reads once more first: assert on the settled page.
+      await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+      expect(screen.getByText(own)).toBeInTheDocument();
+      expect(container.querySelector(`[data-failure="${word}"]`)).not.toBeNull();
+      expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+      expect(container.textContent).not.toContain(fillSentence(DOCS_VIEW_TEXT.versionUnknownCommit, { short: shortCommit(VERSION) }));
+    },
+  );
+
   it('a version page skips the listing\'s size and lets the class cap answer', async () => {
     const cap = DOCS_CLASS_CAP.markdown;
     const big = entry('specs', 'a.md', { committed: { kind: 'file', blob: BLOB_1, size: cap + 1 } });
