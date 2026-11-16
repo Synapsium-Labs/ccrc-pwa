@@ -105,7 +105,7 @@ export function detachUrls(tree: HastRoot): Detached {
  *  project at the same ref. `default-view`: another (or the same) project's default view, `ref: null`, from any page,
  *  the index included. `same-page`: this very page (its section, path, view and frame) in `project` at `ref`
  *  (`ref: null` is that project's default view): the linked-worktree redirect (spec 4.7) and every "open this page at
- *  another ref" link. A `path` target's `view` absent means `effective`. */
+ *  another ref" link. It keeps the page's `at`, so switching the ref keeps the version. A `path` target's `view` absent means `effective`. */
 export type DocsPageTarget =
   | { kind: 'index' }
   | { kind: 'project' }

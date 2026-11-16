@@ -59,8 +59,9 @@ function refusedTitle(why: Extract<GithubPermalink, { ok: false }>['why'], commi
 }
 
 /** Spec 4.17's link table, for the raw `href` a document wrote, on the leaf `link` names, at commit `commit`. A
- *  document's own fragment is not carried onto its permalink (refinement (m)). A version page's doc and repo links are
- *  inert (refinement (t)). */
+ *  document's own fragment is not carried onto its permalink (refinement (m)). When the export's commit is not the
+ *  listing's (a version page's, unless its `at` is the listing's own commit), its doc and repo links are inert
+ *  (refinement (t)). */
 export function exportLinkTarget(
   link: Pick<DocLinkContextValue, 'section' | 'path' | 'tree'>, commit: string, raw: string,
 ): ExportLinkTarget {

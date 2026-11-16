@@ -1179,9 +1179,9 @@ const PAGE_KEYS_BY_KIND: Readonly<Record<DocsPageLocation['kind'], readonly Docs
   path: DOCS_PAGE_KEYS,
 };
 
-/** `view=committed` survives canonicalisation only together with `ref`, and only on a leaf: without `ref` the
- *  default view never overlays drafts, so the key is redundant (spec 3.1). A trailing slash marks a directory,
- *  and a directory is not a leaf. */
+/** `view=committed` survives canonicalisation only together with `ref`, and only on a leaf, and never beside `at`:
+ *  without `ref` the default view never overlays drafts, so the key is redundant (spec 3.1). A trailing slash marks
+ *  a directory, and a directory is not a leaf. */
 function pageKeepsView(l: DocsPathLocation): boolean {
   return l.view === 'committed' && l.ref !== null && !l.dirSlash && l.at === null;
 }
@@ -1316,9 +1316,10 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
 }
 
 /** The canonical page URL. Each path segment goes through encodeURIComponent; `ref` is written verbatim, because
- *  its grammar's charset (A-Z a-z 0-9 . _ / -) is query-safe, and so is `at`, 40 or 64 lower-case hex; keys follow DOCS_PAGE_KEYS order, and a redundant
- *  `view` or `frame` is never written. `loc` must hold values in their grammars, as every parseDocsPage answer
- *  does; encodeURIComponent throws URIError on a lone surrogate, which isDocsRelPath refuses.
+ *  its grammar's charset (A-Z a-z 0-9 . _ / -) is query-safe, and so is `at`, 40 or 64 lower-case hex; keys follow
+ *  DOCS_PAGE_KEYS order, and a redundant `view` or `frame` is never written, nor a directory's `at`. `loc` must hold
+ *  values in their grammars, as every parseDocsPage answer does; encodeURIComponent throws URIError on a lone
+ *  surrogate, which isDocsRelPath refuses.
  *  parseDocsPage(docsPageUrl(l)) returns l for every canonical l. */
 export function docsPageUrl(loc: DocsPageLocation): string {
   if (loc.kind === 'index') return DOCS_PAGE_PREFIX;
