@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { COORD_SCHEMA_VERSION, CoordDbUnmigratable, openCoordDb } from '../src/coord/db.js';
+import { openMigratedSqlite, type MigratedSqliteSpec } from '../src/sqliteFile.js';
 import { COLLECT_LANE_JOURNAL_BASENAME } from '../src/coord/collectLaneJournal.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -187,5 +188,98 @@ describe('openCoordDb, characterized (the opener move changes no byte of it)', (
     const old = process.umask(0o022);
     try { openCoordDb(p).close(); } finally { process.umask(old); }
     expect(statSync(p).mode & 0o777).toBe(0o644);
+  });
+});
+
+class FixtureUnmigratable extends Error {}
+const fixtureSpec = (migrations: string[], createMode?: number): MigratedSqliteSpec => ({
+  migrations,
+  label: 'fixture.db',
+  zeroByte: (p) => `zero ${p}`,
+  migrationFailed: (p, v, err, dataStatus) => `failed ${p} at ${v}: ${err instanceof Error ? err.message : String(err)} | ${dataStatus}`,
+  fail: (m) => new FixtureUnmigratable(m),
+  ...(createMode === undefined ? {} : { createMode }),
+});
+const withUmask = <T>(mask: number, fn: () => T): T => {
+  const old = process.umask(mask);
+  try { return fn(); } finally { process.umask(old); }
+};
+const fileIn = (name: string): string => path.join(mkTmp('ccrc-sqlite-file-'), 'nested', name);
+
+describe('openMigratedSqlite, its own caller\'s spec', () => {
+  it('uses the caller\'s label, sentences and error class', () => {
+    const p = fileIn('fixture.db');
+    const db = openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)', 'CREATE TABLE b (y)']));
+    expect(versionOf(db)).toBe(2);
+    db.exec('PRAGMA user_version = 5');
+    db.close();
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)', 'CREATE TABLE b (y)'])).close();
+    expect(warnSpy.mock.calls[0]![0]).toBe('ccrc-server: fixture.db is at schema 5, this build knows 2 — '
+      + 'reading it as-is and migrating nothing (a rollback may only refuse to migrate, never to read)');
+    const z = fileIn('zero.db');
+    mkdirSync(path.dirname(z), { recursive: true });
+    writeFileSync(z, '');
+    const err = caughtFrom(() => openMigratedSqlite(z, fixtureSpec(['CREATE TABLE a (x)'])));
+    expect(err).toBeInstanceOf(FixtureUnmigratable);
+    expect((err as Error).message).toBe(`zero ${z}`);
+  });
+
+  it('a crash between the DDL and its user_version cannot happen: both commit in one transaction', () => {
+    // The second statement of migration 1 fails after its first applied: the table is rolled back with the version.
+    const p = fileIn('tx.db');
+    const err = caughtFrom(() => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)', 'CREATE TABLE b (y); CREATE TABLE a (z)'])));
+    expect(err).toBeInstanceOf(FixtureUnmigratable);
+    expect((err as Error).message).toMatch(/^failed .* at 1: .*\| Migration 1 already committed earlier in this boot/);
+    reopen(p, (raw) => {
+      expect(versionOf(raw)).toBe(1);
+      expect(raw.prepare("SELECT name FROM sqlite_master WHERE name = 'b'").all()).toEqual([]);
+    });
+  });
+
+  it('a crash between a migration\'s DDL and its user_version leaves neither: both are one transaction', () => {
+    // The crash is simulated at the version write itself: inside the migration's transaction it rolls the DDL back too.
+    const p = fileIn('crash.db');
+    const real = DatabaseSync.prototype.exec;
+    const spy = vi.spyOn(DatabaseSync.prototype, 'exec').mockImplementation(function (this: DatabaseSync, sql: string) {
+      if (sql === 'PRAGMA user_version = 1') throw new Error('simulated crash before the version write');
+      return real.call(this, sql);
+    });
+    let err: unknown;
+    try { err = caughtFrom(() => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)']))); } finally { spy.mockRestore(); }
+    expect(err).toBeInstanceOf(FixtureUnmigratable);
+    reopen(p, (raw) => {
+      expect(versionOf(raw)).toBe(0);
+      expect(raw.prepare("SELECT name FROM sqlite_master WHERE name = 'a'").all()).toEqual([]);
+    });
+  });
+
+  it('createMode: a file this call creates is 0600 under a 0o022 umask, and so are its -wal and -shm', () => {
+    const p = fileIn('private.db');
+    const db = withUmask(0o022, () => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)'], 0o600)));
+    db.exec('INSERT INTO a VALUES (1)');
+    expect(statSync(p).mode & 0o777).toBe(0o600);
+    expect(statSync(`${p}-wal`).mode & 0o777).toBe(0o600);
+    expect(statSync(`${p}-shm`).mode & 0o777).toBe(0o600);
+    expect(versionOf(db)).toBe(1);
+    db.close();
+  });
+
+  it('createMode never touches a file that existed before the call', () => {
+    const p = fileIn('existing.db');
+    withUmask(0o022, () => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)'])).close());
+    expect(statSync(p).mode & 0o777).toBe(0o644);
+    withUmask(0o022, () => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)'], 0o600)).close());
+    expect(statSync(p).mode & 0o777).toBe(0o644);
+  });
+
+  it('createMode: a failed first migration of the created file leaves no file, and the 0-byte guard still refuses only a file that predates the call', () => {
+    const p = fileIn('failing.db');
+    const err = caughtFrom(() => openMigratedSqlite(p, fixtureSpec(['CREATE TABLE broken ('], 0o600)));
+    expect(err).toBeInstanceOf(FixtureUnmigratable);
+    expect(existsSync(p)).toBe(false);
+    const db = openMigratedSqlite(p, fixtureSpec(['CREATE TABLE a (x)'], 0o600));
+    expect(versionOf(db)).toBe(1);
+    db.close();
   });
 });
