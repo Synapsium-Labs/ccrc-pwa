@@ -1,0 +1,257 @@
+{
+  "requests": true,
+  "timing": true,
+  "settleS": 3,
+  "capS": 900,
+  "default": {
+    "text": "W0-WAIT",
+    "repeat": true
+  },
+  "mainMarker": "You are (an interactive agent|an agent working with the user|Claude Code)",
+  "launch": {
+    "args": [
+      "--settings",
+      "@RIG_REPO@/.w0/profile.json",
+      "--strict-mcp-config",
+      "--mcp-config",
+      "@RIG_REPO@/.w0/door.json",
+      "--tools",
+      "Agent,Skill",
+      "--agents",
+      "{\"overlord-reader\":{\"description\":\"W0 sandbox reader\",\"prompt\":\"You are a W0 sandbox reader.\",\"model\":\"sonnet\",\"tools\":[\"mcp__door__read\"]}}",
+      "--dangerously-skip-permissions"
+    ],
+    "env": {
+      "RIG_STATUS_LOG": "@RIG_ROOT@/logs/status.ndjson",
+      "DOOR_LOG": "@RIG_ROOT@/logs/door.ndjson",
+      "DOOR_NONCE": "n-w0-sandbox",
+      "CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1",
+      "CLAUDE_CODE_FORK_SUBAGENT": "0",
+      "CLAUDE_CODE_DISABLE_AGENT_VIEW": "1",
+      "CLAUDE_CODE_SUBAGENT_MODEL": "sonnet",
+      "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1"
+    },
+    "files": [
+      {
+        "in": "repo",
+        "path": ".w0/profile.json",
+        "text": "{\"hooks\":{\"PermissionRequest\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PostCompact\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PostToolUse\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event PostToolUse\"}],\"matcher\":\"*\"}],\"PreCompact\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"PreToolUse\":[{\"matcher\":\"*\",\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event PreToolUse\"}],\"matcher\":\"*\"}],\"SessionEnd\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\"}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event SessionEnd\"}]}],\"SessionStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event SessionStart\"}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"sh -c 'echo w0-sandbox-failing-hook >&2; exit 1'\"}]}],\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event Stop\"}]}],\"StopFailure\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SubagentStart\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"SubagentStop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"bash \\\"$HOME/.cc-sessions/session-hook.sh\\\"\",\"timeout\":600}]},{\"hooks\":[{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/transcripts --event UserPromptSubmit\"}]}]},\"statusLine\":{\"type\":\"command\",\"command\":\"node @RIG_STUBS@/statusline-capture.mjs\"},\"enableWorkflows\":false,\"autoMemoryEnabled\":false,\"switchModelsOnFlag\":true,\"skipDangerousModePermissionPrompt\":true,\"crossSessionInbound\":\"refuse\",\"remoteControlAtStartup\":false,\"env\":{\"DISABLE_AUTOUPDATER\":\"1\"},\"permissions\":{\"deny\":[\"Bash\",\"Edit\",\"Write\",\"NotebookEdit\",\"WebFetch\",\"WebSearch\",\"SendMessage\",\"ListAgents\",\"Workflow\",\"CronCreate\",\"CronList\",\"CronDelete\"]}}"
+      },
+      {
+        "in": "repo",
+        "path": ".w0/door.json",
+        "text": "{\"mcpServers\":{\"door\":{\"type\":\"stdio\",\"command\":\"node\",\"args\":[\"@RIG_STUBS@/door-stub.mjs\"]}}}"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/.cc-sessions/overlord-skill/SKILL.md",
+        "text": "---\nname: ccrc-overlord\ndescription: W0-OV-SKILL-CANARY, the staged Overlord skill\n---\n\nW0-OV-SKILL-BODY: the staged skill's body.\n"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/.cc-sessions/lib/overlord-constitution.md",
+        "text": "# W0-OV-CONSTITUTION-CANARY\n\nThe linked workspace memory file.\n"
+      },
+      {
+        "in": "repo",
+        "path": ".claude/skills/ccrc-overlord",
+        "link": "@RIG_ROOT@/fixhome/.cc-sessions/overlord-skill"
+      },
+      {
+        "in": "repo",
+        "path": "CLAUDE.md",
+        "link": "@RIG_ROOT@/fixhome/.cc-sessions/lib/overlord-constitution.md"
+      },
+      {
+        "in": "repo",
+        "path": ".claude/rules/w0-rule.md",
+        "text": "W0-OV-RULES-CANARY: a .claude/rules file in the workspace.\n"
+      },
+      {
+        "in": "root",
+        "path": "CLAUDE.md",
+        "text": "W0-OV-PARENT-CANARY: a CLAUDE.md in a directory above the workspace.\n"
+      },
+      {
+        "in": "cfg",
+        "path": "skills/w0-user-skill/SKILL.md",
+        "text": "---\nname: w0-user-skill\ndescription: W0-USER-SKILL-CANARY, an account skill the profile must not load\n---\n\nbody\n"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/.claude-plugin/marketplace.json",
+        "text": "{\"name\": \"rig-market\", \"owner\": {\"name\": \"Rig Fixture\"}, \"plugins\": [{\"name\": \"rig-plugin\", \"source\": \"./rig-plugin\", \"description\": \"W0 sandbox plugin\"}]}"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/.claude-plugin/plugin.json",
+        "text": "{\"name\": \"rig-plugin\", \"version\": \"0.0.1\", \"description\": \"W0-PLUGIN-CANARY\"}"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/.claude-plugin/plugin.json",
+        "text": "{\"name\": \"rig-plugin\", \"version\": \"0.0.1\", \"description\": \"W0-PLUGIN-CANARY\"}"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/skills/w0-plugin-skill/SKILL.md",
+        "text": "---\nname: w0-plugin-skill\ndescription: W0-PLUGIN-SKILL-CANARY\n---\n\nbody\n"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/skills/w0-plugin-skill/SKILL.md",
+        "text": "---\nname: w0-plugin-skill\ndescription: W0-PLUGIN-SKILL-CANARY\n---\n\nbody\n"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/commands/w0-plugin-cmd.md",
+        "text": "---\ndescription: W0-PLUGIN-CMD-CANARY\n---\n\nW0 plugin command.\n"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/commands/w0-plugin-cmd.md",
+        "text": "---\ndescription: W0-PLUGIN-CMD-CANARY\n---\n\nW0 plugin command.\n"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/agents/w0-plugin-agent.md",
+        "text": "---\nname: w0-plugin-agent\ndescription: W0-PLUGIN-AGENT-CANARY\n---\n\nYou are a W0 plugin agent.\n"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/agents/w0-plugin-agent.md",
+        "text": "---\nname: w0-plugin-agent\ndescription: W0-PLUGIN-AGENT-CANARY\n---\n\nYou are a W0 plugin agent.\n"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/hooks/hooks.json",
+        "text": "{\"hooks\": {\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/plugin-hook --event SessionStart\"}]}], \"PreToolUse\": [{\"matcher\": \"*\", \"hooks\": [{\"type\": \"command\", \"command\": \"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/plugin-hook --event PreToolUse\"}]}]}}"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/hooks/hooks.json",
+        "text": "{\"hooks\": {\"SessionStart\": [{\"hooks\": [{\"type\": \"command\", \"command\": \"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/plugin-hook --event SessionStart\"}]}], \"PreToolUse\": [{\"matcher\": \"*\", \"hooks\": [{\"type\": \"command\", \"command\": \"node @RIG_STUBS@/transcript-snap.mjs --dir @RIG_ROOT@/logs/plugin-hook --event PreToolUse\"}]}]}}"
+      },
+      {
+        "in": "root",
+        "path": "rig-market/rig-plugin/.mcp.json",
+        "text": "{\"mcpServers\": {\"w0-plugin-mcp\": {\"type\": \"stdio\", \"command\": \"node\", \"args\": [\"@RIG_STUBS@/door-stub.mjs\"]}}}"
+      },
+      {
+        "in": "root",
+        "path": "fixhome/cfg/plugins/cache/rig-market/rig-plugin/0.0.1/.mcp.json",
+        "text": "{\"mcpServers\": {\"w0-plugin-mcp\": {\"type\": \"stdio\", \"command\": \"node\", \"args\": [\"@RIG_STUBS@/door-stub.mjs\"]}}}"
+      },
+      {
+        "in": "cfg",
+        "path": "plugins/known_marketplaces.json",
+        "text": "{\"rig-market\": {\"source\": {\"source\": \"directory\", \"path\": \"@RIG_ROOT@/rig-market\"}, \"installLocation\": \"@RIG_ROOT@/rig-market\", \"lastUpdated\": \"2026-01-01T00:00:00.000Z\"}}"
+      },
+      {
+        "in": "cfg",
+        "path": "plugins/installed_plugins.json",
+        "text": "{\"version\": 2, \"plugins\": {\"rig-plugin@rig-market\": [{\"scope\": \"user\", \"installPath\": \"@RIG_CFG@/plugins/cache/rig-market/rig-plugin/0.0.1\", \"version\": \"0.0.1\", \"installedAt\": \"2026-01-01T00:00:00.000Z\", \"lastUpdated\": \"2026-01-01T00:00:00.000Z\"}]}}"
+      }
+    ],
+    "settings": {
+      "enabledPlugins": {
+        "rig-plugin@rig-market": true
+      },
+      "extraKnownMarketplaces": {
+        "rig-market": {
+          "source": {
+            "source": "directory",
+            "path": "@RIG_ROOT@/rig-market"
+          }
+        }
+      }
+    }
+  },
+  "scenario": "ov-sandbox-plugin-control",
+  "covers": [
+    "M8"
+  ],
+  "steps": [
+    {
+      "sleep": 8
+    },
+    {
+      "paneSnap": "bypass-dialog"
+    },
+    {
+      "keys": [
+        "Down"
+      ]
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitReady": 60
+    },
+    {
+      "paneSnap": "started"
+    },
+    {
+      "type": "w0 s1"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "waitLabels": [
+        "s1",
+        "s1-done"
+      ],
+      "timeoutS": 180
+    },
+    {
+      "sleep": 5
+    },
+    {
+      "paneSnap": "end"
+    },
+    {
+      "type": "/exit"
+    },
+    {
+      "keys": [
+        "Enter"
+      ]
+    },
+    {
+      "sleep": 3
+    }
+  ],
+  "entries": [
+    {
+      "label": "s1",
+      "match": {
+        "kind": "main",
+        "lastUser": "w0 s1$"
+      },
+      "blocks": [
+        {
+          "tool_use": {
+            "name": "Skill",
+            "input": {
+              "skill": "ccrc-overlord"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "label": "s1-done",
+      "match": {
+        "kind": "main",
+        "hasToolResult": true
+      },
+      "text": "W0-S1-DONE"
+    }
+  ]
+}

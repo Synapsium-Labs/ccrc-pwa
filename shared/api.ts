@@ -6491,10 +6491,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `shared/poolset.ts`'s spelling, and the Overlord's ordered account list, account ids joined by `,`. Their writers are
  * the designation's doors and the renewal lane, through `CCD_ARGV.routeSet`, so both are lane-only; ccd refuses either on
  * a `--route` at the mint (`_route_argv_check`), so only `ccd route --session` writes them, and an empty value clears them.
+ * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
+ * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
+ * is its one recorded second writer), and an empty value clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's three, the generations lane's `precompact`, and the pool set's two (W1), written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
+ *  written by the designation's doors.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
