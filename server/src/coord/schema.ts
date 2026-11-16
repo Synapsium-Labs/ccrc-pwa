@@ -3316,6 +3316,23 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX answer_marks_row ON answer_marks (kind, rowId, mark, id);
   `,
+
+  // ── 81: user_version 80 -> 81 ─────────────────────────────────────────────
+  // The Overlord authority journal's head row (spec §7.6, Table 7.6a; plan `w1-authority-journal.md` Task 3, question 5): the
+  // position of the last record of `~/.ccrc/overlord-authority.jsonl` whose row committed. ONE writer, the apply step of
+  // `overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx`, in the transaction of the authority row it records. Boot
+  // coherence compares the file's head with it. Responses A takes 81 at its landing, so this entry becomes 82 there (the
+  // coordinator's word). A NEW TABLE: an older build at `user_version 81` takes rule 3 and never names it. RE-MEASURE the slot:
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_authority_head (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    sequence   INTEGER NOT NULL,
+    journalId  TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    at         INTEGER NOT NULL     -- the record's acceptedAt, as epoch milliseconds
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
