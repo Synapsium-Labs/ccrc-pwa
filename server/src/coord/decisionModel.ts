@@ -130,6 +130,29 @@ export function egressWordOf(egress: Exclude<DecisionEgressWord, 'hit' | 'unread
   return egress === 'no-list' ? 'skipped-no-list' : egress;
 }
 
+/** Every text of a row's state, for the hosted egress screen (§3.8: "every text field"). */
+export function decisionTexts(fields: DecisionFields): readonly string[] {
+  return Object.values(fields).flatMap((v) => texts(v));
+}
+
+/** What a record keeps inline (question 7): a non-private row's quoted and fact fields; null for a private-state row, which
+ *  keeps refs only. */
+export function decisionInlineOf(row: DecisionRowId, fields: DecisionFields): DecisionFields | null {
+  const q = DECISION_QUESTIONS[row];
+  if (q.privateState) return null;
+  const out: Record<string, string | readonly string[]> = {};
+  for (const d of q.fields) {
+    const v = fields[d.name];
+    if (d.kind !== 'ref' && v !== undefined) out[d.name] = v;
+  }
+  return out;
+}
+
+/** Whether the adapter `modelFor` built is the host the call planned with (question 1, review 2262 F9). */
+export function sameDecisionHost(model: { kind: DecisionHostKind; origin: string }, host: { kind: DecisionHostKind; origin: string }): boolean {
+  return model.kind === host.kind && model.origin === host.origin;
+}
+
 // ── addresses ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const ipv4 = (s: string): number[] | null => {

@@ -43,6 +43,8 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/decisionModel.ts',
   'server/src/coord/decisionModelPort.ts',
   'server/src/coord/decisionModelHttp.ts',
+  'server/src/coord/decisionModelStore.ts',
+  'server/src/coord/decisionModelAsk.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */
