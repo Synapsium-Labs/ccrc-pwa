@@ -32966,6 +32966,7 @@ _hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run
   cmp -s -- "$f" <(printf '%s' "$2")
 }
 
+# @ccd-lib:freshpick — the renewal's fresh start ends a set-side crossing once its start is proven (the Overlord's W1, C46): `_fresh_crossing_end` lives in ccd/lib/long-lived.sh
 cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
@@ -33184,6 +33185,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
     exit 5
   fi
+  (( lc_fresh )) && _fresh_crossing_end "$id"   # proven: the receipt was read above (Overlord W1, C46)
   echo "rolled $id"
 }
 

@@ -435,6 +435,7 @@ cmd_forget -> _tmux_t
 cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
+cmd_hibernate -> _fresh_crossing_end
 cmd_hibernate -> _graceful_stop_after
 cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke

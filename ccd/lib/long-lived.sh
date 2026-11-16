@@ -113,3 +113,18 @@ _route_holddown_settle() {   # id degraded-class -> rc 0 hold (the settle compos
     echo "$(date '+%F %T') holddown-restamp $1: the degraded stamp's time read later than ccd's clock; $2 written again as now" >> "$REG/swap.log" ;; esac
   return 0
 }
+
+# @ccd-lib:freshpick
+_fresh_crossing_end() {   # id — a proven renewal ends a set-side crossing (spec §3.4 C46, "Every renewal clears the crossing marker"). Always 0.
+  # Called only after the consuming spawn's receipt proved the fresh start (review 2148 F4; slug crossing-ends-after-the-
+  # receipt): a renewal that failed (exit 4), was not restored (5), was not killed (6) or was not proven (7) keeps the
+  # operator's crossing, which C46 says holds until the next renewal. Only a set side ends it here, with the tick's own line
+  # format. `set-unreadable` or `set-malformed` keeps it (the tick's "an unreadable pin is not deleted"): the tick ends it once
+  # the side reads again. A project side's crossing is the tick's, as today.
+  local LC_ALL=C IFS=' '
+  [[ -e "$REG/$1.crosspool" || -L "$REG/$1.crosspool" ]] || return 0
+  [[ "$(_session_pool_side "$1")" == "set "* ]] || return 0
+  rm -f -- "$REG/$1.crosspool"
+  echo "$(date '+%F %T') crosspool-ended $1: renewal" >> "$REG/swap.log"
+  return 0
+}
