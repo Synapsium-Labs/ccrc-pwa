@@ -569,10 +569,11 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
   // W4's four — `detach` on Linux only (decision 17: `--detach` refuses on
   // Darwin) — W6's `versions`, and the box-token lifecycle's `token-sync`
   // (design 2026-10-07 §4.5; every os, because the op runs the verb in the
-  // foreground), so a Linux install writes ten words (D-6915's `settings`, which the tree's timer backs, is the tenth) and a Darwin one eight.
+  // foreground), and the pool set B2's `below-cap` (every os: `--below-cap` passes the capability floor), so a Linux install
+  // writes eleven words (D-6915's `settings`, which the tree's timer backs, is the last) and a Darwin one nine.
   // LITERALS, not a read of ccd/ccrc's arrays: a pin
   // derived from the list it pins could never red on the list being wrong.
-  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync'];
+  const CAPS_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback', 'versions', 'token-sync', 'below-cap'];
   const CAPS_LINUX = [...CAPS_ALL, 'detach', 'settings'];
   const CAPS_HERE = process.platform === 'darwin' ? CAPS_ALL : CAPS_LINUX;
 
@@ -620,7 +621,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout.split('\n').filter((l) => l.startsWith('install: caps:')).join('\n')).not.toContain(home);
   });
 
-  it('ccrc-caps: ten words on Linux, eight on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+  it('ccrc-caps: eleven words on Linux, nine on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
     // A real install reaches only the host's own arm. The other is reached by
     // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
     // CCD_OS set — the extraction harness the `_inst_installed` cases below
@@ -683,6 +684,8 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
       versions: [/^_upd_restore_arm1\(\) \{/m, /^_ver_flip_back\(\) \{/m],
       // Box-token lifecycle wave 1: the verb ccrc-agent's token-sync op spawns, dispatched to its sibling body.
       'token-sync': [/^cmd_token\(\) \{/m, /^\s*token\)\s+cmd_token "\$@" ;;$/m, /"\$CCRC_HERE\/ccrc-token-sync"/],
+      // The pool set B2: the override of the capability floor, its argument check, and the update verb's arm that takes it.
+      'below-cap': [/^_below_cap_arg\(\) \{/m, /^_cap_floor_lifted\(\) \{/m, /^\s*--below-cap\) _below_cap_arg \$# "\$\{2:-\}"; below\+=/m],
       detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
       // D-6915: the tree writes ~/.ccrc/box-settings.json — the verb, its dispatch, and the timer that runs it.
       settings: [/^cmd_settings\(\) \{/m, /^\s*settings\)\s+cmd_settings "\$@" ;;$/m, /^\s*_inst_enable_timer settings ccrc-settings\.timer\b/m],

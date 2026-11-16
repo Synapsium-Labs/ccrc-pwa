@@ -5274,11 +5274,11 @@ fi
 
 # ── THE CHILD'S APPROVAL-SURFACE AND FORBIDDEN-VERB DENY (plan Task 14, spec §6.6, D-5297, D-5299) ──────
 # A dispatched child (its row carries `$REG/<id>.child`), on the main thread AND in a subagent, never reaches the
-# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `ccrc rollback`, in any invocation form:
+# approval surface and never runs a SAFETY `ccd` verb or `ccrc update` / `rollback` / `rollout`, in any invocation form:
 # bare, through a path ending `/ccd` or `/ccrc`, env-prefixed, anywhere in an `&&`, `;`, `||` or `|` chain, or inside
 # a `bash -c` / `sh -c` string. In this arm the command is read twice, as written and as bash runs it (`norm`: quotes,
 # backslashes and line continuations removed, which only ever denies more), and a verb or `approvals` after a `$VAR`,
-# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback` only when the command also names
+# `${...}`, `$(...)` or backtick program is refused too (`xmatch`; `update`/`rollback`/`rollout` only when the command also names
 # `ccrc`): the security review of Task 14 ran `ccd 'ws-rm' x`, `ccd ws\-rm x`, `C=ccd; $C ws-rm x` and `"${API:?}"
 # approvals` past the plain match. A verb run from a script file, stdin or another interpreter is past any lexical
 # match, an accepted limit (spec §6.1); the classifier escalates it. Children run with permissions bypassed, so no prompt and no classifier sees these
@@ -5297,7 +5297,7 @@ fi
 # `session-hook-approval-deny.test.ts` holds equal to `approvalClass` over Task 12's corpus,
 # `server/test/fixtures/approvals/guard-corpus.json`. It answers one line: `<category>\t<why>`, or empty. In mode
 # `class` (the PermissionRequest arm below) any category counts; in mode `deny` (this arm) only `verb` (a SAFETY `ccd`
-# verb, `ccrc update` or `ccrc rollback`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
+# verb, `ccrc update`, `rollback` or `rollout`), `surface` (the approval surface) and `build` do. `build` (D-5696, spec
 # 2026-10-18 §7.6) is deny mode's alone (`bmatch`, never read in `class` mode, so the classifier parity is untouched): a
 # write into `~/.local/share/claude/versions/` or onto the launcher, by Bash or an edit tool, and Claude Code's
 # `install`, `update` or `upgrade` (D-6063) under a `claude…` wrapper name, a `~/.local/bin/<id>` launcher, a `$VAR`
@@ -5430,7 +5430,7 @@ def fmatch:
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
   (select(test("/\\.(?:cc-sessions|cc-limits|ccrc)(?![A-Za-z0-9_.-])")) | "other\ta registry path"),
   (select(test(WB + "(?:reboot|shutdown|poweroff|halt)(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\treboot or shutdown"),
-  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
   (ACCTV as $v | select(test(WB + "ccrc[" + $q + "\"]?" + SP + "+" + FLAGS + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(CCD + "account-pane" + NW)) | "account\tccd account-pane"),
   (select(test(AAUTH)) | "account\tccd-account-auth"),
@@ -5532,7 +5532,7 @@ def xmatch:
   (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
-  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback)" + NW)) | "verb\tccrc update or rollback"),
+  (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
   (select(test(EXPV + "approvals" + NW)) | "surface\tthe approval surface"),
   (ACCTV as $v | select(test(WB + "ccrc" + NW) and test(EXPV + "account" + SP + "+" + FLAGS + $v + NW)) | "account\tccrc account \($v)"),
   (select(test(WB + "ccd" + NW) and test(EXPV + "account-pane" + NW)) | "account\tccd account-pane");
