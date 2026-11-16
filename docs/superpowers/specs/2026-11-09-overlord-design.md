@@ -7288,6 +7288,9 @@ mechanism leaves something open, the row says what is left.
 now states what shipped. These corrections are not rulings: they record the code on `main`, and no one was asked to
 agree them. Appendix B's Table B5 lists each one with its source.
 
+**Corrected to match the W1 plans (2026-11-16).** Where a merged W1 piece plan ruled against this spec's wording, the
+body now states the plan's ruling, in its words. Appendix B's Table B7 lists each one with its plan and question.
+
 ### Agreed
 
 - R1 to R6, the operator's rulings of 2026-11-09 on the six open questions of #2491 (§2).
@@ -7479,8 +7482,8 @@ The body of the spec states only the result.
 ## Appendix B. What the rulings since 2026-11-10 changed, and what the W1a builds corrected
 
 This appendix keeps two trails. The first is the operator's rulings since 2026-11-10 (Tables B to B4, and B6); the
-second is the corrections the W1a builds measured, which are no rulings (Table B5). The body of the spec states only the
-result.
+second is the corrections the W1a builds measured and the W1 plans ruled, which are no rulings of the operator's (Tables B5
+and B7). The body of the spec states only the result.
 
 The operator approved this edition on 2026-11-10, ruled on the review's fifteen questions, and gave R16 and R17. This
 table keeps the trail for the six calls those two rulings added.
@@ -7619,6 +7622,30 @@ The body states only the result.
 | Where they live | Did not exist | `answer_marks` in `coord.db`, append-only, written by one session-gated operator door; Tables 11.1a and 11.1e |
 
 *Table B6. What R21 changed.*
+
+**Corrections from the W1 plans, 2026-11-16.** The W1 piece plans (`docs/superpowers/plans/2026-11-14-overlord-w1/`)
+each ruled, against this spec's wording, questions the spec left open or stated otherwise, and each listed the spec
+change it needs. This table folds them. Like Table B5 these are corrections, not new rulings of the operator's: each
+row records what a merged plan ruled, in the plan's words, and names the plan and its question or slug. Where the
+coordinator ruled the matter, the row says so.
+
+| What | Before | Now, and its source |
+|---|---|---|
+| The hold-down and the serviceability answer (H16, Tables 11.1b and B2) | Four more inputs to the serviceability answer, the hold-down among them, and "one rule to `_route_restore`" | Three more inputs. The hold-down is ccd's alone, one constant and one decider in `ccd/lib/long-lived.sh`, asked at the settle's servable arm and the pick's first step, never inside `_route_restore`; for up to an hour the server's forecast can name the designated class while ccd composes the fallback. The ccd arms plan, questions 3 and 4, ruled by the coordinator |
+| The sleep markers' verb and its capability word (§3.2, Tables 3.6a, 11.1c, 11.1d, 11.6, C2, §14) | `ccd keep-awake --state on\|off <id>`, advertised by `keep-awake` | `ccd keep-awake --session <id> --state on\|off`, advertised by `keep-awake-v1`, because a refusing row is answered by a capability word, never by its bare verb name. The marker carries the stamp `keep-awake v1`, and only the renewal's `--roll --fresh` passes a `.no-roll` with exactly that stamp. The ccd arms plan, questions 1, 7 and 8 |
+| The affinity stand-down (C57, Table 11.1c) | "For the `overlord` role" | Keyed on a route record with an entry at `acctorder`, which only the Overlord's row carries. The ccd arms plan, question 2 |
+| `capability-missing` (§3.2, Tables 11.1d, 11.6, C2) | Designate and rebind refused it without `pool-set`, `keep-awake` or `hibernate-fresh` | Every place it is answered is listed: every Overlord door at the gate's step 2, the ladder's raise above `chat`, designate and rebind (adding `keep-awake-v1`, `launch-surface-v1`, `project-add`, `ws-title-v1`, `ws-wrapper-v1`, the server's `continuity-v1` and an unread pool answer), and `ccrc-api timer`. Status 501. The designation plan, question 33 and review M1; the vocabulary plan, F6 |
+| `launch-profile-unmet` (Table 11.6) | A digest mismatch or an unlisted loaded item | The launch profile is not engaged, computed on read from the newest `startup` or `resume` start, `unmeasured` never held; build skew and a changed row hold it until the next start; designate and rebind refuse it under build skew. The sandbox plan; the designation plan, question 3 |
+| `read-ceiling` and `rank-changed` (Table 11.6) | No rows | Rows added. `read-ceiling` (429) leaves the guard's exception list in the same pull request. The inbox plan, questions 1 and 2; the vocabulary plan; the portfolio plan, question 8 |
+| Table 11.6's intro | Nothing checks the table against the code | A guard suite checks it both ways. The vocabulary plan |
+| The rank (§5.6, Table 11.1e) | No order between classes; a write's effect on rows it did not show unstated; the door in `coord/overlordRoutes.ts` | Classes in Table 5.6a's order, then position; a write merges and never deletes unseen rows, against a revision that only rises; the door registers with the programme ledgers' operator doors and works while sign-in is dark. The portfolio plan, questions 2, 4, 6 and 8 |
+| The operator's ratify door (§3.8, Table 11.1e) | "The operator's door", unnamed | `POST /api/programmes/:slug/goals/ratify`, naming the version by its stamp and refusing while sign-in is dark. The portfolio plan, question 4 |
+| An item answer as goal evidence (§6.3) | Ratifies when its effect names the change | From W3, when effects arrive; in W1 it reads as not ratified, `effect-unmeasured`. The portfolio plan, question 3 |
+| The readiness word (§6.4, Table 6.4a) | A third restart "reads `dead`"; deaf "within 2 minutes of `ready`"; proof newer than the last leaving of `ready` | A third restart reads `dead` while down and after its generation mints, until the hour clears, outside the renewing guard; the deaf clock runs from the later of the message's arrival and `readySince`; proof must be of the current generation, and a server restart counts as leaving `ready`. The readiness plan, F1, F18 and F13 |
+| A lost door process (Table 3.3.11b) | No trigger | A hard renewal trigger for a refused act-key claim or lost tools on the live generation. Proposed by the door process plan, question 7 (F12), adopted by the coordinator |
+| Who sees the answer marks (§9.2.1) | The privacy rule was stated for the write door only | A coordinator does not see the operator's marks only while sign-in is armed; while it is dark the waiting view, marks included, is open to any process on the box. The delegation marks plan, `coordinator-read-carries-no-marks` |
+
+*Table B7. The corrections from the W1 plans.*
 
 ---
 
