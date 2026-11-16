@@ -240,6 +240,7 @@ _account_deny_json() {
     rules+=("Read($p)")
   done
   for p in '~/.cc-sessions/.auth/**' '~/.cc-sessions/.accounts/**'; do rules+=("Edit($p)"); done
+  # shellcheck disable=SC2088  # a deny rule's path keeps its literal tilde: Claude Code expands it, not bash
   for p in '~/.ccrc/accounts.json' '~/.ccrc/accounts.sh'; do rules+=("Edit($p)"); done   # ACCOUNT_ROSTER_FILES
   for p in 'node deploy/account-op.mjs' 'node ./deploy/account-op.mjs' './deploy/account-op.mjs'; do rules+=("Bash($p:*)"); done   # ACCOUNT_OP_RUNS
   rules+=('mcp__claude_ai_Linear')   # LINEAR_MCP_DENY (D-7674): the claude.ai Linear connector's tools

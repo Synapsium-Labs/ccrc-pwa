@@ -355,7 +355,7 @@ const runsWorktreePrune = (t: string): boolean => {
  *  (`grep x deploy/account-op.mjs`) is not a run. The roster files themselves are already `a registry path`. */
 const ACCOUNT_OP_RUN = new RegExp(String.raw`^\s*(?:[(\x60{]\s*){0,4}(?:(?:then|do|else|if|while|!)\s+){0,2}(?:[A-Za-z_]\w*=\S*\s+){0,8}`
   + String.raw`(?:(?:exec|env|time|nohup|command)\s+){0,2}(?:(?:\S*/)?(?:node|nodejs|bun|deno)\s+(?:-\S*\s+){0,8})?(?:\S*/)?account-op\.mjs(?![\w.-])`);
-const runsAccountOp = (t: string): boolean => t.includes('account-op') && t.replace(/['"]/g, '').split(/[\n;&|]/).some((s) => ACCOUNT_OP_RUN.test(s));
+const runsAccountOp = (t: string): boolean => /account-op/.test(t) && t.replace(/['"]/g, '').split(/[\n;&|]/).some((s) => ACCOUNT_OP_RUN.test(s));
 
 /** Every forbidden shape, matched anywhere in a Bash command's text (spec §6.5 "forbidden"). Each test is linear in
  *  the text's length (D-5299). */
