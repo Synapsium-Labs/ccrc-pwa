@@ -10,6 +10,12 @@ Home project: `ccrc-pwa`   Coordinator: `ccrc-pwa-brisk-mesa`   Workspace: per-w
 the phone without lying to the fleet. It replaces PR #96, which was measured to destroy the very
 scrollback it exists to render.
 
+> **CLOSED 2026-11-16 — nothing left to build.** Two of its four goals are met and merged; the
+> expensive one was re-specified into a successor whose first stage has already merged; the one wave
+> this ledger added was delivered by another PR entirely. The closing entry, with what carries
+> forward and the one act still owed, is **§CLOSED** below. Nothing in the September sections is an
+> instruction to anybody — read the dated headings before acting on a sentence.
+
 ## Goals
 
 The spec's §3 states the whole programme as one invariant, and every wave is a mechanism for one
@@ -26,8 +32,8 @@ written so a fresh session can tell whether it is met without replaying a wave:
 | # | Goal | Met when | State |
 |---|---|---|---|
 | **G1** | **History a phone can read.** A wheel notch or a finger drag scrolls the pane's stored scrollback. | The drawer renders scrollback from one measured read of the RIGHT pane (`capture-pane -J` on the active pane, never row `[0]` — F7), and no scroll gesture reaches the pane as keystrokes. | **MET** — wave 1, [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7`. Before it, a wheel notch typed `ESC OA` into the session. |
-| **G2** | **A live pane readable at phone width.** ~43 columns, not the tail of 220-column lines. | A drawer may narrow a session's window, only to a width the fit floor permits, only through the capability-gated verb, and the width returns when the drawer leaves. | **NOT MET.** The un-pin wave (wave 4 in the table below, §7 in the spec) has never been dispatched. Today a phone still sees 220 columns painted into 43 — honestly, and without losing history, but not readably. |
-| **G3** | **No stored line is ever destroyed** — the cost G1 and G2 must not pay. tmux reflows on a horizontal resize and sheds the overflow past `history-limit` for good (F1). | Every attach pins the canonical grid FIRST (F14: pinned → zero loss; unpinned → 157 of 1203 lines destroyed on one 43-column attach), and any deliberate un-pin is bounded by `(history_size + pane_height) × ceil(pane_width/W)` (F13 — the cheaper bound approved a narrow that destroyed 200 lines). | **HALF MET.** The pin is live (wave 1). The fit floor is an L1 policy module that lands with G2's wave, so nothing un-pins yet — which is why the half that is missing costs no history. |
+| **G2** | **A live pane readable at phone width.** ~43 columns, not the tail of 220-column lines. | A drawer may narrow a session's window, only to a width the fit floor permits, only through the capability-gated verb, and the width returns when the drawer leaves. | **NOT MET HERE, AND NO LONGER THIS PROGRAMME'S TO MEET.** The un-pin wave (row 3 below, §7 in the spec) was never dispatched and was superseded unbuilt on 2026-10-14 (ruling O8). G2 moved to the successor design, which reaches it from the other side — a client the window's own size, and a wrapped browser view for a glass too narrow to hold the grid — and whose stage 1 has merged ([#428](https://github.com/Synapsium-Labs/ccrc-pwa/pull/428) `f46bf2bc5`). Until that design is finished a phone still sees 220 columns painted into 43: honestly, and without losing history, but not readably. |
+| **G3** | **No stored line is ever destroyed** — the cost G1 and G2 must not pay. tmux reflows on a horizontal resize and sheds the overflow past `history-limit` for good (F1). | Every attach pins the canonical grid FIRST (F14: pinned → zero loss; unpinned → 157 of 1203 lines destroyed on one 43-column attach), and any deliberate un-pin is bounded by `(history_size + pane_height) × ceil(pane_width/W)` (F13 — the cheaper bound approved a narrow that destroyed 200 lines). | **HALF MET, and the missing half is MOOT.** The pin is live (wave 1). The fit floor was an L1 policy module that would have landed with the un-pin; the successor never narrows a window at all, so there is no narrowing left to bound. The half that is missing costs no history because the thing it guarded against no longer happens. |
 | **G4** | **No reader types into a pane it cannot read** — the other cost. A narrow pane wraps `esc to interrupt` between words and every phrase reader fails OPEN, which is the shape of the 2026-09-08 five-session incident. | Every `ccd` site and server lane that would TYPE stands down below `READER_MIN_COLS` and says why, and the stand-down is live ON THE FLEET BOX before any server that calls it (AGENT-FIRST). | **MET** — wave 2, [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6`, and the deploy is measured, not reported: the box's active ccd body carries the same guard counts as `origin/main` (2026-11-14, last section). |
 
 **G4 is met in BEHAVIOUR, and its coverage mechanism is not yet proof — carried wave-3 finding 4.**
@@ -37,14 +43,16 @@ call sites, and it is read as though it were the latter. Measured on `origin/mai
 stand-down deleted in one of the other five would not red the suite. That is a gap in the GUARD'S
 GUARD, not an ungated typing site — the sites are gated; what is missing is the mechanism that keeps
 them gated (CLAUDE.md's mutation-table discipline: "a comment is a request; a red suite is a
-mechanism"). Whoever resumes this programme fixes the census before trusting it, and does not count
-greps when the claim is about sites.
+mechanism"). Whoever next touches these lanes fixes the census before trusting it, and does not count
+greps when the claim is about sites. **This is the one live defect the programme owns on the way out**
+— §CLOSED says where it goes.
 
-**So the programme is half-delivered, and the half that shipped is the half that cannot hurt anything.**
-G1 and G4 are live; G3's pin is live and its floor is unwritten; G2 — the original complaint about the
-live pane — is untouched. The ordering was deliberate (spec §4: "wave 1 delivers most of the value
-alone and is safe with nothing after it"), so stopping here is a coherent place to stop, not a
-half-built mechanism. **What it is not is finished.**
+**So this programme shipped the two goals that are cheap and permanent, and handed on the one that is
+expensive and still being designed.** G1 and G4 are live on the box; G3's pin is live and its unwritten
+half is moot; G2 belongs to the successor. The ordering was deliberate (spec §4: "wave 1 delivers most
+of the value alone and is safe with nothing after it"), which is why stopping here costs nothing and
+leaves no half-built mechanism behind. **That is an ending, not an abandonment** — and it is why
+§CLOSED closes the programme rather than parking it.
 
 **Non-goals, named so a later wave does not quietly adopt them** (spec §10, §6.4):
 
@@ -62,14 +70,102 @@ That is bounded by the drawer's open time, visible in the drawer, and the correc
 under a human's eye yields automation rather than having automation type over the human. It is not a
 defect to be fixed by a later wave of this programme.
 
+## CLOSED — 2026-11-16
+
+**The verdict: nothing in this programme is buildable any more, and nothing in it is in flight.** Four
+facts settle it, each measured on `origin/main` the day this entry was written, not recalled:
+
+1. **G1 and G4 are met and merged.** [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) →
+   `6d46bab7` and [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6`. Wave 2's
+   AGENT-FIRST deploy — the one operational act it left owed — is **measured live on the fleet box**,
+   not reported: the active `ccd` body carries 20 `_pane_measurable` references and 35 `KS_WHY`, the
+   same guard counts `origin/main`'s `ccd/ccd` carries (last section, 2026-11-14).
+2. **The un-pin (row 3 — G2, and G3's fit floor) is SUPERSEDED, unbuilt,** by operator ruling O8 of
+   2026-10-14 (D-5013). Its replacement is §Successor, and **the successor's stage 1 has already
+   merged**: [#428](https://github.com/Synapsium-Labs/ccrc-pwa/pull/428) `f46bf2bc5`. G2 was not
+   dropped — it was re-specified into a design that never narrows a window at all, so the fit floor
+   this programme was going to build is moot rather than owed.
+3. **The wave this ledger INSERTED was delivered by another PR entirely** —
+   [#209](https://github.com/Synapsium-Labs/ccrc-pwa/pull/209) `338b7ff34`, D-3525,
+   `shared/tmux-target.ts`. Run 83, which still reads `w3/5` on the board, names work that is done.
+4. **The docs wave (row 4) is NOT RUN, and this entry is the only part of it that was owed.** Its
+   ledger reconcile is this section plus the renumbering note under the waves table. Its one
+   CLAUDE.md sentence — `resize-window` latches `window-size manual`, and `set-option window-size
+   smallest|latest` un-latches but does not restore — is no longer this programme's to place: the
+   successor is the design that turns on that fact, and the sentence should land with the stage that
+   depends on it.
+
+**Why that is an ending rather than an abandonment.** Spec §4 ordered the waves so that wave 1 "delivers
+most of the value alone and is safe with nothing after it", and wave 2's stand-downs are a pure safety
+gain that needs nothing after them either. Both shipped. What remained was the one wave that could
+destroy stored lines if it got its bound wrong — and that is precisely the wave the operator
+re-specified before it was ever built.
+
+### What carries forward, and where it goes
+
+**The six carried findings from wave 2's review are the whole of it, and all six live in one place:**
+`ccd/ccd`'s stand-down lanes and `server/test/ccd-reader-standdown.test.ts`. Every one is about
+COVERAGE or PROSE, never about an ungated typing site — the shipped behaviour was verified correct
+three rounds over, by lenses that reproduced the mutation table in their own trees. Restated with
+today's measurement rather than September's:
+
+- **Finding 4, the census, is the live one.** `POPULATION` counts phrase-carrying grep lines and is
+  read as a census of guard call sites. Measured on `origin/main` 2026-11-15: **13 `_pane_measurable`
+  call sites across 12 functions, against 7 functions named.** A stand-down deleted in one of the
+  others does not red the suite. (September's count at `436d773d` was 9 sites across 8 functions; the
+  gap has grown, which is what an un-swept census does.)
+- **Findings 1, 2, 3 and 5** are the same shape one lane down: the stale lane pinned only by its log
+  STRING; the post-wait guard that can lose its `return 0` and stay green; the top-of-function
+  sentence pinned by nothing; and a header naming `_spawn_settle`, which carries no guard at all,
+  instead of the pair that is genuinely uncovered.
+- **Finding 6** is prose: a `WIDE_PANE` docstring that names a wide-pane fixture as an example of one
+  modelling a narrow drawer, a freshly minted bare cardinal, and two rotted line citations.
+
+**Their home is the successor's stage 2·B0** — "ccd stands down across a geometry change" — because
+that is the next work that will TRUST this census, and a finding has no owner in a closed ledger.
+Whoever picks up B0 reads this list before touching the suite.
+
+### The one act still owed: run 83
+
+Run 83 is this programme's last open row, and until 2026-11-16 nobody could close it. That is worth
+recording, because the reason was a product defect and not an operator mistake:
+
+- **The sweep will never close it.** Its row reads `stuck: {reason: 'never-started', closes: null}`,
+  and `closes: null` is the run-close lane saying "nothing closes this on its own". No operator item
+  was raised either: its hold is `unmeasured`, which is not one of the three routed refusals
+  (`open-pr`, `unpushed-commits`, `child-marker-unreadable`).
+- **It cannot be dispatched.** Its `sessionId` has no registry row, and a wave ≥ 2 dispatch RESUMES
+  rather than spawns, so its first act would be an `ensure` against a session that does not exist.
+- **And the abandon failed too.** `decideAbandon` always chose `wsRelease`; `ccd ws-release` died
+  `no such session` because the registry held no `<id>.uuid`; D-48 then left the run exactly where it
+  was. The console's Abandon sheet answered "The release failed." on every retry.
+
+**That last one is fixed, by another programme, on the day this one closed.** D-8664 — `3499b905e`,
+[#2906](https://github.com/Synapsium-Labs/ccrc-pwa/pull/2906) — adds a `gone` step to the fleet act
+the abandon and the ordinary close share: a release of a session the registry POSITIVELY lists as
+absent is already done, so no act is sent, the close commits, and one
+`fleet-act-omitted:session-absent` event records it, in the shape of the existing
+`fleet-act-omitted:bad-session`. Fail-shut — an unlistable or unmeasurable registry still sends the
+act, so `ccd`'s own answer keeps deciding. **So the last act this programme needs is one operator tap
+on Abandon, against a server carrying `3499b905e` or later.**
+
+### For a fresh reader, in one paragraph
+
+This ledger is long because it was written wave by wave, and most of it is September. The only parts
+that still describe the world are **§Goals** (what was wanted and what each goal came to),
+**§Successor** (where G2 went), **this section**, and the measured section at the very end.
+Everything between them is history carrying its own dates — including two sections whose own
+conclusions were later refuted by measurement, each flagged in its heading. Read the heading before
+acting on the paragraph.
+
 ## Waves
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106), merged as `6d46bab7` | **merged 2026-09-15** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117), merged as `7a6220f6` | **merged 2026-09-18** |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106), merged as `6d46bab7` | **merged 2026-09-15** (run 51 closed `done`, `final:false`) |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117), merged as `7a6220f6` | **merged 2026-09-18** (run 62 closed `done`, 5/6 items; six findings carried; **fleet deploy MEASURED LIVE 2026-11-14**) |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | **superseded, unbuilt** (2026-10-14, operator ruling O8; D-5013): see §Successor |
-| 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | **not run.** Its ledger reconcile for rows 1–3 is the 2026-10-14 edit above (D-5013); the rest is open, to be re-scoped against the successor |
+| 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | **not run.** Its ledger reconcile for rows 1–3 is the 2026-10-14 edit above (D-5013), extended by §CLOSED; the rest lapses with the programme |
 
 Wave 1 is independently valuable and safe with nothing after it. Wave 3, as planned, could merge in
 any order but would DO nothing until wave 2 was on the fleet box: it un-pinned only through a verb
@@ -79,6 +175,22 @@ and was never built; the sentence is kept as the record of its gate.)
 **Rows 1–2 reconciled 2026-10-14 (D-5013).** This table read "awaiting approval" and "planned" for a
 month after both waves merged: the ledger was last edited in #102, before either landed. The merge
 commits above are measured on `origin/main`.
+
+**THE NUMBERING DIVERGED ON 2026-09-18, AND BOTH HALVES ARE TRUE — read this before citing a wave by
+number.** That day the coordinator's working copy of this ledger inserted a NEW wave 3 — anchored
+tmux targeting `=cc-<id>:`, all four constructions plus the ingress predicate — and renumbered the
+un-pin to 4 and the docs pass to 5. **Run 83 was opened under that scheme and the run board still
+reads `w3/5`.** The 2026-10-14 reconcile (D-5013) and ruling O8 were written against the ORIGINAL
+scheme, in which wave 3 IS the un-pin, and the table above keeps it, because the successor spec and
+the ruling that chose it both cite it. So `w3/5` on the board means **the inserted wave, not row 3 of
+this table** — they are different pieces of work and only one of them was ever superseded.
+
+**The inserted wave's work is DONE, and it was never this programme's to do.** Anchored targeting
+landed as [#209](https://github.com/Synapsium-Labs/ccrc-pwa/pull/209) `338b7ff34` — D-3525,
+`shared/tmux-target.ts`, "the one TypeScript spelling of a tmux session, as a name and as a target",
+with `ccd/ccd`'s `_tmux` / `_tmux_t` / `_tmux_at` as its bash twins. Run 83 therefore names work that
+exists, under a number that means something else, for a programme that is closed: a row to abandon,
+not a wave to dispatch (§CLOSED, "The one act still owed").
 
 ## Successor (2026-10-14)
 
@@ -1044,6 +1156,12 @@ lapsed with wave 3. The pin, the readers' stand-down in ccd and the no-raise rul
 
 ## Next-wave brief
 
+**THERE IS NO NEXT WAVE.** The un-pin this brief pointed at was superseded on 2026-10-14 (ruling O8,
+§Successor), and the programme itself closed on 2026-11-16 (§CLOSED). Everything below is September,
+kept as history, and none of it is an instruction to anybody. The successor's stage 1 has since
+merged ([#428](https://github.com/Synapsium-Labs/ccrc-pwa/pull/428) `f46bf2bc5`); stages 1b and 2 are
+that design's business and have no plan file yet.
+
 **Superseded 2026-10-14.** Everything below this paragraph is the brief as it stood before wave 1
 merged, and is kept as history. The next act is the successor design's docs PR (the spec and the
 stage-1 plan, §Successor). Once the operator approves it, dispatch stage 1 per that plan; stage 1b
@@ -1051,6 +1169,13 @@ follows stage 1's deploy; stage 2 gets its own plan once stage 1 is on the box.
 
 **Wave 1 is in fix round 1** (mail 1179, nine items, artifact
 `…/scratchpad/wave1-review/fix-round-1.md`). Wave 2 does not open until wave 1's PR #106 merges.
+
+**Overtaken 2026-09-15: wave 1 is DONE and merged** (`6d46bab7`), and so are the spec and plans
+(`7a91bcf1`). Both gates wave 2 waited on are gone. Wave 1's plan was
+`docs/superpowers/plans/2026-09-14-drawer-wave1-latch-and-reader.md`, all 17 tasks, and it owed no
+deviation numbers as planned (both departures an earlier draft carried were ruled into the spec
+instead — §11 rulings 9 and 10); the nine it ended up owing are D-2766..D-2774, every one a defect in
+the plan this session wrote rather than in the execution.
 
 **Wave 1 was dispatched.** Its plan is `docs/superpowers/plans/2026-09-14-drawer-wave1-latch-and-reader.md`,
 all 17 tasks, and it owes no deviation numbers as planned (both departures an earlier draft carried
@@ -1084,8 +1209,14 @@ exec grant.
 
 ## WHERE THIS PROGRAMME ACTUALLY STANDS (2026-11-14, measured)
 
+**These three measurements stand; the conclusion they were taken for has been overtaken.** The
+programme CLOSED on 2026-11-16 (§CLOSED), and measurement 2's "it is closed from the console or it
+stays open" was settled two days later by D-8664, which made the console's tap work. They are kept
+because each cost a measurement to establish and two of them contradict what this ledger said before
+them.
+
 Two months after wave 2 merged, nothing has been dispatched. A fresh coordinator should read these
-three measurements before deciding anything, because two of them contradict what this ledger said.
+three measurements before deciding anything.
 
 **1. Run 66 is closed, and the sweep did it.** This ledger recorded run 66 as needing an operator
 abandon — `POST /api/runs/:id/abandon` is an ungated operator door, and ungated means ungated against
@@ -1101,7 +1232,8 @@ holds is LISTED, never closed: it reads 'Nothing closes this on its own'."* No o
 raised against it either, which places the hold among the transient kind (a doubt), not among the
 three routed refusals (`open-pr`, `unpushed-commits`, `child-marker-unreadable`). **So "let it lapse"
 is not an available outcome for run 83.** It is closed deliberately from the console, or it stays
-open and this programme stays live on the board.
+open and this programme stays live on the board. (The console's abandon then failed too, for a
+separate reason, until D-8664 — §CLOSED, "The one act still owed".)
 
 **3. The workspace run 83 names no longer exists.** `ccd ws-audit --session ccrc-pwa-plain-basin`
 answers `verdict: 'no-such-session'`, `detail: 'no registry entry'`. Wave 3 was opened with that
