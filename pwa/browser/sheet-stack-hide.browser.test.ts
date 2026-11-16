@@ -1,0 +1,217 @@
+// Desktop polish Task C40 (D-8698), in a real Chrome over the production build, a phone and a desk view.
+// - Review 2310 F4, stacked: the flow the C38 rows hold in jsdom (`test/sheet-trap-hide.test.tsx`). A fleet row's Session
+//   actions, then Swap account over it, then that sheet's target confirm, then Cancel. Each layer's aria-hidden is read
+//   with all three open, in the same task as the Cancel (the confirm still animating out), and once the confirm has
+//   gone: only the sheet directly under the confirm is announced as it closes, and Session actions and the page stay
+//   hidden behind it (C38's rule, review 2287).
+// - Review 2310 F2, no stack, in the app: the session screen's menu sheet, whose Move to another account row closes it
+//   and opens the swap sheet in one commit (`SessionFlows`), over a chat holding a code block, whose Copy label is a
+//   live region (`markdown.tsx`): the aria-hidden package keeps the path to it visible and marks its siblings, an
+//   element the page hid itself among them.
+// In both, every element the page hid itself before the first sheet opened is still hidden at each read and after every
+// sheet has gone (Task C40: the sheet never lifts an aria-hidden it did not set).
+// Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
+// browser/sheet-stack-hide.browser.test.ts )`.
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { chromium, type Browser, type Page } from 'playwright-core';
+import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
+import { resolveChrome } from './harness';
+import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
+import { servedSocket } from '../test/wirePairing';
+
+const VIEWS: readonly AppView[] = [{ skin: REFINED, theme: PHOSPHOR, width: 390 }, { skin: INSTRUMENT, theme: 'light', width: 1280 }];
+
+// Neutral names only. project-a is tagged into lane-a's pool, so lane-b is the session's one eligible target, drawn
+// "suggested" (`row-fit.browser.test.ts`'s swap fixture, cut to what this flow reads).
+const NOW = 1_792_362_479;
+const POOL = 'pool-a';
+const ROSTER = [
+  { id: 'lane-a', label: 'lane-a', hue: 'cyan', pool: POOL },
+  { id: 'lane-b', label: 'lane-b', hue: 'violet', pool: POOL },
+].map((r) => ({ ...r, homeAble: true, hidden: false }));
+const usage = (wrapper: string, five: number, seven: number): object => ({
+  wrapper, five, seven, ts: NOW, fiveResetAt: NOW + 7_800, sevenResetAt: NOW + 259_800,
+  fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false,
+});
+const SESSION = {
+  id: 'project-a-one', wrapper: 'lane-a', home: 'lane-a', project: 'project-a', workdir: '/w/project-a/one', workspace: 'one',
+  name: 'one', status: 'idle', statusUpdatedAt: null, limits: null, dialogPending: false, version: null, model: null,
+  effort: null, ultracode: false, branch: 'ws/one', ctxPct: null, paneCols: null, tasks: null, pr: null, archivedAt: null,
+  archivedBytes: null, held: null, hookState: null, askSummary: null, subagents: null, background: null,
+  withCoordinator: null, lastEnd: null, hibernatedAt: null, bucket: 'idle', unmeasured: [], started: true,
+  child: { kind: 'none' },
+};
+const FIXTURE: AppFixture = {
+  api: {
+    '/api/accounts': { accounts: [usage('lane-a', 40, 50), usage('lane-b', 20, 30)], projected: null, roster: ROSTER },
+    '/api/projects': { roots: ['/w'], projects: [{ name: 'project-a', workdir: '/w/project-a' }] },
+    '/api/runs': [],
+    '/api/claims': [],
+  },
+  fleetFrames: [
+    { type: 'fleet', sessions: [SESSION] },
+    { type: 'pools', pools: { listed: true, enforcement: 'enforced', accountPools: 'enforced',
+      byProject: { 'project-a': { state: 'tagged', name: POOL } } } },
+  ],
+};
+
+const TS = new Date((NOW - 600) * 1000).toISOString();
+/** The session screen's transcript: one answer holding a code block, whose Copy label is a live region. */
+const FRAMES = (): object[] => [
+  { type: 'backlog', uuid: 'u-1', offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
+    events: [
+      { kind: 'user', uuid: 'q1', ts: TS, text: 'show the command' },
+      { kind: 'assistant', uuid: 'a1', ts: TS, text: 'Here it is:\n\n```sh\nnpm test\n```\n\nRun it from the package.' },
+    ] },
+  { type: 'status', status: 'idle', statusUpdatedAt: null },
+];
+
+let dist: string | undefined;
+let server: DistServer | undefined;
+let browser: Browser | undefined;
+beforeAll(async () => {
+  const executablePath = resolveChrome(); // throws on a box with no Chrome: red, never skipped
+  dist = sharedDist();
+  server = await serveDist(dist);
+  browser = await chromium.launch({ executablePath, headless: true });
+}, 180_000);
+afterAll(async () => { await browser?.close(); await server?.close(); });
+
+interface Layers {
+  /** Each mounted dialog in document order (the order they opened): its title, its state, and whether it or an ancestor
+   *  is aria-hidden. */
+  readonly dialogs: readonly { readonly title: string; readonly state: string | null; readonly hidden: boolean }[];
+  /** Whether the page's own content (`main`) or an ancestor of it is aria-hidden. */
+  readonly page: boolean;
+  /** The elements hidden before the first sheet opened that are no longer `aria-hidden="true"`. */
+  readonly lostOwn: readonly string[];
+}
+
+/** Remember every element hidden from assistive technology before any sheet opens, by reference, on the window. */
+const rememberOwn = (page: Page): Promise<number> => page.evaluate(() => {
+  const own = [...document.querySelectorAll('[aria-hidden="true"]')];
+  (window as unknown as { __c40Own: Element[] }).__c40Own = own;
+  return own.length;
+});
+
+const read = (page: Page): Promise<Layers> => page.evaluate(() => {
+  const up = (el: Element | null): boolean => {
+    for (let at = el; at !== null; at = at.parentElement) if (at.getAttribute('aria-hidden') === 'true') return true;
+    return false;
+  };
+  const dialogs = [...document.querySelectorAll('[role="dialog"]')].map((d) => ({
+    title: (d.querySelector('h2')?.textContent ?? '').trim(), state: d.getAttribute('data-state'), hidden: up(d),
+  }));
+  const own = (window as unknown as { __c40Own: Element[] }).__c40Own;
+  const lostOwn = own.filter((el) => el.isConnected && el.getAttribute('aria-hidden') !== 'true')
+    .map((el) => `${el.tagName}.${el.getAttribute('class') ?? ''}`.slice(0, 80));
+  return { dialogs, page: up(document.querySelector('main')), lostOwn };
+});
+
+describe('Session actions, Swap account, its confirm, Cancel (Task C40, review 2310 F4)', () => {
+  for (const view of VIEWS) {
+    it(`${view.skin}, ${view.width}px: only the sheet under the closing confirm is announced; nothing the page hid is lifted`, async () => {
+      const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await page.goto(`${server!.origin}/`);
+        // The session's card (Refined) or status group (Instrument) is drawn folded: unfold it to reach the row.
+        await page.locator('button[aria-expanded="false"]', { hasText: '▸' }).first().click();
+        const actions = page.getByRole('button', { name: /^Actions for / }).first();
+        await actions.waitFor();
+        const remembered = await rememberOwn(page);
+        expect(remembered, 'CONTROL: the page hides some elements itself (icons, decoration)').toBeGreaterThan(0);
+
+        await actions.click();
+        await page.getByRole('button', { name: 'Swap account' }).click();
+        await page.locator('.sheet-body .acct-list > button', { has: page.locator('.acct-suggested') }).click();
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(3);
+        await page.waitForTimeout(300);
+        const open = await read(page);
+        expect(open.dialogs.map((d) => d.hidden), 'CONTROL: the confirm hides both sheets under it').toEqual([true, true, false]);
+        expect(open.page, 'CONTROL: the page is hidden behind three dialogs').toBe(true);
+        expect(open.lostOwn, 'an element the page hid itself was lifted with three dialogs open').toEqual([]);
+
+        await page.getByRole('dialog').last().getByRole('button', { name: 'Cancel' }).click();
+        const closing = await read(page);
+        expect(closing.dialogs.map((d) => d.state), 'CONTROL: the confirm is animating out, both sheets open')
+          .toEqual(['open', 'open', 'closed']);
+        expect(closing.dialogs.map((d) => d.hidden).slice(0, 2), 'as the confirm closes, only the sheet under it is announced')
+          .toEqual([true, false]);
+        expect(closing.page, 'the page was announced behind two open sheets as the confirm closed').toBe(true);
+        expect(closing.lostOwn, 'an element the page hid itself was lifted as the confirm closed').toEqual([]);
+
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(2);
+        const gone = await read(page);
+        expect(gone.dialogs.map((d) => d.hidden), 'after the confirm unmounted, only the top sheet is announced').toEqual([true, false]);
+        expect(gone.page, 'the page was announced behind two open sheets after the confirm unmounted').toBe(true);
+        expect(gone.lostOwn, 'an element the page hid itself was lifted after the confirm unmounted').toEqual([]);
+
+        await page.keyboard.press('Escape');
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+        await page.keyboard.press('Escape');
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(0);
+        await page.waitForTimeout(100);
+        const after = await read(page);
+        expect(after.page, 'the page stayed hidden after every sheet left').toBe(false);
+        expect(after.lostOwn, 'an element the page hid itself was left announced for good').toEqual([]);
+        expect(errors).toEqual([]);
+      } finally { await ctx.close(); }
+    });
+  }
+});
+
+describe('the session menu\'s Move to another account, over a chat with a live region (Task C40, review 2310 F2)', () => {
+  for (const view of VIEWS) {
+    it(`${view.skin}, ${view.width}px: the swap sheet the menu hands to never lifts an element the page hid itself`, async () => {
+      const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
+      try {
+        await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+          servedSocket(ws);
+          for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
+        });
+        await page.goto(`${server!.origin}/s/${SESSION.id}`);
+        await page.waitForSelector('.chat-item .code-block [aria-live]', { timeout: 30_000 });
+        await page.getByRole('button', { name: 'More' }).waitFor();
+        // Measured (Task C40): in this app, with this transcript, the menu marks no element the page hid itself, so an
+        // element the page hid itself is planted where the shape needs one, beside the path to the live region (a direct
+        // child of the answer that holds the code block), as an icon beside a message's blocks would be.
+        await page.evaluate(() => {
+          const planted = document.createElement('span');
+          planted.setAttribute('aria-hidden', 'true');
+          planted.className = 'c40-planted';
+          planted.textContent = '*';
+          document.querySelector('.chat-item .code-block')!.parentElement!.appendChild(planted);
+        });
+        const remembered = await rememberOwn(page);
+        expect(remembered, 'CONTROL: the page hides some elements itself (icons, decoration)').toBeGreaterThan(0);
+
+        await page.getByRole('button', { name: 'More' }).click();
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+        await page.waitForTimeout(300);
+        // The shape review 2310 F2 needs: an element the page hid itself that the menu's Radix has marked, so the
+        // aria-hidden package takes it as the page's and will never put it back once anything lifts it.
+        const marked = await page.evaluate(() => (window as unknown as { __c40Own: Element[] }).__c40Own
+          .filter((el) => el.isConnected && el.hasAttribute('data-aria-hidden')).length);
+        expect(marked, 'CONTROL: the menu marked an element the page hid itself (the path to the live region)').toBeGreaterThan(0);
+
+        await page.getByRole('button', { name: 'Move to another account' }).click();
+        await page.locator('.sheet-body .acct-suggested').waitFor();
+        expect((await read(page)).lostOwn, 'an element the page hid itself was lifted as the menu handed to the swap sheet')
+          .toEqual([]);
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+
+        await page.keyboard.press('Escape');
+        const closing = await read(page);
+        expect(closing.dialogs.map((d) => d.state), 'CONTROL: the swap sheet is animating out').toEqual(['closed']);
+        expect(closing.page, 'the page is still aria-hidden while the swap sheet closes').toBe(false);
+        expect(closing.lostOwn, 'the closing swap sheet lifted an element the page hid itself').toEqual([]);
+        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(0);
+        await page.waitForTimeout(100);
+        const after = await read(page);
+        expect(after.page, 'the page stayed hidden after the swap sheet left').toBe(false);
+        expect(after.lostOwn, 'an element the page hid itself was left announced for good').toEqual([]);
+        expect(errors).toEqual([]);
+      } finally { await ctx.close(); }
+    });
+  }
+});
