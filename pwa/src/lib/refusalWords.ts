@@ -588,7 +588,8 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
   | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
-  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'not-markable' | 'not-configured', string
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'not-markable' | 'unknown-ask'
+  | 'ask-unreadable' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
   'programme-unclaimed': 'This programme has an open run, but no coordinator holds it, so nobody would see your tick. Abandon that run from the Runs screen first, or wait for a coordinator to take it.',
@@ -620,6 +621,9 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'rank-changed': 'The order of the programmes changed since this screen read it, so your order was not saved. Read it again and reorder.',
   // The answer-mark door (Overlord W1): the row left the operator's list, or carries no box.
   'not-markable': 'This row has left your list, so it cannot be marked any more. The list will update.',
+  // Its ask arm (answer marks B): an ask the server no longer holds, or one this box could not read.
+  'unknown-ask': 'This question is no longer on record, so it cannot be marked.',
+  'ask-unreadable': 'This box could not read that question, so it was not marked. Try again.',
   'not-configured': 'This box has no coordination database, so there is no Waiting on you list here.',
 };
 

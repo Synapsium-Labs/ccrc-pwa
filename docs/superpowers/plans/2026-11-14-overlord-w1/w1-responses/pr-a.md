@@ -34,7 +34,9 @@ ledger. The brief named this note `w1-responses-a.md`; the plan's Global Constra
   24 to 26 gain the clock and stamp `index.ts` gives every sink, so their pushes go through the outbox as in production.
   Measured, the sites with no row are the two `notifyPushOnly` ones (28, 29: no label) and three whose rigs have no
   coordination store (1, 10 and 12, and the project-suffix cases on the same rig), whose push is sent as before the
-  record. Flipping site 2 to no-row, or site 28 to row, each goes red.
+  record. Flipping site 2 to no-row, or site 28 to row, each goes red. Site 30 (the pool set B2's loss lane, which
+  reached this branch at a later merge of main) gains the clock the watcher's deps give it, and is a row site; flipping
+  it to no-row goes red.
 - **adoption-sink-pinned-by-scan**. The plan asks for a test that drives the delegation adoption sink through the
   watcher's own path. That path needs the whole delegation lane (a durable journal, a census, a registry listing) to
   reach `notice`. The sink's one field is pinned instead by a scan of `server/src` for hand-built funnel deps literals

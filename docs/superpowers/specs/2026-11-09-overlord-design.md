@@ -5873,11 +5873,13 @@ one word for one thing.
     them pick one.
   - **Which rows.** A `decide` or `value` item the operator has been shown, while it is open or in Recently cleared
     (`CLEARED_WINDOW_MS`, 48 hours). An ask that reached the operator: released or declined to them, or answered by
-    them (`answeredBy` the operator's principal), while it is live or within 48 hours of its last change of state.
-    Live means its child's newest hook state is waiting on that ask's own `askKey`, read through the live-ask port the
+    them (`answeredBy` the operator's principal). An ask that reached them stays theirs whoever answers it later: a
+    released ask may still be taken into `answering`, answered late by its parent, or go `stale` with its dialog, and
+    its reach stamp (`reachedOperatorAt`, written once when it reached them) says so. It is listed while it is live, or
+    within 48 hours of its release, of its answer or of the time it went stale. Live means its child's newest hook state is waiting on that ask's own `askKey`, read through the live-ask port the
     portfolio already uses, and an unmeasured live read counts as not live. A live ask's boxes sit on its child's
-    question row, and every other listed ask is a row of Recently cleared, because a `released` or `declined` ask never
-    leaves that state (the delegation marks plan, question 3). So a mark can be set before the answer or after it. A `do` item records the
+    question row, and every other listed ask is a row of Recently cleared (the delegation marks plan, question 3, and its
+    answer marks B notes). So a mark can be set before the answer or after it. A `do` item records the
     operator's own act and a `secret` item is never seen by a session (Table 6.1a), so neither carries a box. Neither
     does a root session's own ask or a permission prompt, which have no row for a mark to name ("Where things stand",
     Later).
@@ -7427,7 +7429,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `timer-not-yours` | The timer cancel doors | The timer belongs to another identity: at the setter's cancel, another identity's; at the operator's, another session's than the path names, or, for a role timer, a designation that is not `designated` with the path's session. At the setter's cancel an id that names no row answers the same word, so the door is no oracle for which ids exist | C61 |
 | `timer-not-found` | The operator's timer cancel door | The id names no timer, answered 404. The signed-in operator may know which ids exist, so only the operator's cancel answers it | C61 |
 | `timer-not-pending` | The timer cancel doors | The timer has already fired or been cancelled | C61 |
-| `not-markable` | The answer-mark door | The row carries no box, or is not on the operator's list: past the Recently cleared window, or in no list's state. The detail names which. A row the operator was never shown is `unknown-item`, as at the item read | C70 |
+| `not-markable` | The answer-mark door | The row carries no box, or is not on the operator's list: past the Recently cleared window, or in no list's state. The detail names which. A row the operator was never shown is `unknown-item`, as at the item read, or `unknown-ask` for an ask that never reached the operator | C70 |
 | `not-ready:<word>` | A hold's release reason | The readiness word (§6.4) was not `ready`, such as `not-ready:saturated` | H19, H20 |
 | `server-gap` | A hold's release reason | The deadline passed while the server was down | H18, H32 |
 | `released:<cause>` | A hold's release reason | A cause of Table 6.7c other than a readiness word let a standing hold go: `rung`, `disarmed`, `engagement`, `class-raised`, `grant-ended`, `bypassed` or `deaf` | H18, H39 |

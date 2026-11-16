@@ -23,7 +23,7 @@ const why = (url: string): DocsPageParseFailure | 'ok' => {
 };
 
 const leaf = (path: string, over: Partial<Extract<DocsPageLocation, { kind: 'path' }>> = {}): DocsPageLocation => ({
-  kind: 'path', project: 'demo', section: 'specs', path, dirSlash: false, ref: null, view: 'effective', frame: 'inline',
+  kind: 'path', project: 'demo', section: 'specs', path, dirSlash: false, ref: null, at: null, view: 'effective', frame: 'inline',
   ...over,
 });
 
@@ -141,7 +141,7 @@ describe('M3.2: a page URL never carries a commit', () => {
 
   it('declares the pin keys and the page keys exactly', () => {
     expect(DOCS_PIN_KEYS).toEqual(PINS);
-    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'view', 'frame']);
+    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame']);
   });
 
   it.each(PINS)('%s gives commit-in-page on every page kind, ahead of every other query word', (k) => {
@@ -221,6 +221,69 @@ describe('M3.3: view and frame canonicalisation; unknown and repeated keys', () 
     ['/docs/demo/specs/a.md?zz=1&view=x', 'unknown-param'],
   ] as const)('%s gives %s', (url, word) => {
     expect(why(url)).toBe(word);
+  });
+});
+
+describe('the version key at= (rich-docs spec G6, M9.11)', () => {
+  const REF = { kind: 'bare', name: 'ws/a' } as const;
+
+  it('a leaf with a 40- or 64-hex at round-trips', () => {
+    for (const sha of [C40, F64]) {
+      expect(parse(`/docs/demo/specs/a.md?at=${sha}`))
+        .toEqual({ ok: true, loc: leaf('a.md', { at: sha }), canonical: `/docs/demo/specs/a.md?at=${sha}` });
+      expect(parse(`/docs/demo/specs/a.md?ref=ws/a&at=${sha}`)).toEqual({
+        ok: true, loc: leaf('a.md', { ref: REF, at: sha }), canonical: `/docs/demo/specs/a.md?ref=ws/a&at=${sha}`,
+      });
+      expect(docsPageUrl(leaf('a.md', { ref: REF, at: sha }))).toBe(`/docs/demo/specs/a.md?ref=ws/a&at=${sha}`);
+      expect(parse(docsPageUrl(leaf('a.md', { at: sha })))).toMatchObject({ ok: true, loc: leaf('a.md', { at: sha }) });
+    }
+  });
+
+  it('a short, uppercase or 39-hex at is bad-at', () => {
+    for (const bad of ['abc1234', 'A'.repeat(40), 'a'.repeat(39), 'a'.repeat(41), 'g'.repeat(40), '']) {
+      expect(why(`/docs/demo/specs/a.md?at=${bad}`), bad).toBe('bad-at');
+    }
+  });
+
+  it('at on the index, a project or a section is unknown-param', () => {
+    expect(why(`/docs?at=${C40}`)).toBe('unknown-param');
+    expect(why(`/docs/demo?at=${C40}`)).toBe('unknown-param');
+    expect(why(`/docs/demo/specs?at=${C40}`)).toBe('unknown-param');
+  });
+
+  it('at on a directory (trailing slash) is canonicalised away', () => {
+    expect(parse(`/docs/demo/specs/d/?ref=ws/a&at=${C40}`)).toEqual({
+      ok: true, loc: leaf('d', { dirSlash: true, ref: REF }), canonical: '/docs/demo/specs/d/?ref=ws/a',
+    });
+    expect(docsPageUrl(leaf('d', { dirSlash: true, at: C40 }))).toBe('/docs/demo/specs/d/');
+  });
+
+  it('view=committed beside at is canonicalised away', () => {
+    expect(parse(`/docs/demo/specs/a.md?ref=ws/a&at=${C40}&view=committed`)).toEqual({
+      ok: true, loc: leaf('a.md', { ref: REF, at: C40 }), canonical: `/docs/demo/specs/a.md?ref=ws/a&at=${C40}`,
+    });
+    expect(docsPageUrl(leaf('a.md', { ref: REF, at: C40, view: 'committed' })))
+      .toBe(`/docs/demo/specs/a.md?ref=ws/a&at=${C40}`);
+  });
+
+  it('a repeated at is repeated-param', () => {
+    expect(why(`/docs/demo/specs/a.md?at=${C40}&at=${C40}`)).toBe('repeated-param');
+  });
+
+  it('commit=, servedRef=, branch=, head= and fp= still give commit-in-page, beside at too', () => {
+    for (const k of ['commit', 'servedRef', 'branch', 'head', 'fp']) {
+      expect(why(`/docs/demo/specs/a.md?at=${C40}&${k}=${H40}`), k).toBe('commit-in-page');
+      expect(why(`/docs/demo/specs/a.md?${k}=${H40}&at=${C40}`), k).toBe('commit-in-page');
+    }
+  });
+
+  it('keys are written ref, at, view, frame', () => {
+    expect(docsPageUrl(leaf('m.html', { ref: REF, at: C40, view: 'committed', frame: 'full' })))
+      .toBe(`/docs/demo/specs/m.html?ref=ws/a&at=${C40}&frame=full`);
+    expect(parse(`/docs/demo/specs/m.html?frame=full&at=${C40}&ref=ws/a`)).toMatchObject({
+      ok: true, canonical: `/docs/demo/specs/m.html?ref=ws/a&at=${C40}&frame=full`,
+    });
+    expect(DOCS_PAGE_KEYS).toEqual(['ref', 'at', 'view', 'frame']);
   });
 });
 

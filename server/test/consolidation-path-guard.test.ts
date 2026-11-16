@@ -158,39 +158,40 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
 });
 
 // W3 (slug question-census; Task Q3a; plan 2026-10-26-consolidation-w3-questions.md, §Global constraints): the files W3
-// creates and no other stream edits. A diff touching one of them is red when it also touches a `pwa/` path (W3 is the
-// server halves only; the PWA halves are W7's), or when it also touches the approval signing path, which no W3 diff
-// may change (§What W3 must not change): the child's verifier, the server's signer and the session hook. Keyed on the
-// diff, as the W1a guard above is, and measured from the same base.
+// creates. A diff touching one of them is red when it also touches the approval signing path, which no W3 diff may change
+// (§What W3 must not change): the child's verifier, the server's signer and the session hook. Keyed on the diff, as the
+// W1a guard above is, and measured from the same base. Its `pwa/` arm is gone (slug path-guard-w3-releases-pwa, Overlord
+// W1 answer marks B): it stood because W3 was the server halves only and the PWA halves were W7's, and consolidation W7
+// has landed (C7a to C7p, the last of them #1948 and #1952), so a later stream may edit a W3 file beside the PWA.
 
-/** The files W3 creates (Q3b, Q3c, Q3g) and no other stream edits. */
+/** The files W3 creates (Q3b, Q3c, Q3g). */
 const W3_OWNED: readonly string[] = ['server/src/coord/questions.ts', 'server/src/coord/questionPolicy.ts', 'server/src/pane/askPairing.ts'];
 
 /** The approval signing path: no diff that touches a W3-owned file may touch one of these. */
 const SIGNING_PATH: readonly string[] = ['ccd/approval-verify.mjs', 'server/src/coord/approvalsign.ts', 'ccd/session-hook.sh'];
 
 /** The W3 guard's verdict over one diff's file names. */
-function w3Guard(files: readonly string[]): { owned: string[]; pwa: string[]; signing: string[]; red: boolean } {
+function w3Guard(files: readonly string[]): { owned: string[]; signing: string[]; red: boolean } {
   const owned = files.filter((f) => W3_OWNED.includes(f));
-  const pwa = files.filter((f) => f.startsWith('pwa/'));
   const signing = files.filter((f) => SIGNING_PATH.includes(f));
-  return { owned, pwa, signing, red: owned.length > 0 && (pwa.length > 0 || signing.length > 0) };
+  return { owned, signing, red: owned.length > 0 && signing.length > 0 };
 }
 
-describe('W3: no pwa/ file and no signing-path file beside a W3-owned file (slug question-census)', () => {
-  it('CONTROL (fixture): a W3-owned file with a pwa/ path is red; with the verifier, the signer or the hook is red; alone, or either side alone, passes', () => {
-    expect(w3Guard(['server/src/coord/questions.ts', 'pwa/src/session/askLive.ts'])).toEqual(
-      { owned: ['server/src/coord/questions.ts'], pwa: ['pwa/src/session/askLive.ts'], signing: [], red: true });
+describe('W3: no signing-path file beside a W3-owned file (slug question-census)', () => {
+  it('CONTROL (fixture): a W3-owned file with the verifier, the signer or the hook is red; with a pwa/ path, alone, or either side alone, passes', () => {
     for (const s of SIGNING_PATH) expect(w3Guard(['server/src/coord/questionPolicy.ts', s]).red, s).toBe(true);
-    expect(w3Guard(['server/src/pane/askPairing.ts', 'ccd/session-hook.sh', 'pwa/src/app.tsx']).red).toBe(true);
+    expect(w3Guard(['server/src/pane/askPairing.ts', 'ccd/session-hook.sh', 'pwa/src/app.tsx'])).toEqual(
+      { owned: ['server/src/pane/askPairing.ts'], signing: ['ccd/session-hook.sh'], red: true });
+    // W7 has landed, so a W3-owned file beside a pwa/ path is green (slug path-guard-w3-releases-pwa).
+    expect(w3Guard(['server/src/coord/questions.ts', 'pwa/src/session/askLive.ts']).red).toBe(false);
     expect(w3Guard(['server/src/coord/questions.ts', 'server/src/watch.ts', 'server/test/questions-pin.test.ts']).red).toBe(false);
     // Round 2 edits the signing path beside the routes, never beside a W3-owned file: green.
     expect(w3Guard(['ccd/approval-verify.mjs', 'server/src/coord/routes.ts', 'pwa/src/app.tsx']).red).toBe(false);
     // A path that merely starts like an owned one is not it.
-    expect(w3Guard(['server/src/coord/questions.ts.orig', 'pwa/src/app.tsx']).red).toBe(false);
+    expect(w3Guard(['server/src/coord/questions.ts.orig', 'ccd/session-hook.sh']).red).toBe(false);
   });
 
-  it('this diff does not touch pwa/ or the signing path beside a W3-owned file', () => {
+  it('this diff does not touch the signing path beside a W3-owned file', () => {
     const base = guardBase(REPO, process.env);
     if (base === null) {
       expect(process.env.CI, 'no $CCRC_HISTORY_BASE or origin/main resolved in CI: the guard would measure nothing').toBeFalsy();
@@ -198,7 +199,6 @@ describe('W3: no pwa/ file and no signing-path file beside a W3-owned file (slug
       return;
     }
     const v = w3Guard(diffFiles(REPO, base));
-    expect(v.red ? [...v.pwa, ...v.signing] : [],
-      `this diff touches pwa/ or signing-path files beside W3-owned [${v.owned.join(', ')}]`).toEqual([]);
+    expect(v.red ? v.signing : [], `this diff touches signing-path files beside W3-owned [${v.owned.join(', ')}]`).toEqual([]);
   });
 });

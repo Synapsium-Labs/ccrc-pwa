@@ -1133,10 +1133,11 @@ export const DOCS_API_PREFIX = '/api/docs';
  *  navigation cannot attach it, and a cross-origin fetch can only after a preflight the server never answers. */
 export const DOCS_REQUEST_HEADER = 'x-ccrc-docs';
 export const DOCS_REQUEST_HEADER_VALUE = '1';
-/** The page query keys, in the order docsPageUrl writes them. */
-export const DOCS_PAGE_KEYS = ['ref', 'view', 'frame'] as const;
-/** Pin keys. On a page they are refused as commit-in-page, never canonicalised: a page URL never carries a
- *  commit, and a durable pointer to one exact commit is a GitHub URL (spec 3.1, 3.11). */
+/** The page query keys, in the order docsPageUrl writes them. `at` is the version view's (rich-docs spec G6, R-d): a
+ *  leaf's full commit, kept beside `ref`. */
+export const DOCS_PAGE_KEYS = ['ref', 'at', 'view', 'frame'] as const;
+/** Pin keys. On a page they are refused as commit-in-page, never canonicalised: a page names a commit only as `at`
+ *  (rich-docs spec A14), and a durable pointer to one exact commit is a GitHub URL (spec 3.1, 3.11). */
 export const DOCS_PIN_KEYS = ['commit', 'servedRef', 'branch', 'head', 'fp'] as const;
 
 export type DocsPageLocation =
@@ -1144,14 +1145,17 @@ export type DocsPageLocation =
   | { kind: 'project'; project: string; ref: DocsRefSpec | null }
   | { kind: 'section'; project: string; section: DocSectionSlug; ref: DocsRefSpec | null }
   | { kind: 'path'; project: string; section: DocSectionSlug; path: string; dirSlash: boolean;
-      ref: DocsRefSpec | null; view: 'effective' | 'committed'; frame: 'inline' | 'full' };
-export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref'
+      ref: DocsRefSpec | null;
+      /** The version view's commit (rich-docs spec G6); `null` has one meaning, the latest at `ref`. */
+      at: string | null;
+      view: 'effective' | 'committed'; frame: 'inline' | 'full' };
+export type DocsPageParseFailure = 'not-docs' | 'bad-project' | 'bad-section' | 'bad-path' | 'bad-ref' | 'bad-at'
   | 'bad-view' | 'bad-frame' | 'bad-escape' | 'encoded-slash' | 'commit-in-page' | 'unknown-param'
   | 'repeated-param' | 'reserved-node';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_PAGE_PARSE_FAILURE_MAP: Record<DocsPageParseFailure, true> = {
-  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-view': true,
+  'not-docs': true, 'bad-project': true, 'bad-section': true, 'bad-path': true, 'bad-ref': true, 'bad-at': true, 'bad-view': true,
   'bad-frame': true, 'bad-escape': true, 'encoded-slash': true, 'commit-in-page': true, 'unknown-param': true,
   'repeated-param': true, 'reserved-node': true,
 };
@@ -1175,11 +1179,17 @@ const PAGE_KEYS_BY_KIND: Readonly<Record<DocsPageLocation['kind'], readonly Docs
   path: DOCS_PAGE_KEYS,
 };
 
-/** `view=committed` survives canonicalisation only together with `ref`, and only on a leaf: without `ref` the
- *  default view never overlays drafts, so the key is redundant (spec 3.1). A trailing slash marks a directory,
- *  and a directory is not a leaf. */
+/** `view=committed` survives canonicalisation only together with `ref`, and only on a leaf, and never beside `at`:
+ *  without `ref` the default view never overlays drafts, so the key is redundant (spec 3.1). A trailing slash marks
+ *  a directory, and a directory is not a leaf. */
 function pageKeepsView(l: DocsPathLocation): boolean {
-  return l.view === 'committed' && l.ref !== null && !l.dirSlash;
+  return l.view === 'committed' && l.ref !== null && !l.dirSlash && l.at === null;
+}
+
+/** `at` survives only on a leaf (rich-docs spec G6): a directory is no version. A version is committed bytes, so
+ *  `view=committed` beside it is redundant (`pageKeepsView`). */
+function pageKeepsAt(l: DocsPathLocation): boolean {
+  return l.at !== null && !l.dirSlash;
 }
 
 /** `frame=full` survives only on a leaf whose class is html (spec 3.1, 5.6.7). */
@@ -1267,6 +1277,7 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   const q = pageQuery(search, PAGE_KEYS_BY_KIND[kind]);
   if (!q.ok) return q;
   let ref: DocsRefSpec | null = null;
+  let at: string | null = null;
   let view: DocsPathLocation['view'] = 'effective';
   let frame: DocsPathLocation['frame'] = 'inline';
   for (const key of DOCS_PAGE_KEYS) {
@@ -1277,6 +1288,9 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
     if (key === 'ref') {
       ref = parseDocsRef(value);
       if (ref === null) return { ok: false, why: 'bad-ref' };
+    } else if (key === 'at') {
+      if (!isDocsCommit(value)) return { ok: false, why: 'bad-at' };
+      at = value;
     } else if (key === 'view') {
       if (value !== 'committed') return { ok: false, why: 'bad-view' };
       view = 'committed';
@@ -1290,9 +1304,10 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
   else if (section === undefined) loc = { kind: 'project', project, ref };
   else if (segs.length === 2) loc = { kind: 'section', project, section, ref };
   else {
-    const asked: DocsPathLocation = { kind: 'path', project, section, path, dirSlash, ref, view, frame };
+    const asked: DocsPathLocation = { kind: 'path', project, section, path, dirSlash, ref, at, view, frame };
     loc = {
       ...asked,
+      at: pageKeepsAt(asked) ? at : null,
       view: pageKeepsView(asked) ? 'committed' : 'effective',
       frame: pageKeepsFrame(asked) ? 'full' : 'inline',
     };
@@ -1301,9 +1316,10 @@ export function parseDocsPage(pathname: string, search: string): DocsPageParse {
 }
 
 /** The canonical page URL. Each path segment goes through encodeURIComponent; `ref` is written verbatim, because
- *  its grammar's charset (A-Z a-z 0-9 . _ / -) is query-safe; keys follow DOCS_PAGE_KEYS order, and a redundant
- *  `view` or `frame` is never written. `loc` must hold values in their grammars, as every parseDocsPage answer
- *  does; encodeURIComponent throws URIError on a lone surrogate, which isDocsRelPath refuses.
+ *  its grammar's charset (A-Z a-z 0-9 . _ / -) is query-safe, and so is `at`, 40 or 64 lower-case hex; keys follow
+ *  DOCS_PAGE_KEYS order, and a redundant `view` or `frame` is never written, nor a directory's `at`. `loc` must hold
+ *  values in their grammars, as every parseDocsPage answer does; encodeURIComponent throws URIError on a lone
+ *  surrogate, which isDocsRelPath refuses.
  *  parseDocsPage(docsPageUrl(l)) returns l for every canonical l. */
 export function docsPageUrl(loc: DocsPageLocation): string {
   if (loc.kind === 'index') return DOCS_PAGE_PREFIX;
@@ -1314,6 +1330,7 @@ export function docsPageUrl(loc: DocsPageLocation): string {
   }
   const value: Record<DocsPageKey, string | null> = {
     ref: loc.ref === null ? null : docsRefText(loc.ref),
+    at: loc.kind === 'path' && pageKeepsAt(loc) ? loc.at : null,
     view: loc.kind === 'path' && pageKeepsView(loc) ? 'committed' : null,
     frame: loc.kind === 'path' && pageKeepsFrame(loc) ? 'full' : null,
   };

@@ -230,7 +230,7 @@ describe('the approval-surface deny: a child cannot reach the approval surface (
 });
 
 describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc update/rollback, in any form (D-5299)', () => {
-  const verbs = [...FORBIDDEN_CCD_VERBS.map((v) => `ccd ${v}`), 'ccrc update', 'ccrc rollback'];
+  const verbs = [...FORBIDDEN_CCD_VERBS.map((v) => `ccd ${v}`), 'ccrc update', 'ccrc rollback', 'ccrc rollout'];
   const forms = (cmd: string): string[] => {
     const [prog, ...rest] = cmd.split(' ');
     const tail = rest.join(' ');
@@ -274,7 +274,8 @@ describe('the forbidden-verb deny: a child never runs a SAFETY verb or ccrc upda
   });
   it('the reason names the verb', () => {
     expect(bash('ccd ws-rm x')).toContain('ccd ws-rm');
-    expect(bash('ccrc rollback')).toContain('ccrc update or rollback');
+    expect(bash('ccrc rollback')).toContain('ccrc update, rollback or rollout');
+    expect(bash('ccrc rollout --below-cap pool-set')).toContain('ccrc update, rollback or rollout');
   });
   it.each(batches(verbs))('a top-level session is not denied any of them ($thread, $part)', ({ extra, cs }) => {
     fs.rmSync(path.join(home, '.cc-sessions', `${ID}.child`));

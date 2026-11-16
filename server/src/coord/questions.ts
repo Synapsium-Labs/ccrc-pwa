@@ -56,7 +56,7 @@ import { approvalClass, rootsForChild } from './approvalguard.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
-import type { WatcherCoordPort } from './ports.js';
+import type { LiveAskRead, WatcherCoordPort } from './ports.js';
 import { decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush, type AskLapse, type QuestionHoldPhase } from './questionPolicy.js';
 import type { ReclaimDeps } from './reclaim.js';
 import { redactCommand, redactedStored } from './redact.js';
@@ -164,6 +164,17 @@ export function forCorrection(
 /** The drift lane's read: the questions still held, for its orphaned-question finding. */
 export function heldForDrift(store: Pick<CoordStore, 'driftHeldQuestions'>): ReturnType<CoordStore['driftHeldQuestions']> {
   return store.driftHeldQuestions();
+}
+
+/** The waiting view's read of the asks the operator has (Overlord W1, answer marks B; `waitingViewOf`). */
+export function markableAsks(store: Pick<CoordStore, 'askMarkTargets'>, now: number, liveAsk: LiveAskRead): ReturnType<CoordStore['askMarkTargets']> {
+  return store.askMarkTargets(now, liveAsk);
+}
+
+/** The answer-mark door's read (answer marks B; review 2217 F4): one ask by id, through the same statement and rule as
+ *  `markableAsks`, so the door and the view never disagree. A row this box cannot read is that refusal, never an absent row. */
+export function askForMark(store: Pick<CoordStore, 'askMarkRead'>, id: number, now: number, liveAsk: LiveAskRead): ReturnType<CoordStore['askMarkRead']> {
+  return store.askMarkRead(id, now, liveAsk);
 }
 
 // ── the owner of question state ──────────────────────────────────────────────────────────────────────────────────

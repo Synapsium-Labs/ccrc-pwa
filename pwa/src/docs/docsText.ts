@@ -128,10 +128,11 @@ export const DOCS_PAGE_INVALID_SENTENCE: Record<DocsPageParseFailure, string> = 
   'bad-ref': "This address's ref is not a branch name Docs can read.",
   'bad-view': "This address's view is not one Docs knows; only view=committed is.",
   'bad-frame': "This address's frame is not one Docs knows; only frame=full is.",
+  'bad-at': "This address's at= is not a full 40- or 64-character lower-case commit id.",
   'bad-escape': 'This address holds a percent-escape that does not decode.',
   'encoded-slash': 'This address hides a slash inside one path segment (%2F).',
   'commit-in-page':
-    'A Docs page address never names a commit; open the page without it, or use a GitHub link for one exact commit.',
+    'A Docs page address names a commit only as at=; open the page without the other key, or use a GitHub link for one exact commit.',
   'unknown-param': 'This address carries a query key Docs pages do not use.',
   'repeated-param': 'This address carries the same query key twice.',
   'reserved-node': 'This address names a fleet node, which Docs does not serve yet.',
@@ -404,6 +405,7 @@ export const DOCS_VIEW_TEXT = {
   emptyListing: 'Nothing is listed here.',
   missing: 'Not in this listing at {short}.',
   sectionUnserved: "The fleet box does not serve this section yet; it appears once that box's ccrc is updated.",
+  versionUnknownCommit: "This box's copy of the repository has no commit {short}.",
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',
@@ -449,6 +451,8 @@ export const DOCS_HEAD_TEXT = {
   sourceDraft: '{badge} in {label}',
   sourceDraftUnbadged: 'draft',
   sourceNone: 'nothing opened',
+  sourceVersion: 'version {short}',
+  backToLatest: 'Back to the latest',
   updatedTo: 'Updated to {short}',
   github: 'View on GitHub',
   /** The full head's row shows this word beside its icon; the link's name stays `github` (desk-nav Part B, D-8101). */
@@ -528,6 +532,8 @@ export const DOCS_BANNER_TEXT = {
   draftAssets: 'This draft page embeds {k} uncommitted asset{s}.',
   viewCommitted: 'Showing the committed version at {short}.',
   backToDraft: 'Back to the draft',
+  version: 'Showing the version at {short}, not the latest on {served}.',
+  notContainedVersion: 'Commit {short} is not on {served}; it comes from another branch.',
 } as const;
 
 /** The served ref as the truth line and the banners name it (spec 4.5): `origin/<b>` when the origin side is served,
@@ -587,6 +593,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
   'unmeasured': 'Docs could not measure whether origin has {short}; Refresh, then share.',
   'new-draft': 'Not committed yet, so GitHub has nothing to show.',
   'new-withheld': 'Not committed yet, and Docs did not read it ({withheld}); nothing to share or export.',
+  'version-unmeasured': 'Docs cannot tell whether origin has {short}, so it gives no link to this version.',
 };
 
 /** Export's clause (spec 4.16), and the refusals that take it on a page that offers Export. THE SEAM FOR EXPORT
@@ -594,7 +601,7 @@ export const SHARE_SENTENCE: Record<ShareRefusal, string> = {
  *  sentence carries the clause. Export's run passes its own availability and changes no sentence here. */
 export const SHARE_EXPORT_CLAUSE = 'Export makes a file you can send.';
 export const SHARE_EXPORT_CLAUSE_FOR: ReadonlySet<ShareRefusal> =
-  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft']);
+  new Set<ShareRefusal>(['no-github-origin', 'bad-slug', 'bad-target', 'new-draft', 'version-unmeasured']);
 
 /** A refusal's sentence, filled from its fields, with Export's clause when the page offers Export. */
 export function shareRefusalSentence(why: ShareRefusal, fields: ShareFields, exportOffered: boolean): string {

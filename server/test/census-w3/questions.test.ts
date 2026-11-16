@@ -205,7 +205,7 @@ describe('W3 question census (slug question-census)', () => {
 
   it('REAL: the closed store-method list partitions the class\'s question-shaped public methods with the not-a-question list', () => {
     const listed = [...QUESTION_STORE_METHODS, ...Object.keys(NOT_QUESTION_STORE_METHODS)].sort();
-    expect(QUESTION_STORE_METHODS).toHaveLength(32);
+    expect(QUESTION_STORE_METHODS).toHaveLength(34); // answer marks B: askMarkTargets
     expect(new Set(listed).size, 'no method is on both lists').toBe(listed.length);
     expect(coordStoreQuestionShapedMethods(), 'a CoordStore question method missing from QUESTION_STORE_METHODS').toEqual(listed);
   });

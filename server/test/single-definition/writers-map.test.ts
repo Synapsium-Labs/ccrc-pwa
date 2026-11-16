@@ -500,7 +500,9 @@ describe(TABLES_PIN, () => {
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.
   const markReadSites = callSitesOf('answerMarksOf');
+  // Answer marks B adds `asksViewOf`, the waiting view's ask lists, which only `waitingViewOf` calls.
   const MARK_READS = [
+    'server/src/coord/ledgersRoutes.ts#asksViewOf',
     'server/src/coord/ledgersRoutes.ts#registerLedgerOperatorRoutes.operatorView', 'server/src/coord/ledgersRoutes.ts#waitingViewOf',
     `${S}answerMarksOf`,
   ];
@@ -511,10 +513,10 @@ describe(TABLES_PIN, () => {
     await plant('ledgersRoutes.ts', routes.replace(anchor, "deps.presenceOf, deps.secretOf, coord.answerMarksOf('item', []))) });"), (f) => {
       const sites = markReadSites([f]).map((x) => x.replace(/^.*#/, ''));
       expect(sites).toContain('registerLedgerCoordinatorRoutes @ GET /api/programmes/:slug/items');
-      expect(sites).not.toEqual(MARK_READS.slice(0, 2).map((x) => x.replace(/^.*#/, '')));
+      expect(sites).not.toEqual(MARK_READS.slice(0, 3).map((x) => x.replace(/^.*#/, '')));
     });
   });
-  it('answerMarksOf is called only by the two operator views (the item view and the waiting view)', () => {
+  it('answerMarksOf is called only by the operator views (the item view, the waiting view and its ask lists)', () => {
     expect(markReadSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_READS);
   });
   const tableReaders = (files: readonly string[]): string[] => files.filter((f) => /\bFROM\s+answer_marks\b/.test(

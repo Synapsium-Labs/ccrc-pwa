@@ -199,7 +199,7 @@ async function readCorpus(
       if (parsed.kind !== 'tree') { unreadDocs += 1; continue; }
       docs += 1;
       await onDoc(codeBlocksOf(parsed.tree), t.text, {
-        project: p.project, pageRef: null, view: 'effective', section: t.pin.section, path: t.pin.path, tree,
+        project: p.project, pageRef: null, pageAt: null, view: 'effective', section: t.pin.section, path: t.pin.path, tree,
         pageSource: 'committed', onFragment: () => undefined,
       });
       progress(`Item 1: ${docs} documents read`);
