@@ -86,7 +86,7 @@ async function rig(): Promise<{ w: FleetWatcher; coord: CoordStore; ccd: string[
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const deps: Deps = { ...testDeps(home, run), coord, fleetState: { ccdVerbs: VERBS } as unknown as FleetState, viewers: { isOpen: () => false } as never };
   const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000, path.join(home, 'state-cache.json')));
-  w.useStopDoneSerialiser({ serial: (fn) => fn() } as never);
+  w.useStopDoneSerialiser({ serial: <T>(fn: () => Promise<T>) => fn() } as never);
   const warns: string[] = [];
   vi.spyOn(console, 'warn').mockImplementation((...a: unknown[]) => { warns.push(a.map(String).join(' ')); });
   await w.tick();                       // priming
