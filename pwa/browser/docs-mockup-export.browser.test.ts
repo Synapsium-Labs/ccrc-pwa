@@ -306,7 +306,7 @@ async function buildAll(b: string, a: string, row: string, refresh: boolean): Pr
   if (page.kind !== 'path') throw new Error('fixture: not a leaf page');
   const request: ExportRequest = {
     page, tree, assets: null, readAt: NOW,
-    source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsedExport.doc, assets: { plan, settled: Promise.resolve({ s: 'loaded', result }) } },
+    source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsedExport.doc, assets: { plan, settled: Promise.resolve({ s: 'loaded', result }), now: () => result } },
   };
   const input = exportInputOf(request, { exportedAt: NOW, theme: null });
   const exported = await buildExport(input);

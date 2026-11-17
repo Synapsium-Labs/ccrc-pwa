@@ -36,7 +36,7 @@ import {
 } from './docsText';
 import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
-import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, type MockupExtract } from './mockup/load';
+import { buildMockupSrcdoc, extractMockupRefs, startMockupLoad, type MockupExtract } from './mockup/load';
 import {
   capRows, censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
 } from './mockup/census';
@@ -197,7 +197,7 @@ function MockupLive(p: MockupViewProps & {
   // generation before it publishes anything.
   //
   // The attempt reads through an OBSERVING reader that passes every answer through unchanged and reports a movement word
-  // (`DOCS_RELIST_WORDS`) answered to THIS attempt (a stale generation's report is ignored). `loadMockupAssets` itself
+  // (`DOCS_RELIST_WORDS`) answered to THIS attempt (a stale generation's report is ignored). The loader itself
   // never relists (D-8660); the view decides, here:
   //   - a historical page: the word is that row's failure and nothing else (the commit is the URL's, no re-list changes it);
   //   - the first movement in this view: the attempt is aborted at once (that disposes of its buffered discoveries, pending
@@ -226,7 +226,6 @@ function MockupLive(p: MockupViewProps & {
     // The attempt's end for Export: resolved once, by whichever comes first (its result, its failure, its abort).
     let end!: (e: MockupLoadEnd) => void;
     const settled = new Promise<MockupLoadEnd>((resolve) => { end = resolve; });
-    setExported({ plan, settled });
     const moved = (): void => {
       if (generation.current !== mine || host.current.historical) return;
       if (autoRelisted.current) {
@@ -253,7 +252,11 @@ function MockupLive(p: MockupViewProps & {
         return answer;
       },
     };
-    loadMockupAssets(plan, observing, ctl.signal).then(
+    // Export gets the plan, the end, and the load as it stands (`now`), read when its wait runs out (review 2361 F2). No read
+    // answers before this publishes: every answer reaches the observer after an await.
+    const load = startMockupLoad(plan, observing, ctl.signal);
+    setExported({ plan, settled, now: load.now });
+    load.result.then(
       (result) => {
         if (generation.current !== mine) {
           end({ s: 'ended' });

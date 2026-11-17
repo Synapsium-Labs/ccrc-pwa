@@ -1,6 +1,6 @@
 // The mockup viewer (native Docs reader, completion plan Task 8, C2; base spec 2026-10-01 5.6.1-5.6.8; rows M5.13-M5.16,
 // M5.21, M5.22). The real C1 modules run (pre-scan, parser, planner, loader, build); only the asset reader is a fake
-// whose answers each test controls, and `loadMockupAssets` is wrapped so a test can hold one attempt's result and
+// whose answers each test controls, and `startMockupLoad` is wrapped so a test can hold one attempt's result and
 // hand it back after the view has moved on. jsdom does not run a srcdoc, so a frame's `load` events are fired by hand.
 // Completion plan Task 9 adds the last describe: what the view publishes for Export. Placeholders only (project `demo`,
 // hosts `cdn.example`, `lib.example`, `ext.example`).
@@ -18,7 +18,7 @@ import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
 import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence } from '../src/docs/docsText';
 import { ExportBodyContext, GATE_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
-import { buildMockupSrcdoc, loadMockupAssets } from '../src/docs/mockup/load';
+import { buildMockupSrcdoc, startMockupLoad } from '../src/docs/mockup/load';
 import {
   MOCKUP_AUTO_RENDER_BYTES, MOCKUP_CENSUS_ROW_CAP, MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH,
   MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS, mockupCsp, metaFor,
@@ -34,7 +34,7 @@ import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
 vi.mock('../src/docs/mockup/load', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/docs/mockup/load')>();
-  return { ...real, loadMockupAssets: vi.fn(real.loadMockupAssets), buildMockupSrcdoc: vi.fn(real.buildMockupSrcdoc) };
+  return { ...real, startMockupLoad: vi.fn(real.startMockupLoad), buildMockupSrcdoc: vi.fn(real.buildMockupSrcdoc) };
 });
 
 const RealDOMParser = DOMParser;
@@ -48,7 +48,7 @@ beforeEach(() => {
       constructed += 1;
     }
   });
-  vi.mocked(loadMockupAssets).mockClear();
+  vi.mocked(startMockupLoad).mockClear();
   vi.mocked(buildMockupSrcdoc).mockClear();
 });
 
@@ -423,7 +423,7 @@ describe('a second load tears the frame down (M5.15; base 5.6.6)', () => {
     const firstDoc = first.getAttribute('srcdoc');
     act(() => raiseAuthLost('expired'));
     act(() => clearAuthLost());
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(m.frame()!.getAttribute('srcdoc')).not.toBe(firstDoc));
     await flush();
     const second = m.frame()!;
@@ -822,7 +822,7 @@ describe('the attempt lifecycle (base 5.6.2 step 5; the generation and abort bou
     const reads = fakeReader(new Map([['a.png', gate]]));
     const m = mount({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
     await waitFor(() => expect(reads.calls).toHaveLength(1));
-    const signal = vi.mocked(loadMockupAssets).mock.calls[0]![2];
+    const signal = vi.mocked(startMockupLoad).mock.calls[0]![2];
     expect(signal.aborted).toBe(false);
     m.unmount();
     expect(signal.aborted).toBe(true);
@@ -833,11 +833,11 @@ describe('the attempt lifecycle (base 5.6.2 step 5; the generation and abort bou
     const reads = fakeReader(new Map([['a.png', gate]]));
     const m = mount({ html: '<img src="a.png"><img src="b.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
     await waitFor(() => expect(reads.paths()).toEqual(['a.png']));
-    const firstSignal = vi.mocked(loadMockupAssets).mock.calls[0]![2];
+    const firstSignal = vi.mocked(startMockupLoad).mock.calls[0]![2];
     m.again({ html: '<img src="a.png"><img src="b.png">', context: ctxOf([entry('specs', 'b.png')]), reader: reads.reader });
     await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'b.png']));
     expect(firstSignal.aborted).toBe(true);
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(m.frame()).not.toBeNull());
     const html = m.frame()!.getAttribute('srcdoc')!;
     expect(html).toContain('data:image/png;base64,AQID');
@@ -852,10 +852,11 @@ describe('the attempt lifecycle (base 5.6.2 step 5; the generation and abort bou
     const ctxP = ctxOf([entry('specs', 'a.png')]);
     const html = '<img src="a.png">';
     const outP = new Deferred2();
-    const mocked = vi.mocked(loadMockupAssets);
+    const mocked = vi.mocked(startMockupLoad);
     mocked.mockImplementationOnce((plan, rd, signal) => {
       void signal;
-      return outP.promise.then(() => real.loadMockupAssets(plan, rd, new AbortController().signal));
+      const load = real.startMockupLoad(plan, rd, new AbortController().signal);
+      return { result: outP.promise.then(() => load.result), now: load.now };
     });
     const m = mount({ html, context: ctxP, reader: heldReader.reader });
     await waitFor(() => expect(mocked).toHaveBeenCalledTimes(1));
@@ -878,7 +879,7 @@ describe('the attempt lifecycle (base 5.6.2 step 5; the generation and abort bou
     const stale: MockupContext = { ...ctxOf([]), tree: treeOk({ entries: [], drafts: holder() }) };
     m.again({ html: '<img src="a.png">', context: stale, reader: reads.reader });
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
     expect(m.frame()!.getAttribute('srcdoc')).toBe(shown);
   });
 
@@ -956,23 +957,23 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     const relist = vi.fn<() => void>();
     const m = mount({ html: HTML, context: ctxP(), reader: reads.reader, relist });
     await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
-    const pSignal = vi.mocked(loadMockupAssets).mock.calls[0]![2];
+    const pSignal = vi.mocked(startMockupLoad).mock.calls[0]![2];
     expect(pSignal.aborted).toBe(true);
     expect(reads.paths()).toEqual(['s.css', 'moved.png']);
     expect(m.frame()).toBeNull();
     await flush();
     expect(relist).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
     expect(reads.paths()).toEqual(['s.css', 'moved.png']);
     // The next context starts Q, a fresh plan from Q's listing, pin and budget.
     const q = ctxQ();
     m.again({ html: HTML, context: q, reader: reads.reader, relist });
     await waitFor(() => expect(m.frame()).not.toBeNull());
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
     const qCalls = reads.calls.slice(2);
     expect(qCalls.map((c) => c.path)).toEqual(['s.css', 'moved.png', 'x.png', 'y.png']);
     for (const c of qCalls) expect(c).toMatchObject({ kind: 'committed', commit: COMMIT_B });
-    expect(vi.mocked(loadMockupAssets).mock.calls[1]![0].context).toBe(q);
+    expect(vi.mocked(startMockupLoad).mock.calls[1]![0].context).toBe(q);
     const shown = m.frame()!.getAttribute('srcdoc')!;
     // The held P stylesheet comes back after Q started: its child is uniquely eligible in P's listing only.
     await act(async () => { heldCss.resolve(OK(cssBytes(P_CSS))); await flush(); });
@@ -981,7 +982,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     expect(reads.calls.slice(2)).toHaveLength(4);
     expect(m.frame()!.getAttribute('srcdoc')).toBe(shown);
     expect(shown).not.toContain('child.png');
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
     expect(relist).toHaveBeenCalledTimes(1);
     // Q's rows and reservations are Q's own: its boundary kept z.png out (P admitted it), and its reservations are Q's sizes.
     openFold(m.container, CENSUS);
@@ -1043,7 +1044,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     await flush();
     expect(relist).not.toHaveBeenCalled();
     expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
   });
 
   it('a second movement in this view (attempt Q): no second relist and no third attempt, the changing note and Retry; Retry re-lists only, the next context starts the attempt, uncapped', async () => {
@@ -1061,7 +1062,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     // The attempt finished: its page shows, the moved row reads failed, and nothing re-listed or started again.
     await waitFor(() => expect(m.frame()).not.toBeNull());
     expect(relist).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
     const readsAfterQ = reads.calls.length;
     await flush();
     expect(reads.calls).toHaveLength(readsAfterQ);
@@ -1073,25 +1074,25 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     fireEvent.click(button(MOCKUP_TEXT.retry));
     expect(relist).toHaveBeenCalledTimes(2);
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
     expect(reads.calls).toHaveLength(readsAfterQ);
     expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument();
     // The context the re-list produces starts the attempt; its own movement does not re-list by itself (the automatic one is
     // spent): the note stays, and Retry is uncapped.
     m.again({ html, context: ctxQ(), reader: reads.reader, relist });
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(reads.paths().filter((x) => x === 'moved.png')).toHaveLength(3));
     await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
     await flush();
     expect(relist).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(3);
     fireEvent.click(button(MOCKUP_TEXT.retry));
     expect(relist).toHaveBeenCalledTimes(3);
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(3);
     // The new context the re-list produces starts another attempt; the note goes with the old attempt.
     m.again({ html, context: ctxQ(COMMIT_C), reader: reads.reader, relist });
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull());
     expect(screen.queryByRole('button', { name: MOCKUP_TEXT.retry })).toBeNull();
     expect(relist).toHaveBeenCalledTimes(3);
@@ -1109,9 +1110,9 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     expect(relist).toHaveBeenCalledTimes(2);
     await flush();
     expect(moving.calls).toHaveLength(readsBefore);
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
     n.again({ html, context: ctxQ(), reader: moving.reader, relist });
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(moving.calls).toHaveLength(readsBefore + 1));
     await waitFor(() => expect(n.frame()).not.toBeNull());
     await flush();
@@ -1128,7 +1129,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     await waitFor(() => expect(m.frame()).not.toBeNull());
     await flush();
     expect(relist).not.toHaveBeenCalled();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
     expect(reads.paths()).toEqual(['a.png']);
     expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull();
     expect(screen.queryByRole('button', { name: MOCKUP_TEXT.retry })).toBeNull();
@@ -1153,19 +1154,19 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     await flush();
     expect(reads.paths()).toEqual(['a.png']);
     act(() => clearAuthLost());
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'a.png']));
     // The second attempt answered auth again: its result subscribes again, and one more sign-in is one more attempt.
     await flush();
     act(() => raiseAuthLost('expired'));
     act(() => clearAuthLost());
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(m.container.querySelector('details.docs-mockup-census > summary')?.textContent).toBe('Assets and references · 1 loaded · 0 not loaded'));
     // The result has no auth row now: a further sign-in starts nothing.
     act(() => raiseAuthLost('expired'));
     act(() => clearAuthLost());
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(3);
   });
 
   it('sign-in starts nothing for a result with no auth row, and nothing after unmount', async () => {
@@ -1176,7 +1177,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     act(() => raiseAuthLost('expired'));
     act(() => clearAuthLost());
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
     expect(reads.paths()).toEqual(['a.png']);
     m.unmount();
     cleanup();
@@ -1184,12 +1185,12 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     const n = mount({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: authReads.reader });
     await waitFor(() => expect(n.frame()).not.toBeNull());
     await flush();
-    const before = vi.mocked(loadMockupAssets).mock.calls.length;
+    const before = vi.mocked(startMockupLoad).mock.calls.length;
     n.unmount();
     act(() => raiseAuthLost('expired'));
     act(() => clearAuthLost());
     await flush();
-    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(before);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(before);
     expect(authReads.paths()).toEqual(['a.png']);
   });
 
@@ -1274,9 +1275,28 @@ describe('what the view publishes for Export (completion plan Task 9; M5.EX6)', 
     gate.resolve({ kind: 'ok', bytes: bytesOf(1, 2, 3) });
     const end = await body.assets.settled;
     if (end.s !== 'loaded') throw new Error('not loaded');
-    expect(end.result).toBe(await vi.mocked(loadMockupAssets).mock.results[0]!.value);
+    expect(end.result).toBe(await vi.mocked(startMockupLoad).mock.results[0]!.value.result);
     expect([...end.result.assets.values()].map((a) => [...a.bytes])).toEqual([[1, 2, 3]]);
     await waitFor(() => expect(m.frame()).not.toBeNull());
+  });
+
+  it('the published body carries the load as it stands: now() keeps what has loaded and fails what is still loading with the word (review 2361 F2)', async () => {
+    const gate = deferred();
+    const reads = fakeReader(new Map([['b.png', gate]]));
+    const m = publishing({
+      html: '<img src="a.png"><img src="b.png">', context: ctxOf([entry('specs', 'a.png'), entry('specs', 'b.png')]), reader: reads.reader,
+    });
+    await waitFor(() => expect(reads.calls).toHaveLength(2));
+    await flush();
+    const body = mockupOf(m.current());
+    const at = body.assets.now('timed-out');
+    expect(at.plan.rows.map((r) => (r.verdict.v === 'failed' ? r.verdict.failure : r.verdict.v))).toEqual(['inline', 'timed-out']);
+    expect([...at.assets.values()].map((a) => [...a.bytes])).toEqual([[1, 2, 3]]);
+    gate.resolve({ kind: 'ok', bytes: bytesOf(4) });
+    const end = await body.assets.settled;
+    if (end.s !== 'loaded') throw new Error('not loaded');
+    expect(end.result.assets.size).toBe(2);
+    expect(at.assets.size, 'the answer given at the deadline is a copy').toBe(1);
   });
 
   it('a new attempt publishes its own body, and the superseded attempt\'s settled ends', async () => {

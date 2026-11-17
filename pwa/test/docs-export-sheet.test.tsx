@@ -201,7 +201,7 @@ describe('exportInputOf for a mockup (completion plan Task 9)', () => {
   it('builds the mockup body from the viewer\'s Document and plan, titles it by the file name and carries no Markdown registry', () => {
     const doc = new DOMParser().parseFromString('<p>x</p>', 'text/html');
     const plan = { context: { project: 'demo', pin: { ...PIN, path: 'm.html' }, tree: treeOk() }, rows: [], admitted: new Map(), reservedBytes: 0 } as never;
-    const assets = { plan, settled: Promise.resolve({ s: 'ended' } as const) };
+    const assets = { plan, settled: Promise.resolve({ s: 'ended' } as const), now: (): never => { throw new Error('not read here'); } };
     const input = exportInputOf({
       ...REQUEST, page: pageAt('/docs/demo/specs/m.html') as Leaf, assets: createExportAssets(),
       source: { kind: 'mockup', pin: { ...PIN, path: 'm.html' }, show: fileResponse('<p>x</p>').show, doc, assets },

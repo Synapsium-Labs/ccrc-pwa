@@ -285,6 +285,17 @@ interface Unit {
   done: boolean;
 }
 
+/** A load in flight (`startMockupLoad`): its end, and the load as it stands at any moment. */
+export interface MockupLoad {
+  /** The load's end, exactly as `loadMockupAssets` answers it. */
+  readonly result: Promise<MockupAssetResult>;
+  /** The load as it stands now, leaving it running: every row whose read completed as the end would answer it (its bytes
+   *  in `assets`), and every admitted row whose read has not completed `failed` with `failure`. Export reads it at its
+   *  deadline (base decision 3 and section 4.17: wait up to `DOCS_EXPORT_IMAGE_WAIT_MS`, then placeholders for what is
+   *  still loading; review 2361 F2). `assets` is a copy, so a read that completes later never reaches an answer given. */
+  now(failure: string): MockupAssetResult;
+}
+
 /** Reads each admitted unique pin of `plan` once, at most `DOCS_PWA_FETCH_CONCURRENCY` in flight, in row order, and
  *  returns the plan with its failures kept as rows. A completed stylesheet's references (the real `scanCssRefs`) are
  *  fed to `extendMockupAssetPlan` in DETERMINISTIC order: parents in row order, each parent's references in token
@@ -295,7 +306,12 @@ interface Unit {
  *  or not) is read once. On `signal` abort it starts no further read and rejects with the signal's reason. It never
  *  relists, retries or replans (D-8660): a moved or unknown-commit word is just that row's failure. */
 export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReader, signal: AbortSignal): Promise<MockupAssetResult> {
-  if (signal.aborted) return Promise.reject(signal.reason);
+  return startMockupLoad(plan, reader, signal).result;
+}
+
+/** `loadMockupAssets`, started: its end, and `now`, the load as it stands (`MockupLoad`). The same one loader: `now` only
+ *  reads the state the load keeps anyway, and changes nothing in it. */
+export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader, signal: AbortSignal): MockupLoad {
   const project = plan.context.project;
   let current = plan;
   const units: Unit[] = [];
@@ -306,6 +322,17 @@ export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReade
   const failed = new Map<string, string>();
   let actualBytes = 0;
   let seen = 0;
+
+  const now = (failure: string): MockupAssetResult => {
+    const rows: MockupAssetRow[] = current.rows.map((row) => {
+      if (row.verdict.v !== 'inline' || row.size === null) return row;
+      const unit = byKey.get(unitKeyOf(row.ref));
+      const word = unit === undefined || !unit.done ? failure : failed.get(unit.key);
+      return word === undefined ? row : { ...row, verdict: { v: 'failed', failure: word } };
+    });
+    return { plan: { ...current, rows }, actualBytes, assets: new Map(assets) };
+  };
+  if (signal.aborted) return { result: Promise.reject(signal.reason), now };
 
   /** New units from the rows added since the last look: the first admitted row of each file defines it. */
   const absorb = (): void => {
@@ -326,10 +353,10 @@ export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReade
   try {
     absorb();
   } catch (err) {
-    return Promise.reject(err);
+    return { result: Promise.reject(err), now };
   }
 
-  return new Promise<MockupAssetResult>((resolve, reject) => {
+  const result = new Promise<MockupAssetResult>((resolve, reject) => {
     let next = 0;
     let inflight = 0;
     let cursor = 0;
@@ -419,6 +446,7 @@ export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReade
     };
     pump();
   });
+  return { result, now };
 }
 
 // ---------------------------------------------------------------------------------------------------------------

@@ -322,7 +322,7 @@ function heldFiles(result: MockupAssetResult): HeldFile[] {
 }
 
 /** The attempt's plan with no bytes: every admitted row failed with `failure`, so the snapshot lists each as not
- *  inlined and words it by that failure (`TIMED_OUT`: still loading). */
+ *  inlined and words it by that failure (`'ended'`: the attempt was aborted or its load failed, so no bytes will come). */
 function unheld(plan: MockupAssetPlan, failure: string): MockupAssetResult {
   const rows = plan.rows.map((row) => (row.verdict.v === 'inline' ? { ...row, verdict: { v: 'failed' as const, failure } } : row));
   return { plan: { ...plan, rows }, actualBytes: 0, assets: new Map() };
@@ -424,7 +424,9 @@ const mockupNotes = (input: ExportInput<MockupArm>, diagrams: number): readonly 
 async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLimits): Promise<ExportResult> {
   const arm = input.body;
   const end = await settledWithin(arm.assets.settled, limits.imageWaitMs);
-  const result = end === 'timed-out' ? unheld(arm.assets.plan, TIMED_OUT) : end.s === 'loaded' ? end.result : unheld(arm.assets.plan, 'ended');
+  // A wait that runs out keeps what has loaded: only the rows still loading become placeholders, worded as still loading
+  // (base decision 3, section 4.17; review 2361 F2).
+  const result = end === 'timed-out' ? arm.assets.now(TIMED_OUT) : end.s === 'loaded' ? end.result : unheld(arm.assets.plan, 'ended');
   const diagrams = mockupDiagramCount(arm.doc);
   const held = heldFiles(result);
   const attempt = (k: number): MockupTry => {

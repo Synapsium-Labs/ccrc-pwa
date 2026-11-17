@@ -22,7 +22,7 @@ import {
   EXPORT_WAIT_TEXT, fillSentence,
 } from '../src/docs/docsText';
 import { GATE_BODY, READER_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
-import { extractMockupRefs, loadMockupAssets } from '../src/docs/mockup/load';
+import { extractMockupRefs, startMockupLoad } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { planMockupAssets } from '../src/docs/mockup/plan';
 import { MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
@@ -847,7 +847,9 @@ describe('buildExport: one React <html>, inert by construction (spec 4.17; M4.EX
 
 // ---- Completion plan Task 9 (C2): the builder's mockup arm, over the real snapshot --------------------------------------
 
-type MockupFiles = Record<string, Uint8Array<ArrayBuffer> | string | { failed: string }>;
+/** A file's reply: its bytes (or text), a failure word, or `STALL`, a read that never answers (an asset still loading). */
+type MockupFiles = Record<string, Uint8Array<ArrayBuffer> | string | { failed: string } | typeof STALL>;
+const STALL = Symbol('a read that never answers');
 const lenOfFile = (f: MockupFiles[string]): number => (typeof f === 'string' ? f.length : f instanceof Uint8Array ? f.length : 1);
 const specsRepo = (name: string): string => `docs/superpowers/specs/${name}`;
 const NO_LIMIT: ExportLimits = { maxBytes: 1e9, imageWaitMs: 1000 };
@@ -857,8 +859,8 @@ interface MockupOpts {
   readonly draftPage?: boolean;
   /** Assets that also have a draft side (a draft page opens them as drafts). */
   readonly draftAssets?: readonly string[];
-  /** How the attempt's load ends; the default is the real load over the fake reader. */
-  readonly end?: 'never' | 'ended';
+  /** How the attempt's load ends: `ended` (aborted); the default is the real load over the fake reader. */
+  readonly end?: 'ended';
   /** A change to the loaded result (a hostile MIME on a loaded entry). */
   readonly edit?: (r: MockupAssetResult) => MockupAssetResult;
   /** More listed files (a link target's document). */
@@ -887,17 +889,19 @@ async function mockupRequest(html: string, files: MockupFiles = {}, o: MockupOpt
     read: async (p) => {
       const f = files[p.path];
       if (f === undefined) return { kind: 'failed', failure: 'not-found' };
+      if (f === STALL) return new Promise<never>(() => {});
       if (typeof f === 'string') return { kind: 'ok', bytes: new TextEncoder().encode(f) };
       return f instanceof Uint8Array ? { kind: 'ok', bytes: f } : { kind: 'failed', failure: f.failed };
     },
   };
-  const loadedEnd = loadMockupAssets(plan, reader, new AbortController().signal)
+  // The view's own wiring (`MockupView`): the real load, its end, and `now`, the load as it stands.
+  const load = startMockupLoad(plan, reader, new AbortController().signal);
+  const loadedEnd = load.result
     .then((result): MockupLoadEnd => ({ s: 'loaded', result: o.edit === undefined ? result : o.edit(result) }));
-  const settled = o.end === 'never' ? new Promise<MockupLoadEnd>(() => {})
-    : o.end === 'ended' ? Promise.resolve<MockupLoadEnd>({ s: 'ended' }) : loadedEnd;
+  const settled = o.end === 'ended' ? Promise.resolve<MockupLoadEnd>({ s: 'ended' }) : loadedEnd;
   return {
     page, tree, assets: null, readAt: NOW,
-    source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsed.doc, assets: { plan, settled } },
+    source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsed.doc, assets: { plan, settled, now: load.now } },
   };
 }
 
@@ -1091,7 +1095,7 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     const input = await mockupInput(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(100) });
     if (input.body.kind !== 'mockup') throw new Error('not a mockup');
     const rejecting: ExportInput = {
-      ...input, body: { ...input.body, assets: { plan: input.body.assets.plan, settled: Promise.reject(new Error('the load failed')) } },
+      ...input, body: { ...input.body, assets: { ...input.body.assets, settled: Promise.reject(new Error('the load failed')) } },
     };
     const { result, inner } = await built(rejecting, { maxBytes: 1e9, imageWaitMs: 60_000 }).then((b) => ({
       result: b.result, inner: new DOMParser().parseFromString(b.doc.querySelector('iframe')?.getAttribute('srcdoc') ?? '', 'text/html'),
@@ -1112,17 +1116,23 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     expect(room.inner.querySelector('img')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
   });
 
-  it('a wait that passes imageWaitMs omits every admitted asset as still loading, never as no room left', async () => {
-    const files = { 'a.png': BIG(100), 'b.png': BIG(100) };
-    const html = mockupPage('<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b">');
-    const stalled = await builtMockup(html, files, { end: 'never' }, { maxBytes: 1e9, imageWaitMs: 15 });
-    for (const id of ['a', 'b']) {
+  it('a wait that passes imageWaitMs keeps every asset that has loaded and words only the ones still loading (base decision 3, 4.17; review 2361 F2)', async () => {
+    const html = mockupPage('<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">');
+    const partial = await builtMockup(html, { 'a.png': BIG(100), 'b.png': STALL, 'c.png': BIG(100) }, {}, { maxBytes: 1e9, imageWaitMs: 50 });
+    for (const id of ['a', 'c']) expect(partial.inner.getElementById(id)?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    expect(partial.inner.getElementById('b')?.hasAttribute('src')).toBe(false);
+    expect(partial.inner.getElementById('b')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    expect(partial.result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png'), specsRepo('c.png')]);
+    expect(partial.result.mockup?.omitted).toEqual([specsRepo('b.png')]);
+    // Nothing loaded yet: every asset is still loading, never "no room left".
+    const stalled = await builtMockup(html, { 'a.png': STALL, 'b.png': STALL, 'c.png': STALL }, {}, { maxBytes: 1e9, imageWaitMs: 15 });
+    for (const id of ['a', 'b', 'c']) {
       expect(stalled.inner.getElementById(id)?.hasAttribute('src')).toBe(false);
       expect(stalled.inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
     }
     expect(stalled.result.mockup?.inlined).toEqual([]);
-    expect(stalled.result.mockup?.omitted).toEqual([specsRepo('a.png'), specsRepo('b.png')]);
-    const ended = await builtMockup(html, files, { end: 'ended' });
+    expect(stalled.result.mockup?.omitted).toEqual(['a.png', 'b.png', 'c.png'].map(specsRepo));
+    const ended = await builtMockup(html, { 'a.png': BIG(100), 'b.png': BIG(100), 'c.png': BIG(100) }, { end: 'ended' });
     expect(ended.inner.getElementById('a')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.failed);
     expect(ended.result.mockup?.inlined).toEqual([]);
   });
@@ -1189,7 +1199,7 @@ describe('exportStateFor for a mockup, class html (spec 4.17 "When it is offered
   const tree = treeOk({ entries: [entry('specs', 'm.html')] });
   const HTML = '<p>m</p>';
   const doc = new DOMParser().parseFromString(HTML, 'text/html');
-  const assets = { plan: {} as never, settled: Promise.resolve<MockupLoadEnd>({ s: 'ended' }) };
+  const assets = { plan: {} as never, settled: Promise.resolve<MockupLoadEnd>({ s: 'ended' }), now: (): never => { throw new Error('not read here'); } };
   const page = leafAt('/docs/demo/specs/m.html');
   const pin = pinFor(tree, page);
   if (pin === null) throw new Error('fixture');

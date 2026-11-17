@@ -28,10 +28,14 @@ import type { MockupAssetPlan, MockupAssetResult } from './mockup/ports';
  *  failed, so no asset bytes will come (never an overloaded null). */
 export type MockupLoadEnd = { readonly s: 'loaded'; readonly result: MockupAssetResult } | { readonly s: 'ended' };
 
-/** One attempt's assets for Export: its plan (known at once) and the promise of its load's end, which never rejects. */
+/** One attempt's assets for Export: its plan (known at once), the promise of its load's end, which never rejects, and
+ *  `now`, its load as it stands (`MockupLoad.now`, `mockup/load.ts`): what has loaded kept, every admitted row still
+ *  loading `failed` with the word given. Export reads `now` when its wait runs out, so a slow asset costs only itself
+ *  (base decision 3, section 4.17; review 2361 F2). */
 export interface MockupExportAssets {
   readonly plan: MockupAssetPlan;
   readonly settled: Promise<MockupLoadEnd>;
+  readonly now: (failure: string) => MockupAssetResult;
 }
 
 export type ExportBody =
