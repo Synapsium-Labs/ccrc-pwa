@@ -219,6 +219,33 @@ describe('D-8710 — the exact-bytes row join walks every row a key spans', () =
   });
 });
 
+describe('D-8710 — a shape key over many rows is masked on every row when a chunk splits it', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('a 1,600-character shape key on eight rows, cut into two chunks anywhere, is never drawn', () => {
+    // The text after the cut once masked only its first row as the shape's continuation; its later rows were masked
+    // only while the context (1 KiB) still held the shape's start, so a long key's rows showed after most cuts (measured
+    // on main: a full row at about a third of all cuts, with or without fingerprints). The rows a masked run goes on
+    // into are now walked as the shape's own are, a text that ends after a row break and the next row's indent carries
+    // into the next, and the drawer reads that carry at the end of what it sends, not of what it holds.
+    const key = skOf(1_600);
+    const fp = fingerprinted(keyOf(40, 78));
+    try {
+      for (const m of [SHAPE_ONLY_MASKER, fp]) {
+        for (const s of [SEPS[3]!, SEPS[0]!]) {
+          const text = drawn(key, wrapAt(key.length, 220, s.indent), s, ' done.');
+          for (let cut = 1; cut < text.length; cut += 2) {
+            const sent = throughDrawer(m, [{ text: text.slice(0, cut), quietMs: 0 }, { text: text.slice(cut), quietMs: 40 }]);
+            expect(slicesIn(key.slice(2), sent), `${m === fp ? 'fingerprints held' : 'shape-only'}, ${s.name}, cut at ${cut}`).toEqual([]);
+          }
+        }
+      }
+    } finally {
+      fp.close();
+    }
+  });
+});
+
 describe('D-8710 — a run longer than a drawer holds stays masked to its end (review 2326 O1)', () => {
   afterEach(() => { vi.useRealTimers(); });
 

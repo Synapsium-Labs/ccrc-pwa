@@ -52,7 +52,7 @@ import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import { isOperatorSecretLane, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
   ROW_BREAK, RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
-  rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
+  Rows, rowTextEnd, runOnRows, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
 } from './shapes.js';
 
 /** The fingerprint's domain prefix, fed to the HMAC ahead of the secret. */
@@ -61,6 +61,11 @@ export const FINGERPRINT_DOMAIN = 'ccrc-secret-fp-v1\0';
  *  (D-5995: 16,384 cost a frame past the 25 ms bound). */
 export const RUNS_PER_CHUNK = 256;
 export const MAX_CHUNKS = 32;
+/** The bytes of candidates joined across three or more rows one frame may hash, each under every live key (D-8710). Such
+ *  candidates overlap: in a listing of equal lines whose width divides a held key's length, every line starts one as
+ *  long as the key, so counting runs alone let a 64 Ki slice hash 31 MB (177 ms, measured). 2 MiB keeps a frame near
+ *  the 20 ms the run budget bounds; past it the frame is cut, failing closed like the run budget. */
+export const ROW_CHAIN_BYTES = 2 * 1024 * 1024;
 /** How long the drawer holds back an open tail that could start a secret, from the FIRST hold (D-5995): well over the
  *  gap between the chunks of one node-pty burst. 6 ms, so the echo latency it adds, with the 1 to 3 ms late a Node
  *  timer fires, stays within the 8 ms bound measured through a real tmux attach. */
@@ -193,6 +198,13 @@ function runStartBefore(t: string, e: number, fine: boolean, max: number): numbe
 const LINE_BREAK = new RegExp(ROW_BREAK, 'g');
 const ROW_INDENT_OPT = /(?:[ \t\0]|│|┃|\|)*/y;
 const LEADING_BREAK = new RegExp(String.raw`^(?:${ROW_BREAK})?`);
+/** The first index of view `v` whose original index is `i` or later. */
+function viewIndexOf(v: View, i: number): number {
+  if (v.map === null) return i;
+  let lo = 0; let hi = v.t.length;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (v.map[mid]! < i) lo = mid + 1; else hi = mid; }
+  return lo;
+}
 
 /** One key's HMAC with its padded key blocks hashed once (D-5995): the same digest as `fingerprintOf`. */
 class FpHasher {
@@ -221,6 +233,14 @@ const isPunct = (c: number): boolean => (c >= 0x21 && c <= 0x2f) || (c >= 0x3a &
   || (c >= 0x7b && c <= 0x7e);
 /** The longest punctuation a candidate is trimmed of. */
 const TRIM_MAX = 16;
+/** The fewest units of a row a key's row join runs through (D-8710): a key's rows between its first and its last are
+ *  as wide as its wrap, and no terminal, TUI or program wraps one at fewer columns than this (review 2326's narrowest
+ *  case is 15). A shorter row may still begin or end a key's rows. */
+const WRAP_ROW_MIN = 12;
+/** The most rows the row join reads one key across (D-8710): the drawer's pane is 220 columns, the reader floor 120, and
+ *  a client that sends no width 80, where a key at the run ceiling (`RUN_MAX_BYTES`) spans 105 rows. More rows would
+ *  only cost: a listing of equal lines chained that deep makes one candidate as long as the longest key per line. */
+const KEY_ROWS_MAX = 128;
 
 /** The fail-closed start of a text's open tail (D-5995): an open Codex token value, `sk-` or `eyJ` at a boundary in
  *  its last run (a shape's prefix), or, while fingerprints are held (`fpMax`: the longest held byte length), a last run
@@ -248,9 +268,10 @@ function failClosedStart(t: string, fpMax: number | null, floor = RUN_MIN_BYTES)
 
 interface Key { readonly gen: string; readonly token: string }
 interface GenRows { readonly fps: Set<string>; readonly lens: Set<number> }
-/** What one frame may still hash (D-5995). */
-export interface MaskBudget { left: number }
-const newBudget = (): MaskBudget => ({ left: RUNS_PER_CHUNK * MAX_CHUNKS });
+/** What one frame may still hash (D-5995): `left` candidate runs, and `rowBytes` bytes of the candidates the row join
+ *  makes across three or more rows (D-8710). */
+export interface MaskBudget { left: number; rowBytes?: number }
+const newBudget = (): MaskBudget => ({ left: RUNS_PER_CHUNK * MAX_CHUNKS, rowBytes: ROW_CHAIN_BYTES });
 
 export interface MaskOpts {
   /** The drawer and pane history: TUI row wraps. */
@@ -268,6 +289,10 @@ export interface MaskOpts {
   readonly budget?: MaskBudget;
   /** A sliced mask (pane history): raw text that follows this text, matched with it and never emitted (D-5995). */
   readonly lookahead?: string;
+  /** The drawer (D-8710): `carry` is read at this text's own end, as if no lookahead followed it. The drawer's held text
+   *  is its lookahead, and a shape whose next row it holds would otherwise carry nothing into it, leaving that row to
+   *  the context's 1 KiB. */
+  readonly carryAtText?: boolean;
   /** The drawer: what each masked run reads as, in place of `SECRET_MASK` (`DRAWER_SECRET_MASK`, D-8694). */
   readonly mark?: string;
 }
@@ -669,20 +694,31 @@ export class SecretMasker {
     const cap = Math.floor(Math.max(0, budget.left) / live.length);
     const limit = cap + 1;
     /** Every distinct candidate occurrence (by its original span), and its text. */
-    const occ = new Map<string, { at: number; text: string; spans: [number, number][] }>();
+    /** Each candidate's original spans are worked out only for one that matched (D-8710: a key's row join can hold
+     *  scores of pieces, and most candidates match nothing). */
+    const occ = new Map<string, { at: number; text: string | null; bytes: number; v: View; pieces: readonly [number, number][] }>();
     let seen = 0;
-    /** Records one candidate occurrence, counting the new ones of this pass in `seen`. */
+    /** The bytes of the row join's candidates of three or more rows this pass has collected (D-8710). */
+    let chainSeen = 0;
+    const textOf = (v: View, pieces: readonly [number, number][]): string =>
+      (pieces.length === 1 ? v.t.slice(pieces[0]![0], pieces[0]![1]) : pieces.map(([a, b]) => v.t.slice(a, b)).join(''));
+    /** Records one candidate occurrence, counting the new ones of this pass in `seen`. Its id is its original first and
+     *  last bytes and its count of pieces: two candidates alike in those are the same rows of the same text. */
     const consider = (v: View, pieces: readonly [number, number][]): void => {
       let n = 0;
       for (const [a, b] of pieces) n += b - a;
       if (n > maxLen || n * 3 < minLen || (ascii && !lens.has(n))) return;
-      const text = pieces.length === 1 ? v.t.slice(pieces[0]![0], pieces[0]![1]) : pieces.map(([a, b]) => v.t.slice(a, b)).join('');
-      if (!lens.has(ascii ? text.length : Buffer.byteLength(text, 'utf8'))) return;
-      const spans = pieces.map(([a, b]) => spanIn(v, a, b));
-      const id = spans.map(([a, b]) => `${a},${b}`).join(';');
+      // An ASCII candidate's bytes are its units, so its text is built only if it is hashed.
+      const text = ascii ? null : textOf(v, pieces);
+      const bytes = text === null ? n : Buffer.byteLength(text, 'utf8');
+      if (!lens.has(bytes)) return;
+      const first = spanIn(v, pieces[0]![0], pieces[0]![1]);
+      const id = pieces.length === 1 ? `${first[0]},${first[1]}`
+        : `${first[0]},${spanIn(v, pieces[pieces.length - 1]![0], pieces[pieces.length - 1]![1])[1]},${pieces.length}`;
       if (occ.has(id)) return;
-      occ.set(id, { at: spans[0]![0], text, spans });
+      occ.set(id, { at: first[0], text, bytes, v, pieces });
       seen++;
+      if (pieces.length > 2) chainSeen += bytes * live.length;
     };
     /** A run and its punctuation trims (`lead`/`trail`: that end may be trimmed). In an ASCII text every depth of
      *  each trim is tried (D-5995: a key that itself ends in `_` or `-`, then a `.`, is found with its own last byte),
@@ -754,14 +790,20 @@ export class SecretMasker {
       for (let i = 0; i < nb; i++) P[i + 1] = P[i]! + (ra[i]! < 0 ? 0 : rb[i]! - ra[i]!);
       /** last[i]: the last break whose leading run a chain from break i reaches. */
       const last = new Int32Array(nb);
-      for (let i = nb - 1; i >= 0; i--) last[i] = fills[i] === 1 && i + 1 < nb && ra[i + 1]! >= 0 ? last[i + 1]! : i;
+      // A row the chain runs THROUGH holds `WRAP_ROW_MIN` units or more: nothing wraps a key that narrow, and a listing
+      // of short lines (numbers, short words) would otherwise chain every row into candidates of every held length.
+      for (let i = nb - 1; i >= 0; i--) {
+        last[i] = fills[i] === 1 && rb[i]! - ra[i]! >= WRAP_ROW_MIN && i + 1 < nb && ra[i + 1]! >= 0 ? last[i + 1]! : i;
+      }
       /** The trailing ASCII punctuation of break m's run a candidate may be trimmed of. */
       const trailPunct = (m: number): number => {
         let r = 0;
         while (r < TRIM_MAX && rb[m]! - r > ra[m]! && isPunct(t.charCodeAt(rb[m]! - r - 1))) r++;
         return r;
       };
-      for (let i = 0; i < nb && seen < limit; i++) {
+      chainSeen = 0;
+      const rowBytesLeft = budget.rowBytes ?? Infinity;
+      for (let i = 0; i < nb && seen < limit && chainSeen <= rowBytesLeft; i++) {
         if (ra[i]! < 0) continue;
         const e = rowTextEnd(t, brk[i]!);
         const aFine = runStartBefore(t, e, true, longest + 1);
@@ -775,11 +817,12 @@ export class SecretMasker {
             const hl = ascii ? h[1] - h[0] : Buffer.byteLength(t.slice(h[0], h[1]), 'utf8');
             for (const len of lens) {
               const need = len - hl;   // what the rows after the head give, less the last run's trailing trim
-              if (need <= 0 || P[last[i]! + 1]! - P[i]! < need) continue;
+              const end = Math.min(last[i]!, i + KEY_ROWS_MAX - 2);   // the head's row and the rows after it
+              if (need <= 0 || P[end + 1]! - P[i]! < need) continue;
               // The first break m whose chain through its run gives `need` units or more.
-              let lo = i; let hi = last[i]!;
+              let lo = i; let hi = end;
               while (lo < hi) { const mid = (lo + hi) >> 1; if (P[mid + 1]! - P[i]! >= need) hi = mid; else lo = mid + 1; }
-              for (let m = lo; m <= last[i]! && P[m + 1]! - P[i]! - need <= TRIM_MAX; m++) {
+              for (let m = lo; m <= end && P[m + 1]! - P[i]! - need <= TRIM_MAX; m++) {
                 const y = P[m + 1]! - P[i]! - need;
                 if (y >= rb[m]! - ra[m]!) continue;
                 // Every depth of the trim in an ASCII text; otherwise none or the whole punctuation run (`trims`).
@@ -796,15 +839,25 @@ export class SecretMasker {
       }
     }
     const all = [...occ.values()].sort((x, y) => x.at - y.at);
-    const cut = all.length > cap ? all[cap]!.at : null;
-    const kept = cut === null ? all : all.slice(0, cap);
+    let at = all.length > cap ? cap : -1;
+    let rowBytes = budget.rowBytes ?? Infinity;
+    for (let k = 0; k < (at < 0 ? all.length : at); k++) {
+      const o = all[k]!;
+      if (o.pieces.length <= 2) continue;
+      rowBytes -= o.bytes * live.length;
+      if (rowBytes < 0) { at = k; break; }
+    }
+    const cut = at < 0 ? null : all[at]!.at;
+    const kept = at < 0 ? all : all.slice(0, at);
     budget.left = cut === null ? budget.left - kept.length * live.length : 0;
+    if (budget.rowBytes !== undefined) budget.rowBytes = cut === null ? rowBytes : 0;
     const verdict = new Map<string, boolean>();
     const spans: [number, number][] = [];
     for (const o of kept) {
-      let hit = verdict.get(o.text);
-      if (hit === undefined) verdict.set(o.text, (hit = live.some(({ key, fps }) => fps.has(hasherOf(key).of(o.text)))));
-      if (hit) spans.push(...o.spans);
+      const text = o.text ?? textOf(o.v, o.pieces);
+      let hit = verdict.get(text);
+      if (hit === undefined) verdict.set(text, (hit = live.some(({ key, fps }) => fps.has(hasherOf(key).of(text)))));
+      if (hit) for (const [a, b] of o.pieces) spans.push(spanIn(o.v, a, b));
     }
     if (cut !== null) return { spans, cut };
     return { spans, cut: null };
@@ -855,17 +908,42 @@ export class SecretMasker {
     };
     const shapes = shapeSpans(full, rows, SHAPES);
     clip(shapes.spans);
-    if (opts.leadingTaint === true) {
-      const v = viewOf(text, '\0');
-      let k = 0;
-      while (k < v.t.length && !OPEN_DELIM.test(v.t[k]!)) k++;
-      if (k > 0) spans.push(spanIn(v, 0, k));
-    }
-    if (rows && opts.leadingWrap === true) {
-      const v = viewOf(text, '\0');
-      const lead = LEADING_BREAK.exec(v.t)![0].length;
-      const first = leadingRun(v.t, lead);
-      if (first !== null) spans.push(spanIn(v, first[0], first[1]));
+    // The text's leading run continues a run the last text masked: a fail-closed tail or a mask that reached its end
+    // (`leadingTaint`), or a shape that ran to its last row's end (`leadingWrap`). So do the rows it runs on into (D-8710):
+    // on through every next row while each is as full as the row before the first (`runOnRows`, the shapes' own walk),
+    // read on the context and the text together, so a key whose start the context no longer holds is masked to its end.
+    let runCarry = false;
+    if (opts.leadingTaint === true || (rows && opts.leadingWrap === true)) {
+      const w = viewOf(ctx + text, '\0');
+      const t0 = viewIndexOf(w, off);
+      const put = (a: number, b: number): void => clip([spanIn(w, a, b)]);
+      const r = rows ? new Rows(w.t) : null;
+      if (opts.leadingTaint === true) {
+        let k = t0;
+        while (k < w.t.length && !OPEN_DELIM.test(w.t[k]!)) k++;
+        if (k > t0) {
+          put(t0, k);
+          if (r !== null && runOnRows(w.t, k, r.prevWidth(k - 1), r, put, false)) runCarry = true;
+        }
+      }
+      if (r !== null && opts.leadingWrap === true) {
+        const lead = LEADING_BREAK.exec(w.t.slice(t0))![0].length;
+        let first = leadingRun(w.t, t0 + lead);
+        if (first === null && lead === 0) {
+          // The row break and the indent were the last text's (D-8710): the run starts this text.
+          let k = t0;
+          while (k > 0 && ROW_LEAD.includes(w.t[k - 1]!)) k--;
+          if (k < t0 && k > 0 && (w.t[k - 1] === '\n' || w.t[k - 1] === '\r')) {
+            TOKEN_RUN.lastIndex = t0;
+            const run = TOKEN_RUN.exec(w.t);
+            if (run !== null) first = [t0, t0 + run[0].length];
+          }
+        }
+        if (first !== null) {
+          put(first[0], first[1]);
+          if (runOnRows(w.t, first[1], r.prevWidth(first[0]), r, put, false)) runCarry = true;
+        }
+      }
     }
     const fp = spent === null ? this.fingerprintSpans(full, rows, budget) : { spans: [], cut: full.length };
     clip(fp.spans);
@@ -878,7 +956,9 @@ export class SecretMasker {
     const cutAt = fp.cut !== null && fp.cut - off < text.length ? fp.cut : null;
     const limit = cutAt === null ? text.length : Math.max(0, cutAt - off);
     const masked = spliceMasked(text, spans, limit, opts.mark);
-    return { text: cutAt === null ? masked : masked + SECRET_MASK_TOO_LARGE, carry: cutAt === null && shapes.carry, cut: cutAt !== null };
+    const carry = opts.carryAtText === true && (opts.lookahead ?? '') !== '' && spent === null
+      ? shapeSpans(ctx + text, rows, SHAPES).carry : shapes.carry;
+    return { text: cutAt === null ? masked : masked + SECRET_MASK_TOO_LARGE, carry: cutAt === null && (carry || runCarry), cut: cutAt !== null };
   }
 
   /** A long text (pane history) masked in slices at line breaks, yielding to the event loop between them, so no slice
@@ -957,6 +1037,9 @@ function breakStartAt(t: string, j: number): number | null {
   return k > 0 && t[k - 1] === '\n' ? k - 1 : j - 1;   // a LF, blanks, then this CR: one row down (D-8710)
 }
 const ROW_LEAD = ' \t\0│┃|';
+/** The most units a drawer holds for a key's rows (D-8710): twice what it holds for one run, room for a key at the run
+ *  ceiling over a hundred rows, each with its cursor position and indent. */
+const CHAIN_HELD_MAX = 2 * DRAWER_HELD_MAX;
 /** A run held at its row end, from where it is held (D-5995, D-8710): `at`, and `cut` when the rows it continues run on
  *  before the text read (a chain longer than the window: the caller reads the chain again from the whole text). */
 interface RowTail { readonly at: number; readonly cut: boolean }
@@ -977,8 +1060,15 @@ function rowTailAt(t: string, fpMax: number | null, ok: (i: number) => boolean =
   while (j > 0 && ROW_LEAD.includes(t[j - 1]!)) j--;
   if (j === 0) return null;
   const br = breakStartAt(t, j);
-  if (br === null) return null;
-  j = rowTextEnd(t, br);
+  if (br === null) {
+    // No row break yet, but the run ends in blanks (an erase, padding) at the text's end: its row end may be the next
+    // chunk's first bytes, and its key's next row after it (D-8710). Held while fingerprints are; a shape that reaches
+    // the text's end carries into the next text already (`shapeSpans`'s carry).
+    if (fpMax === null || j === t.length) return null;
+    j = rowTextEnd(t, j);
+  } else {
+    j = rowTextEnd(t, br);
+  }
   let i = j;
   while (i > 0 && j - i <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[i - 1]!)) i--;
   if (i === j) return null;
@@ -1002,7 +1092,11 @@ function rowTailAt(t: string, fpMax: number | null, ok: (i: number) => boolean =
 function chainBack(t: string, at: number, n: number, fpMax: number, ok: (i: number) => boolean): RowTail & { bytes: number } {
   const bound = fpMax + 2 * TRIM_MAX;
   let cut = false;
-  while (n < bound) {
+  let rows = 1;
+  // The rows held are bounded by the units they span too (the security review of D-8710): rows of one byte between
+  // long escapes would otherwise hold without bound. Past `CHAIN_HELD_MAX` the earlier rows are sent, read with the held
+  // rows after them, and only a key that also reaches rows not yet written can show (named in D-5995's accepted gaps).
+  while (n < bound && t.length - at < CHAIN_HELD_MAX && rows < KEY_ROWS_MAX) {
     let k = at;
     while (k > 0 && ROW_LEAD.includes(t[k - 1]!)) k--;
     if (k === 0) { cut = true; break; }
@@ -1015,7 +1109,9 @@ function chainBack(t: string, at: number, n: number, fpMax: number, ok: (i: numb
     if (!ok(ps)) break;   // already sent
     n += Buffer.byteLength(t.slice(ps, pe), 'utf8');
     at = ps;
+    rows++;
     if (ps === 0) { cut = true; break; }
+    if (pe - ps < WRAP_ROW_MIN) break;   // a row the join never runs through: it can only begin the key's rows
   }
   return { at, cut, bytes: n };
 }
@@ -1039,9 +1135,10 @@ function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): 
       // The open run, with the rows it continues (D-8710): holding the run alone sent the rows before it unjoined.
       const c = chainBack(v.t, i, Buffer.byteLength(run, 'utf8'), fpMax, (k) => origin(v, k) >= lead.length);
       if (c.cut && base > 0 && c.at !== i) {
-        const whole = viewOf(s.slice(0, base + bodyEnd), '\0');
+        const from = Math.max(0, base + bodyEnd - CHAIN_HELD_MAX);
+        const whole = viewOf(s.slice(from, base + bodyEnd), '\0');
         const all = chainBack(whole.t, whole.t.length - run.length, Buffer.byteLength(run, 'utf8'), fpMax, () => true);
-        return origin(whole, all.at);
+        return from + origin(whole, all.at);
       }
       hold = c.at;
     } else {
@@ -1055,11 +1152,12 @@ function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): 
     if (rt !== null && rt.cut && base > 0) {
       // The rows it continues run on before the window (D-8710): read the chain from the whole text, so no row of a key
       // that can still reach the next rows is sent before them.
-      const whole = viewOf(s.slice(0, base + bodyEnd), '\0');
+      const from = Math.max(0, base + bodyEnd - CHAIN_HELD_MAX);
+      const whole = viewOf(s.slice(from, base + bodyEnd), '\0');
       const all = rowTailAt(whole.t, fpMax);
       if (all !== null) {
         const cx0 = codexValueOpenAt(v.t);
-        return Math.min(origin(whole, all.at), cx0 === null ? Infinity : base + origin(v, cx0));
+        return Math.min(from + origin(whole, all.at), cx0 === null ? Infinity : base + origin(v, cx0));
       }
     }
     if (rt !== null && origin(v, rt.at) >= lead.length) hold = rt.at;
@@ -1267,7 +1365,7 @@ export class DrawerMask {
   private out(text: string, failClosedTail: boolean, lookahead = ''): void {
     const r = this.masker.maskWithCarry(text, {
       rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint, lookahead,
-      mark: DRAWER_SECRET_MASK,
+      carryAtText: true, mark: DRAWER_SECRET_MASK,
     });
     this.carry = r.carry;
     const tv = viewOf(text, '').t;

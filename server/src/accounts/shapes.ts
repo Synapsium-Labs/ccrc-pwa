@@ -133,7 +133,9 @@ export function rowTextEnd(t: string, e: number): number {
 }
 export const ROW_INDENT = /(?:[ \t\0]|│|┃|\|)+/y;
 export const TOKEN_RUN = /[A-Za-z0-9_+/.-]+/y;
-const TEXT_END = new RegExp(String.raw`[ \t\0]*(?:${ROW_BREAK})?$`, 'y');
+/** A text that ends at a row's end (D-5995): blanks (and a right rule), then perhaps the row break and the next row's
+ *  indent with nothing of its run yet (D-8710), so a shape that reaches it carries into the next text's leading run. */
+const TEXT_END = new RegExp(String.raw`[ \t\0]*(?:[│┃|][ \t\0]*)?(?:(?:${ROW_BREAK})(?:[ \t\0]|│|┃|\|)*)?$`, 'y');
 function continuationAfter(t: string, end: number): [number, number] | null {
   ROW_END.lastIndex = end;
   const nl = ROW_END.exec(t);
@@ -169,7 +171,7 @@ function columnsOf(t: string, a: number, b: number): number {
 }
 /** The row widths of one text, in columns, from one index of its line breaks (D-5995: built once, in rows mode only;
  *  each row is measured once, on first use). */
-class Rows {
+export class Rows {
   private readonly breaks: number[] = [];
   private readonly widths = new Map<number, number>();
   constructor(private readonly t: string) {
@@ -188,6 +190,38 @@ class Rows {
       this.widths.set(lo, (w = columnsOf(this.t, start, end)));
     }
     return w;
+  }
+  /** The width of the last row before the row `i` sits on that holds more than blanks (a CR LF, or a move down and a
+   *  CR, leaves an empty row between its two bytes), or 0: there is none, or it is the text's first row, which may
+   *  begin before the text (D-8710). */
+  prevWidth(i: number): number {
+    const b = this.breaks;
+    let lo = 0; let hi = b.length;
+    while (lo < hi) { const mid = (lo + hi) >> 1; if (b[mid]! < i) lo = mid + 1; else hi = mid; }
+    for (let row = lo - 1; row >= 1; row--) {
+      const start = b[row - 1]! + 1;
+      for (let k = start; k < b[row]!; k++) if (!' \t\0│┃|'.includes(this.t[k]!)) return this.length(start);
+    }
+    return 0;
+  }
+}
+
+/** Rows mode (D-5995): a run that reaches its row's end at `end` runs on into the next row's leading run, and on through
+ *  every further row while the row before it was as full as `full` columns (a shorter row is the value's last); `first`:
+ *  the row `end` is on is not measured. Each run it takes goes to `put`. True: it ran to the text's last row end, so its
+ *  next row is the next text's leading run (the carry). The one walk of a run across rows: a shape's (`shapeSpans`), and
+ *  a run the last text masked that this text's leading run continues (`accounts/mask.ts#SecretMasker`, D-8710). */
+export function runOnRows(t: string, end: number, full: number, rows: Rows, put: (a: number, b: number) => void,
+  first: boolean): boolean {
+  for (;; first = false) {
+    if (!first && rows.length(end - 1) < full) return false;
+    const next = continuationAfter(t, end);
+    if (next === null) {
+      TEXT_END.lastIndex = end;
+      return TEXT_END.test(t);
+    }
+    put(next[0], next[1]);
+    end = next[1];
   }
 }
 
@@ -305,18 +339,7 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
           if (r === null || (j !== null && seamWithin(j.seams, m.index, end))) continue;
           // Rows mode: a shape that reaches its row's end runs on into the next row's leading run, and on through every
           // further row while the row before it was as full as the shape's own (a shorter row is the value's last).
-          const full = r.length(m.index);
-          for (let first = true; ; first = false) {
-            if (!first && r.length(end - 1) < full) break;
-            const next = continuationAfter(t, end);
-            if (next === null) {
-              TEXT_END.lastIndex = end;
-              if (TEXT_END.test(t)) carry = true;   // the next row is in the next text
-              break;
-            }
-            put(next[0], next[1]);
-            end = next[1];
-          }
+          if (runOnRows(t, end, r.length(m.index), r, put, true)) carry = true;   // the next row is in the next text
         }
       }
     }
