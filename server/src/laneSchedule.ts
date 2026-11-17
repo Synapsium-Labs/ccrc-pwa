@@ -34,6 +34,9 @@ export const PLAN_SYNC_BEAT_MS = 5_000;
 /** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
  *  key (the ISO week), so a day only bounds how late in a week the item appears. */
 export const QUIZ_LANE_PERIOD_MS = 86_400_000;
+/** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
+ *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
+export const FORECAST_LANE_PERIOD_MS = 60_000;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -201,7 +204,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'forecasts';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -394,6 +397,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The Linear plan sync (D-8182): one tick at a time. A tick's deadline plus one call's timeout stays under `staleAfterMs`, and
   // a tick restarted as stuck only joins the passes in flight (`planSync.ts`), so a restart never sends a second write.
   { name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' },
+  // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
+  // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
+  // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
+  { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
 ];
 
 export function laneRow(name: string): LaneRow {

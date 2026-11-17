@@ -3593,6 +3593,28 @@ export const MIGRATIONS: readonly string[] = [
     carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
     CHECK (carriedTo IS NULL OR kind = 'ticket'));
   `,
+
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
+  // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3; spec §5.6 H38, Table 11.1a row "Sealed
+  // forecasts (85% dates)"): `programme_forecasts`, one row per closed work run (its wave boundary, `closingRunId` UNIQUE),
+  // computed as of `asOf` from the statement it names (`statementId`, NULL when none stood) and replayable from `seed`;
+  // `outcome` is `open` until the forecast lane scores it at `p85At`. Writers: `programmeFactsStore.ts#sealForecast` (the
+  // INSERT, `ON CONFLICT DO NOTHING`) and `#scoreForecast` (`outcome` and `scoredAt` only, on an `open` row), each called
+  // only by its arm of the forecast lane. NEW TABLE only: an older build at this `user_version` takes rule 3 and never
+  // names it. Account organization D (#2958) landed 90, the Overlord's designation (#2950) 91, done tests A (#2964) 92 and the
+  // programme's phases (#2974) 93, so this is 94 by position (the coordinator's standing renumber license, 2026-11-17);
+  // whoever lands second renumbers. RE-MEASURE the slot (it must print 93 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    closingRunId INTEGER NOT NULL UNIQUE REFERENCES runs(id), sealedAt INTEGER NOT NULL, asOf INTEGER NOT NULL,
+    statementId INTEGER REFERENCES programme_remaining(id), lo INTEGER, hi INTEGER, kind TEXT NOT NULL, reason TEXT,
+    source TEXT, n INTEGER, seed INTEGER, medianAt INTEGER, p85At INTEGER, outcome TEXT NOT NULL DEFAULT 'open', scoredAt INTEGER
+  );
+  CREATE INDEX programme_forecasts_by_program ON programme_forecasts (program, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
