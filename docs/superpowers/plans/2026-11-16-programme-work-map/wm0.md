@@ -68,6 +68,14 @@ Measured: `git show origin/main:server/src/coord/schema.ts | grep -c '^  // â”€â
 `linear_*` tables); on the coordinator's terms whichever of the two lands second takes the next free slot. The slot is
 re-measured before the PR and again before merge.
 
+Re-measured after the PR's first CI run: renewal readings A (#2962) landed its backstop setting at 88 first (`origin/main`
+`c6d52f92f` printed 88), so WM0 is the second to land and takes 89. The branch absorbed `origin/main` once by
+`git merge` (the conflict probe answered 1, clause 16's first trigger), with the migration renumbered in the merge's
+resolution: `schema.ts` (88 stays the backstop setting, 89 is `plan_phases` and `plan_phase_refs`), `coord-db.test.ts`
+(89, and WM0's case pins its slot at 89), `auth-gate.test.ts` (256 routes, 253 over HTTP, 95 exempt, 157 gated) and
+`gate.ts` (253), and the mutation floors and `MUTANT_SETS` keep both sides' rows. Re-measure again before merge: it must
+print 88 before WM0's entry is counted.
+
 ### 2.3 The rows and what reds each
 
 `server/test/plan-phases.test.ts` holds the plan's Step 1 rows (49 cases: 27 decider cases from `planPhasesCases.ts`, 20
@@ -149,3 +157,20 @@ refusal.
   exact two-line scope against `421be9977` went to its holder (mail 22708), and the holder answered yes to each line
   separately (relayed, mail delivery 22724): the count word eighty-five to eighty-six, and `phases/refs` in the plan
   verbs' route list. Those two lines are the whole README change (measured with `git diff`).
+
+### 2.6 The first CI run: red on two hidden migration pins
+
+The PR's first run at `b2e0ce6a3` was red in two server shards, each on a test that walks the coord schema back past
+the newest migration and so had to undo WM0's migration as well:
+
+- `decision-model-records.test.ts` (the migration case) pinned the decision-model migration at
+  `COORD_SCHEMA_VERSION - 2` and undid only 87. Renewal readings A (#2962) rewrote that case on `main` to derive every
+  later migration's undo from its text, so after the merge it undoes WM0's two tables on its own and WM0 changes
+  nothing in it (the consent asked of its holder, mail 22760, became moot; claim 4760 was taken and is released
+  unused).
+- `run-close-switch.test.ts` (migration 54's case) undid every migration down to 53 except WM0's, so the reopen failed
+  on `table plan_phases already exists`. It now drops the two phase tables first, its comment names 89, and the count
+  of replayed migrations reads thirty-six (54 to 89; `main` had left it at thirty-four after its own 88). It sits under
+  wave 4's claim 4737, co-edited on the grant above; the lines went to its holder (mail 22761).
+
+The wave-done's suite line reads red, as clause 15 has it; the kind is shallow (tests missed).
