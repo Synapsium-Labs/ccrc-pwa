@@ -13,6 +13,7 @@ import { planStorePort, type PlanStorePort } from '../../src/coord/planStore.js'
 import type { Runner } from '../../src/exec.js';
 import { testDeps } from '../helpers.js';
 import { mkTmp } from '../tmpHelpers.js';
+import { landingStoreOver } from '../landingFixture.js';
 
 export const CHAR_TOKEN = 'c'.repeat(64);
 export const CHAR_COORD = 'coord-a';
@@ -21,8 +22,10 @@ const headers = { 'x-ccrc-mail-token': CHAR_TOKEN };
 
 export interface CharWorld { app: FastifyInstance; coord: CoordStore; plan: PlanStorePort }
 
-/** A server over a fresh coord.db, with a registry row for the coordinator (and for each of `others`) so attribution holds. */
-export async function charWorld(others: readonly string[] = []): Promise<CharWorld> {
+/** A server over a fresh coord.db, with a registry row for the coordinator (and for each of `others`) so attribution holds.
+ *  `landing` (programme work map WM1) gives the store a landing journal in the fixture's own directory, boot-replayed, so the
+ *  landing line can be read and written. */
+export async function charWorld(others: readonly string[] = [], opts: { landing?: boolean } = {}): Promise<CharWorld> {
   const home = mkTmp('ccrc-plan-phases-');
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   for (const id of [CHAR_COORD, ...others]) {
@@ -31,7 +34,8 @@ export async function charWorld(others: readonly string[] = []): Promise<CharWor
       writeFileSync(path.join(home, '.cc-sessions', `${id}.${k}`), v);
     }
   }
-  const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  const dbPath = path.join(home, '.ccrc', 'coord.db');
+  const coord = opts.landing === true ? landingStoreOver(openCoordDb(dbPath), dbPath) : new CoordStore(openCoordDb(dbPath));
   const plan = planStorePort(coord.db);
   const app = await buildServer({ ...testDeps(home, runner), mailToken: CHAR_TOKEN, coord, plan });
   return { app, coord, plan };

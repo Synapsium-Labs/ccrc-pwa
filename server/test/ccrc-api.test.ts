@@ -269,6 +269,8 @@ describe('the closed route table', () => {
     [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
     // `plan phase-ref` (programme work map WM0): like its siblings, the pane's identity in the query.
     [['plan', 'phase-ref', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/phases/refs'],
+    // `plan ticket-done` (programme work map WM1): like its siblings, the pane's identity in the query.
+    [['plan', 'ticket-done', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/done'],
     // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
     [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
     [['timer', 'list'], 'GET', '/api/timers'],
@@ -331,8 +333,8 @@ describe('the closed route table', () => {
     // the probes piece): `sessions.probe` and `probe.answer`.
     // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
-    // Eighty-six since `plan.phase-ref` (programme work map WM0).
-    expect(keys).toHaveLength(86);
+    // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-seven since `plan.ticket-done` (WM1).
+    expect(keys).toHaveLength(87);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -347,7 +349,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -521,7 +523,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
-      ['plan', 'phase-ref', 'prog-a', '--json', '-'],
+      ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
       ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
@@ -1964,6 +1966,26 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     // the other plan rows still send: the word gates phase-ref alone
     await run(['plan', 'show', 'prog-a']);
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
+  });
+
+  it('plan ticket-done sends the pane\'s identity in the query and the body unchanged (programme work map WM1)', async () => {
+    plantPane('demo-ws');
+    const b = '{"ticket":"t1","evidence":{"runId":12}}';
+    const r = await run(['plan', 'ticket-done', 'prog-a', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan/tickets/done?${ID}`, b]]);
+  });
+
+  it('the ticket-done row is refused locally without plan-ticket-done-v1', async () => {
+    expect(SERVER_CAPS).toContain('plan-ticket-done-v1');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-ticket-done-v1'));
+    plantPane('demo-ws');
+    const r = await run(['plan', 'ticket-done', 'prog-a', '--json', '-'], '{"ticket":"t1","evidence":{"pr":7}}', { TMUX_PANE: '%7' });
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'capability-missing']);
+    expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain('plan-ticket-done-v1');
+    // the other plan rows still send, phase-ref included: the word gates ticket-done alone
+    await run(['plan', 'phase-ref', 'prog-a', '--json', '-'], '{"op":"add","phase":"p1","ref":{"kind":"epic","key":"e1"}}', { TMUX_PANE: '%7' });
+    expect(seen.map((s) => s.url)).toEqual([`/api/programmes/prog-a/plan/phases/refs?${ID}`]);
   });
 
   it('an absent or stale cap file sends', async () => {

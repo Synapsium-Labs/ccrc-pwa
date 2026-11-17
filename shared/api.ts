@@ -6776,7 +6776,10 @@ export type RunRefuseCode =
   | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
   // D-8181: the plan's refusals of a run (Linear hierarchy design): the wave names no planned epic, the programme has no
   // plan, the reserved programme, a ticket another run holds or that is dropped, and a plan the coordinator closed.
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed';
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
+  // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
+  // into an epic with an open declared ticket no run holds must name one.
+  | 'ticket-required';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6789,6 +6792,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
+  'ticket-required': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -12341,7 +12345,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-ticket-done-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12413,6 +12417,12 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
    *  Added by the change that builds the route and the client row, cut after them. */
   'plan-phases-v1': true,
+  /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
+   *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
+   *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the route and
+   *  the client row, cut after them. */
+  'plan-ticket-done-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

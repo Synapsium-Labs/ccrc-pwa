@@ -62,12 +62,14 @@ export const isPlanKey = (v: unknown): v is string => {
 /** Every refusal word of the plan verbs and the hierarchy routes. Each has its status in `REFUSAL_STATUS`
  *  (`shared/refusal.ts`). Only the coordinator's client sends the plan verbs, so only `linear-text-public` and
  *  `item-act-mismatch` have a fixed sentence in the console (`pwa/src/lib/refusalWords.ts`; programme work map reviews
- *  2268 F20 and 2375 F11). `unknown-ref` and `bad-carry` are the phase words (programme work map WM0, D-8715). */
+ *  2268 F20 and 2375 F11). `unknown-ref` and `bad-carry` are the phase words (programme work map WM0, D-8715);
+ *  `evidence-unverified` is `plan ticket-done`'s (WM1, D-8727), which reuses `plan-runs-open` and `plan-bad-body` for a held
+ *  ticket and one not open, so no `ticket-not-open` is added (review 2268 F21). */
 export const PLAN_REFUSALS = [
   'not-plan-owner', 'not-linear-owner', 'plan-too-large', 'plan-bad-body', 'waves-not-contiguous', 'wave-overlap',
   'dropped-needs-reason', 'unknown-epic', 'unknown-checkpoint', 'unknown-ticket', 'ticket-workspace-mismatch',
   'linear-text-public', 'plan-owned', 'map-rewrites-plan', 'map-incomplete', 'migration-in-flight', 'not-managed',
-  'issue-not-inbound', 'item-act-mismatch', 'plan-closed', 'plan-runs-open', 'unknown-ref', 'bad-carry',
+  'issue-not-inbound', 'item-act-mismatch', 'plan-closed', 'plan-runs-open', 'unknown-ref', 'bad-carry', 'evidence-unverified',
 ] as const;
 export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 
@@ -110,6 +112,12 @@ export interface PlanPutBody { home?: string; title?: string; phases?: PlanPhase
 export type PlanPhaseRefMoveBody =
   | { op: 'add' | 'remove'; phase: string; ref: PlanPhaseRefBody }
   | { op: 'carry'; from: string; to: string; ticket: string };
+/** A ticket's done evidence (programme work map WM1, D-8727; spec §4.1 D11): the work run that finished it, or a pull
+ *  request the landing line holds `landed` for the ticket's own project. Stored as JSON in `plan_tickets.doneEvidence`
+ *  beside `doneAt`, written by `planStore.ts` alone. */
+export type TicketDoneEvidence = { runId: number } | { pr: number };
+/** `plan ticket-done`'s body: the ticket and exactly one piece of evidence. The caller's identity rides the query. */
+export interface PlanTicketDoneBody { ticket: string; evidence: TicketDoneEvidence }
 /** `why` is required for `abandoned`. */
 export interface PlanCloseBody { outcome: PlanEndOutcome; why?: string }
 
