@@ -593,6 +593,8 @@ describe('the pass: moves and closes', () => {
     expect(sent[0]!.input).toMatchObject({ status: 'Canceled', description: expect.stringContaining('Abandoned on ') });
     expect(sent[1]!.input['statusId']).toBe(U(34));
     expect(sent[3]!.input['body']).toEqual(expect.stringContaining('the work moved to another programme'));
+    // D-8183: the journal's closed list for a comment names `body`; a cancel comment naming another field is refused by the real journal.
+    expect(sent[3]!.fields).toEqual(['body']);
     expect(sent[4]!.input['stateId']).toBe(U(24));
     expect(r.plan.bindingsOf(SLUG).every((b) => b.state === 'bound')).toBe(true);
     const settled = r.asks.length;

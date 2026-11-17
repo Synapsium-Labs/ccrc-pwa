@@ -26,6 +26,8 @@ export interface HierarchyRouteOpts {
   itemOf?: (id: number) => { action?: ItemAction | null } | null;
   /** Check again on an initiatives item: queue the probe for the workspace and answer at once (`PlanSync#checkInitiatives`). */
   checkInitiatives?: (workspaceId: string) => Promise<boolean>;
+  /** The operator's Hand or Keep on a persistent-drift item (`DriftPass#act`, D-8183); undefined (a test, a script): `unavailable`. */
+  driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' };
   now?: () => number;
 }
 
@@ -109,7 +111,8 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
   /**
    * `POST /api/items/:id/linear` `{ act, note?, owner? }`: the operator's act on a hierarchy item (§7). Session-gated, no box
    * token. An act the item's action does not take (`LINEAR_ITEM_ACTS`) is `item-act-mismatch`. `check-again` queues the
-   * initiatives probe for the item's workspace and answers at once; the other acts' arms arrive with waves 4 and 7.
+   * initiatives probe for the item's workspace and answers at once; `hand` and `keep` on a drift item reach the drift pass inside `serial`
+   * (D-8183); the other acts' arms arrive with waves 5 and 7.
    */
   app.post('/api/items/:id/linear', async (req, reply) => {
     const id = Number((req.params as { id: string }).id);
@@ -120,12 +123,28 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     if (item === null) return refuseRoute(reply, 'not-found');
     const action = item.action ?? null;
     if (!isLinearItemAction(action) || !LINEAR_ITEM_ACTS[action.verb].includes(b['act'])) return refuseRoute(reply, 'item-act-mismatch');
-    if ('workspaceId' in action && opts.checkInitiatives !== undefined) {
-      try {
-        return { ok: true, queued: await opts.checkInitiatives(action.workspaceId) };
-      } catch (err) {
-        return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+    // The verb names the arm (a `switch`: the wave 3 follow-up to testing the action's shape); the acts of waves 5 and 7 add arms.
+    switch (action.verb) {
+      case 'linear-initiatives': {
+        if (opts.checkInitiatives === undefined) break;
+        try {
+          return { ok: true, queued: await opts.checkInitiatives(action.workspaceId) };
+        } catch (err) {
+          return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+        }
       }
+      case 'linear-drift': {
+        const driftAct = opts.driftAct;
+        const act = b['act'];
+        if (driftAct === undefined || (act !== 'hand' && act !== 'keep')) break;
+        try {
+          const done = await opts.serial(async () => driftAct(id, act, action.bindingId));
+          return done.ok ? { ok: true } : refuseRoute(reply, done.word);
+        } catch (err) {
+          return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+        }
+      }
+      default: break;
     }
     return refuseRoute(reply, 'unavailable', { detail: 'act' });
   });

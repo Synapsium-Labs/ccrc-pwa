@@ -191,7 +191,8 @@ number from `POST /api/ledger/deviations`.
 - **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
   updates and never creates. Record: the wave 3 note.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
-  (wave 4's open point). Record: the wave 3 note.
+  (wave 4's open point). Wave 4 (the coordinator's ruling): links are compared one way, so a planned link missing in Linear
+  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`). Record: the wave 3 note.
 - **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
   by-name listing of 10, so with ten or more same-named objects ownership can fail; it fails once, mails once and retries
   on the 30-minute backoff. Carried to the next capture (`creator { id }` on the by-id reads). Record: the wave 3 note.

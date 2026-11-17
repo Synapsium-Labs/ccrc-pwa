@@ -2117,6 +2117,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
+    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),

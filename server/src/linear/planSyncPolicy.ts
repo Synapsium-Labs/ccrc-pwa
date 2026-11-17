@@ -18,6 +18,7 @@ import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, SyncDeferral, TicketRow } from '../coord/planStore.js';
 import { LINEAR_INITIATIVE_STATUSES, withCcrcProvenance, type CcrcOpInput, type CcrcOpName, type LinearInitiativeStatus } from './hierarchyOps.js';
 import { statusOfType, type LinearDirectoryEntries } from './ops.js';
+import type { DriftKind, OwnedFields } from './driftPolicy.js';
 
 /** A project's name is at most 80 characters in Linear (R4); an epic's title allows 255. */
 export const LINEAR_PROJECT_NAME_MAX_CHARS = 80;
@@ -95,7 +96,7 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
 }
 
 /** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
-export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel' | 'pr'): string {
+export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel' | 'pr' | `restore-${string}`): string {
   const hex = createHash('sha256').update(`${kind}:${localId}:${workspaceId}${part === undefined ? '' : `:${part}`}`).digest('hex').slice(0, 32).split('');
   hex[12] = '4';
   hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16]!, 16) & 3]!;
@@ -166,9 +167,21 @@ const statusId = (dir: LinearDirectoryEntries | null, kind: 'project' | 'issue',
 /** What the deciders answer: the steps in §5.2's order, the inputs of each failed binding, the coordinator's notices, and
  *  `waits`: the workspaces whose initiative step waits for the probe to answer (it reads `unknown`), so the pass keeps the
  *  programme due and asks the refresher again rather than settle without it. */
-export interface SyncDecision { steps: SyncStep[]; failedInputs: FailedInputs[]; notices: SyncNotice[]; waits: string[] }
+export interface SyncDecision { steps: SyncStep[]; failedInputs: FailedInputs[]; notices: SyncNotice[]; waits: string[]; owned: PlannedOwned[] }
 
-export function planSyncSteps(s: SyncSnapshot): SyncDecision {
+/** D-8183 (§6.2): what the plan says a bound object's owned fields are, in Linear's terms, as the same computation that decides
+ *  the sync's steps (one computation, never a second copy of the rules): the drift pass compares Linear's copy against it.
+ *  `current` is whether the binding's stored fingerprint is the plan's current one (`isCurrent`): when it is not, a difference
+ *  is the sync not having written the plan yet, a catch-up (D-8704). One entry per `bound` binding with a Linear id that is ready
+ *  to be sent: never a `failed` or a `pending` one. */
+export interface PlannedOwned { bindingId: number; kind: DriftKind; local: Local; owned: OwnedFields; current: boolean }
+
+/** `opts.force` (the drift restore, Task 4.2): a binding id in it is treated as NOT current, so its absolute update is emitted
+ *  though its fingerprint is current, and a forced project whose initiative is live also emits its link step, under a requestId
+ *  of the map's tag (`restore-<tag>`), so a link deleted in Linear is made again instead of answered `conflict` by its old id. */
+export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<number, string> } = {}): SyncDecision {
+  const force = opts.force ?? new Map<number, string>();
+  const owned: PlannedOwned[] = [];
   const phases: SyncStep[][] = [[], [], [], [], [], [], []]; // creates: initiative, project, milestone, issue; updates; links
   const failedInputs: FailedInputs[] = [];
   const notices: SyncNotice[] = [];
@@ -199,21 +212,31 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
     create: () => { input: CcrcOpInput; fields: string[] };
     update: (linearId: string) => { input: CcrcOpInput; fields: string[]; extras?: { stateType?: string; comment?: { requestId: string; body: string } } };
     recover: Recover;
-    /** A link step on the bound object; its `inputs` are the object's own (what a failed binding reports), set by `decide`. */
-    link?: () => Omit<Extract<SyncStep, { kind: 'link' }>, 'inputs'> | null;
+    /** A link step on the bound object; its `inputs` are the object's own (what a failed binding reports), set by `decide`. Given
+     *  the restore's tag when the binding is forced (its link is then made again), else null. */
+    link?: (forced: string | null) => Omit<Extract<SyncStep, { kind: 'link' }>, 'inputs'> | null;
+    /** The owned fields the drift pass compares (D-8183), as the shaped Linear answers name them. */
+    owned: { kind: DriftKind; fields: OwnedFields };
   }
   const decide = (d: Decide): void => {
     const local: Local = { kind: d.kind, id: d.id };
     const inputs = plannedFingerprint({ ...d.planned, teamKey: d.teamKey, workspaceId: d.workspaceId });
     if (d.b?.state === 'failed') { failedInputs.push({ bindingId: d.b.id, inputs }); return; }
     if (!d.ready) return;
+    const forced = d.b === undefined ? undefined : force.get(d.b.id);
+    if (d.b?.state === 'bound' && d.b.linearId !== null) {
+      owned.push({ bindingId: d.b.id, kind: d.owned.kind, local, owned: d.owned.fields, current: d.isCurrent(d.b.fingerprint) });
+    }
     const base = { local, workspaceId: d.workspaceId, teamKey: d.teamKey, inputs };
     const skip = (why: SkipWhy, detail: string | null = null): void => {
       phases[d.phase]!.push({ kind: 'skip', local, why, workspaceId: d.workspaceId, bindingId: d.b?.id ?? null, inputs, detail });
     };
     const bound = d.b?.state === 'bound' && d.b.linearId !== null;
-    if (bound && d.link !== undefined) { const l = d.link(); if (l !== null) { phases[5]!.push({ ...l, inputs }); return; } }
-    if (bound && d.isCurrent(d.b!.fingerprint)) return;
+    if (bound && d.link !== undefined) {
+      const l = d.link(forced ?? null);
+      if (l !== null) { phases[5]!.push({ ...l, inputs }); if (forced === undefined) return; }
+    }
+    if (bound && forced === undefined && d.isCurrent(d.b!.fingerprint)) return;
     if (d.statusMissing) { skip('status-missing'); return; }
     const refused = textRefusal(d.texts, d.facts);
     if (refused !== null) { skip('text-public', refused); return; }
@@ -282,6 +305,8 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
    *  initiative that has a Linear object keeps its projects' links as they are (A3: no update that unlinks, no second link
    *  when it binds again), and no new link is made to it. */
   const initiativeIdOf = new Map<string, { id: string; live: boolean }>();
+  /** Per workspace, the Linear ids of the bound projects the initiative should link (D-8183), filled by the epic loop below. */
+  const linkedProjects = new Map<string, string[]>();
   for (const wsId of wsIds) {
     // A workspace the snapshot does not describe (no slot serves it now) cannot be written: nothing is decided for it.
     const ws = s.workspaces.find((w) => w.workspaceId === wsId);
@@ -308,6 +333,7 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       create: () => ({ input: planned, fields: ['name', 'description', 'status'] }),
       update: (id) => ({ input: { id, ...planned }, fields: ['name', 'description', 'status'] }),
       recover: 'name-and-creator',
+      owned: { kind: 'initiative', fields: { ...planned, projectIds: linkedProjects.set(wsId, []).get(wsId)! } },
     });
   }
 
@@ -356,6 +382,8 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
     };
     const fpFull = plannedFingerprint(planned);
     const fpNull = plannedFingerprint({ ...planned, initiativeId: null });
+    /** The Linear ids of this project's bound checkpoints' milestones, filled by the checkpoint loop below (D-8183). */
+    const milestoneIds: string[] = [];
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
       b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned,
@@ -363,25 +391,36 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       fp: fpNull, isCurrent: (st) => st === fpFull || (initiative?.live === false && st === fpNull),
       create: () => ({ input: { name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       update: (id) => ({ input: { id, name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
-      link: () => {
-        if (initiative?.live !== true || eb === undefined || eb.fingerprint !== fpNull || fpNull === fpFull) return null;
-        const requestId = requestIdOf('epic', e.id, wsId, 'link');
+      link: (forced) => {
+        if (initiative?.live !== true || eb === undefined) return null;
+        if (forced === null && (eb.fingerprint !== fpNull || fpNull === fpFull)) return null;
+        const requestId = requestIdOf('epic', e.id, wsId, forced === null ? 'link' : `restore-${forced}`);
         return {
           kind: 'link', op: 'initiativeToProjectCreate', local: { kind: 'epic', id: e.id }, workspaceId: wsId, teamKey: pl.teamKey, bindingId: eb.id,
           input: { requestId, initiativeId, projectId: eb.linearId! }, fields: ['project'], requestId, fingerprint: fpFull,
         };
       },
       recover: 'name-and-creator',
+      owned: {
+        kind: 'project',
+        fields: {
+          name: planned.name, description: planned.description, statusType: PROJECT_STATUS_TYPE[eff.state],
+          teamKeys: planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; }),
+          initiativeIds: initiative?.live === true ? [initiative.id] : [], milestoneIds,
+        },
+      },
     });
     if (eb?.state !== 'bound' || eb.linearId === null) continue;
     const projectId = eb.linearId;
     epicProject.set(e.id, projectId);
+    // D-8183: this bound project is one the workspace's live initiative should link (the setting on and the initiative bound).
+    if (initiative?.live === true) linkedProjects.get(wsId)?.push(projectId);
 
     const msIds = new Map<number, string>();
     for (const c of e.checkpoints) {
       const cb = bindingOf('checkpoint', c.id, wsId);
       if (c.state === 'dropped' && cb === undefined) continue;
-      if (cb?.state === 'bound' && cb.linearId !== null) msIds.set(c.id, cb.linearId);
+      if (cb?.state === 'bound' && cb.linearId !== null) { msIds.set(c.id, cb.linearId); milestoneIds.push(cb.linearId); }
       // D-8700 (milestone-target-date-once-met; spec §6.2, §5.3): the target date is ccrc's only once the checkpoint is met.
       // An open (or dropped) checkpoint's create and update leave it out of the input and the fields, so a date set in Linear
       // stands; a met one sets it, and owns it from then on.
@@ -400,6 +439,8 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
         }),
         update: (id) => ({ input: { id, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...dated }, fields: ['name', 'description', ...dateField] }),
         recover: 'name-in-project',
+        // D-8700: a target date not yet set by ccrc is `undefined` here, never compared.
+        owned: { kind: 'milestone', fields: { name: mp.name, description: mp.description, targetDate: mp.targetDate ?? undefined, sortOrder: mp.sortOrder, projectId } },
       });
     }
 
@@ -446,8 +487,8 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
         b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
         planned: ip, fp: fpNull, isCurrent: (st) => st === fpFull,
-        link: () => {
-          if (!wantPr || tb === undefined || tb.linearId === null || tb.fingerprint !== fpNull) return null;
+        link: (forced) => {
+          if (forced !== null || !wantPr || tb === undefined || tb.linearId === null || tb.fingerprint !== fpNull) return null;
           const requestId = requestIdOf('ticket', t.id, wsId, 'pr');
           return {
             kind: 'link', op: 'issueLink', local: tlocal, workspaceId: wsId, teamKey: tpl.teamKey, bindingId: tb.id,
@@ -464,10 +505,17 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
           extras: { stateType, ...(cancelBody === null ? {} : { comment: { requestId: requestIdOf('ticket', t.id, wsId, 'cancel'), body: cancelBody } }) },
         }),
         recover: 'request-id',
+        // ccrc sets no parent, so `parentId` is not owned now (`undefined`); the team key is compared as Linear writes it.
+        owned: {
+          kind: 'issue',
+          fields: {
+            title: ip.title, description: ip.description, teamKey: tpl.teamKey.toUpperCase(), projectId, milestoneId, stateType, parentId: undefined,
+          },
+        },
       });
     }
   }
-  return { steps: phases.flat(), failedInputs, notices, waits };
+  return { steps: phases.flat(), failedInputs, notices, waits, owned };
 }
 
 // ── The pass's ruled verdicts (final review I-4): what the L4 pass reads, it asks here; it never decides itself ──

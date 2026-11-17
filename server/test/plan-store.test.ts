@@ -17,7 +17,7 @@ import { hierarchySettingsOf, setHierarchySettings } from '../src/coord/planStor
 import {
   clearSettledProbes, driftEventsOf, driftMarkOf, driftRestoresOf, inboundByState, inboundOf, inboundWaiting, lastDriftCommentAt,
   managedTeams, markDriftCommented, recordDrift, setDriftItem, setDriftMark, setDriftSince, setInboundState, setStreak, settledProbes,
-  streaksOf, upsertInbound,
+  streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound,
 } from '../src/coord/planStore.js';
 import { LINEAR_SYNC_PROGRAMME, PLAN_BOUNDS } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -421,6 +421,17 @@ describe('managed teams', () => {
   });
 });
 
+describe('managedSince (D-8183)', () => {
+  it('is the earliest appliedAt of a workspace\'s applied migrations, null for none', () => {
+    const ins = db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)');
+    ins.run('ws-a', 'AAA', 'applied', 500); ins.run('ws-a', 'BBB', 'applied', 300); ins.run('ws-a', 'CCC', 'proposed', 100); ins.run('ws-b', 'DDD', 'applied', 900);
+    expect(managedSince(db, 'ws-a')).toBe(300);
+    expect(managedSince(db, 'ws-b')).toBe(900);
+    expect(managedSince(db, 'ws-c')).toBeNull();
+    expect(planStorePort(db).managedSince('ws-a')).toBe(300);
+  });
+});
+
 describe('drift marks and events', () => {
   it('a drift mark is upserted per workspace', () => {
     expect(driftMarkOf(db, 'ws-a')).toBeNull();
@@ -526,5 +537,33 @@ describe('streaks and settled probes', () => {
       'streaksOf', 'setStreak', 'settledProbes', 'addSettledProbe', 'clearSettledProbes']) {
       expect(typeof (port as unknown as Record<string, unknown>)[f], f).toBe('function');
     }
+  });
+});
+
+describe('the drift pass\'s two lookups (D-8183)', () => {
+  const idOf = (sql: string): number => (db.prepare(sql).get() as { id: number }).id;
+  it('bindingByLinearId finds a binding by its workspace and Linear id, and only there', () => {
+    declare('prog-a');
+    const ep = idOf("SELECT id FROM plan_epics WHERE program = 'prog-a'");
+    const b = ensurePending(db, 'epic', ep, 'ws-a', 'AAA');
+    markBound(db, b.id, 'lin-1', null, 'fp', 5);
+    expect(bindingByLinearId(db, 'ws-a', 'lin-1')?.id).toBe(b.id);
+    expect(bindingByLinearId(db, 'ws-b', 'lin-1')).toBeNull();
+    expect(bindingByLinearId(db, 'ws-a', 'lin-2')).toBeNull();
+    expect(planStorePort(db).bindingByLinearId('ws-a', 'lin-1')?.id).toBe(b.id);
+  });
+  it('dueKeyOfBinding names the programme\'s slug for each kind of binding, and upkeep:<project> for an Upkeep epic', () => {
+    declare('prog-a');
+    const rid = planStorePort(db).programmeRowId('prog-a')!;
+    const ep = idOf("SELECT id FROM plan_epics WHERE program = 'prog-a'");
+    const cp = idOf('SELECT id FROM plan_checkpoints');
+    const tk = idOf("SELECT id FROM plan_tickets WHERE program = 'prog-a'");
+    const kinds = [['programme', rid], ['epic', ep], ['checkpoint', cp], ['ticket', tk]] as const;
+    for (const [kind, id] of kinds) expect(dueKeyOfBinding(db, ensurePending(db, kind, id, 'ws-a', null).id), kind).toBe('prog-a');
+    const up = db.prepare("INSERT INTO plan_epics (program, project, waves, key, ordinal, title, summary, state) VALUES (NULL, 'project-a', '[]', 'upkeep', 0, 'Upkeep', '', 'active')").run();
+    const upBinding = ensurePending(db, 'epic', Number(up.lastInsertRowid), 'ws-a', null);
+    expect(dueKeyOfBinding(db, upBinding.id)).toBe('upkeep:project-a');
+    expect(dueKeyOfBinding(db, 99999)).toBeNull();
+    expect(typeof planStorePort(db).dueKeyOfBinding).toBe('function');
   });
 });

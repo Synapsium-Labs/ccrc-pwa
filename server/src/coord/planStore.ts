@@ -498,6 +498,35 @@ export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
   ).all(program, program, program, program) as unknown as BindingRow[];
 }
 
+/** The binding holding a Linear object in a workspace (the drift pass maps each node it reads to its binding, D-8183), or null. */
+export function bindingByLinearId(db: DatabaseSync, workspaceId: string, linearId: string): BindingRow | null {
+  const r = db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? AND linearId = ? ORDER BY id LIMIT 1').get(workspaceId, linearId);
+  return (r as BindingRow | undefined) ?? null;
+}
+/** The sync's due key of a binding's programme: its slug, or `upkeep:<project>` for an Upkeep epic's own objects; null for a
+ *  binding with no such object (D-8183: what the drift pass marks due or restores through). */
+export function dueKeyOfBinding(db: DatabaseSync, bindingId: number): string | null {
+  const b = db.prepare('SELECT localKind, localId FROM linear_bindings WHERE id = ?').get(bindingId) as { localKind: string; localId: number } | undefined;
+  if (b === undefined) return null;
+  const epic = (id: number): string | null => {
+    const e = db.prepare('SELECT program, project FROM plan_epics WHERE id = ?').get(id) as { program: string | null; project: string } | undefined;
+    return e === undefined ? null : e.program ?? `${UPKEEP_DUE_PREFIX}${e.project}`;
+  };
+  switch (b.localKind) {
+    case 'programme': return (db.prepare('SELECT slug FROM programs WHERE rowid = ?').get(b.localId) as { slug: string } | undefined)?.slug ?? null;
+    case 'epic': return epic(b.localId);
+    case 'checkpoint': {
+      const c = db.prepare('SELECT epicId FROM plan_checkpoints WHERE id = ?').get(b.localId) as { epicId: number } | undefined;
+      return c === undefined ? null : epic(c.epicId);
+    }
+    case 'ticket': {
+      const t = db.prepare('SELECT epicId FROM plan_tickets WHERE id = ?').get(b.localId) as { epicId: number } | undefined;
+      return t === undefined ? null : epic(t.epicId);
+    }
+    default: return null;
+  }
+}
+
 // ── Per-project settings ───────────────────────────────────────────────────────────────────────────────────────────────
 
 export function hierarchySettingsOf(db: DatabaseSync, project: string): HierarchySettingsBody {
@@ -575,6 +604,12 @@ export function coordinatorIdsOf(db: DatabaseSync): string[] {
 export function managedTeams(db: DatabaseSync): { workspaceId: string; teamKey: string }[] {
   return (db.prepare("SELECT DISTINCT workspaceId, teamKey FROM linear_migrations WHERE state = 'applied' ORDER BY workspaceId, teamKey").all() as Raw[])
     .map((r) => ({ workspaceId: r.workspaceId as string, teamKey: r.teamKey as string }));
+}
+
+/** When a workspace's first team migration was applied (the drift pass's first watermark, D-8183); null when none was. */
+export function managedSince(db: DatabaseSync, workspaceId: string): number | null {
+  const r = db.prepare("SELECT MIN(appliedAt) AS at FROM linear_migrations WHERE state = 'applied' AND workspaceId = ?").get(workspaceId) as Raw | undefined;
+  return (r?.at as number | null | undefined) ?? null;
 }
 
 export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermark: string; passAt: number } | null {
@@ -718,7 +753,7 @@ const PORT_FUNCTIONS = {
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
   managedTeams, driftMarkOf, setDriftMark, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
   setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
-  settledProbes, addSettledProbe, clearSettledProbes,
+  settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, dueKeyOfBinding, managedSince,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

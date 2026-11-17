@@ -9,8 +9,10 @@
  * with a pass in flight JOINS it and never starts a second, and `withFlight` runs another writer's work (the drift
  * restore, the migration's adopted issues) after the pass in flight, never between two of its steps. Every write to a
  * bound object, whoever asked for it, updates that binding's fingerprint in the same flight, so a restore of an older
- * planned value can never be read as drift of a newer sync write. Do NOT call `passFor` for a key from inside its own
- * `withFlight` function: the flight waits for itself.
+ * planned value can never be read as drift of a newer sync write: the drift restore (`restore`, D-8183) re-reads the plan
+ * INSIDE its flight, and a target whose fingerprint moved since the drift pass read it (a sync write landed first, carrying the
+ * newer plan) is `moot`: nothing is sent for it. Do NOT call `passFor` for a key from inside its own `withFlight` function:
+ * the flight waits for itself.
  *
  * WHAT IS WRITTEN BEFORE A CALL. The binding row is `pending` before a create is sent (`ensurePending`) and `bound` after;
  * a row found `pending` at the start of a step is a create a previous pass may have sent (a crash, a timeout), so the
@@ -40,8 +42,9 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
+import { RESTORED_LINE_PREFIX, restoredLines } from './driftPolicy.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, nextDirectoryStreak, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
+  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, nextDirectoryStreak, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
   withoutPutBack, type AdoptionAsk, type DeferCause, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
@@ -66,6 +69,22 @@ const MAX_STEPS_PER_PASS = 500;
 const ADOPTED = 'adopted';
 const LAST_BACKOFF_MS = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]!;
 
+/** One binding the drift pass asks to have put back (D-8183): `seen` is the binding's fingerprint when the pass read Linear, `tag`
+ *  names the restore (the forced link's request id), `comment` is the drift comment to send once it is restored, `restoredLine` a
+ *  milestone's own record of it. */
+export interface RestoreTarget {
+  bindingId: number; seen: string | null; tag: string;
+  /** The drift is in the project's link to its initiative (or the initiative's to it): the link is made again under the restore's own
+   *  request id. Absent: the update alone (the sync's own next step re-sends the link by its old id, which answers `conflict` when it stands). */
+  link?: boolean;
+  comment?: { body: string; requestId: string };
+  restoredLine?: { line: string; linearDescription: string | null };
+}
+/** `restored`: the planned fields are back and the binding holds the plan's fingerprint. `moot`: a sync write landed first, or the
+ *  binding is gone: nothing was sent. `refused`: Linear refused the write and the binding is failed (`word`). `deferred`: nothing
+ *  was written yet (a deferring answer, an unreadable store, no step to send). `commented`: the drift comment was sent or found made. */
+export interface RestoreOutcome { bindingId: number; outcome: 'restored' | 'moot' | 'refused' | 'deferred'; word?: string; commented: boolean }
+
 export interface PlanSyncDeps {
   /** For the mail and for `goalsFor`, `linkingOf` and `programs()` only: every plan read and write goes through `plan`. */
   coord: CoordStore;
@@ -89,15 +108,19 @@ export interface PlanSyncDeps {
   tickDeadlineMs?: number;
 }
 
-interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
+export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
 /** The drift pass's restore pass, taken from the list (never spelled beside `'plan-sync'`: the list is policy.ts's alone). */
-type RestorePass = Extract<CcrcPass, `${string}restore`>;
+export type RestorePass = Extract<CcrcPass, `${string}restore`>;
+/** Which of ccrc's passes a send belongs to: the sync's own, or the restore's (D-8183: a restore's calls are journaled `drift-restore`). */
+type SendPass = 'plan-sync' | RestorePass;
 type Flow = 'next' | 'defer';
+/** The steps a restore sends: an absolute update and, for a project under a live initiative, its link (never a create). */
+type Restorable = Extract<SyncStep, { kind: 'update' | 'link' }>;
 type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
 /** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
 interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan }
 /** What a failed outcome needs to know about the object it was for. */
-interface Subject extends Told { slot: SlotInfo }
+interface Subject extends Told { slot: SlotInfo; /** The pass every call of this step is journaled under (`readAsk` reads it). */ pass: SendPass }
 
 const OBJECT_WORD: Record<BindingKind, string> = { programme: 'programme', epic: 'epic', checkpoint: 'checkpoint', ticket: 'ticket' };
 
@@ -262,25 +285,84 @@ export class PlanSync {
     return run;
   }
 
-  /** The drift pass's restore (Task 4.2): its steps sent as the pass `drift-restore`, in the key's flight, each write
-   *  updating its binding's fingerprint. Stops at the first outcome that is not ok and answers what it sent. */
-  restore(key: string, steps: readonly SyncStep[], pass: RestorePass): Promise<CcrcOpOutcome[]> {
+  /** What the plan says each bound object's owned fields are (D-8183, §6.2), from the very deciders the sync sends by
+   *  (`planSyncSteps`' `owned`): one computation, never a second copy of the rules. Read-only: it reads the stores, writes none,
+   *  calls nothing in Linear and joins no flight. Null when the key has no programme (an Upkeep key has none until `plan triage`). */
+  async plannedOwned(key: string): Promise<{ bindings: BindingRow[]; owned: PlannedOwned[] } | null> {
+    const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    const built = this.snapshot(key, store);
+    return built === null ? null : { bindings: built.snap.bindings, owned: planSyncSteps(built.snap).owned };
+  }
+
+  /** The drift pass's restore (D-8183, §7.2): it puts the named bindings' planned fields back, in the key's flight, so it runs
+   *  after any pass in flight and never between two of its steps. It RE-READS THE PLAN INSIDE THE FLIGHT: a target whose
+   *  binding is gone, no longer `bound`, or whose fingerprint is no longer the one the drift pass read (`seen`) is `moot`,
+   *  because a sync write landed first and wrote the newer plan (a restore of the older value would undo it, and the drift read
+   *  was a catch-up). Its steps are the sync's own (`planSyncSteps` with the targets forced), each sent through `execute`, so
+   *  C12's issue read, the outcome table, the binding writes and the coordinator's mails apply as for any sync step, under the
+   *  pass `drift-restore`. A refusal that fails the binding (`linear-forbidden`, `linear-invalid`) is `refused` with its word; a
+   *  deferring answer is `deferred`. The comment follows a restored target: a failed comment never fails the binding. */
+  restore(key: string, targets: readonly RestoreTarget[], pass: RestorePass): Promise<RestoreOutcome[]> {
     return this.withFlight(key, async () => {
+      const outcome = (t: RestoreTarget, o: RestoreOutcome['outcome'], word?: string, commented = false): RestoreOutcome =>
+        ({ bindingId: t.bindingId, outcome: o, ...(word === undefined ? {} : { word }), commented });
       const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-      const slots = slotsOf(store);
-      const out: CcrcOpOutcome[] = [];
-      for (const step of steps) {
-        if (step.kind === 'skip') continue;
-        const slot = slots.get(step.workspaceId);
-        if (slot === undefined) { out.push({ ok: false, word: 'not-configured', maybeSent: false }); break; }
-        const b = step.bindingId === null ? null : this.bindingById(key, step.bindingId);
-        const result = await this.deps.call(this.askOf(step, slot, b, pass));
-        out.push(result);
-        if (!result.ok) break;
-        if (b !== null && b.linearId !== null) this.bind(b, b.linearId, this.identifierOf(result, b), step.fingerprint);
+      if (store.kind === 'unreadable') return targets.map((t) => outcome(t, 'deferred'));
+      const built = this.snapshot(key, store);
+      if (built === null) return targets.map((t) => outcome(t, 'moot'));
+      const live = targets.filter((t) => {
+        const b = built.snap.bindings.find((x) => x.id === t.bindingId);
+        return b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen;
+      });
+      const force = new Map(live.map((t) => [t.bindingId, t.tag] as const));
+      const steps = planSyncSteps(built.snap, { force }).steps;
+      const deadlineAt = this.deps.now() + PLAN_SYNC_TICK_DEADLINE_MS;
+      const out: RestoreOutcome[] = [];
+      for (const t of targets) {
+        if (!force.has(t.bindingId)) { out.push(outcome(t, 'moot')); continue; }
+        const mine = steps.filter((x): x is Restorable => (x.kind === 'update' || (x.kind === 'link' && t.link === true)) && x.bindingId === t.bindingId);
+        if (mine.length === 0) { out.push(outcome(t, 'deferred')); continue; }          // nothing to send (a skip): the sync's own pass says why
+        let flow: Flow = 'next';
+        for (const step of mine) {
+          flow = await this.execute(key, this.withRestoredLine(step, t), built, deadlineAt, pass);
+          if (flow === 'defer') break;
+        }
+        const b = this.bindingById(key, t.bindingId);
+        const final = mine[mine.length - 1]!.fingerprint;
+        if (flow === 'defer') { out.push(outcome(t, 'deferred')); continue; }
+        if (b?.state === 'failed') { out.push(outcome(t, 'refused', b.failedWord ?? 'unknown')); continue; }
+        if (b === null || b.state !== 'bound' || b.fingerprint !== final) { out.push(outcome(t, 'deferred')); continue; }
+        const commented = t.comment === undefined ? false : await this.restoreComment(b, t.comment, built, pass);
+        out.push(outcome(t, 'restored', undefined, commented));
       }
       return out;
     });
+  }
+
+  /** A milestone's restore replaces its update's description with the planned one carrying the last Restored lines Linear holds
+   *  and this one (a milestone takes no comment in Linear, D-8407); the step's fingerprint stays the plan's, the lines are not plan text. */
+  private withRestoredLine(step: Restorable, t: RestoreTarget): Restorable {
+    if (t.restoredLine === undefined || step.kind !== 'update' || step.op !== 'projectMilestoneUpdate') return step;
+    const held = (t.restoredLine.linearDescription ?? '').split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX));
+    const planned = String(step.input['description'] ?? '');
+    const description = restoredLines(held.length === 0 ? planned : `${planned}\n\n${held.join('\n')}`, t.restoredLine.line);
+    return { ...step, input: { ...step.input, description } };
+  }
+
+  /** The drift comment on a restored object: an initiative, a project or an issue (never a milestone). A `conflict` answer is a
+   *  comment made already (the same request id). Answers whether it was sent or found made. */
+  private async restoreComment(b: BindingRow, c: { body: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
+    const slot = built.slots.get(b.workspaceId);
+    if (slot === undefined || b.linearId === null) return false;
+    const [op, key, target, teamKey] = b.localKind === 'programme' ? ['initiativeComment', 'initiativeId', b.linearId, null] as const
+      : b.localKind === 'epic' ? ['projectComment', 'projectId', b.linearId, b.teamKey] as const
+      : b.localKind === 'ticket' ? ['issueComment', 'issueId', b.identifier ?? b.linearId, b.teamKey] as const : [null, null, null, null] as const;
+    if (op === null) return false;
+    const out = await this.deps.call({
+      op, pass, lane: 'sync', slot: slot.ref, workspaceId: b.workspaceId, teamKey, target, fields: ['body'],
+      input: { requestId: c.requestId, [key]: b.linearId, body: c.body },
+    });
+    return out.ok || (out.word === 'linear-invalid' && out.detail === 'conflict');
   }
 
   // ── The dispatch (§5.6) ──
@@ -396,7 +478,7 @@ export class PlanSync {
         } else if (Math.max(0, ...until) > this.deps.now()) this.deferFor(slug, 'workspace-blocked', { until: Math.max(...until) });
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
-      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt);
+      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt, 'plan-sync');
       if (flow === 'defer') return 'deferred';
     }
   }
@@ -489,7 +571,7 @@ export class PlanSync {
 
   // ── One step ──
 
-  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number): Promise<Flow> {
+  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number, pass: SendPass = 'plan-sync'): Promise<Flow> {
     const { plan } = this.deps;
     if (step.kind === 'skip') {
       // `status-missing`, `text-public`, `workspace-mismatch`: the object's binding is failed with the reason.
@@ -506,7 +588,7 @@ export class PlanSync {
     const slot = built.slots.get(step.workspaceId);
     if (slot === undefined) { this.notConfigured.add(step.workspaceId); return 'next'; }
     let b = step.bindingId === null ? null : built.snap.bindings.find((x) => x.id === step.bindingId) ?? null;
-    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan });
+    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan, pass });
 
     if (step.kind === 'create') {
       const existed = b !== null;
@@ -517,7 +599,7 @@ export class PlanSync {
         if (r === 'defer') return 'defer';
         if (this.deps.now() >= deadlineAt) return 'defer';
       }
-      const out = await this.deps.call(this.askOf(step, slot, b, 'plan-sync'));
+      const out = await this.deps.call(this.askOf(step, slot, b, pass));
       if (out.ok) {
         const id = out.created ?? (typeof out.value['id'] === 'string' ? out.value['id'] : null);
         if (id === null) { this.deferFor(slug, 'created-without-id'); return 'defer'; }   // ok without an id: it may have been sent
@@ -553,14 +635,14 @@ export class PlanSync {
       send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
-          op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
-          target: b.identifier ?? b.linearId, fields: ['comment'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
+          op: 'issueComment', pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
+          target: b.identifier ?? b.linearId, fields: ['body'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
         if (!c.ok && !(c.word === 'linear-invalid' && c.detail === 'conflict')) return this.onFailure(c, subject(b.id));
       }
     }
-    const ask = this.askOf(send, slot, b, 'plan-sync');
+    const ask = this.askOf(send, slot, b, pass);
     // C15: a move writes into the destination team, so the policy is asked about it too (the journal keeps the current one).
     const moves = step.kind === 'update' && step.op === 'issueUpdate' && step.teamKey !== null && currentTeam !== null && currentTeam.toUpperCase() !== step.teamKey.toUpperCase();
     const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate'
@@ -745,7 +827,7 @@ export class PlanSync {
     return this.deps.plan.bindingsOf(slug).find((b) => b.id === id) ?? null;
   }
 
-  private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: 'plan-sync' | RestorePass): CcrcOpAsk {
+  private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: SendPass): CcrcOpAsk {
     const target = step.kind === 'create' ? null : step.op === 'issueUpdate' || step.op === 'issueLink' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
     return {
       op: step.op, pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
@@ -753,7 +835,7 @@ export class PlanSync {
   }
 
   private readAsk(op: CcrcOpAsk['op'], s: Subject, teamKey: string | null, input: CcrcOpAsk['input']): CcrcOpAsk {
-    return { op, pass: 'plan-sync', lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
+    return { op, pass: s.pass, lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
   }
 
   /** The binding is failed with the word, and the coordinator is told once per object and word. */
@@ -832,7 +914,7 @@ function withoutState(step: Extract<SyncStep, { kind: 'update' }>): Extract<Sync
 
 /** Each workspace's slot, the digest of the key in it and the teams its record learned for that key: what the sync reads
  *  of the Linear store. A slot whose key is gone or whose record describes another key is not here (C3). */
-function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
+export function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
   const out = new Map<string, SlotInfo>();
   if (store.kind !== 'listed') return out;
   for (const s of store.slots) {
