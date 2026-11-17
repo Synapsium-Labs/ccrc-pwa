@@ -585,6 +585,8 @@ describe('stopDoneSweep.ts — stopDonePass reads reclaim-paused off the tick\'s
           lastPlaced: asked.map((sessionId) => ({ sessionId, runId: 10, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'acct-a-project-a' })),
           openPlacedWorkers: [], parkedPlacedWorkers: [] }),
+        // The sleep hold reads the designation once a pass; no row, so no worker here is the Overlord's body.
+        designationRead: () => ({ kind: 'not-designated' as const, row: null }),
         activeClaims: () => [],
         outstandingMailFor: () => [] as never,
         recordFeedEvent: () => undefined,

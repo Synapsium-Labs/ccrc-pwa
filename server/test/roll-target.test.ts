@@ -35,6 +35,7 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
     id: 'project-a', status: 'idle', archivedAt: null, bucket: 'idle', held: null, unmeasured: [], statusUnmeasured: false,
     dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null, substrate: null,
   },
+  overlord: false,
   optedOut: false,
   store: o.store ?? { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: o.viewer ?? false,
@@ -48,6 +49,7 @@ const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => 
   role: 'coordinator',
   longLived: false,
   continuityLive: false,
+  overlord: false,
   release: INSTALLED,
   startedAt: PANE_START,
   build: { kind: 'unmeasured' },
@@ -90,6 +92,33 @@ describe('the setting (D-7453; D-8276)', () => {
 
   it('a setting that could not be read rolls nothing', () => {
     expect(autoRollVerdict(input(2 * HOUR, { targets: null }))).toEqual({ act: 'skip', reason: 'setting-unreadable' });
+  });
+});
+
+describe('the Overlord hold and the unread designation (Overlord W1 designation A, Task 3)', () => {
+  it('a bound or pending body is skipped overlord, right after the setting checks, whatever its idle state', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, sleep: sleep(2 * HOUR, { unread: true }) }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, release: null }))).toEqual({ act: 'skip', reason: 'overlord' });
+  });
+
+  it('an unmeasured designation skips every row designation-unreadable, and is not the Overlord skip', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured', role: 'child' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+  });
+
+  it('any other row is rolled as before', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { overlord: false }))).toEqual({ act: 'roll', idleMs: ROLL_QUIET_MS + MIN });
+  });
+
+  it('the idle gate of an ordinary session never reads unmeasured: its sleep input carries a real overlord value', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: false } }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: null } }))).toEqual({ act: 'skip', reason: 'idle-gate', hold: 'unmeasured' });
+  });
+
+  it('the words are in the skip list', () => {
+    expect(AUTO_ROLL_SKIPS).toEqual(expect.arrayContaining(['overlord', 'designation-unreadable']));
   });
 });
 
@@ -379,7 +408,8 @@ describe('claimed runs and claims do not hold a roll (D-7562)', () => {
 describe('the vocabulary', () => {
   it('every skip is named, in the order the ladder tests them', () => {
     expect([...AUTO_ROLL_SKIPS]).toEqual([
-      'setting-unreadable', 'setting-off', 'role-unknown', 'renewal-owns', 'not-coordinator', 'release-unmeasured', 'start-unmeasured',
+      'setting-unreadable', 'setting-off', 'role-unknown', 'renewal-owns', 'not-coordinator', 'designation-unreadable', 'overlord',
+      'release-unmeasured', 'start-unmeasured',
       'no-roll', 'idle-gate', 'hibernation-due', 'compacting',
     ]);
   });

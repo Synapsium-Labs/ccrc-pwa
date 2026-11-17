@@ -41,6 +41,7 @@ import {
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
+import { designationFactFrom, identityOf as generationIdentityOf, type DesignationFact } from '../roleOf.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -297,12 +298,18 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
     console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
   };
+  /** The designation as this call reads it, or `unmeasured` (a read that throws included). */
+  const designationReadOf = (coord: CoordStore): DesignationFact | 'unmeasured' => {
+    try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
+  };
   /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
   const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
     const gens = coord.liveGenerations();
     const starts = coord.startsOf(id, 1);
+    const fact = designationReadOf(coord);
     return {
-      live: gens.ok ? { kind: 'read', value: gens.rows.find((g) => g.identity === id) ?? null } : { kind: 'unmeasured', what: 'the generations' },
+      live: gens.ok && fact !== 'unmeasured' ? { kind: 'read', value: gens.rows.find((g) => g.identity === generationIdentityOf(id, fact)) ?? null }
+        : { kind: 'unmeasured', what: gens.ok ? 'the designation' : 'the generations' },
       newest: starts.ok ? { kind: 'read', value: starts.rows[0] ?? null } : { kind: 'unmeasured', what: "the session's starts" },
     };
   };
@@ -426,8 +433,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   /** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
   const liveGenerationOf = (coord: CoordStore, id: string) => {
     const gens = coord.liveGenerations();
-    if (!gens.ok) return 'unmeasured' as const;
-    const row = gens.rows.find((g) => g.identity === id);
+    const fact = designationReadOf(coord);
+    if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
+    const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
     if (row === undefined) return 'no-generation' as const;
     const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
     return { row, state: effectiveGeneration(row, live).state };

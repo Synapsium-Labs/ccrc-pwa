@@ -25,6 +25,7 @@ import {
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
 import type { SleepPolicy } from './sleep.js';
+import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
 
 /**
@@ -166,6 +167,21 @@ export interface SleepPassFacts<St> {
   readonly holdOkVerb: boolean;
   /** The lane's binding read for one session of the pass (D-7044). */
   readonly storeOf: (id: string) => St;
+  /** X6: the designation, read once a pass (`designationOfCoord`); `'unmeasured'` holds every row `unmeasured`. */
+  readonly designation: DesignationFact | 'unmeasured';
+}
+
+/** X6: the designation as a coordination port reads it, `'unmeasured'` when the read throws. No port at all (a harness
+ *  with no coordination store) reads no row: no Overlord can be bound without a store, and every row there already holds
+ *  `runs-unreadable`, which this must not displace with `unmeasured`. */
+export function designationOfCoord(coord: Pick<CoordStore, 'designationRead'> | undefined): DesignationFact | 'unmeasured' {
+  if (coord === undefined) return { kind: 'none' };
+  try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
+}
+
+/** X6: is this id the Overlord's bound or pending body? `null` when the designation was not measured. */
+export function overlordOf(d: DesignationFact | 'unmeasured', id: string): boolean | null {
+  return d === 'unmeasured' ? null : designationFactOf(id, d) !== 'none';
 }
 
 // ── The lane row ─────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -234,6 +250,8 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
   readonly port: (deps: D) => SleepActPort<Row> | null;
   /** The binding read: the store's answers for `ids`, read the way the lane reads them today (D-7044). */
   readonly bindings: (deps: D, ids: readonly string[]) => (id: string) => St;
+  /** X6: the designation, read once a pass. */
+  readonly designation: (deps: D) => DesignationFact | 'unmeasured';
   /** The lane's asks, each with its reads in its own order: the first (live state unread), the measured one (the
    *  live reads, then the clock), and the one at the act (store, presence and live state again). */
   readonly asks: {
@@ -325,7 +343,7 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   }
   const fleetState = port?.fleetState;
   const f: SleepPassFacts<St> = {
-    names, quietMs, storeOf: lane.bindings(deps, pop.map((s) => s.id)),
+    names, quietMs, storeOf: lane.bindings(deps, pop.map((s) => s.id)), designation: lane.designation(deps),
     verb: ccdCan(fleetState, 'hibernate'),
     holdOkVerb: lane.holdOk && capSupported(fleetState, HIBERNATE_HOLD_OK_CAP),
   };
@@ -559,7 +577,7 @@ function wokeNothing<V, St>(r: SleepActResult<V, St>): boolean {
 
 /** run-done's store port: the batched placed-run read, the live claims, outstanding mail, the feed archive and the run
  *  read `heldKindOf` classifies a run suffix by. */
-export type RunDoneCoordPort = Pick<CoordStore, 'lastRunBySession' | 'activeClaims' | 'outstandingMailFor' | 'recordFeedEvent' | 'run'>;
+export type RunDoneCoordPort = Pick<CoordStore, 'lastRunBySession' | 'activeClaims' | 'outstandingMailFor' | 'recordFeedEvent' | 'run' | 'designationRead'>;
 
 export interface StopDoneSweepDeps {
   readonly coord: RunDoneCoordPort;
@@ -700,7 +718,7 @@ function runDoneInput(
 ): StopDoneInput {
   return {
     row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
-    verb: f.verb, optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
+    verb: f.verb, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: f.quietMs,
   };
 }
@@ -775,6 +793,7 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
   clock: 'per-pass',
   quietMs: () => STOP_DONE_GRACE_MS,
   port: (deps) => deps,
+  designation: (deps) => designationOfCoord(deps.coord),
   bindings: (deps, ids) => {
     const reads = storeReads(deps.coord, ids);
     return (id) => reads.get(id)!;
@@ -790,7 +809,7 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
     atAct: async (deps, f, row, rec) => {
       const at = deps.now();
       const store = storeReads(deps.coord, [row.id]).get(row.id)!;
-      return { v: stopDoneVerdict(runDoneInput(deps, f, row, store, await runDoneLive(deps, rec), at)), store };
+      return { v: stopDoneVerdict(runDoneInput(deps, { ...f, designation: designationOfCoord(deps.coord) }, row, store, await runDoneLive(deps, rec), at)), store };
     },
   },
   notices: {
@@ -825,7 +844,7 @@ export async function stopDonePass(
 // ── idle-hours (hibernation): its binding read, live reads and lines ────────────────────────────────────────────────
 
 /** idle-hours' store port: the bound runs (`bindingsOf`), the live claims and outstanding mail. */
-export type IdleHoursCoordPort = Pick<CoordStore, 'bindingsOf' | 'activeClaims' | 'outstandingMailFor'>;
+export type IdleHoursCoordPort = Pick<CoordStore, 'bindingsOf' | 'activeClaims' | 'outstandingMailFor' | 'designationRead'>;
 
 /** The act's half of the deps: absent in a shadow-only harness, and then nothing can act whatever the markers say. */
 export interface HibernateActPort {
@@ -940,7 +959,7 @@ function idleHoursInput(
   deps: HibernateSweepDeps, f: SleepPassFacts<HibernateStoreRead>, row: HibernateRow, live: HibernateLive, at: number,
 ): HibernateInput {
   return {
-    row, optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), store: f.storeOf(row.id),
+    row, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`), store: f.storeOf(row.id),
     viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: at - deps.startedAt, live,
   };
 }
@@ -976,6 +995,7 @@ export const IDLE_HOURS_LANE: SleepLane<HibernateSweepDeps, HibernateSweepMemory
   quietMs: (deps, names) => (names.includes(HIBERNATE_AFTER_HOURS_FILE)
     ? deps.readAfterHours().then(hibernateAfterMs) : hibernateAfterMs(null)),
   port: (deps) => deps.act,
+  designation: (deps) => designationOfCoord(deps.coord),
   bindings: (deps) => idleHoursBindings(deps),
   asks: {
     first: (deps, f, row, now) => hibernateVerdict(idleHoursInput(deps, f, row, { kind: 'unread' }, now), now, f.quietMs),
@@ -988,7 +1008,7 @@ export const IDLE_HOURS_LANE: SleepLane<HibernateSweepDeps, HibernateSweepMemory
       const live = await idleHoursLive(deps, rec);
       const at = deps.now();
       const store = idleHoursBindings(deps)(row.id);
-      const v = hibernateVerdict(idleHoursInput(deps, { ...f, storeOf: () => store }, row, live, at), at, f.quietMs);
+      const v = hibernateVerdict(idleHoursInput(deps, { ...f, storeOf: () => store, designation: designationOfCoord(deps.coord) }, row, live, at), at, f.quietMs);
       return { v, store };
     },
   },

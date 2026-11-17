@@ -265,10 +265,15 @@ export const OVERLORD_REFUSALS = {
   'overlord-exists': 409,
   // Rebind: the old session does not measure dead or absent (designation B). 409.
   'overlord-body-alive': 409,
+  // Rebind: an attempt is pending on the designation's one slot (designation B; the designation plan, question 9). 409.
+  'overlord-attempt-pending': 409,
   // Designate, rebind and the account set's Settings row: fewer than two accounts (designation A and C). 409.
   'overlord-single-account': 409,
   // Designate and rebind: a property of the sandbox check failed (sandbox B). 409.
   'overlord-sandbox-unmet': 409,
+  // Recorded on the row, never answered: the journal refused the go-live record until the deadline (designation B;
+  // the designation plan, question 10). 503, a box fault.
+  'authority-unrecorded': 503,
   // Every door but card, probe and note: the session's profile digest is not the designation's (sandbox B). 409.
   'launch-profile-unmet': 409,
   // Every door but card, probe and note: boot coherence failed, the authority journal rolled back (authority journal A).

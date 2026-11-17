@@ -13,9 +13,10 @@ import { roleFactsOf, roleOf } from './roleOf.js';
 import { CONTINUITY_LANE, laneArmGate } from '../../shared/lane-arm.js';
 import type { CoordStore } from './coord/store.js';
 import type { RunKind } from '../../shared/api.js';
-import { AFTER_UNMEASURED, idleHoursBindings, laneVerb, sleepPass, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
+import { AFTER_UNMEASURED, designationOfCoord, idleHoursBindings, laneVerb, sleepPass, overlordOf, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
+import type { DesignationFact } from './roleOf.js';
 import { claudeBuildOf, fleetClaudeLatest, laneClaudeLatest, type ClaudeRollTargets } from '../../shared/claudeVersion.js';
 
 /**
@@ -152,6 +153,8 @@ function answerOf(v: AutoRollVerdict): RollAnswer {
 interface Pass {
   readonly targets: ClaudeRollTargets | null;
   readonly release: number | null;
+  /** X6: the designation, read once a pass; `'unmeasured'` skips every row `designation-unreadable`. */
+  readonly designation: DesignationFact | 'unmeasured';
   readonly hibernation: { readonly armed: boolean; readonly afterMs: number };
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest`), the newest on each
    *  lane, which is what a restart there reaches (`laneClaudeLatest`, keyed by `wrapper`), and the reach each id was last
@@ -165,11 +168,14 @@ interface Pass {
 }
 
 /** The hand-off's facts for one pass: the `continuity` row as the generations lane reads it, and, only while it is live, each
- *  recorded id's long-life from its role facts (`roleFactsOf`, intent unread as the generations lane reads it) and whether the
- *  renewal lane holds a live generation for it. A read that fails leaves the id unread (null), which holds it while live. */
-function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionRecord[]): Pick<Pass, 'continuityLive' | 'longLived'> {
+ *  recorded id's long-life from its role facts (`roleFactsOf`, intent unread as the generations lane reads it, the pass's
+ *  designation) and whether the renewal lane holds a live generation for it. A read that fails leaves the id unread (null),
+ *  which holds it while live; so does an unmeasured designation, for every id, as the generations lane fails closed on it. */
+function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionRecord[], designation: DesignationFact | 'unmeasured'):
+  Pick<Pass, 'continuityLive' | 'longLived'> {
   const longLived = new Map<string, boolean | null>();
   if (c === undefined || !continuityLiveOf(c)) return { continuityLive: false, longLived };
+  if (designation === 'unmeasured') return { continuityLive: true, longLived };
   const gens = c.liveGenerations();
   const owned = gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null;
   let openCoordinators: ReadonlySet<string> | 'unmeasured';
@@ -179,7 +185,7 @@ function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionReco
       if (rec.child.kind !== 'child') return 'unmeasured';
       try { const r = c.run(rec.child.runId); return r.ok && r.run !== null ? r.run.kind : 'unmeasured'; } catch { return 'unmeasured'; }
     })();
-    const role = roleOf(roleFactsOf(rec.id, { child: rec.child, childRunKind, openCoordinators, intentDeclared: 'unmeasured' }));
+    const role = roleOf(roleFactsOf(rec.id, { child: rec.child, childRunKind, openCoordinators, intentDeclared: 'unmeasured', designation }));
     longLived.set(rec.id, longLivedOf(role, owned === null ? 'unmeasured' : owned.has(rec.id)));
   }
   return { continuityLive: true, longLived };
@@ -204,12 +210,14 @@ async function liveOf(deps: RollSweepDeps, rec: SessionRecord): Promise<{ live: 
 
 function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetSession, store: HibernateStoreRead,
   live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
+  const overlord = overlordOf(p.designation, row.id);
   return answerOf(autoRollVerdict({
     targets: p.targets, role: row.role, longLived: p.longLived.get(row.id) ?? null, continuityLive: p.continuityLive, release: p.release, startedAt,
+    overlord: overlord ?? 'unmeasured',
     build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
-    sleep: { row, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
+    sleep: { row, overlord: overlord ?? null, optedOut: false, store, viewer: deps.viewers?.isOpen(row.id) ?? true, sinceStartMs: now - deps.startedAt, live },
     now,
   }));
 }
@@ -235,6 +243,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
   clock: 'per-row',
   quietMs: () => ROLL_QUIET_MS,
   port: (deps) => deps.act,
+  designation: (deps) => deps.pass.designation,
   bindings: (deps) => idleHoursBindings(deps),
   asks: {
     first: (deps, f, row, now) => ask(deps, deps.pass, f.names, row, f.storeOf(row.id), { kind: 'unread' }, null, now),
@@ -245,7 +254,8 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     },
     atAct: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
-      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()), continuityLive: continuityLiveOf(deps.continuity) };
+      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()), continuityLive: continuityLiveOf(deps.continuity),
+        designation: designationOfCoord(deps.coord) };
       const at = deps.now();
       const store = idleHoursBindings(deps)(row.id);
       return { v: ask(deps, p, f.names, row, store, live, startedAt, at), store };
@@ -331,7 +341,9 @@ export async function rollPass(
   const latest = fleetClaudeLatest(sessions);
   const lanes = new Map<string, string | null>();
   for (const s of sessions) if (!lanes.has(s.wrapper)) lanes.set(s.wrapper, laneClaudeLatest(sessions, s.wrapper));
-  const pass: Pass = { targets, release, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor, ...handoffOf(deps.continuity, records) };
+  const designation = designationOfCoord(deps.coord);
+  const pass: Pass = { targets, release, designation, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor,
+    ...handoffOf(deps.continuity, records, designation) };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))

@@ -211,6 +211,7 @@ import {
 import { renderMailNudge } from './coord/envelope.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
+import { DesignationEpisode } from './continuity/designationEpisode.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -280,7 +281,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
-import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
+import { SLEEP_LANES, designationOfCoord, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
 import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
@@ -1265,6 +1266,7 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  private readonly designationEpisode = new DesignationEpisode();
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -7091,14 +7093,17 @@ export class FleetWatcher {
       return;
     }
     // The restarted arm reaches a long-lived session run-less (the renewal hand-offs, Task 7): its role from `roleFactsOf`, as a
-    // claimant of open runs, so a row whose child marker reads a child is never told.
-    const role = roleOf(roleFactsOf(id, { child: tick.records.find((x) => x.id === id)?.child ?? { kind: 'unreadable' }, childRunKind: 'unmeasured',
-      openCoordinators: new Set([id]), intentDeclared: 'unmeasured' }));
+    // claimant of open runs, so a row whose child marker reads a child is never told. The designation is a role fact (designation
+    // A), read here plainly (`designationOfCoord`, no notice: the mail sweep raises that one); unmeasured, the role is unread and
+    // the session is not told, as the mail sweep delivers nothing then.
+    const designation = designationOfCoord(store);
+    const role = designation === 'unmeasured' ? null : roleOf(roleFactsOf(id, { child: tick.records.find((x) => x.id === id)?.child ?? { kind: 'unreadable' },
+      childRunKind: 'unmeasured', openCoordinators: new Set([id]), intentDeclared: 'unmeasured', designation }));
     const si: StallSessionInput = {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
-      longLived: longLivedOf(role, false) === true,
+      longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
@@ -8223,6 +8228,11 @@ export class FleetWatcher {
     // matching how `uuidByToId` and `sessionProjects` are built from `records`
     // — the store returns rows, the sweep shapes them into what it will ask.
     const coordinators = new Set(store.openCoordinatorIds());
+    // The designation, read once a sweep; unmeasured, nothing is delivered this pass (the pace of a pending Overlord is no `plain`'s).
+    const designation = this.designationEpisode.observe(() => store.designationRead(), (why) => { this.pushOne({ kind: 'update',
+      sessionId: '', project: '', title: 'Mail held', body: `The Overlord designation could not be read (${why}), so mail waits.`,
+      tag: 'designation-unmeasured' }, this.activeProjects); });
+    if (designation === 'unmeasured') return;
     // The renewal act's hold (Overlord W1a): each session's live generation by its `state` column, read once a sweep (a
     // failed read holds nothing, as before the act existed); `renewalHoldsMail` decides, before any attempt is counted.
     const gens = store.liveGenerations();
@@ -8270,7 +8280,7 @@ export class FleetWatcher {
         // Neither condition changes — only the threshold each is measured
         // against.
         const pace = mailPaceOf(roleOf(roleFactsOf(d.toId, { child: rec?.child ?? { kind: 'unreadable' },
-          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured' })));
+          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured', designation })));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
         // registry ladder: `records` came from `readRegistryMeasured` above,

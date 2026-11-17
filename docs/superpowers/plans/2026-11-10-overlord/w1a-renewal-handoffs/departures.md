@@ -191,11 +191,12 @@ since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 91 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
-(#2962) 88, remaining work A (#2951) 89 and org D (#2958) 90 on main, after responses B (#2914) took 84. Fix round 1 of review 2312 absorbed overlaps
-(85 -> 86, on the coordinator's word of 2026-11-17); the landing merges absorbed decision model A (86 -> 87, mail 22510), row revisions (87 -> 88, mail
-22654), renewal readings A (88 -> 89, mail 22766, its four source conflicts on the coordinator's word, mail 22774), remaining work A (89 -> 90, mail
-22872) and org D (90 -> 91, mail 22987), under this run's standing renumber license. Others may hold 91 too; the second
+The migration is entry 92 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+(#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91 on main, after responses B (#2914) took 84. Fix round 1 of
+review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17); the landing merges absorbed decision model A (86 -> 87, mail 22510),
+row revisions (87 -> 88, mail 22654), renewal readings A (88 -> 89, mail 22766, its four source conflicts on the coordinator's word, mail 22774),
+remaining work A (89 -> 90, mail 22872), org D (90 -> 91, mail 22987, two source conflicts on the coordinator's word, mail 23014) and designation A
+(91 -> 92, mail 23096), under this run's standing renumber license. Others may hold 92 too; the second
 to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
 Moving past decision model A's entry broke that PR's migration case (`decision-model-records.test.ts`), which assumed its entry was the
@@ -206,6 +207,16 @@ side by side), `generationsLane.ts` (`renewalInputsOf` keeps this branch's `rene
 `renewNow`, so neither overrides the other) and the CLAUDE.md sentence on the continuity doors (both doors named).
 Org D's merge met this branch in `generationsLane.ts` too: both PRs added a trailing optional parameter to `renewalInputsOf`. Org D's `orgOf` is sixth
 (its own test passes it there) and this branch's `renewNow` seventh; the lane passes both (`input.orgOf, renewNow`).
+Designation A's merge met this branch in the roll lane and the renewal wiring. `rollLane.ts`'s pass carries both PRs' facts (its `designation`,
+this branch's `continuityLive` and `longLived`), and `handoffOf` now hands the pass's designation to `roleFactsOf`, which designation A made a
+required input; an unmeasured designation leaves every id's long-life unread (null), which holds it while `continuity` is live, as the generations
+lane fails closed on it. `renewalWiring.ts` builds its host through designation A's `renewalHostOf` and keeps this branch's `routePrecompact`. The
+generations lane's coord port and `unread` union, the roll ladder's skip list, the id-argv census (54 calls across 19 files) and the mutation
+floors carry both sides.
+The same requirement reached `watch.ts` without a textual conflict: the stall watch's restarted arm (Task 7) builds role facts too, so it now reads
+the designation plainly (`designationOfCoord`; the mail sweep's read raises the notice), and an unmeasured one leaves the role unread, so the session
+is not told, as the mail sweep delivers nothing then (`stall-restarted-watch.test.ts`). The roll lane's fail-closed read is pinned in
+`roll-lane.test.ts` (an unmeasured designation holds a plain session `role-unknown`). Each case reds when its guard is mutated.
 
 ## Stable exports for W1's consumers
 

@@ -100,4 +100,12 @@ describe('sweepStalls: the restarted arm reaches a long-lived coordinator run-le
     await w.sweepStalls(sessions, DARK, tick);
     expect(restartedMail(coord)).toEqual([]);
   }, 60_000);
+
+  it('armed, the designation unreadable: its role is unread, so the arm sends no mail (designation A made it a role fact)', async () => {
+    const { w, coord, tick, sessions } = await rig();
+    coord.designationRead = () => { throw new Error('fixture'); };
+    vi.setSystemTime(SWEEP_AT);
+    await w.sweepStalls(sessions, LIVE_W2, tick);
+    expect(restartedMail(coord)).toEqual([]);
+  }, 60_000);
 });

@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 52 id-taking calls across 18 files.
+// THE CLAIM: 54 id-taking calls across 19 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -398,6 +398,10 @@ const GATES = {
     file: 'collectLane.ts', scope: 'parseCollectRecordName',
     re: /return id !== undefined && isTmpRootId\(id\) \? id : null;/,
   },
+  /** The Overlord body's route composer refuses an id that is not a registry id before it composes `route --set` (Overlord W1 designation A). */
+  'overlord-body-route': { file: 'coord/overlordBody.ts', scope: 'setRoute', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
+  /** The Overlord body's keep-awake composer refuses an id that is not a registry id before it composes `keep-awake`. */
+  'overlord-body-keep-awake': { file: 'coord/overlordBody.ts', scope: 'keepAwake', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
 } as const satisfies Readonly<Record<string, GateHome>>;
 
 type Gate = keyof typeof GATES;
@@ -519,6 +523,11 @@ const CENSUS: readonly CensusRow[] = [
   // continuity/renewalWiring.ts (Overlord W1a, the renewal hand-offs): the id is a stored generation row's, and the PreCompact
   // field write refuses a non-registry id itself before `routeSet` composes an argv.
   { file: 'continuity/renewalWiring.ts', scope: 'routePrecompact', builder: 'routeSet', id: 'id', origin: ['stored'], gate: ['precompact-id'] },
+  // coord/overlordBody.ts (Overlord W1 designation A, plan Task 4): the door's ids are minted by the door or read from the designation
+  // row; each composer refuses a non-registry id itself before it composes. The stop goes through `stopCreatedOf`, which composes
+  // no `CCD_ARGV` call of its own: it runs the stop route's own `stopArgvFor` (behind its `readSessionRecord` and `stopPairRefused`).
+  { file: 'coord/overlordBody.ts', scope: 'setRoute', builder: 'routeSet', id: 'id', origin: ['stored'], gate: ['overlord-body-route'] },
+  { file: 'coord/overlordBody.ts', scope: 'keepAwake', builder: 'keepAwake', id: 'id', origin: ['stored'], gate: ['overlord-body-keep-awake'] },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -546,6 +555,8 @@ const GATE_FILES = [
   'coord/radar.ts',
   // coord/archiveDoor.ts (D-8199): a claims choice's `heir` is vetted by the predicate before the hand-over reads its row.
   'coord/archiveDoor.ts',
+  // coord/overlordBody.ts (Overlord W1 designation A): `setRoute` and `keepAwake` vet their id with the predicate before composing.
+  'coord/overlordBody.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;

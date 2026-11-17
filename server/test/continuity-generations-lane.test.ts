@@ -21,6 +21,7 @@ import type { CompactionsRead } from '../src/continuity/compactions.js';
 import type { UsageRead } from '../src/usage.js';
 import type { MeasuredStat } from '../src/io.js';
 import type { ChildMark } from '../../shared/api.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import { HOLD_OFF_MS } from '../../shared/continuity.js';
 import { START_RETRY_MS } from '../src/continuity/generationStart.js';
@@ -1070,6 +1071,17 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 62_000]]);
   });
 
+  it('a restarted Overlord\'s notes, keyed by its session id, reach its spot round (review 2349 F2)', () => {
+    const f = active();
+    const g = gen(f);
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+    expect(f.pass(at(f, usage(62_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+  });
+
   /** A live coordinator proven active by a passed start round. */
   const active = (): Fixture => {
     const f = probing();
@@ -1427,5 +1439,88 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());
+  });
+});
+
+describe('the pass reads the designation (Overlord W1 designation A, Task 3, X5)', () => {
+  const BODY = 'overlord-quiet-otter';
+  const NEW_BODY = 'overlord-new-owl';
+  const U4 = '44444444-4444-4444-8444-444444444444';
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const bound = (id = BODY, pending: DesignationView['pending'] = null): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' }, pending }) });
+  const pendingOf = (id: string, kind: 'designate' | 'rebind'): NonNullable<DesignationView['pending']> =>
+    ({ sessionId: id, kind, deadlineAt: 9, since: 1, actor: 'op', generation: null });
+  const withBody = (f: Fixture, id: string, uuid: string): void => { f.registry.push({ id, uuid, lane: 'lane-a', child: { kind: 'none' } }); };
+  const rows = (f: Fixture) => live(f.s).map((g) => ({ identity: g.identity, sessionId: g.sessionId, role: g.role, term: g.term, n: g.n }));
+
+  it('a bound start mints as the identity overlord with the row\'s term, and a coordinator\'s mints as before', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound();
+    withBody(f, BODY, U3);
+    f.start('startup', U1);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 2, unread: null });
+    expect(rows(f)).toEqual([
+      { identity: COORD, sessionId: COORD, role: 'coordinator', term: 1, n: 1 },
+      { identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 },
+    ]);
+  });
+
+  it('a pending designate body reads the Overlord too: its first start mints under overlord', () => {
+    const f = fixture();
+    f.s.designationRead = () => ({ kind: 'not-designated', row: view({ pending: pendingOf(BODY, 'designate') }) });
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 1 });
+    expect(rows(f)).toEqual([{ identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 }]);
+  });
+
+  it('a restart of the Overlord mints against its own live generation: no Superseded, the old one ends, the next stands', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound();
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ minted: 1, superseded: 0 });
+    f.t.advance(30_000);
+    f.start('resume', U3, undefined, BODY);
+    expect(f.pass()).toMatchObject({ read: 1, minted: 1, superseded: 0, unread: null });
+    expect(rows(f)).toEqual([{ identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 2 }]);
+    expect(all(f.s).filter((g) => g['identity'] === 'overlord').map((g) => [g['n'], g['state']])).toEqual([[1, 'ended'], [2, 'active']]);
+  });
+
+  it('a rebind with the old generation live: the pending body\'s start mints under its own id, and the old body\'s overlord row stands', () => {
+    const f = fixture();
+    f.s.designationRead = () => bound(BODY);
+    withBody(f, BODY, U3);
+    f.start('startup', U3, undefined, BODY);
+    f.pass();
+    f.s.designationRead = () => bound(BODY, pendingOf(NEW_BODY, 'rebind'));
+    withBody(f, NEW_BODY, U4);
+    f.t.advance(30_000);
+    f.start('startup', U4, undefined, NEW_BODY);
+    expect(f.pass()).toMatchObject({ minted: 1, superseded: 0 });
+    expect(rows(f).sort((a, b) => a.identity.localeCompare(b.identity))).toEqual([
+      { identity: 'overlord', sessionId: BODY, role: 'overlord', term: 5, n: 1 },
+      { identity: NEW_BODY, sessionId: NEW_BODY, role: 'overlord', term: 1, n: 1 },
+    ]);
+  });
+
+  it('an unmeasured designation fails the mint step closed: nothing mints, the starts stay, and the next pass reads them again', () => {
+    for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'the row is unreadable' }),
+      (): DesignationRead => { throw new Error('locked'); }]) {
+      const f = fixture();
+      f.s.designationRead = bad;
+      f.start('startup', U1);
+      const r = f.pass();
+      expect(r).toMatchObject({ read: 0, minted: 0, unread: 'designation' });
+      expect(f.logs.some((l) => l.includes('designation'))).toBe(true);
+      expect(all(f.s)).toEqual([]);
+      f.s.designationRead = () => ({ kind: 'not-designated', row: null });
+      expect(f.pass()).toMatchObject({ read: 1, minted: 1, unread: null });
+    }
   });
 });

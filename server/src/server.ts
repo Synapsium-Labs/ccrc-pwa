@@ -20,13 +20,14 @@ import {
   accountPoolsEnforcement, accountPoolsUnavailableReason, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
   readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
-import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
+import { poolRostered, poolVerdict, resolvedAccountPool, sessionPoolSideOf } from './poolrule.js';
+import type { SessionPoolSide } from '../../shared/poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE, rosterKindOf } from '../../shared/roster.js';
 import { rosterFactsWireOf } from '../../shared/rosterFacts.js';
 import { workspaceId } from '../../shared/slug.js';
 import { withoutCcdRefusal } from '../../shared/ccd-refusal.js';
 import type { RouteRefusal } from '../../shared/refusal.js';
-import { buildAgreement, defaultCachePath, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
+import { buildAgreement, defaultCachePath, inventoryBuildAgreement, inventoryBuilds, loadSnapshot, rosterAgreement } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
 // build step (see `shared/mark.mjs`'s header) — so reaching them from here
@@ -97,6 +98,9 @@ import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
+import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
+import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { renewalHostOf } from './continuity/renewalWiring.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
 import { trackerIdsIn } from './linking/policy.js';
@@ -139,7 +143,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  type DelegationProjectionWire, type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectRepoWire,
   isRegistryId, parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeForBrowserCap, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 import { ARCHIVE_REFUSALS, PTY_EXIT_CLOSE, SERVER_CAPS, SWAP_REFUSALS, interruptRouteSource, type SwapRefusal } from '../../shared/api.js';
@@ -2271,6 +2275,32 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
   registerFaceRoutes(app, { coord: deps.coord });
+  // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
+  // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
+  const overlordStore = deps.coord !== undefined && deps.overlordAuthority !== undefined
+    ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
+  if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
+  registerOverlordRoutes(app, {
+    gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
+    clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
+    body: ccdOverlordBody({
+      runCcd: deps.runCcd, fleetState: () => deps.fleetState, rowOf: (id) => readSessionRecord(deps.io, deps.cfg, id),
+      generationOf: (id) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id),
+      // The stop route's own identity measurement, pair refusal and argv, handed over: the route and this lane share one of each.
+      stop: stopCreatedOf({
+        read: (id) => readSessionRecord(deps.io, deps.cfg, id), runCcd: deps.runCcd,
+        identityOf: measuredIdentity, pairRefused: stopPairRefused, argvFor: stopArgvFor,
+      }),
+      projects: async () => { const l = await listProjects(deps.io, deps.cfg, undefined, projectWalk); return l.registry === 'listed' ? l.projects.map((p) => p.name) : null; },
+      projectsChanged: () => projectWalk.drop(),
+    }),
+    facts: {
+      ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
+      roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
+      authority: deps.overlordAuthorityGuard === undefined ? undefined : () => deps.overlordAuthorityGuard!.state(),
+    },
+  });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off') });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
@@ -2939,7 +2969,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * cannot be read" from "this box's own database is broken".
    */
   const refusePool = (
-    reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
+    reply: FastifyReply, wrapper: string, pool: SessionPoolSide,
   ): FastifyReply | null => {
     let edges: ReadonlyMap<string, readonly string[]>;
     try {
@@ -2951,8 +2981,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
     if (v.ok) return null;
+    // A set mismatch (C46) names the set's spelling where a project's names its tag; `accountPool` is null for an untagged account.
     return v.reason === 'pool-mismatch'
-      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
+      ? reply.code(409).send({ ok: false, error: 'pool-mismatch', ...(v.side === 'set'
+        ? { accountPool: 'pool' in v.account ? v.account.pool : null, set: v.set }
+        : { accountPool: v.accountPool, projectPool: v.projectPool }) })
       : reply.code(503).send({ ok: false, error: 'pool-unreadable', state: v.state });
   };
 
@@ -3897,7 +3930,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
         PROJECT_POOLS_REQUEST_BUDGET_MS,
       ), read.record.project);
-      const refused = refusePool(reply, body.wrapper, pool);
+      // The session's own side: its set when its route record carries one, else the project's (C46, `sessionPoolSideOf`).
+      const refused = refusePool(reply, body.wrapper, sessionPoolSideOf(read.record.route, pool));
       if (refused) return refused;
     }
     // D-5240: the turn gate, archive's fail-closed `turnVerdictFor` under archive's consent rule (`swapTurnRefusal`):

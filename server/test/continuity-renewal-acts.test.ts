@@ -506,6 +506,23 @@ describe('the renewal act, live (Task 4)', () => {
     const cp = f.s.db.prepare('SELECT generationId FROM continuity_checkpoints').all();
     expect(cp).toEqual([{ generationId: g.id }]);
   });
+
+  it('a restarted Overlord\'s notes (keyed by its session id) reach its seal (review 2349 F2)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    // The generation's identity is `overlord`, its session the body's session: the note door writes under the session id.
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    const note = f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread',
+      waitsOn: 'nothing', next: 'carry on', revises: null, closes: false, at: f.t.ports.clock.wall() });
+    expect(note.ok).toBe(true);
+    f.s.stepGeneration(g.id, genExpectOf(f.gen()), { ...GEN_ACTIVE, state: 'draining', cls: 'soft' }, true, f.t.ports.clock.wall());
+    await f.cycle(() => hardCap());
+    f.t.advance(STATE_DEADLINE_S.checkpointed * 1000);
+    await f.cycle();
+    const cp = f.s.db.prepare('SELECT notes FROM continuity_checkpoints WHERE generationId = ?').get(g.id) as { notes: string } | undefined;
+    expect(cp).toBeDefined();
+    expect(JSON.parse(cp!.notes)).toHaveLength(1);
+  });
 });
 
 describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
