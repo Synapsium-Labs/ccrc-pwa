@@ -303,12 +303,15 @@ export interface MaskOpts {
 }
 
 /** A sliced mask's slice and the raw overlap read on each side of it (D-5995): one slice of pane history costs a few
- *  milliseconds, and the overlap is what a drawer holds for a key's rows, so a key or a wrapped shape a cut splits is
- *  matched whole. It was what a drawer holds for one run (9 KiB), narrower than a key's rows with a colour escape on
- *  each: an 8,192-byte key at 118 columns in `capture-pane -e -J`'s form (10,092 bytes) showed up to 640 key bytes when
- *  the slice boundary fell inside it, and more at 64 columns (review 2352 F2). */
+ *  milliseconds, and the overlap is 16 KiB, so a key or a wrapped shape a cut splits is matched whole. It was what a
+ *  drawer holds for one run (9 KiB), narrower than a key's rows with a colour escape on each: an 8,192-byte key at 118
+ *  columns in `capture-pane -e -J`'s form (10,092 bytes) showed up to 640 key bytes when the slice boundary fell inside
+ *  it, and more at 64 columns (review 2352 F2). 16 KiB holds such a key's block at every width it is joined at (11,901
+ *  bytes at most, with a 19-byte colour escape on every row); a block longer than that, past about 60 bytes of escapes
+ *  a row, can still show its rows beyond the overlap (D-5995). The overlap stays a bound that does not grow with the
+ *  text (`secret-mask.test.ts` pins 16 KiB). */
 const SLICE_UNITS = 64 * 1024;
-const SLICE_OVERLAP = CHAIN_HELD_MAX;
+const SLICE_OVERLAP = 16 * 1024;
 
 /** Masks `text` for every egress of session-derived text. */
 export class SecretMasker {
@@ -1175,13 +1178,18 @@ function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): 
   const v = viewOf(w.slice(0, bodyEnd), '\0');
   // The window's first row break: the row before it began before the window (-1: the window is the whole text).
   const head = base === 0 ? -1 : firstBreakIn(v.t);
+  // The open run is read over one run's hold, as before the window widened: one run longer than that is no key's, and is
+  // never held (D-5995's bound on what a drawer holds; only a key's ROWS are held over the wider window).
+  const runFloor = Math.max(0, v.t.length - (DRAWER_HELD_MAX + 64));
   let i = v.t.length;
-  while (i > 0 && !OPEN_DELIM.test(v.t[i - 1]!)) i--;
+  while (i > runFloor && !OPEN_DELIM.test(v.t[i - 1]!)) i--;
+  const runTooLong = i === runFloor && runFloor > 0 && !OPEN_DELIM.test(v.t[i - 1]!);
   const run = v.t.slice(i);
   let hold: number | null = null;
   if (run !== '') {
     if (fingerprints) {
       // The open run, with the rows it continues (D-8710): holding the run alone sent the rows before it unjoined.
+      if (runTooLong) return null;
       hold = chainBack(v.t, i, Buffer.byteLength(run, 'utf8'), fpMax, (k) => origin(v, k) >= lead.length, head).at;
     } else {
       const sh = SHAPE_STARTED.exec(run);
