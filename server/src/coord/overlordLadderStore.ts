@@ -28,7 +28,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AuthorityAppend, AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityAppender } from './overlordDesignationStore.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
-import type { CurrentRung } from './overlordLadder.js';
+import type { CurrentRung, LadderWriterRefusal } from './overlordLadder.js';
 import {
   LADDER_CAUSE_MAP, LADDER_DEFAULT_RUNG, isLadderCauseKey, isRung, rungRank,
   type LadderNotice, type Rung,
@@ -55,7 +55,7 @@ export type LadderRungRead =
 export type LadderWrite =
   | { readonly ok: true; readonly changed: false }
   | { readonly ok: true; readonly changed: true; readonly journalled: boolean; readonly recordSequence: number | null }
-  | { readonly ok: false; readonly error: AuthorityAppendError | 'row-changed' };
+  | { readonly ok: false; readonly error: AuthorityAppendError | LadderWriterRefusal };
 
 export interface RungMoveInput { from: Rung; to: Rung; actor: string; at: number; opKey: string }
 export interface LatchRaiseInput { cause: string; cap: Rung; detail: string; raisedBy: string; at: number; opKey: string }

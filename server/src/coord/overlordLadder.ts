@@ -101,6 +101,8 @@ export function rungWordReading(operatorRung: CurrentRung, serverCaps: readonly 
   return rungRank(rung) > rungRank(highestHeldRung(serverCaps)) ? 'standing' : 'lifted';
 }
 
+const LADDER_WRITER_REFUSAL_MAP = { 'row-changed': true } as const;
+export type LadderWriterRefusal = keyof typeof LADDER_WRITER_REFUSAL_MAP;
 const RUNG_MOVE_WHY_MAP = { 'rung-unreadable': true } as const;
 const DOOR_CLASS_MAP = { 'card-probe-note': true, other: true } as const;
 const WITNESS_READING_MAP = { held: true, 'not-yet': true, unmeasured: true } as const;
@@ -108,7 +110,7 @@ const WITNESS_READING_MAP = { held: true, 'not-yet': true, unmeasured: true } as
 /** The ladder's local and shared vocabulary, for the coordination kebab census. */
 export const isLadderKebab = (word: string): boolean =>
   [LADDER_EFFECT_KINDS, NARROWING_STATES, NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS, LADDER_ACT_KINDS,
-    Object.keys(RUNG_MOVE_WHY_MAP), Object.keys(DOOR_CLASS_MAP), Object.keys(WITNESS_READING_MAP), Object.keys(GENERATION_ABSENCE_MAP)]
+    Object.keys(LADDER_WRITER_REFUSAL_MAP), Object.keys(RUNG_MOVE_WHY_MAP), Object.keys(DOOR_CLASS_MAP), Object.keys(WITNESS_READING_MAP), Object.keys(GENERATION_ABSENCE_MAP)]
     .some((words) => (words as readonly string[]).includes(word));
 
 export type RungMove =

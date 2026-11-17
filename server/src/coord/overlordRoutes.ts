@@ -42,7 +42,7 @@ import { designateVerdict, overlordAccounts, retireVerdict, type AccountFacts } 
 import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
-import { rungMoveVerdict, narrowingState } from './overlordLadder.js';
+import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
 import type { LadderWrite } from './overlordLadderStore.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -149,7 +149,7 @@ const AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled
   'journal-append': 'journal-unreadable',
 };
 
-const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError | 'row-changed', 'authority-rolled-back' | 'journal-unreadable' | 'unavailable'>> = {
+const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError | LadderWriterRefusal, 'authority-rolled-back' | 'journal-unreadable' | 'unavailable'>> = {
   'row-changed': 'unavailable',
   'authority-rolled-back': 'authority-rolled-back', 'authority-unmeasured': 'authority-rolled-back',
   'bad-entry': 'journal-unreadable', 'not-in-transaction': 'journal-unreadable', 'journal-append': 'journal-unreadable',

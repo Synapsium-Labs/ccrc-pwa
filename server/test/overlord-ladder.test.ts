@@ -44,7 +44,7 @@ describe('every exported union has its runtime list', () => {
     const source = ts.createSourceFile(parsed.path, parsed.text, ts.ScriptTarget.Latest, true);
     const exported = source.statements.filter((s) => (ts.isInterfaceDeclaration(s) || ts.isTypeAliasDeclaration(s))
       && s.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)).map((s) => (s as ts.InterfaceDeclaration | ts.TypeAliasDeclaration).name.text);
-    expect(exported.sort()).toEqual(['CurrentRung', 'DoorClass', 'EffectiveRung', 'LadderFacts', 'RungMove']);
+    expect(exported.sort()).toEqual(['CurrentRung', 'DoorClass', 'EffectiveRung', 'LadderFacts', 'LadderWriterRefusal', 'RungMove']);
     const wireRefs: string[] = [];
     const visit = (node: ts.Node): void => { if (ts.isIdentifier(node) && node.text === 'LadderWire') wireRefs.push(node.text); node.forEachChild(visit); };
     visit(source);
@@ -66,8 +66,8 @@ describe('ladder kebab census', () => {
   it('admits the vocabulary owners and refuses unrecognised words', () => {
     for (const word of [...L0.LADDER_EFFECT_KINDS, ...L0.NARROWING_STATES, ...L0.NARROWING_WHYS,
       ...L0.LADDER_CAUSES, ...L0.LADDER_READERS, ...L0.LADDER_ACT_KINDS,
-      'rung-unreadable', 'card-probe-note', 'not-yet']) expect(m.isLadderKebab(word)).toBe(true);
-    for (const word of ['read-bye', 'server-word', 'rung-unknown', 'some-other-word', '']) {
+      'rung-unreadable', 'card-probe-note', 'not-yet', 'row-changed']) expect(m.isLadderKebab(word)).toBe(true);
+    for (const word of ['read-bye', 'server-word', 'rung-unknown', 'row-change', 'some-other-word', '']) {
       expect(m.isLadderKebab(word)).toBe(false);
     }
   });
