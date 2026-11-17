@@ -18,6 +18,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { withBindingsOf } from './bindingsFake.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { FleetState } from '../src/fleetstate.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 
 const NOW = 1_800_000_000_000;
 const MIN = 60_000;
@@ -74,6 +75,7 @@ function fake(o: { startedAt?: number | null; release?: ReleaseRead; verbs?: rea
       openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => coord.openRunsForSession(...a),
       activeClaims: () => coord.activeClaims(),
       outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n),
+      designationRead: () => coord.designationRead(),
     }),
     targets: () => set.targets,
     release: async () => o.release ?? { kind: 'installed', at: INSTALLED },
@@ -832,5 +834,53 @@ describe('rollPass: behind on the Claude Code build (D-8276)', () => {
     const opted = fresh();
     expect(await buildPass(opted, rows, [`${COORD2}.no-roll`])).toEqual([{ id: COORD2, kind: 'skipped', reason: 'no-roll' }]);
     expect(opted.calls).toEqual([]);
+  });
+});
+
+describe('rollPass: the Overlord and the designation (Overlord W1 designation A, Task 3)', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const boundTo = (id: string): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' } }) });
+  const pendingTo = (id: string): DesignationRead => ({
+    kind: 'not-designated',
+    row: view({ pending: { sessionId: id, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null } }),
+  });
+  const read = (f: Fake, d: DesignationRead): void => { f.deps.coord!.designationRead = () => d; };
+
+  it.each([['bound', boundTo], ['pending', pendingTo]] as const)('the %s id is skipped overlord, and nothing is called', async (_n, mk) => {
+    const f = fake();
+    read(f, mk(COORD));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'overlord' }]);
+    expect(f.calls).toEqual([]);
+    expect(f.lines).toEqual([`ccrc-server: roll-skip ${COORD}: overlord`]);
+  });
+
+  it('every other row is rolled as before, and an ordinary session\'s idle gate does not hold unmeasured', async () => {
+    const f = fake();
+    read(f, boundTo(COORD2));
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'rolled', idleMs: 2 * HOUR }]);
+    expect(f.calls).toEqual([['hibernate', '--roll', COORD, '--surface', 'agent', '--actor', 'sweep:roll']]);
+  });
+
+  it('an unmeasured read skips every row designation-unreadable, and the lane reads the designation once a pass', async () => {
+    const f = fake();
+    let reads = 0;
+    f.deps.coord!.designationRead = () => { reads++; return { kind: 'unmeasured', why: 'fixture' }; };
+    const rows = [row(COORD), row(COORD2)];
+    expect(await pass(f, rows)).toEqual([
+      { id: COORD, kind: 'skipped', reason: 'designation-unreadable' },
+      { id: COORD2, kind: 'skipped', reason: 'designation-unreadable' },
+    ]);
+    expect(f.calls).toEqual([]);
+    expect(reads).toBe(1);
+  });
+
+  it('a read that throws is unmeasured too', async () => {
+    const f = fake();
+    f.deps.coord!.designationRead = () => { throw new Error('fixture'); };
+    expect(await pass(f)).toEqual([{ id: COORD, kind: 'skipped', reason: 'designation-unreadable' }]);
   });
 });

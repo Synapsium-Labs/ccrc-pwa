@@ -61,6 +61,8 @@ const AUTO_ROLL_SKIP_MAP = {
   'setting-off': 'Settings › Automation › Roll idle sessions is off',
   'role-unknown': 'the setting is coordinators only, and the row does not say whether it is a coordinator',
   'not-coordinator': 'the setting is coordinators only, and it is not one: it picks up the release when it next starts for another reason',
+  'designation-unreadable': 'the Overlord designation could not be read, so nothing is rolled',
+  overlord: 'it is the Overlord\'s bound or pending body: the renewal lane moves it to a new build, never the roll',
   'release-unmeasured': 'when the node\'s current ccrc install completed could not be read',
   'start-unmeasured': 'when its Claude Code process started could not be read',
   'no-roll': 'the operator opted it out ($REG/<id>.no-roll)',
@@ -112,6 +114,9 @@ export function rollTargetsOf(r: RollSettingsRead): ClaudeRollTargets | null {
 export interface AutoRollInput {
   /** The Settings row; null when it could not be read. */
   readonly targets: ClaudeRollTargets | null;
+  /** The designation as the lane read it this pass: this row is the Overlord's bound or pending body (`true`), is not
+   *  (`false`), or the read failed (`'unmeasured'`): two conditions, two values, never one null. */
+  readonly overlord: boolean | 'unmeasured';
   /** `FleetSession.role` (`server/src/roleOf.ts#sessionRoleOf`); null when the row did not say. */
   readonly role: SessionRole | null;
   /** When the node's current ccrc install completed (epoch ms); null when it could not be read. */
@@ -156,6 +161,8 @@ export function autoRollVerdict(i: AutoRollInput): AutoRollVerdict {
   if (i.targets === null) return { act: 'skip', reason: 'setting-unreadable' };
   const t = rollTargetVerdict(i.targets, i.role);
   if (!t.take) return { act: 'skip', reason: t.skip };
+  if (i.overlord === 'unmeasured') return { act: 'skip', reason: 'designation-unreadable' };
+  if (i.overlord) return { act: 'skip', reason: 'overlord' };
   if (i.release === null) return { act: 'skip', reason: 'release-unmeasured' };
   if (i.sleep.live.kind === 'unread') return { act: 'measure' };
   if (i.startedAt === null) return { act: 'skip', reason: 'start-unmeasured' };

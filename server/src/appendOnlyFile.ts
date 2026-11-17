@@ -11,6 +11,8 @@
 // - The snapshot is the port's evidence and opaque to its holder: the retained parent descriptor, its identity (dev,
 //   ino), the retained leaf descriptor and identity, and the exact bytes. Process-local, single-operation scoped:
 //   unusable after `release` or an `appendLine`. A token this port did not issue, or one it already released, is refused.
+//   A present read also names the leaf's device and inode (`leaf`), measured on the descriptor the bytes were read through:
+//   the chained-journal file adapter keys its verified-head cache on them. It is a report, never a proof; the snapshot is.
 // - `confirmDurable` re-opens the pathname, requires the same parent and leaf identity and the same bytes, then fsyncs
 //   the RETAINED descriptors (file, then parent) and re-proves it all; for absence it fsyncs the parent and re-proves the
 //   absence, creating nothing. A pathname replacement is `changed`, never confirmation of an unrelated file.
@@ -44,9 +46,11 @@ export type AppendOnlyReadError = 'unreadable';
 export type AppendOnlyConfirmError = 'unreadable' | 'changed' | 'durability';
 export type AppendOnlyAppendError = 'unreadable' | 'changed' | 'unwritable' | 'durability';
 export type AppendOnlyCutError = 'unreadable' | 'changed' | 'unwritable' | 'durability';
+/** The device and inode of the file a present read read its bytes from (the same descriptor's `fstat`). */
+export interface AppendOnlyLeafId { readonly dev: bigint; readonly ino: bigint }
 export type AppendOnlyRead =
   | { ok: true; kind: 'absent'; snapshot: AppendOnlySnapshot }
-  | { ok: true; kind: 'present'; bytes: Uint8Array; snapshot: AppendOnlySnapshot }
+  | { ok: true; kind: 'present'; bytes: Uint8Array; leaf: AppendOnlyLeafId; snapshot: AppendOnlySnapshot }
   | { ok: false; error: AppendOnlyReadError };
 
 export interface AppendOnlyCut {
@@ -255,7 +259,7 @@ export function appendOnlyFileAt(dir: string, basename: string, ops: AppendOnlyF
           ev = { parentFd, parent: parent.id, leaf: { fd: leafFd, id: leaf.id }, bytes, state: 'live' };
           const snapshot: AppendOnlySnapshot = { release: () => spend(ev) };
           issued.set(snapshot, ev);
-          result = { ok: true, kind: 'present', bytes: new Uint8Array(bytes), snapshot };
+          result = { ok: true, kind: 'present', bytes: new Uint8Array(bytes), leaf: { dev: leaf.id.dev, ino: leaf.id.ino }, snapshot };
         }
         // Ownership of the descriptors passed to the snapshot.
         parentFd = -1;

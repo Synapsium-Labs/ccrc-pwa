@@ -123,6 +123,9 @@ export interface SleepInput {
   readonly stopped: boolean | null;
   /** The lane classified the row's hold as one that guards only the workspace, and the box's ccd can pass it. */
   readonly heldPasses: boolean;
+  /** X6: the session is the Overlord's bound or pending body, which no sleep lane ever takes; `null`: the lane did not
+   *  read the designation, which holds `unmeasured`. */
+  readonly overlord: boolean | null;
   readonly optedOut: boolean;
   readonly store: SleepStoreRead;
   /** `Viewers.isOpen` (D-5242's presence contract): an open screen, visible or hidden. */
@@ -170,6 +173,8 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
   if (e.paneDead && i.paneDead !== false) return hold('pane');
   if (e.stopped && i.stopped !== false) return hold('stopped');
   if (r.unmeasured.length > 0 || r.statusUnmeasured) return hold('unmeasured');
+  if (i.overlord === null) return hold('unmeasured');
+  if (i.overlord) return hold('overlord');
   if (i.optedOut) return hold('opted-out');
   const holdPasses = policy.held === SLEEP_HELD_RULES.workspacePasses && i.heldPasses;
   if (r.held !== null && !holdPasses) return hold('held');

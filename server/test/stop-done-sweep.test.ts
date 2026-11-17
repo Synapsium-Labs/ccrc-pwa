@@ -73,6 +73,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
   let seq = 0;
   f.deps = {
     coord: {
+      designationRead: () => ({ kind: 'not-designated' as const, row: null }),
       lastRunBySession: (asked: readonly string[]) => ({
         ok: true as const,
         last: asked.flatMap((sessionId) => {

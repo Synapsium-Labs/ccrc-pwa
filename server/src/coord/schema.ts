@@ -3539,6 +3539,27 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
+  // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
+  // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 91`
+  // takes rule 3, never names it. Renewal readings A (#2962) landed 88, remaining work A (#2951) 89 and account organization D (#2958) 90, so this is 91; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 90 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_designation (id INTEGER PRIMARY KEY CHECK (id = 1), sessionId TEXT, generation TEXT,
+    pendingId TEXT, pendingGeneration TEXT, pendingKind TEXT CHECK (pendingKind IN ('designate','rebind')),
+    pendingSince INTEGER, pendingDeadlineAt INTEGER, pendingActor TEXT,
+    term INTEGER NOT NULL CHECK (term >= 0), designatedTerm INTEGER NOT NULL CHECK (designatedTerm >= 0),
+    model TEXT NOT NULL CHECK (model IN ('fable','opus')), accountPools TEXT NOT NULL,
+    pastIds TEXT NOT NULL DEFAULT '[]', actor TEXT NOT NULL, attemptId TEXT, attemptOutcome TEXT, attemptAt INTEGER,
+    stopsOwed TEXT NOT NULL DEFAULT '[]', updatedAt INTEGER NOT NULL,
+    CHECK ((sessionId IS NULL) = (generation IS NULL)), CHECK ((pendingId IS NULL) = (pendingKind IS NULL)),
+    CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
+    CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
+  `,
+
+  // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
   // The decision model's arming, host and lines (Overlord spec §3.7 H6, Table 11.1a and 11.1d; W2, plan `w2-decision-model.md`
   // Task 6). `decision_rows`, each row's switch (`off`, `shadow`, `armed`), its daily ceiling, an armed gate's line and the
   // server's hold: in `OVERLORD_AUTHORITY_TABLES`, so it is NEVER SEEDED (a row with no journal head reads `missing` at boot
@@ -3547,9 +3568,9 @@ export const MIGRATIONS: readonly string[] = [
   // here). `decision_lines`, every admitted line, newest per row and key current, with its canary and its anchors' baseline.
   // ONE writer each, in `decisionModelStore.ts`: `moveDecisionRowInTx`, `setDecisionHostInTx`, and `admitDecisionLine` with
   // `recordCanary` for the canary columns. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names
-  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90, so this is 91 by position; other open PRs
-  // hold 91 too, and whoever lands second renumbers. RE-MEASURE the slot before the PR and before merge (it must print 90
-  // before this entry is counted):
+  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90 and designation A (#2950) 91, so this is 92
+  // by position (the coordinator's standing license, 2026-11-17); whoever lands second renumbers. RE-MEASURE the slot before
+  // the PR and before merge (it must print 91 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

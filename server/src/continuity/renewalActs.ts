@@ -137,7 +137,7 @@ async function renew(deps: RenewalActsDeps, t: ActTarget, tryN: number, r: Count
 /** Seal this generation's checkpoint (the lane is its one writer): the identity's live notes, this generation's handover
  *  note if one arrived, and for a coordinator its newest rulings. */
 function seal(deps: RenewalActsDeps, t: ActTarget): boolean {
-  const notes = deps.coord.liveNotes(t.identity);
+  const notes = deps.coord.liveNotes(t.sessionId); // notes are keyed by session id (review 2349 F2)
   const handover = deps.coord.handoverOf(t.genId);
   const rulings = t.role === 'coordinator' ? deps.coord.rulingRowsOf(t.sessionId, CHECKPOINT_RULINGS_MAX) : { ok: true as const, rulings: [] };
   if (!notes.ok || !handover.ok || !rulings.ok) return false;

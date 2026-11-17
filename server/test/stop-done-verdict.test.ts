@@ -31,7 +31,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
     openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
   },
-  viewer: false, sinceStartMs: VIEWER_TTL_MS + 1, viewerOpenTtlMs: VIEWER_TTL_MS, verb: true, optedOut: false,
+  viewer: false, sinceStartMs: VIEWER_TTL_MS + 1, viewerOpenTtlMs: VIEWER_TTL_MS, verb: true, overlord: false, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
   now: NOW, graceMs: STOP_DONE_GRACE_MS, ...o,
 });
@@ -73,6 +73,7 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['background', { row: row({ background: { count: 1, kinds: ['shell'] } }) }],
     ['roster', { row: row({ subagents: [{ name: 'a0000000000000001', startedAt: NOW }] }) }],
     ['no-verb', { verb: false }],
+    ['overlord', { overlord: true }],
     ['opted-out', { optedOut: true }],
     ['pane', { live: readLive({ word: { ok: false, reason: 'no-pane' } }) }],
     ['live-word', { live: readLive({ word: { ok: true, word: 'shell' } }) }],
@@ -91,6 +92,12 @@ describe('stopDoneVerdict (D-5370)', () => {
 
   it('every hold in STOP_DONE_HOLDS has its case above', () => {
     expect(new Set(cases.map(([h]) => h))).toEqual(new Set(STOP_DONE_HOLDS));
+  });
+
+  it('X6: an unread designation holds unmeasured, the Overlord holds overlord before opted-out, and another session is unchanged', () => {
+    expect(stopDoneVerdict(base({ overlord: null }))).toEqual({ act: 'hold', reason: 'unmeasured' });
+    expect(stopDoneVerdict(base({ overlord: true, optedOut: true }))).toEqual({ act: 'hold', reason: 'overlord' });
+    expect(stopDoneVerdict(base({ overlord: false }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
   });
 
   it('a viewer is assumed for one presence TTL after the server starts (presence is never persisted)', () => {
