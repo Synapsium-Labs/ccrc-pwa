@@ -88,7 +88,7 @@ describe('the store: three states per group, default shadow', () => {
     const file = path.join(mkTmp('ccrc-runclose-migrate-'), 'coord.db');
     const fresh = openCoordDb(file);
     fresh.prepare("UPDATE run_close_settings SET neverStarted = 'on', claimantCrashed = 'off', updatedAt = 9").run();
-    // Back to version 53: undo migrations 93 (the renewal hand-offs' four tables, Overlord W1a), 92 (runs.closePr, Overlord W2 done tests A), 91 (overlord_designation, Overlord W1 designation), 90 (continuity_generations.prevLane, account organization D, undone by the continuity_generations drop below), 89 (programme_edges and programme_remaining, Overlord W2 remaining work), 88 (renewal_backstop_settings, Overlord W1 renewal readings A), 87 (asks.revision and operator_items.revision, Overlord W2 row revisions), 86 (decision_records and decision_days, Overlord W2 decision model), 85 (claim_collisions and programme_pairs, Overlord W2 overlaps), 84 (response_settings, Overlord W1 responses B), 83 (the goals versions' ratification columns, Overlord W1 portfolio B), 82 (operator_responses, response_receipts and response_boots, Overlord W1
+    // Back to version 53: undo migrations 94 (the renewal hand-offs' four tables, Overlord W1a), 93 (plan_phases and plan_phase_refs, programme work map WM0), 92 (runs.closePr, Overlord W2 done tests A), 91 (overlord_designation, Overlord W1 designation), 90 (continuity_generations.prevLane, account organization D, undone by the continuity_generations drop below), 89 (programme_edges and programme_remaining, Overlord W2 remaining work), 88 (renewal_backstop_settings, Overlord W1 renewal readings A), 87 (asks.revision and operator_items.revision, Overlord W2 row revisions), 86 (decision_records and decision_days, Overlord W2 decision model), 85 (claim_collisions and programme_pairs, Overlord W2 overlaps), 84 (response_settings, Overlord W1 responses B), 83 (the goals versions' ratification columns, Overlord W1 portfolio B), 82 (operator_responses, response_receipts and response_boots, Overlord W1
     // responses), 81 (overlord_authority_head, Overlord W1), 80 (answer_marks, Overlord W1), 79 (continuity_checkpoints, continuity_renew_calls and continuity_soft_renewals, Overlord W1a), 78 (continuity_start_loads, Overlord W1 sandbox), 77 (continuity_quiz_runs, the replay quiz, Overlord W1a), 76 (portfolio_rank and portfolio_rank_revision, Overlord W1), 75 (push_outbox, push_outbox_meta and the reach stamps, Overlord W1), 74 (the anchor-slot lane-arm row, which goes with lane_arm_settings), 73 (continuity_probes and continuity_reads, Overlord W1a), 72 (continuity_notes and
     // continuity_handovers, Overlord W1a), 71
     // (plain_memory_settings, Overlord W1a launch profiles PR B), 70 (continuity_timers,
@@ -101,7 +101,7 @@ describe('the store: three states per group, default shadow', () => {
     // testbox_events.changes, D-8399), 62 (claims.chainedFrom,
     // D-8395), 61 (nodes.reportedSweep, D-8386), 60 (claude_builds, D-8289), 59 (the plan model, D-8181), 58 (practice_cases,
     // Overlord W1a), 57 (testbox_events, D-8166), 56 (lane_arm_settings, D-8274) and 55 (coordinator_calls, D-8126) as well
-    // as 54, so the reopen replays all thirty-eight.
+    // as 54, so the reopen replays all forty.
     fresh.exec(`ALTER TABLE project_linking DROP COLUMN teamSource; ALTER TABLE project_linking DROP COLUMN teamName;
       ALTER TABLE project_linking DROP COLUMN teamEvidence; ALTER TABLE project_linking DROP COLUMN teamAt;
       ALTER TABLE project_linking DROP COLUMN teamCandidates;
@@ -111,6 +111,7 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
+    fresh.exec('DROP TABLE plan_phase_refs; DROP TABLE plan_phases;');
     fresh.exec('DROP TABLE programme_edges; DROP TABLE programme_remaining;');
     fresh.exec('ALTER TABLE operator_items DROP COLUMN revision; ALTER TABLE asks DROP COLUMN revision;');
     fresh.exec('DROP TABLE programme_pairs; DROP TABLE claim_collisions;');

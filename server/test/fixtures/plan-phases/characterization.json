@@ -1,0 +1,648 @@
+{
+  "prog-a": {
+    "ok": true,
+    "plan": {
+      "program": "prog-a",
+      "planned": true,
+      "initiatives": [],
+      "epics": [
+        {
+          "key": "w0",
+          "title": "W0 stage",
+          "summary": "stage 0",
+          "project": "project-a",
+          "waves": [
+            1
+          ],
+          "state": "active",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w0-done",
+              "title": "w0 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w0-t1",
+              "kind": "work",
+              "title": "w0 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "done",
+              "runId": 1,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w0-t2",
+              "kind": "work",
+              "title": "w0 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w0-t3",
+              "kind": "work",
+              "title": "w0 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w0-t4",
+              "kind": "work",
+              "title": "w0 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w0-t5",
+              "kind": "work",
+              "title": "w0 ticket 5",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        },
+        {
+          "key": "w1",
+          "title": "W1 stage",
+          "summary": "stage 1",
+          "project": "project-a",
+          "waves": [
+            2
+          ],
+          "state": "active",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w1-done",
+              "title": "w1 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w1-t1",
+              "kind": "work",
+              "title": "w1 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w1-t2",
+              "kind": "work",
+              "title": "w1 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "started",
+              "runId": 2,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w1-t3",
+              "kind": "work",
+              "title": "w1 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w1-t4",
+              "kind": "work",
+              "title": "w1 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w1-t5",
+              "kind": "work",
+              "title": "w1 ticket 5",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        },
+        {
+          "key": "w2",
+          "title": "W2 stage",
+          "summary": "stage 2",
+          "project": "project-a",
+          "waves": [
+            3
+          ],
+          "state": "planned",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w2-done",
+              "title": "w2 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w2-t1",
+              "kind": "work",
+              "title": "w2 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w2-t2",
+              "kind": "work",
+              "title": "w2 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w2-t3",
+              "kind": "work",
+              "title": "w2 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w2-t4",
+              "kind": "work",
+              "title": "w2 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "run-3",
+              "kind": "work",
+              "title": "a wave",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": 3,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        },
+        {
+          "key": "w3",
+          "title": "W3 stage",
+          "summary": "stage 3",
+          "project": "project-a",
+          "waves": [
+            4
+          ],
+          "state": "planned",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w3-done",
+              "title": "w3 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w3-t1",
+              "kind": "work",
+              "title": "w3 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w3-t2",
+              "kind": "work",
+              "title": "w3 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w3-t3",
+              "kind": "work",
+              "title": "w3 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w3-t4",
+              "kind": "work",
+              "title": "w3 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        },
+        {
+          "key": "w4",
+          "title": "W4 stage",
+          "summary": "stage 4",
+          "project": "project-a",
+          "waves": [
+            5
+          ],
+          "state": "planned",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w4-done",
+              "title": "w4 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w4-t1",
+              "kind": "work",
+              "title": "w4 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w4-t2",
+              "kind": "work",
+              "title": "w4 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w4-t3",
+              "kind": "work",
+              "title": "w4 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w4-t4",
+              "kind": "work",
+              "title": "w4 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "dropped",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        },
+        {
+          "key": "w5",
+          "title": "W5 stage",
+          "summary": "stage 5",
+          "project": "project-a",
+          "waves": [
+            6
+          ],
+          "state": "planned",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "w5-done",
+              "title": "w5 accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "w5-t1",
+              "kind": "work",
+              "title": "w5 ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w5-t2",
+              "kind": "work",
+              "title": "w5 ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w5-t3",
+              "kind": "work",
+              "title": "w5 ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "w5-t4",
+              "kind": "work",
+              "title": "w5 ticket 4",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        }
+      ],
+      "doneWhen": []
+    }
+  },
+  "prog-b": {
+    "ok": true,
+    "plan": {
+      "program": "prog-b",
+      "planned": true,
+      "initiatives": [],
+      "epics": [
+        {
+          "key": "only",
+          "title": "The one epic",
+          "summary": "all of it",
+          "project": "project-a",
+          "waves": [
+            1,
+            2
+          ],
+          "state": "active",
+          "url": null,
+          "sync": "unsynced",
+          "syncWord": null,
+          "checkpoints": [
+            {
+              "key": "only-done",
+              "title": "only accepted",
+              "kind": "acceptance",
+              "state": "open",
+              "proves": [],
+              "metAt": null,
+              "evidence": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ],
+          "tickets": [
+            {
+              "key": "only-t1",
+              "kind": "work",
+              "title": "only ticket 1",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "only-t2",
+              "kind": "work",
+              "title": "only ticket 2",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            },
+            {
+              "key": "only-t3",
+              "kind": "work",
+              "title": "only ticket 3",
+              "project": "project-a",
+              "checkpoint": null,
+              "source": "plan",
+              "state": "open",
+              "runId": null,
+              "identifier": null,
+              "url": null,
+              "sync": "unsynced",
+              "syncWord": null
+            }
+          ]
+        }
+      ],
+      "doneWhen": []
+    }
+  }
+}

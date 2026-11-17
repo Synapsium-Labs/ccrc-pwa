@@ -322,11 +322,13 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
   // `/api/coord/renewal-mode` twice: its GET and its POST are two registrations of the one path.
   '/api/sessions/:id/renew', '/api/coord/renewal-mode', '/api/coord/renewal-mode'];
 
-/** The Overlord's designation doors (Overlord W1 designation A, `coord/overlordRoutes.ts`): the read, and Start and retire on the
+/** The Overlord's designation doors (Overlord W1 designation A and C, `coord/overlordRoutes.ts`): the read, and Start and retire on the
  *  one path (`POST` and `DELETE /api/overlord/designate`). The operator's, behind the account gate and a step-up on the two writes, no
  *  box token, none in EXEMPT. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's
  *  registrations and compares in both directions. */
-const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate'];
+const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate',
+  // the Settings doors (Overlord W1 designation C): the model class and the account set, the same gate, a step-up for `fable` and a widening
+  '/api/overlord/model', '/api/overlord/account-set'];
 
 /** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
  *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
@@ -387,7 +389,8 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
   'eighty-five',
   // Overlord W2 remaining work A: POST /api/coord/programmes/:slug/remaining, a box-token lane in the remaining-work door's file: eighty-six machine lanes in all.
-  'eighty-six'];
+  // Programme work map WM0: POST /api/programmes/:slug/plan/phases/refs (`plan phase-ref`), a box-token lane in the plan file: eighty-seven machine lanes in all.
+  'eighty-six', 'eighty-seven'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -570,7 +573,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the designation doors file registers its three routes').toBe(3);
+    expect(regs.length, 'the designation doors file registers its five routes (designation C adds the two Settings doors)').toBe(5);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {

@@ -3573,8 +3573,28 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
   `,
-
   // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
+  // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
+  // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
+  // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
+  // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
+  // nothing on an existing table: an older build opening a file at `user_version 93` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
+  // (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 first, so WM0 took the next slot each time (the
+  // coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 92 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_phases (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL, key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, droppedWhy TEXT, UNIQUE (program, key));
+  CREATE TABLE plan_phase_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, phaseId INTEGER NOT NULL REFERENCES plan_phases(id),
+    kind TEXT NOT NULL CHECK (kind IN ('epic', 'ticket')), refId INTEGER NOT NULL, carriedTo INTEGER REFERENCES plan_phases(id),
+    carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
+    CHECK (carriedTo IS NULL OR kind = 'ticket'));
+  `,
+
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
   // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
@@ -3585,9 +3605,9 @@ export const MIGRATIONS: readonly string[] = [
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
   // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
   // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
-  // opening a file at `user_version 93` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
-  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92, so this is 93 (the coordinator's word, 2026-11-17, mail 23372); others may hold 93 too, and the second to land renumbers on the coordinator's word.
-  // RE-MEASURE the slot before merge (it must print 92 before this entry is counted):
+  // opening a file at `user_version 94` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92 and the programme work map WM0 (#2974) 93, so this is 94 (the coordinator's word, 2026-11-17, mails 23509 and 23617); others may hold 94 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 93 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

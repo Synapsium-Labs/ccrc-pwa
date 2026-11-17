@@ -191,13 +191,13 @@ since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 93 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
-(#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 on main, after responses B (#2914) took
+The migration is entry 94 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+(#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92 and the programme work map WM0 (#2974) 93 on main, after responses B (#2914) took
 84. Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17); the landing merges absorbed decision model A
 (86 -> 87, mail 22510), row revisions (87 -> 88, mail 22654), renewal readings A (88 -> 89, mail 22766, its four source conflicts on the coordinator's
 word, mail 22774), remaining work A (89 -> 90, mail 22872), org D (90 -> 91, mail 22987, two source conflicts on the coordinator's word, mail 23014),
-designation A (91 -> 92, mail 23096, its source conflicts on the coordinator's word, mails 23169 and 23233) and done tests A (92 -> 93, mail 23372),
-under this run's standing renumber license. Others may hold 93 too; the second
+designation A (91 -> 92, mail 23096, its source conflicts on the coordinator's word, mails 23169 and 23233), done tests A (92 -> 93, mail 23372) and the work map WM0 (93 -> 94, mails 23509 and
+23617, the route census recounted with designation C (#2992): 262 HTTP routes, 265 in all, 165 gated, 96 exempt), under this run's standing renumber license. Others may hold 94 too; the second
 to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
 Moving past decision model A's entry broke that PR's migration case (`decision-model-records.test.ts`), which assumed its entry was the
