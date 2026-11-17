@@ -10,12 +10,13 @@ learn from it. Each departure carries a plain-words slug (cross-plan ruling X9);
 - The fresh start asks the pick last in its re-measure, after the attached check. A row with no `acctorder` keeps its
   account, so no fresh start changes until the designation writes the list. A pick that finds nothing refuses exit 3
   `ccd: session-busy: unplaced — <cause>; nothing was touched`, which the renewal act's adapter already maps to `refused`.
-- A move writes `wrapper` before `.fresh` and the uuid in one chain. Exits 4 and 7 put the old `wrapper` back beside the old
-  uuid; exit 5 lets the account follow the uuid. Only the proven tail records the move: one `swap` row (`dec.reason
+- A move writes `wrapper` before `.fresh` and the uuid in one chain. Exits 4 and 7 put the old `wrapper` back, then the old
+  uuid (exit 7 only while `wrapper` still reads the pick); exit 5 lets the account follow the uuid. Each put-back is logged. Only the proven tail records the move: one `swap` row (`dec.reason
   fresh-pick`) and `cmd_swap`'s side effects for an automatic move, never `home`, `lastswap` or a pin. W1a's receipt shape
   (`used <uuid>`) is unchanged.
-- K1: a step 3 tie goes first to an account in the current account's organization (`_org_rel` `same`, org C's reader),
-  then to the earlier listed.
+- K1: a step 3 tie goes first to another account in the current account's organization, then to the earlier listed. The
+  rule is `_swap_target`'s own `_org_tie`, called from the pick, and the current account is never `same` to itself, so an
+  unlabelled current account gives no preference (review 2360 F1 and F5, §6).
 - `ccd caps` says `fresh-pick-v1` (designation review 2349 F10), so a fleet box below C2 makes the designation refuse
   `capability-missing`.
 - Account switching and the auto-swap are untouched for every session: nothing here runs outside `--roll --fresh`, and
@@ -28,11 +29,12 @@ Measured with `growthCheck.ts`'s own counting (`codeLines`) against the merge ba
 
 | File | Net code lines | Brief's estimate |
 |---|---|---|
-| `ccd/lib/long-lived.sh` | +17 | +19 to +24, plus K1's +3, less F3's savings |
+| `ccd/lib/long-lived.sh` | +16 (+17 before fix round 1) | +19 to +24, plus K1's +3, less F3's savings |
 | `ccd/ccd` | +4 | +4 to +6 |
-| `ccd (program)` | +21 | within 40 |
+| `ccd (program)` | +20 (+21 before fix round 1) | within 40 |
 
-*Table 1. Every row is at 40 or under, with no waiver. F3's move saved 5 lines of the library.*
+*Table 1. Every row is at 40 or under, with no waiver. F3's move saved 5 lines of the library; fix round 1 saved one more
+(the tie's inline organization reads became one call of `_org_tie`).*
 
 ## 2. Step 1: can `_wake_ceiling_move` fire on a fresh start's wake?
 
@@ -50,19 +52,25 @@ serialised, as W1a's exit-7 comment already says of a concurrent wake.
 |---|---|
 | `field-reads-refuse-an-unsearchable-registry` | F3's shared reader (`_fresh_pick_field_to`) answers rc 2 for a registry it cannot search (review 2336 F2). Moving `_keep_awake_ours` and `_role_long_lived` onto it changes one answer each, made in its own commit before the move: `_keep_awake_ours` reads such an entry `unreadable` (so `keep-awake off` keeps and exits 1, where it answered `released` over markers it could not see) and `_role_long_lived` reads it undecidable (long-lived, fail-safe), where both read it absent. The move commit changes no test. |
 | `field-reader-locals-are-underscored` | `_fresh_pick_field_to`'s own locals are `__ff` and `__fv`, so a caller's out-var named `f` or `v` is not shadowed (the first move attempt shadowed `_keep_awake_ours`'s `v` and reddened 25 keep-awake cases). |
-| `fresh-pick-step-3-in-the-one-pass` | Step 3 is gathered in C1's one pass: each account with a measured load is asked the class gate (unless the hold holds), else the fallback's, and kept by `_fresh_pick_least` in one of two tiers. Step 1 still returns at once, and step 2's first account still wins over every step 3 account. C1 asked the fallback's gate only until step 2's first account; C2 asks it of every later account too, for step 3. |
+| `fresh-pick-step-3-in-the-one-pass` | Step 3 is gathered in C1's one pass: each account with a measured load is asked the class gate (unless the hold holds), else the fallback's, and kept by `_fresh_pick_least_to` in one of two tiers. Step 1 still returns at once, and step 2's first account still wins over every step 3 account. C1 asked the fallback's gate only until step 2's first account; C2 asks it of every later account too, for step 3. |
 | `fresh-pick-load-clause-means-unmeasured` | After C2 the clause word `load` means "no measured load figure". An account over the soft line that serves neither class reads `class`. |
 | `fresh-pick-stay-asks-the-gate-with-no-class` | The plan says that with no class `stay`'s gate is skipped. `stay` asks `_class_gate <cur> "" <id>` instead, as C1's step 1 does (slug `fresh-pick-no-class-gate-asks-with-the-id`): it answers servable except for a set side whose account has no continuity record (serviceability A's F8). |
 | `fresh-pick-stay-ignores-the-hold` | `stay` reads no hold-down, as the plan's `stay` text says: staying keeps the current account, and the settle's own hold-down still composes the class at the spawn. |
 | `fresh-pick-empty-current-refuses` | With a list standing, an empty current account (`wrapper` absent or unreadable) refuses `unplaced` with its own sentence (`the session's account on <path> cannot be read`), inside the decider, so a row with no list keeps today's behaviour and the put-backs never write an empty `wrapper`. |
 | `fresh-pick-wrapper-read-is-the-verbs-reader` | `cmd_hibernate` reads `wrapper` with `_reg_get_to`, the reader it already uses for `uuid` and `lastswap` (a regular file that is not a link; not time-bounded). The decider's own reads stay bounded. |
-| `fresh-pick-log-line-names-the-move-only-when-it-moves` | The fresh start's first log line keeps W1a's exact bytes when the account does not move (W1a's suite pins them with the newline), and gains `, account <cur> -> <pick>` only on a move. |
+| `fresh-pick-log-line-names-the-move-only-when-it-moves` | The fresh start's first log line keeps W1a's exact bytes when no list stands or a step picks the current account (W1a's suite pins them with the newline). It gains `, account <cur> -> <pick>` on a move and `, stay on <cur>` on a `stay` (question 6's "logged `stay`", review 2360 F6). |
 | `fresh-pick-swap-row-carries-org` | The settle's `swap` row carries `meas.org`, the relation of the two accounts (`_org_rel`), as `cmd_swap`'s rows do, so a reader of swap rows sees one shape. |
 | `fresh-pick-pin-cleared-unconditionally` | The settle removes `swappin`, `swappinnote` and `swappinexp` with one `rm -f`, which is the automatic path's rule without its `-e` guard (same effect). |
 | `fresh-pick-settle-log-line` | The settle writes one `swap.log` line, `fresh-pick <id>: <cur> -> <pick> step=<n>`. |
-| `fresh-pick-put-back-account-first` | Exit 7 writes the old `wrapper` back before the old uuid, so the registry never names the old conversation under the new account, even for the moment between the two writes. |
+| `fresh-pick-put-back-account-first` | Exits 7 and 4 write the old `wrapper` back before the old uuid, so the registry never names the old conversation under the new account, even for the moment between the two writes. Both cases pin the order through the write hook (review 2360 F3). |
+| `fresh-pick-exit-7-keeps-a-wrapper-written-since` | Exit 7 writes the old `wrapper` back only while `wrapper` still reads the pick, as exit 5 does for the uuid, so a detached `_wake_ceiling_move` swap that wrote it first stands (review 2360 F8). |
+| `fresh-pick-put-back-is-logged` | Exits 4, 5 and 7 add `, account back to <cur>` to their `swap.log` line when they write the old `wrapper` back; exit 7 says `, account kept at <wrapper>` when it leaves it, and exit 4 `, account <pick> not put back` when its write fails (review 2360 F6). |
+| `org-tie-skips-the-current-account` | `_org_tie` (ccd/ccd) never lets the current account win a tie by organization and never counts it as `same` when it holds the best place (review 2360 F1). `_swap_target` never offers the current account as a candidate, so its picks are unchanged; the fresh pick's list may hold it. `_fresh_pick_least_to` calls `_org_tie`, the one writer of the tie rule, over its own `cur` and label table (review 2360 F5), so no departure `fresh-pick-tie-is-not-org-tie` is needed. |
 | `fresh-pick-exit-5-follows-a-readable-uuid` | Exit 5 writes the old `wrapper` back only when the uuid reads the old one. A uuid that cannot be read keeps the new account, as the plan's "the account follows the uuid" reads for a uuid that does not read the old one. |
-| `fresh-pick-concurrent-wake-residual` | A concurrent wake that lands between the `wrapper` write and `.fresh` spawns the picked account's launcher resuming the OLD uuid; the verb answers exit 7 and puts the old `wrapper` and uuid back, as the plan rules. Until that pane's next restart, the registry names the old account while the pane runs on the picked one. The plan accepts this window (Review Focus 3); it is said here so the ledger has it. |
+| `fresh-pick-concurrent-wake-residual` | A concurrent wake that lands between the `wrapper` write and `.fresh` spawns the picked account's launcher resuming the OLD uuid; the verb answers exit 7 and puts the old `wrapper` and uuid back, as the plan rules. The old uuid has no transcript under the picked account's config directory, so `_spawn_start`'s one-time retry ("left no session; retrying once with --session-id") starts an EMPTY conversation under the old uuid on the picked account (review 2360 F2). Until that pane's next restart or swap, the registry names the old account while the pane runs that empty conversation on the picked one. On `main` the same race resumed the real conversation. The window is milliseconds and the plan accepts it (Review Focus 3); `swap.log`'s pre-write line (`fresh start, uuid <u1> -> <u2>, account <cur> -> <pick>`) is the recovery: it names the old uuid and both accounts. |
+| `fresh-pick-kill-between-the-writes-residual` | A kill (an agent timeout, SIGKILL) between the `wrapper` write and the uuid write leaves the registry naming the picked account with the old uuid, with no put-back and no swap row; the next wake then takes the retry path above (review 2360 F4). `swap.log`'s pre-write line is the recovery. |
+| `fresh-pick-exit-5-failed-put-back-residual` | Exit 5's put-back of `wrapper` is one attempt (`_reg_set`, its failure ignored); when it fails, the registry is left as the kill above leaves it (review 2360 F4). `swap.log`'s pre-write line is the recovery. |
+| `fresh-pick-exit-4-gap-residual` | Exit 4's put-back runs after `.hibernated` is written again, the unit stopped and the pane killed, so a wake in that gap starts the new uuid fresh on the picked account. `main` has the same window for the uuid; C2 adds the account (review 2360 F4). `swap.log`'s pre-write line is the recovery. |
 | `fresh-pick-v1-in-the-wiring-commit` | `echo fresh-pick-v1` joins `cmd_caps` and `CCD_CAPABILITY_TOKENS` in the commit that wires the pick into `cmd_hibernate`, never before. No server constant is added: designation A owns the read. |
 
 *Table 2. Departures from the plan's text, each the builder's own call within the rulings.*
@@ -83,6 +91,8 @@ serialised, as W1a's exit-7 comment already says of a concurrent wake.
   list and the class) are bounded.
 
 ## 5. Verification
+
+(As built, before fix round 1; §6 has the fix round's measurements.)
 
 - `ccd-fresh-pick.test.ts`: 65 cases. Of C1's 43, ten changed: two count `stay`'s extra gate ask, one soft-line case is
   now a step 3 pick, and seven refusals ask from an account outside the set (`claude`), so `stay` cannot answer and they
@@ -116,3 +126,40 @@ serialised, as W1a's exit-7 comment already says of a concurrent wake.
   with exactly the findings it has on `main`.
 - README: one hunk in the automatic roll's paragraph, the fresh-start sentence, agreed byte for byte with `README.md`'s
   claim holder.
+
+## 6. Fix round 1 (review 2360)
+
+Review 2360 found no reason not to land. The coordinator's rulings, and what changed:
+
+- **F1 (ruled):** the current account wins no tie by organization. It is never `same` to itself for the tie, and on a tie it
+  sits at its list position like an account with no relation; an unlabelled current account gives no preference, so the
+  answer is the earlier listed, as `_swap_target`'s. Three cases with the current account on the list: unlabelled and
+  listed second (the earlier wins); labelled and listed first, with a same-organization peer at equal load (the peer
+  wins); labelled and listed second, with an earlier account in another organization (the earlier wins). The first two
+  were measured red on the code at `919dfeba5`.
+- **F5:** `_fresh_pick_least_to` (renamed from `_fresh_pick_least`, with `__`-named locals, and listed in the out-var
+  census's planned and landed forms) calls `_org_tie`. `_fresh_pick_to` declares the four names `_org_tie` reads by dynamic
+  scope (`cur`, `corg`, `corgr`, `corgs`), as `_swap_target` does; none of its callees reads or writes them. The labels are
+  now read once per pick, on the first tie, where `_org_rel` forked twice per tie.
+- **F3, F8, F6:** see the slugs `fresh-pick-put-back-account-first`, `fresh-pick-exit-7-keeps-a-wrapper-written-since`,
+  `fresh-pick-put-back-is-logged` and `fresh-pick-log-line-names-the-move-only-when-it-moves`. The settle's missing
+  `LC_ALL` line needs nothing: it parses nothing.
+- **F7:** `unplaced` joins the closed set in the header above `_hib_refuse`. For designation and readiness: the server keeps
+  only the word `unplaced` (the renewal adapter's `SESSION_BUSY` match in `continuity/ccdSessionHost.ts`) and drops the
+  cause sentence (`FRESH_PICK_WHY`), which lives in ccd's stderr only.
+- **F2 and F4:** notes only, as the four residual slugs in §3.
+- **F9:** no change; plan-conformant.
+
+Measured:
+
+- `ccd-fresh-pick.test.ts` 68 cases (65 + three F1). `ccd-hibernate-roll.test.ts` 92 cases (91 + the F8 case; the exit 4
+  and exit 7 cases now pin the put-back order and its log line, and the stay case its `stay` line).
+- Mutation, one at a time, restored from a saved copy, each turning a case red: `_org_tie` with the current account
+  counting as `same` (the old rule); `_org_tie` with the best place's current account counted by its relation;
+  `_org_tie` letting a candidate that is the current account win; the exit 7 put-back writing the uuid before `wrapper`
+  (review 2360's M4, which survived at `919dfeba5`); the same on exit 4; the exit 7 put-back without its guard; the stay's
+  log clause dropped; the exit 7 log line without the account. All 8 killed.
+- Green, one file at a time through `ccrc test`: `ccd-fresh-pick`, `ccd-hibernate-roll`, `ccd-hibernate`,
+  `ccd-swap-target-org` (`_swap_target`'s picks unchanged), `ccd-long-lived`, `ccd-keep-awake`, `ccd-limit-no-keys`,
+  `ccd-lib-load`, `ccd-split-pin`, `ccd-contexts`, the `ccd-tick-diet*` family (16), `growth-check` armed,
+  `single-definition/*`, `rings/*` and `deviation-refs` (after `git fetch origin main`).
