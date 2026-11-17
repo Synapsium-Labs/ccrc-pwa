@@ -432,6 +432,10 @@ const CANDIDATE_LISTS: ReadonlySet<string> = new Set(['srcset', 'imagesrcset']);
 /** The SMIL elements that can set an attribute over time. */
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(['animate', 'set', 'animateMotion', 'animateTransform']);
 const HREF_NAMES: ReadonlySet<string> = new Set(['href', 'xlink:href']);
+/** The attributes whose value is text a reader sees and the browser never loads from or reads as CSS: the `url(` strip leaves
+ *  them as written, so a link target that step 5 writes into `title`, and an author's `title` or `alt` that mentions `url(`,
+ *  keep their real text (review 2361 M1). */
+const TEXT_ATTRIBUTES: ReadonlySet<string> = new Set(['title', 'alt']);
 
 /** Whether every candidate of a `srcset` value is a `data:` URL, read with the extractor's own srcset grammar
  *  (`parseSrcset`, `load.ts`): at least one candidate, every candidate's URL `data:`, and no candidate the grammar
@@ -485,7 +489,8 @@ function removeLinks(clone: Document): string[] {
 }
 
 /** Steps 3 and 4 over every attribute: handlers and active attributes out, `srcset` and the URL allowlist checked, CSS in
- *  a `style` attribute (or any attribute holding `url(`) neutralised. */
+ *  a `style` attribute (or any attribute holding `url(`, an SVG paint attribute's included, but `TEXT_ATTRIBUTES`)
+ *  neutralised. */
 function stripAttributes(clone: Document): void {
   for (const el of clone.querySelectorAll('*')) {
     const svg = el instanceof SVGElement;
@@ -498,7 +503,7 @@ function stripAttributes(clone: Document): void {
       } else if (URL_ATTRIBUTES.has(name)) {
         const local = svg && HREF_NAMES.has(name) && isFragment(attr.value) && el.localName !== 'a' && el.localName !== 'image';
         if (!isDataUrl(attr.value) && !local) el.removeAttributeNode(attr);
-      } else if (name === 'style' || /url\(/i.test(attr.value)) {
+      } else if (name === 'style' || (!TEXT_ATTRIBUTES.has(name) && /url\(/i.test(attr.value))) {
         attr.value = stripCssText(attr.value);
       }
     }

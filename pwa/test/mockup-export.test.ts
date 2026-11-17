@@ -396,6 +396,21 @@ describe('the inner document and the links (base 5.6.9 Steps 5 and 6)', () => {
     expect(out.html).not.toContain('link.example/never');
   });
 
+  it('a link target, and an author\'s title or alt, that holds url( keeps its real text; a style and an SVG paint attribute that hold one are still neutralised (review 2361 M1)', async () => {
+    const { out } = await run(page(
+      '<a id="l" href="https://link.example/url(a).png">l</a><span id="t" title="see url(t.png)">t</span><img id="i" alt="url(i.png)" src="data:,">'
+      + '<div id="s" style="background:url(https://x.example/s.png)"></div><svg><rect id="r" fill="url(https://x.example/p.svg#g)"/></svg>',
+    ));
+    const d = innerOf(out.html);
+    expect(out.links).toEqual(['https://link.example/url(a).png']);
+    expect(d.getElementById('l')!.getAttribute('title')).toBe('https://link.example/url(a).png');
+    expect(d.getElementById('t')!.getAttribute('title')).toBe('see url(t.png)');
+    expect(d.getElementById('i')!.getAttribute('alt')).toBe('url(i.png)');
+    expect(d.getElementById('s')!.getAttribute('style')).toContain('url("data:,")');
+    expect(d.getElementById('r')!.getAttribute('fill')).toBe('url("data:,")');
+    expect(out.html).not.toContain('x.example');
+  });
+
   it('NO URL LEAVES: across a hostile page, no attribute holds a URL but data: (and a same-document fragment, and the link target in title)', async () => {
     const hostile = page(
       `${LINKS}
