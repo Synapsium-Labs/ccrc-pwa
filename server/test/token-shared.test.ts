@@ -387,6 +387,10 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
   const OWN_FACTS: Record<string, string> = {
     // How long an edge's target may stay unmeasured before the edge stops blocking (w2-remaining-work.md question 3).
     'shared/programmeFacts.ts:EDGE_UNMEASURABLE_AFTER_MS': 'target-unmeasurable exit',
+    // How far back the forecast lane's seal arm looks for a close with no seal (w2-forecasts-health.md, forecasts A).
+    'server/src/coord/programmeFactsStore.ts:SEAL_LOOKBACK_MS': 'seal look-back',
+    // The step between calibration's four weekly cuts, M30's "four weeks" (w2-forecasts-health.md question 6, forecasts A).
+    'server/src/coord/forecast.ts:CALIBRATION_CUT_STEP_MS': 'calibration cut step',
   };
 
   it('each seven-day fact of its own is still found by the scan where its row says, and is no holder', () => {

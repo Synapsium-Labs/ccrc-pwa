@@ -217,12 +217,12 @@ export function forecastsOf(db: DatabaseSync, q: { program: string } | { dueBy: 
 /** The seal arm's read: every work run closed in the last `SEAL_LOOKBACK_DAYS` with no seal, oldest close first, each
  *  paired with the newest statement naming it, else the newest of its programme standing `SEAL_WAIT_MINUTES` after the
  *  close. `missed` counts the work runs closed before the window, after the first sealed close, that have no seal: a gap
- *  the lane was down for, which is never sealed. */
-export function unsealedClosesOf(db: DatabaseSync, now: number): { closes: UnsealedClose[]; missed: number } {
+ *  the lane was down for, which is never sealed. `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
+export function unsealedClosesOf(db: DatabaseSync, now: number, terminal: string): { closes: UnsealedClose[]; missed: number } {
   const from = now - SEAL_LOOKBACK_MS;
   const rows = db.prepare(
     "SELECT r.id AS runId, r.program AS program, r.closedAt AS closedAt FROM runs r WHERE r.kind = 'work' " +
-    "AND r.state IN ('done', 'failed') AND r.closedAt IS NOT NULL AND r.closedAt >= ? AND r.program IS NOT NULL " +
+    `AND r.state IN ${terminal} AND r.closedAt IS NOT NULL AND r.closedAt >= ? AND r.program IS NOT NULL ` +
     'AND NOT EXISTS (SELECT 1 FROM programme_forecasts f WHERE f.closingRunId = r.id) ORDER BY r.closedAt, r.id',
   ).all(from) as unknown as { runId: number; program: string; closedAt: number }[];
   const named = db.prepare('SELECT id, at, lo, hi FROM programme_remaining WHERE runId = ? AND program = ? ORDER BY id DESC LIMIT 1');
@@ -235,7 +235,7 @@ export function unsealedClosesOf(db: DatabaseSync, now: number): { closes: Unsea
     return { ...r, statement: st ?? null, named: false };
   });
   const missed = (db.prepare(
-    "SELECT COUNT(*) AS n FROM runs r WHERE r.kind = 'work' AND r.state IN ('done', 'failed') AND r.closedAt < ? " +
+    `SELECT COUNT(*) AS n FROM runs r WHERE r.kind = 'work' AND r.state IN ${terminal} AND r.closedAt < ? ` +
     'AND r.closedAt > (SELECT MIN(c.closedAt) FROM programme_forecasts f JOIN runs c ON c.id = f.closingRunId) ' +
     'AND NOT EXISTS (SELECT 1 FROM programme_forecasts f WHERE f.closingRunId = r.id)',
   ).get(from) as { n: number }).n;

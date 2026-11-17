@@ -11300,7 +11300,7 @@ export class CoordStore {
   sealForecast(seal: programmeFacts.NewSeal, now: number): { written: boolean } { return programmeFacts.sealForecast(this.db, seal, now); }
   scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean } { return programmeFacts.scoreForecast(this.db, id, outcome, now); }
   forecastsOf(q: { program: string } | { dueBy: number }): programmeFacts.SealedForecast[] { return programmeFacts.forecastsOf(this.db, q); }
-  unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now); }
+  unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now, TERMINAL_RUN_STATES_SQL); }
   leadHistoryOf(program: string, asOf: number): programmeFacts.ForecastHistory { return programmeFacts.leadHistoryOf(this.db, program, asOf); }
   outcomeFactsOf(sealId: number): programmeFacts.OutcomeFacts | null { return programmeFacts.outcomeFactsOf(this.db, sealId); }
 
