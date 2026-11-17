@@ -145,7 +145,8 @@ export class PlanSync {
   private readonly malformed = new Map<number, number>();
   /** Workspaces whose key is not configured, for this tick: no call is made for them again until the next. */
   private readonly notConfigured = new Set<string>();
-  /** Workspaces whose key Linear refused (401): no call until the time. */
+  /** Workspaces whose key Linear refused (401): no call until the time. ONE OWNER for both lanes that write (review 2394 A-3): the
+   *  plan sync's own 401 and an inbound close's go through `keyRefused`, and the inbound lane reads `keyBlockedUntil`. */
   private readonly blockedUntil = new Map<string, number>();
   /** D-8183 (carried M3/A9): a step's failure holds that step's WORKSPACE for its programme (`<slug>|<workspaceId>`), not the
    *  whole programme: the pass goes on with its runnable steps in other workspaces, and its row is deferred, as a failure, to the
@@ -817,8 +818,7 @@ export class PlanSync {
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
       case 'linear-unauthorised': {
         this.hold(s, 'linear-unauthorised');
-        this.blockedUntil.set(s.workspaceId, this.wsHolds.get(`${s.slug}|${s.workspaceId}`)!.until);
-        void this.deps.markSlotRejected(s.slot.ref, s.slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
+        this.keyRefused(s.workspaceId, s.slot, this.wsHolds.get(`${s.slug}|${s.workspaceId}`)!.until);
         return 'held';
       }
       default: failWith(out.word); return 'next';
@@ -849,6 +849,16 @@ export class PlanSync {
     this.wsHolds.set(`${s.slug}|${s.workspaceId}`, { until: this.deferTime(`${s.slug}|${s.workspaceId}`, d, o), why: d.why });
     return 'held';
   }
+
+  /** A workspace's key was refused (a 401), by the plan sync's own call or an inbound close's (D-8183, review 2394 A-3): no call
+   *  in that workspace until `until` (the later of any standing refusal and this one), for every programme and the inbound lane
+   *  alike, and the slot is marked rejected through its one owner (`markSlotRejected`), so the key card shows it. */
+  keyRefused(workspaceId: string, slot: Pick<SlotInfo, 'ref' | 'digest'>, until: number): void {
+    this.blockedUntil.set(workspaceId, Math.max(this.blockedUntil.get(workspaceId) ?? 0, until));
+    void this.deps.markSlotRejected(slot.ref, slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
+  }
+  /** Until when a workspace's refused key holds every write lane there (0: not held). */
+  keyBlockedUntil(workspaceId: string): number { return this.blockedUntil.get(workspaceId) ?? 0; }
 
   /** When a workspace is free for this programme again: the later of its key's refusal and its step failure's hold (0: free). */
   private releaseOf(slug: string, ws: string): number {

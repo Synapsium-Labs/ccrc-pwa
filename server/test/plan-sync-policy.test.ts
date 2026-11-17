@@ -642,15 +642,24 @@ describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
   const steps = [30_000, 120_000, 600_000, 1_800_000];
   it('a key word holds the workspace on the failure-hold steps, the last repeating, and mails the owner', () => {
     const a = inboundActVerdict('linear-unauthorised', undefined, { now: 1000, backoffSteps: steps });
-    expect(a).toEqual({ kind: 'retry', mailsOwner: true, hold: { until: 31_000, step: 1 } });
+    expect(a).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: true, hold: { until: 31_000, step: 1 } });
     const b = inboundActVerdict('not-configured', a.kind === 'retry' ? a.hold : undefined, { now: 40_000, backoffSteps: steps });
-    expect(b).toEqual({ kind: 'retry', mailsOwner: true, hold: { until: 160_000, step: 2 } });
+    expect(b).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: false, hold: { until: 160_000, step: 2 } });
     const z = inboundActVerdict('not-configured', { until: 0, step: 9 }, { now: 0, backoffSteps: steps });
     expect(z).toMatchObject({ hold: { until: 1_800_000 } });
   });
   it('another retry word holds without mailing; any other word gives up', () => {
     expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', mailsOwner: false });
     for (const w of ['linear-forbidden', 'not-found', 'linear-invalid', 'workspace-blocked']) expect(inboundActVerdict(w, undefined, { now: 0, backoffSteps: steps })).toEqual({ kind: 'give-up' });
+  });
+  it('only the key\'s refusal (a 401) is recorded for both lanes (review 2394 A-3)', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: false });
+    expect(inboundActVerdict('linear-unauthorised', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: true });
+  });
+  it('malformed is retried on the steps and given up once the hold has passed the last (review 2394 N1)', () => {
+    expect(inboundActVerdict('malformed', { until: 0, step: 3 }, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', hold: { step: 4 } });
+    expect(inboundActVerdict('malformed', { until: 0, step: 4 }, { now: 0, backoffSteps: steps })).toEqual({ kind: 'give-up' });
+    expect(inboundActVerdict('rate-limited', { until: 0, step: 9 }, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry' });
   });
   it('inboundHeld is true strictly before until', () => {
     expect(inboundHeld(undefined, 5)).toBe(false);

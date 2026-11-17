@@ -49,8 +49,10 @@ interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
   asks: CcrcOpAsk[]; presence: Record<string, CoordinatorPresence>; presenceFn: { current: (id: string) => CoordinatorPresence };
   viaCalls: string[][]; fleet: { ids: Set<string> };
-  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' };
+  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
+  /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
+  rejected: number[];
 }
 let counter = 3000;
 let dirs: string[] = [];
@@ -97,13 +99,13 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' },
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'] }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
   const call = async (ask: CcrcOpAsk): Promise<CcrcOpOutcome> => {
     r.asks.push(ask);
-    if (r.lin.fail.has(ask.op)) return { ok: false, word: r.lin.failWord, maybeSent: false };
+    if (r.lin.fail.has(ask.op)) return (r.lin.failWord === 'rate-limited' ? { ok: false, word: 'rate-limited', retryAfterS: 0 } : { ok: false, word: r.lin.failWord, maybeSent: false }) as CcrcOpOutcome;
     if (ask.op === 'changedIssues') return ok({ nodes: r.lin.issues, next: null });
     if (ask.op.startsWith('changed')) return ok({ nodes: [], next: null });
     if (ask.op === 'projectsByName' || ask.op === 'initiativesByName') return ok({ nodes: [] });
@@ -115,7 +117,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   const directory = { get: () => r.lin.directory, filledAt: () => T - 1000, projectStatusesRead: () => 'read' as const };
   r.sync = new PlanSync({
     coord, plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir), call, directory,
-    directoryMiss: () => undefined, markSlotRejected: async () => undefined, now: () => r.t.now, privateTrackerKeys: [],
+    directoryMiss: () => undefined, markSlotRejected: async (_slot, _digest, at) => { r.rejected.push(at); }, now: () => r.t.now, privateTrackerKeys: [],
     upkeepOwnerOf: (project) => {
       const w = linearOwnerOfProject(project, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
       return w.id;
@@ -584,6 +586,68 @@ describe('plan triage (D-8183)', () => {
     await passAt(r, r.t.now + 600_000);
     expect(rowOf(r, 12)!.actedAt).not.toBeNull();
     expect(givenUpWord(rowOf(r, 12)!.reason)).toBeNull();
+  });
+
+  // N1: the hold was cleared once the comment was accepted, before the cancel went out, so a cancel refused with a retry word
+  // started the schedule again at 30 s at every beat. Now only a close done whole clears it: the hold grows and the calls stop.
+  it('a cancel refused with a retry word grows the hold on the failure-hold steps, and the calls per pass stop (N1)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'rate-limited';
+    r.lin.fail.add('issueUpdate');
+    const updates = (): number => r.asks.filter((a) => a.op === 'issueUpdate').length;
+    await passAt(r, r.t.now + 1);
+    const first = r.t.now;
+    expect(updates()).toBe(1);
+    await passAt(r, first + 30_000);
+    expect(updates()).toBe(2);                                    // the first step (30 s) passed
+    const second = r.t.now;
+    await passAt(r, second + 60_000);
+    expect(updates()).toBe(2);                                    // the second step is 2 min: a beat sends nothing
+    await passAt(r, second + 120_000);
+    expect(updates()).toBe(3);
+    const third = r.t.now;
+    await passAt(r, third + 300_000);
+    expect(updates()).toBe(3);                                    // the third step is 10 min
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    r.lin.fail.clear();
+    await passAt(r, third + 600_000);
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);                  // the close lands once the wait is over
+  });
+
+  // N1: an answer outside the grammar is given up as the plan sync gives a binding up, after the last backoff step, never retried for ever.
+  it('a cancel answered malformed is given up after the last backoff step, with one mail and no further call (N1)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueUpdate');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000, 600_000, 1_800_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueUpdate')).toHaveLength(5);
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBe('malformed');
+    expect(mails(r, 'Linear inbound: AAA-12 could not be closed%')).toHaveLength(1);
+    const calls = writes(r).length;
+    await passAt(r, r.t.now + 1_800_000);
+    expect(writes(r)).toHaveLength(calls);
+  });
+
+  // A-3: a 401 on an inbound close goes through the plan sync's one owner of the key's refusal, so it holds both lanes alike.
+  it('a 401 on an inbound close marks the slot rejected, and the plan sync holds that workspace (A-3)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'linear-unauthorised';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    expect(r.rejected).toEqual([r.t.now]);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBeGreaterThan(r.t.now);
+    r.lin.fail.clear();
+    r.asks.length = 0;
+    r.plan.markSyncDue('prog-a', r.t.now);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync')).toEqual([]);   // the plan sync sends nothing into the refused workspace
   });
 
   it('raise makes a decide item for the operator, and its answer comes back to the owner', async () => {

@@ -225,7 +225,9 @@ export function commentDue(lastCommentAt: number | null, now: number): boolean {
 export type DriftRaiseWhy = 'restored' | 'refused' | 'unrestorable';
 /** Whether the pass raises a binding's item: never while its last item is open. A refused restore and a difference no update can
  *  put back raise it at once, always (§7.4). Persistence alone is not raised again within seven days of that item's close (D-8720,
- *  kept-plan-quiet: a plan the operator kept, or drift handed on, is not asked about again that week). */
+ *  kept-plan-quiet: a plan the operator kept is not asked about again that week). `last` is the binding's item: open, or closed
+ *  by Keep. Hand to the coordinator ends the binding's hold on its item, so drift handed on is raised again as §7.4 says (review
+ *  2394 A-1: only Keep quiets persistence). */
 export function shouldRaiseDriftItem(last: { open: boolean; closedAt: number | null } | null, now: number, why: DriftRaiseWhy): boolean {
   if (last === null) return true;
   if (last.open) return false;

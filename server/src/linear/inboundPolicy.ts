@@ -116,17 +116,20 @@ const KEY_WORDS: ReadonlySet<string> = new Set<DeferCause>(['not-configured', 'l
 
 /** A workspace's hold on its inbound close writes: not before `until`, at backoff step `step` (the next refusal's). */
 export interface InboundHold { until: number; step: number }
-export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold; mailsOwner: boolean };
+export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold; mailsOwner: boolean; keyRefused: boolean };
 /** What a refused close write means. A retry word holds the workspace: its wait is the deferral table's, the step of
  *  `backoffSteps` (the last repeats) the prior hold reached, and the step moves only when the deferral waits on the backoff.
- *  `mailsOwner` is true for the words only the key's owner can clear. Any other word gives the close up. */
+ *  `mailsOwner` is true for the words only the key's owner can clear; `keyRefused` for the key's refusal (a 401), which the plan
+ *  sync's one owner records for both lanes (review 2394 A-3). `malformed` (an answer outside the grammar) is given up once the
+ *  hold has passed the last backoff step, as the plan sync fails a binding (review 2394 N1). Any other word gives the close up. */
 export function inboundActVerdict(word: string, prior: InboundHold | undefined, o: { now: number; backoffSteps: readonly number[] }): InboundActVerdict {
   if (!RETRY_WORDS.has(word)) return { kind: 'give-up' };
-  const d = deferralOf(word as DeferCause);
   const step = prior?.step ?? 0;
+  if (word === 'malformed' && step >= o.backoffSteps.length) return { kind: 'give-up' };
+  const d = deferralOf(word as DeferCause);
   const backoffMs = o.backoffSteps[Math.min(step, o.backoffSteps.length - 1)]!;
   return {
-    kind: 'retry', mailsOwner: KEY_WORDS.has(word),
+    kind: 'retry', mailsOwner: KEY_WORDS.has(word), keyRefused: word === 'linear-unauthorised',
     hold: { until: deferralUntil(d, { now: o.now, backoffMs, directoryWaitMs: 0 }), step: deferralUsesBackoff(d) ? step + 1 : step },
   };
 }

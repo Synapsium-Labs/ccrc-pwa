@@ -24,7 +24,7 @@ import { isInbound } from './driftPolicy.js';
 import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundMail, keyWaitMail, noCancelMail, ownerItemInput, type InboundHold } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
-import { PLAN_SYNC_BACKOFF_MS, slotsOf } from './planSync.js';
+import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
 import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
 
@@ -39,8 +39,12 @@ function factsOf(n: Node): { linearId: string; identifier: string; teamKey: stri
 }
 
 export class InboundLane {
-  /** The workspaces whose key Linear or the proxy refused, or that have none, held in this process: their closes wait (`refused`).
-   *  A restart forgets it, which costs one call, and the next refusal holds again. A successful close write clears it. */
+  /** The workspaces whose close writes a retryable refusal holds, in this process: their closes wait (`refused`), on the plan
+   *  sync's failure-hold SCHEDULE (D-8702's `deferralOf`). LEGITIMATELY DIFFERENT from the plan sync's own holds (review 2394
+   *  A-3): an inbound close must never hold a programme's plan sync (the coordinator's round 2 brief, point 3), so the two
+   *  lanes share the schedule, never the state. The one refusal both lanes share is the key's (a 401): it goes through the plan
+   *  sync's one owner (`keyRefused`), and this lane honours `keyBlockedUntil`. A restart forgets these holds, which costs one
+   *  call, and the next refusal holds again. Only a close done whole (its cancel ok) clears one (review 2394 N1). */
   private readonly holds = new Map<string, InboundHold>();
 
   constructor(private readonly deps: Deps) {}
@@ -158,7 +162,8 @@ export class InboundLane {
       const slot = slots.get(row.workspaceId);
       const entries = slot === undefined ? null : directory.get(slot.ref, slot.digest);
       if (slot === undefined || entries === null) continue;
-      if (inboundHeld(this.holds.get(row.workspaceId), this.deps.now())) continue;   // the workspace's key waits: nothing is sent
+      const now = this.deps.now();
+      if (inboundHeld(this.holds.get(row.workspaceId), now) || planSync.keyBlockedUntil(row.workspaceId) > now) continue;   // held: nothing is sent
       const canceled = statusOfType(entries, 'issue', 'canceled', row.teamKey);
       if (canceled === null) { this.mailNoCancel(row); continue; }
       await planSync.withFlight(`inbound:${row.linearId}`, async () => {
@@ -169,11 +174,11 @@ export class InboundLane {
           ...base, op: 'issueComment', fields: ['body'],
           input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
         });
-        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment.word); return; }
-        this.holds.delete(row.workspaceId);                 // a write landed: the key works
+        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment.word, slot); return; }
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
-        if (update.ok) plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
-        else this.refused(fresh, update.word);
+        if (!update.ok) { this.refused(fresh, update.word, slot); return; }
+        plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
+        this.holds.delete(row.workspaceId);                 // the whole close landed, never only its comment (N1)
       });
     }
   }
@@ -181,11 +186,12 @@ export class InboundLane {
   /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold
    *  schedule (and, for a key word, mails the owner once). Any other word gives the close up: the row is written FIRST (`actedAt`
    *  set, so `act` skips it for good, across restarts; the reason carries the refusal), and only then is the owner mailed once. */
-  private refused(row: InboundRow, word: string): void {
+  private refused(row: InboundRow, word: string, slot: SlotInfo): void {
     const now = this.deps.now();
     const v = inboundActVerdict(word, this.holds.get(row.workspaceId), { now, backoffSteps: PLAN_SYNC_BACKOFF_MS });
     if (v.kind === 'retry') {
       this.holds.set(row.workspaceId, v.hold);
+      if (v.keyRefused) this.deps.planSync.keyRefused(row.workspaceId, slot, v.hold.until);   // a 401 holds both lanes (A-3)
       if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row));
       return;
     }

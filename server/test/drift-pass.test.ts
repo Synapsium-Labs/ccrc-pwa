@@ -585,6 +585,37 @@ describe('the drift pass (D-8183)', () => {
     expect(dueAt(r)).toBe(r.t.now);
   });
 
+  // N2: an initiative's missing link rides on its project's restore; when that restore is deferred, the initiative's watermark must
+  // be kept too, or the unchanged initiative is never read again and the link stays missing.
+  it('a deferred link restore keeps its initiative\'s watermark, and the next pass sends the link', async () => {
+    const r = await synced(await rig());
+    r.lin.over.initiative = { projectIds: [] };
+    r.lin.at.initiative = r.t.now;
+    r.lin.at.project = T - 2000; r.lin.at.milestone = T - 2000; r.lin.at.issue = T - 2000;
+    const base = r.respond.current;
+    let refuse = true;
+    r.respond.current = (ask) => (refuse && ask.op === 'initiativeToProjectCreate' ? fail('rate-limited') : base(ask));
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'initiativeToProjectCreate')).toHaveLength(1);         // sent, refused: deferred
+    refuse = false;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.asks.filter((a) => a.op === 'changedInitiatives').at(-1)!.input['since']).toBe(iso(T - 1000));
+    expect(sent(r, 'initiativeToProjectCreate')).toHaveLength(2);         // read again, and the link is sent
+  });
+
+  // A-1: only Keep the plan quiets persistence (D-8720); after Hand to the coordinator, persistent drift raises the item again (§7.4).
+  it('after Hand, three restores in seven days raise the item again', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    const [it] = items(r);
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + DAY);
+    expect(items(r)).toHaveLength(2);
+    expect(items(r)[1]).toMatchObject({ state: 'open', title: 'Linear keeps changing ticket t1' });
+  });
+
   // F3 (D-8720): the week's quiet after Keep covers persistence only; a restore Linear refuses raises the item at once (§7.4).
   it('a restore refused the day after Keep raises the item at once', async () => {
     const r = await synced(await rig());

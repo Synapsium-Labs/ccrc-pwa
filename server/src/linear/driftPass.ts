@@ -187,7 +187,14 @@ export class DriftPass {
       const specs = [...w.targets.values()];
       const outcomes = specs.length === 0 ? [] : await this.deps.planSync.restore(key, specs.map((s) => this.targetOf(ws, s, now)), 'drift-restore');
       const byId = new Map<number, RestoreOutcome>(outcomes.map((o) => [o.bindingId, o]));
-      for (const o of outcomes) if (o.outcome === 'deferred') { const t = w.targets.get(o.bindingId); if (t !== undefined) keep[t.kind] = true; }
+      // A deferred target keeps the watermark of its own kind and of every event that rides on it (review 2394 N2: an initiative's
+      // missing link rides on its project's restore, so the initiative must be read again too).
+      for (const o of outcomes) {
+        if (o.outcome !== 'deferred') continue;
+        const t = w.targets.get(o.bindingId);
+        if (t !== undefined) keep[t.kind] = true;
+        for (const ev of w.events) if (ev.via.includes(o.bindingId)) keep[ev.kind] = true;
+      }
       const commentedOnce = new Set<number>();
       for (const ev of w.events) {
         const verdict = eventVerdict(ev.via, byId);
@@ -353,8 +360,8 @@ export class DriftPass {
 
   // ── The persistent-drift item ──
 
-  /** Raises the operator's item for a binding (§7.4) unless one is open for it, or, for persistence alone, one it had was closed
-   *  inside the window (D-8720; `shouldRaiseDriftItem`). */
+  /** Raises the operator's item for a binding (§7.4) unless one is open for it, or, for persistence alone, the binding's kept item
+   *  was closed inside the window (D-8720; `shouldRaiseDriftItem`). A handed-on item is no longer the binding's (`act`). */
   private raiseItem(binding: BindingRow, kind: DriftKind, key: string, why: DriftRaiseWhy, word: string | null, now: number): void {
     const { plan, coord } = this.deps;
     const fresh = plan.bindingsOf(key).find((b) => b.id === binding.id) ?? binding;
@@ -403,7 +410,8 @@ export class DriftPass {
   // ── The operator's acts ──
 
   /** The operator's Hand or Keep on a persistent-drift item. `hand` mails the programme's coordinator (an Upkeep key has none: the
-   *  item's note says so) and settles the item in one transaction; `keep` settles it, and ccrc goes on restoring. */
+   *  item's note says so), settles the item and ends the binding's hold on it, in one transaction; `keep` settles it and the
+   *  binding keeps it (D-8720's quiet reads it), and ccrc goes on restoring. */
   act(itemId: number, act: 'hand' | 'keep', bindingId: number): { ok: true } | { ok: false; word: 'not-found' | 'not-open' } {
     const { coord, plan } = this.deps;
     const item = coord.itemById(itemId);
@@ -418,15 +426,18 @@ export class DriftPass {
     const key = plan.dueKeyOfBinding(bindingId);
     const binding = key === null ? undefined : plan.bindingsOf(key).find((b) => b.id === bindingId);
     const owner = key === null || key.startsWith(UPKEEP_DUE_PREFIX) ? null : plan.planOwnerOf(key);
+    // A hand-on ends the binding's hold on the item, so its next persistence is raised again as §7.4 says; only Keep keeps the
+    // item, and with it D-8720's week of quiet (review 2394 A-1).
     if (key === null || binding === undefined || owner === null) {
-      const moved = coord.moveItem(itemId, 'settle', 'ccrc', { note: 'Handed to nobody: this object has no coordinator (an Upkeep plan, or a programme with none).' }, now, ctx);
+      const moved = coord.moveItemWithMail(itemId, 'settle', 'ccrc', { note: 'Handed to nobody: this object has no coordinator (an Upkeep plan, or a programme with none).' }, now, ctx,
+        () => plan.setDriftItem(bindingId, null));
       return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
     }
     const kind = KIND_OF[binding.localKind];
     const subject = `Linear sync: drift on ${WORD[kind]} ${this.planKeyOf(key, binding)} handed (${key})`;
     const body = `ccrc keeps finding the ${WORD[kind]} ${this.planKeyOf(key, binding)} of ${key} changed in Linear and putting the plan's values back. The operator hands it to you: decide whether the plan should change, and if it should, change the plan (the sync follows). What ccrc recorded:\n\n${this.recordBlock(bindingId, now)}`;
     const moved = coord.moveItemWithMail(itemId, 'settle', 'ccrc', { note: 'Handed to the coordinator.' }, now, ctx,
-      () => insertSystemMailTx(coord, { program: key }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }));
+      () => { insertSystemMailTx(coord, { program: key }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); plan.setDriftItem(bindingId, null); });
     return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
   }
 }
