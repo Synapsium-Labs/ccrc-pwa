@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import type { LaneArmRead } from '../../src/coord/laneArm.js';
 import type * as QuizModule from '../../src/continuity/quiz.js';
+import type * as LaneArmModule from '../../src/coord/laneArm.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 type Quiz = typeof QuizModule;
@@ -17,6 +18,8 @@ export const QUIZ_BASELINE_KEY = 'server/src/continuity/quiz.ts#quizBaseline';
 export const QUIZ_REPORT_KEY = 'server/src/continuity/quiz.ts#validQuizReport';
 export const QUIZ_RULE_KEY = 'server/src/continuity/quiz.ts#quizRuleVerdict';
 export const QUIZ_RECORD_KEY = 'server/src/continuity/quiz.ts#quizRecordVerdict';
+export const LANE_ARM_QUIZ_KEY = 'server/src/coord/laneArm.ts#laneArmQuizViewOf';
+const LANE_ARM_TS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../src/coord/laneArm.ts');
 
 const row = (choice: unknown): LaneArmRead => ({ kind: 'row', choice, updatedAt: 0, importedAt: null, imported: null });
 const SHADOW = { continuity: row('shadow'), 'launch-profile': row('shadow'), 'anchor-slot': row('shadow') } as const;
@@ -211,6 +214,42 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
   },
 };
 
+// The Shadow lanes card's quiz block (plan Task 12): the baseline is never folded into "not yet", nor a failed pending read
+// into no runs, and the view carries the block when its reads are given.
+const LANE_ARM_QUIZ_SET: MutantSet<typeof LaneArmModule> = {
+  modulePath: LANE_ARM_TS,
+  mutants: [
+    { id: 'A1', old: "? { state: 'unreadable', detail: q.baseline.detail }", new: "? { state: 'not-yet' }" },
+    { id: 'A2', old: ": q.baseline.exists ? { state: 'recorded', at: q.baseline.at } : { state: 'not-yet' };", new: ": { state: 'recorded', at: q.baseline.at };" },
+    { id: 'A3', old: "q.pending.ok ? { ok: true, runs: [...q.pending.runs] } : { ok: false, detail: q.pending.detail };", new: '{ ok: true, runs: q.pending.ok ? [...q.pending.runs] : [] };' },
+    { id: 'A4', old: '{ lanes, quizBaseline: laneArmQuizViewOf(quiz) }', new: '{ lanes }' },
+  ],
+  suite(m): Record<string, SuiteCase> {
+    const run = { id: 1, measuredAt: 5, score: 0.8, lo: 0.7, hi: 0.9, questions: 10, families: 3, answered: 10, runFailed: 0, absent: 0 };
+    const ok = { ok: true, runs: [run] } as const;
+    return {
+      'a recorded baseline carries its date': () => {
+        expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: true, at: 9 }, pending: ok })).toEqual({ baseline: { state: 'recorded', at: 9 }, pending: ok });
+      },
+      'no baseline is not yet': () => {
+        expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: false, at: null }, pending: ok }).baseline).toEqual({ state: 'not-yet' });
+      },
+      'a failed baseline read is unreadable': () => {
+        expect(m.laneArmQuizViewOf({ baseline: { ok: false, detail: 'x' }, pending: ok }).baseline).toEqual({ state: 'unreadable', detail: 'x' });
+      },
+      'a failed pending read stays a failure': () => {
+        expect(m.laneArmQuizViewOf({ baseline: { ok: true, exists: false, at: null }, pending: { ok: false, detail: 'y' } }).pending)
+          .toEqual({ ok: false, detail: 'y' });
+      },
+      'the view carries the block when given its reads': () => {
+        const v = m.laneArmViewOf(() => ({ kind: 'absent' }), { baseline: { ok: true, exists: false, at: null }, pending: ok });
+        expect(v.quizBaseline).toEqual({ baseline: { state: 'not-yet' }, pending: ok });
+        expect('quizBaseline' in m.laneArmViewOf(() => ({ kind: 'absent' }))).toBe(false);
+      },
+    };
+  },
+};
+
 export const QUIZ_LANE_KEY = 'server/src/continuity/quiz.ts#quizLaneVerdict';
 export const QUIZ_WEEK_KEY = 'server/src/continuity/quiz.ts#quizWeek';
 const MON = Date.UTC(2026, 10, 16);
@@ -276,6 +315,7 @@ export const QUIZ_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [QUIZ_REPORT_KEY]: QUIZ_REPORT_SET as MutantSet<never>,
   [QUIZ_RULE_KEY]: QUIZ_RULE_SET as MutantSet<never>,
   [QUIZ_RECORD_KEY]: QUIZ_RECORD_SET as MutantSet<never>,
+  [LANE_ARM_QUIZ_KEY]: LANE_ARM_QUIZ_SET as MutantSet<never>,
   [QUIZ_LANE_KEY]: QUIZ_LANE_SET as MutantSet<never>,
   [QUIZ_WEEK_KEY]: QUIZ_WEEK_SET as MutantSet<never>,
 };

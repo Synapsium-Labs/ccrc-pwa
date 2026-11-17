@@ -42,6 +42,10 @@ import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linki
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
+/** The operator's ruling on one pending replay quiz run (`POST /api/continuity/quiz-runs/:id/rule`'s body word). */
+export type QuizRuleAction = 'confirm' | 'discard';
+/** That door's 200: the run's new state and whether it became the baseline (a ruling that is refused rejects instead). */
+export interface QuizRuleAnswer { readonly ok: true; readonly id: number; readonly state: string; readonly baseline: boolean }
 /** `GET`/`POST /api/face`'s answer. */
 export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
@@ -1069,6 +1073,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
+     *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
+     *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */
+    ruleQuizRun: async (id: number, action: QuizRuleAction): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/rule`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ action }),
+      })).json() as Promise<QuizRuleAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */

@@ -8,7 +8,7 @@
 // lane-arm door's fact, confirmed rows only, with the baseline's date) and `quizPendingRead` (the card's). Nothing here decides
 // beyond asking those rules, and no read folds a failure into an answer: each tells a failed read apart.
 import type { DatabaseSync } from 'node:sqlite';
-import type { LaneArmRead } from '../coord/laneArm.js';
+import type { LaneArmQuizReads, LaneArmRead } from '../coord/laneArm.js';
 import { tx } from '../coord/tx.js';
 import type { CoordStore } from '../coord/store.js';
 import { itemRaisedWithTitle } from '../coord/ledgersStore.js';
@@ -183,6 +183,11 @@ export function quizPendingRead(db: DatabaseSync): QuizPendingRead {
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** The Shadow lanes card's two quiz reads (`laneArm.ts#laneArmViewOf`), each its own failure. */
+export function quizCardReads(db: DatabaseSync): LaneArmQuizReads {
+  return { baseline: quizBaselineRead(db), pending: quizPendingRead(db) };
 }
 
 /** The quiz lane's port (`quizLane.ts#QuizLanePort`) over the store, built once in the composition root. */

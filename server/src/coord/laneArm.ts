@@ -9,8 +9,8 @@
 import {
   LANE_ARM_LANES, LANE_ARM_MARKER, LANE_ARM_TEXT, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, isLaneArmChoice, isLaneArmImport, isLaneArmLane,
   laneArmGate, laneArmLive,
-  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmRequest,
-  type LaneArmRowView, type LaneArmView,
+  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmImport, type LaneArmLane, type LaneArmQuizPending, type LaneArmQuizView,
+  type LaneArmRequest, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm.js';
 import { isW1aArmRow } from '../continuity/quiz.js';
 
@@ -38,9 +38,29 @@ export function laneArmRowViewOf(lane: LaneArmLane, read: LaneArmRead, gate: str
   return { lane, stored, detail: null, live: laneArmLive(stored, gate), updatedAt: read.updatedAt, imported, marker };
 }
 
-/** Every row of the card, in `LANE_ARM_LANES` order. */
-export function laneArmViewOf(read: (lane: LaneArmLane) => LaneArmRead): LaneArmView {
-  return { lanes: LANE_ARM_LANES.map((lane) => laneArmRowViewOf(lane, read(lane))) };
+/** The replay quiz's two reads the card shows (plan `2026-11-17-overlord-quiz-record.md` §6), declared here by their consumer:
+ *  the confirmed baseline with its date (`quizStore.ts#quizBaselineRead`) and the pending runs (`quizStore.ts#quizPendingRead`),
+ *  each a value or why it failed. */
+export interface LaneArmQuizReads {
+  readonly baseline: { readonly ok: true; readonly exists: true; readonly at: number } | { readonly ok: true; readonly exists: false; readonly at: null }
+    | { readonly ok: false; readonly detail: string };
+  readonly pending: { readonly ok: true; readonly runs: readonly LaneArmQuizPending[] } | { readonly ok: false; readonly detail: string };
+}
+
+/** The card's quiz block: the baseline recorded with its date, not yet, or unreadable (never folded into "not yet"), and the
+ *  pending runs as read, oldest first. */
+export function laneArmQuizViewOf(q: LaneArmQuizReads): LaneArmQuizView {
+  const baseline: LaneArmQuizView['baseline'] = !q.baseline.ok
+    ? { state: 'unreadable', detail: q.baseline.detail }
+    : q.baseline.exists ? { state: 'recorded', at: q.baseline.at } : { state: 'not-yet' };
+  const pending: LaneArmQuizView['pending'] = q.pending.ok ? { ok: true, runs: [...q.pending.runs] } : { ok: false, detail: q.pending.detail };
+  return { baseline, pending };
+}
+
+/** Every row of the card, in `LANE_ARM_LANES` order, and the quiz block when its reads are given. */
+export function laneArmViewOf(read: (lane: LaneArmLane) => LaneArmRead, quiz?: LaneArmQuizReads): LaneArmView {
+  const lanes = LANE_ARM_LANES.map((lane) => laneArmRowViewOf(lane, read(lane)));
+  return quiz === undefined ? { lanes } : { lanes, quizBaseline: laneArmQuizViewOf(quiz) };
 }
 
 /** What `GET /api/runs` carries to the session hook for the roster card (`RUNS_ROSTER_CARD_FIELD`): `live` or `shadow`,

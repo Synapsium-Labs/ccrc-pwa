@@ -358,3 +358,32 @@ describe('arming a W1a lane waits for the quiz baseline (W0-28)', () => {
     expect(coord.laneArmSetting('roster-card')).toMatchObject({ choice: 'live' });
   });
 });
+
+// The replay quiz's block on the card (plan `2026-11-17-overlord-quiz-record.md` Task 12): the GET and the POST's answer carry
+// the baseline (recorded with its date, not yet, or unreadable) and the pending runs, oldest first.
+describe('the Shadow lanes card\'s quiz block', () => {
+  it('not yet with no runs; a pending run listed; once confirmed the baseline is recorded with its date', async () => {
+    const { app, coord } = await setup();
+    expect((await get(app)).json()).toMatchObject({ ok: true, quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } } });
+    const r = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: 7, report: {
+      measuredAt: 6, reportSha: 'e'.repeat(64), questionsSha: 'd'.repeat(64), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
+      judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
+    }, extra: { answered: 39, correct: 27, runFailed: 1, absent: 0, arm: 'treatment', settingsMode: 'fallback', pilot: 'skipped-by-ruling', ci: 95,
+      method: 'percentile', bootstrapB: 10000, inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
+    if (!r.ok) throw new Error('insert failed');
+    expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [
+      { id: r.id, measuredAt: 6, score: 0.7, lo: 0.6, hi: 0.8, questions: 40, families: 6, answered: 39, runFailed: 1, absent: 0 },
+    ] } } });
+    ruleQuizRun(coord.db, { id: r.id, action: 'confirm', at: 8, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
+    expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'recorded', at: 7 }, pending: { ok: true, runs: [] } } });
+    expect((await post(app, { lane: 'roster-card', choice: 'shadow' })).json()).toMatchObject({ quizBaseline: { baseline: { state: 'recorded', at: 7 } } });
+  });
+
+  it('an unreadable quiz table shows the baseline and the pending runs as unreadable, never as not yet', async () => {
+    const { app, coord } = await setup();
+    coord.db.exec('DROP TABLE continuity_quiz_runs');
+    const body = (await get(app)).json() as { quizBaseline: { baseline: { state: string }; pending: { ok: boolean } } };
+    expect(body.quizBaseline.baseline.state).toBe('unreadable');
+    expect(body.quizBaseline.pending.ok).toBe(false);
+  });
+});
