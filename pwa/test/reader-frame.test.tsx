@@ -323,11 +323,11 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     const head = 'b'.repeat(40);
     const h1 = harness();
     render(frame(h1, { show: { ...showOf('# A'), source: 'committed', commit } }));
-    expect((await ready(h1)).document.version).toEqual({ sha: commit, draft: false });
+    expect((await ready(h1)).version).toEqual({ sha: commit, draft: false, commits: null, only: null });
     cleanup();
     const h2 = harness();
     render(frame(h2, { show: { ...showOf('# A'), source: 'draft', head } }));
-    expect((await ready(h2)).document.version).toEqual({ sha: head, draft: true });
+    expect((await ready(h2)).version).toEqual({ sha: head, draft: true, commits: null, only: null });
   });
 
   it('a fallback before the mount lands keeps the fragment for the plain view', async () => {

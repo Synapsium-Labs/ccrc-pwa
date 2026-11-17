@@ -26,6 +26,7 @@ import { leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import { downloadDocFile, showBytes } from './objectUrls';
 import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
+import { useReaderOnly } from './readerHistory';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
 import { usePublishExportBody, type ExportBody } from './exportBody';
 
@@ -232,6 +233,8 @@ function bodyKeyOf(pin: DocPin, show: DocsShowOk, pinKey: string, version: boole
  *  this browser has no worker, and the plain view is the only view). */
 function MarkdownBody(p: {
   readonly show: DocsShowOk; readonly bodyKey: string; readonly link: LinkBase; readonly parser: MarkdownParser;
+  /** What the reader's history is read for: the pin this body opened at, the page now and the day filter of the entry. */
+  readonly pin: DocPin; readonly page: Leaf; readonly only: string | null;
   readonly reader: ReaderDeps | null; readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
 }): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
@@ -242,7 +245,9 @@ function MarkdownBody(p: {
   }
   return (
     <ReaderFrame
-      key={p.bodyKey} show={p.show} bodyKey={p.bodyKey} link={p.link} parser={p.parser} reader={p.reader}
+      // A new day filter on the same URL is a new body, which seeds it (M8.22); `bodyKey` itself is the bytes' identity.
+      key={p.bodyKey + '\u0000' + (p.only ?? '')} show={p.show} bodyKey={p.bodyKey} link={p.link} parser={p.parser}
+      reader={p.reader} opened={{ pin: p.pin, page: p.page, only: p.only }}
       pendingFragment={p.pendingFragment} onFragmentConsumed={p.onFragmentConsumed}
     />
   );
@@ -260,6 +265,8 @@ export function DocsLeaf(p: {
 }): ReactNode {
   const { visit, tree, page, parser } = p;
   const reader = p.reader ?? null;
+  // The day filter of the history entry the page stands on (never in the URL): it follows back and forward.
+  const only = useReaderOnly();
   const root = useRef<HTMLDivElement | null>(null);
   const cls = contentClass(page.path);
   // Only a Markdown body has anchors; a fragment meant for any other leaf is spent as soon as that leaf is open.
@@ -333,7 +340,7 @@ export function DocsLeaf(p: {
           body = (
             <MarkdownBody
               show={show} bodyKey={bodyKeyOf(file.pin, show, pinKey, page.at !== null)} link={link} parser={parser}
-              reader={reader} pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
+              pin={file.pin} page={page} only={only} reader={reader} pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
             />
           );
           break;
