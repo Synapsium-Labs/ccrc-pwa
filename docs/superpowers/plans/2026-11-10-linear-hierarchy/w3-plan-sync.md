@@ -227,3 +227,7 @@ From the final review's triage, fine to follow up:
   - M3: a failure in one workspace holds the whole programme for up to 30 minutes, including its other workspaces' work.
     Holding per workspace is the fix.
   - The episode counts live in memory: a restart restarts a streak, so a long episode can mail twice.
+  - The probe's 3-refill count is taken when a pass reads the directory, not when each refill lands. So a refill that
+    reads `on` but that no pass sees does not end the episode, and the programme can settle early with one mail.
+  - Once the bound is reached, a plan change re-reads the stored probe answer and asks for no refill. Only a refill can
+    change that answer.
