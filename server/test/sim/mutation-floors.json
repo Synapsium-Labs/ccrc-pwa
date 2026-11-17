@@ -161,5 +161,6 @@
   "server/src/operatorModel/nameListState.ts#nameListState": 1,
   "server/src/continuity/renewalReadings.ts#fittedCeilingOf": 1,
   "server/src/continuity/renewalReadings.ts#backstopInstantBefore": 1,
-  "server/src/continuity/renewalReadings.ts#backstopDueOf": 1
+  "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
+  "shared/overlord-identity.ts#readActorColumns": 1
 }
