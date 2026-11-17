@@ -299,7 +299,20 @@ The coordinator's rulings on review 2382 (fix-round mail delivery 23073), each a
 
 ### 4.1 The suites fix round 2 ran
 
-SUITES-FR2
+One at a time from `server/`, each as `~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 <files>`
+(the typecheck as `~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit -p test/tsconfig.tests.json`), at
+`b29602448`'s tree (no suite reads this note), each measured, with the load recorded at its start (7.4 to 13.0):
+
+| Suite (files) | Result |
+|---|---|
+| `test/plan-phases.test.ts`, `test/plan-store.test.ts`, `test/plan-routes.test.ts`, `test/plan-policy.test.ts`, `test/plan-vocabulary.test.ts` | 59, 30, 34, 23 and 8 passed |
+| `test/coord-db.test.ts` | 147 of 149 at load 12.4: two delegation-table cases timed out (20 s and 120 s), a load timeout; rerun alone once, as ruled: 149 passed (load 9.2) |
+| `test/box-token-census.test.ts`, `test/auth-gate.test.ts`, `test/ccrc-api.test.ts`, `test/ccrc-api-closed.test.ts` | 59, 341, 278 and 52 passed |
+| `test/single-definition/plan.test.ts`, `test/decision-model-records.test.ts`, `test/run-close-switch.test.ts` | 3, 13 and 21 passed |
+| `test/sim/mutation-floors.test.ts` (whole file) | 165 of 167: the same two `pwa/src/face/mood.ts` environment reds as round 1 ("Cannot find package '@ccrc/ui'"); the three planPolicy floors pass, 39 of 39 mutants killed |
+| `test/single-definition` (whole directory), `test/rings` (whole directory) | 1494 and 133 passed |
+| the server test typecheck (the `tsc` command above) | exit 0; the slice did not kill it |
+| `test/deviation-refs.test.ts` (after `git fetch origin main`: main at `bd82b7f50`, its slot count still 90), `test/dtbd.test.ts`, `test/topology-clean.test.ts` | 34, 1 and 61 passed |
 
 ## 5. Open
 
