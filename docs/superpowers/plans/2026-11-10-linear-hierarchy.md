@@ -192,7 +192,8 @@ number from `POST /api/ledger/deviations`.
   updates and never creates. Record: the wave 3 note.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
   (wave 4's open point). Wave 4 (the coordinator's ruling): links are compared one way, so a planned link missing in Linear
-  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`). Record: the wave 3 note.
+  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`); a project's milestones compare the same way,
+  since nothing deletes one. Record: the wave 3 and wave 4 notes.
 - **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
   by-name listing of 10, so with ten or more same-named objects ownership can fail. The binding is retried at every
   requeue, directory refill and plan change, and only its mail is once. Carried to the next capture (`creator { id }` on
@@ -209,6 +210,21 @@ number from `POST /api/ledger/deviations`.
   and keep a held `dueAt` even when it is later; and a held programme's dispatch (`ensureTicketBound`, read through `heldSyncUntil`) starts no pass.
   The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
   Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
+- **D-8703 (2026-11-17)** — drift-actor-unread: the changed* documents select no actor and `ops.ts` is frozen, so a drift
+  event's actor and the persistent-drift item read "not read"; the item still shows the object, the field, both values
+  and the time. The actor joins D-8699's next-capture list. Record: the wave 4 note.
+- **D-8704 (2026-11-17)** — catch-up-by-fingerprint: a binding stores F(the planned inputs), not F(Linear's owned
+  fields), so a difference is a catch-up when the binding's fingerprint is not the plan's current one; the programme is
+  marked due through `markSyncDue` alone (a held programme stays held, D-8702). Gap: a person's edit made while the sync
+  is behind, or while a programme is held, is overwritten with no drift event and no comment. Record: the wave 4 note.
+- **D-8705 (2026-11-17)** — inbound-open-and-kept-text: `changedIssues` selects no `createdAt` and no creator, so an
+  inbound issue is an open one in a managed team that no binding holds and the journal's `viaFleet` does not name; the
+  inbound row keeps the reporter's title and body, cut visibly to the plan's ticket bounds and read only under `untrusted`
+  and through the secret mask, so `plan triage` and `plan take` call no Linear. Record: the wave 4 note.
+- **D-8706 (2026-11-17)** — triage-own-programme-epic: `plan triage` `hand` to the caller's own programme takes the issue
+  at once, so the body's optional `epic` is then required (`plan-bad-body`). Record: the wave 4 note.
+- **D-8707 (2026-11-17)** — write-ask-project-teams: `LinearWriteAsk.resource` gains `teamKeys`, every team a project
+  write puts the project in, so the policy is asked about each. Record: the wave 4 note.
 
 ## Global Constraints
 
