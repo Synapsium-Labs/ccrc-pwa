@@ -16,7 +16,7 @@ import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
 import { readerDiff } from '../src/docs/reader/diff';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsHistoryAnswer, DocsHistoryLoader } from '../src/docs/failures';
-import { READER_ONLY_STATE_KEY, startReaderHistory, useReaderOnly } from '../src/docs/readerHistory';
+import { READER_ONLY_STATE_KEY, resetReaderOnlyForTests, startReaderHistory, useReaderOnly } from '../src/docs/readerHistory';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
@@ -193,6 +193,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  resetReaderOnlyForTests();
   vi.restoreAllMocks();
 });
 

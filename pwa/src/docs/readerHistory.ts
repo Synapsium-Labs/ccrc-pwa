@@ -64,6 +64,11 @@ export interface ReaderHistoryBody {
 /** The filter `openVersion` last asked for, with the URL it opened. Module state: a page load clears it. */
 let pending: { readonly href: string; readonly only: string | null } | null = null;
 
+/** Tests only: forget the pending filter, so one case's `openVersion` that nothing consumed never reaches the next case. */
+export function resetReaderOnlyForTests(): void {
+  pending = null;
+}
+
 const hereUrl = (): string => location.pathname + location.search;
 
 /** The day filter of the entry the page stands on. The pending filter is the answer for the URL it was set for, and with
