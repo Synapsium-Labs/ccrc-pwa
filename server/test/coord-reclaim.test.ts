@@ -13,7 +13,8 @@ import path from 'node:path';
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { measureClaimant, reclaimRun, type ReclaimDeps } from '../src/coord/reclaim.js';
+import { measureClaimant, reclaimRun, type ReclaimDeps, type ReclaimRunDeps } from '../src/coord/reclaim.js';
+import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 import { CLAIMANT_DEAD_CAUSES } from '../src/deadCoordinator.js';
 import { DEAD_LIFECYCLES } from '../../shared/api.js';
 import { readSessionRecord } from '../src/registry.js';
@@ -54,8 +55,8 @@ const store = (home: string): CoordStore =>
  *  scripting an exec runner into producing it — and it cannot state the
  *  `hasSession` boolean at all, because the port has no such method. */
 const depsFor = (home: string, coord: CoordStore, verdict: SessionVerdict,
-                 io: FleetIO = localIO): ReclaimDeps =>
-  ({ coord, io, cfg: testDeps(home).cfg, tmux: { sessionVerdict: async () => verdict } });
+                 io: FleetIO = localIO): ReclaimRunDeps =>
+  ({ coord, io, cfg: testDeps(home).cfg, tmux: { sessionVerdict: async () => verdict }, otherLaneReads: NOT_DESIGNATED_READS });
 
 const blindIO = (): FleetIO => ({ ...localIO, readdir: async () => null });
 

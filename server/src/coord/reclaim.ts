@@ -8,8 +8,7 @@ import type { WatcherCoordPort } from './ports.js';
 import { CLAIMS_MOVE_REFUSALS, isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
-import { decideOtherLane } from './otherLanes.js';
-import { otherLaneReadsOf } from './otherLaneReads.js';
+import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -56,6 +55,10 @@ export interface ReclaimDeps {
    */
   tmux: { sessionVerdict(id: string): Promise<SessionVerdict> };
 }
+
+/** What a hand-over needs beyond the ladder's reads (Overlord W1 other lanes, C48): the other lanes' reads, declared by
+ *  `otherLanes.ts` and handed in by the route and the archive door, so this L1 decider makes no I/O of its own. */
+export type ReclaimRunDeps = ReclaimDeps & { readonly otherLaneReads: OtherLaneReads };
 
 /** THREE answers, never two. `why` is the sentence the route sends as `detail`, so the evidence
  *  survives the collapse to a code — `alive` is reached from a live tmux pane AND from a
@@ -367,7 +370,7 @@ export interface ReclaimOptions {
  * body-supplied attribution would be a self-declared one.
  */
 export async function reclaimRun(
-  deps: ReclaimDeps, runId: number, to: string, opts: ReclaimOptions = {},
+  deps: ReclaimRunDeps, runId: number, to: string, opts: ReclaimOptions = {},
 ): Promise<ReclaimOutcome> {
   const now = Date.now();
   const read = deps.coord.run(runId);
@@ -405,7 +408,7 @@ export async function reclaimRun(
   }
   // Overlord W1 other lanes (C48): the Overlord's body is never an heir. Right after rung 3 (the heir's row and shape)
   // and before the heir's worker rung, the project read and rung 4's measurement, so a refusal measures no pane.
-  const heirLane = await decideOtherLane('runReclaim', to, otherLaneReadsOf(deps));
+  const heirLane = await decideOtherLane('runReclaim', to, deps.otherLaneReads);
   if (heirLane.kind === 'refuse') return { ok: false, kind: heirLane.word, detail: heirLane.detail };
   let heirProject: string | null | undefined;
   if (to !== from) {
@@ -566,7 +569,7 @@ async function heirLiveness(
  * run or stops a session.
  */
 export async function moveClaims(
-  deps: ReclaimDeps, from: string, choice: ClaimsChoice, claimed: readonly OpenSibling[],
+  deps: ReclaimRunDeps, from: string, choice: ClaimsChoice, claimed: readonly OpenSibling[],
 ): Promise<ClaimsMoveOutcome> {
   const refuse = (moved: readonly OpenSibling[], refusal: ClaimsMoveRefusal): ClaimsMoveOutcome =>
     ({ ok: false, moved, notMoved: claimed.filter((c) => !moved.includes(c)), refusal });

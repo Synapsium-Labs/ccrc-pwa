@@ -1,7 +1,7 @@
 // The other write lanes' table, decider and reads (Overlord W1, plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-other-lanes.md` Task 2; spec §3.5 C48, §3.8 H10). Pure cases over
 // handed-in designation reads, a reads double that counts its calls, and the L3 reads over a fixture registry.
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest';
 import Fastify from 'fastify';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -228,7 +228,7 @@ describe('refuseOtherLane', () => {
 
 describe('otherLaneReadsOf (L3)', () => {
   let home: string;
-  let warn: ReturnType<typeof vi.spyOn>;
+  let warn: MockInstance<typeof console.warn>;
   beforeEach(() => {
     home = mkTmp('other-lane-reads-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });

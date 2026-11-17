@@ -59,7 +59,7 @@ import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } fro
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
-import { reclaimRun, type ReclaimDeps } from './reclaim.js';
+import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
 import { MAIL_DISABLED_MARKER } from './rundefs.js';
 import { queueSystemMail } from './rundefsTx.js';
@@ -1848,7 +1848,7 @@ export function registerCoordRoutes(
     }
     const to = body.claimedBy.trim();
 
-    const reclaimDeps: ReclaimDeps = { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux };
+    const reclaimDeps: ReclaimRunDeps = { coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads };
     // Inside the mutex for abandon's reason (`CoordMutex`'s docstring,
     // routes.ts:32-64): the measurement of the old claimant and the UPDATE that
     // replaces it are separated by awaits over live fleet acts, and a concurrent

@@ -3705,7 +3705,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  and `reclaim.ts#moveClaims` over this server's store, registry and tmux. Called inside the coordination serialiser. */
   const claimsPort = (coord: CoordStore, id: string): ClaimsCoordPort => ({
     bindingsOf: (sid) => coord.bindingsOf(sid),
-    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, choice, claimed),
+    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads }, id, choice, claimed),
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
