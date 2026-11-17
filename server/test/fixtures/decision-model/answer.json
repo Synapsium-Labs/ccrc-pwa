@@ -1,0 +1,29 @@
+{
+  "model": "model-a-2026-11",
+  "answers": {
+    "q81d": {
+      "type": "choice",
+      "choice": "o2e9",
+      "confidence": 0.74,
+      "probabilities": {
+        "o7c1": 0.2,
+        "o2e9": 0.74,
+        "o5a4": 0.06
+      }
+    },
+    "q3b0": {
+      "type": "choice",
+      "choice": "o2e9",
+      "confidence": 0.71,
+      "probabilities": {
+        "o2e9": 0.71,
+        "o7c1": 0.22,
+        "o5a4": 0.07
+      }
+    },
+    "q6f2": {
+      "type": "noul",
+      "noul": 0.88
+    }
+  }
+}

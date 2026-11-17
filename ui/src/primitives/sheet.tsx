@@ -6,6 +6,7 @@ import { Drawer } from 'vaul';
 import { useCallback, useEffect, useRef } from 'react';
 import type { KeyboardEvent as ReactKeyboardEvent, ReactNode, RefObject } from 'react';
 import { cn } from '../lib/cn';
+import { recordModalLayer } from '../lib/modal-layers';
 import { EYEBROW } from '../lib/text';
 import { SHEET_DESK_MOTION_VARS, SHEET_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { useDesk } from '../lib/use-media-query';
@@ -199,14 +200,24 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  follow it too. As the sheet turns closed with its panel still mounted, the marks Radix made are lifted; while any other
  *  open Radix dialog (`[role="dialog"][data-state="open"]`) is still mounted, only the marks over or inside the topmost
  *  one are, so the page and any dialog under that one stay hidden behind it. A reopen during
- *  the exit, where Radix hides nothing again, puts them back. An element the page
- *  hid itself before the sheet opened is left as it was, and so are Radix's focus guards. Radix's own undo at the unmount
- *  then removes what is left. */
+ *  the exit, where Radix hides nothing again, puts them back. An element the page hid itself is never lifted, whatever
+ *  modal marked it (Task C40, D-8698; reviews 2310 F1 and F2): the `aria-hidden` package takes a node already hidden as the
+ *  page's and never puts it back, so a lift would leave it announced for good. What the page hid is `recordModalLayer`'s
+ *  answer (`../lib/modal-layers.ts`), read at the panel's mount, before this sheet's Radix marks anything; every other
+ *  mark, this sheet's own or another modal's (the palette's, which never lifts its own, or a sheet's closed under this one),
+ *  is lifted (review 2334 F1 and F2). Radix's focus guards are left too. Radix's own undo at the unmount then removes what
+ *  is left.
+ *
+ *  THE READ IS AT THE PANEL'S MOUNT, in its callback ref. Radix mounts a dialog's content at least one commit after `open`
+ *  turns true (its portal, and for a Root that mounted closed its presence, mount first), so the ref runs in a layout
+ *  phase before Radix's own passive `hideOthers` marks anything for this sheet (inferred from the installed React and
+ *  Radix sources; measured in jsdom and in Chrome by its effect). Unlike a read of every hidden node (review 2323's round),
+ *  the record's answer does not depend on whether a sheet closing in the same commit has lifted its marks yet. */
 function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
   const panel = useRef<HTMLElement | null>(null);
   const lifted = useRef<Element[]>([]);
-  // What the page hid itself, read as the sheet opens, before Radix marks anything.
-  const own = useRef<ReadonlySet<Element>>(new Set());
+  // What the page hid itself, as the modal layers recorded it at this panel's mount (`recordModalLayer`).
+  const pageOwn = useRef<ReadonlySet<Element>>(new Set());
   useEffect(() => {
     const el = panel.current;
     if (open) {
@@ -215,8 +226,6 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
       // the page itself, which Radix's undo never clears.
       if (el !== null && el.isConnected) {
         for (const node of lifted.current) if (node.isConnected) node.setAttribute('aria-hidden', 'true');
-      } else {
-        own.current = new Set(document.querySelectorAll('[aria-hidden="true"]:not([data-aria-hidden])'));
       }
       lifted.current = [];
       return;
@@ -229,12 +238,15 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
     // open dialog in document order is the topmost.
     const top = [...document.querySelectorAll('[role="dialog"][data-state="open"]')].filter((d) => d !== el).at(-1);
     const marked = [...document.querySelectorAll('[data-aria-hidden="true"][aria-hidden="true"]')]
-      .filter((node) => !own.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el))
+      .filter((node) => !pageOwn.current.has(node) && !node.hasAttribute('data-radix-focus-guard') && !node.contains(el))
       .filter((node) => top === undefined || node.contains(top) || top.contains(node));
     for (const node of marked) node.removeAttribute('aria-hidden');
     lifted.current = marked;
   }, [open]);
-  return useCallback((el: HTMLElement | null): void => { panel.current = el; }, []);
+  return useCallback((el: HTMLElement | null): void => {
+    if (el !== null) pageOwn.current = recordModalLayer(el);
+    panel.current = el;
+  }, []);
 }
 
 /** SHIFT+TAB PRESSED FIRST STAYS IN THE SHEET (Task C38, D-8670; PR10b's reviews). The Sheet focuses its panel before
