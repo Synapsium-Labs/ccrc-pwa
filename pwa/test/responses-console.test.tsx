@@ -100,9 +100,16 @@ const digest = (lines: DigestLine[]): DigestAnswer => ({
 
 describe('the digest page', () => {
   it('posts one body naming each decision line it shows, once', async () => {
+    // Wait on the post itself, not on the lines: React posts from a passive effect, which runs in a scheduler task
+    // after the commit that draws the lines, and `findAllByRole` settles on that commit's DOM change through a
+    // `setTimeout(0)` drain that a loaded box can run first, so a count read there was 0 (the responses console flake).
+    let posted!: () => void;
+    const post = new Promise<void>((done) => { posted = done; });
+    receipts.mockImplementation(async () => { posted(); return { ok: true, kept: 2, dropped: [] }; });
     const load = vi.fn().mockResolvedValue(digest([line('ask', 1), line('approval', 2)]));
     const { rerender } = render(<DigestScreen day="2026-10-18" load={load} />);
     await screen.findAllByRole('button', { name: /^Correct / });
+    await post;
     expect(receipts).toHaveBeenCalledTimes(1);
     expect(receipts.mock.calls[0]![0]).toEqual([
       { ref: { kind: 'digest', key: '2026-10-18:ask:1' }, receipt: 'opened', from: { source: 'console' } },
