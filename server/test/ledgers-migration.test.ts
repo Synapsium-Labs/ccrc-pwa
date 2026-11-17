@@ -86,7 +86,9 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       // The typed action and the hold a later entry adds (D-8076, spec 2026-11-04 §10).
       ['action', 'TEXT', 0, null, 0], ['heldUntil', 'INTEGER', 0, null, 0],
       // The reach stamp a later entry adds (the push outbox, Overlord W1; its own pin is coord-db.test.ts).
-      ['reachedOperatorAt', 'INTEGER', 0, null, 0]]);
+      ['reachedOperatorAt', 'INTEGER', 0, null, 0],
+      // The row revision a later entry adds (Overlord W2 row revisions; its own pin is row-revisions.test.ts).
+      ['revision', 'INTEGER', 1, '0', 0]]);
     expect(colsOf(db, 'operator_item_events')).toEqual([
       ['id', 'INTEGER', 0, null, 1], ['itemId', 'INTEGER', 1, null, 0], ['at', 'INTEGER', 1, null, 0],
       ['act', 'TEXT', 1, null, 0], ['actor', 'TEXT', 1, null, 0], ['note', 'TEXT', 0, null, 0]]);

@@ -3461,6 +3461,17 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
   // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
@@ -3471,9 +3482,9 @@ export const MIGRATIONS: readonly string[] = [
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
   // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
   // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
-  // opening a file at `user_version 87` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85 and decision model A
-  // (#2948) 86, so this is 87 (the coordinator's word, 2026-11-17, mail 22510); others may hold 87 too, and the second to land renumbers on the coordinator's word.
-  // RE-MEASURE the slot before merge (it must print 86 before this entry is counted):
+  // opening a file at `user_version 88` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word, 2026-11-17, mail 22654); others may hold 88 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 87 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

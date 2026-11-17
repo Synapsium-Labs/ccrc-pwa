@@ -191,14 +191,14 @@ since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 87 on this branch: overlaps (#2949) landed 85 and decision model A (#2948) 86 on main, after responses B (#2914) took 84.
-Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17), and the landing merge absorbed decision model A
-(86 -> 87, mail 22510, under this run's standing renumber license). Others may hold 87 too; the second to land renumbers on the coordinator's word. Re-measure the
+The migration is entry 88 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86 and row revisions (#2965) 87 on main, after
+responses B (#2914) took 84. Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17); the landing merges absorbed
+decision model A (86 -> 87, mail 22510) and row revisions (87 -> 88, mail 22654), under this run's standing renumber license. Others may hold 88 too; the second
+to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
-Moving to 87 put this entry after decision model A's, so that PR's migration case (`decision-model-records.test.ts`, which assumed
-its entry was the last) now finds its own slot. The text is renewal readings A's (#2962), taken with its holder's yes, and its guard is widened to accept
-an index on a table a later entry creates, since the DROP TABLE removes it (this entry's `continuity_renew_requests_by_session`). Mutant measured: a guard that
-accepts no later index reds it (1 failed, 12 passed).
+Moving past decision model A's entry broke that PR's migration case (`decision-model-records.test.ts`), which assumed its entry was the
+last. The case now carries the one text shared by every branch past decision model A (renewal readings A's, taken verbatim on the coordinator's word, mail
+22654): it finds its own slot and undoes every later entry, newest first. That covers this entry's index on its own table and row revisions' ADD COLUMNs.
 
 ## Stable exports for W1's consumers
 
