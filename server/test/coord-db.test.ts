@@ -740,9 +740,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[82] (ratifiedBy, ratifiedAt and doneWhenBy on the goals versions, the portfolio B, Overlord W1)
     // and MIGRATIONS[83] (response_settings, the response record's retention, Overlord W1 responses B)
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, overlaps and goal conflicts, Overlord W2),
-    // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2).
-    expect(COORD_SCHEMA_VERSION).toBe(86);
-    expect(MIGRATIONS.length).toBe(86);
+    // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2),
+    // and MIGRATIONS[86] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183).
+    expect(COORD_SCHEMA_VERSION).toBe(87);
+    expect(MIGRATIONS.length).toBe(87);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -853,8 +854,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[82] (the goals versions' ratification columns, Overlord W1)
     // and MIGRATIONS[83] (response_settings, Overlord W1 responses B)
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, Overlord W2),
-    // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(86);
+    // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2),
+    // and MIGRATIONS[86] (the drift, migration and inbound stores, Linear hierarchy wave 4); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(87);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

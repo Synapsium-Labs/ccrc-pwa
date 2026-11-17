@@ -3459,6 +3459,47 @@ export const MIGRATIONS: readonly string[] = [
     maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
     anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
   `,
+
+  // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
+  // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark (the `updatedAt` it has read to)
+  // and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
+  // `linear_bindings.id`), whether ccrc put it back, and when it commented; `value` and `actor` hold LINEAR TEXT, read only
+  // under `untrusted`, and `actor` is always the literal `not read` in this build (the changed* documents select no actor and
+  // `ops.ts` is frozen; D-8703). `linear_migrations`: one row per team migration (`state` is a `MigrationState` word, `map` the
+  // approved map, `itemId` the operator item that asks for it, `reportItemId` the report's), and `linear_migration_moves`: one
+  // row per subject it moves, with the object before and after, unique per (migration, subject) so a re-run never doubles a move.
+  // `linear_inbound`: an issue a person filed in a managed team, seen by the inbound sweep; `state` is `waiting | mailed |
+  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason and `actedAt` when the close's
+  // Linear write landed; `title` and `body` are the reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the
+  // plan's ticket bounds, so `plan triage upkeep` and `plan take` make the ticket without calling Linear (D-8705).
+  // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
+  // which wave 3 kept in process memory (its carried findings 1 and 6).
+  //
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 87` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; main ends at 86 and several open PRs hold 87, so this is 87 and is renumbered at landing
+  // if another lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_marks (workspaceId TEXT PRIMARY KEY, watermark TEXT NOT NULL, passAt INTEGER NOT NULL);
+  CREATE TABLE linear_drift_events (id INTEGER PRIMARY KEY AUTOINCREMENT, bindingId INTEGER NOT NULL, at INTEGER NOT NULL,
+    field TEXT NOT NULL, value TEXT NOT NULL, actor TEXT NOT NULL, restored INTEGER NOT NULL, commentedAt INTEGER);
+  CREATE TABLE linear_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    state TEXT NOT NULL, map TEXT, itemId INTEGER, reportItemId INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+    appliedAt INTEGER, putBackAt INTEGER);
+  CREATE TABLE linear_migration_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, migrationId INTEGER NOT NULL,
+    subject TEXT NOT NULL, kind TEXT NOT NULL, linearId TEXT, identifier TEXT, before TEXT, after TEXT NOT NULL,
+    appliedAt INTEGER, revertedAt INTEGER);
+  CREATE UNIQUE INDEX linear_migration_moves_one ON linear_migration_moves(migrationId, subject);
+  CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    identifier TEXT NOT NULL, title TEXT NOT NULL, body TEXT, seenAt INTEGER NOT NULL, mailedTo TEXT, mailedAt INTEGER,
+    handedTo TEXT, reason TEXT, actedAt INTEGER, state TEXT NOT NULL);
+  CREATE TABLE linear_sync_streaks (key TEXT PRIMARY KEY, keyDigest TEXT NOT NULL, since INTEGER NOT NULL,
+    lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
+  CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

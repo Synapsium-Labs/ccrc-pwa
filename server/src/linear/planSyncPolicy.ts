@@ -105,7 +105,7 @@ export function requestIdOf(kind: BindingKind, localId: number, workspaceId: str
 
 // ── Texts (§6.1) ──
 
-const egress = (text: string): string => redactShapedCount('linear-egress', text).text;
+export const egress = (text: string): string => redactShapedCount('linear-egress', text).text;
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 
 /** A project name fitted to {@link LINEAR_PROJECT_NAME_MAX_CHARS} code points: cut, trailing whitespace trimmed, and when

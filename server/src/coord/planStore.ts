@@ -10,10 +10,10 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { RunState } from '../../../shared/api.js';
 import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX,
-  type BindingKind, type BindingState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
+  type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
-import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone } from './planPolicy.js';
+import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { tx } from './tx.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -567,6 +567,148 @@ export function coordinatorIdsOf(db: DatabaseSync): string[] {
   return rows.map((r) => r.id as string);
 }
 
+// ── Drift, managed teams, inbound issues and the sync's streaks (D-8183, migration 87) ───────────────────────────────────
+// Every write here is one statement and opens no transaction. `linear_drift_events.value` and `.actor` and
+// `linear_inbound.title` and `.body` hold Linear text: read only under `untrusted`.
+
+/** The workspace and team of every team migration that stands `applied`, distinct and ordered: the managed teams. */
+export function managedTeams(db: DatabaseSync): { workspaceId: string; teamKey: string }[] {
+  return (db.prepare("SELECT DISTINCT workspaceId, teamKey FROM linear_migrations WHERE state = 'applied' ORDER BY workspaceId, teamKey").all() as Raw[])
+    .map((r) => ({ workspaceId: r.workspaceId as string, teamKey: r.teamKey as string }));
+}
+
+export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermark: string; passAt: number } | null {
+  const r = db.prepare('SELECT watermark, passAt FROM linear_drift_marks WHERE workspaceId = ?').get(workspaceId) as Raw | undefined;
+  return r === undefined ? null : { watermark: r.watermark as string, passAt: r.passAt as number };
+}
+export function setDriftMark(db: DatabaseSync, workspaceId: string, watermark: string, passAt: number): void {
+  db.prepare('INSERT INTO linear_drift_marks (workspaceId, watermark, passAt) VALUES (?, ?, ?) '
+    + 'ON CONFLICT(workspaceId) DO UPDATE SET watermark = excluded.watermark, passAt = excluded.passAt').run(workspaceId, watermark, passAt);
+}
+
+export interface DriftEventRow {
+  id: number; bindingId: number; at: number; field: string; value: string; actor: string; restored: boolean; commentedAt: number | null;
+}
+export function recordDrift(db: DatabaseSync, ev: { bindingId: number; at: number; field: string; value: string; actor: string; restored: boolean }): number {
+  const res = db.prepare('INSERT INTO linear_drift_events (bindingId, at, field, value, actor, restored) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(ev.bindingId, ev.at, ev.field, ev.value, ev.actor, ev.restored ? 1 : 0);
+  return Number(res.lastInsertRowid);
+}
+/** The `at` of a binding's restores since `since`, ascending. */
+export function driftRestoresOf(db: DatabaseSync, bindingId: number, since: number): number[] {
+  return (db.prepare('SELECT at FROM linear_drift_events WHERE bindingId = ? AND restored = 1 AND at >= ? ORDER BY at, id').all(bindingId, since) as Raw[])
+    .map((r) => r.at as number);
+}
+export function lastDriftCommentAt(db: DatabaseSync, bindingId: number): number | null {
+  const r = db.prepare('SELECT MAX(commentedAt) AS at FROM linear_drift_events WHERE bindingId = ?').get(bindingId) as Raw | undefined;
+  return (r?.at as number | null | undefined) ?? null;
+}
+export function markDriftCommented(db: DatabaseSync, eventId: number, at: number): void {
+  db.prepare('UPDATE linear_drift_events SET commentedAt = ? WHERE id = ?').run(at, eventId);
+}
+export function driftEventsOf(db: DatabaseSync, bindingId: number, since: number): DriftEventRow[] {
+  return (db.prepare('SELECT * FROM linear_drift_events WHERE bindingId = ? AND at >= ? ORDER BY at, id').all(bindingId, since) as Raw[]).map((r) => ({
+    id: r.id as number, bindingId: r.bindingId as number, at: r.at as number, field: r.field as string, value: r.value as string,
+    actor: r.actor as string, restored: r.restored === 1, commentedAt: (r.commentedAt as number | null) ?? null,
+  }));
+}
+/** The one writer of `linear_bindings.driftSince` (null clears it) and, below, of `heldItemId`. */
+export function setDriftSince(db: DatabaseSync, bindingId: number, at: number | null): void {
+  db.prepare('UPDATE linear_bindings SET driftSince = ? WHERE id = ?').run(at, bindingId);
+}
+export function setDriftItem(db: DatabaseSync, bindingId: number, itemId: number | null): void {
+  db.prepare('UPDATE linear_bindings SET heldItemId = ? WHERE id = ?').run(itemId, bindingId);
+}
+
+export interface InboundRow {
+  linearId: string; workspaceId: string; teamKey: string; identifier: string; title: string; body: string | null; seenAt: number;
+  mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null; state: InboundState;
+}
+const inboundRow = (r: Raw): InboundRow => ({
+  linearId: r.linearId as string, workspaceId: r.workspaceId as string, teamKey: r.teamKey as string, identifier: r.identifier as string,
+  title: r.title as string, body: (r.body as string | null) ?? null, seenAt: r.seenAt as number, mailedTo: (r.mailedTo as string | null) ?? null,
+  mailedAt: (r.mailedAt as number | null) ?? null, handedTo: (r.handedTo as string | null) ?? null, reason: (r.reason as string | null) ?? null,
+  actedAt: (r.actedAt as number | null) ?? null, state: r.state as InboundState,
+});
+/** A new issue is inserted `waiting`; a known one keeps its state and only refreshes `title` and `body`. The text is cut
+ *  visibly to the plan's ticket bounds first (`fitInboundText`, D-8705): this is the one writer. */
+export function upsertInbound(
+  db: DatabaseSync, row: { linearId: string; workspaceId: string; teamKey: string; identifier: string; title: string; body: string | null; seenAt: number },
+): 'new' | 'known' {
+  const fit = fitInboundText(row.title, row.body);
+  const known = db.prepare('SELECT 1 AS k FROM linear_inbound WHERE linearId = ?').get(row.linearId) !== undefined;
+  if (known) {
+    db.prepare('UPDATE linear_inbound SET title = ?, body = ? WHERE linearId = ?').run(fit.title, fit.body, row.linearId);
+    return 'known';
+  }
+  db.prepare("INSERT INTO linear_inbound (linearId, workspaceId, teamKey, identifier, title, body, seenAt, state) VALUES (?, ?, ?, ?, ?, ?, ?, 'waiting')")
+    .run(row.linearId, row.workspaceId, row.teamKey, row.identifier, fit.title, fit.body, row.seenAt);
+  return 'new';
+}
+export function inboundOf(db: DatabaseSync, linearId: string): InboundRow | null {
+  const r = db.prepare('SELECT * FROM linear_inbound WHERE linearId = ?').get(linearId) as Raw | undefined;
+  return r === undefined ? null : inboundRow(r);
+}
+const INBOUND_PATCH_COLUMNS = ['state', 'mailedTo', 'mailedAt', 'handedTo', 'reason', 'actedAt'] as const;
+/** Set the named columns of one row; a column not named stays. The column names come from the list above, never the caller. */
+export function setInboundState(
+  db: DatabaseSync, linearId: string,
+  patch: Partial<{ state: InboundState; mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null }>,
+): void {
+  const cols = INBOUND_PATCH_COLUMNS.filter((c) => patch[c] !== undefined);
+  if (cols.length === 0) return;
+  db.prepare(`UPDATE linear_inbound SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE linearId = ?`)
+    .run(...cols.map((c) => patch[c] as string | number | null), linearId);
+}
+export function inboundByState(db: DatabaseSync, workspaceId: string | null, states: InboundState[]): InboundRow[] {
+  if (states.length === 0) return [];
+  const marks = states.map(() => '?').join(', ');
+  const rows = workspaceId === null
+    ? db.prepare(`SELECT * FROM linear_inbound WHERE state IN (${marks}) ORDER BY seenAt, linearId`).all(...states)
+    : db.prepare(`SELECT * FROM linear_inbound WHERE workspaceId = ? AND state IN (${marks}) ORDER BY seenAt, linearId`).all(workspaceId, ...states);
+  return (rows as Raw[]).map(inboundRow);
+}
+/** How many `waiting` rows sit in the team the project is linked to (keys compared upper-case). */
+export function inboundWaiting(db: DatabaseSync, project: string): number {
+  const r = db.prepare(
+    "SELECT COUNT(*) AS n FROM linear_inbound i JOIN project_linking l ON UPPER(l.teamKey) = UPPER(i.teamKey) WHERE l.project = ? AND i.state = 'waiting'",
+  ).get(project) as Raw;
+  return r.n as number;
+}
+
+export interface StreakRow { keyDigest: string; since: number; lastFilledAt: number; refills: number }
+/** The plan sync's episode streaks (D-8701), by key. */
+export function streaksOf(db: DatabaseSync): Map<string, StreakRow> {
+  const out = new Map<string, StreakRow>();
+  for (const r of db.prepare('SELECT * FROM linear_sync_streaks ORDER BY key').all() as Raw[]) {
+    out.set(r.key as string, { keyDigest: r.keyDigest as string, since: r.since as number, lastFilledAt: r.lastFilledAt as number, refills: r.refills as number });
+  }
+  return out;
+}
+/** Write one streak, or delete it with null. */
+export function setStreak(db: DatabaseSync, key: string, s: StreakRow | null): void {
+  if (s === null) { db.prepare('DELETE FROM linear_sync_streaks WHERE key = ?').run(key); return; }
+  db.prepare('INSERT INTO linear_sync_streaks (key, keyDigest, since, lastFilledAt, refills) VALUES (?, ?, ?, ?, ?) '
+    + 'ON CONFLICT(key) DO UPDATE SET keyDigest = excluded.keyDigest, since = excluded.since, lastFilledAt = excluded.lastFilledAt, refills = excluded.refills')
+    .run(key, s.keyDigest, s.since, s.lastFilledAt, s.refills);
+}
+/** The plan sync's settled probes: workspace to the programme slugs whose probe settled. */
+export function settledProbes(db: DatabaseSync): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const r of db.prepare('SELECT workspaceId, program FROM linear_probe_settled ORDER BY workspaceId, program').all() as Raw[]) {
+    const set = out.get(r.workspaceId as string) ?? new Set<string>();
+    set.add(r.program as string);
+    out.set(r.workspaceId as string, set);
+  }
+  return out;
+}
+export function addSettledProbe(db: DatabaseSync, workspaceId: string, program: string): void {
+  db.prepare('INSERT INTO linear_probe_settled (workspaceId, program) VALUES (?, ?) ON CONFLICT DO NOTHING').run(workspaceId, program);
+}
+export function clearSettledProbes(db: DatabaseSync, workspaceId: string): void {
+  db.prepare('DELETE FROM linear_probe_settled WHERE workspaceId = ?').run(workspaceId);
+}
+
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
@@ -574,6 +716,9 @@ const PORT_FUNCTIONS = {
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
+  managedTeams, driftMarkOf, setDriftMark, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
+  setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
+  settledProbes, addSettledProbe, clearSettledProbes,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

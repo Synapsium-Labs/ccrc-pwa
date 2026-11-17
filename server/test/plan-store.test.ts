@@ -8,13 +8,18 @@ import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  NO_PLAN_CHANGES, applyPlanChanges, attachTicketInTx, clearSyncDue, closePlan, deferSync, dueSyncs, heldSyncUntil, insertTicket, markCheckpointMet, markSyncDue,
+  NO_PLAN_CHANGES, addSettledProbe, applyPlanChanges, attachTicketInTx, clearSyncDue, closePlan, deferSync, dueSyncs, heldSyncUntil, insertTicket, markCheckpointMet, markSyncDue,
   markSyncDueInTx, onRunAdvancedInTx, planEndOf, planOf, planOwnerOf, planStorePort, settleEpicInTx, ticketById, updateTicket,
   type NewTicket, type PlanChanges,
 } from '../src/coord/planStore.js';
 import { linkingOf } from '../src/coord/linkingStore.js';
 import { hierarchySettingsOf, setHierarchySettings } from '../src/coord/planStore.js';
-import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
+import {
+  clearSettledProbes, driftEventsOf, driftMarkOf, driftRestoresOf, inboundByState, inboundOf, inboundWaiting, lastDriftCommentAt,
+  managedTeams, markDriftCommented, recordDrift, setDriftItem, setDriftMark, setDriftSince, setInboundState, setStreak, settledProbes,
+  streaksOf, upsertInbound,
+} from '../src/coord/planStore.js';
+import { LINEAR_SYNC_PROGRAMME, PLAN_BOUNDS } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const PLAN_SLOT = 59;   // the plan model's migration (the plan's own number was 57; slots 55 to 58 went first)
@@ -375,5 +380,151 @@ describe('requeueFailed (C17)', () => {
     expect(port.requeueFailed({ bindingId: never.id, to: 'bound' })).toBe(0);             // nothing to be bound to
     expect(port.requeueFailed({ bindingId: never.id, to: 'pending' })).toBe(1);
     expect(port.bindingOf('checkpoint', cpId, 'ws-a')).toMatchObject({ state: 'pending', linearId: null, failedAt: null });
+  });
+});
+
+// ── Migration 87 and the drift, migration and inbound stores (D-8183, Task 4.1) ───────────────────────────────────────
+
+const NEW_TABLES = ['linear_drift_marks', 'linear_drift_events', 'linear_migrations', 'linear_migration_moves', 'linear_inbound',
+  'linear_sync_streaks', 'linear_probe_settled'];
+const insertMigration = (ws: string, team: string, state: string): void => {
+  db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt) VALUES (?, ?, ?, 1, 1)').run(ws, team, state);
+};
+const inboundIn = (linearId: string, over: Partial<Parameters<typeof upsertInbound>[1]> = {}) => ({
+  linearId, workspaceId: 'ws-a', teamKey: 'AAA', identifier: `KEY-${linearId}`, title: 'T', body: 'B', seenAt: 5, ...over,
+});
+
+describe('migration 87 (D-8183)', () => {
+  it('migration 87 applies after 59 and 86', () => {
+    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(87);
+    expect(MIGRATIONS[86]).toMatch(/CREATE TABLE linear_drift_marks\b/);
+    expect(MIGRATIONS.slice(0, 86).some((m) => /CREATE TABLE linear_drift_marks\b/.test(m))).toBe(false);
+    for (const t of NEW_TABLES) {
+      expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t), t).toBeDefined();
+    }
+    db.prepare("INSERT INTO linear_migration_moves (migrationId, subject, kind, after) VALUES (1, 'epic:e1', 'epic', '{}')").run();
+    expect(() => db.prepare("INSERT INTO linear_migration_moves (migrationId, subject, kind, after) VALUES (1, 'epic:e1', 'epic', '{}')").run())
+      .toThrow(/UNIQUE/);
+    db.prepare("INSERT INTO linear_migration_moves (migrationId, subject, kind, after) VALUES (2, 'epic:e1', 'epic', '{}')").run();
+  });
+});
+
+describe('managed teams', () => {
+  it('managedTeams answers applied migrations only', () => {
+    insertMigration('ws-b', 'BBB', 'applied');
+    insertMigration('ws-a', 'AAA', 'applied');
+    insertMigration('ws-a', 'AAA', 'applied');
+    insertMigration('ws-a', 'CCC', 'proposed');
+    insertMigration('ws-a', 'DDD', 'put-back');
+    expect(managedTeams(db)).toEqual([{ workspaceId: 'ws-a', teamKey: 'AAA' }, { workspaceId: 'ws-b', teamKey: 'BBB' }]);
+    expect(planStorePort(db).managedTeams()).toEqual(managedTeams(db));
+  });
+});
+
+describe('drift marks and events', () => {
+  it('a drift mark is upserted per workspace', () => {
+    expect(driftMarkOf(db, 'ws-a')).toBeNull();
+    setDriftMark(db, 'ws-a', 'w1', 10);
+    setDriftMark(db, 'ws-a', 'w2', 20);
+    expect(driftMarkOf(db, 'ws-a')).toEqual({ watermark: 'w2', passAt: 20 });
+  });
+  it('recordDrift and driftRestoresOf', () => {
+    const a = recordDrift(db, { bindingId: 1, at: 100, field: 'projectId', value: 'x', actor: 'not read', restored: true });
+    const b = recordDrift(db, { bindingId: 1, at: 50, field: 'title', value: 'y', actor: 'not read', restored: true });
+    recordDrift(db, { bindingId: 1, at: 70, field: 'title', value: 'z', actor: 'not read', restored: false });
+    recordDrift(db, { bindingId: 2, at: 60, field: 'title', value: 'z', actor: 'not read', restored: true });
+    expect(b).toBeGreaterThan(a);
+    expect(driftRestoresOf(db, 1, 0)).toEqual([50, 100]);
+    expect(driftRestoresOf(db, 1, 60)).toEqual([100]);
+    expect(driftEventsOf(db, 1, 60).map((e) => [e.at, e.field, e.restored])).toEqual([[70, 'title', false], [100, 'projectId', true]]);
+    expect(lastDriftCommentAt(db, 1)).toBeNull();
+    markDriftCommented(db, a, 111);
+    markDriftCommented(db, b, 99);
+    expect(lastDriftCommentAt(db, 1)).toBe(111);
+  });
+  it('the binding drift columns have one writer each', () => {
+    declare('prog-a');
+    const port = planStorePort(db);
+    const b = port.ensurePending('epic', port.planOf('prog-a').epics[0]!.id, 'ws-a', 'AAA');
+    setDriftSince(db, b.id, 77);
+    setDriftItem(db, b.id, 9);
+    expect(port.bindingOf('epic', b.localId, 'ws-a')).toMatchObject({ driftSince: 77, heldItemId: 9 });
+    setDriftSince(db, b.id, null);
+    setDriftItem(db, b.id, null);
+    expect(port.bindingOf('epic', b.localId, 'ws-a')).toMatchObject({ driftSince: null, heldItemId: null });
+  });
+});
+
+describe('inbound', () => {
+  it('upsertInbound keeps the state of a known row', () => {
+    expect(upsertInbound(db, inboundIn('L1'))).toBe('new');
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'waiting', title: 'T', body: 'B', mailedTo: null });
+    setInboundState(db, 'L1', { state: 'mailed', mailedTo: 'coord-a', mailedAt: 6 });
+    expect(upsertInbound(db, inboundIn('L1', { title: 'T2', body: null, seenAt: 99 }))).toBe('known');
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'mailed', title: 'T2', body: null, mailedTo: 'coord-a', mailedAt: 6, seenAt: 5 });
+    expect(inboundOf(db, 'nope')).toBeNull();
+    setInboundState(db, 'L1', { state: 'closed', reason: 'duplicate', actedAt: 8 });
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'closed', reason: 'duplicate', actedAt: 8, mailedTo: 'coord-a' });
+  });
+  it('upsertInbound truncates a long title and body visibly, on a code point (D-8705)', () => {
+    const title = '😀'.repeat(300);
+    const body = 'é'.repeat(40_000) + '😀';   // 80 003 bytes
+    upsertInbound(db, inboundIn('L1', { title, body }));
+    const row = inboundOf(db, 'L1')!;
+    expect([...row.title].length).toBe(PLAN_BOUNDS.titleChars);
+    expect(row.title.endsWith('…')).toBe(true);
+    expect(Buffer.byteLength(row.body!, 'utf8')).toBeLessThanOrEqual(PLAN_BOUNDS.bodyBytes);
+    expect(row.body!.endsWith('\n…')).toBe(true);
+    expect(row.body).not.toContain('\uFFFD');
+    upsertInbound(db, inboundIn('L2', { title: 'short', body: 'short' }));
+    expect(inboundOf(db, 'L2')).toMatchObject({ title: 'short', body: 'short' });
+    upsertInbound(db, inboundIn('L1', { title, body }));   // a refresh cuts the same way
+    expect([...inboundOf(db, 'L1')!.title].length).toBe(PLAN_BOUNDS.titleChars);
+  });
+  it('inboundByState filters by workspace and state', () => {
+    upsertInbound(db, inboundIn('L1'));
+    upsertInbound(db, inboundIn('L2', { workspaceId: 'ws-b' }));
+    setInboundState(db, 'L2', { state: 'handed', handedTo: 'coord-a' });
+    expect(inboundByState(db, null, ['waiting', 'handed']).map((r) => r.linearId)).toEqual(['L1', 'L2']);
+    expect(inboundByState(db, 'ws-b', ['waiting', 'handed']).map((r) => r.linearId)).toEqual(['L2']);
+    expect(inboundByState(db, null, ['taken'])).toEqual([]);
+    expect(inboundByState(db, null, [])).toEqual([]);
+  });
+  it("inboundWaiting counts the project's team's waiting rows", () => {
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'aaa')").run();
+    upsertInbound(db, inboundIn('L1'));
+    upsertInbound(db, inboundIn('L2'));
+    upsertInbound(db, inboundIn('L3'));
+    upsertInbound(db, inboundIn('L4', { teamKey: 'BBB' }));
+    setInboundState(db, 'L3', { state: 'mailed' });
+    expect(inboundWaiting(db, 'project-a')).toBe(2);
+    expect(inboundWaiting(db, 'project-none')).toBe(0);
+  });
+});
+
+describe('streaks and settled probes', () => {
+  it('streaks and settled probes round-trip', () => {
+    setStreak(db, 'k1', { keyDigest: 'd1', since: 1, lastFilledAt: 2, refills: 3 });
+    setStreak(db, 'k1', { keyDigest: 'd1', since: 1, lastFilledAt: 5, refills: 4 });
+    setStreak(db, 'k2', { keyDigest: 'd2', since: 9, lastFilledAt: 9, refills: 1 });
+    expect([...streaksOf(db)]).toEqual([['k1', { keyDigest: 'd1', since: 1, lastFilledAt: 5, refills: 4 }], ['k2', { keyDigest: 'd2', since: 9, lastFilledAt: 9, refills: 1 }]]);
+    setStreak(db, 'k1', null);
+    expect([...streaksOf(db).keys()]).toEqual(['k2']);
+
+    addSettledProbe(db, 'ws-a', 'prog-a');
+    addSettledProbe(db, 'ws-a', 'prog-a');
+    addSettledProbe(db, 'ws-a', 'prog-b');
+    addSettledProbe(db, 'ws-b', 'prog-a');
+    expect([...settledProbes(db).get('ws-a')!].sort()).toEqual(['prog-a', 'prog-b']);
+    clearSettledProbes(db, 'ws-a');
+    expect([...settledProbes(db).keys()]).toEqual(['ws-b']);
+  });
+  it('every new function joins the port', () => {
+    const port = planStorePort(db);
+    for (const f of ['managedTeams', 'driftMarkOf', 'setDriftMark', 'recordDrift', 'driftRestoresOf', 'lastDriftCommentAt', 'markDriftCommented',
+      'driftEventsOf', 'setDriftSince', 'setDriftItem', 'upsertInbound', 'inboundOf', 'setInboundState', 'inboundByState', 'inboundWaiting',
+      'streaksOf', 'setStreak', 'settledProbes', 'addSettledProbe', 'clearSettledProbes']) {
+      expect(typeof (port as unknown as Record<string, unknown>)[f], f).toBe('function');
+    }
   });
 });

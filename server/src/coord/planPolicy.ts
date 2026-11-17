@@ -412,3 +412,23 @@ export function linearOwnerOf(project: string, f: OwnerFacts):
   const p = f.presence(id);
   return { id, source: f.named !== null ? 'named' : 'default', live: p === 'alive', gone: p === 'dead' || p === 'absent' };
 }
+
+/** An inbound issue's reporter text, cut visibly to the plan's ticket bounds before it is stored (D-8705): the title to
+ *  `PLAN_BOUNDS.titleChars` code points, the body to `PLAN_BOUNDS.bodyBytes` UTF-8 bytes, never splitting a code point. A
+ *  title's cut ends with `…`; a body's cut ends with a line holding `…`. Text inside its bound is returned unchanged. */
+export function fitInboundText(title: string, body: string | null): { title: string; body: string | null } {
+  const cps = [...title];
+  const fitTitle = cps.length <= PLAN_BOUNDS.titleChars ? title : `${cps.slice(0, PLAN_BOUNDS.titleChars - 1).join('')}\u2026`;
+  if (body === null || Buffer.byteLength(body, 'utf8') <= PLAN_BOUNDS.bodyBytes) return { title: fitTitle, body };
+  const tail = '\n\u2026';
+  const room = PLAN_BOUNDS.bodyBytes - Buffer.byteLength(tail, 'utf8');
+  let out = '';
+  let used = 0;
+  for (const ch of body) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (used + n > room) break;
+    out += ch;
+    used += n;
+  }
+  return { title: fitTitle, body: out + tail };
+}
