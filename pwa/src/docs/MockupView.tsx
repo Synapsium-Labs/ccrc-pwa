@@ -282,7 +282,8 @@ function MockupLive(p: MockupViewProps & {
           unwatch();
         } else if (regained) {
           // A sign-in completed during the load, after a read answered `auth`: the new attempt reads again, so this one
-          // builds nothing.
+          // builds nothing. What is shown (an earlier attempt's result, or Loading) stays until the new attempt's result,
+          // and this attempt's cleanup, which the new attempt's start runs, withdraws its Export body.
           end({ s: 'ended' });
           setAttemptNo((n) => n + 1);
           return;
