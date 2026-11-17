@@ -11,6 +11,9 @@
 //     The Linear plan sync reads `prLineage` too, for a run's PR NUMBER to link, never whether it merged: it is admitted
 //     as ONE function, `linear/planSync.ts#prOfRunFrom` (#2941), whose body is cut out and must not say `merged`, and the
 //     rest of that file reads neither column (slug `census-admits-the-plan-sync-pr-link`, narrowed by review 2377 F4).
+//     Remaining work A's edge check (`coord/programmeFactsStore.ts#edgeTargetFacts`, #2951) reads a run's lineage for the
+//     PR numbers it lists, and is admitted the same way until remaining work B moves that check onto `readTarget` (review
+//     2377 F3) and deletes its row here (slug `census-admits-the-edge-facts-until-remaining-work-b`).
 // A read is a member access, an index by name, a destructuring (plain, typed, or of a parameter) or a one-line `SELECT`
 // naming the column (review 2377 F5). Comment lines are not code. KNOWN WIDTH: a read through a computed key or an alias
 // of the row object, and a `SELECT` whose column list spans lines, are not seen.
@@ -53,11 +56,15 @@ const bodyOfFn = (src: string, head: RegExp): string => {
   return lines.slice(at, end + 1).join('\n');
 };
 
-/** The plan sync's admission, by text: the one function cut out, what the rest of the file reads, and what the body says. */
-const PLAN_SYNC = 'server/src/linear/planSync.ts';
-const PR_OF_RUN = /^export function prOfRunFrom\(/;
-const admission = (text: string): { body: string; restReads: boolean; bodyReads: boolean; bodySaysMerged: boolean } => {
-  const body = bodyOfFn(text, PR_OF_RUN);
+/** The functions outside the store and the gatherer admitted to read a run's lineage, each for PR numbers, never merged. */
+const ADMITTED = [
+  { file: 'server/src/linear/planSync.ts', head: /^export function prOfRunFrom\(/ },
+  { file: 'server/src/coord/programmeFactsStore.ts', head: /^export function edgeTargetFacts\(/ },
+] as const;
+const PR_OF_RUN = ADMITTED[0].head;
+/** One admission, by text: the one function cut out, what the rest of the file reads, and what the body says. */
+const admission = (text: string, head: RegExp = PR_OF_RUN): { body: string; restReads: boolean; bodyReads: boolean; bodySaysMerged: boolean } => {
+  const body = bodyOfFn(text, head);
   const rest = body === '' ? text : text.replace(body, '');
   const reads = (t: string): boolean => readPattern('prLineage').test(t) || readPattern('closePr').test(t);
   return { body, restReads: reads(rest), bodyReads: reads(body), bodySaysMerged: /merged/i.test(body) };
@@ -141,18 +148,19 @@ describe('the done-test reader: one gatherer, one decider, and no other reader o
     expect(readersOf(SRC, 'closePr')).toEqual([`${C}doneTestRead.ts`, `${C}doneTests.ts`, `${C}store.ts`]);
   });
 
-  it('a run\'s prLineage is read only by the store, the gatherer and the plan sync\'s one PR-link function', () => {
-    expect(readersOf(SRC, 'prLineage').filter((f) => f !== PLAN_SYNC)).toEqual([`${C}doneTestRead.ts`, `${C}store.ts`]);
+  it('a run\'s prLineage is read only by the store, the gatherer and the admitted functions', () => {
+    const admittedFiles: readonly string[] = ADMITTED.map((a) => a.file);
+    expect(readersOf(SRC, 'prLineage').filter((f) => !admittedFiles.includes(f))).toEqual([`${C}doneTestRead.ts`, `${C}store.ts`]);
   });
 
-  it('the plan sync reads a run\'s lineage only inside prOfRunFrom, which never says merged (F4)', () => {
-    const file = SRC.find((f) => rel(f) === PLAN_SYNC);
-    expect(file, PLAN_SYNC).toBeDefined();
-    const a = admission(code(file!));
-    expect(a.body, 'prOfRunFrom is cut out of the file').not.toBe('');
-    expect(a.bodyReads, 'prOfRunFrom is the admitted reader').toBe(true);
-    expect(a.restReads, 'the rest of the plan sync reads neither prLineage nor closePr').toBe(false);
-    expect(a.bodySaysMerged, 'prOfRunFrom never decides merged').toBe(false);
+  it.each(ADMITTED.map((a) => [a.file, a.head] as const))('%s reads a run\'s lineage only inside its admitted function, which never says merged (F4)', (file, head) => {
+    const abs = SRC.find((f) => rel(f) === file);
+    expect(abs, file).toBeDefined();
+    const a = admission(code(abs!), head);
+    expect(a.body, 'the admitted function is cut out of the file').not.toBe('');
+    expect(a.bodyReads, 'the admitted function is the reader').toBe(true);
+    expect(a.restReads, 'the rest of the file reads neither prLineage nor closePr').toBe(false);
+    expect(a.bodySaysMerged, 'the admitted function never decides merged').toBe(false);
   });
 
   it('CONTROL (F4): a reader beside prOfRunFrom, and a prOfRunFrom that says merged, are each found', () => {

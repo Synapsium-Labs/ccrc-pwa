@@ -6,12 +6,12 @@ departures and measurements the build added, by slug. No D-number is minted here
 
 ## In short
 
-- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 89: overlaps A (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87 and renewal readings A (#2962) 88 first, renumbered on the coordinator's word),
+- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 90: overlaps A (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88 and remaining work A (#2951) 89 first, renumbered on the coordinator's word),
   `closePrFactsOf`, `parseDoneTest`, `targetVerdict`, `readTarget`, the reader's census, the writers-map pin of
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
   the close was touched, and stays green after, with the one additive column set aside.
-- **Eight departures,** each below; two follow the coordinator's rulings on review 2377 (F2, F7). None changes a rule the plan states; each makes a rule measurable on this tree.
+- **Nine departures,** each below; two follow the coordinator's rulings on review 2377 (F2, F7). None changes a rule the plan states; each makes a rule measurable on this tree.
 
 ## Departures
 
@@ -23,6 +23,7 @@ departures and measurements the build added, by slug. No D-number is minted here
 | `target-facts-reuse-read-failure` | §11 Task A3's interface spells `run: … \| 'absent' \| 'unreadable'` | The pair is declared once, as `shared/agent-protocol.ts#ReadFailure`, and `single-definition/vocabularies` refuses a second spelling, so `TargetFacts` names `ReadFailure`. Same two words |
 | `close-pr-merged-is-the-phase-readers-predicate` | DT7: `{ pr, merged, head }` | `merged` is `prstate.ts#isMergedRow`, the predicate every phase reader uses, so a pull request a merge train landed (closed with the train label, proven by the train record) records `merged: true`. `mergedFactsOf`, the landing line's reader, leaves such a row to its PR-keyed reader; the done test reads the run's PR as merged either way |
 | `census-admits-the-plan-sync-pr-link` | Task A4 Step 2: no file outside `store.ts` and `doneTestRead.ts` reads `prLineage` | The Linear plan sync (#2941, merged after this plan) reads a run's newest lineage entry in `linear/planSync.ts#prOfRunFrom` for the PR number to link, never whether it merged. The census admits that ONE function (review 2377 F4): it cuts `prOfRunFrom`'s body out, requires the rest of the file to read neither column and the body never to say `merged`, each with a planted control |
+| `census-admits-the-edge-facts-until-remaining-work-b` | Task A4 Step 2: no file outside `store.ts` and `doneTestRead.ts` reads `prLineage` | Remaining work A (#2951, merged during this fix round) reads a run's lineage in `coord/programmeFactsStore.ts#edgeTargetFacts` for the PR numbers it lists (review 2377 F3's reader). The census admits that one function as it admits `prOfRunFrom` (body cut out, the rest of the file reads neither column, the body never says `merged`), until remaining work B moves the edge check onto `readTarget` and deletes the row (pending the coordinator's word) |
 | `pr-merged-reads-the-own-close-only` | Table 3 row 12 and DT7: a PR the run replaced, merged inside its window, passes `pr-merged` through the lineage (row 13: closed ends it; row 14: another phase is `phase-<word>`) | The coordinator's ruling on review 2377 F2: `pr-merged` means "this run's PR N merged". The fold keeps lineage entries by the shared workspace branch, and ccd stamps an outgoing PR when it is replaced, inside the replacing run's window, so no entry says whose it is. Only the run's own `closePr` naming N answers it (passed if merged, ended if not). N named only by an in-window lineage entry is `unmeasurable:lineage-unattributed`, whatever its phase; outside the window, or nowhere, `not-this-runs-pr`. Rows 13 and 14 fold into it. The coordinator folds the plan's text in the ledger PR |
 | `pr-merged-unreadable-close-is-unmeasurable` | Table 3 has no `pr-merged` row for an unreadable `closePr` | An unreadable `closePr` answers `unmeasurable:close-record-unreadable` before the lineage is read (review 2377 F7): the safe side, since the record that alone answers the target cannot be read |
 
