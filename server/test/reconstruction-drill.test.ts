@@ -398,6 +398,16 @@ describe('the reconstruction drill', () => {
     expect(Object.keys(r)).not.toContain('calls');
   });
 
+  it('programme_remaining and programme_edges are tables no artifact mirrors: reconstruct() rebuilds none of them (Overlord W2)', () => {
+    // A statement of the waves left, and the edges it opened, are the coordinator's own record (remaining work A). Neither
+    // the ledger, the registry nor `.prhistory` carries one, so a DB loss forgets every statement and every edge: the
+    // forecast reads no remaining work until the coordinator next states it, and no edge blocks. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toMatch(/programme_remaining|programme_edges/);
+    expect(Object.keys(r)).not.toContain('remaining');
+    expect(Object.keys(r)).not.toContain('edges');
+  });
+
   it('refuses to invent a program when the ledger is missing', () => {
     // A DB loss with no committed ledger is an unrecoverable program, and the
     // honest answer is a loud failure — the same polarity as the migration

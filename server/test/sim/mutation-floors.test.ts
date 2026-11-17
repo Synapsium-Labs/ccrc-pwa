@@ -35,6 +35,7 @@ import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
+import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
 import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
 import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
@@ -192,6 +193,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
+  ...PROGRAMME_FACTS_MUTANT_SETS,
   ...OVERLAPS_MUTANT_SETS,
   ...PRIVATE_NAMES_MUTANT_SETS,
   ...RENEWAL_READING_MUTANT_SETS,
