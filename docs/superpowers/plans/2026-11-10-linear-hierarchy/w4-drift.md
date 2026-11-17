@@ -175,12 +175,12 @@ migration is 92. Every fix has a test seen red against the code before it.
 
 The review read 6e4a12a3c with the full panel; round 2's fixes were all built as ruled, and six of its eight mutations went
 red. The coordinator ruled a short, closed list for this round (mail 23411), and carried the rest to a follow-up run after
-landing (below). Main was merged twice in this round, each on the coordinator's word: done tests A (#2964) took 92, then
+landing (below). Main was merged three times in this round, each on the coordinator's word: done tests A (#2964) took 92,
 the work map WM0 (#2974) took 93 (its phases, the `plan phase-ref` lane and row, `plan-phases-v1`, and the refusal words
-`unknown-ref` and `bad-carry`, kept beside this wave's), so the migration is 94 (coord-db pins 94; the run-close replay
-undoes back to 53 and replays forty-one). The census re-counted on the merged tree: 263 routes with the sockets (260
-HTTP), 161 gated, 98 exempt, 86 box-token machine lanes (89 with notify, pools/epoch and updates/intent), and 88
-`ccrc-api` rows. Every fix has a test seen red before it: against the previous
+`unknown-ref` and `bad-carry`, kept beside this wave's), and designation C (#2992) added two session-gated Settings doors
+(route counts only), so the migration is 94 (coord-db pins 94; the run-close replay undoes back to 53 and replays
+forty-one). The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
+box-token machine lanes (89 with notify, pools/epoch and updates/intent), and 88 `ccrc-api` rows. Every fix has a test seen red before it: against the previous
 code for F2, A-2, A-3 and A-8, and, for the test-only F1, F4 and A-5, by mutating the line each guards.
 
 | Finding | Outcome |
