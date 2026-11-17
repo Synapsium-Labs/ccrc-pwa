@@ -3539,17 +3539,20 @@ export const MIGRATIONS: readonly string[] = [
   // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
   // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark for each changed* kind (the
-  // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped) and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
+  // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped; D-8723) and when it
+  // last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
   // `linear_bindings.id`), whether ccrc put it back, and when it commented; `value` and `actor` hold LINEAR TEXT, read only
   // under `untrusted`, and `actor` is always the literal `not read` in this build (the changed* documents select no actor and
   // `ops.ts` is frozen; D-8703). `linear_migrations`: one row per team migration (`state` is a `MigrationState` word, `map` the
   // approved map, `itemId` the operator item that asks for it, `reportItemId` the report's), and `linear_migration_moves`: one
   // row per subject it moves, with the object before and after, unique per (migration, subject) so a re-run never doubles a move.
   // `linear_inbound`: an issue a person filed in a managed team, seen by the inbound sweep; `state` is `waiting | mailed |
-  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason, `actedAt` when the close's
-  // Linear write landed and `itemId` the operator item a `raise` made (the one fact that links a raised row to its answer); `title` and `body` are the reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the
-  // plan's ticket bounds, so `plan triage upkeep` and `plan take` make the ticket without calling Linear (D-8705).
-  // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
+  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason (with the refusal's marker when
+  // ccrc gave the close up), `actedAt` when the close's Linear writes landed or were given up, and `itemId` the operator item a
+  // `raise` made (the one fact that links a raised row to its answer); those three are D-8723's. `title` and `body` are the
+  // reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the plan's ticket bounds, so `plan triage upkeep`
+  // and `plan take` make the ticket without calling Linear (D-8705).
+  // `linear_sync_streaks` and `linear_probe_settled` (D-8723) persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
   //
   // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 91` warns, reads as-is, names none of them and

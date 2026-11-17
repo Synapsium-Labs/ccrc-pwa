@@ -238,6 +238,23 @@ number from `POST /api/ledger/deviations`.
   as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
   body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
   not a departure. Record: the ledger, review runs 2364 and 2368.
+- **D-8720 (2026-11-17)** — kept-plan-quiet: after *Keep the plan*, the same binding's persistent drift is not raised again
+  for seven days; a restore Linear refuses still raises the item at once (§7.4). Record: the wave 4 note (review run 2386
+  F3, the coordinator's ruling).
+- **D-8721 (2026-11-17)** — restore-comment-daily: a restore comments at most once a day on an object, whether or not its
+  item is open; §7.4 bounds only the open case. Record: the wave 4 note (review run 2386 F6, the coordinator's ruling).
+- **D-8722 (2026-11-17)** — issue-adopt-by-id: a ticket's issue is adopted by its idempotent id on any team, so a key
+  change between a lost create reply and recovery is not stranded. The id hashes kind, local id and workspace, so this is
+  safe only while one coord.db has ever filed tickets into that workspace. A second install, or a rebuilt database that
+  numbers tickets again, can adopt and rewrite another install's issue. The issue creator on the next capture (D-8699's
+  list) closes it. Record: the wave 4 note (review run 2386 F5, the coordinator's ruling).
+- **D-8723 (2026-11-17)** — w4-schema-additions: the wave's one migration departs from Task 4.1's SQL in four places.
+  `linear_inbound` gains `reason` (a close's reason, and a given-up close's refusal), `actedAt` (when the close's Linear
+  writes landed or were given up) and `itemId` (the operator item a `raise` made), beyond D-8705's `title` and `body`;
+  two tables the plan never names persist wave 3's carried findings, `linear_sync_streaks` (item 6, the D-8701 episode
+  streaks) and `linear_probe_settled` (item 1, the settled-probe marks); and `linear_drift_marks` keeps one watermark per
+  changed* kind (`initiatives`, `projects`, `milestones`, `issues`) in place of one `watermark`, so a change made between
+  two kinds' reads is never skipped (review run 2386 A3). Record: the wave 4 note (review run 2386 A6).
 
 ## Global Constraints
 

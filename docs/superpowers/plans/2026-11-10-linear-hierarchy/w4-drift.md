@@ -2,15 +2,16 @@
 
 This note is the wave's record for the programme ledger. The coordinator folds it into the plan's ledger on its own pull
 request. This pull request edits the plan in one place only, under the coordinator's instruction: it defines the wave's
-departure numbers, D-8703..D-8707, in the plan's `## Deviations found`, and records the coordinator's D-8681 ruling under
-that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It changes no other line and no checkbox.
+departure numbers, D-8703..D-8707 and, after review run 2386, D-8720..D-8723, in the plan's `## Deviations found`, and
+records the coordinator's D-8681 ruling under that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It changes no other line and no checkbox.
 
 ## In short
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 90: row
-    revisions, #2965, took 87, renewal readings A, #2962, 88 and remaining work A, #2951, 89 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 91: row
+    revisions, #2965, took 87, renewal readings A, #2962, 88, remaining work A, #2951, 89 and account organization D, #2958,
+    90 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
@@ -50,6 +51,19 @@ that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It ch
 - **D-8707, write-ask-project-teams.** `LinearWriteAsk.resource` gains `teamKeys`, every team a project write puts the
   project in (the deciders map `teamIds` to keys), so the policy is asked about each, as D-8678 did for a move's
   destination. Nothing changes under `allowAll`.
+- **D-8720, kept-plan-quiet** (review run 2386 F3). After *Keep the plan*, the same binding's persistent drift is not raised
+  again for seven days; a restore Linear refuses still raises the item at once (§7.4). So does a difference no update can
+  put back, which §7.2 already raises at once (`shouldRaiseDriftItem` takes the reason).
+- **D-8721, restore-comment-daily** (review run 2386 F6). A restore comments at most once a day on an object, whether or not
+  its item is open; §7.4 bounds only the open case.
+- **D-8722, issue-adopt-by-id** (review run 2386 F5, Task 4.5 item 4). A ticket's issue is adopted by its idempotent id on
+  any team, so a key change between a lost create reply and recovery is not stranded. The id hashes kind, local id and
+  workspace, so this is safe only while one coord.db has ever filed tickets into that workspace; a second install, or a
+  rebuilt database that numbers tickets again, can adopt and rewrite another install's issue. The issue creator on the
+  next capture (D-8699's list) closes it.
+- **D-8723, w4-schema-additions** (review run 2386 A6). Beyond D-8705's `title` and `body`, `linear_inbound` gains `reason`,
+  `actedAt` and `itemId`; `linear_sync_streaks` (item 6) and `linear_probe_settled` (item 1) are tables the plan never
+  names; and `linear_drift_marks` keeps one watermark per changed* kind instead of one (A3).
 - **D-8681's ruling (no new number).** Links are compared one way: a planned link missing in Linear is drift, restored by
   linking with a fresh request id; a link the plan does not have (D-8681's kept link, or one a person added) is not drift,
   since nothing unlinks. A project's milestones compare the same way: a planned milestone missing is drift (recorded and
@@ -59,15 +73,15 @@ that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It ch
 
 | Ruling | What |
 |---|---|
-| Comments | An issue, an initiative and a project take a restore comment (FX2 answer 3); a milestone takes a "Restored on <day>" line in its description, the last three kept (D-8407). The comment rows `initiativeComment` and `projectComment` reuse the session's comment document unchanged. |
-| Grace | An issue Linear reads `completed` with no merge recorded waits one pass (`driftSince`), then is restored; with the merge recorded it is left. |
-| One comment a day | While a binding's drift item is open, a restore comments at most once a day; persistence counts distinct restore times, not rows. |
+| Comments | An issue, an initiative and a project take a restore comment (FX2 answer 3); a milestone takes a "Restored on <day>" line in its description, the last three kept (D-8407). Only a line in ccrc's exact shape is ccrc's record, and only in Linear's copy: a plan line that begins "Restored on" is plan text (A9). The comment rows `initiativeComment` and `projectComment` reuse the session's comment document unchanged. |
+| Grace | An issue Linear reads `completed` with no merge recorded waits one pass (`driftSince`), then is restored; with the merge recorded it is left (`graceVerdict`). While the grace stands the issue is re-read by id at every pass (F1), and a restore of another of its fields goes without its state (A5). |
+| One comment a day | A restore comments at most once a day on an object, its item open or not (D-8721); persistence counts distinct restore times, not rows. |
 | Unrestorable | A planned milestone missing from its project, or a milestone moved to another project, is recorded and raises the item at once (no op makes or re-parents one). |
-| Kept plan | A binding whose item was kept is not raised again for seven days. |
+| Kept plan | A binding whose item was kept is not raised again for persistence for seven days; a refused restore raises at once (D-8720). |
 | Description compare | Descriptions and names are compared after one normaliser (`normalText`: CRLF, per-line trailing spaces, blank-line runs), so a whitespace re-flow Linear makes is never drift. |
 | Inbound pass word | The close of an inbound issue (its comment, then its cancel) runs under a new pass, `inbound`, in `LINEAR_CCRC_PASSES`. |
-| A refused close | A refusal that may clear (a rate limit, unreachable, a timeout, an unavailable policy or journal, out of grammar, a key not configured or refused) retries at the next beat; any other gives the close up with one mail to the team's owner and is never sent again in that process (Review Focus 5). |
-| Raised issue | A raised issue's row links to its operator item (`linear_inbound.itemId`, the one column the plan's table lacked); when the operator answers, the answer is mailed to the team's owner and the row is `mailed` again. |
+| A refused close | A refusal that may clear (a rate limit, unreachable, a timeout, an unavailable policy or journal, out of grammar, a key not configured or refused) holds the workspace's closes on the plan sync's failure-hold schedule (D-8702's `deferralOf`, F8), and a key refusal mails the team's owner once; any other gives the close up: the row records it first (`actedAt`, and the reason with the refusal), so it is never sent again, across restarts, and then the owner is mailed once (Review Focus 5; A7, A8). The project's upkeep read lists those closes (`notClosed`). |
+| Raised issue | A raised issue's row links to its operator item (`linear_inbound.itemId`, one of D-8723's columns); when the operator answers, the answer is mailed to the team's owner and the row is `mailed` again. |
 | `return` with no owner | A handed issue returned while the team has no usable owner goes back to `waiting`, so the *Name a Linear owner* item applies. |
 | Upkeep | The Upkeep epic lists no waves, never closes, and no run opens on its ticket (`ticket-unavailable`); its failures mail the project's Linear owner. |
 
@@ -87,7 +101,7 @@ The brief's eleven items, each fixed with a test seen red first and its guard pr
 | 1. A restart lost the probe's settled mark | Persisted (the coordinator's choice): `linear_probe_settled`, read and written through the plan store; a test reopens the store and a refill reading `on` creates the initiative. |
 | 2. A failing workspace held the whole programme (M3/A9) | A deferral from a step's call holds that step's workspace for that programme, with its own backoff step; the pass goes on in the programme's other workspaces, and only when nothing else is runnable is the programme's row held (a failure, D-8702) to the earliest workspace hold. `store-unreadable` still holds the programme. The workspace holds live in process memory (the row's own hold is persisted). The dispatch wait does not wait when its ticket's workspace is held. |
 | 3. An issue made before its project gained the team (round 1 A1) | A ticket CREATE on a team that is not its epic's own waits until the epic's project binding is current (its fingerprint holds the planned teams), so the project's team update goes first (§5.2). |
-| 4. ccrc's own object stranded under an old team key (round 1 A11) | `adoptionVerdict` adopts an issue by id alone (id = requestId, held by no other binding) and a project by id and viewer, whatever its team, and answers the object's actual team; the binding records it, so the next pass moves it. An issue made by another ccrc install with the same deterministic id would be adopted: a known limit, as before for an issue (no creator is read, D-8699's list). |
+| 4. ccrc's own object stranded under an old team key (round 1 A11) | `adoptionVerdict` adopts an issue by id alone (id = requestId, held by no other binding) and a project by id and viewer, whatever its team, and answers the object's actual team; the binding records it, so the next pass moves it. An issue made by another ccrc install with the same deterministic id would be adopted: D-8722 (no creator is read, D-8699's list). |
 | 5. A project's extra teams reached no policy (D-8707) | `teamKeys` on the project steps, on `CcrcOpAsk` and on `LinearWriteAsk.resource`; never journaled. |
 | 6. Episode streaks in memory | Persisted (`linear_sync_streaks`): a restart neither restarts an episode nor mails twice; a test reopens the store for both the probe and the statuses episodes. |
 | 7. Three decisions in L4 (round 2 A3) | `probeRecheckDue`, `dispatchWaitVerdict` and `deferralUntil` (with `deferralUsesBackoff`) are pure, in `planSyncPolicy.ts`, each with its own tests. |
@@ -106,19 +120,44 @@ wave's changes there, and three notes of its review (run 2368) came to this wave
 - **The Restored lines survive the cap.** A milestone's restored description (`restoredDescription`, L1) puts this
   Restored line and the two newest Linear holds FIRST, newest first, then the planned text, and fits the whole to 255:
   the fit cuts from the end, so it shortens the plan's text and, past that, drops the oldest line first. The comparison
-  strips the lines, the provenance line and a cut's `…` from both sides, and accepts Linear's text as a prefix of the
-  plan's when Restored lines stand before it (a person's other edit is still drift). Tests with a long body, red first,
-  and the prefix rule proved by mutation.
+  accepts Linear's text when, without ccrc's lines, it is the plan's text, or when it is EXACTLY what a restore writes for
+  the plan's text and the lines it holds: one composition (`composeRestored`) serves the writer and the comparison. The
+  first build accepted any prefix of the plan's text once a Restored line stood (review run 2386 F2); fix round 1 made it
+  exact, with the review's three probes as tests.
 - **The fitter's untested edges** (`plan-sync-description.test.ts`): fitting is idempotent; a bound description carrying a
   note takes one update and then none; the non-ASCII case carries an astral character, so its code-point bound and its
   UTF-16 bound differ. These pin behaviour that held already, so none was red first.
 - **A known safe-direction false refusal** (an id-like token running into letters, cut to the id): left, as ruled.
 
+## Fix round 1 (review run 2386)
+
+The review read aeac0d80d with the full panel; the coordinator ruled F3, F5 and F6 and issued D-8720..D-8723. Every fix
+has a test seen red against the code before it (the drift ones by running the new tests against the previous source); the
+A5 state hold and the inbound hold were also proved by mutating their lines. Main was merged once and the migration is 91.
+
+| Finding | Outcome |
+|---|---|
+| F1 the grace never got its second look | Fixed: a graced issue is re-read by id at every pass (`graceRereads`, `issueOwned`); the fake honours `since` |
+| F2 any prefix accepted once a Restored line stood | Fixed: exactly `composeRestored`'s string, or the plan's text |
+| F3 a refused restore quiet for a week after Keep | Ruled: D-8720; persistence alone keeps the quiet |
+| F4 `plan-owned` matched only bound bindings | Fixed: any ticket binding holding the issue, whatever its state |
+| F5 issue adopted by id on any team | Ruled: D-8722 |
+| F6 a comment every pass while no item is open | Ruled: D-8721, once a day whatever the item's state |
+| F7 decisions in the L4 pass | Fixed: `graceVerdict`, `graceRereads`, `UNRESTORABLE`/`restorableFields`, `eventVerdict` in `driftPolicy.ts` |
+| F8 key refusals retried every beat | Fixed: the D-8702 failure-hold schedule (`not-configured` joins `deferralOf`), owner mailed once |
+| A1 initiative links judged by the initiative's binding | Fixed: `missingLinksVerdict`, each by the project's own binding |
+| A2 `plannedOwned` advanced streaks and asked for fills | Fixed: a read-only snapshot |
+| A3 one watermark for four reads | Fixed: one per kind (`nextWatermark`; D-8723) |
+| A4 an unrestorable change recorded at every re-read | Fixed: `isNewUnrestorable` |
+| A5 a graced issue's state restored with another field | Fixed: the update goes without its state (`holdState`) |
+| A6 schema additions not ledgered | Ruled: D-8723; the `itemId` sentence corrected |
+| A7, A8 a give-up lost with no owner, two calls per restart | Fixed: the give-up is written on the row before the mail; the upkeep read lists it |
+| A9 a plan line beginning "Restored on" dropped | Fixed: only ccrc's exact line, only in Linear's copy |
+
 ## Follow-ups
 
 - The changed* documents' actor (D-8703), with D-8699's by-id creator and `issueOwned`'s creator, at the next capture.
 - A milestone description edit may not move its `updatedAt` (FX2 item 4), so `changedMilestones` may not see it.
-- A grace-pass issue with another drifted field is restored with its state too (the update carries the planned state);
-  the next pass after the merge is recorded completes it again.
-- A refused inbound close is forgotten by a restart, so it costs at most one more refused call per restart.
+- The inbound close's workspace hold (F8) lives in process memory: a restart costs one more call before the next refusal
+  holds again.
 - `deviation-refs.test.ts`' "two real trees" case times out under load on this box (git over two whole trees); CI decides.
