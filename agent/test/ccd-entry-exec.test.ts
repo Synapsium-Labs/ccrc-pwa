@@ -95,6 +95,12 @@ describe('the agent’s exec of ccd crosses the installed launcher', () => {
       [['delegation-adopt', '--state', 'on'], true],
       // The Overlord W1 ccd arms: the sleep markers' writer rides `['keep-awake','--session']` and starts under `bash -p`.
       [['keep-awake', '--session', 'x', '--state', 'on'], true],
+      // D-8666 (the delegation broker's Rider): the forbidden verbs the server composes through this op (the archive,
+      // restore and reap routes) start under `bash -p` too, so an inherited `nocasematch` folds no case variant into one.
+      // `ws-rm` and `ws-gc` are ungrantable here, and `roll` and `claude` have no grant: their rows are the server suite's.
+      [['ws-archive', '--session', 'demo-x'], true],
+      [['ws-restore', '--session', 'demo-x'], true],
+      [['ws-reap', '--expect', 'a'.repeat(64), '--session', 'demo-x'], true],
       [['ensure', 'demo-x'], false],
     ];
     let id = 0;

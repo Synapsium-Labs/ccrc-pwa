@@ -58,6 +58,8 @@ import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './ru
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
 import * as portfolio from './portfolioStore.js';
 import * as answerMarks from './answerMarkStore.js';
+import * as collisions from './claimCollisions.js';
+import * as pairs from './programmePairsStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -5337,6 +5339,14 @@ export class CoordStore {
     const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
     return r !== undefined && r.planEnd === null;
   }
+  // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
+  collisionsSince(since: number): collisions.CollisionsRead { return collisions.collisionsSince(this.db, since); }
+  applyPairMoves(moves: Parameters<typeof pairs.applyPairMoves>[1], now: number): number[] { return pairs.applyPairMoves(this.db, moves, now); }
+  standingPairs(): pairs.StandingPairsRead { return pairs.standingPairs(this.db); }
+  newestEpisodes(): pairs.NewestEpisodesRead { return pairs.newestEpisodes(this.db); }
+  claimHistory(since: number, cap: number): pairs.ClaimHistoryRead { return pairs.claimHistory(this.db, since, cap); }
+  goalsStamp(slug: string): string { return pairs.goalsStamp(this.db, slug); }
+  programmeLandedSince(slug: string, at: number): boolean | 'unmeasured' { return pairs.programmeLandedSince(this.db, slug, at); }
 
   /** Count of this program's runs still in a NON-terminal state — the
    *  question `setProgramState`'s caller (the close route, D-51) needs
@@ -8787,7 +8797,7 @@ export class CoordStore {
     const now = input.now ?? Date.now();
     const callerLiveness = input.callerLiveness ?? 'unmeasurable';
     const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
-    return tx(this.db, () => {
+    const answer = tx(this.db, () => {
       // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
       this.expireLapsedInner(now);
       const liveRows = this.db.prepare(
@@ -8886,6 +8896,10 @@ export class CoordStore {
         input.sessionId, paths, now);
       return { ok: true as const, claims: out, lapsedSince, rechained };
     });
+    // Overlord W2 overlaps (plan w2-overlaps.md question 4, review F5): a refusal's collisions are recorded AFTER the claim's
+    // own transaction committed, in one of their own, and a failed record is swallowed there, so this answer never changes.
+    if (!answer.ok && answer.why === 'conflict') collisions.recordCollisionsAfterRefusal(this.db, input, answer.conflicts, now);
+    return answer;
   }
 
   /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s

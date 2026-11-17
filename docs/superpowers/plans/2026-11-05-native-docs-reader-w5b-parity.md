@@ -139,7 +139,7 @@ Each says What, Why and Cost if wrong, and whether it departs from a spec, desig
 
 **W5b-2**
 
-- **(m) `ref` stays in the URL beside `at`; W5b writes nothing into `history.state`** (pending Q1). Departs from two sentences of the rich-docs spec. G6 says "'Back to the latest' its ref, in `history.state` for the visit, not in the URL". RD19, a Ruled row, says "`at=<sha>` (R-d). `only` and `latest` stay in-visit state". The spec's Later item, "`only` and `latest` in the URL beside `at=`, if in-visit state proves too thin", loses its `latest` half, because the latest is then the page URL less `at`; its `only` half stays W8b's. The library host table's `openVersion` still supplies a separate `latestUrl`, which W8b fills with that same URL.
+- **(m) `ref` stays in the URL beside `at`; W5b writes nothing into `history.state`.** The operator answered Q1 (a) (item 50). It departs from two sentences of the rich-docs spec, as D-8648. G6 says "'Back to the latest' its ref, in `history.state` for the visit, not in the URL". RD19, a Ruled row, says "`at=<sha>` (R-d). `only` and `latest` stay in-visit state". The spec's Later item, "`only` and `latest` in the URL beside `at=`, if in-visit state proves too thin", loses its `latest` half, because the latest is then the page URL less `at`; its `only` half stays W8b's. The library host table's `openVersion` still supplies a separate `latestUrl`, which W8b fills with that same URL.
   - What: `at` is a leaf page's key, written after `ref` (`DOCS_PAGE_KEYS = ['ref','at','view','frame']`). Back to the latest is the same URL less `at` (`docsLocation(page, { kind: 'version', at: null })`). `only` lands in `history.state` with W8b's `version` op (M8.22), which this run does not build.
   - Why: a version page's listing, served ref, `onRef` and Share all read the ref's tree; with `ref` out of the URL, a reload or a shared link would open the version over the default branch's listing, and a version from a branch view would read `not-contained`. Today's page grammar already carries `ref` on every page but the index (base §3.1), and no spec sentence refuses it beside `at` (A14 refuses only the other pin keys).
   - Cost if wrong: Q1's option (b), one task's edits: when a version page is opened, the visit also keeps the latest URL in `history.state` (RD19's `latest`), Back to the latest reads it back, and a reload or a shared link, which has no such state, falls back to the URL less `at`. RD19 and the Later line then stand. (m) still departs from G6's last clause as worded, because its ref stays in the URL as the page key it already is, so (m) keeps its number under either answer.
@@ -147,7 +147,7 @@ Each says What, Why and Cost if wrong, and whether it departs from a spec, desig
   - What: on a page with `at`, `imagePinFor` pins at `at` (and never marks `uncommittedNotShown`); `DocImage`, Export and the reader's images all take it, being the one derivation (`planImageRef`). Whether an image is offered is still the served listing's answer, as (p) asks of the leaf: an image the listing does not hold as a committed `file` or `exec` is `absent`, with no request, so a version whose image was deleted or renamed since shows it absent. The listing's size is the tip's, so on a version page `planImageRef` skips the size pre-check and lets ccd's class cap answer, as Task 17 does for the leaf.
   - Why: G6's "the page opens a committed pin at that commit"; an old doc shown with today's diagrams would be wrong. Presence comes from the served listing because a version page reads no listing at its own commit.
   - Cost if wrong: one line each.
-- **(o) Links inside a version page keep the version** (pending Q2).
+- **(o) Links inside a version page keep the version.** The operator answered Q2 (a) (item 50). It departs from the rich-docs spec's row M8.22 ("`navigate` never produces an `at=` URL") as D-8654: on a version page a frame `navigate` to a doc inherits the page's `at`.
   - What: a `path` target from a leaf page with `at` inherits it, unless the target names `at` (`null` for the latest) or is a directory. So a version page's in-document doc links, its image's leaf link and its own crumb stay at the version (GitHub's blob-at-commit rule); the crumbs above it, Back, every listing, and Back to the latest go to the latest. `docLinkTarget` passes the page's `at` from `DocLinkContext` (`pageAt`).
   - Why: a version is read as a snapshot; a relative link that jumped to today's copy would mix two commits on one reading path.
   - Cost if wrong: Q2's option (b): `docsLocation`'s path arm sets `at: null`.
@@ -2538,7 +2538,7 @@ Review run 2204 read `c16276de2..02b7bc2ac`, with three lenses on `claude-opus-5
 | F-N2 to F-N5 the plan text | `46bf47b17` |
 | these Results | the head commit |
 
-Checks for the round, through `ccrc test`, in the foreground, one file at a time, at `46bf47b17`, after `git fetch -q origin main` (`origin/main` at `649ac3f13`):
+Checks for the round, through `ccrc test`, in the foreground, one file at a time, on these Results (the head commit, after `46bf47b17`), after `git fetch -q origin main` (`origin/main` at `649ac3f13`). Review run 2208 re-ran them at the head:
 
 | Package | Run | Result |
 |---|---|---|

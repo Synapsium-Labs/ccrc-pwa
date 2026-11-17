@@ -217,9 +217,12 @@ export type ImagePin =
  *    on a version page). A draft is never resolved.
  *  - draft page (an admitted holder at the served commit): no draft on the image gives the committed side under the
  *    same condition; a deleted draft is `deleted-in-worktree`; a draft `entryView` opens gives
- *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`. */
+ *    `DraftPin(drafts.branch, worktree head, fp)`; any other draft is `draft-withheld`.
+ *  `pageDraft` is `pageOpensDraft(tree, page)` when the caller already holds it (the mockup planner asks it once per
+ *  plan, so a page of many references does not search the listing for the page's own entry once per reference); when
+ *  omitted it is asked here. */
 export function imagePinFor(
-  e: DocsEntry | undefined, tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' },
+  e: DocsEntry | undefined, tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' }, pageDraft?: boolean,
 ): ImagePin {
   if (e === undefined) return { ok: false, why: 'absent' };
   const drafts = tree.drafts;
@@ -232,7 +235,7 @@ export function imagePinFor(
     };
     return { ok: true, pin, draft: false, uncommittedNotShown };
   };
-  if (pinFor(tree, page)?.kind !== 'draft') return committed(page.at === null && page.ref !== null && admitDraft(e, drafts));
+  if (!(pageDraft ?? pageOpensDraft(tree, page))) return committed(page.at === null && page.ref !== null && admitDraft(e, drafts));
   const draft = e.draft;
   if (draft === null) return committed(false);
   if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
@@ -243,6 +246,11 @@ export function imagePinFor(
     kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: e.section, path: e.path, fp: draft.fp,
   };
   return { ok: true, pin, draft: true, uncommittedNotShown: false };
+}
+
+/** Whether `page` is a DRAFT page for `imagePinFor`: its own leaf opens a draft (`pinFor` answers a `DraftPin`). */
+export function pageOpensDraft(tree: DocsTreeOk, page: DocsPageLocation & { kind: 'path' }): boolean {
+  return pinFor(tree, page)?.kind === 'draft';
 }
 
 /** A session's link into Docs (spec 4.8). `href`: the session's project at the branch its worktree holds NOW, written
