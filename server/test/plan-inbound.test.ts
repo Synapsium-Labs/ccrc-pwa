@@ -96,13 +96,13 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>() },
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as 'linear-forbidden' | 'unreachable' },
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
   const call = async (ask: CcrcOpAsk): Promise<CcrcOpOutcome> => {
     r.asks.push(ask);
-    if (r.lin.fail.has(ask.op)) return { ok: false, word: 'linear-forbidden', maybeSent: false };
+    if (r.lin.fail.has(ask.op)) return { ok: false, word: r.lin.failWord, maybeSent: false };
     if (ask.op === 'changedIssues') return ok({ nodes: r.lin.issues, next: null });
     if (ask.op.startsWith('changed')) return ok({ nodes: [], next: null });
     if (ask.op === 'projectsByName' || ask.op === 'initiativesByName') return ok({ nodes: [] });
@@ -481,10 +481,11 @@ describe('plan triage (D-8183)', () => {
     expect(rowOf(r2, 12)!.actedAt).toBeNull();
   });
 
-  it('a close whose comment is refused is not acted: the row stays for the next beat', async () => {
+  it('a close whose comment cannot be sent yet is not acted: the row stays for the next beat', async () => {
     const r = await rig();
     await detect(r, [node(12)]);
     await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'unreachable';
     r.lin.fail.add('issueComment');
     await passAt(r, r.t.now + 1);
     expect(r.asks.filter((a) => a.op === 'issueUpdate')).toEqual([]);
@@ -492,6 +493,24 @@ describe('plan triage (D-8183)', () => {
     r.lin.fail.clear();
     await passAt(r, r.t.now + 1);
     expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+  });
+
+  it('a close Linear refuses is given up: the owner is mailed once and nothing is sent again (Review Focus 5)', async () => {
+    for (const op of ['issueComment', 'issueUpdate']) {
+      const r = await rig();
+      await detect(r, [node(12)]);
+      await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+      r.lin.failWord = 'linear-forbidden';
+      r.lin.fail.add(op);
+      await passAt(r, r.t.now + 1);
+      const sentOnce = r.asks.filter((a) => a.op === op).length;
+      expect(sentOnce).toBe(1);
+      await passAt(r, r.t.now + 1);
+      await passAt(r, r.t.now + 1);
+      expect(r.asks.filter((a) => a.op === op)).toHaveLength(1);              // never sent again: no retry spends the lane
+      expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+      expect(mails(r, 'Linear inbound: AAA-12 could not be closed%').map((m) => m.toId)).toEqual([OWNER]);
+    }
   });
 
   it('raise makes a decide item for the operator, and its answer comes back to the owner', async () => {

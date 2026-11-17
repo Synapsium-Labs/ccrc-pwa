@@ -21,7 +21,7 @@ import { tx } from '../coord/tx.js';
 import { linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
-import { answeredMail, closeCommentBody, inboundMail, noCancelMail, ownerItemInput } from './inboundPolicy.js';
+import { answeredMail, closeCommentBody, closeRefusedMail, inboundActVerdict, inboundMail, noCancelMail, ownerItemInput } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
 import { slotsOf } from './planSync.js';
@@ -39,6 +39,9 @@ function factsOf(n: Node): { linearId: string; identifier: string; teamKey: stri
 }
 
 export class InboundLane {
+  /** The closes Linear refused for good in this process (`refused`): never sent again. */
+  private readonly givenUp = new Set<string>();
+
   constructor(private readonly deps: Deps) {}
 
   // ── Detect (a workspace pass) ──
@@ -154,6 +157,7 @@ export class InboundLane {
       const slot = slots.get(row.workspaceId);
       const entries = slot === undefined ? null : directory.get(slot.ref, slot.digest);
       if (slot === undefined || entries === null) continue;
+      if (this.gaveUp(row)) continue;                       // Linear refused this close once: never sent again
       const canceled = statusOfType(entries, 'issue', 'canceled', row.teamKey);
       if (canceled === null) { this.mailNoCancel(row); continue; }
       await planSync.withFlight(`inbound:${row.linearId}`, async () => {
@@ -164,19 +168,33 @@ export class InboundLane {
           ...base, op: 'issueComment', fields: ['body'],
           input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
         });
-        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) return;
+        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment.word); return; }
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
         if (update.ok) plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
+        else this.refused(fresh, update.word);
       });
     }
   }
 
-  private mailNoCancel(row: InboundRow): void {
+  /** A refused close write: a word that may clear waits for the next beat; any other gives the close up with the owner's one
+   *  mail (`inboundActVerdict`), and is never sent again (`gaveUp`). */
+  private refused(row: InboundRow, word: string): void {
+    if (inboundActVerdict(word) === 'retry') return;
+    this.givenUp.add(row.linearId);
+    this.mailOwnerOnce(row, closeRefusedMail(row, word));
+  }
+
+  /** Whether this close was given up in this process. The owner's mail is the durable record (sent once per owner); a restart
+   *  forgets the set, so a refused close costs at most one more call per restart, never one per beat. */
+  private gaveUp(row: InboundRow): boolean { return this.givenUp.has(row.linearId); }
+
+  private mailNoCancel(row: InboundRow): void { this.mailOwnerOnce(row, noCancelMail(row)); }
+
+  private mailOwnerOnce(row: InboundRow, m: { subject: string; body: string }): void {
     const { coord } = this.deps;
     const { rows, facts } = this.ownerFacts();
     const owner = linearOwnerOfTeam(row.teamKey, rows, facts);
     if (owner === null || owner.id === null) return;
-    const m = noCancelMail(row);
     const ownerId = owner.id;
     if (coord.hasMailWithSubject('operator', null, ownerId, m.subject)) return;
     tx(coord.db, () => { insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'status', subject: m.subject, body: m.body }); });

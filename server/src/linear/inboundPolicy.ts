@@ -103,6 +103,23 @@ export function noCancelMail(row: InboundText): { subject: string; body: string 
   };
 }
 
+/** The refusals of a close's Linear write that may clear by themselves (a rate limit, Linear or the policy unreachable, an answer
+ *  out of grammar, the key not configured or refused): the row stays and the next beat tries again. Any other word (Linear refused
+ *  the write itself, `linear-forbidden`, `linear-invalid`, `not-found`, a policy deny) will be refused again, so the close is given
+ *  up with one mail to the owner and never sent again (Review Focus 5: no retry loop spends the lane). */
+const RETRY_WORDS: ReadonlySet<string> = new Set([
+  'rate-limited', 'unreachable', 'timeout', 'policy-unavailable', 'journal-unavailable', 'malformed', 'not-configured', 'linear-unauthorised',
+]);
+export function inboundActVerdict(word: string): 'retry' | 'give-up' { return RETRY_WORDS.has(word) ? 'retry' : 'give-up'; }
+
+/** The owner's one mail for a close Linear refused. Its subject is the durable mark that the close was given up. */
+export function closeRefusedMail(row: InboundText, word: string): { subject: string; body: string } {
+  return {
+    subject: `Linear inbound: ${row.identifier} could not be closed`,
+    body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but Linear refused ccrc's close (${word}). ccrc does not try again: close it in Linear by hand.`,
+  };
+}
+
 /** The comment a close leaves on the issue before it is canceled: the reason, egress-redacted, with the ccrc provenance line. */
 export const closeCommentBody = (reason: string): string => withCcrcProvenance(egress(`Closed: ${reason}`));
 
