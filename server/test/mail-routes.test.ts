@@ -63,6 +63,8 @@ import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
+import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
+import { ACTOR_ISSUERS } from '../../shared/overlord-identity.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -870,6 +872,9 @@ describe('the rejection table is total, in both directions', () => {
       'stash-failed',
       'stash-occupied',
       'enter-ignored',
+      // CallerIdentity's in-process ConsoleCaller discriminants, compared by the rank door; never refusal or wire codes.
+      'signed-in',
+      'device-unmeasured',
       // LANDING ORDER WAVE 4 (plan docs/superpowers/plans/2026-10-27-landing-order-wave4-lineage-acceptance.md, Task 1):
       // `coord/lineage.ts` spells wave 3b's walk-stop words (`LINEAGE_STOPS`, the radar's vocabulary, written into a
       // lineage file and only read here) and the DETAIL words of `decideLineage`'s answers. A detail is free text
@@ -1207,7 +1212,11 @@ describe('the rejection table is total, in both directions', () => {
         // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,
         // never a `refused` or `reject.code`. Admitted through L0's guards, derived from `REMAINING_REFUSALS` and
         // `EDGE_PREDICATES`, never NOT_CODES.
-        || isRemainingRefusal(tok) || isEdgePredicate(tok),
+        || isRemainingRefusal(tok) || isEdgePredicate(tok)
+        // The door registry's own keys identify routes, never refusals; derive them from the one table.
+        || Object.prototype.hasOwnProperty.call(OVERLORD_DOORS, tok)
+        // The designation migration stores L0's actor issuers, not mail or run refusal codes.
+        || (ACTOR_ISSUERS as readonly string[]).includes(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, Overlord refusal or designation word`).toBe(true);
     }
   });

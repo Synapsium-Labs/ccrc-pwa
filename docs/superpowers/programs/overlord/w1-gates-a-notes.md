@@ -94,3 +94,28 @@ arbiter; no whole-suite green is inferred from these scoped runs.
 A later false-positive hook refusal matched verification prose in a git commit command, before any action executed.
 The worker stopped and reported it, received an explicit structured ruling, and continued with separate ordinary git
 calls and a message file. That stop/report/re-authorise is not another unapproved reroute.
+
+### First full CI run and census repair
+
+The first full PR run at `ef6bb964e` was red: server shard 10's `mail-routes` token census rejected
+`signed-in`, and browser shard 1's reader-frame M8.B5 control observed no child hello. All other server shards,
+server typechecking, the PWA typecheck/build and the actual CodeQL check passed. The wave signal is therefore
+`suite: red`, `failure: shallow`; a later green run does not rewrite the first-run signal.
+
+The full isolated mail-routes file reproduced the census red (59 passed, one failed). Admitting the two in-process
+console caller tags exposed the quoted door-registry keys; admitting keys through `OVERLORD_DOORS` then exposed
+the actor issuer vocabulary in the migration's CHECK. Comparing every newly introduced quoted coordination token
+against the base tree identified the complete three families. Each expansion of the held test file was requested
+from its holder before editing; their separate lane-arm import and clause are untouched.
+
+The isolated browser attempt built the PWA, then failed setup because no Chrome executable was available:
+all 24 cases were skipped, so it neither reproduced nor cleared the original browser assertion. The next full CI
+run must measure it; it is not classified as a flake. The external judge's pending proof requires non-author
+review. Its weakened-test flags were checked against the diff: the ledger-secret rig only gains the identity
+dependency, and the private-name rig gains an additional refusal/no-write test; no existing assertions were removed.
+
+After the holder approved the actor-issuer import and membership clause too, the restored full isolated
+`mail-routes` file passed 60/60, exit 0. The wrapper reported seven shared-slice OOM kills during that passing run;
+the passing file result is retained with that caveat, not presented as a complete local suite pass. The repair
+adds only the two explained in-process tags, an own-key check of `OVERLORD_DOORS`, and membership in L0's derived
+`ACTOR_ISSUERS` list. No production behavior, route guard, refusal vocabulary or sibling test assertion changes.
