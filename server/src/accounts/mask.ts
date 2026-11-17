@@ -431,7 +431,7 @@ function chainRowsOn(text: string, from: number, left: ChainLeft, spans: [number
     const reached = chainRowSpans(v, 0, v.t.length, from, left, true, spans);
     if (reached < v.t.length) return false;
     if (stop >= text.length) return true;
-    from = stop;
+    from = text[stop] === '\n' ? stop + 1 : stop;   // the next window starts at the row after the break
   }
   return left.rows > 0 && left.units > 0;
 }

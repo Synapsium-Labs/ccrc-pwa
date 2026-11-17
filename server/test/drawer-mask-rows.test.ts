@@ -795,12 +795,16 @@ describe('D-8710 — a key the drawer holds in part, or past its window, is neve
     const m = fingerprinted(key);
     try {
       const shows = leaks(key);
-      const { block, rows } = escapedBlock(key, 2_100);
-      expect(block.length).toBe(277_386);
-      for (const filler of [1_000, 30_000, 60_000, 64 * 1024 - 5_000]) {
-        const out = await m.maskTextSliced(`${ordinary(filler)}${block}${'tail line\n'.repeat(50)}`, { rows: true });
-        expect(shows(out), `at ${filler}`).toBe(false);
-        expect(count(out, SECRET_MASK), `at ${filler}`).toBe(rows);
+      // And 2,600 bytes a row (a 341,386-byte block): the rows on from a cut run past one 256 KiB read of them.
+      for (const [escapes, size] of [[2_100, 277_386], [2_600, 341_386]] as const) {
+        const { block, rows } = escapedBlock(key, escapes);
+        expect(block.length).toBe(size);
+        for (const filler of [1_000, 30_000, 60_000, 64 * 1024 - 5_000]) {
+          const out = await m.maskTextSliced(`${ordinary(filler)}${block}${'tail line\n'.repeat(50)}`, { rows: true });
+          expect(shows(out), `${size} bytes at ${filler}`).toBe(false);
+          // Each of the key's rows one mark at least; the rows after a masked chain can be masked too (`done`, a word).
+          expect(count(out, SECRET_MASK), `${size} bytes at ${filler}`).toBeGreaterThanOrEqual(rows);
+        }
       }
     } finally {
       m.close();
