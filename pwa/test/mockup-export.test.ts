@@ -673,6 +673,14 @@ describe('inlining (base 5.6.9 Step 2): a held file becomes data: with the ROW M
     expect(out.omitted).toEqual([repo('s.css'), repo('bg.png')]);
   });
 
+  it('a cut stylesheet\'s nested file stays at the stylesheet\'s place in omitted: before an asset that comes later in the page, not after it (review I1)', async () => {
+    const big = new Uint8Array(2 * MIB).fill(7);
+    const { out } = await run(page(
+      '<img src="big.png"><img src="big.png"><img src="big.png"><link rel="stylesheet" href="s.css"><img src="gone.png">',
+    ), { 'big.png': big, 's.css': 'p{background:url(bg.png)}', 'bg.png': big });
+    expect(out.omitted).toEqual([repo('s.css'), repo('bg.png'), repo('gone.png')]);
+  });
+
   it('a nested file whose stylesheet is not in the result is omitted too: no use of it was written (review I1)', async () => {
     const drop = (r: MockupAssetResult): MockupAssetResult => ({ ...r, assets: new Map([...r.assets].filter(([k]) => !k.includes('s.css'))) });
     const { out } = await run(page('<p>x</p>', '<link rel="stylesheet" href="s.css">'), { 's.css': 'p{background:url(bg.png)}', 'bg.png': 'B' }, drop);
