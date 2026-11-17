@@ -191,8 +191,8 @@ since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 85 on this branch: responses B (#2914) landed 84 on main, and fix round 1 of review 2312 absorbed it,
-as the coordinator ordered. Others may hold 85 too; the second to land renumbers on the coordinator's word. Re-measure the
+The migration is entry 86 on this branch: overlaps (#2949) landed 85 on main after responses B (#2914) took 84, and fix round 1 of review 2312 absorbed both,
+as the coordinator ordered (renumbered 85 -> 86 on its word of 2026-11-17). Others may hold 86 too; the second to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
 
 ## Stable exports for W1's consumers
