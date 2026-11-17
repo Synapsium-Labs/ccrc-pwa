@@ -61,9 +61,9 @@ export interface FleetWatcherView {
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet' | 'advanceObserved'
   | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
-  | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
+  | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
   | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
-  | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
+  | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteResponsesThrough' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'

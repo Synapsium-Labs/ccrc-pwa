@@ -5,7 +5,7 @@
 // W1a registers the start report, the card door, the note door (the notes piece: a note, the live notes, the handover
 // note), the timer doors (the session's three, box-token lanes, and the operator's two, session-gated) and the probe door (the
 // probes piece: a session's open round, and its answers). W1's loaded-file report and witness extend this file (Table 11.1e,
-// "The hook's reports").
+// "The hook's reports"), and W1's renewal readings add the daily backstop's two operator doors, beside the timer doors.
 import { createHash } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
@@ -20,6 +20,7 @@ import {
   type HandoverNote, type HandoverThread, type KeyFact, type NoteKey, type RenewalModeView,
 } from '../../../shared/continuity.js';
 import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
+import { BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
 import { timerCapOf } from '../../../shared/fleetRoles.js';
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
@@ -809,6 +810,40 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       'record-only', { degraded: 'renewal mode written, feed archive degraded' });
     }
     return reply.code(200).send({ ok: true, ...renewalModeView(coord) });
+  });
+
+  // THE DAILY BACKSTOP'S DOORS (R19, Table 11.1d's Settings row; W1, plan `w1-renewal-readings.md` Task 2, slug
+  // backstop-door-in-continuity-routes): the operator's, session-gated when sign-in is armed, never EXEMPT, consulting no
+  // box token, the `plain-auto-memory` shape. No step-up: the backstop grants no authority, and it is not journalled (§7.6
+  // journals authority only). `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` names the path once per method.
+  const backstopView = (r: Extract<BackstopRead, { ok: true }>) =>
+    ({ ok: true, hour: r.backstop.hour, zone: r.backstop.zone, isDefault: r.backstop.isDefault, setAt: r.backstop.setAt });
+
+  /** `GET /api/continuity/renewal-backstop`: the backstop's hour, zone, whether it is still the default, and when it was set.
+   *  A row the store cannot read answers `unavailable` with the store's detail, never the default in its place. */
+  app.get('/api/continuity/renewal-backstop', async (_req, reply) => {
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const r = coord.backstopRead();
+    if (!r.ok) return refuseRoute(reply, 'unavailable', { detail: r.detail });
+    return reply.code(200).send(backstopView(r));
+  });
+
+  /** `POST /api/continuity/renewal-backstop { hour, zone }`: the operator sets the backstop. `bad-request` for an hour that is
+   *  not a whole number from 0 to 23, or a zone `Intl` does not take; `write-failed` when the store could not write it; then
+   *  the row read back, as the `GET` answers it. `setBackstop` is the row's one writer. */
+  app.post('/api/continuity/renewal-backstop', async (req, reply) => {
+    const body = req.body as { hour?: unknown; zone?: unknown } | null | undefined;
+    const hour = body !== null && typeof body === 'object' ? body.hour : undefined;
+    const zone = body !== null && typeof body === 'object' ? body.zone : undefined;
+    if (!isBackstopHour(hour)) return refuseRoute(reply, 'bad-request', { detail: 'hour must be a whole number from 0 to 23' });
+    if (!isBackstopZone(zone)) return refuseRoute(reply, 'bad-request', { detail: `zone must be an IANA time zone name of at most ${BACKSTOP_ZONE_MAX} characters` });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    if (!coord.setBackstop({ hour, zone, at: deps.wall() }).ok) return refuseRoute(reply, 'write-failed', { detail: 'renewal_backstop_settings could not be written' });
+    const r = coord.backstopRead();
+    if (!r.ok) return refuseRoute(reply, 'unavailable', { detail: r.detail });
+    return reply.code(200).send(backstopView(r));
   });
 
   // THE PROBE DOOR (spec §3.3.5 C41, §3.3.9 C52; the probes piece, Task 4). Two box-token lanes, each an `auth/gate.ts` EXEMPT

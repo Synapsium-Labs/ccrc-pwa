@@ -61,6 +61,8 @@
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
 // pass itself on its fake clock.
+// The gather's optional `w1` port (W1's renewal readings, `renewalReadingsWiring.ts`) adds each wired producer's reading, and
+// `renewalInputsOf` spreads them over its `W1` defaults, so a field no producer answers keeps `W1`.
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { RENEWAL_LANE_PERIOD_MS, RENEWAL_MODE_DEFAULT, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
@@ -99,6 +101,7 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
+import type { W1Inputs } from './renewalReadings.js';
 import {
   actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
   standingActs, type ItemAbout, type ItemStanding, type PermitWait, type RenewalAct,
@@ -144,6 +147,9 @@ export interface GenReadings {
   /** The soft preconditions' fleet reads, which the hand-offs piece's gather and W1 will fill (the operator mark, the
    *  readers and the Overlord's place); absent, each reads unmeasured as before. The simulator's world hands them. */
   readonly soft?: Partial<Pick<SoftInputs, 'readersRunning' | 'operatorQuietObservedMs' | 'placeHiddenObservedMs'>>;
+  /** The Overlord's renewal readings (W1, `renewalReadingsWiring.ts`): each field its producer's mapped answer, spread over
+   *  `renewalInputsOf`'s `W1` defaults; a field absent keeps `W1`. */
+  readonly w1?: Partial<W1Inputs>;
 }
 
 /** The deciders the pass asks, named so that a simulator can hand a mutant of one to the same pass (as `observe` is). */
@@ -778,11 +784,17 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
     probeFailedUnfixed, modelDrift: W1, startResumed, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
     classUnservable: W1, accountLoadMove: W1, compactionRefused: later('compaction'), classChanged: W1, evaluationDue: W1,
     notLocal: W1, waveBoundary: wave, renewNow,
+    ...definedOf(r?.w1),
   };
 }
 
+/** The renewal readings the wiring answered, without a key it left undefined: an absent field keeps its `W1` default. */
+function definedOf(w1: Partial<W1Inputs> | undefined): Partial<W1Inputs> {
+  return Object.fromEntries(Object.entries(w1 ?? {}).filter(([, v]) => v !== undefined)) as Partial<W1Inputs>;
+}
+
 /** One usage figure from a fresh sidecar, or why it is unmeasured: a stale sidecar is unmeasured, never a reading. */
-function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow'): Reading<number> {
+export function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow'): Reading<number> {
   if (r === undefined) return later('unread this pass');
   if (r.usage.kind !== 'reading') return later(`usage ${r.usage.kind}`);
   if (r.usage.usage.stale) return later('usage stale');
@@ -863,6 +875,9 @@ export interface GatherPorts {
   /** The hold table's drain for a session (`drainVerdict` over its row and live reads). Absent: no drain is read, which
    *  holds as unmeasured. */
   drainOf?(id: string): Promise<DrainRead>;
+  /** The renewal readings for one generation (`renewalReadingsOf`), over the base readings of the same sample. Absent: every
+   *  W1 field keeps its default. */
+  w1?(g: GenRow, base: GenReadings): Promise<Pick<GenReadings, 'w1' | 'soft'>>;
 }
 
 /** The compactions last read per session and the stamp they were read at: a read cache, never a decision's memory. */
@@ -906,7 +921,9 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
       : release.kind === 'unreadable' ? later('install record unreadable')
       : started === null ? later('process start unmeasured') : { kind: 'measured', value: startedBeforeRelease(started, release.at) };
     const drain = ports.drainOf !== undefined && drainRead(g) ? await ports.drainOf(id) : undefined;
-    out.set(g.id, drain === undefined ? { usage, compactions, turn, behind } : { usage, compactions, turn, behind, drain });
+    const base: GenReadings = drain === undefined ? { usage, compactions, turn, behind } : { usage, compactions, turn, behind, drain };
+    const more = ports.w1 === undefined ? undefined : await ports.w1(g, base);
+    out.set(g.id, more === undefined ? base : { ...base, w1: more.w1, soft: more.soft });
   }
   for (const id of [...memo.keys()]) if (!targets.some((g) => g.sessionId === id)) memo.delete(id);
   return out;

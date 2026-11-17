@@ -742,10 +742,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, overlaps and goal conflicts, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, the row revisions, Overlord W2),
-    // and MIGRATIONS[87] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
+    // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A)
+    // and MIGRATIONS[88] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(88);
-    expect(MIGRATIONS.length).toBe(88);
+    expect(COORD_SCHEMA_VERSION).toBe(89);
+    expect(MIGRATIONS.length).toBe(89);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -858,8 +859,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
-    // and MIGRATIONS[87] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(88);
+    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A),
+    // and MIGRATIONS[88] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(89);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

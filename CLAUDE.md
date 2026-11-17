@@ -638,7 +638,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
-  and `POST /api/sessions/:id/timers/:timerId/cancel`, the operator's Renew now, `POST /api/sessions/:id/renew`, and the Setting
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, the operator's daily backstop setting (Overlord W1, the renewal readings),
+  `GET` and `POST /api/continuity/renewal-backstop`, the operator's Renew now, `POST /api/sessions/:id/renew`, and the Setting
   "when soft renewals happen", `GET`/`POST /api/coord/renewal-mode` (the renewal hand-offs), consult no box token either and are
   session-gated when armed; they register
   from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated

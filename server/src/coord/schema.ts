@@ -3472,6 +3472,22 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
+  // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
+  // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
+  // default (question 2). ONE writer, its door's `continuityStore.ts#setBackstop`; `backstopRead` narrows it. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 88` takes rule 3 and never names it. Overlaps A (#2949)
+  // landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word,
+  // 2026-11-17); other open PRs hold 88 too, and whoever lands second renumbers on the coordinator's word. RE-MEASURE the
+  // slot before the PR and before merge (it must print 87 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE renewal_backstop_settings (id INTEGER PRIMARY KEY CHECK (id = 1), hour INTEGER NOT NULL, zone TEXT NOT NULL,
+    isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
+  INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
+  `,
+
+  // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
   // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
@@ -3482,9 +3498,9 @@ export const MIGRATIONS: readonly string[] = [
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
   // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
   // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
-  // opening a file at `user_version 88` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
-  // (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word, 2026-11-17, mail 22654); others may hold 88 too, and the second to land renumbers on the coordinator's word.
-  // RE-MEASURE the slot before merge (it must print 87 before this entry is counted):
+  // opening a file at `user_version 89` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87 and renewal readings A (#2962) 88, so this is 89 (the coordinator's word, 2026-11-17, mail 22766); others may hold 89 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 88 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
