@@ -57,6 +57,7 @@ _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get
 _follow_continued_in -> _reg_set
+_fresh_pick_settle -> _typed_note
 _graceful_stop_before -> _ci_proc_start
 _graceful_stop_same -> _ci_proc_start
 _hard_block_dated -> _pane_born
@@ -67,6 +68,7 @@ _idle_for_keystroke -> _reg_get
 _idle_for_keystroke -> _tmux_t
 _inflight_write -> _compact_lock_acquire
 _inflight_write -> _compact_lock_release
+_keep_awake_ours -> _fresh_pick_field_to
 _limit_dated -> _transcript_path
 _limit_read -> _transcript_limit_banner
 _operator_choice_keep -> _reg_set
@@ -115,6 +117,7 @@ _resume_env -> _resume_prompt_for
 _resume_prompt_for -> _reg_get
 _resupervise_live -> _reg_claim
 _resupervise_live -> _session_state
+_role_long_lived -> _fresh_pick_field_to
 _route_applied_before_write -> _route_apply_seed
 _route_applied_get_to -> _reg_get_to
 _route_applied_set -> _reg_get
@@ -436,6 +439,8 @@ cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
 cmd_hibernate -> _fresh_crossing_end
+cmd_hibernate -> _fresh_pick_settle
+cmd_hibernate -> _fresh_pick_to
 cmd_hibernate -> _graceful_stop_after
 cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke

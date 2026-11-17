@@ -194,6 +194,7 @@ describe('the corpora no longer invoke curl', () => {
       'plan.show',
       'plan.ticket-add',
       'plan.ticket-move',
+      'programme.remaining',
       'runs.end-request',
       'runs.list',
       'runs.open',
@@ -211,6 +212,18 @@ describe('the corpora no longer invoke curl', () => {
     const calls = executableBlocks(text).flatMap((b) => [...b.matchAll(/ccrc-api\s+leases\s+retain\b/g)]);
     expect(calls.length, 'the reference has no executable `ccrc-api leases retain` call').toBeGreaterThan(0);
     expect(routeKeys().has('leases.retain'), 'no [leases.retain] row').toBe(true);
+  });
+
+  it('the wave-boundary reference teaches `ccrc-api programme remaining` with an example that is a call of the row (Overlord W2)', () => {
+    const file = path.join(root, 'ccd/coordinator-skill/references/wave-lifecycle-5-boundary.md');
+    const blocks = executableBlocks(fs.readFileSync(file, 'utf8')).filter((b) => /"\$API"\s+programme\s+remaining\b/.test(b));
+    expect(blocks, 'the boundary reference has no executable `programme remaining` call').toHaveLength(1);
+    expect(routeKeys().has('programme.remaining'), 'no [programme.remaining] row').toBe(true);
+    const m = /"\$API" programme remaining (\S+) --json - <<'JSON'\n([\s\S]*?)\nJSON/.exec(blocks[0]!);
+    expect(m, 'the example is not a `--json -` heredoc call').not.toBeNull();
+    const body = JSON.parse(m![2]!) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(['hi', 'lo', 'reason', 'runId']);
+    expect(body).not.toHaveProperty('byId');
   });
 
   it('executes ask examples with no valid default and exact expanded calls', () => {
@@ -418,9 +431,10 @@ describe('the client stays closed', () => {
     // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
     // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
     // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
-    // no splice and no fill) to eighty-four. `plan.phase-ref` (programme work map WM0) to eighty-five; it takes the caller's
+    // no splice and no fill) to eighty-four. `programme.remaining` (Overlord W2 remaining work A, which takes the probe answer's
+    // rule: refuse a body naming either key, then append the pane's pair LAST, review 2265 F9) to eighty-five. `plan.phase-ref` (programme work map WM0) to eighty-six; it takes the caller's
     // own body and fills none (the identity rides the query, as for the other `plan` rows).
-    expect(routeKeys().size).toBe(85);
+    expect(routeKeys().size).toBe(86);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
@@ -441,6 +455,19 @@ describe('the client stays closed', () => {
     expect(probeFill).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
     expect(probeFill).toMatch(/append_body_field 'byId' "\$DERIVED_ID"/);
     expect(probeFill).toMatch(/append_body_field 'byUuid' "\$DERIVED_UUID"/);
+    // THE APPEND-LAST FILLS, derived from the client's own blocks: every `if [[ "$key" == …` block that fills the pane's pair
+    // with `append_body_field` (the pair LAST, so a parser keeping the later of two keys keeps the pane's, review 2039 F7), and
+    // no such block that splices it. The goals writes (review 2240 F1) and the remaining-work door (Overlord W2, review 2265 F9)
+    // joined the note and probe rows.
+    const blocks = [...code.matchAll(/^  if \[\[ ("\$key" == '[a-z.-]+'(?: \|\| "\$key" == '[a-z.-]+')*) \]\]; then\n([\s\S]*?)^  fi$/gm)];
+    const keysOf = (head: string): string[] => [...head.matchAll(/'([a-z.-]+)'/g)].map((m) => m[1]!);
+    const appendLast = blocks.filter((b) => /append_body_field 'byId'/.test(b[2]!)).flatMap((b) => keysOf(b[1]!)).sort();
+    expect(appendLast).toEqual(['goals.merged', 'goals.modify', 'goals.pin', 'note.add', 'note.close', 'note.handover', 'probe.answer', 'programme.remaining']);
+    for (const b of blocks.filter((x) => keysOf(x[1]!).includes('programme.remaining'))) {
+      expect(b[2]).toMatch(/\*'"byId":'\*\|\*'"byUuid":'\*\)\s+refuse 'bad-body'/);
+      expect(b[2]).not.toMatch(/splice_body_field/);
+      expect(b[2]!.indexOf("append_body_field 'byId'")).toBeLessThan(b[2]!.indexOf("append_body_field 'byUuid'"));
+    }
     // The claimant's identity is the PANE's, derived, never a value the caller
     // passes as a flag: the runs.open fill splices `$DERIVED_UUID` and nothing else.
     expect(code).toMatch(/splice_body_field 'claimedByUuid' "\$DERIVED_UUID"/);

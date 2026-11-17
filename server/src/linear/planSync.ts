@@ -554,7 +554,7 @@ export class PlanSync {
       if (step.comment !== undefined) {
         const c = await this.deps.call({
           op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
-          target: b.identifier ?? b.linearId, fields: ['comment'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
+          target: b.identifier ?? b.linearId, fields: ['body'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
         if (!c.ok && !(c.word === 'linear-invalid' && c.detail === 'conflict')) return this.onFailure(c, subject(b.id));

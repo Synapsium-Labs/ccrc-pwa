@@ -743,9 +743,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, the row revisions, Overlord W2),
     // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A),
-    // and MIGRATIONS[88] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
-    expect(COORD_SCHEMA_VERSION).toBe(89);
-    expect(MIGRATIONS.length).toBe(89);
+    // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2),
+    // and MIGRATIONS[89] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
+    expect(COORD_SCHEMA_VERSION).toBe(90);
+    expect(MIGRATIONS.length).toBe(90);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -859,8 +860,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
     // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A),
-    // and MIGRATIONS[88] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(89);
+    // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
+    // and MIGRATIONS[89] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(90);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -3035,12 +3037,13 @@ describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; 
 });
 
 describe('coord.db: the programme\'s phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14)', () => {
-  /** Found by its DDL, never hard-coded: whichever of two branches holding one slot merges second moves up. */
+  /** Found by its DDL, so every case below follows the entry wherever it sits; the one `toBe` on it is the measured slot,
+   *  pinned on purpose and re-pinned by whichever of two branches holding one slot merges second (review 2375 F15). */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_phases (')) + 1;
 
   it('TWO NEW TABLES and nothing on an existing table, after the plan tables', () => {
     expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_tickets (')) + 1);
-    expect(SLOT).toBe(89);
+    expect(SLOT).toBe(90);
     const statements = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean);
     expect(statements.map((x) => x.split('(')[0]!.trim())).toEqual(['CREATE TABLE plan_phases', 'CREATE TABLE plan_phase_refs']);
   });

@@ -45,7 +45,8 @@ const registrations = (): Reg[] => {
 
 /** Coordination routes whose handlers live in a lane file of their own (growth-checked `coord/routes.ts` cannot take them),
  *  registered from `registerCoordRoutes` with its own gate and sender check. Named, so a stray is still a stray. */
-const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/programmes/:slug/calls']);
+const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/programmes/:slug/calls',
+  'coord/programmeRemainingRoute.ts POST /api/coord/programmes/:slug/remaining']);
 
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 
