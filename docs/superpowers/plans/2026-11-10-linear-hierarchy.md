@@ -212,7 +212,9 @@ number from `POST /api/ledger/deviations`.
   Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
 - **D-8703 (2026-11-17)** — drift-actor-unread: the changed* documents select no actor and `ops.ts` is frozen, so a drift
   event's actor and the persistent-drift item read "not read"; the item still shows the object, the field, both values
-  and the time. The actor joins D-8699's next-capture list. Record: the wave 4 note.
+  and the time. The actor joins D-8699's next-capture list. Clause (review 2408 A-6, the coordinator's ruling, the same
+  cause): §7.3 exempts an issue moved to completed by Linear's GitHub integration once the merge is recorded, and with the
+  actor unread the grace exempts ANY completion after a recorded merge, whoever made it. Record: the wave 4 note.
 - **D-8704 (2026-11-17)** — catch-up-by-fingerprint: a binding stores F(the planned inputs), not F(Linear's owned
   fields), so a difference is a catch-up when the binding's fingerprint is not the plan's current one; the programme is
   marked due through `markSyncDue` alone (a held programme stays held, D-8702). Gap: a person's edit made while the sync

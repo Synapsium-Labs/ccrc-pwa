@@ -9,9 +9,9 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 92: row
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 93: row
     revisions, #2965, took 87, renewal readings A, #2962, 88, remaining work A, #2951, 89, account organization D, #2958,
-    90 and designation A, #2950, 91 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+    90, designation A, #2950, 91 and done tests A, #2964, 92 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
@@ -171,8 +171,41 @@ migration is 92. Every fix has a test seen red against the code before it.
 | A-2 one word, two rules (`not-configured`) | Ruled (b): the plan sync keeps its per-tick retry and wave 3's pin, and the inbound lane matches it. The word is answered locally, before any Linear call, so a retry each beat costs nothing and a key set in Settings is picked up on the next beat; a backoff spares Linear and the owner's mailbox, and neither is touched. The DEFERRALS row came out. A test drives the close through the real `runCcrcOp` with no key: three beats, three tries, no fetch, one mail |
 | A-3 the inbound lane's own holds beside the plan sync's | Ruled: a 401 goes through the plan sync's one owner (`keyRefused`, which marks the slot rejected and blocks the workspace), and the inbound lane honours `keyBlockedUntil`, so a 401 holds both lanes alike. The lane's holds for the other retry words stay its own state on the shared schedule, LEGITIMATELY DIFFERENT: an inbound close must never hold a programme's plan sync (the coordinator's round 2 brief, point 3), so the two lanes share the schedule, never the state |
 
+## Fix round 3 (review run 2408)
+
+The review read 6e4a12a3c with the full panel; round 2's fixes were all built as ruled, and six of its eight mutations went
+red. The coordinator ruled a short, closed list for this round (mail 23411), and carried the rest to a follow-up run after
+landing (below). Main was merged once: done tests A (#2964) took 92, so the migration is 93 (coord-db pins 93; the
+run-close replay undoes back to 53 and replays forty). Every fix has a test seen red before it: against the previous
+code for F2, A-2, A-3 and A-8, and, for the test-only F1, F4 and A-5, by mutating the line each guards.
+
+| Finding | Outcome |
+|---|---|
+| F1 the plan sync's 401 holding the inbound lane had no test | Test: the plan sync's call is refused 401, then a close in that workspace sends nothing until `keyBlockedUntil`, and lands at it. Red with the `keyBlockedUntil` clause removed from the act loop |
+| F2 the malformed give-up counted the workspace's hold step | Fixed: the lane counts each close's malformed answers by its linearId (as the plan sync counts a binding's), and `inboundActVerdict` gives up on that count past the last step; the hold step is the wait only. Test: four timeouts and a give-up on one close, then a first malformed answer to a new close holds |
+| F4 the Handed-to-nobody arm had no test | Test: Hand on a binding whose programme has no coordinator, then three restores in seven days raise a new item. Red with the arm's callback emptied |
+| A-2 the not-configured mail's words, and one subject for two words | Fixed: each key word has its own mail and subject, so each is mailed once per issue; the not-configured mail says ccrc tries again at every beat and closes the issue once a key is set. The coordinator's "once per episode" is once per issue |
+| A-3 a rate limit's Retry-After was dropped | Fixed (reversing round 2's majority, the coordinator's ruling): the answer's `retryAfterS` floors the close's wait, as the plan sync floors the same deferral |
+| A-5 Task 4.1's state-type rule had no test | Test: In Progress → In Review is not drift, and a move to another state type is. Red with `stateType` out of `OWNED_FIELDS.issue` |
+| A-8 the linear skill listed `linear-text-public` for the `linear` verbs | Fixed: the row is out of the skill's refusal table; a test holds the table to the proxy's words and the ones it shares with older routes |
+
 ## Follow-ups
 
+Carried to the follow-up run after landing, with the coordinator's rulings (mail 23411); none is built in this PR:
+
+- **F3, a page-capped changed* read freezes its watermark** (`DRIFT_MAX_PAGES`, 10 pages of 100): a defect, in scope for
+  the follow-up run. Direction: no change past the cap is ever skipped. Either keep the page cursor across passes, or
+  read in a measured order and advance to the newest node read. Linear's order direction for `updatedAt` is not measured
+  in the fixtures, so the cursor approach stands unless a capture proves the order; that capture joins the next-capture
+  list.
+- **A-1, the generic item dismiss quiets persistence:** the generic dismiss door must refuse a linear-drift action item
+  (an L1 rule), so that only Keep quiets persistence.
+- **A-4, the restore comment names no values:** it names them (§7.2), ccrc's own from the plan, and Linear's only from
+  ccrc's directory reads, never free text.
+- **A-6, the grace exempts any completion after a merge:** the actor is unread, so this is D-8703's cause; recorded there
+  as a clause.
+- **A-7, Hand on a coordinator-less (Upkeep) binding:** it goes to the project's Linear owner; with no owner, Hand is
+  refused and the item stays.
 - The changed* documents' actor (D-8703), with D-8699's by-id creator and `issueOwned`'s creator, at the next capture.
 - A milestone description edit may not move its `updatedAt` (FX2 item 4), so `changedMilestones` may not see it.
 - The inbound close's workspace hold (F8) lives in process memory: a restart costs one more call before the next refusal
