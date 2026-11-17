@@ -3461,11 +3461,22 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
   // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
-  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 87`
-  // takes rule 3, never names it. Decision model A (#2948) landed 86, so this is 87; sibling W1 pieces add migrations too, so
-  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry is counted):
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 88`
+  // takes rule 3, never names it. Row revisions (#2965) landed 87, so this is 88; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 87 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
