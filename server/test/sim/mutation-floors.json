@@ -132,5 +132,6 @@
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
   "shared/private-names.mjs#hashEntry": 1,
-  "shared/private-names.mjs#privateNameHits": 1
+  "shared/private-names.mjs#privateNameHits": 1,
+  "server/src/operatorModel/nameListState.ts#nameListState": 1
 }

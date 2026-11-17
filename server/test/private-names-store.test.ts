@@ -6,6 +6,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { OperatorModelStore, type NameListEntryRow, type PrivacyIssuer } from '../src/operatorModel/store.js';
+import type { NameListMode } from '../../shared/privateNames.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const issuer: PrivacyIssuer = { kind: 'ready', issue: () => ({ ok: true, id: 1 }) };
@@ -19,7 +20,7 @@ function fixture(): { db: DatabaseSync; store: OperatorModelStore; p: string } {
 }
 
 const hex = (seed: number): string => seed.toString(16).padStart(2, '0').repeat(16);
-const entry = (seed: number, n = 1, mode = 'part'): NameListEntryRow => ({ h: hex(seed), f: hex(seed + 1), n, mode });
+const entry = (seed: number, n = 1, mode: NameListMode = 'part'): NameListEntryRow => ({ h: hex(seed), f: hex(seed + 1), n, mode });
 const LIST_1 = [entry(1), entry(3, 2, 'words'), entry(5, 1, 'exact')];
 const LIST_2 = [entry(7), entry(9, 1, 'run')];
 
@@ -111,7 +112,8 @@ describe('replacePrivateNames: the one writer of the list', () => {
       [[{ ...entry(1), f: hex(10).toUpperCase() }], 0, 1],
       [[{ ...entry(1), n: 0 }], 0, 1],
       [[{ ...entry(1), n: 1.5 }], 0, 1],
-      [[{ ...entry(1), mode: '' }], 0, 1],
+      [[{ ...entry(1), mode: '' as never }], 0, 1],
+      [[{ ...entry(1), mode: 'bogus' as never }], 0, 1],
       [LIST_1, -1, 1],
       [LIST_1, 0.5, 1],
       [LIST_1, 2, -1],
@@ -128,6 +130,13 @@ describe('replacePrivateNames: the one writer of the list', () => {
     expect(store.replacePrivateNames(LIST_1, 2, 1)).toMatchObject({ ok: false, error: 'not-open' });
     expect(store.privateNamesRead()).toMatchObject({ kind: 'unmeasured' });
     expect(store.privateNamesGeneration()).toMatchObject({ kind: 'unmeasured' });
+  });
+
+  it('an entry of a mode this build does not know reads unmeasured, never a list', () => {
+    const { store, db } = fixture();
+    store.replacePrivateNames(LIST_1, 2, 1_000);
+    db.exec("UPDATE private_name_entries SET mode = 'bogus' WHERE pos = 1");
+    expect(store.privateNamesRead()).toMatchObject({ kind: 'unmeasured' });
   });
 
   it('a list row whose entries are missing reads unmeasured, never a list with no canary', () => {

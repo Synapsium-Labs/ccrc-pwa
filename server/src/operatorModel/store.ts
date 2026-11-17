@@ -20,6 +20,7 @@ import {
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadLine,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
+import { isNameListMode, type NameListMode } from '../../../shared/privateNames.js';
 import { chainedTailHealPlan, type ChainedTail } from '../chainedJournal.js';
 import { chainedJournalFileAt, type ChainedFileSeen, type ChainedJournalFile } from '../chainedJournalFile.js';
 import { openOperatorModelDb } from './db.js';
@@ -77,14 +78,14 @@ export interface MessageRecorded {
 
 /** One entry of the uploaded name list as the store holds it: the shape `entryOf` makes (`shared/private-names.mjs`), keyed
  *  hashes and a token count, never a name. */
-export interface NameListEntryRow { readonly h: string; readonly f: string; readonly n: number; readonly mode: string }
+export interface NameListEntryRow { readonly h: string; readonly f: string; readonly n: number; readonly mode: NameListMode }
 /** The name list as the store holds it: never uploaded, or the list with its time, its rows, its generation and its entries. */
 export type PrivateNamesRead =
   | { readonly kind: 'none' }
   | { readonly kind: 'list'; readonly uploadedAt: number; readonly rows: number; readonly generation: number; readonly entries: readonly NameListEntryRow[] };
 const HASH32 = /^[0-9a-f]{32}$/;
 const isEntryRow = (e: NameListEntryRow): boolean => typeof e === 'object' && e !== null && typeof e.h === 'string' && HASH32.test(e.h)
-  && typeof e.f === 'string' && HASH32.test(e.f) && Number.isSafeInteger(e.n) && e.n >= 1 && typeof e.mode === 'string' && e.mode !== '';
+  && typeof e.f === 'string' && HASH32.test(e.f) && Number.isSafeInteger(e.n) && e.n >= 1 && isNameListMode(e.mode);
 
 /** The column list every row read names: `SELECT *` is banned, so an unknown column a later build adds is ignored. */
 const ROW_COLUMNS = 'id, at, term, state, text, cut, sha256, queuedAt, deliveredAt, pickedUpAt, settledAt, settledBy, spentAt';
@@ -237,7 +238,8 @@ export class OperatorModelStore {
   }
 
   /** The name list: `none` when never uploaded, or the list with its entries in order. A list row with no entries cannot be
-   *  written (the canary is always first), so it reads `unmeasured`, never a list a check would trust. */
+   *  written (the canary is always first), and an entry of another shape or mode is one this build cannot read, so either
+   *  reads `unmeasured`, never a list a check would trust. */
   privateNamesRead(): StoreRead<PrivateNamesRead> {
     return this.read((): PrivateNamesRead => {
       const l = this.db.prepare('SELECT uploadedAt, rows, generation FROM private_name_list WHERE id = 1').get() as
@@ -245,6 +247,7 @@ export class OperatorModelStore {
       if (l === undefined) return { kind: 'none' };
       const entries = this.db.prepare('SELECT h, f, n, mode FROM private_name_entries ORDER BY pos').all() as unknown as NameListEntryRow[];
       if (entries.length === 0) throw new Error('the name list has a row and no entries');
+      if (!entries.every(isEntryRow)) throw new Error('the name list holds an entry this build cannot read');
       return { kind: 'list', uploadedAt: l.uploadedAt, rows: l.rows, generation: l.generation, entries: entries.map((e) => ({ h: e.h, f: e.f, n: e.n, mode: e.mode })) };
     });
   }
