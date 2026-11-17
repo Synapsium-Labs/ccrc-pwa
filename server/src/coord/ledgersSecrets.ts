@@ -453,6 +453,43 @@ function storedSlots(ccrcDir: string): StoredSlots {
   return out;
 }
 
+/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
+ *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
+export const SLOT_WAIT_MS = 30_000;
+
+/**
+ * ONE ACT OF A SLOT AT A TIME (review 1389 F2, review 1391 A-3): the serialiser every door of this store runs its acts on. The
+ * answer runs `act` once the previous act on the same `key` has finished, or answers `busy` when that takes longer than
+ * `waitMs`. A waiter that gives up releases its own place at once, so the one after it waits only for the act still running,
+ * and the map entry stays until that act is done: the deadline never lets two acts of one key run together. Each door builds
+ * its own (`ledgersRoutes.ts` keys on `programmeChainKey`; the name list's door on its `.server` slot). The deadline's timer is
+ * a local of one call, never kept.
+ */
+export function slotChains(waitMs: number): <T>(key: string, act: () => Promise<T>, busy: () => T) => Promise<T> {
+  const chains = new Map<string, Promise<void>>();
+  return async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
+    const before = chains.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => { release = resolve; });
+    const chain = before.then(() => mine);
+    chains.set(key, chain);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), waitMs); });
+    const first = await Promise.race([before.then(() => 'ready' as const), late]);
+    clearTimeout(timer);
+    if (first === 'late') {
+      release();
+      return busy();
+    }
+    try {
+      return await act();
+    } finally {
+      release();
+      if (chains.get(key) === chain) chains.delete(key);
+    }
+  };
+}
+
 /** Each stored value's fingerprint row, made by `rowOf` (the composition root passes the masker's `fingerprintRow` under the
  *  current token: a value is taken from this adapter, never handed to an outer ring's import), for the masker's re-key after a
  *  rotation (the box's `roster` answer cannot carry them: the box holds none of them). A value file that is not a regular file,
