@@ -59,6 +59,8 @@ landed migration 92. The ladder moves positionally to migration 93. The only con
 its database and run-close pins, and mutation-set imports/spreads. Both sides were retained; the shared
 `decision-model-records.test.ts` case is unchanged from main. No unrelated source conflict was resolved.
 
+Fix round 1 absorbs main again under the coordinator's explicit new ruling, after #2974 took migration 93. The ladder now occupies 94. The six conflicts are additive migration/census unions only: schema, database rewind/version pins, authentication count comments and mutation floors. Both the phase-ref door and phase mutation floors remain, and the shared decision-model-records case is byte-for-byte main. The merged authentication census passes 348 cases; its 264 scanned registrations comprise 261 HTTP routes and three websocket upgrades.
+
 ## Verification so far
 
 | Piece | Evidence |

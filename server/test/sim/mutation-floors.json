@@ -173,5 +173,8 @@
   "server/src/coord/overlordLadder.ts#narrowingState": 1,
   "server/src/coord/overlordLadder.ts#degradedReading": 1,
   "server/src/coord/overlordLadder.ts#latchKnown": 1,
-  "server/src/coord/overlordLadder.ts#rungAvailable": 1
+  "server/src/coord/overlordLadder.ts#rungAvailable": 1,
+  "server/src/coord/planPolicy.ts#phaseNumbers": 1,
+  "server/src/coord/planPolicy.ts#diffPhases": 1,
+  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1
 }
