@@ -183,7 +183,7 @@ export function targetVerdict(target: DoneTarget, facts: TargetFacts): TargetAns
  *  completes an issue when its PR merges): the run's stored lineage, unvalidated, its own workspace branch, and its session's PR
  *  as the newest fleet listing shows it (null when the listing has no row for that session), or why the run was not read. */
 export type RunMergedFacts =
-  | { run: 'unreadable' | 'absent' }
+  | { run: ReadFailure }
   | { run: 'read'; lineage: unknown; ownBranch: string | null; listing: { phase: string | null; branch: string | null } | null };
 
 /** Whether a run's PR is merged as the server knows it, for an open run as well as a closed one: a `merged` phase in its folded
