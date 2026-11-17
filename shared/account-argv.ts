@@ -107,7 +107,8 @@ export const ACCOUNT_SUB_ARGV: Readonly<Record<AccountSub, SubSpec>> = Object.fr
   // `--stated=-` is written when the caller carries it, and the verb holds it to 1 to 120 printable characters.
   'set': {
     cli: ['set'], lane: true, stdin: 'optional', stdinFlag: '--stated=-',
-    // The two serviceability facts (plan 2026-11-14 Task 3): the billing words come from L0, never respelled here.
+    // The two serviceability facts (plan 2026-11-14 Task 3) and the organization label: the billing words come from
+    // L0, never respelled here.
     fields: {
       placement, limit, limitReset,
       fableBilling: { flag: '--fable-billing', rule: e(...FABLE_BILLINGS) }, continuity: { flag: '--continuity', rule: e('on', 'off') },

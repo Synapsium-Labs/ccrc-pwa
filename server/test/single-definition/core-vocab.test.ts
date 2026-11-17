@@ -838,10 +838,12 @@ describe('Build 7 nouns', () => {
     // The answer marks (Overlord W1): `answerMarkStore.ts` is `answer_marks`' one writer and its read, in the same idiom.
     // The Overlord authority journal (Overlord W1, H27): `overlordAuthorityJournal.ts` is `overlord_authority_head`'s one writer,
     // inside its caller's transaction, and its read; it names the handle by `import type`, and every method takes it as an argument.
+    // Overlaps (Overlord W2): `claimCollisions.ts` is `claim_collisions`' one writer and its read, and `programmePairsStore.ts`
+    // is `programme_pairs`' writers and reads, in `answerMarkStore.ts`' idiom.
     // The decision-model records (Overlord W2): `decisionModelStore.ts` is `decision_records`' and `decision_days`' SQL, in
     // `ledgersStore.ts`' idiom; the one caller reaches it through the `DecisionAskStore` port and never holds the handle.
     const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts',
-      'responsesStore.ts', 'decisionModelStore.ts']);
+      'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts']);
     const coordFiles = sources(coordDir);
 
     it('visits the whole directory — a moved directory must turn this red, not disarm it', () => {

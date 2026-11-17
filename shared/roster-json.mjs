@@ -543,10 +543,14 @@ function checkAccount(raw, index) {
     continuityAt = at;
   }
 
-  // Mirrors `parseRoster`'s organization-label gate, a written `null` refused. RETURNED: `_ccrc_org` emits it.
+  // Mirrors `parseRoster`'s organization-label gate, a written `null` refused, and its message: the key and the reason,
+  // never the value (PR A's review F6). RETURNED: `_ccrc_org` emits it.
   const org = raw['org'];
-  if (org !== undefined && (typeof org !== 'string' || orgLabelVerdict(org) !== 'ok')) {
-    bad(`account "${id}" has an invalid org ${JSON.stringify(org)}.`,
+  const orgWord = typeof org === 'string' ? orgLabelVerdict(org) : 'off-shape';
+  if (org !== undefined && orgWord !== 'ok') {
+    const why = typeof org !== 'string' ? 'is not a string' : orgWord === 'looks-like-an-id'
+      ? "looks like an organization's id (org-looks-like-an-id)" : 'is not a name matching ^[a-z][a-z0-9-]{0,31}$ other than "none"';
+    bad(`account "${id}" has an invalid "org": it ${why}.`,
       `Set "org" for account "${id}" to a name matching ^[a-z][a-z0-9-]{0,31}$, other than "none" and never the `
       + "organization's id, or remove the key to leave it unset.");
   }

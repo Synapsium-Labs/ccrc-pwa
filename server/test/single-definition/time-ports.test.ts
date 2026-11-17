@@ -38,6 +38,13 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/answerMarks.ts',
   'server/src/coord/answerMarks.ts',
   'server/src/coord/answerMarkStore.ts',
+  // Overlord W2, overlaps: the pair vocabulary, the pure deciders and the stores take `now` as an argument; the arm reads the
+  // wall clock only through the watcher's time port.
+  'shared/programmeFacts.ts',
+  'server/src/coord/overlaps.ts',
+  'server/src/coord/claimCollisions.ts',
+  'server/src/coord/programmePairsStore.ts',
+  'server/src/coord/overlapsLane.ts',
   // Overlord W2, the decision-model port (plan w2-decision-model.md question 14): `coord/` is not a time-port family, so each
   // file joins by name. The deciders take the day as an argument; the adapter's deadline is `Scheduler.after`, local to a call.
   'shared/decisionModel.ts',

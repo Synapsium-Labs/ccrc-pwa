@@ -8621,6 +8621,9 @@ _acct_set() {
   fi
   [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity$org" ] \
     || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off or --org <label>|none. Nothing was written."
+  # The label's shape is refused before the stated account or the placement is written (PR A's review, F2): the op owns
+  # the gate, so the verb asks it, read-only, and holds no copy of the id shapes.
+  [ -z "$org" ] || _acct_write_op "Nothing was written." org-check --org "$org"
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8655,7 +8658,14 @@ _acct_set() {
     [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
     _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
       ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} ${org:+--org "$org"} --recorded-at now
-    _acct_projection "The roster records lane $id's ${billing:+billing }${continuity:+continuity }${org:+organization }facts."
+    local -a facts_named=()   # its own name: shellcheck reads one name across functions, and `w` is a string elsewhere
+    [ -z "$billing" ] || facts_named+=("billing fact"); [ -z "$continuity" ] || facts_named+=("continuity record")
+    [ -z "$org" ] || facts_named+=("organization label")
+    case ${#facts_named[@]} in
+      1) v=${facts_named[0]} ;; 2) v="${facts_named[0]} and ${facts_named[1]}" ;;
+      *) v="${facts_named[0]}, ${facts_named[1]} and ${facts_named[2]}" ;;
+    esac
+    _acct_projection "The roster records lane $id's $v."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"

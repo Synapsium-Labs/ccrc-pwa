@@ -15,6 +15,7 @@ import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
 import type { RotateAnswer } from '../../../shared/box-token';
+import type { RosterFactsChange } from '../../../shared/rosterFacts';
 import type { ResolveRead } from '../fleet/workspaceNameWords';
 import type { PaneScopeStopState } from '../fleet/paneScopeStopWords';
 import { raiseAuthLostFrom } from './auth';
@@ -465,7 +466,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/code`, body),
     accountAuthCancel: (id: string, body: AccountAuthCancelBody) =>
       postJson<{ ok: true }>(`/api/accounts/${encodeURIComponent(id)}/auth/cancel`, body),
-    accountSet: (id: string, body: AccountSetBody) =>
+    /** `org` is the organization label, or `none` to clear it (account organization B1): the facts door's own field. */
+    accountSet: (id: string, body: AccountSetBody & Pick<RosterFactsChange, 'org'>) =>
       postJson<AccountSwitchAnswer>(`/api/accounts/${encodeURIComponent(id)}/set`, body),
     accountSignOut: (id: string) =>
       postJson<AccountSignOutAnswer>(`/api/accounts/${encodeURIComponent(id)}/credential`, { signOut: true }),
