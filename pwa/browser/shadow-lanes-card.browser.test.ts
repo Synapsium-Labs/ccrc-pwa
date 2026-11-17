@@ -137,6 +137,9 @@ describe('Settings › Automation › Shadow lanes at every width, in both skins
         if (shots) await page.screenshot({ path: path.join(shots, `shadow-lanes-confirm-${view.skin}-${view.width}.png`) });
         await sheet.getByRole('button', { name: T.confirmLabel }).click();
         await expect.poll(() => live.isChecked(), { timeout: 10_000 }).toBe(true);
+        // The confirm animates out after the write lands: once it has gone, the keyboard's way back opens none (Task C38:
+        // the page is no longer aria-hidden while the sheet leaves, so the radio reads checked before the sheet has gone).
+        await expect.poll(() => sheet.count(), { timeout: 10_000 }).toBe(0);
         expect(posts).toEqual([{ lane: 'roster-card', choice: 'live' }, { lane: 'roster-card', choice: 'live', confirm: KEY }]);
         fits(await measure(section));
 

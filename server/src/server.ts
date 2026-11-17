@@ -67,6 +67,7 @@ import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -2115,6 +2116,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+    itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2265,7 +2267,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
   registerFaceRoutes(app, { coord: deps.coord });
-  registerResponseRoutes(app, { coord: deps.coord, time: deps.time });
+  registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off') });
 
   app.get('/ws/session/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
@@ -2646,6 +2648,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
+  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers

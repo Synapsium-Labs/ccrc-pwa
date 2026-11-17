@@ -12,7 +12,8 @@ import {
 import {
   delegationEventRowOfRecord,
 } from './delegation-journal.js';
-import { sessionKeyOf, type DelegationEvidenceCounts } from './delegation-checkpoint.js';
+import { sessionKeyOf } from './delegation-checkpoint.js';
+import { type DelegationEvidenceCounts } from './delegation-recovery.js';
 
 // ── The SQLite projection port and its repair (ruling R20) ───────────────────────────────────────────────────────────
 

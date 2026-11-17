@@ -28,6 +28,7 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/pushOutboxStore.ts',
   'server/src/coord/responsesStore.ts',
   'server/src/responses/routes.ts',
+  'server/src/responses/lane.ts',
   'server/src/pushSender.ts',
   // Overlord W1, portfolio: the class vocabulary, the pure decider and the store take `now` as an argument.
   'shared/portfolio.ts',
@@ -37,6 +38,21 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/answerMarks.ts',
   'server/src/coord/answerMarks.ts',
   'server/src/coord/answerMarkStore.ts',
+  // Overlord W2, overlaps: the pair vocabulary, the pure deciders and the stores take `now` as an argument; the arm reads the
+  // wall clock only through the watcher's time port.
+  'shared/programmeFacts.ts',
+  'server/src/coord/overlaps.ts',
+  'server/src/coord/claimCollisions.ts',
+  'server/src/coord/programmePairsStore.ts',
+  'server/src/coord/overlapsLane.ts',
+  // Overlord W2, the decision-model port (plan w2-decision-model.md question 14): `coord/` is not a time-port family, so each
+  // file joins by name. The deciders take the day as an argument; the adapter's deadline is `Scheduler.after`, local to a call.
+  'shared/decisionModel.ts',
+  'server/src/coord/decisionModel.ts',
+  'server/src/coord/decisionModelPort.ts',
+  'server/src/coord/decisionModelHttp.ts',
+  'server/src/coord/decisionModelStore.ts',
+  'server/src/coord/decisionModelAsk.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

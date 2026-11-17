@@ -216,7 +216,9 @@ declare -A ROUTES=(
   # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
   # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
   # item's id. `items list` is a read that names its caller in the query: `byId` and `byUuid` are the caller's own,
-  # supplied as flags.
+  # supplied as flags. The three `goals` POSTs are the exception: their pair is the PANE's, appended by this client, and a body
+  # that names either is refused (review 2240 F1; the block that does it sits beside the note door's, below). The `items.*`
+  # rows are unchanged: the caller types the pair into their body.
   [items.raise]='POST|/api/programmes/{id}/items|yes|-'
   [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
   [items.confirm]='POST|/api/items/{id}/confirm|yes|-'
@@ -1181,6 +1183,22 @@ main() {
     derive_identity
     append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
+  fi
+  # THE GOALS ROWS' IDENTITY (review 2240 F1, the coordinator's ruling), the note door's rule: `goals pin`, `goals modify` and
+  # `goals merged` are attributed to this pane, because the ratification a coordinator's pin carries rests on this attribution.
+  # A body that names `byId` or `byUuid` is refused, unsent; a bodyless call is refused (`no-body`); and the pane's pair is
+  # appended LAST, byId then byUuid, so a spelling of `byId` the textual test misses never outranks it (review 2039, F7). The
+  # residual is a same-user forger with the box token and a raw HTTP call, which this does not stop.
+  if [[ "$key" == 'goals.pin' || "$key" == 'goals.modify' || "$key" == 'goals.merged' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local goalsbody="${body//[[:space:]]/}"
+    case "$goalsbody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a goals write is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the goals body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the goals body is not a JSON object; byUuid cannot be added'
   fi
   # THE PROBE ANSWER'S IDENTITY, the note door's rule above, word for word: a body that names `byId` or `byUuid` is refused
   # unsent, a bodyless call is refused, and the pane's pair is appended LAST.

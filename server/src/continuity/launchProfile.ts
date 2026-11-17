@@ -57,8 +57,11 @@ export function compactThresholdFor(profile: LaunchProfile, windowTokens: number
 //
 // `launchRowOf` is the ONE projection of a role's launch profile into the row ccd reads from `ccd/lib/launch-profiles.json`:
 // the JSON file's test, the digest, the route field `profiledigest` and the sandbox check all call it (Review Focus 4). A row
-// with no surface keeps W1a's five keys; a surfaced row adds `flags`, `surfaceSettings`, `stagedSkills`, `memory` and
-// `remoteControl`, which ccd renders whole or not at all while the route carries `profiledigest`.
+// with no surface keeps W1a's five keys and `longLived`; a surfaced row adds `flags`, `surfaceSettings`, `stagedSkills`,
+// `memory` and `remoteControl`, which ccd renders whole or not at all while the route carries `profiledigest`.
+// `longLived` is `FLEET_ROLES`'s column of that name, the one definition ccd reads it from (Overlord W1 ccd arms, Task 4,
+// slug long-lived-is-projected): `_role_long_lived` asks it for the hold-down and the `/model` skip, and no role-name list
+// in ccd restates it. Adding it changed every row's digest, the same on both sides.
 
 /** ccrc's own hook command, as `ccd/install-session-hooks.sh` registers it (`HOOK_CMD`). Pinned setting sources drop the
  *  account's settings, so the surfaced profile registers the hook itself (proposal 4); `launch-surface-installer.test.ts`
@@ -90,7 +93,7 @@ function surfaceHooks(): Record<string, unknown> {
 export function launchRowOf(role: FleetRole): Record<string, unknown> {
   const p = FLEET_ROLES[role].launchProfile;
   const base = { env: p.env, settings: p.settings, autoMemory: p.autoMemory, compactionSettings: p.compaction?.settings ?? {},
-    compactText: compactInstructionsFor(role) };
+    compactText: compactInstructionsFor(role), longLived: FLEET_ROLES[role].longLived };
   const s = p.surface;
   if (s === null) return sortedJson(base) as Record<string, unknown>;
   return sortedJson({

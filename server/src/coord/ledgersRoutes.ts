@@ -33,7 +33,7 @@ import {
   ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, parseItemActBody, refusedCloseDetail, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
-  nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  nextItemState, outsideDocLink, parseGoalsVersion, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -57,7 +57,7 @@ import type { AnswerMarksRead } from './answerMarkStore.js';
 import { askForMark, markableAsks } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, operatorSecretLaneId, slotChains, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
@@ -522,7 +522,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
         return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'this programme already has a definition of done; change it with goals modify, citing a ruling or an itemId' });
       }
     }
-    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen, { kind: 'coordinator' });
     changed();
     return reply.code(200).send({ ok: true });
   });
@@ -568,6 +568,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
+    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
     const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
@@ -637,9 +638,8 @@ const PROGRAMME_UNCLAIMED_SENTENCE =
  *  escape), the `{"value":""}` around it and room to spare (plan PL6; review 1391 A-9: 16384 refused a value the panel takes).
  *  On the secret's route the body IS the secret, so its body errors are fixed words (`credentialBodyRoute`). */
 export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
-/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
- *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
-export const SLOT_WAIT_MS = 30_000;
+/** How long an act on a slot waits for that slot's previous act (`SLOT_WAIT_MS`, `ledgersSecrets.ts`, review 1391 A-3). */
+export { SLOT_WAIT_MS };
 
 /** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
  *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
@@ -853,6 +853,29 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
   });
 
+  // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
+  // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
+  // (`LEDGER_OPERATOR_DOORS`). The body names the version by the stamp the operator was shown (`parseGoalsVersion`); a pin
+  // that moved since is `goals-changed`, so text they were not shown is never ratified. Whether the version already reads
+  // ratified is `goalRatification`'s, asked inside `ratifyGoalsVersion`'s transaction; the door decides nothing and awaits
+  // nothing between the read and the write. A change emits the waiting frame, as the tick door does; the coordinator is not
+  // mailed, and reads the verdict through its goals read.
+  app.post('/api/programmes/:slug/goals/ratify', (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const slug = (req.params as { slug: string }).slug;
+    const version = parseGoalsVersion(req.body);
+    if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
+    // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), String(g.actor));
+    if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
+    if (res.changed) deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, changed: res.changed, goals: coord.goalsFor(slug) });
+  });
+
   app.post('/api/items/:id/tick', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
@@ -1062,32 +1085,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
    * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
    */
-  const slotChains = new Map<string, Promise<void>>();
-  /** Runs `act` once the slot's previous act has finished, or answers `busy` when that takes longer than the deadline (review
-   *  1391 A-3). A waiter that gives up releases its own place at once, so the one after it waits only for the act still
-   *  running, and the map entry stays until that act is done: the deadline never lets two acts of one slot run together. */
-  const slotWait = deps.slotWaitMs ?? SLOT_WAIT_MS;
-  const underSlot = async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
-    const before = slotChains.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const mine = new Promise<void>((resolve) => { release = resolve; });
-    const chain = before.then(() => mine);
-    slotChains.set(key, chain);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), slotWait); });
-    const first = await Promise.race([before.then(() => 'ready' as const), late]);
-    clearTimeout(timer);
-    if (first === 'late') {
-      release();
-      return busy();
-    }
-    try {
-      return await act();
-    } finally {
-      release();
-      if (slotChains.get(key) === chain) slotChains.delete(key);
-    }
-  };
+  /** Each act on a slot runs once that slot's previous act has finished, or answers `busy` past the deadline (`slotChains`,
+   *  `ledgersSecrets.ts`, review 1391 A-3). */
+  const underSlot = slotChains(deps.slotWaitMs ?? SLOT_WAIT_MS);
   /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
    *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
   const noStore = noStoreRoute.onRequest;

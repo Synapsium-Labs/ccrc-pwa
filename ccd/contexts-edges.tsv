@@ -127,6 +127,7 @@ _route_apply_seed -> _route_peek
 _route_compact_settling -> _reg_get
 _route_escape -> _tmux_t
 _route_escape -> _tmx
+_route_holddown_holds -> _role_long_lived
 _route_inert_has -> _route_word_in
 _route_model_ack_wait -> _tmux_t
 _route_model_ack_wait -> _tmx
@@ -198,6 +199,7 @@ _spawn_start -> _route_degrade
 _spawn_start -> _route_effort_for
 _spawn_start -> _route_effort_shown
 _spawn_start -> _route_get
+_spawn_start -> _route_holddown_settle
 _spawn_start -> _route_inert_has
 _spawn_start -> _route_restore
 _spawn_start -> _route_stale_degrade_clear
@@ -433,6 +435,7 @@ cmd_forget -> _tmux_t
 cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
+cmd_hibernate -> _fresh_crossing_end
 cmd_hibernate -> _graceful_stop_after
 cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke
@@ -452,6 +455,7 @@ cmd_hibernate -> _session_verdict
 cmd_hibernate -> _tmux_t
 cmd_hibernate -> _tmx
 cmd_hibernate -> _ws_unsupervise
+cmd_keep_awake -> _reg_id_ok
 cmd_menu -> _alive
 cmd_menu -> cmd_ensure
 cmd_pr_landing -> _reg_get

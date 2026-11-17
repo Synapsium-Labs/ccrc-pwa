@@ -292,6 +292,8 @@ const API_ERROR_TEXT: Record<string, string> = {
   // D-8181: a plan verb (and the plan sync before each write) refuses text a public repository's tracker must not carry;
   // the box names the class in its own detail, which is never shown.
   'linear-text-public': 'This text names a ticket id, a person or a private name, and this project is public, so it was not saved or sent. Say it in words a stranger could read.',
+  // D-8182: the hierarchy item route answers it when the item's action does not take that act.
+  'item-act-mismatch': 'That item does not take this action, so nothing was changed. Reload the item and choose again.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a
@@ -588,7 +590,7 @@ export function refusalText<K extends string>(err: unknown, table: Readonly<Reco
 export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'programme-ended' | 'programme-unclaimed' | 'not-open' | 'duplicate' | 'programme-live' | 'use-secret-route'
   | 'not-a-secret-item' | 'bad-slot' | 'stored-not-ticked' | 'secret-not-one-line' | 'slot-busy' | 'secret-not-stored'
-  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'not-markable' | 'unknown-ask'
+  | 'secrets-unreadable' | 'remove-failed' | 'secret-name-collides' | 'outside-doc-link' | 'bad-request' | 'too-large' | 'unknown-item' | 'not-big' | 'rank-changed' | 'goals-changed' | 'not-markable' | 'unknown-ask'
   | 'ask-unreadable' | 'not-configured', string
 >> = {
   'programme-ended': 'This programme has no open run, so no coordinator is waiting for this. Dismiss the item instead.',
@@ -619,6 +621,7 @@ export const LEDGER_REFUSAL_TEXT: Readonly<Record<
   'not-big': 'That call is not a big one, so there is nothing to mark as seen. The list will update.',
   // The portfolio's rank door (Overlord W1): the rank changed since this screen read it, in another tab or window.
   'rank-changed': 'The order of the programmes changed since this screen read it, so your order was not saved. Read it again and reorder.',
+  'goals-changed': 'The goals changed since this screen showed them, so nothing was ratified. They have been read again: check them and ratify again.',
   // The answer-mark door (Overlord W1): the row left the operator's list, or carries no box.
   'not-markable': 'This row has left your list, so it cannot be marked any more. The list will update.',
   // Its ask arm (answer marks B): an ask the server no longer holds, or one this box could not read.

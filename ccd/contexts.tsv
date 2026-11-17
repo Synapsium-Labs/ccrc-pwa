@@ -1,14 +1,14 @@
 # ccd/contexts.tsv: every function ccd/ccd defines, mapped to ONE context of the 08-10 architecture spec
 # (C1 Fleet Registry & Accounts, C2 Fleet Mutation, C3 Session Conversation, C4 Workspace Lifecycle, C5 Coordination,
-# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs, C10 Session host; K = kernels
-# and platform, no aggregate). D-6054 (ARCH-34, #536). C10 is the session-host ruling Q13 (D-8272): hosting, observing
+# C6 Attention & Notification, C7 Update control plane, C8 Auth & box token, C9 Docs, C10 Session host, C11 Operator Model;
+# K = kernels and platform, no aggregate). D-6054 (ARCH-34, #536). C10 is the session-host ruling Q13 (D-8272): hosting, observing
 # and driving sessions behind one SessionHost interface, home ccd/lib/sessionhost.sh (the file-split plan's Task 7);
 # it is ccd's alone, and the server declares its port at C3. Data only: no installer reads it, and ccd/ccd never sources it.
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
-# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5) and ccd/lib/pool-set.sh (the Overlord's W1), which
-# ccd loads at its foot:
+# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1) and
+# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms), which ccd loads at its foot:
 # <function name><TAB><context>.
 _tmx_sock	C10
 _tmx_argv	C10
@@ -86,6 +86,9 @@ _is_codex_backend	C1
 _is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
+_acct_org	C1
+_org_rel_of	C1
+_org_rel	C1
 _pool_sync_installed	C1
 _acct_pool_state	C1
 _pool_ok	C1
@@ -318,6 +321,12 @@ _id_wrapper	C1
 _home_for	C1
 _home_measured_to	C1
 _avail	C1
+_org_cur	C1
+_org_is	C1
+_org_tie	C1
+_org_note	C1
+_org_near_say	C1
+_orgnear_cut	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1
@@ -963,3 +972,12 @@ _pool_undecided_word	C1
 _pool_undecidable_cause	C1
 _pool_set_start_warn	C1
 cmd_pool_answer	C1
+cmd_keep_awake	C4
+_keep_awake_ours	C4
+_role_long_lived	C3
+_route_holddown_holds	C1
+_route_holddown_settle	C1
+_fresh_crossing_end	C1
+_fresh_pick_ok	C1
+_fresh_pick_field_to	C1
+_fresh_pick_to	C1

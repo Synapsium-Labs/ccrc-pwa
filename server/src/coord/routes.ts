@@ -1706,6 +1706,10 @@ export function registerCoordRoutes(
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
+    // D-8182 (§5.6): a fresh work run for a ticket in a private project waits (outside `coordMutex`) for its issue and is
+    // named by the identifier; every other dispatch passes through untouched.
+    const ticketSlug = await deps.planSync?.dispatchSlug(id, body.slug);
+    if (ticketSlug !== undefined) body.slug = ticketSlug;
     const run = () => coordMutex.run(() => stampDispatchAttempt(dispatchDeps.coord, id, () => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route, body.slug, body.intents)));
     const outcome = await run();
     // D-5238: a pane this dispatch STARTED and has not published a live file. The wait is HERE, outside

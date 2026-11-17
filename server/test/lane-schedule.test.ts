@@ -8,7 +8,7 @@ import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
+import { LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, RESPONSES_LANE_PERIOD_MS, laneRow, type LaneRow } from '../src/laneSchedule.js';
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
@@ -521,9 +521,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 46 of 46 are monotonic (the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 49 of 49 are monotonic (the Linear plan sync, D-8182; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(46);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(49);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -613,6 +613,16 @@ describe('the push outbox lane row (Overlord spec §6.7, Table 11.1c; W1 push ou
   });
 });
 
+describe('the response lane row (Overlord spec §4.3, Table 11.1c, Table 11.5; W1 responses B Task 7)', () => {
+  it('runs every ten minutes, one pass at a time, abandons a pass older than two periods, and names its warning', () => {
+    expect(laneRow('responses')).toEqual({
+      name: 'responses', cadenceMs: RESPONSES_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+      staleAfterMs: 2 * RESPONSES_LANE_PERIOD_MS, warnKey: 'ccrc-server: the responses lane failed',
+    });
+    expect(RESPONSES_LANE_PERIOD_MS).toBe(600_000);
+  });
+});
+
 describe('the timers lane row (Overlord spec §3.3.12, Table 11.1c)', () => {
   it('runs once a minute on its own period, one pass at a time, and names its warning', () => {
     expect(laneRow('timers')).toEqual({
@@ -620,6 +630,16 @@ describe('the timers lane row (Overlord spec §3.3.12, Table 11.1c)', () => {
       warnKey: 'ccrc-server: the timers lane failed', derivedFrom: null,
     });
     expect(TIMER_LANE_PERIOD_MS).toBe(60_000);
+  });
+});
+
+describe('the overlaps arm row (Overlord spec §5.5 and §5.6, Table 11.1c; W2 plan w2-overlaps.md Task 4)', () => {
+  // The radar's minute as a literal, the radar row's reason above: a test reading the constant would move with a mutation of it.
+  it('rides the landing radar\'s cadence, skips an overlap, abandons a stuck pass and names its warning', () => {
+    expect(laneRow('overlaps')).toMatchObject({
+      cadenceMs: 60_000, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+      warnKey: 'ccrc-server: the overlaps arm failed', derivedFrom: { name: 'landingRadar' },
+    });
   });
 });
 

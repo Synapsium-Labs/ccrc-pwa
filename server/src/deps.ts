@@ -23,7 +23,9 @@ import type { ChildReclaimOutcome, ChildReclaimRequest } from './coord/childRecl
 import type { BoxTokenHolder } from './coord/token.js';
 import type { TokenRouteDriver } from './token/routes.js';
 import type { CoordStore } from './coord/store.js';
+import type { OperatorModelStore } from './operatorModel/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
+import type { PlanSync } from './linear/planSync.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
@@ -159,6 +161,9 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** The Overlord's private store (`operator-model.db`, context C11), opened at the root after `coord`. Absent in a test
+   *  that builds no store; nothing in PR A reads it. */
+  operatorModel?: OperatorModelStore;
   /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
    *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
    *  `coord`, not inside a route: `CoordStore.setAccountPools` calls
@@ -205,6 +210,8 @@ export interface Deps {
   /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
    *  Absent (a test, a script): the lane does not run. */
   quiz?: QuizLanePort;
+  /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
+  planSync?: PlanSync | null;
   /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
    *  over `~/.ccrc/overlord-authority.jsonl`, the guard passed to the journal as its `AuthorityGuardPort`. The designation and
    *  ladder stores append through `overlordAuthority.appendInTx`; gates B's step 3 reads `overlordAuthorityGuard.state()`.

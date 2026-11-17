@@ -45,6 +45,7 @@ import { isDelegationIngestKebab } from '../src/coord/delegation-ingest.js';
 import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlation.js';
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
+import { isDecisionModelWord } from '../src/coord/decisionModel.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -58,6 +59,7 @@ import { isArchiveGateKebab } from '../src/coord/archiveAdmission.js';
 import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
+import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -640,6 +642,7 @@ describe('the rejection table is total, in both directions', () => {
       'no-test-box',
       'no-runner',
       'x-ccrc-mail-token',   // coord/token.ts's header name
+      'content-type',        // coord/decisionModelHttp.ts's request header name (Overlord W2 decision model A)
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
       // D-2545 — the READ-FAILURE family, and the same family as
       // `not-configured` directly above: a fact about THIS BOX, not about the
@@ -1154,8 +1157,17 @@ describe('the rejection table is total, in both directions', () => {
         // THE RESPONSE RECORD'S RECEIPTS DOOR (Overlord W1): `coord/responsesStore.ts` names a drop word as a literal
         // (`'no-row'`). It rides the door's answer as a `dropped` key, never a `refused` or `reject.code`. Admitted through
         // L0's guard, derived from `RECEIPT_DROPS`, never NOT_CODES.
-        || isReceiptDrop(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word or receipt drop word`).toBe(true);
+        // THE OVERLAPS ARM (Overlord W2 overlaps A): `coord/overlaps.ts` names a pair's kind, source and close, the relay's
+        // refusal word and its reasons as literals. A word rides a `programme_pairs` row or the relay's verdict, never a mail
+        // rejection or a run refusal. Admitted through the exported guard, derived from L0's pair tables and
+        // `RELAY_CONFLICT_WHY_MAP`, never NOT_CODES.
+        || isOverlapsKebab(tok)
+        || isReceiptDrop(tok)
+        // THE DECISION MODEL (Overlord W2): `coord/decisionModel*.ts` name its outcomes, their reasons, its host kinds, bands
+        // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
+        // through `coord/decisionModel.ts#isDecisionModelWord`, derived from L0's lists and that file's, never NOT_CODES.
+        || isDecisionModelWord(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word or receipt drop word`).toBe(true);
     }
   });
 });

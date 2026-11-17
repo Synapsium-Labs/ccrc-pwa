@@ -99,6 +99,10 @@ export type DelegationAdoptNeedsState = Assert<Equals<(typeof REQUIRED_VERB_FLAG
  *  a bare `['pool-answer']` with every subset test still green; asserted here, losing it stops this project compiling.
  *  `g29-pool-answer-without-session.ts` is the other side. */
 export type PoolAnswerNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['pool-answer'], '--session'>>;
+/** The sleep markers' verb (Overlord W1 ccd arms, plan Task 3). Deleting this ENROLMENT turns `['keep-awake','--session']`
+ *  into a bare `['keep-awake']` with every subset test still green; asserted here, losing it stops this project compiling.
+ *  `g30-keep-awake-without-session.ts` is the other side. */
+export type KeepAwakeNeedsSession = Assert<Equals<(typeof REQUIRED_VERB_FLAG)['keep-awake'], '--session'>>;
 
 /** The project create (add-project spec 2026-11-04 §4). Deleting this ENROLMENT turns `['project-add','--name']` into a
  *  bare `['project-add']` with every subset test still green; asserted here, losing it stops this project compiling.

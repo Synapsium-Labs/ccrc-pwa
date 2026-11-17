@@ -86,22 +86,27 @@ const syncOf = (rows: readonly BindingRow[] | undefined): Sync => {
 };
 
 /** One programme's plan as the wire says it (`PlanView`): the stored plan, each object's sync word from its bindings. */
-export function planViewOf(stored: StoredPlan, doneWhen: readonly string[], bindings: readonly BindingRow[]): PlanView {
+export function planViewOf(
+  stored: StoredPlan, doneWhen: readonly string[], bindings: readonly BindingRow[], teamKeyOf?: (project: string) => string | null,
+): PlanView {
+  /** A record whose project has no team key reads `unsynced`: the sync sends nothing for it, its bindings stay untouched. */
+  const syncFor = (project: string, rows: readonly BindingRow[] | undefined): Sync =>
+    teamKeyOf !== undefined && teamKeyOf(project) === null ? { sync: 'unsynced', syncWord: null } : syncOf(rows);
   const by = new Map<string, BindingRow[]>();
   for (const b of bindings) by.set(`${b.localKind}:${b.localId}`, [...(by.get(`${b.localKind}:${b.localId}`) ?? []), b]);
   const epics: EpicView[] = stored.epics.map((e) => {
     const checkpoints: CheckpointView[] = e.checkpoints.map((c) => ({
       key: c.key, title: c.title, kind: c.kind, state: c.state, proves: c.proves, metAt: c.metAt, evidence: c.evidence, url: null,
-      ...syncOf(by.get(`checkpoint:${c.id}`)),
+      ...syncFor(e.project, by.get(`checkpoint:${c.id}`)),
     }));
     const tickets: TicketView[] = e.tickets.map((t) => ({
       key: t.key, kind: t.kind, title: t.title, project: t.project,
       checkpoint: e.checkpoints.find((c) => c.id === t.checkpointId)?.key ?? null, source: t.source, state: t.state,
-      runId: t.runId, identifier: by.get(`ticket:${t.id}`)?.[0]?.identifier ?? null, url: null, ...syncOf(by.get(`ticket:${t.id}`)),
+      runId: t.runId, identifier: by.get(`ticket:${t.id}`)?.[0]?.identifier ?? null, url: null, ...syncFor(t.project, by.get(`ticket:${t.id}`)),
     }));
     return {
       key: e.key, title: e.title, summary: e.summary, project: e.project, waves: e.waves, state: e.state, url: null,
-      ...syncOf(by.get(`epic:${e.id}`)), checkpoints, tickets,
+      ...syncFor(e.project, by.get(`epic:${e.id}`)), checkpoints, tickets,
     };
   });
   const live = stored.epics.filter((e) => e.state !== 'dropped');
@@ -159,7 +164,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   };
 
   const viewOf = (plan: PlanStorePort, coord: CoordStore, slug: string): PlanView =>
-    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug));
+    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug), (p) => coord.linkingOf(p).teamKey);
 
   const refuse = (reply: FastifyReply, word: PlanRefusal, detail: string): FastifyReply => refuseRoute(reply, word, { detail });
 

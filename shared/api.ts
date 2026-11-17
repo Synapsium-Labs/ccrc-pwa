@@ -9293,6 +9293,12 @@ export interface LifecycleMeas {
    *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
    *  tree. Null: no stale lock passed, an older ccd, or another act. */
   readonly staleLock: string | null;
+  /** A `swap` row's landing relation to the account it left (account organization PR C, #2909): `_org_rel`'s word,
+   *  `same`, `other` or `unknown`. Null: an older ccd, or another act. */
+  readonly org: string | null;
+  /** A rescue's organization near miss (#2909): the lowest score of a `same` candidate that lost to a lower-scored
+   *  `other` landing, as digits. Null: none, a move that was not a rescue, an older ccd, or another act. */
+  readonly orgnear: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9320,6 +9326,8 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   witness: true,
   heldBy: true,
   staleLock: true,
+  org: true,
+  orgnear: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -13220,7 +13228,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -13833,7 +13841,8 @@ export function credentialMaskSource(id: CredentialMaskId): string {
   return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
 }
 
-/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513), except the drawer
+ *  (`DRAWER_SECRET_MASK`, D-8694). */
 export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
@@ -13904,10 +13913,13 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6), `~`-anchored: Read (and Bash) of the first seven, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1), `~`-anchored: Read (and Bash) of every one of these thirteen, writes under `ACCOUNT_WRITE_DIRS`' two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
+   // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
+   '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
+   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
@@ -14223,11 +14235,12 @@ export interface AccountSwitchAnswer {
  *  `auth-in-progress`   a sign-in for the lane is in flight (409, spec §3.9).
  *  `not-a-token-lane`   a stated account for a sign-in lane, whose account `check` measures (409).
  *  `duplicate-id`       the verb found the id taken although the server's roster did not hold it (409): a race the
- *                       reconcile settles. */
+ *                       reconcile settles.
+ *  `org-looks-like-an-id` an organization label shaped like an organization id (400, account organization A3). */
 export const ACCOUNT_WRITE_REFUSALS = [
   'key-charset', 'confirm-mismatch', 'not-discardable', 'lane-exists', 'bad-stated', 'token-unverified',
   'config-dir-exists', 'live-sessions', 'sleeping-sessions', 'upstream', 'last-home-able', 'auth-in-progress',
-  'not-a-token-lane', 'duplicate-id',
+  'not-a-token-lane', 'duplicate-id', 'org-looks-like-an-id',
 ] as const;
 export type AccountWriteRefusal = (typeof ACCOUNT_WRITE_REFUSALS)[number];
 

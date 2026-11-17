@@ -2,8 +2,11 @@
 // section 4.3's Images row, base 4.11). Ring L3: it loads bytes through the page's queue and loaders and decides
 // nothing of its own: which images the page may show is `planImageRef`, the plain view's one pin rule, and how one is
 // loaded is `fetchImage`, the plain view's own loader path with its raster checks. The reader's frame cannot hold a
-// `blob:` URL, so every image here is a `data:` URL in the shared Markdown library's image grammar. W6's asset planner
-// replaces this file.
+// `blob:` URL, so every image here is a `data:` URL in the shared Markdown library's image grammar. The reader, the plain
+// view and the mockup planner share one pin rule (`imagePinFor`, through `planImageRef`) and one size basis
+// (`mockupSizeBasis`, on every page but a version page, where the plain view keeps its rule of no listed-size check),
+// while each keeps its own seed limits. A failed load, a 401 included, is still left out of the reader until C2
+// (completion plan Task 8).
 import { docsApi } from '../../../../shared/docs';
 import { READER_IMAGE_BUDGET_BYTES } from '../../lib/readerLimits';
 import {

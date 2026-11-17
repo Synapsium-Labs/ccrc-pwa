@@ -3370,6 +3370,95 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX response_receipts_once ON response_receipts(responseId, receipt, source, endpointHash);
   CREATE TABLE response_boots (epoch INTEGER PRIMARY KEY, bootedAt INTEGER NOT NULL, buildSha TEXT);
   `,
+
+  // ── 83: user_version 82 -> 83 ─────────────────────────────────────────────
+  // What each goals version rests on (Overlord spec §3.8, Table 11.1a; W1, plan `w1-portfolio.md` Task 4): `ratifiedBy`
+  // (a `RatifiedBy` word: `coordinator`, `item` or `operator`) and `ratifiedAt` on the pin (`programs`) and on each
+  // modification, `ratifiedActor` beside them (the account gate's actor of the operator's ratify, its device label and
+  // session hash, because an act that confers authority keeps its device; NULL for every other source, review 2240 F7), and
+  // `programs.doneWhenBy` (`pin` or `mod:<id>`), the version that wrote the current definition of done.
+  // The source only: whether it ratifies is `goalRatification`'s, decided at every read. Writers, all in `ledgersStore.ts`:
+  // `setSpecPin` and `ratifyGoalsVersion` on `programs`, `addModification` and `ratifyGoalsVersion` on the modifications,
+  // and `doneWhenBy` only in the statements that write `doneWhen` (`setSpecPin`, `setDoneWhen`). The pin's source counts only
+  // when `ratifiedAt >= inShortAt` (`pinSource`, review 2240 F2), so an older build's re-pin reads unrecorded. Nothing is back-filled:
+  // NULL is a version nobody recorded, read as `unrecorded`. Responses A (#2884) landed 82, so this is 83 (the coordinator's
+  // word, 2026-11-16).
+  //
+  // SEVEN NULLABLE COLUMNS on existing tables: an older build opening a file at `user_version 83` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), names none of them and boots. Its re-pin or modification leaves these columns as they
+  // stand. For the pin that is closed (the stamp rule above). For the definition of done it is ACCEPTED: an older build's
+  // modification with a list leaves `doneWhenBy` naming the version before it, so after a roll-forward that list reads that
+  // version's verdict until this build's next write (slug done-when-provenance-survives-a-rollback).
+  // Every earlier entry is frozen. RE-MEASURE the slot before the PR and before merge (it must print 82 before this entry
+  // is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE programs ADD COLUMN ratifiedBy TEXT;                  -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programs ADD COLUMN ratifiedAt INTEGER;               -- wall ms the pin's source was recorded
+  ALTER TABLE programs ADD COLUMN doneWhenBy TEXT;                  -- 'pin' or 'mod:<id>'; NULL is unrecorded
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedBy TEXT;   -- RatifiedBy word; parseRatifiedBy, never a cast
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedAt INTEGER;
+  ALTER TABLE programs ADD COLUMN ratifiedActor TEXT;               -- the operator's ratify: the gate's actor; else NULL
+  ALTER TABLE programme_modifications ADD COLUMN ratifiedActor TEXT; -- the operator's ratify: the gate's actor; else NULL
+  `,
+
+  // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
+  // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
+  // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
+  // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE response_settings (id INTEGER PRIMARY KEY CHECK (id = 1), retentionDays INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL);
+  INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
+  `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // Overlaps and goal conflicts (Overlord spec §5.5 H23, §5.6 H38, Table 11.1a; W2, plan `w2-overlaps.md` Task 3, questions
+  // 4 and 8). `claim_collisions`: one row per conflicting path and holder of a REFUSED claim, written only by
+  // `claimCollisions.ts#recordCollisions` after the claim's own transaction committed, in a transaction of its own, and pruned
+  // there after 48 hours. `programme_pairs`: one row per EPISODE of a pair key (`<kind>:<a>:<b>`), at most one standing
+  // (closedAt NULL), written by `programmePairsStore.ts`. Every column PR B writes (mailedAt, ruled, ruledAt, ruledBy) is here.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 85` takes rule 3, never names
+  // them. The next slot on the main this branch merged (84 there, responses B's); other open PRs hold 85 too, so the second
+  // to land renumbers at landing, on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must
+  // print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claim_collisions (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL,
+    claimedPath TEXT NOT NULL, requesterId TEXT NOT NULL, requesterRun INTEGER, holderClaimId INTEGER NOT NULL);
+  CREATE INDEX claim_collisions_at ON claim_collisions (at);
+  CREATE TABLE programme_pairs (id INTEGER PRIMARY KEY, pairKey TEXT NOT NULL, kind TEXT NOT NULL, progA TEXT NOT NULL,
+    progB TEXT NOT NULL, episode INTEGER NOT NULL, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL,
+    evidence TEXT NOT NULL, goalsA TEXT, goalsB TEXT, closedAt INTEGER, closedWhy TEXT, mailedAt INTEGER, ruled TEXT,
+    ruledAt INTEGER, ruledBy TEXT, UNIQUE (pairKey, episode));
+  CREATE UNIQUE INDEX programme_pairs_standing ON programme_pairs (pairKey) WHERE closedAt IS NULL;
+  `,
+
+  // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
+  // The decision-model records and day counts (Overlord spec §3.7 H6, Table 11.1a; W2, plan `w2-decision-model.md` Task 4):
+  // `decision_records`, one answer per key ("never asked twice"; the key holds the host kind and origin and the line the row
+  // was gathered under, review 2262 F20), refs and non-private inline fields only, never an operator message's text
+  // (question 7); `decision_days`, each row's HTTP attempts per UTC day by serve and maintain, the calls reserved by requests
+  // in flight, and M19's time unavailable. Writers in `decisionModelStore.ts` alone: `recordDecision`, and
+  // `reserveDecisionCalls` and `settleDecisionCalls` (the anchor columns are PR B's `recordAnchorRun`). NEW TABLES, nothing
+  // on an existing table: an older build ignores them (Table 11.1a). Nothing reads or writes them until PR B wires the caller.
+  // The slot is positional: overlaps A (#2949) took 85, so this is 86 (the coordinator's word, 2026-11-17, mail 22345).
+  `
+  CREATE TABLE decision_records (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, modelId TEXT NOT NULL,
+    hostKind TEXT NOT NULL, origin TEXT NOT NULL, stateHash TEXT NOT NULL, lineGen INTEGER NOT NULL, verdict TEXT NOT NULL,
+    p REAL NOT NULL, band TEXT NOT NULL, ms INTEGER NOT NULL, refs TEXT NOT NULL, inline TEXT, at INTEGER NOT NULL,
+    UNIQUE (row, revision, modelId, hostKind, origin, stateHash, lineGen));
+  CREATE TABLE decision_days (row TEXT NOT NULL, day TEXT NOT NULL, serve INTEGER NOT NULL DEFAULT 0,
+    maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
+    anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

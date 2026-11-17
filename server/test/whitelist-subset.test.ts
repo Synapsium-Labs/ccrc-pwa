@@ -301,6 +301,17 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(() => CCD_ARGV.poolAnswer('a b')).toThrow(/not a registry id/);
   });
 
+  // Overlord W1 ccd arms (plan Task 3, question 7): the sleep markers' verb cannot be reached with a positional tail. Its
+  // grant stops at the flag, and the agent's `REQUIRED_VERB_FLAG` enrolment makes a bare grant a boot refusal.
+  it('keep-awake is grantable ONLY with --session', () => {
+    const ka = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'keep-awake');
+    expect(ka).toEqual([['keep-awake', '--session']]);
+    expect(isExecAllowed('ccd', ['keep-awake'])).toBe(false);
+    expect(isExecAllowed('ccd', ['keep-awake', '--state', 'on', 'demo-quiet-basin'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.keepAwake('demo-quiet-basin', 'on')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.keepAwake('demo-quiet-basin', 'off')])).toBe(true);
+  });
+
   it('win-size is grantable ONLY with --session', () => {
     const ws = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'win-size');
     expect(ws.length, 'exactly one win-size grant').toBe(1);
@@ -649,6 +660,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
     poolAnswer: ['pool-answer', '--session', 'demo-quiet-basin'],
+    keepAwake: ['keep-awake', '--session', 'demo-quiet-basin', '--state', 'on'],
     // NATIVE DOCS READER wave 2: spec 2026-10-01 section 2 (a)'s verb table, token for token. The verb, then
     // `--project` (or `--all`), then every flag pair in ccd's argv order; `--max-bytes` is the class cap,
     // stringified. Committed show is 12 tokens after the verb, draft show 14.
@@ -1033,5 +1045,44 @@ describe('the admin-merge door is not a server verb', () => {
       .flatMap((e) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
     const holders = walk(root).filter((f) => f.endsWith('.ts') && readFileSync(f, 'utf8').includes('pr-admin-merge'));
     expect(holders).toEqual([]);
+  });
+});
+
+// Auto-advance plan W4a (D-8687, D-8692): the `models` op, the sixth wire-triggered spawn, is not an exec path either.
+describe('layer 4e — the models op is not an exec path and the whitelist is unchanged', () => {
+  it('EXEC_COMMANDS is unchanged, ccrc and models are on neither list, and the exec op refuses the argv', () => {
+    expect([...EXEC_COMMANDS]).toEqual(['tmux', 'ccd']);
+    expect(Object.keys(EXEC_WHITELIST).sort()).toEqual(['ccd', 'tmux']);
+    for (const w of ['ccrc', 'models']) {
+      expect(EXEC_COMMANDS as readonly string[], w).not.toContain(w);
+      expect(FORBIDDEN_COMMANDS as readonly string[], w).not.toContain(w);
+    }
+    for (const cmd of [...FORBIDDEN_COMMANDS, 'ccrc', 'models']) {
+      expect(isExecAllowed(cmd, ['models', 'lane-a', 'show']), cmd).toBe(false);
+    }
+  });
+
+  it("`case 'models'` and agent/src/modelsop.ts name no exec-surface symbol, and ctx.spawnModels is reached only inside the case", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+    const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+    const readSrc = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+    const cutBetween = (src: string, open: string, close: RegExp): string => {
+      const at = src.indexOf(open);
+      expect(at, `${open} is there`).toBeGreaterThanOrEqual(0);
+      const after = src.slice(at + open.length);
+      return after.slice(0, close.exec(after)!.index);
+    };
+    const server = readSrc('server.ts');
+    const handle = cutBetween(server, 'async function handleReq(', /\n\}\n/);
+    const body = cutBetween(handle, "case 'models': {", /\n    (?:case '|default:)/);
+    const reach = (src: string): number => code(src).match(/\bctx\.spawnModels\b/g)?.length ?? 0;
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(reach(body), 'reached once inside the case').toBe(1);
+    expect(reach(server.replace(body, '')), 'never outside it').toBe(0);
+    expect(code(readSrc('modelsop.ts'))).not.toMatch(EXEC_PATH);
   });
 });

@@ -245,6 +245,7 @@ export const NOT_QUESTION_STORE_METHODS: Readonly<Record<string, string>> = {
   raiseReviewCapAsk: "the review cap's own raise row (D-6795), not the asks table",
   digestDay: "the digest's send ledger, not a question table",
   claimDigestDay: "the digest's send ledger, not a question table",
+  insertDigestResponses: "the response record's digest lines (Overlord W1 responses B), not a question table",
 };
 
 /** The public `CoordStore` methods (no `private`) whose name says ask, approval, question or digest: the set

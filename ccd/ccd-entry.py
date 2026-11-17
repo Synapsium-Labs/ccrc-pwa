@@ -18,7 +18,7 @@
 # `SHELLOPTS`/`BASHOPTS`/`CDPATH`/`GLOBIGNORE`. It is a startup boundary, not a
 # privilege change, and not a sandbox.
 #
-# WHAT IS PROTECTED (the body re-classifies the exact shapes — plus whatever an
+# WHAT IS PROTECTED (the body re-classifies the exact shapes of this first group — plus whatever an
 # inherited `nocasematch` folds — and a test runs one table against both):
 #   ws-reclaim <any tail>                         — the body's parser owns the tail
 #   ws-expire <any tail>                          — likewise (workspace lifecycle wave 3: the
@@ -37,12 +37,21 @@
 #     measure of a leased tree; it writes nothing, and starts protected as its writer does)
 #   delegation-adopt <any tail>                   — likewise (delegation broker wave 5 PR8b, D-8112: the server's raise or
 #     lower of the adoption switch, the one writer of $REG/delegation-adopt)
+#   keep-awake <any tail>                         — likewise (the Overlord W1 ccd arms: the server's set or clear of one
+#     session's two sleep markers, their one writer in the tree)
 #   ws-audit --session <value> --reclaim [--defer-expired] [--stale <word>] [--hold-digest <digest>] — the token skeleton;
 #   ws-audit --session <value> --expire           — the expiry's token skeleton;
 #   ws-audit --session <value> --expire --child-of <value> — the same, for an archived child (expire-child-v1);
 #   ws-audit --session <value> --collect          — the collector's token skeleton;
 #   ws-audit --loose-hex <value> --collect        — the loose arm's token skeleton (D-6625);
 #     <value> is any string here, and the body still validates it as a session id
+# AND A GROUP OF THEIR OWN, PROTECTED_START_ONLY (D-8666): the forbidden verbs no session may run
+# (FORBIDDEN_CCD_VERBS, server/src/coord/approvalguard.ts) that are the operator's, not the server's alone —
+#   ws-rm, ws-reap, ws-gc, ws-archive, ws-restore, roll, claude <any tail>
+# start under `-p` too, so an inherited `nocasematch` cannot fold a case variant into one of them, but the body's own
+# entry guard does NOT refuse them when they start another way: the operator and their suites start the body
+# directly. `ws-gc` is the whole verb, its read-only listing included: it loses nothing under `-p`. `roll` and
+# `claude` are no verb of the body yet (D-8667): the group guards their spelling ahead of them.
 # Each of those tokens is matched WITHOUT CASE, a deliberate superset: an inherited
 # `nocasematch` folds the body's own entry guard and dispatcher (in a UTF-8 locale
 # beyond ASCII: `İ` folds to `i`), so a case variant must start protected too,
@@ -67,8 +76,8 @@
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
 #
-# THE BODY'S LIBRARIES (#1279). The body loads four more files beside it, `lib/disk-retention.sh`,
-# `lib/train-proof.sh`, `lib/delegation-lease.sh` and `lib/pool-set.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
+# THE BODY'S LIBRARIES (#1279). The body loads five more files beside it, `lib/disk-retention.sh`,
+# `lib/train-proof.sh`, `lib/delegation-lease.sh`, `lib/pool-set.sh` and `lib/long-lived.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
 # body, the body pins the libraries.
 # The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed
 # file refuses the start with status 125 before any verb runs. The path comes from the body's own location, so no
@@ -165,9 +174,15 @@ def folds_to(token, word):
     return False
 
 
+# D-8666: started under `-p`, never refused by the body when started another way — see WHAT IS PROTECTED above.
+PROTECTED_START_ONLY = ('ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore', 'roll', 'claude')
+
+
 def is_protected(argv):
     # CASE-INSENSITIVE, A SUPERSET ON PURPOSE — see WHAT IS PROTECTED above.
-    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in ('ws-reclaim', 'ws-expire', 'ws-collect', 'ws-orphan', 'scratch-rescue', 'ws-shed-deps', 'keep-awake', 'ws-lease-mark', 'ws-lease-audit', 'delegation-adopt')):
+        return True
+    if argv[:1] and any(folds_to(argv[0], verb) for verb in PROTECTED_START_ONLY):
         return True
     if len(argv) == 4 and folds_to(argv[0], 'ws-audit') and folds_to(argv[1], '--session') \
             and (folds_to(argv[3], '--expire') or folds_to(argv[3], '--collect')):

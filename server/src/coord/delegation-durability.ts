@@ -78,7 +78,8 @@ import {
   type DelegationLeaseActRefusal,
   type DelegationLeaseTransitionReason,
 } from './delegation-lease-state.js';
-import { type DelegationRecoveryReport, COORDINATION_RESTORE_MARKER_FILE, DelegationRecovery, DELEGATION_RESTORE_IN_PROGRESS, DELEGATION_CHECKPOINT_FILE, type DelegationRecoveryFailure, DelegationCheckpointBuilder, DelegationEvidenceIndex, type DelegationOwnFailureCode, refuse, readCursor, readInterval, sessionKeyOf, type DelegationMetaOpenResult, delegationRecordNaming, isMember, encodeDelegationCheckpoint, decodeDelegationCheckpoint, type DelegationCheckpointErrorCode } from './delegation-checkpoint.js';
+import { COORDINATION_RESTORE_MARKER_FILE, DELEGATION_RESTORE_IN_PROGRESS, DELEGATION_CHECKPOINT_FILE, DelegationCheckpointBuilder, refuse, readCursor, readInterval, sessionKeyOf, type DelegationMetaOpenResult, delegationRecordNaming, isMember, encodeDelegationCheckpoint, decodeDelegationCheckpoint, type DelegationCheckpointErrorCode } from './delegation-checkpoint.js';
+import { type DelegationRecoveryReport, DelegationRecovery, type DelegationRecoveryFailure, DelegationEvidenceIndex, type DelegationOwnFailureCode } from './delegation-recovery.js';
 import { type DelegationProjectionPort, type DelegationProjectionRepairReport, DELEGATION_REPAIR_FULL_MS, repairDelegationProjection, deleteEventsInGaps, DELEGATION_EVENTS_DELETE_CHUNK } from './delegation-db-projection.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════════════════════════════════════════════

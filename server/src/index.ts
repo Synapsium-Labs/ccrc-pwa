@@ -31,6 +31,7 @@ import { BoxTokenDriver } from './token/driver.js';
 import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js';
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
+import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -50,6 +51,8 @@ import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
+import { planSyncFor } from './linear/planSync.js';
+import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
 import { testboxCaptureTransport } from './buildCaptureLane.js';
@@ -129,6 +132,11 @@ if (!landingReplay.ok) {
   try { coordDb.close(); } catch { /* the process stops either way */ }
   process.exit(1);
 }
+// The Overlord's private store (context C11; Overlord W1 private store A): opened after coord.db and before the watcher, and
+// its throw (`PrivateStoreUnmigratable`) stops the process as coord.db's does. Its privacy journal never stops it: a journal
+// the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
+const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
+for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
 // The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
 // belongs to a process that died.
@@ -363,6 +371,12 @@ deps.plan = planStorePort(coord.db);
 // The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 deps.linearPolicy = allowAll;
+// The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
+deps.planSync = planSyncFor({
+  coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
+  privateTrackerKeys: cfg.privateTrackerKeys, readLinearStore: () => readLinearStore(cfg.ccrcDir),
+  currentFleet: () => watcher.currentFleet(),
+});
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.
@@ -415,6 +429,7 @@ const masker = new SecretMasker({
 deps.masker = masker;
 deps.responseStamp = () => responseStampNow(responseBoot);
 push?.setMasker(masker);
+deps.operatorModel = operatorModel.store;
 // The audit's 365-day retention, at boot and then daily on its own unref'd timer (D-5620). The Linear journal's 365 days
 // ride the same beat (D-7671). Not a row of `LANE_SCHEDULE`: this root holds the three stores, none of them is a watcher
 // lane, and the sweep runs before the server listens and whether or not the tick does. A recorded exception (D-8614).

@@ -457,6 +457,7 @@ export const REQUIRED_VERB_FLAG = {
   'project-add': '--name',
   'pane-scope-stop': '--state',
   'pool-answer': '--session',
+  'keep-awake': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -742,6 +743,12 @@ export const EXEC_WHITELIST = {
     // whole argument surface (g29 is the other side), so the wire cannot widen it to another form; an older agent
     // without this row refuses it `forbidden`, which the server reads as `ran: false`, never as an answer.
     ['pool-answer', '--session'],
+    // The Overlord's sleep markers (Overlord W1 ccd arms, plan Task 3; spec §3.2, C4): `ccd keep-awake --session <id>
+    // --state on|off` sets or clears one session's `.no-hibernate` and `.no-roll`, holding keep-awake's own stamp. A
+    // registry-file write and unlink, non-destructive, on `coord-pause`'s argument: the server may write only `~/.cc-clips`
+    // there, so the markers are raised through this verb or not at all. ENROLLED in `REQUIRED_VERB_FLAG` on `--session`
+    // (g30 is the other side), so the wire cannot reach it with a positional tail. Forbidden to every session.
+    ['keep-awake', '--session'],
     // NATIVE DOCS READER (spec 2026-10-01 section 2 (a), docs W2): the four
     // verbs `docs-v1` names, each ENROLLED in `REQUIRED_VERB_FLAG` above on the
     // flag that is its whole argument surface (g16-g19 are the other side).
