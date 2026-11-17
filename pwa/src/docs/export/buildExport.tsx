@@ -36,7 +36,7 @@ import type { DocLinkContextValue } from '../DocLink';
 import type { DetachedUrls } from '../docsLinks';
 import { DOC_IMAGE_TEXT, EXPORT_TEXT, fillSentence, kib, pluralS } from '../docsText';
 import type { MockupExportAssets, MockupLoadEnd } from '../exportBody';
-import { TIMED_OUT, buildMockupSnapshot, heldInUseOrder } from '../mockup/exportMockup';
+import { TIMED_OUT, buildMockupSnapshot, heldInUseOrder, mockupDiagramCount } from '../mockup/exportMockup';
 import type { MockupAssetPlan, MockupAssetResult } from '../mockup/ports';
 import { exportColouring, type ExportColouring } from './colouring';
 import { settleExportAssets, type ExportAsset, type ExportAssets } from './exportAssets';
@@ -425,6 +425,7 @@ async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLi
   const arm = input.body;
   const end = await settledWithin(arm.assets.settled, limits.imageWaitMs);
   const result = end === 'timed-out' ? unheld(arm.assets.plan, TIMED_OUT) : end.s === 'loaded' ? end.result : unheld(arm.assets.plan, 'ended');
+  const diagrams = mockupDiagramCount(arm.doc);
   const held = heldFiles(result);
   const attempt = (k: number): MockupTry => {
     const files = held.slice(0, k);
@@ -438,7 +439,7 @@ async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLi
       inlined: files.filter((f) => !left.has(f.path)).map((f) => ({ path: f.path, size: f.size, draft: f.draft })),
       omitted: snap.omitted,
     };
-    const notes = mockupNotes(input, snap.diagrams);
+    const notes = mockupNotes(input, diagrams);
     const parts: ShellParts = { metas: input.provenance.metas, notes, banner: input.provenance.banner };
     const content = (
       <MockupContent title={input.title} html={snap.html} facts={facts} links={<MockupLinks links={snap.links} input={input} />} />

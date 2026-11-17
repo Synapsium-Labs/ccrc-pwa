@@ -55,9 +55,6 @@ export interface MockupSnapshot {
   readonly html: string;
   readonly links: readonly string[];
   readonly omitted: readonly string[];
-  /** How many elements of `html` have `mermaid` in their class list: the template shape's diagram blocks, which appear in
-   *  the file as source (base 5.6.9's table: "<m> diagrams appear as source"). */
-  readonly diagrams: number;
 }
 
 type InlineVerdict = Extract<MockupRefVerdict, { readonly v: 'inline' }>;
@@ -459,10 +456,13 @@ function keepDataStylesheet(link: Element): boolean {
 
 /** The elements the file never carries: template, scripts, frames, objects, embeds, base, `meta[http-equiv]`, SMIL that
  *  targets `href`, and every `link` but a `data:` stylesheet; noscript is unwrapped, its children kept. */
+/** The elements step 3 drops with everything inside them: one list, read by the strip and by the diagram count. */
+const DROPPED_ELEMENTS = 'script, iframe, frame, object, embed, base, meta[http-equiv]';
+
 function dropInertElements(clone: Document): void {
   for (const t of [...clone.querySelectorAll('template')]) t.remove();
   for (const n of [...clone.querySelectorAll('noscript')]) n.replaceWith(...n.childNodes);
-  for (const el of [...clone.querySelectorAll('script, iframe, frame, object, embed, base, meta[http-equiv]')]) el.remove();
+  for (const el of [...clone.querySelectorAll(DROPPED_ELEMENTS)]) el.remove();
   for (const link of [...clone.querySelectorAll('link')]) if (!keepDataStylesheet(link)) link.remove();
   for (const el of [...clone.querySelectorAll('*')]) {
     if (SMIL_ELEMENTS.has(el.localName) && HREF_NAMES.has((el.getAttribute('attributeName') ?? '').trim())) el.remove();
@@ -522,9 +522,15 @@ function addCspMeta(clone: Document): void {
 
 /** The elements of the stripped clone whose class list holds `mermaid`: compared as a class token, case-sensitively, so
  *  neither a look-alike class nor the case-folding of a quirks-mode selector counts. */
-function countDiagrams(clone: Document): number {
+/** How many elements of `doc`'s snapshot have `mermaid` in their class list: the template shape's diagram blocks, which a
+ *  mockup export shows as source (base 5.6.9's table: "<m> diagrams appear as source"). Read from `doc` itself, never changed,
+ *  so the snapshot's interface stays the plan's `{html, links, omitted}`: an element the strip drops, or one inside it, is not
+ *  counted (a `template`'s content is no child of the document, and no `link` survives as a diagram). */
+export function mockupDiagramCount(doc: Document): number {
   let n = 0;
-  for (const el of clone.querySelectorAll('[class]')) if (el.classList.contains('mermaid')) n += 1;
+  for (const el of doc.querySelectorAll('[class]')) {
+    if (el.classList.contains('mermaid') && el.localName !== 'link' && el.closest(DROPPED_ELEMENTS) === null) n += 1;
+  }
   return n;
 }
 
@@ -537,7 +543,6 @@ export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): M
   dropInertElements(clone);
   const links = removeLinks(clone);
   stripAttributes(clone);
-  const diagrams = countDiagrams(clone);
   addCspMeta(clone);
-  return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted, diagrams };
+  return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted };
 }
