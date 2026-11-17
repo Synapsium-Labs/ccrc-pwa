@@ -9,8 +9,8 @@ that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It ch
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 89: row
-    revisions, #2965, took 87 and renewal readings A, #2962, took 88 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 90: row
+    revisions, #2965, took 87, renewal readings A, #2962, 88 and remaining work A, #2951, 89 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
