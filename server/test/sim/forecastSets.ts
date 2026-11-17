@@ -96,9 +96,9 @@ export const SEAL_BOUNDARY_SET = forecastSet([
 export const LEAD_HISTORY_SET = forecastSet([
   // Task 3's lead rules: the wave rule's representative, close order, the rework sum, the abandon words, the rebuilt rule,
   // and fix round 1's: the gap between waves and between runs kept (F1), a failed wave spanned (F3), one rework sample (F2).
-  { id: 'LH-1', old: 'const start = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start = opened;' },
+  { id: 'LH-1', old: 'const start: number = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start: number = opened;' },
   // F1: the gap between waves dropped (a wave opened after the close before it timed from its open).
-  { id: 'LH-2', old: 'const start = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start = Math.max(prevClose ?? -Infinity, opened);' },
+  { id: 'LH-2', old: 'const start: number = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start: number = Math.max(prevClose ?? -Infinity, opened);' },
   { id: 'LH-3', old: 'waves.sort((a, b) => a.closedAt - b.closedAt || a.rep.id - b.rep.id);', new: 'waves.sort((a, b) => a.rep.wave - b.rep.wave);' },
   { id: 'LH-4', old: 'const main = (w.runs.length === 1 ? w.closedAt : closes[0] ?? NaN) - start;', new: 'const main = w.closedAt - start;' },
   { id: 'LH-5', old: "d !== null && d !== NEVER_STARTED_DETAIL && (d.startsWith('abandon:') || d === DISPATCH_ABANDON_CLOSE_DETAIL)", new: "d !== null && d !== NEVER_STARTED_DETAIL && d.startsWith('abandon:')" },

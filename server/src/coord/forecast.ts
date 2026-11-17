@@ -175,7 +175,7 @@ function programmeLeads(runs: readonly LeadRun[], asOf: number): LeadHistory {
   let firstFrom: number | null = null;
   for (const w of waves) {
     const opened = Math.min(...w.runs.map((r) => r.openedAt));
-    const start = prevClose ?? Math.min(firstFrom ?? opened, opened);
+    const start: number = prevClose ?? Math.min(firstFrom ?? opened, opened);
     const abandoned = w.rep.state === 'failed' && isAbandonDetail(w.rep.closeDetail);
     if (w.rep.state !== 'done' && !abandoned) { if (prevClose === null) firstFrom = start; continue; }
     prevClose = w.closedAt;
