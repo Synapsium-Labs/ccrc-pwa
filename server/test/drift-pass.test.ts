@@ -616,6 +616,21 @@ describe('the drift pass (D-8183)', () => {
     expect(items(r)[1]).toMatchObject({ state: 'open', title: 'Linear keeps changing ticket t1' });
   });
 
+  // Review 2408 F4: the Handed-to-nobody arm (a programme with no coordinator) ends the binding's hold on the item too, so
+  // persistence that goes on is raised again.
+  it('after Hand on a binding with no coordinator, three restores in seven days raise the item again (review 2408 F4)', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    const [it] = items(r);
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + DAY);
+    expect(items(r)).toHaveLength(2);
+    expect(items(r)[1]).toMatchObject({ state: 'open', title: 'Linear keeps changing ticket t1' });
+  });
+
   // F3 (D-8720): the week's quiet after Keep covers persistence only; a restore Linear refuses raises the item at once (§7.4).
   it('a restore refused the day after Keep raises the item at once', async () => {
     const r = await synced(await rig());

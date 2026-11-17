@@ -107,7 +107,6 @@ stdout is the server's JSON: `{ok: true, …}`, or `{ok: false, error, detail}`.
 | `linear-forbidden` | This workspace's key may not do that. Tell the operator; do not retry. |
 | `linear-unauthorised` | The stored key was refused by Linear: tell the operator to replace it in Settings → Linear. |
 | `plan-owned` | The plan owns this managed team's tickets (a create, or an update of a bound one). Don't retry: file it with `ccrc-api plan ticket-add` (a worker: a follow-up into its run's epic). |
-| `linear-text-public` | A public repository can mirror this issue. Remove tracker ids and private names, then send again. |
 | `policy-denied` | The operator's policy refused this write. Do not retry; report it. |
 | `rate-limited` | Detail `session`, `workspace` or `linear`: a budget is spent. Wait (a minute at least, longer each time) and do not loop. |
 | `timeout`, `unreachable`, `malformed` | For a write the change may have happened: read the issue (or search for a created one) before any retry. A `timeout` with detail `not-sent` sent nothing. |

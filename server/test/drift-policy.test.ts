@@ -35,6 +35,15 @@ describe('driftedFields and driftVerdict', () => {
       ['milestone', { name: 'X', description: 'd', targetDate: null, sortOrder: 2, projectId: 'p' }, { name: 'M', description: 'd', targetDate: null, sortOrder: 2, projectId: 'p' }],
     ] as const) expect(driftVerdict(linear, planned, kind, { current: true })).toBe('drift');
   });
+  // Task 4.1's first rule (review 2408 A-5): an issue's state is owned by its TYPE, so a move between two states of one type
+  // (a team's own workflow, In Progress to In Review) is not drift, and a move to another type is.
+  it('In Progress → In Review is not drift; a move to another state type is', () => {
+    const inProgress = issue({ stateType: 'started', stateId: 's-progress', stateName: 'In Progress' });
+    const inReview = issue({ stateType: 'started', stateId: 's-review', stateName: 'In Review' });
+    expect(driftedFields(inReview, inProgress, 'issue')).toEqual([]);
+    expect(driftVerdict(inReview, inProgress, 'issue', { current: true })).toBe('match');
+    expect(driftedFields(issue({ stateType: 'unstarted', stateId: 's-todo' }), inProgress, 'issue')).toEqual(['stateType']);
+  });
   it('a value ccrc wrote is catch-up', () => {
     expect(driftVerdict(issue({ title: 'old' }), issue(), 'issue', { current: false })).toBe('catch-up');
   });
