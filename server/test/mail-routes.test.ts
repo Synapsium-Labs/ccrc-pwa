@@ -46,6 +46,7 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
 import { isDecisionModelWord } from '../src/coord/decisionModel.js';
+import { isEdgePredicate, isRemainingRefusal } from '../../shared/programmeFacts.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -1181,8 +1182,14 @@ describe('the rejection table is total, in both directions', () => {
         // THE DECISION MODEL (Overlord W2): `coord/decisionModel*.ts` name its outcomes, their reasons, its host kinds, bands
         // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
         // through `coord/decisionModel.ts#isDecisionModelWord`, derived from L0's lists and that file's, never NOT_CODES.
-        || isDecisionModelWord(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word or receipt drop word`).toBe(true);
+        || isDecisionModelWord(tok)
+        // THE REMAINING-WORK DOOR (Overlord W2 remaining work A): `coord/programmeFactsStore.ts` names why it refused a
+        // good body (`'too-many-open-edges'`), and `coord/programmeRemaining.ts` an edge target's predicate (`'run-closed'`,
+        // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,
+        // never a `refused` or `reject.code`. Admitted through L0's guards, derived from `REMAINING_REFUSALS` and
+        // `EDGE_PREDICATES`, never NOT_CODES.
+        || isRemainingRefusal(tok) || isEdgePredicate(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal or edge predicate`).toBe(true);
     }
   });
 });

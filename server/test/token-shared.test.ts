@@ -382,6 +382,17 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     expect(HOLDERS_MESSAGE, 'a missing holder').toMatch(/missing[^]*(moved|changed value)/);
   });
 
+  // Seven days that hold no week: each is a different fact that only shares the number, ruled out of the holders above and
+  // named in this row of its own (remaining work A, fix round 1; slug `edge-unmeasurable-is-its-own-fact`).
+  const OWN_FACTS: Record<string, string> = {
+    // How long an edge's target may stay unmeasured before the edge stops blocking (w2-remaining-work.md question 3).
+    'shared/programmeFacts.ts:EDGE_UNMEASURABLE_AFTER_MS': 'target-unmeasurable exit',
+  };
+
+  it('each seven-day fact of its own is still found by the scan where its row says, and is no holder', () => {
+    expect(sevenDayHolders(ALL).filter((h) => h in OWN_FACTS)).toEqual(Object.keys(OWN_FACTS).sort());
+  });
+
   it('the holders across shared, server/src, pwa/src and agent/src are exactly the seventeen separate seven-day quantities', () => {
     // A weekly interval anywhere else must import the one in shared/box-token.ts. These seventeen are separate
     // quantities (the coordinator confirmed them, Q2); a new, unrelated seven-day quantity needs a ruling to join.
@@ -417,7 +428,7 @@ describe('the rotation interval: declared once in L0, pinned by name and by valu
     // The response record's Waiting on you window (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md`
     // Task 5) is the seventeenth: a Waiting on you row's longest window (§4.3 Table 4.3a), unrelated to token rotation, and
     // it does not import the token interval.
-    expect(sevenDayHolders(ALL), HOLDERS_MESSAGE).toEqual([
+    expect(sevenDayHolders(ALL).filter((h) => !(h in OWN_FACTS)), HOLDERS_MESSAGE).toEqual([
       'pwa/src/screens/usePrograms.ts:QUIET_AFTER_MS',
       'server/src/childReclaimSweep.ts:CHILD_RECLAIM_LEAF_KEPT_HORIZON_MS',
       'server/src/childReclaimSweep.ts:CHILD_STALE_IDLE_MS',

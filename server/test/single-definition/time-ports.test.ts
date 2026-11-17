@@ -55,6 +55,9 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/decisionModelHttp.ts',
   'server/src/coord/decisionModelStore.ts',
   'server/src/coord/decisionModelAsk.ts',
+  // Overlord W2, remaining work: the vocabulary, the body's rules and the store take `now` as an argument.
+  'server/src/coord/programmeRemaining.ts',
+  'server/src/coord/programmeFactsStore.ts',
   // Overlord W2, done tests A: the vocabulary, the pure deciders and the one reader read no clock.
   'shared/doneTests.ts',
   'server/src/coord/doneTests.ts',

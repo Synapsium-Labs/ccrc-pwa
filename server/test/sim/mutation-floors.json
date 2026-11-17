@@ -140,6 +140,8 @@
   "server/src/coord/decisionModel.ts#bandOf": 1,
   "server/src/coord/decisionModel.ts#decisionRequestGroups": 1,
   "server/src/coord/decisionModel.ts#isLiteralHost": 1,
+  "server/src/coord/programmeRemaining.ts#remainingBodyOf": 1,
+  "server/src/coord/programmeRemaining.ts#edgeTargetVerdict": 1,
   "server/src/coord/overlaps.ts#overlapSightings": 1,
   "server/src/coord/overlaps.ts#goalConflictSightings": 1,
   "server/src/coord/overlaps.ts#pairMoves": 1,

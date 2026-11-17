@@ -3488,13 +3488,42 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
+  // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
+  // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
+  // reason, at the plan when `runId` is null or at that run's wave boundary); `programme_edges`, what the programme waits
+  // on, each a `needs-landed` or `needs-decision` edge whose `target` is the canonical JSON of an `EdgeTarget`
+  // (`shared/programmeFacts.ts#edgeTargetKey`), so the partial unique index sees two equal targets as one open edge. ONE
+  // writer of both inserts, `programmeFactsStore.ts#insertRemaining`, in the statement's transaction; the edge's state
+  // columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's edge arm's alone. NEW TABLES only:
+  // an older build at this `user_version` takes rule 3 and never names them. Renewal readings A (#2962) landed 88, so this is
+  // 89 by position (the coordinator's standing license, 2026-11-17); whoever of the open PRs holding 89 lands second
+  // renumbers at landing, on the coordinator's word. RE-MEASURE the slot:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_remaining (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    byId TEXT NOT NULL, runId INTEGER, lo INTEGER NOT NULL, hi INTEGER NOT NULL, reason TEXT NOT NULL, build TEXT
+  );
+  CREATE INDEX programme_remaining_by_program ON programme_remaining (program, id);
+  CREATE TABLE programme_edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    statementId INTEGER NOT NULL REFERENCES programme_remaining(id), kind TEXT NOT NULL, target TEXT NOT NULL,
+    why TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'open', openedAt INTEGER NOT NULL, endedAt INTEGER, evidence TEXT,
+    unmeasuredSince INTEGER
+  );
+  CREATE UNIQUE INDEX programme_edges_one_open ON programme_edges (program, kind, target) WHERE state = 'open';
+  CREATE INDEX programme_edges_by_program ON programme_edges (program, state);
+  `,
+
+  // ── 90: user_version 89 -> 90 ─────────────────────────────────────────────
   // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
   // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
   // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
-  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 89`
-  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87 and
-  // renewal readings A (#2962) 88, so this is 89 (the coordinator's word, 2026-11-17).
-  // RE-MEASURE the slot before the PR and before merge (it must print 88 before this entry is counted):
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 90`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88 and remaining work A (#2951) 89, so this is 90 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 89 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

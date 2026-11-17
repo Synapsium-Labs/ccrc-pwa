@@ -314,7 +314,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
+  'programme_remaining', 'programme_edges'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -414,6 +415,10 @@ describe(TABLES_PIN, () => {
       decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
+      // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
+      // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
+      programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      programme_edges: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
     });
   });
 
@@ -504,6 +509,56 @@ describe(TABLES_PIN, () => {
   });
   it('recordAnswerMark is called exactly once outside the store, inside the POST /api/answer-marks handler', () => {
     expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
+  });
+  // What a programme says is left (Overlord W2 remaining work A, plan w2-remaining-work.md Task 2): `programme_remaining`
+  // is append-only, so no statement that changes or removes a row names it anywhere, even inside its one writer (which the
+  // map above cannot tell from the INSERT): UPDATE, DELETE, REPLACE INTO, INSERT OR REPLACE, or an INSERT whose
+  // ON CONFLICT clause does an UPDATE (review 2347, F4). The writer is reached only from the remaining-work door, and it
+  // never changes an edge: the edge's state columns are remaining work B's `settleEdge`'s.
+  const remainingCallSites = callSitesOf('insertRemaining');
+  const uncommented = (t: string): string => t.replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, '');
+  const rowChanges = (table: string) => (text: string): boolean => {
+    const code = uncommented(text);
+    if (new RegExp(`(?:UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO|INSERT\\s+OR\\s+REPLACE\\s+INTO)\\s+${table}\\b`).test(code)) return true;
+    // An upsert names no table after its UPDATE: read each INSERT into the table up to the call that runs it.
+    return [...code.matchAll(new RegExp(`INTO\\s+${table}\\b`, 'g'))]
+      .some((m) => /ON\s+CONFLICT[^]*?DO\s+UPDATE/.test(code.slice(m.index).split(/\)\s*\.(?:run|get|all|iterate)\(/)[0]!));
+  };
+  const remainingChanges = rowChanges('programme_remaining');
+  const edgeChanges = rowChanges('programme_edges');
+  const insertRemainingBody = (text: string): string => {
+    const from = text.indexOf('export function insertRemaining(');
+    return from < 0 ? '' : text.slice(from, text.indexOf('\n}\n', from));
+  };
+  it.each([
+    'UPDATE programme_remaining SET reason = ?', 'DELETE FROM programme_remaining WHERE id = ?',
+    'REPLACE INTO programme_remaining (id) VALUES (?)', 'INSERT OR REPLACE INTO programme_remaining (id) VALUES (?)',
+    "db.prepare('INSERT INTO programme_remaining (id) VALUES (?) ' +\n  'ON CONFLICT(id) DO UPDATE SET reason = excluded.reason').run(1)",
+  ])('CONTROL: the append-only scan sees %s', (sql) => {
+    expect(remainingChanges(sql)).toBe(true);
+    expect(remainingChanges(sql.replace('programme_remaining', 'programme_edges'))).toBe(false);
+  });
+  it('CONTROL: an INSERT followed by another statement\'s upsert is not read as an upsert of programme_remaining', () => {
+    expect(remainingChanges("p('INSERT INTO programme_remaining (id) VALUES (?)').run(1);\np('INSERT INTO t (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET n = 1').run(1);")).toBe(false);
+  });
+  it('no statement that changes or removes a row names programme_remaining anywhere: append-only', () => {
+    expect(ALL.filter((f) => !rel(f).startsWith('pwa/') && remainingChanges(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('insertRemaining never changes or removes an edge: it only inserts into programme_edges', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    expect(insertRemainingBody(text)).toMatch(/INSERT INTO programme_edges/);
+    expect(edgeChanges(insertRemainingBody(text))).toBe(false);
+    // CONTROL: the same body with an edge UPDATE planted before its return is caught.
+    const planted = text.replace('    return { ok: true, id, added, kept };',
+      "    db.prepare(\"UPDATE programme_edges SET state = 'met' WHERE id = ?\").run(id);\n    return { ok: true, id, added, kept };");
+    expect(planted).not.toBe(text);
+    expect(edgeChanges(insertRemainingBody(planted))).toBe(true);
+  });
+  it('insertRemaining is called exactly once outside the store, inside the remaining-work door', () => {
+    expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
+      `${S}insertRemaining`,
+    ]);
   });
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.

@@ -100,8 +100,9 @@ const refuse = (detail: string): Refuse => ({ ok: false, detail });
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 /** One text, 1 to `max` characters as sent, then masked and cut whole (F3). Null when it is not a string of that size
- *  or the mask and the cut leave nothing. `oneLine` refuses a line break. */
-function text(v: unknown, max: number, oneLine = false): string | null {
+ *  or the mask and the cut leave nothing. `oneLine` refuses a line break. Exported as `callText` for the remaining-work
+ *  body (`programmeRemaining.ts`), so a coordinator's texts are bounded and masked by one rule (Overlord W2). */
+export function callText(v: unknown, max: number, oneLine = false): string | null {
   if (typeof v !== 'string' || v.trim() === '' || v.length > max) return null;
   if (oneLine && /[\r\n]/.test(v)) return null;
   const out = cutWhole(redactCommand(v), max).trim();
@@ -117,7 +118,7 @@ export function callBodyOf(raw: unknown, now: number): { ok: true; call: NewCall
   }
   const callClass = klass as CoordCallClass;
   if (typeof raw.reversible !== 'boolean') return refuse('reversible must be true or false');
-  const why = text(raw.why, CALL_WHY_MAX, true);
+  const why = callText(raw.why, CALL_WHY_MAX, true);
   if (why === null) return refuse(`why must be one line of 1 to ${CALL_WHY_MAX} characters`);
   let runId: number | null = null;
   if (raw.runId !== undefined) {
@@ -128,7 +129,7 @@ export function callBodyOf(raw: unknown, now: number): { ok: true; call: NewCall
   if (callClass === 'block') {
     if (raw.question !== undefined) return refuse('a block call takes no question');
     if (raw.options !== undefined) return refuse('a block call takes no options');
-    const chosen = text(raw.chosen, CALL_TEXT_MAX);
+    const chosen = callText(raw.chosen, CALL_TEXT_MAX);
     if (chosen === null) return refuse(`chosen must be 1 to ${CALL_TEXT_MAX} characters`);
     const wake = typeof raw.wakeOn === 'string' ? parseWake(raw.wakeOn) : null;
     if (wake === null) return refuse(`wakeOn must be one of ${CALL_WAKES.join(', ')} or time:<epoch ms>`);
@@ -140,7 +141,7 @@ export function callBodyOf(raw: unknown, now: number): { ok: true; call: NewCall
   }
 
   if (raw.wakeOn !== undefined) return refuse('wakeOn belongs to a block call only');
-  const question = text(raw.question, CALL_TEXT_MAX);
+  const question = callText(raw.question, CALL_TEXT_MAX);
   if (question === null) return refuse(`question must be 1 to ${CALL_TEXT_MAX} characters`);
   const opts = raw.options;
   if (!Array.isArray(opts) || opts.length < 2 || opts.length > CALL_OPTIONS_MAX) {
@@ -149,7 +150,7 @@ export function callBodyOf(raw: unknown, now: number): { ok: true; call: NewCall
   if (typeof raw.chosen !== 'string' || !opts.includes(raw.chosen)) return refuse('chosen must be one of the options');
   const options: string[] = [];
   for (const o of opts) {
-    const t = text(o, CALL_OPTION_MAX);
+    const t = callText(o, CALL_OPTION_MAX);
     if (t === null) return refuse(`each of the options must be 1 to ${CALL_OPTION_MAX} characters`);
     options.push(t);
   }
