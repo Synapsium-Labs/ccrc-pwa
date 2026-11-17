@@ -119,6 +119,10 @@ describe('Task D2: `startOtherOrg` is read from lane, prevLane and the roster (T
     expect(inputsOf(minted(['lane-z', 'lane-c'], { resumed: true }).g).startOtherOrg).toEqual(unmeasured('organization unknown'));
     // No roster labels at all: every pair of distinct accounts is unknown.
     expect(inputsOf(minted(['lane-a', 'lane-c'], { resumed: true }).g, () => null).startOtherOrg).toEqual(unmeasured('organization unknown'));
+    // No `orgOf` passed at all (`org-of-absent-is-unlabelled`): the default reads every account unlabelled.
+    const g = minted(['lane-a', 'lane-c'], { resumed: true }).g;
+    expect(renewalInputsOf(g, undefined, { kind: 'unmeasured', why: 'not a coordinator' }, NOW, { kind: 'measured', value: false })
+      .startOtherOrg).toEqual(unmeasured('organization unknown'));
   });
   it('`startResumed` keeps its shape: an unknown organization never blinds it (`other-org-reading-apart`)', () => {
     const i = inputsOf(minted(['lane-a', 'lane-z'], { resumed: true }).g);

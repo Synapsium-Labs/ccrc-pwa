@@ -41,8 +41,11 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
 - `own-account-unknown-is-unmeasured`: Table 3 has no row for a resumed generation whose own `lane` is null (the
   registry's wrapper was unmeasured, or the start was not the newest). It reads unmeasured, `account unknown`, the same
   direction as `previous account unknown`, and never "same".
-- `org-of-absent-is-unlabelled`: `GenerationsInput.orgOf` is optional. Absent, every account reads unlabelled, so a resume
-  onto another account is unmeasured and the row is blind (the safe direction). Only the watcher passes it.
+- `org-of-absent-is-unlabelled`: `GenerationsInput.orgOf` is optional, and so is `renewalInputsOf`'s `orgOf` argument,
+  which defaults to "no label" (the one place the default is written; the pass hands its input's value on). Absent, every
+  account reads unlabelled, so a resume onto another account is unmeasured and the row is blind (the safe direction).
+  Only the watcher passes it. The argument became optional at the merge with renewal readings A (#2962), whose lane tests
+  call `renewalInputsOf` with five arguments; the test-tree type check (CI) refused the required sixth.
 - `own-account-unknown-is-unmeasured` and `org-of-absent-is-unlabelled` stand as recorded (the coordinator's rulings in
   fix round 1); Table 3 gains the own-account row in the programme's ledger PR, not here.
 - `decision-model-undo-shared-case`: after this branch's migration sat behind decision model A's 86, `decision-model-records`' case
@@ -84,7 +87,7 @@ table and the outstanding-mail clamp, which inserts 510 rows, about 27 s). None 
 test slice's shared memory cap, so the touched test files were type-checked through a scratch config, and CI runs the whole.
 
 `mutation-run.py` mutates Python modules only, so the mutants were applied one at a time by a script that saves the file,
-applies one replacement, runs the named test file and restores the saved copy. All 12 were killed:
+applies one replacement, runs the named test file and restores the saved copy. All 13 were killed:
 
 | Mutant | Killed by |
 |---|---|
@@ -100,6 +103,7 @@ applies one replacement, runs the named test file and restores the saved copy. A
 | the read drops `prevLane` | `continuity-generations-org` |
 | the watcher passes no labels | `continuity-generations-org` |
 | the pass drops `orgOf` | `continuity-generations-org` |
+| `renewalInputsOf`'s default reads every account as one label | `continuity-generations-org` |
 
 ## Growth
 

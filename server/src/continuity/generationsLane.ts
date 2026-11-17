@@ -484,7 +484,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
     const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass'),
-      input.orgOf ?? (() => null)));
+      input.orgOf));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
@@ -686,7 +686,7 @@ const W1 = later('W1');
 /** The gather's readings, as `renewalDue`'s inputs. Every reading that is not a fresh measurement reaches the decider as
  *  unmeasured with its reason: a stale sidecar is unmeasured, never a reading below the cap. */
 export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Reading<boolean>, nowMs: number,
-  probeFailedUnfixed: Reading<boolean>, orgOf: OrgOf): RenewalInputs {
+  probeFailedUnfixed: Reading<boolean>, orgOf: OrgOf = () => null): RenewalInputs {
   const unread = later('unread this pass');
   const usage = (pick: 'ctxTokens' | 'ctxWindow'): Reading<number> => usageReading(r, pick);
   const compactions = ((): Reading<number> => {
