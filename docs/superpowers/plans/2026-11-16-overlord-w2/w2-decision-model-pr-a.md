@@ -48,9 +48,9 @@ Each is small and is recorded so the ledger and PR B read the code, not the plan
 - **A swapped pair.** A both-order yes-or-no row puts its first two fields under opaque labels, and its two questions name
   the labels in swapped order before the catalogue's instruction ("The request is under x… The readback is under x…").
 - **The canary strings.** `DECISION_CANARY_OVERRIDES` holds five neutral override strings. PR B's canary uses them.
-- **The migration slot.** 85 by position. Portfolio B (#2904) took 83, and this branch first merged `main` to take 84 (the
-  coordinator's word, mail 21993). Responses B (#2914) then landed 84, and this branch merged `main` a second time to take 85,
-  keeping both sides (the coordinator's word, mail 22094).
+- **The migration slot.** 86 by position. Portfolio B (#2904) took 83, and this branch first merged `main` to take 84 (the
+  coordinator's word, mail 21993). Responses B (#2914) then landed 84, and this branch merged `main` to take 85 (mail 22094).
+  Overlaps A (#2949) then landed 85, and this branch merged `main` again to take 86, keeping both sides (mail 22345).
 
 ## 3. Review 2324, fix round 1
 
