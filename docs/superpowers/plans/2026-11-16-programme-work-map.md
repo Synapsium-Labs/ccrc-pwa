@@ -219,7 +219,7 @@ export function phaseNumbers(phases: readonly { key: string; dropped: boolean }[
   comment stops saying every word has a console sentence: only `linear-text-public` has one (F20).
 - `census-w3/claimant.test.ts`'s count of cap-reader calls in `ccrc-api` rises by the one new gate (F5).
 
-- [ ] **Step 1: Write the failing tests** — `plan-phases.test.ts`: `plan put stores phases in order with their
+- [x] **Step 1: Write the failing tests** — `plan-phases.test.ts`: `plan put stores phases in order with their
   references`, `a phase's number counts only phases not dropped`, `a put with no phases key leaves the stored phases`, `a put adds references and never removes one`,
   `a phase may reference a whole epic and a ticket`, `one ticket may be referenced by two phases`, `phase-ref adds and
   removes one reference`, `phase-ref carries a ticket and records the time`, `a carry out of a whole-epic reference is
@@ -230,11 +230,11 @@ export function phaseNumbers(phases: readonly { key: string; dropped: boolean }[
   bad-carry`, `removing any other reference is allowed`, `a put that orders a carry's target before its source is
   refused bad-carry`, `phase-ref refuses plan-closed after the plan ends`, `add and remove refuse an unknown or dropped
   phase`; and in `ccrc-api.test.ts`, `the phase-ref row is refused locally without plan-phases-v1`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-phases.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every test named under Files.
-- [ ] **Step 5: Commit** — `feat(plan): phases that reference epics and tickets, with recorded carries`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, then every test named under Files.
+- [x] **Step 5: Commit** — `feat(plan): phases that reference epics and tickets, with recorded carries`.
 
 **Acceptance.** Every stored plan reads the same before and after (a characterization case over a fixture shaped like
 the two live plans), and `runs open` is unchanged for every plan. **Rollback.** A plain revert; the new tables are left
@@ -628,8 +628,12 @@ Task WM0 departs under its own number:
   `plan-phases-v1` lives in `shared/api.ts` (F5); a phase's number is derived once, in `planPolicy.ts` (F6); the
   `remove` of either end of a recorded carry, and a put that reorders a carry's target before its source, are refused
   `bad-carry` (F12); `plan ticket-done` reuses `plan-runs-open` and `plan-bad-body`, so `ticket-not-open` is never added
-  (F21); `{ pr }` evidence is judged by the ticket's own project (F19). The task note
-  (`2026-11-16-programme-work-map/wm0.md`) lists each amendment and the finding it answers.
+  (F21); `{ pr }` evidence is judged by the ticket's own project (F19). The build departs from the plan's text in four
+  small ways: `plan show` answers `phases` only for a programme that declares one, so a plan with no phases reads exactly
+  as before WM0 (the acceptance); `PhaseView.number` is null for a dropped phase; the client refuses `capability-missing`,
+  the timers' word, rather than a new one; and a phase holds at most 200 references (`PLAN_BOUNDS.refsPerPhase`, the
+  tickets' bound). The task note (`2026-11-16-programme-work-map/wm0.md`) lists each amendment and the finding it
+  answers, the migration slot, the rows and the mutants.
 
 ## Where things stand
 
