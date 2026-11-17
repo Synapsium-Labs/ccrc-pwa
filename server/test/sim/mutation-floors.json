@@ -153,5 +153,9 @@
   "server/src/operatorModel/nameListState.ts#nameListState": 1,
   "server/src/continuity/renewalReadings.ts#fittedCeilingOf": 1,
   "server/src/continuity/renewalReadings.ts#backstopInstantBefore": 1,
-  "server/src/continuity/renewalReadings.ts#backstopDueOf": 1
+  "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
+  "server/src/time/seeded.ts#seededDraws": 1,
+  "server/src/coord/forecast.ts#forecastProgramme": 1,
+  "server/src/coord/forecast.ts#forecastOutcome": 1,
+  "server/src/coord/forecast.ts#forecastCalibration": 1
 }
