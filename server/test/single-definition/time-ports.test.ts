@@ -41,6 +41,7 @@ const TIME_PORT_FILES: readonly string[] = [
   // Overlord W2, done tests A: the vocabulary, the pure deciders and the one reader read no clock.
   'shared/doneTests.ts',
   'server/src/coord/doneTests.ts',
+  'server/src/coord/doneTestRead.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

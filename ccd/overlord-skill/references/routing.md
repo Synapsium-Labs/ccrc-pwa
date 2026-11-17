@@ -40,6 +40,17 @@ open), or you.
 - **Every relay has a done test** (clause 18, §5.5): the outcome that shows the request met. When the owner reports
   done, check the read-back against that test before you close the request.
 
+## The done test
+
+A done test names one to five predicates, each at most once, and nothing else: no prose, no other field. The five are
+`run-closed` (a linked work run closed and its own pull request merged), `pr-merged` (a linked run's pull request
+merged), `goals-modified` (a goals modification cites the request, and its pull request merged when it names one),
+`review-passed` and `operator-confirms`. The server measures them from its own rows. Two read `unmeasurable` in W2:
+`review-passed`, because no row records a review's verdict, and a request's `operator-confirms`, because no item links
+to a request yet. So a test needs at least one of `run-closed`, `pr-merged` or `goals-modified`, or it is refused; a test
+that also names an unmeasurable one closes `done-unverified`, for the operator to confirm with one tap. An item's
+`operator-confirms` passes only at a firm `done`: a tick (`checking`) can still be returned, so it waits.
+
 ## The doors
 
 **The doors.** `relay`, `close-request`, `drop-request` and `nudge-owner` (`overlord-route-v1`); `start` (`overlord-start-v1`).
