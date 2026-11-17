@@ -250,4 +250,25 @@ describe('a rebuilt run (review 2130 F10)', () => {
     const entry = portfolioFor(facts, Date.now()).programmes.find((p) => p.slug === 'prog-a')!;
     expect(entry).toMatchObject({ oldestOpenMs: null, oldestOpenUnmeasured: 1 });
   });
+
+  it('characterization (forecasts A, before the rule moves to shared/programmes.ts): a done rebuilt wave is cycle-unmeasured, '
+    + 'and a claimed run whose dispatch equals its open is not rebuilt', () => {
+    const [rebuilt] = coord.reconstruct({
+      ledger: { slug: 'prog-a', title: 'Prog A', waves: [{ wave: 1, of: 1, handoffCommit: null }] },
+      registry: { sessionId: 'lane-a-project-a', project: 'project-a', workspace: 'ws-a', branch: 'ws/a', held: 'program:prog-a wave:1/1' },
+      prHistory: [],
+    });
+    coord.db.prepare("UPDATE runs SET state = 'done', closedAt = ? WHERE id = ?").run(NOW - HOUR, rebuilt!.id);
+    programme('prog-b');
+    const claimed = Number(coord.db.prepare(
+      "INSERT INTO runs (program, wave, project, state, kind, openedAt, dispatchedAt, closedAt, claimedBy) VALUES ('prog-b', 1, 'project-a', 'done', 'work', ?, ?, ?, 'lane-a-project-a')",
+    ).run(NOW - 3 * DAY, NOW - 3 * DAY, NOW - HOUR).lastInsertRowid);
+    coord.db.prepare("INSERT INTO runs (program, wave, project, state, kind, openedAt) VALUES ('prog-b', 2, 'project-a', 'planned', 'work', ?)").run(NOW - HOUR);
+    coord.setPortfolioRank({ basedOn: 0, seen: [], order: [e('prog-a')] }, 'op-a', NOW);
+    const facts = coord.portfolioFacts(NOW, none);
+    expect(facts.runs.find((r) => r.id === claimed)).not.toHaveProperty('rebuilt');
+    const view = portfolioFor(facts, NOW);
+    expect(view.programmes.find((p) => p.slug === 'prog-a')).toMatchObject({ cycle: { n: 0, medianMs: null, p85Ms: null }, cycleUnmeasured: 1 });
+    expect(view.programmes.find((p) => p.slug === 'prog-b')).toMatchObject({ cycle: { n: 1, medianMs: 3 * DAY - HOUR }, cycleUnmeasured: 0 });
+  });
 });
