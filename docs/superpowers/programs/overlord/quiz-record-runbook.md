@@ -49,8 +49,9 @@ $Q report --out <WEEK> --setup <OUT>/setup.json --setup-sha256 <H_SETUP> --froze
 ccrc quiz-record --report <WEEK>/single-report.json --sha <H_REPORT>
 ```
 
-Then open the console's Shadow lanes card and press **Confirm** (or **Discard**) on the pending run. Confirming the first
-run while all three W1a rows read Shadow makes it the baseline.
+`ccrc quiz-record` validates and packages the report and posts it through `ccrc-api`, and the run is recorded as pending
+until it is confirmed. Then open the console's Shadow lanes card and press **Confirm** (or **Discard**) on the pending run.
+Confirming the first run while all three W1a rows read Shadow makes it the baseline.
 
 ## What each step can say
 
