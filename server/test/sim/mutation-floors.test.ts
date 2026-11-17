@@ -38,6 +38,7 @@ import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
 import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
+import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -195,6 +196,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PROGRAMME_FACTS_MUTANT_SETS,
   ...OVERLAPS_MUTANT_SETS,
   ...PRIVATE_NAMES_MUTANT_SETS,
+  ...RENEWAL_READING_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

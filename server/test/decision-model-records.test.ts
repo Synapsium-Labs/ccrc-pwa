@@ -148,17 +148,19 @@ describe('decisionAskStore: the store as the one caller uses it; no method throw
 
 describe('the migration', () => {
   it('a database one version back gains the two tables and keeps every row of every older table', () => {
-    // One version back from THIS migration, found by its text rather than by being last: later migrations sit above it (87,
-    // asks.revision and operator_items.revision, Overlord W2 row revisions; 88, programme_remaining and programme_edges,
-    // Overlord W2 remaining work), so each later one is undone first, newest first: its added columns and its tables.
-    const at = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE decision_records'));
-    expect(at).toBeGreaterThan(0);
-    const laterMigrations = MIGRATIONS.slice(at + 1);
-    const later = laterMigrations.flatMap((m) => [...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => x[1]!));
-    const undo = [...laterMigrations].reverse().map((m) => [
+    // This entry's slot, found by its DDL and never hard-coded: a later migration moves it off the end, and whichever of the
+    // branches holding one slot lands second renumbers without editing this case. Every later entry is undone first, newest
+    // first: its indexes on older tables, the columns it added, then its own tables (their indexes go with them), so the
+    // database is truly one version back. A later entry this case cannot undo (any other ALTER) reds here by name.
+    const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE decision_records')) + 1;
+    const after = MIGRATIONS.slice(SLOT);
+    const later = after.flatMap((m) => [...m.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)].map((x) => x[1]!));
+    for (const m of after) expect(m.replace(/ALTER TABLE \w+ ADD COLUMN/g, ''), 'a later migration this case cannot undo').not.toMatch(/ALTER TABLE/);
+    const undo = [...after].reverse().flatMap((m) => [
+      ...[...m.matchAll(/CREATE (?:UNIQUE )?INDEX (?:IF NOT EXISTS )?(\w+) ON (\w+)/g)].filter((x) => !later.includes(x[2]!)).map((x) => `DROP INDEX ${x[1]};`),
       ...[...m.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)].map((x) => `ALTER TABLE ${x[1]} DROP COLUMN ${x[2]};`),
-      ...[...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => `DROP TABLE ${x[1]};`),
-    ].join(' ')).join(' ');
+      ...[...m.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?(\w+)/g)].map((x) => `DROP TABLE ${x[1]};`),
+    ]).join(' ');
     db.prepare('INSERT INTO response_boots (epoch, bootedAt, buildSha) VALUES (1, 2, NULL)').run();
     const tables = (d: DatabaseSync): string[] => (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as
       { name: string }[]).map((t) => t.name);
@@ -166,7 +168,7 @@ describe('the migration', () => {
     const counts = (d: DatabaseSync) => Object.fromEntries(older.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
     const before = counts(db);
     expect(before['response_boots']).toBe(1);
-    db.exec(`${undo} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${at};`);
+    db.exec(`${undo} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${SLOT - 1};`);
     db.close();
     const again = openCoordDb(file);
     expect(again.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });

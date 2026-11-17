@@ -314,7 +314,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days',
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
   'programme_remaining', 'programme_edges'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
@@ -413,6 +413,8 @@ describe(TABLES_PIN, () => {
       // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
       decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
       decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
+      renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
       // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
