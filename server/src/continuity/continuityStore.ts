@@ -175,6 +175,9 @@ export interface GenRow {
   readonly proven: boolean; readonly renudged: boolean; readonly probeRounds: number; readonly hostEnded: boolean;
   readonly blind: readonly RenewalTrigger[] | null;
   readonly model: string | null; readonly prevModel: string | null; readonly lane: string | null; readonly host: string | null;
+  /** The previous generation's account, written by the mint alone, as `prevModel` is (account organization §4); null for
+   *  the first generation, one whose predecessor had no lane, and a row an older build wrote. */
+  readonly prevLane: string | null;
   readonly cardHash: string | null; readonly snapshotId: string | null; readonly attempts: number;
   readonly outcome: GenerationOutcome | null; readonly resumed: boolean;
   readonly startId: number; readonly startReportedAt: number;
@@ -226,7 +229,7 @@ const deadlineFor = (s: GenerationState, now: number): number | null => {
 const GEN_COLUMNS = 'id, identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, walkClass, enteredAt, '
   + 'deadlineAt, shadowDeadlineAt, dueSince, dueWhy, dueClass, dueSinceObservedMs, proven, renudged, probeRounds, hostEnded, '
   + 'blind, model, prevModel, lane, host, cardHash, snapshotId, attempts, outcome, resumed, startId, startReportedAt, observed, '
-  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs';
+  + 'mintedObservedMs, softRenewalObservedMs, holdOffUntilObservedMs, prevLane';
 
 /** The generation functions' statements, prepared once per database: the lane runs every period over a handful of rows,
  *  and compiling the same SQL on every call is most of a pass's cost. */
@@ -290,7 +293,7 @@ function genRowOf(raw: Record<string, unknown>): GenRow | string {
     dueSince: num('dueSince'), dueWhy, dueClass,
     dueSinceObservedMs: num('dueSinceObservedMs'),
     proven: num('proven') === 1, renudged: num('renudged') === 1, probeRounds: num('probeRounds') ?? 0, hostEnded: num('hostEnded') === 1,
-    blind, model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane),
+    blind, model: strOrNull(raw.model), prevModel: strOrNull(raw.prevModel), lane: strOrNull(raw.lane), prevLane: strOrNull(raw.prevLane),
     host: strOrNull(raw.host), cardHash: strOrNull(raw.cardHash), snapshotId: strOrNull(raw.snapshotId), attempts: num('attempts') ?? 0,
     outcome, resumed: num('resumed') === 1, startId, startReportedAt,
     observed, mintedObservedMs: minted, softRenewalObservedMs: num('softRenewalObservedMs'),
@@ -353,8 +356,8 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       if (expect === null ? old !== null : old === null || old.term !== expect.term || old.n !== expect.n || old.state !== expect.state
         || old.shadowState !== expect.shadowState || old.walk !== expect.walk) throw new Superseded();
       if (stmt(db, 'SELECT 1 FROM continuity_generations WHERE startId = ?').get(input.startId) !== undefined) throw new Superseded();
-      const newest = stmt(db, 'SELECT observed, n, model FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
-        .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown } | undefined;
+      const newest = stmt(db, 'SELECT observed, n, model, lane FROM continuity_generations WHERE identity = ? AND term = ? ORDER BY n DESC LIMIT 1')
+        .get(input.identity, input.term) as { observed: unknown; n: unknown; model: unknown; lane: unknown } | undefined;
       const carried = observedOf(newest?.observed)?.ms ?? 0;
       const n = (intOrNull(newest?.n) ?? 0) + 1;
       if (old !== null) {
@@ -367,13 +370,13 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       const observed: Observed = { ms: carried, mono: input.mono, proc: input.proc };
       const res = stmt(db, 
         'INSERT INTO continuity_generations (identity, sessionId, role, term, rowIncarnation, n, state, shadowState, walk, enteredAt, '
-        + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs) '
-        + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + 'deadlineAt, shadowDeadlineAt, proven, resumed, startId, startReportedAt, model, prevModel, lane, host, observed, mintedObservedMs, '
+        + 'prevLane) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(input.identity, input.sessionId, input.role, input.term, input.rowIncarnation, n,
         mode === 'live' ? 'carded' : 'active', mode === 'live' ? null : 'carded', mode, input.now,
         mode === 'live' ? deadline : null, mode === 'live' ? null : deadline,
         input.resumed ? 1 : 0, input.startId, input.startReportedAt, input.model, strOrNull(newest?.model), input.lane, input.host,
-        JSON.stringify(observed), carried);
+        JSON.stringify(observed), carried, strOrNull(newest?.lane));
       if (cursor !== null && !advanceCursorIn(db, cursor)) throw new Superseded();
       return { ok: true as const, id: Number(res.lastInsertRowid), n };
     });

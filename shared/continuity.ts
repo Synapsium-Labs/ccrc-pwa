@@ -63,6 +63,7 @@ const RENEWAL_TRIGGER_MAP = {
   'probe-failed': 'a probe failed mid-generation, and a re-read did not fix it',
   'model-drift': 'the running model is not the one the generation records',
   'resumed-other-class': 'a start that resumed the conversation on another model class',
+  'resumed-other-org': 'a start that resumed the conversation in another organization',
   'entry-retired': 'an entry it was served was retired, edited, superseded or wiped',
   'term-raised': 'the operator confirmed a restore, which raised the term',
   'account-outside-set': "the generation's account is outside its set",

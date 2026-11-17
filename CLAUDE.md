@@ -235,13 +235,19 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
   under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
   real `timeout`-wrapped child process, so a badly loaded box can still starve it. The collector suites shell the real
-  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-resume`, `-move` and `-verb` (four walks
+  10 s `/proc` walk (`_ws_path_users`) in `ccd-ws-collect-reprove`, `-order`, `-move` and `-verb` (four walks
   a case at step 5, thirteen in the verb's one-JSON-line case) and, in a few cases each, `ccd-collect-audit-rungs`,
   `-audit-resume`, `-audit` and `-idle-token`, and under load they fail in two shapes: vitest's `Test timed out in
   <n>ms` when a case's ccd calls together outrun it, or an `unmeasured` `in-use` answer (`the walk of /proc did not
   finish within 10s`) when one walk passes its bound; a walk measured about 0.13 s at the median and 1.1 s at the worst
-  at load 11, so re-run the file alone. `ccd-collect-race-spawn-late` (path-identity W2) forces a recycled spawn
-  through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with `mv --no-copy` only; it stubs
+  at load 11, so re-run the file alone. `ccd-ws-collect-resume` walks for real in three cases only (the resume from
+  `moved`, the resume from an empty slot then a fresh pass, and the order resumed from `removed`: eight, six and four
+  walks) and stubs the walk in the rest. Each case runs under its own measured budget, 12 s per ccd run plus 10 s per
+  real walk, and fails when its measured run or walk count leaves its plan. So it no longer times out at the suite's
+  20 s beside a fork-heavy file (CI's shard 10 packs it beside `session-hook-append-race`). A red there is a real
+  break, or a plan to update after ccd's walk count changed. `ccd-collect-race-spawn-late` (path-identity W2)
+  forces a recycled spawn through the real verb and a real `_child_tmpdir` at six late boundaries, Linux with
+  `mv --no-copy` only; it stubs
   the in-use probe, so it fails under load in one shape only: vitest's `Test timed out in <n>ms`. Any other red is a
   real break. Re-run the file alone first. `ccd-reclaim-tail-mounts` (path-identity W2) runs the real reclaim and
   expire verbs end to end on git fixtures (its expire cases with the expiry ladder's real `/proc` walk), at about 10 s

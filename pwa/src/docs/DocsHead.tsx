@@ -205,8 +205,8 @@ export function shareStateFor(
 
 /** Whether Export is offered on `page`, and on what (spec 4.5, 4.17; M4.SH3, M4.SH8, M4.EX12, M4.EX15; refinements (a),
  *  (j), (k)). Only a leaf has Export, never in `frame=full`; the header draws no actions until the tree slot is `ok`.
- *  - `absent`: a leaf that opens nothing (a withheld new file, a symlink, a submodule); class `other` or `html` (W6); an
- *    over-cap raster; a file slot that settled with no bytes to show (refinement (k));
+ *  - `absent`: a leaf that opens nothing (a withheld new file, a symlink, a submodule); class `other`; an over-cap
+ *    raster; a file slot that settled with no bytes to show (refinement (k));
  *  - `updating`: the leaf does not show `pinFor`'s pin yet (its read, or its raster image, is in flight);
  *  - `waiting`: disabled, with why (`ExportWait`);
  *  - `plain-view`: the reader frame shows the leaf; a tap turns it off so Export saves the plain view (refinement (a));
@@ -233,13 +233,25 @@ export interface ExportInputs {
 const EXPORT_ABSENT: ExportState = { s: 'absent' };
 const exportWaits = (why: ExportWait): ExportState => ({ s: 'waiting', why });
 
+/** A mockup's Export (class `html`; spec 4.17's table, 5.6.9; rows M5.EX6): no body yet is "Preparing…" (the parse or the
+ *  plan is not done); the render gate waiting is "Render the mockup first"; a page the pre-scan refused (`plain`) and a
+ *  planned attempt (`mockup`), each for the text shown, are ready (assets still loading are awaited by the builder, not
+ *  here); a body for another text is "Preparing…" again. */
+function htmlExportState(b: ExportBody | null, text: string, pin: DocPin, show: DocsShowOk): ExportState {
+  if (b === null) return exportWaits('preparing');
+  if (b.kind === 'gate') return exportWaits('render-first');
+  if (b.kind === 'plain' && b.text === text) return { s: 'ready', source: { kind: 'plain', pin, show, body: b } };
+  if (b.kind === 'mockup' && b.text === text) return { s: 'ready', source: { kind: 'mockup', pin, show, doc: b.doc, assets: b.assets } };
+  return exportWaits('preparing');
+}
+
 export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: FileSlot, x: ExportInputs): ExportState {
   if (page.kind !== 'path' || page.frame === 'full') return EXPORT_ABSENT;
   const k = docsPathKind(tree, page.section, page.path, modeOf(page));
   const expected = pinFor(tree, page);
   if (k.kind !== 'leaf' || expected === null) return EXPORT_ABSENT;
   const cls = contentClass(page.path);
-  if (cls === 'other' || cls === 'html') return EXPORT_ABSENT;
+  if (cls === 'other') return EXPORT_ABSENT;
   const updating: ExportState = { s: 'updating', to: pinCommit(expected) };
   if (cls === 'raster') {
     const size = expected.kind === 'draft' ? k.entry.draft?.size : k.entry.committed?.size;
@@ -261,6 +273,7 @@ export function exportStateFor(page: DocsPageLocation, tree: DocsTreeOk, file: F
   const src = docMarkdownSource(show);
   if (src.kind === 'no-bytes') return EXPORT_ABSENT;
   const b = x.body;
+  if (cls === 'html') return htmlExportState(b, src.text, pin, show);
   if (b === null) return exportWaits('formatting');
   if (cls === 'markdown' && b.kind === 'reader') return { s: 'plain-view' };
   if (cls === 'markdown' && b.kind === 'gate') return exportWaits('gate');

@@ -128,7 +128,7 @@ W6 implements the base spec's §5.6–5.8 against the current reader/worker arch
 
 | Area | Required outcome |
 |---|---|
-| Prescan | One linear raw scan before the sole `DOMParser` constructor; depth limit 256; measured formatting/tag limits; hostile reconstruction shapes refused before parsing |
+| Prescan | One linear raw scan before the sole `DOMParser` constructor; depth limit 64 (256 until D-8695 lowered it, 2026-11-16); measured formatting/tag limits; hostile reconstruction shapes refused before parsing |
 | Render gate | HTML class cap 2 MiB; above 1 MiB requires a tap; refused input remains Source + Download, never Render anyway |
 | Asset plan | At most 64 assets and 5 MiB reserved total before fetching; same-pin listing sizes or conservative class-cap reservations for historical assets, deterministic DOM/discovery order, concurrency 2, CSS recursion at most 3 |
 | Pins | Commit C reads assets at C; admitted draft assets get draft pins, deleted/withheld/typechange never fall back silently; mutable latest/draft pin movement permits one relist/replan, then changing/failure with manual retry. An unavailable historical commit fails directly without relisting, as W5b specifies |
@@ -149,7 +149,7 @@ Baseline mockup CSP is `default-src 'none'; script-src 'unsafe-inline' data:; st
 
 Export clones the already parsed inert document, rather than introducing another parser. It strips active elements and attributes, unwraps noscript, strips templates and SMIL href animation, neutralises CSS under the documented scanner limitations, and lists removed links and assets. Draft confirmation precedes the synchronous Save turn. Measure the escaped result against `DOCS_EXPORT_MAX_BYTES`; use placeholders in deterministic order. Refused input exports source text.
 
-Bounded browser measurements choose formatting/tag limits such that the worst admitted deep and formatting parses each complete within 1000 ms. Depth stays 256. The implementer lowers safe limits rather than relaxing the gate. No repository-copy or disk-scale benchmark is authorised. Phone shared-thread evidence can select `mockup-scripts-confirm`; export/activation evidence can select the already specified `mockup-export-flat` or `export-share-file` contingencies. Failure to draw a CDN diagram never authorises widening CSP.
+Bounded browser measurements choose formatting/tag limits such that the worst admitted deep and formatting parses each complete within 1000 ms. Depth is 64: it stayed 256 through W6's measurement, and D-8695 lowered it to 64 on 2026-11-16 (with open formatting 16, and D-8671's attributes 32), when the merge queue's hosted runner read the gated shapes over the gate. The implementer lowers safe limits rather than relaxing the gate. No repository-copy or disk-scale benchmark is authorised. Phone shared-thread evidence can select `mockup-scripts-confirm`; export/activation evidence can select the already specified `mockup-export-flat` or `export-share-file` contingencies. Failure to draw a CDN diagram never authorises widening CSP.
 
 ## 6. D: reader history and carried fixes
 

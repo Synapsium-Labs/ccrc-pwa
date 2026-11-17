@@ -1,7 +1,7 @@
 // A Docs leaf (spec 2026-10-01 4.4's leaf row, 5.4, 5.5, 6.1; refinement (b); W5 part 1 Task 9): the body by
 // `contentClass(path)`. `markdown` is `DocMarkdown`; `raster` is ONE `DocImage` (its bytes through `loaders.raster`,
-// an object URL); `svg` is the same `data:` image Markdown gets, with Source and Download; `html` is the stand-in
-// until W6's mockup viewer (no frame of any kind); `text` is the file in `<pre class="doc-plain">`, or `CodeBlock`
+// an object URL); `svg` is the same `data:` image Markdown gets, with Source and Download; `html` is the mockup viewer
+// (`MockupView`: one sandboxed frame, C2 Task 8), keyed by the document's identity and the mode; `text` is the file in `<pre class="doc-plain">`, or `CodeBlock`
 // on a one-block highlight store (W5h-a) when a registered grammar matches its extension; `other` is "No preview" and Download. A listed size over its
 // class cap is the `too-large` sentence, and nothing was requested (the visit's `too-large` slot). The header and the
 // banners are `DocsScreen`'s (`DocsHead`, `DocsBanners`), above this body, so a file failure replaces only the body.
@@ -14,6 +14,9 @@ import { isRegisteredGrammar } from '../lib/highlightNames';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import { DocImage, DocsAssetContext, DocsLeafImageContext, svgDataUrl, type DocsAssetContextValue } from './DocImage';
+import { MockupView } from './MockupView';
+import { mockupAssetReader } from './mockup/load';
+import type { MockupContext } from './mockup/ports';
 import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextValue } from './DocLink';
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
@@ -148,18 +151,36 @@ function SvgBody(p: { readonly show: DocsShowOk; readonly answered: string; read
   );
 }
 
-/** The `html` stand-in until W6 (refinement (b)): the sentence, the size, Source and Download. It draws no frame of
- *  any kind and gives the HTML to nothing but the text renderer; `?frame=full` renders the same. */
-function HtmlStandIn(p: { readonly show: DocsShowOk; readonly download: ReactNode }): ReactNode {
-  const [source, setSource] = useState(false);
-  return (
-    <div className="docs-standin">
-      <p className="docs-note">{DOCS_VIEW_TEXT.htmlStandIn}</p>
-      <p className="docs-note">{fillSentence(DOCS_VIEW_TEXT.size, { size: kib(p.show.size) })}</p>
-      <div className="docs-leaf-actions"><SourceButton shown={source} onToggle={() => setSource((s) => !s)} />{p.download}</div>
-      {source && <SourceText show={p.show} />}
-    </div>
+/** The `html` leaf (base 5.6.7): the mockup viewer. Its context is the page's own pin and the tree this leaf listed, and
+ *  its reader goes through the screen's loaders and queue (`DocsAssetContext`), so a mockup's assets share the images'
+ *  one queue. Outside a Docs screen there is no such context, and the leaf is Source and Download alone, with no frame.
+ *  The view is keyed by the document's identity AND the mode (`bodyKeyOf`, the page's view and frame): a re-list that
+ *  moves the commit but not the file does not remount it (its one-relist cap would start over), and a new draft
+ *  fingerprint, a version page, a view or a frame change does (D-8711). */
+function HtmlBody(p: {
+  readonly show: DocsShowOk; readonly pin: DocPin; readonly tree: DocsTreeOk; readonly page: Leaf; readonly visit: DocsVisit;
+  readonly bodyKey: string; readonly download: ReactNode;
+}): ReactNode {
+  const assets = useContext(DocsAssetContext);
+  const { page, pin, tree } = p;
+  const context = useMemo<MockupContext>(() => ({ project: page.project, pin, tree }), [page.project, pin, tree]);
+  const loaders = assets?.loaders;
+  const queue = assets?.queue;
+  const reader = useMemo(
+    () => (loaders === undefined || queue === undefined ? null : mockupAssetReader(page.project, loaders, queue)),
+    [page.project, loaders, queue],
   );
+  const [source, setSource] = useState(false);
+  if (reader === null) {
+    return (
+      <div className="docs-standin">
+        <div className="docs-leaf-actions"><SourceButton shown={source} onToggle={() => setSource((s) => !s)} />{p.download}</div>
+        {source && <SourceText show={p.show} />}
+      </div>
+    );
+  }
+  const key = [p.bodyKey, page.view, page.frame].join('\u0000');
+  return <MockupView key={key} show={p.show} context={context} reader={reader} page={page} relist={p.visit.retryTree} download={p.download} />;
 }
 
 /** The leaf's own image is not an embedded draft asset (the truth line already says draft), so this leaf's assets
@@ -268,7 +289,9 @@ export function DocsLeaf(p: {
     if (cls === 'raster') {
       body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
     } else if (file.s === 'too-large') {
-      body = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
+      const sentence = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
+      // An HTML mockup over its class cap is download-only (base 5.6.2): its sentence, and the bytes through Download.
+      body = cls === 'html' ? <>{sentence}<div className="docs-leaf-actions">{download}</div></> : sentence;
     } else if (cls === 'other') {
       const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
       body = (
@@ -321,7 +344,12 @@ export function DocsLeaf(p: {
           body = <SvgBody key={pinKey} show={show} answered={file.answer.contentClass} download={download} name={name} />;
           break;
         case 'html':
-          body = <HtmlStandIn key={pinKey} show={show} download={download} />;
+          body = (
+            <HtmlBody
+              show={show} pin={file.pin} tree={tree} page={page} visit={visit} download={download}
+              bodyKey={bodyKeyOf(file.pin, show, pinKey, page.at !== null)}
+            />
+          );
           break;
       }
     }

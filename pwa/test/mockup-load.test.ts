@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DOCS_CLASS_CAP, contentClass, docsApi, type DocPin, type DocsEntry } from '../../shared/docs';
 import { createFetchQueue, DOCS_PWA_FETCH_CONCURRENCY } from '../src/docs/fetchQueue';
-import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader } from '../src/docs/mockup/load';
+import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, mockupAssetReader, startMockupLoad } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { extendMockupAssetPlan, planMockupAssets } from '../src/docs/mockup/plan';
 import { MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
@@ -451,6 +451,55 @@ describe('loadMockupAssets: the loader (plan Task 7 RED loader; D-8660)', () => 
 });
 
 // ---------------------------------------------------------------------------------------------------------------
+describe('startMockupLoad: the load as it stands, read at Export\'s deadline (C2 fix round 1, review 2361 F2)', () => {
+  const wordsOf = (p: MockupAssetPlan): string[] => p.rows.map((r) => (r.verdict.v === 'failed' ? r.verdict.failure : r.verdict.v));
+
+  it('now() keeps every row read so far and fails each admitted row not yet read with the word; the load runs on and ends as before', async () => {
+    const names = ['a.png', 'b.png', 'c.png'];
+    const gates = new Map(names.map((n) => [n, deferred()] as const));
+    const f = fakeReader({}, gates);
+    const load = startMockupLoad(planMockupAssets(names.map((n) => root(n)), ctxOf(names.map((n) => sized(n, 3)))), f.reader, signal());
+    await flush();
+    gates.get('a.png')!.resolve({ kind: 'ok', bytes: enc('PNG') });
+    await flush();
+    expect(f.paths()).toEqual(['a.png', 'b.png', 'c.png']);
+    const at = load.now('timed-out');
+    expect(wordsOf(at.plan)).toEqual(['inline', 'timed-out', 'timed-out']);
+    expect([...at.assets.keys()]).toEqual([assetId(f.calls[0]!)]);
+    expect(at.actualBytes).toBe(3);
+    // The load runs on: the rest answer, and its end holds them all, read once each.
+    gates.get('b.png')!.resolve({ kind: 'ok', bytes: enc('PNG') });
+    gates.get('c.png')!.resolve({ kind: 'ok', bytes: enc('PNG') });
+    const result = await load.result;
+    expect(wordsOf(result.plan)).toEqual(['inline', 'inline', 'inline']);
+    expect(result.assets.size).toBe(3);
+    expect(f.paths()).toEqual(names);
+    // The answer given at the deadline is a copy: what loaded later never reaches it.
+    expect(at.assets.size).toBe(1);
+    expect(wordsOf(at.plan)).toEqual(['inline', 'timed-out', 'timed-out']);
+  });
+
+  it('a read that already failed keeps its own word, one past its reservation is size-mismatch, and only the read still open takes the word', async () => {
+    const f = fakeReader({ 'a.png': { failed: 'unreachable' }, 'b.png': bytesOf(5) }, new Map([['c.png', deferred()]]));
+    const load = startMockupLoad(
+      planMockupAssets([root('a.png'), root('b.png'), root('c.png')], ctxOf([sized('a.png', 3), sized('b.png', 3), sized('c.png', 3)])),
+      f.reader, signal(),
+    );
+    await flush();
+    expect(wordsOf(load.now('timed-out').plan)).toEqual(['unreachable', 'size-mismatch', 'timed-out']);
+    expect(load.now('timed-out').assets.size).toBe(0);
+  });
+
+  it('a row the load never admitted keeps its own verdict; loadMockupAssets answers the same load\'s end', async () => {
+    const f = fakeReader({ 'a.png': 'PNG' });
+    const plan = planMockupAssets([root('a.png'), root('https://ext.example/x.png')], ctxOf([sized('a.png', 3)]));
+    const load = startMockupLoad(plan, f.reader, signal());
+    expect(wordsOf(load.now('timed-out').plan)).toEqual(['timed-out', plan.rows[1]!.verdict.v]);
+    expect(wordsOf((await load.result).plan)).toEqual(['inline', plan.rows[1]!.verdict.v]);
+    expect(wordsOf((await loadMockupAssets(plan, fakeReader({ 'a.png': 'PNG' }).reader, signal())).plan)).toEqual(['inline', plan.rows[1]!.verdict.v]);
+  });
+});
+
 describe('nested discovery through the real CSS scan, the real loader and extendMockupAssetPlan (NDR-C1-T7-N1..N5)', () => {
   // N1: two root stylesheets; reply-completion order must not change what is admitted.
   async function twoSheets(releaseFirst: 'p0.css' | 'p1.css') {

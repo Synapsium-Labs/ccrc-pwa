@@ -6175,6 +6175,8 @@ export class FleetWatcher {
         listedAt,
         readings,
         canRenew: acts.canRenew,
+        // The roster this server holds now (`reloadRoster` swaps it): an account's organization label, or null.
+        orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null,
       });
       if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
     });
