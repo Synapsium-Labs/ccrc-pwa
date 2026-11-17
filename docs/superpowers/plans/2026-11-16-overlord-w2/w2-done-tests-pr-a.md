@@ -6,7 +6,7 @@ departures and measurements the build added, by slug. No D-number is minted here
 
 ## In short
 
-- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 85, numbered from `main` at 84),
+- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 86: overlaps A (#2949) landed 85 first, renumbered on the coordinator's word),
   `closePrFactsOf`, `parseDoneTest`, `targetVerdict`, `readTarget`, the reader's census, the writers-map pin of
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
