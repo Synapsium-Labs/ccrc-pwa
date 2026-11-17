@@ -31,8 +31,10 @@ const ALL_OWNED: ReadonlySet<string> = new Set(Object.values(OWNED_FIELDS).flat(
  *  checkpoint is met, D-8700). */
 export type OwnedFields = Readonly<Record<string, string | number | null | readonly string[] | undefined>>;
 
-/** Links compared one way (D-8681: nothing unlinks): a PLANNED id missing from Linear's set differs; an extra id does not. */
-const ONE_WAY_LINKS: ReadonlySet<string> = new Set(['initiativeIds', 'projectIds']);
+/** Sets compared one way (D-8681: nothing unlinks, and nothing deletes): a PLANNED id missing from Linear's set differs; an
+ *  extra id does not. That holds for the initiative links (the coordinator's ruling) and for a project's milestones: a milestone
+ *  a person added is theirs, since no op of ccrc's deletes one. */
+const ONE_WAY_LINKS: ReadonlySet<string> = new Set(['initiativeIds', 'projectIds', 'milestoneIds']);
 
 // ── Restored lines (a milestone takes no comment in Linear, so these are its only restore record; D-8407) ──
 

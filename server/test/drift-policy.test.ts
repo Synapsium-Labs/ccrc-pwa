@@ -56,7 +56,8 @@ describe('driftedFields and driftVerdict', () => {
     const p: OwnedFields = { name: 'P', description: 'd', statusType: 'started', teamKeys: ['AAA', 'BBB'], initiativeIds: ['i'], milestoneIds: ['a', 'b'] };
     expect(driftedFields({ ...p, teamKeys: ['bbb', 'aaa'], milestoneIds: ['b', 'a'] }, p, 'project')).toEqual([]);
     expect(driftedFields({ ...p, milestoneIds: ['a'] }, p, 'project')).toEqual(['milestoneIds']);
-    expect(driftedFields({ ...p, milestoneIds: ['a', 'b', 'c'] }, p, 'project')).toEqual(['milestoneIds']);
+    // A milestone a person added is not drift: nothing deletes (D-8681's one-way rule, extended to milestones).
+    expect(driftedFields({ ...p, milestoneIds: ['a', 'b', 'c'] }, p, 'project')).toEqual([]);
   });
   it('a planned link missing is drift, an extra link is not', () => {
     const p: OwnedFields = { name: 'P', description: 'd', statusType: 'started', teamKeys: ['AAA'], initiativeIds: ['i1'], milestoneIds: [] };

@@ -363,7 +363,8 @@ describe('the drift pass (D-8183)', () => {
     };
     r.t.now += 1;
     const ticking = r.drift.tick(r.t.now);
-    for (let i = 0; i < 200 && r.hold.held === 0; i += 1) await new Promise((res) => setImmediate(res));
+    // Bounded by time, not by turns: the pass reads the Linear store from disk, which a loaded box can take many turns to answer.
+    for (const until = Date.now() + 10_000; Date.now() < until && r.hold.held === 0;) await new Promise((res) => setTimeout(res, 5));
     expect(r.hold.held).toBe(1);
     expect(opsOf(r, 'drift-restore').filter((o) => o === 'issueUpdate')).toEqual([]);   // the restore waits behind the flight
     release();
@@ -476,7 +477,7 @@ describe('the drift pass (D-8183)', () => {
     r.hold.when = (a) => a.op === 'changedInitiatives';
     r.t.now += 1;
     const first = r.drift.tick(r.t.now);
-    for (let i = 0; i < 200 && r.hold.held === 0; i += 1) await new Promise((res) => setImmediate(res));
+    for (const until = Date.now() + 10_000; Date.now() < until && r.hold.held === 0;) await new Promise((res) => setTimeout(res, 5));
     const n = r.asks.length;
     await r.drift.tick(r.t.now);
     expect(r.asks).toHaveLength(n);
@@ -529,7 +530,8 @@ describe('the drift pass at FetchLike, through runCcrcOp (recorded and construct
     expect(ev.length).toBeGreaterThan(0);
     expect(ev.every((e) => e.actor === 'not read')).toBe(true);
     expect(ev.filter((e) => e.restored).map((e) => e.field)).toEqual(['name', 'description', 'statusType', 'initiativeIds']);
-    // The fixture's project holds a milestone the plan does not: no update can put that back, so it is recorded, not restored, and asked about.
+    // The plan's milestone is missing from the fixture's project (which holds another one, a person's, and that extra one is
+    // not drift: nothing deletes): no update can make the missing one again, so it is recorded, not restored, and asked about.
     expect(ev.filter((e) => !e.restored).map((e) => e.field)).toEqual(['milestoneIds']);
     expect(items(r)).toHaveLength(1);
     expect(ev.some((e) => e.field === 'name' && e.commentedAt !== null)).toBe(true);
