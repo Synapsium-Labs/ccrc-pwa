@@ -21,7 +21,10 @@ import { docsLocation } from './docsLinks';
 import type { DocsHistoryLoader, DocsLoaders } from './failures';
 import type { FetchQueue } from './fetchQueue';
 import { readerDiff } from './reader/diff';
-import { readerChangesBase, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed, type ReaderVersionSeed } from './reader/history';
+import {
+  readerChangesBase, readerChangesTexts, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed,
+  type ReaderPinRead, type ReaderVersionSeed,
+} from './reader/history';
 
 /** The key of the day filter in a history entry's state. */
 export const READER_ONLY_STATE_KEY = 'ccrcReaderOnly';
@@ -68,6 +71,8 @@ let pending: { readonly href: string; readonly only: string | null } | null = nu
 export function resetReaderOnlyForTests(): void {
   pending = null;
 }
+
+const UNAVAILABLE: ReaderPinRead = { kind: 'unavailable' };
 
 const hereUrl = (): string => location.pathname + location.search;
 
@@ -133,16 +138,18 @@ export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
     endedFirst,
   ]);
 
-  /** The text of a committed pin's file through the queue: `null` for a failure word, a client slot, a body that is not
-   *  Markdown text, a rejection and an abort. */
-  const textAt = async (loaders: Pick<DocsLoaders, 'file'>, queue: FetchQueue, p: DocPin): Promise<string | null> => {
+  /** One committed pin's file read through the queue, in `readerChangesTexts`'s shape: the text of a Markdown show, the
+   *  server's failure word kept exactly as sent (what it means is L1's), and `unavailable` for a client slot, a body that
+   *  is not Markdown text, a rejection and an abort. */
+  const textAt = async (loaders: Pick<DocsLoaders, 'file'>, queue: FetchQueue, p: DocPin): Promise<ReaderPinRead> => {
     try {
       const a = await queue.run((s) => loaders.file(i.project, p, s), i.signal);
-      if (a.s !== 'ok') return null;
+      if (a.s === 'failed') return { kind: 'failed', failure: a.body.failure };
+      if (a.s !== 'ok') return UNAVAILABLE;
       const src = docMarkdownSource(a.value.show);
-      return src.kind === 'markdown' ? src.text : null;
+      return src.kind === 'markdown' ? { kind: 'text', text: src.text } : UNAVAILABLE;
     } catch {
-      return null;
+      return UNAVAILABLE;
     }
   };
 
@@ -152,10 +159,12 @@ export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
       if (ended() || i.loaders === null || i.queue === null) return null;
       const base = readerChangesBase(pin, sha);
       if (base === null) return null;
-      const [head, before] = await Promise.all([textAt(i.loaders, i.queue, pin), textAt(i.loaders, i.queue, base)]);
-      // The marks are keyed to the bytes the frame rendered: a head that differs from them is not this body's.
-      if (ended() || head === null || before === null || head !== i.text) return null;
-      const d = readerDiff(before, head);
+      const [headRead, baseRead] = await Promise.all([textAt(i.loaders, i.queue, pin), textAt(i.loaders, i.queue, base)]);
+      if (ended()) return null;
+      // The marks are keyed to the bytes the frame rendered: `readerChangesTexts` refuses a head that differs from them.
+      const texts = readerChangesTexts(baseRead, headRead, i.text);
+      if (texts === null) return null;
+      const d = readerDiff(texts.before, texts.after);
       return d.kind === 'available' ? { ranges: d.ranges, removedAfter: d.removedAfter } : null;
     },
     openVersion(v) {

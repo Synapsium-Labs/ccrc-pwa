@@ -306,6 +306,20 @@ describe('changes(sha) (rich-docs spec G5)', () => {
     await expect(input.changes!(BASE)).resolves.toEqual({ ranges: [], removedAfter: [] });
   });
 
+  it('3b: a base that does not exist at its commit (absent-path) reads as the empty text, so every line of the head is marked new', async () => {
+    const head = '# A\nb\nc\n';
+    const f = fileFrom({ [C1]: head, [BASE]: { s: 'failed', body: { ok: false, failure: 'absent-path' } as never } });
+    const r = rig({ files: f });
+    render(frame(r, { show: committedShow(head) }));
+    const input = await mounted(r);
+    const answer = await input.changes!(BASE);
+    expect(f.file).toHaveBeenCalledTimes(2);
+    expect(f.file.mock.calls.map((c) => c[1])).toEqual(expect.arrayContaining([headPin(), basePin()]));
+    expect(answer).toEqual({ ranges: [[1, 3]], removedAfter: [] });
+    const d = readerDiff('', head);
+    expect(d.kind === 'available' && { ranges: d.ranges, removedAfter: d.removedAfter }).toEqual(answer);
+  });
+
   it('4: answers null for a failed read, a client slot, a non-UTF-8 show, a head that is not the rendered text, a diff over the line bound and a short sha', async () => {
     const text = '# A\nb\n';
     const bad = { ...fileResponse('x').show, encoding: 'base64' as const, b64: '/w==', size: 1 };
@@ -333,6 +347,43 @@ describe('changes(sha) (rich-docs spec G5)', () => {
     const r2 = rig({ files: f2 });
     render(frame(r2, { show: committedShow(long) }));
     await expect((await mounted(r2)).changes!(BASE)).resolves.toBeNull();
+  });
+});
+
+describe('changes(sha): absent-path is the empty text at the base only (rich-docs spec G5)', () => {
+  it('4b: any other base answer is null, and a head that is absent is null even for an empty rendered text', async () => {
+    const text = '# A\nb\n';
+    const bad = { ...fileResponse('x').show, encoding: 'base64' as const, b64: '/w==', size: 1 };
+    delete (bad as { text?: string }).text;
+    const f = fileFrom({
+      [C1]: text,
+      [C2]: { s: 'failed', body: { ok: false, failure: 'unknown-commit' } as never },
+      [C3]: { s: 'failed', body: { ok: false, failure: 'a-word-from-a-newer-server' } as never },
+      ['4'.repeat(40)]: { s: 'auth' },
+      ['5'.repeat(40)]: { s: 'unreachable' },
+      ['6'.repeat(40)]: { s: 'ok', value: { ...fileResponse(text), show: bad } },
+      ['7'.repeat(40)]: { s: 'failed', body: { ok: false, failure: 'not-a-file' } as never },
+    });
+    const rejecting = '8'.repeat(40);
+    const inner = f.file.getMockImplementation()!;
+    f.file.mockImplementation(async (project, pin, signal) => {
+      if (pin.kind === 'committed' && pin.commit === rejecting) throw new Error('loader rejected');
+      return inner(project, pin, signal);
+    });
+    const r = rig({ files: f });
+    render(frame(r, { show: committedShow(text) }));
+    const input = await mounted(r);
+    for (const sha of [C2, C3, '4'.repeat(40), '5'.repeat(40), '6'.repeat(40), '7'.repeat(40), rejecting]) {
+      await expect(input.changes!(sha), `base ${sha.slice(0, 4)}`).resolves.toBeNull();
+    }
+    cleanup();
+    // A body whose rendered text is empty, its own head pin answering absent-path: the empty text is never read for a head.
+    const absent: DocsFileAnswer = { s: 'failed', body: { ok: false, failure: 'absent-path' } as never };
+    const f2 = fileFrom({ [C1]: absent, [BASE]: '# A\n' });
+    const r2 = rig({ files: f2 });
+    render(frame(r2, { show: committedShow('') }));
+    await expect((await mounted(r2)).changes!(BASE)).resolves.toBeNull();
+    expect(f2.file).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { DocPin, DocsLogEntry, DocsLogOk } from '../../shared/docs';
 import {
   READER_SEED_DATE_MAX_UNITS, READER_SEED_MAX_COMMITS, READER_SEED_MAX_PARENTS, READER_SEED_SUBJECT_MAX_UNITS,
-  readerChangesBase, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed,
+  readerChangesBase, readerChangesTexts, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed, type ReaderPinRead,
 } from '../src/docs/reader/history';
 
 const SHA40 = 'a'.repeat(40);
@@ -307,5 +307,56 @@ describe('readerLogAsk', () => {
 
   it('a served hash that is not a full commit asks for nothing', () => {
     for (const served of ['', 'abc1234', 'A'.repeat(40), `${SHA40} `, 'a'.repeat(39)]) expect(readerLogAsk(committed, false, served)).toBeNull();
+  });
+});
+
+describe('readerChangesTexts (rich-docs spec G5)', () => {
+  const text = (t: string): ReaderPinRead => ({ kind: 'text', text: t });
+  const failed = (failure: string): ReaderPinRead => ({ kind: 'failed', failure });
+  const UNAVAILABLE: ReaderPinRead = { kind: 'unavailable' };
+  const HEAD = '# A\nb\nc\n';
+
+  it('a text base and the rendered head give both texts', () => {
+    expect(readerChangesTexts(text('# A\nx\n'), text(HEAD), HEAD)).toEqual({ before: '# A\nx\n', after: HEAD });
+    expect(readerChangesTexts(text(''), text(HEAD), HEAD)).toEqual({ before: '', after: HEAD });
+  });
+
+  it('the oldest day: a base that does not exist at its commit (absent-path) reads as the empty text', () => {
+    expect(readerChangesTexts(failed('absent-path'), text(HEAD), HEAD)).toEqual({ before: '', after: HEAD });
+  });
+
+  it('every other base answer is unavailable: another known word, a newer server\'s word, a near miss of the word, and a non-answer', () => {
+    const words = [
+      'unknown-commit', 'object-missing', 'not-a-file', 'too-large', 'unreadable-path', 'bad-commit',
+      'some-newer-word', 'Absent-path', 'absent_path', 'absent-path ', ' absent-path', 'ABSENT-PATH', '',
+    ];
+    for (const w of words) expect(readerChangesTexts(failed(w), text(HEAD), HEAD), `base word ${JSON.stringify(w)}`).toBeNull();
+    expect(readerChangesTexts(UNAVAILABLE, text(HEAD), HEAD)).toBeNull();
+  });
+
+  it('the head is never read as empty: absent-path at the head is unavailable, an empty rendered text included', () => {
+    expect(readerChangesTexts(text(HEAD), failed('absent-path'), HEAD)).toBeNull();
+    expect(readerChangesTexts(text(HEAD), failed('absent-path'), '')).toBeNull();
+    expect(readerChangesTexts(failed('absent-path'), failed('absent-path'), '')).toBeNull();
+    expect(readerChangesTexts(text('x'), failed('absent-path'), '')).toBeNull();
+  });
+
+  it('any other failed or unavailable head is unavailable', () => {
+    for (const w of ['unknown-commit', 'not-a-file', 'some-newer-word', '']) {
+      expect(readerChangesTexts(text('x'), failed(w), HEAD), `head word ${JSON.stringify(w)}`).toBeNull();
+    }
+    expect(readerChangesTexts(text('x'), UNAVAILABLE, HEAD)).toBeNull();
+  });
+
+  it('a head text that is not exactly the rendered text is unavailable, by one byte or a trailing newline', () => {
+    expect(readerChangesTexts(text('x'), text(`${HEAD}\n`), HEAD)).toBeNull();
+    expect(readerChangesTexts(text('x'), text(HEAD.slice(0, -1)), HEAD)).toBeNull();
+    expect(readerChangesTexts(text('x'), text(HEAD.replace('b', 'B')), HEAD)).toBeNull();
+    expect(readerChangesTexts(failed('absent-path'), text(`${HEAD} `), HEAD)).toBeNull();
+  });
+
+  it('neither side readable is unavailable, an absent base with an unreadable head included', () => {
+    expect(readerChangesTexts(UNAVAILABLE, UNAVAILABLE, HEAD)).toBeNull();
+    expect(readerChangesTexts(failed('absent-path'), UNAVAILABLE, '')).toBeNull();
   });
 });

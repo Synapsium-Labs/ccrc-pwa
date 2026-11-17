@@ -2,7 +2,7 @@
 // plain values, no I/O, no timer, no DOM, no React, no library import (the shapes below mirror the shared Markdown
 // library's, which the type test holds equal) and no `lib/api.ts`. `bridge.ts` hands the answers to the frame and
 // the Docs screen acts on them: this file decides and does nothing else.
-import { isDocsCommit, type DocPin, type DocsLogAsk, type DocsLogOk, type DocsShowOk } from '../../../../shared/docs';
+import { isDocsCommit, type DocPin, type DocsFailure, type DocsLogAsk, type DocsLogOk, type DocsShowOk } from '../../../../shared/docs';
 
 /** One commit of the document, in the library's seed shape. */
 export interface ReaderCommit {
@@ -125,4 +125,30 @@ export function readerVersionMove(
 export function readerChangesBase(pin: DocPin, sha: string): DocPin | null {
   if (pin.kind !== 'committed' || !isDocsCommit(sha)) return null;
   return { kind: 'committed', commit: sha, servedRef: pin.servedRef, section: pin.section, path: pin.path };
+}
+
+/** The server's word for a path that does not exist at the commit asked (the docs-show failure `absent-path`). */
+const ABSENT_PATH = 'absent-path' satisfies DocsFailure;
+
+/** One committed pin's file read, as `readerChangesTexts` takes it (rich-docs spec G5): the Markdown text at that commit,
+ *  the server's failure word exactly as it was sent (a word this build knows, or a newer server's), or `unavailable` for
+ *  everything else: a client slot, a rejection or an abort, and a body that is not Markdown text. The adapter keeps the
+ *  word, so what it means is decided here. */
+export type ReaderPinRead =
+  | { readonly kind: 'text'; readonly text: string }
+  | { readonly kind: 'failed'; readonly failure: string }
+  | { readonly kind: 'unavailable' };
+
+/** The two texts one `changes` call compares, or `null` for unavailable (rich-docs spec G5; the completion spec's Version
+ *  callback row). The head must be text, and exactly the text the frame rendered, because the marks are keyed to those
+ *  bytes: any other head, an absent doc's included, is not this body's. The base is its text, or the empty text when the
+ *  doc does not exist at the base commit (`absent-path`, and only that word): the oldest day's baseline is the parent of
+ *  the commit that first touched the path, so there every line of the head is new. Any other base is unavailable. */
+export function readerChangesTexts(
+  base: ReaderPinRead, head: ReaderPinRead, rendered: string,
+): { readonly before: string; readonly after: string } | null {
+  const after = head.kind === 'text' ? head.text : null;
+  if (after === null || after !== rendered) return null;
+  const before = base.kind === 'text' ? base.text : base.kind === 'failed' && base.failure === ABSENT_PATH ? '' : null;
+  return before === null ? null : { before, after };
 }

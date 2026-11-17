@@ -7,7 +7,9 @@
 //
 // The fixture is project `demo`, section `specs`, and made-up commits. `doc.md` has three commits newest first, C3 (the
 // listing's commit), C2 and C1, each the first parent of the one before; C1's parent C0 is NOT an entry (the oldest day's
-// baseline). The three days are far apart, so the menu's quick ranges are empty and its rows are the day rows, newest first.
+// baseline), and doc.md does not exist at C0, as a complete path log implies (its oldest entry is the commit that first
+// touched the path), so the server answers `absent-path` there. The three days are far apart, so the menu's quick ranges
+// are empty and its rows are the day rows, newest first.
 // A document in the library's sense needs one title and three sections (`isDocument`), so every text here has them, or the
 // frame builds no menu at all.
 //
@@ -50,7 +52,6 @@ const isoAt = (day: number): string => new Date(Date.UTC(2026, 0, 10 + day, 12))
 /** A text from its blocks, one blank line between them. */
 const text = (blocks: readonly string[]): string => blocks.join('\n\n') + '\n';
 const LINK = 'See [the other doc](./other.md).';
-const DOC_C0 = ['# Doc', LINK, '## Alpha', 'Alpha text.', '## Beta', 'Beta text.', '## Gamma', 'Gamma text.', '## Delta', 'Delta text.'];
 const DOC_C1 = ['# Doc', LINK, '## Alpha', 'Alpha text, revised.', '## Beta', 'Beta text.', '## Gamma', 'Gamma text.', '## Delta', 'Delta text.'];
 const DOC_C2 = ['# Doc', LINK, '## Alpha', 'Alpha text, revised.', '## Beta', 'Beta text, revised.', '## Gamma', '## Delta', 'Delta text.'];
 const DOC_C3 = ['# Doc', LINK, '## Alpha', 'Alpha text, revised.', '## Beta', 'Beta text, revised.', '## Gamma', '## Delta', 'Delta text, revised.', 'Epilogue.'];
@@ -71,6 +72,8 @@ interface FixtureDoc {
   readonly log: readonly (LogCommit | unknown)[];
   /** The text at each commit the fixture serves. */
   readonly texts: Readonly<Record<string, string>>;
+  /** The commits the repository has where this path does not exist yet, which the server answers with `absent-path`. */
+  readonly absentAt?: readonly string[];
 }
 
 const commit = (sha: string, parent: string | null, day: number, subject: string): LogCommit => ({ sha, parent, date: isoAt(day), subject });
@@ -95,7 +98,8 @@ const manyLog = (): unknown[] => {
 const DOCS: Readonly<Record<string, FixtureDoc>> = {
   'doc.md': {
     log: [commit(C3, C2, 3, 'Epilogue'), commit(C2, C1, 2, 'Beta and Gamma'), commit(C1, C0, 1, 'Alpha')],
-    texts: { [C0]: text(DOC_C0), [C1]: text(DOC_C1), [C2]: text(DOC_C2), [C3]: text(DOC_C3) },
+    texts: { [C1]: text(DOC_C1), [C2]: text(DOC_C2), [C3]: text(DOC_C3) },
+    absentAt: [C0],
   },
   'other.md': {
     log: [commit(C3, O1, 3, 'Revise one'), commit(O1, null, 1, 'Start')],
@@ -215,7 +219,8 @@ async function openSession(opts: SessionOptions = {}): Promise<Session> {
       if (held !== undefined) await held.gate;
       const isDraft = q['fp'] !== undefined;
       const body = isDraft ? doc.texts[C3] : doc.texts[q['commit'] ?? ''];
-      if (failing.has(key) || body === undefined) answer = fail(failing.has(key) ? 'not-a-file' : 'unknown-commit');
+      if (failing.has(key)) answer = fail('not-a-file');
+      else if (body === undefined) answer = fail(doc.absentAt?.includes(q['commit'] ?? '') === true ? 'absent-path' : 'unknown-commit');
       else {
         const common = { v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, section: SECTION, path: q['path'], size: Buffer.byteLength(body), encoding: 'utf8', text: body };
         const show = isDraft
@@ -485,6 +490,30 @@ describe('Task 12 reader history in Chrome, with the actual library', () => {
     await chooseDay(f, 0);
     await f.waitForFunction((n) => document.querySelectorAll('[data-line].chg, [data-line].chg-del').length === n, expectedMarks(m.blocks, d2).chg.length + expectedMarks(m.blocks, d2).del.length, { timeout: 30_000 });
     await expectMarked(f, d2, true, 'since day 3');
+  }, 120_000);
+
+  it('the oldest day: a document that did not exist at the day\'s base marks every line as new, with no removal', async () => {
+    const s = await openSession();
+    const f = await openDoc(s, 'doc.md');
+    const head = T('doc.md', C3);
+    const d = diffOf('', head);
+    const lines = head.split('\n').length - 1;
+    expect(d.ranges, 'the whole head is one range').toEqual([[1, lines]]);
+    expect(d.removedAfter, 'and nothing is removed').toEqual([]);
+    const from = s.hits.length;
+    await chooseDay(f, 2); // day 1: the base is C1's parent C0, where the path does not exist
+    await hasMarks(f);
+    const reads = verbHits(s, 'file', from);
+    expect(new Set(reads.map((h) => h.q['commit'])), 'the head pin and the base, both committed').toEqual(new Set([C3, C0]));
+    const m = await expectMarked(f, d, true, 'since day 1');
+    const parents = new Set(m.blocks.map((b) => b.parent));
+    const innermost = m.blocks.flatMap((_, i) => (parents.has(i) ? [] : [i]));
+    expect(m.chg, 'every innermost block is marked as changed').toEqual(innermost);
+    expect(m.del, 'and none as a removal').toEqual([]);
+    expect(await settle(s.page), 'the page did not fall back').toBe('ready');
+    // The base read's 404 is the server's own answer for an absent path: the browser reports it as a failed resource load.
+    expect(frameErrors(s).filter((l) => !/Failed to load resource/.test(l)), 'no console error').toEqual([]);
+    expect(s.app.errors, 'no page error').toEqual([]);
   }, 120_000);
 
   it('removedAfter 0 (Task 11\'s pin): the frame accepts a removal before the first line, marks no block for it, and marks the other changes', async () => {
