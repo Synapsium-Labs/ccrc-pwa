@@ -35,6 +35,8 @@ const put = (dir: string, rel: string, text: string): void => {
 function fixture(): string {
   const dir = mkTmp('ledger-guard-');
   git(dir, 'init', '-q', '-b', 'main');
+  // The guard's own git reads this repo's config, so a box-wide core.quotePath=false cannot change row L10.
+  git(dir, 'config', 'core.quotePath', 'true');
   put(dir, 'docs/superpowers/programs/x.md', '| row | open |\n');
   put(dir, 'docs/superpowers/plans/2026-01-01-p.md', '# plan\n');
   put(dir, 'docs/superpowers/plans/p/t0.md', 'note\n');
@@ -166,6 +168,12 @@ const PLAN_OK = 'docs/superpowers/plans/2026-03-03-a-thing.md';
 const slug = (n: number): string => 'a'.repeat(n);
 
 describe('ledger-guard CLI: the layout arm (D-8719)', () => {
+  /** A refusal by the layout arm itself, naming each path: a throwing arm exits 1 too, but prints neither. */
+  const expectRefused = (r: ReturnType<typeof run>, ...paths: string[]): void => {
+    expect(r.code).toBe(1);
+    expect(r.out).toContain('ledger-guard: layout:');
+    for (const p of paths) expect(r.out).toContain(`  - ${p}\n      should be `);
+  };
   const refused = (paths: string[], branch = 'feat/thing', msg = 'add'): ReturnType<typeof run> => {
     const d = fixture();
     for (const p of paths) put(d, p, 'x\n');
@@ -189,13 +197,16 @@ describe('ledger-guard CLI: the layout arm (D-8719)', () => {
   });
 
   it('(L3) an added .html spec fails: a new spec is markdown', () => {
-    expect(refused(['docs/superpowers/specs/2026-03-03-a-thing-design.html']).code).toBe(1);
+    const p = 'docs/superpowers/specs/2026-03-03-a-thing-design.html';
+    expectRefused(refused([p]), p);
   });
 
   it('(L4) a 41-character slug fails; 40 characters pass, in a plan, a spec and a promise-ids file', () => {
-    expect(refused([`docs/superpowers/plans/2026-03-03-${slug(41)}.md`]).code).toBe(1);
-    expect(refused([`docs/superpowers/specs/2026-03-03-${slug(41)}-design.md`]).code).toBe(1);
-    expect(refused([`docs/superpowers/specs/2026-03-03-${slug(41)}-design.promise-ids.json`]).code).toBe(1);
+    for (const p of [
+      `docs/superpowers/plans/2026-03-03-${slug(41)}.md`,
+      `docs/superpowers/specs/2026-03-03-${slug(41)}-design.md`,
+      `docs/superpowers/specs/2026-03-03-${slug(41)}-design.promise-ids.json`,
+    ]) expectRefused(refused([p]), p);
     expect(refused([
       `docs/superpowers/plans/2026-03-03-${slug(40)}.md`,
       `docs/superpowers/specs/2026-03-03-${slug(40)}-design.md`,
@@ -204,8 +215,9 @@ describe('ledger-guard CLI: the layout arm (D-8719)', () => {
   });
 
   it('(L5) a double-hyphen slug fails, in a plan and in a spec', () => {
-    expect(refused(['docs/superpowers/plans/2026-03-03-a--thing.md']).code).toBe(1);
-    expect(refused(['docs/superpowers/specs/2026-03-03-a--thing-design.md']).code).toBe(1);
+    for (const p of ['docs/superpowers/plans/2026-03-03-a--thing.md', 'docs/superpowers/specs/2026-03-03-a--thing-design.md']) {
+      expectRefused(refused([p]), p);
+    }
   });
 
   it('(L6) a file added in a subdirectory of specs/ or plans/ fails, even with a valid name', () => {
@@ -229,17 +241,16 @@ describe('ledger-guard CLI: the layout arm (D-8719)', () => {
   });
 
   it('(L8) it holds on a ledger/ branch too', () => {
-    expect(refused(['docs/superpowers/plans/p/x.md'], 'ledger/p').code).toBe(1);
+    expectRefused(refused(['docs/superpowers/plans/p/x.md'], 'ledger/p'), 'docs/superpowers/plans/p/x.md');
   });
 
   it('(L9) no Ledger-Edit trailer escapes it', () => {
     const r = refused(['docs/superpowers/plans/p/x.md'], 'feat/thing', 'add\n\nLedger-Edit: D-' + '9999 a reason');
-    expect(r.code).toBe(1);
-    expect(r.out).toContain('layout');
+    expectRefused(r, 'docs/superpowers/plans/p/x.md');
   });
 
   it('(L10) a path git quotes (a character outside the slug set) under plans/ fails', () => {
-    expect(refused(['docs/superpowers/plans/2026-03-03-café.md']).code).toBe(1);
+    expectRefused(refused(['docs/superpowers/plans/2026-03-03-café.md']), '"docs/superpowers/plans/2026-03-03-caf\\303\\251.md"');
   });
 
   it('(L11) warn mode reports a layout violation and exits 0', () => {
@@ -336,9 +347,23 @@ describe('layoutViolations (D-8719)', () => {
     ]);
   });
 
+  it('(e1-e3) a one-digit month or day, an uppercase or digit-first slug, and text after the extension are refused', () => {
+    const bad = [
+      'docs/superpowers/plans/2026-3-03-a.md', 'docs/superpowers/plans/2026-03-3-a.md',
+      'docs/superpowers/specs/2026-3-03-a-design.md', 'docs/superpowers/specs/2026-03-3-a-design.md',
+      'docs/superpowers/plans/2026-03-03-A.md', 'docs/superpowers/plans/2026-03-03-1a.md',
+      'docs/superpowers/specs/2026-03-03-A-design.md', 'docs/superpowers/specs/2026-03-03-1a-design.md',
+      'docs/superpowers/plans/2026-03-03-a.md.bak', 'docs/superpowers/specs/2026-03-03-a-design.md.bak',
+      'docs/superpowers/specs/2026-03-03-a-design.mdx', 'docs/superpowers/specs/2026-03-03-a-design.promise-ids.json.bak',
+    ];
+    expect(layoutViolations(bad.map((p) => `A\t${p}`)).map((x) => x.path)).toEqual(bad);
+    expect(layoutViolations(['A\tdocs/superpowers/plans/2026-03-03-a1.md', 'A\tdocs/superpowers/specs/2026-03-03-a1-design.md'])).toEqual([]);
+  });
+
   it('names the shape a spec path and a plan path should take', () => {
     const [spec, plan] = layoutViolations(['A\tdocs/superpowers/specs/x.md', 'A\tdocs/superpowers/plans/x.md']);
     expect(spec.shape).toContain('docs/superpowers/specs/YYYY-MM-DD-<slug>-design.md');
+    expect(spec.shape).toContain('docs/design/<spec file name without its extension>/');
     expect(plan.shape).toContain('docs/superpowers/plans/YYYY-MM-DD-<slug>.md');
     expect(plan.shape).toContain('docs/superpowers/programs/<programme>/<task-or-pr>.md');
   });

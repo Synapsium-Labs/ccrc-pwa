@@ -20,6 +20,8 @@
 // most 40 characters. It holds on EVERY branch, ledger branches included, and no trailer escapes it, because the
 // judge has no escape. An existing file, an edit to one and a deletion are never a layout violation. A path git
 // quotes (a byte outside the slug set) can never take the layout, so it is reported as it is quoted.
+// A spec's images, mockup pages and other non-spec files go under docs/design/<spec file name less its extension>/,
+// which the judge classes as editorial and its layout rule does not read; the spec links to them by relative path.
 //
 // ESCAPE (the edit arm only): a `Ledger-Edit: <reason>` trailer on the HEAD commit of the change passes the edit arm and is written to the
 // step summary with the files it covers. Only the head commit's trailers count (read with git's own trailer
@@ -79,7 +81,8 @@ const SLUG_MAX = 40;
 const SPEC_NAME = new RegExp(`^${DATE}-(${SLUG})-design(?:\\.md|\\.promise-ids\\.json)$`);
 const PLAN_NAME = new RegExp(`^${DATE}-(${SLUG})\\.md$`);
 const NOTE_ROUTE = 'docs/superpowers/programs/<programme>/<task-or-pr>.md';
-const SPEC_SHAPE = `${SPECS_DIR}YYYY-MM-DD-<slug>-design.md (or its -design.promise-ids.json), directly in ${SPECS_DIR}`;
+const SPEC_SHAPE = `${SPECS_DIR}YYYY-MM-DD-<slug>-design.md (or its -design.promise-ids.json), directly in ${SPECS_DIR}; `
+  + 'a spec\'s images, mockup pages and other non-spec files go under docs/design/<spec file name without its extension>/';
 const PLAN_SHAPE = `${PLANS_DIR}YYYY-MM-DD-<slug>.md, directly in ${PLANS_DIR}; a task note goes to ${NOTE_ROUTE}`;
 
 /** True when a file name in one layout directory takes that directory's shape with a slug of at most SLUG_MAX characters. */
