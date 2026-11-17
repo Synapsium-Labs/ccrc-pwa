@@ -11,10 +11,10 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   site of a new lane source; `ccrc-api programme remaining`; the wave-boundary reference paragraph.
 - **Live at merge.** The door needs the box token, attribution and ownership. Nothing reads the two tables yet but the
   tests. `EDGE_CLEARING_SHIPPED` is `false`.
-- **Migration slot.** It is entry 88 by position on this branch after a sixth merge of `main` (the coordinator's
+- **Migration slot.** It is entry 89 by position on this branch after a seventh merge of `main` (the coordinator's
   standing license, 2026-11-17): portfolio B (#2904) landed 83, responses B (#2914) 84, overlaps A (#2949) 85, decision
-  model A (#2948) 86 and row revisions (#2965) 87. Other open PRs may hold 88; whoever lands second renumbers at landing,
-  on the coordinator's word.
+  model A (#2948) 86, row revisions (#2965) 87 and renewal readings A (#2962) 88. Other open PRs may hold 89; whoever
+  lands second renumbers at landing, on the coordinator's word.
 
 ## Departures, by slug
 
@@ -90,7 +90,14 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   PR's migration is 88. #2965 had fixed `decision-model-records.test.ts`'s migration case for its own column migration
   (`COORD_SCHEMA_VERSION - 2`, its two columns dropped by name); the merged case finds its slot by text and undoes every
   later migration newest first, its added columns and its tables, so a third migration above it needs no edit there.
-  `user_version` 88; `run-close-switch.test.ts` drops this PR's tables, then the revision columns, and replays thirty-five;
+  `user_version` 88 then.
+- **The seventh merge of `main`** (the standing license again: renewal readings A, #2962, landed migration 88 and two
+  session-gated doors; every conflict was a migration's or a census row's: `schema.ts`, `coord-db.test.ts`,
+  `run-close-switch.test.ts`, `decision-model-records.test.ts`, `gate.ts`, `auth-gate.test.ts` and `writers-map.test.ts`).
+  This PR's migration is 89. #2962 had made `decision-model-records.test.ts`'s case slot-generic too, more completely (it
+  also drops a later entry's indexes on older tables and reds on an ALTER it cannot undo), so the merge takes main's case
+  whole. Counts: route 256 behind renewal readings A's 255; HTTP 253, gated 157, exempt 95; `user_version` 89;
+  `run-close-switch.test.ts` drops this PR's tables and replays thirty-six;
   `shared/programmeFacts.ts` holds overlaps A's block and this PR's, each under its own head; `token-shared.test.ts`'s seven-day holders stay
   seventeen, with `EDGE_UNMEASURABLE_AFTER_MS` in its own row; the lane words and the `ccrc-api` rows unchanged,
   since responses B's doors are session-gated and add no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
