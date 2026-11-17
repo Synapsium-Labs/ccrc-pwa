@@ -599,6 +599,68 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(3));
   });
 
+  // The viewer's key is the document's identity, the page's view and its frame (D-8711; review M7c): each part below starts
+  // the viewer over, which a state it holds (Run scripts) shows. Each is measured red by dropping that part from the key.
+  describe('the mockup viewer\'s key holds its view, its frame and its draft fingerprint (review M7c)', () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const entries = [entry('specs', 'm.html')];
+
+    it('a view=committed change starts the viewer over (Run scripts is off again)', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      const root = container.querySelector('.docs-mockup')!;
+      act(() => navigate('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(here()).toBe('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+      expect(container.querySelector('.docs-mockup')).not.toBe(root);
+    });
+
+    it('a frame change (Full screen) starts the viewer over: the full frame is static again', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+      await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+
+    it('a new draft fingerprint starts the viewer over; a re-list that keeps the fingerprint does not', async () => {
+      const FP_2 = 'e'.repeat(64);
+      const draftTree = (fp: string): DocsTreeOk =>
+        treeOk({ entries: [entry('specs', 'm.html', { draft: draftOf('modified', { fp }) })], drafts: holder() });
+      const f = fakeLoaders({ tree: okTree(draftTree(FP_1)) });
+      // The answers carry the same blob, so only the draft arm of the key (its pin, fingerprint included) tells the two apart.
+      f.file.mockImplementation(async (_p: string, pin: DocPin) => {
+        const a = fileAs('m.html', html + (pin.kind === 'draft' && pin.fp === FP_2 ? '<!-- two -->' : ''), 'html');
+        return a.s === 'ok' ? { s: 'ok', value: { ...a.value, show: { ...a.value.show, blob: BLOB_1 } } } : a;
+      });
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_1))));
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      expect(f.file.mock.calls[0]![1]).toMatchObject({ kind: 'draft', fp: FP_1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      const root = container.querySelector('.docs-mockup')!;
+      // The same fingerprint again: the same view, its choice kept.
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(container.querySelector('.docs-mockup')).toBe(root);
+      expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+      // A new fingerprint: the document changed, so the view starts over.
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_2))));
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.file.mock.calls.some((c) => c[1].kind === 'draft' && c[1].fp === FP_2)).toBe(true));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+  });
+
   it('text with a registered grammar (x.ts) is highlighted through CodeBlock; x.txt is pre.doc-plain', async () => {
     const f = byPath(treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] }), {
       'x.ts': fileAs('x.ts', 'const a: number = 1;', 'text'),
