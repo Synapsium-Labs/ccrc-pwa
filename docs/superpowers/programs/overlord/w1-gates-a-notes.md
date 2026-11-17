@@ -52,3 +52,45 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
 - **Migration slot**: this PR's migration is positional at 93 after absorbing #2964 (which took 92); the second lander renumbers.
 
 - **Additive absorption**: kept both migration and census additions under the standing license; the shared decision-model record case was kept verbatim.
+
+## Verification evidence
+
+The recovered pre-change runs use main at `b0683770e`. Every temporary replacement was restored from a saved copy,
+byte-for-byte; the branch later absorbed #2964 with no production change outside the additive migration/census resolution.
+
+| Check | Pre-change / red evidence | Restored / green evidence |
+|---|---|---|
+| Identity vocabulary | main has no module: import failure (not behavioural proof) | 14 cases; codec mutants 11/11 killed |
+| Door registry | main has no module: import failure | 13 cases; removing retire, removing start exclusion and changing card to operate each red |
+| CallerIdentity | main has no adapter: import failure | 16 cases; stale-uuid mint, look-alike, missing device and unfrozen actor mutants each red |
+| Designation columns and writers | 21 cases red against main's old schema and writers | 21 cases green; six actor/pending/default mutants killed |
+| Writer type contract | main's string writers produce two TS2578 errors, one per writer | isolated actor-contract project green with all six negative type pins |
+| Rank characterization, unchanged | 12/12 green against main's source in scratch | 12/12 green against this branch, also after absorption |
+| Private-name PUT | valid upload returned 200 when the port refusal was ignored | refused identity returns fixed bad-request; no key or list write; 25/25 routes green |
+| Private-name rows | missing GET/PUT table rows red the census | both rows present; 13/13 census cases green |
+
+The full mutation-floor suite passed 173/173 before absorbing #2964. Every single-definition and ring file passed
+(48 files), and the armed growth check after absorption passed: schema +16 net code lines, server composition +5,
+CoordStore +0, all below 40. The server-source typecheck passed. The full tests-inclusive typecheck repeatedly hit
+the shared test slice's memory cap (exit 137); on the coordinator's explicit ruling, CI must measure that whole project.
+An isolated project for the actor type contract passed locally; it does not stand in for the full-project check.
+
+No complete server suite is claimed. Scope runs and expected-red/mutant runs are kept distinct from that signal.
+
+### Post-absorption measurements
+
+After #2964: all 175 mutation-floor cases and all 49 ring/single-definition files passed. Migration replay,
+designation routes, the actor suite, rank, ratify, private-name routes, auth, box-token census, deviation refs,
+anchors, citations and all 80 roll-lane cases passed. Server-source typechecking passed on the merged branch.
+
+Local limits remain explicit: the full tests-inclusive typecheck and the PWA typecheck were OOM-killed in the shared
+6 GiB test slice. An isolated rerun of `ledgers-secrets` timed out on “a re-key in flight across a Remove never writes
+the removed slot's row back” and “a value file that cannot be removed is remove-failed, and nothing else changes;
+a symlinked programme directory too”, amid 19 slice OOM kills; earlier timeouts were in different cases. These are
+not claimed green locally. The post-merge full `coord-db` rerun passed 146/146 (exit 0), as did
+its pre-merge full run and the post-merge actor/migration-specific cases. CI is the remaining
+arbiter; no whole-suite green is inferred from these scoped runs.
+
+A later false-positive hook refusal matched verification prose in a git commit command, before any action executed.
+The worker stopped and reported it, received an explicit structured ruling, and continued with separate ordinary git
+calls and a message file. That stop/report/re-authorise is not another unapproved reroute.
