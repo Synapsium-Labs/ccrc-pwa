@@ -37,6 +37,7 @@ import type { LightMyRequestResponse } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { Bus } from '../src/bus.js';
 import { FleetWatcher } from '../src/watch.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { askKey } from '../src/askkey.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -186,7 +187,7 @@ async function core(st: State, o: Opts = {}): Promise<World> {
   let checkpoint: World['checkpoint'] = async () => 'no watcher';
   if (o.watcher === true) {
     const bus = new Bus();
-    const watcher = new FleetWatcher(deps as never, bus, 10_000);
+    const watcher = quietAtTestEnd(new FleetWatcher(deps as never, bus, 10_000));   // D-8140
     app = await buildServer(deps, bus, watcher);
     closers.push(() => app.close(), () => watcher.closeDelegation());
     const durable = await watcher.delegationApplier();
