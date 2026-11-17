@@ -24,6 +24,7 @@
 // RED FIRST, measured 2026-11-16 against origin/main 0c573d7f3: see the task note `c38.md` for each row's red and its
 // mutant.
 import { StrictMode, useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import type { ReactNode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -495,9 +496,11 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
   });
 
   // Review 2334 F3 (Task C40, D-8698): under React's StrictMode (`pwa/src/main.tsx` renders the app in it), React calls a
-  // newly mounted element's ref callback a second time in development, after its effects have run, Radix's hiding
-  // included. That second call must not take this sheet's own marks for what the page hid. The menu's hand-off, in
-  // both tree orders.
+  // newly mounted element's ref callback a second time in development. React 19 detaches the ref, disconnects the passive
+  // effects (Radix's undo runs, so this sheet's own marks are gone), re-attaches the ref (the second call), then reconnects
+  // the effects (review 2343 F5). So the second call sees only other layers' marks: here the menu's, still closing, which
+  // a read of every hidden node would take for what the page hid (C40's mutant M7). The menu's hand-off, in both tree
+  // orders.
   for (const order of ['closing sheet first', 'opening sheet first'] as const) {
     it(`under StrictMode, the hand-off (${order}) announces the page as the next sheet closes, and lifts nothing the page hid`, async () => {
       function Chain(): ReactNode {
@@ -592,6 +595,223 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: both confirms have unmounted, the sheet still open').toBe(1);
       expect(decoration.getAttribute('aria-hidden'), 'an element the sheet hid itself was left announced for good').toBe('true');
       expect(hiddenUp(releaseButton), 'the sheet is hidden after both confirms left').toBe(false);
+    } finally { release(); }
+  });
+
+  // Review 2343 F1 (Task C42, D-8714): a node the page UN-hides while a layer is open. The page hides a body-level node X;
+  // layer A records X as the page's own, and A's Radix marks X as already hidden (its undo will never take that
+  // `aria-hidden` off). The page then removes X's `aria-hidden` while A is mounted, and layer B mounts while A still is.
+  // B must not take X in from A's record as the page's own: B's Radix hides X again, so a B that keeps X would leave it
+  // hidden after every dialog has gone. Two models of the page's un-hide (a direct DOM removal, and a portal whose
+  // `aria-hidden` prop a state change un-sets), three shapes (the hand-off in both tree orders, and B over A with A closed
+  // by code before B closes), and the control where the page never un-hides X (it stays hidden, as C40 pinned).
+  type Unhide = 'dom' | 'portal';
+  type Shape = 'hand-off, closing sheet first' | 'hand-off, opening sheet first' | 'over A, A closed by code';
+  const SHAPES: readonly Shape[] = ['hand-off, closing sheet first', 'hand-off, opening sheet first', 'over A, A closed by code'];
+  /** X, the page's own body-level node, as a portal the page renders and un-hides by state (the `portal` model). */
+  function PortalDecoration({ hidden }: { hidden: boolean }): ReactNode {
+    return createPortal(<div data-testid="x" aria-hidden={hidden ? 'true' : undefined}>decoration</div>, document.body);
+  }
+  function TwoLayers({ shape, unhide }: { shape: Shape; unhide: Unhide }): ReactNode {
+    const [first, setFirst] = useState(false);
+    const [second, setSecond] = useState(false);
+    const [xHidden, setXHidden] = useState(true);
+    const handOff = shape !== 'over A, A closed by code';
+    const a = (
+      <Sheet open={first} onClose={() => setFirst(false)} title="Menu">
+        <button type="button" onClick={() => setXHidden(false)}>Show it</button>
+        <button type="button" onClick={() => { if (handOff) setFirst(false); setSecond(true); }}>Next</button>
+      </Sheet>
+    );
+    const b = (
+      <Sheet open={second} onClose={() => setSecond(false)} title="Next sheet">
+        <button type="button" onClick={() => setFirst(false)}>Close the menu</button>
+        <button type="button" onClick={() => setSecond(false)}>Done</button>
+      </Sheet>
+    );
+    return (
+      <main>
+        <button type="button" onClick={() => setFirst(true)}>Open it</button>
+        {unhide === 'portal' && <PortalDecoration hidden={xHidden} />}
+        {shape === 'hand-off, opening sheet first' ? <>{b}{a}</> : <>{a}{b}</>}
+      </main>
+    );
+  }
+  const runTwoLayers = async (shape: Shape, unhide: Unhide | 'never'): Promise<Element> => {
+    let x: Element;
+    if (unhide === 'portal') {
+      render(<TwoLayers shape={shape} unhide="portal" />);
+      x = screen.getByTestId('x');
+    } else {
+      x = document.createElement('div');
+      x.setAttribute('aria-hidden', 'true');
+      x.textContent = 'decoration';
+      document.body.appendChild(x);
+      render(<TwoLayers shape={shape} unhide="dom" />);
+    }
+    expect(x.getAttribute('aria-hidden'), 'CONTROL: the page hid X').toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+    await settle();
+    expect(x.hasAttribute('data-aria-hidden'), 'CONTROL: A\'s Radix marked X as already hidden').toBe(true);
+    if (unhide === 'portal') fireEvent.click(screen.getByRole('button', { name: 'Show it', hidden: true }));
+    if (unhide === 'dom') x.removeAttribute('aria-hidden');
+    await settle();
+    if (unhide !== 'never') expect(x.getAttribute('aria-hidden'), 'CONTROL: the page un-hid X while A is open').toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    await settle();
+    expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: A is still mounted as B mounts').toBe(2);
+    expect(x.getAttribute('aria-hidden'), 'CONTROL: B hides X').toBe('true');
+    if (shape === 'over A, A closed by code') {
+      fireEvent.click(screen.getByRole('button', { name: 'Close the menu' }));
+      await settle();
+      expect([...document.querySelectorAll('[role="dialog"]')].map((d) => d.getAttribute('data-state')).sort(),
+        'CONTROL: A closed by code under B').toEqual(['closed', 'open']);
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    await settle();
+    expect(pageHidden(), 'the page is still aria-hidden while B closes').toBe(false);
+    return x;
+  };
+  for (const unhide of ['dom', 'portal'] as const) {
+    for (const shape of SHAPES) {
+      it(`a node the page un-hid while a layer was open is not kept hidden by the next layer (${unhide}, ${shape})`, async () => {
+        const release = holdClosingContent();
+        let x: Element | undefined;
+        try {
+          x = await runTwoLayers(shape, unhide);
+          expect.soft(x.getAttribute('aria-hidden'), 'B kept X hidden through its exit as the page\'s own').toBeNull();
+          for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+          expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: every dialog has unmounted').toBe(0);
+          expect(x.getAttribute('aria-hidden'), 'X, which the page un-hid, stayed hidden after every dialog left').toBeNull();
+          expect(pageHidden(), 'the page stayed hidden after every dialog left').toBe(false);
+        } finally { if (unhide === 'dom') x?.remove(); release(); }
+      });
+    }
+  }
+  for (const shape of SHAPES) {
+    it(`CONTROL: a node the page hid and never un-hid stays hidden through both layers (${shape})`, async () => {
+      const release = holdClosingContent();
+      let x: Element | undefined;
+      try {
+        x = await runTwoLayers(shape, 'never');
+        expect(x.getAttribute('aria-hidden'), 'the closing sheet lifted an element the page hid itself').toBe('true');
+        for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+        expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: every dialog has unmounted').toBe(0);
+        expect(x.getAttribute('aria-hidden'), 'an element the page hid itself was left announced for good').toBe('true');
+      } finally { x?.remove(); release(); }
+    });
+  }
+
+  // Review 2343 F2 (Task C42, D-8714): the record forgets a layer whose panel has left the document. Sheet A comes and goes
+  // while the page has X hidden, so A's record holds X. The page then un-hides X, and the palette (whose hiding marks X,
+  // and which never lifts its own marks) hands off to sheet B. At B's record X is hidden by the palette's mark, so only a
+  // record still holding the gone A would take X for the page's own; B must lift X as it closes, like every other mark.
+  it('a layer whose panel has left is forgotten: the palette\'s mark on a node the page has since un-hid is lifted as the next sheet closes', async () => {
+    function Later(): ReactNode {
+      const [first, setFirst] = useState(false);
+      const [palette, setPalette] = useState(false);
+      const [sheet, setSheet] = useState(false);
+      const options = useMemo(() => [{ id: 'shortcuts', title: 'Keyboard shortcuts' }], []);
+      return (
+        <main>
+          <button type="button" onClick={() => setFirst(true)}>Open it</button>
+          <button type="button" onClick={() => setPalette(true)}>Palette</button>
+          <Sheet open={first} onClose={() => setFirst(false)} title="Menu">
+            <button type="button" onClick={() => setFirst(false)}>Close</button>
+          </Sheet>
+          <CommandPalette open={palette} onClose={() => setPalette(false)} query="" onQueryChange={() => undefined}
+            options={options} onRun={() => { setPalette(false); setSheet(true); }} />
+          <Sheet open={sheet} onClose={() => setSheet(false)} title="Shortcuts">
+            <button type="button" onClick={() => setSheet(false)}>Done</button>
+          </Sheet>
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    const x = document.createElement('div');
+    x.setAttribute('aria-hidden', 'true');
+    x.textContent = 'decoration';
+    document.body.appendChild(x);
+    try {
+      render(<Later />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      await settle();
+      for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: sheet A has left the document').toBe(0);
+      expect(x.getAttribute('aria-hidden'), 'CONTROL: X is still the page\'s hidden node').toBe('true');
+      x.removeAttribute('aria-hidden');
+      fireEvent.click(screen.getByRole('button', { name: 'Palette' }));
+      await settle();
+      expect(x.getAttribute('aria-hidden'), 'CONTROL: the palette hides X').toBe('true');
+      fireEvent.click(screen.getByRole('option', { name: /Keyboard shortcuts/ }));
+      await settle();
+      expect([...document.querySelectorAll('[role="dialog"]')].map((d) => d.getAttribute('data-state')).sort(),
+        'CONTROL: the palette is closing as the sheet opens').toEqual(['closed', 'open']);
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await settle();
+      expect(x.getAttribute('aria-hidden'), 'a forgotten layer\'s record kept X hidden through the sheet\'s exit').toBeNull();
+      expect(pageHidden(), 'the page is still aria-hidden while the sheet closes').toBe(false);
+      for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+      expect(x.getAttribute('aria-hidden'), 'X stayed hidden after every dialog left').toBeNull();
+    } finally { x.remove(); release(); }
+  });
+
+  // Review 2343 F3 (Task C42, D-8714): a reopen during the exit puts back only marks that still stand. A live region keeps
+  // the palette's hiding on the children of the page (not the page), and the page drops it while the palette is open. The
+  // palette hands off to a sheet, which hides the page and, as it closes, lifts the palette's marks on those children too.
+  // The palette's exit then ends, and its undo takes its marks off. A reopen of the sheet during its own exit must not put
+  // `aria-hidden` back on a child no modal marks any more: no close would lift it, and no undo would remove it.
+  it('a reopen during the exit never re-hides a node whose mark has gone, so the sibling is not left hidden', async () => {
+    function Dropped(): ReactNode {
+      const [palette, setPalette] = useState(false);
+      const [sheet, setSheet] = useState(false);
+      const [live, setLive] = useState(true);
+      const options = useMemo(() => [{ id: 'shortcuts', title: 'Keyboard shortcuts' }], []);
+      return (
+        <main>
+          <button type="button" onClick={() => setPalette(true)}>Open it</button>
+          <button type="button" data-testid="reopen" onClick={() => setSheet(true)}>Reopen</button>
+          <button type="button" data-testid="drop" onClick={() => setLive(false)}>Drop the region</button>
+          <p data-testid="sibling">Sibling</p>
+          {live && <p aria-live="polite">Ready.</p>}
+          <CommandPalette open={palette} onClose={() => setPalette(false)} query="" onQueryChange={() => undefined}
+            options={options} onRun={() => { setPalette(false); setSheet(true); }} />
+          <Sheet open={sheet} onClose={() => setSheet(false)} title="Shortcuts">
+            <button type="button" onClick={() => setSheet(false)}>Done</button>
+          </Sheet>
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    try {
+      render(<Dropped />);
+      const sibling = screen.getByTestId('sibling');
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      expect(sibling.hasAttribute('data-aria-hidden'), 'CONTROL: the live region keeps the palette\'s marks on the page\'s children').toBe(true);
+      fireEvent.click(screen.getByTestId('drop'));
+      await settle();
+      fireEvent.click(screen.getByRole('option', { name: /Keyboard shortcuts/ }));
+      await settle();
+      expect([...document.querySelectorAll('[role="dialog"]')].map((d) => d.getAttribute('data-state')).sort(),
+        'CONTROL: the palette is closing as the sheet opens').toEqual(['closed', 'open']);
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await settle();
+      expect(hiddenUp(sibling), 'CONTROL: the sibling is announced as the sheet closes').toBe(false);
+      const palette = [...document.querySelectorAll('[role="dialog"]')].find((d) => d.querySelector('[role="option"]') !== null);
+      await finishExit(palette!);
+      expect(sibling.hasAttribute('data-aria-hidden'), 'CONTROL: the palette\'s undo took its mark off the sibling').toBe(false);
+      fireEvent.click(screen.getByTestId('reopen'));
+      await settle();
+      expect(hiddenUp(sibling), 'CONTROL: the reopened sheet hides the page again').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await settle();
+      expect.soft(hiddenUp(sibling), 'the sibling is still hidden as the reopened sheet closes').toBe(false);
+      for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: every dialog has unmounted').toBe(0);
+      expect(sibling.getAttribute('aria-hidden'), 'a reopen left the sibling hidden with no mark, for good').toBeNull();
     } finally { release(); }
   });
 });

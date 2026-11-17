@@ -3962,7 +3962,7 @@ measurements, the search of the app for F2, the mutants and the browser run.
   during the exit and the focus guards are unchanged. A single sheet with no overlapping exit behaves as before.
 - **The record** (fix round 2, review 2334 F1 and F2). Each modal layer, `Sheet` and the command palette's drawer,
   records at its panel's mount, before its own Radix hiding runs, what the page hid itself: the hidden nodes no modal has
-  marked, plus what every layer still mounted recorded.
+  marked, plus what every layer still mounted recorded (since Task C42, D-8714: only those still `aria-hidden`).
 
   The answer does not depend on tree order or on another modal's marks. So it removes the first build's cost (review
   2323 F1: a sheet rendered before the closing menu kept the page hidden through its exit). It also removes round 1's
@@ -3997,14 +3997,64 @@ measurements, the search of the app for F2, the mutants and the browser run.
   - round 1's same read at the panel's mount (review 2334 F1, the palette's hand-off; F2, a layer an effect closes one
     commit after the sheet under it).
 
-  No cost of this kind is known now. The only modal layers are the two that keep the record. A future Radix modal that
-  does not keep it would bring the old read's costs back, for its own marks only (inferred).
+  The record as merged had one cost of another kind (corrected by Task C42, review 2343 F1): a node the page un-hid while
+  a layer was open stayed in every later layer's record as the page's own, so a later layer that mounted while the first
+  was still mounted hid it again and nothing lifted it; it stayed hidden for good (measured in jsdom; no route in the app
+  reaches it, inferred from a code search). Task C42 (D-8714) removed it. One narrower shape, also open before C40, is
+  still open (measured; `c42.md`). The only modal layers are the two that keep the record. A future Radix modal that
+  kept no record would not bring back the old read's window: its marks on an element the page hid itself would hide that
+  element from a later sheet's record, so the sheet would lift it and it would stay announced for good, C38's original
+  failure (review 2310 F2; review 2343 F6; inferred from code).
 
 **Acceptance.** The new jsdom rows are red on `main` (F2, F1), on the first build (the reversed tree order) or on round
 1 (the palette's hand-off, the effect-driven layer), and green at the tip; every C38 row stays green. The new browser
 file passes in Chrome. Its hand-off rows are red on `main`'s Sheet, and its palette rows are red on round 1's. Every pwa
 test file that renders a Sheet, a QuickConfirm or the command palette passes, as do ui's typecheck and the deviation-refs,
 dtbd and topology-clean guards.
+**Rollback.** A plain revert.
+
+### Task C42: a node the page un-hides is not kept hidden by the next modal layer (D-8714) — now
+
+**Why.** Review 2343 of Task C40 found that C40's modal-layer record (`ui/src/lib/modal-layers.ts`) only ever grows. The
+page hides a body-level node X; layer A records X as the page's own, and A's Radix marks X as already hidden, so its undo
+never takes that `aria-hidden` off. If the page then un-hides X while A is open, and layer B mounts while A still is,
+B's record took X in from A's as the page's own; B's Radix hid X again, nothing lifted it, and X stayed hidden after every
+dialog had gone (F1, a regression from `main` in that one shape; no route in `pwa/src` or `ui/src` reaches it). The
+review also found the record's prune unpinned (F2), a reopen during the exit that puts back a mark another modal has
+since taken off (F3, on `main` before C40), the palette's Chrome row without its overlap control (F4), and five text
+slips (F5 to F9). `c42.md` holds the measurements, each row and what reds it, and the mutants.
+
+**What was done.**
+- **F1, at the record.** A node inherited from another layer's record stays in the new layer's page-own set only while it
+  still carries `aria-hidden="true"`. A node the page un-hid is then lifted as the new layer closes, like any other mark.
+  Every C38 and C40 row stays green, and no caller changed.
+- **F3, in the sheet.** A reopen during the exit puts back only the lifted nodes that a modal still marks
+  (`data-aria-hidden`), so a node whose mark the palette's undo removed is not hidden again with no mark.
+- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows (36): six F1 rows (a direct DOM removal and a portal whose
+  `aria-hidden` a state change un-sets; the hand-off in both tree orders and B over A with A closed by code), red at
+  `main` (6c2d705d2); three controls where the page never un-hides X; the F2 row (the record forgets a layer whose panel
+  has left), red when the prune is removed; and the F3 row, red at `main`. `sheet-stack-hide.browser.test.ts`'s palette
+  group reads the overlap right after Show shortcuts, checks the focus, and adds the still-closing variant (10 rows).
+- **Text.** The StrictMode comments now follow React 19's order (F5); `c40.md` and the D-8698 entry are corrected on
+  the cost, on a modal that keeps no record (F6), on the mutant table (F7) and on the row counts (F8); the browser file's
+  header names the read and the palette group (F9).
+
+- **D-8714** — `c42-record-forgets-unhidden`: Task C42, issued on 2026-11-17. A modal layer's record takes in another
+  layer's node as the page's own only while that node still carries `aria-hidden="true"` (review 2343 F1), and a reopen
+  during the exit puts back only nodes a modal still marks (F3). Two further departures, by slug:
+  - `c42-prune-row-via-palette`: the brief's sequential shape for F2 (sheet A, the page un-hides X, sheet B) no longer
+    needs the prune once F1's filter is in, so a row of that shape stays green with the prune removed (measured). The F2
+    row goes through the palette instead: its mark hides X again before the sheet's record, and only a forgotten layer's
+    record would keep X as the page's own then.
+  - `c42-reverse-close-residual`: one shape keeps a node hidden for good after C42, as it did before C40. The page un-hides
+    X while A is open, B opens over A (and hides X), B closes before A. A recorded X as the page's own, so A's close
+    leaves it, and the package's uncontrolled mark keeps the `aria-hidden` after both unmount. Measured at C42's tip, at
+    6c2d705d2 and at f8251a39d; no route in the app reaches it (inferred, review 2343's search). Not fixed: telling the
+    page's re-hide from a modal's needs more than the record holds.
+
+**Acceptance.** The F1 and F3 rows are red at `main` and green at the tip; the F2 row is red with the prune removed; every
+C38 and C40 row stays green; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs,
+dtbd and topology-clean guards pass.
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
