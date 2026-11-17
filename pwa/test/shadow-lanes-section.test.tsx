@@ -265,7 +265,7 @@ describe('the replay quiz block (Overlord W1a, quiz record)', () => {
 
   it.each([['confirm', T.quizConfirm], ['discard', T.quizDiscard]] as const)('%s calls the rule door with the run id and re-reads the card', async (action, label) => {
     const read = vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ pending: { ok: true, runs: [run(7), run(8)] } })));
-    const rule = vi.spyOn(api, 'ruleQuizRun').mockResolvedValue({ ok: true, id: 8, state: action === 'confirm' ? 'confirmed' : 'discarded', baseline: null });
+    const rule = vi.spyOn(api, 'ruleQuizRun').mockResolvedValue({ ok: true, id: 8, state: action === 'confirm' ? 'confirmed' : 'discarded', baseline: false });
     mount();
     const second = (await screen.findByText(T.quizPending(laneArmQuizDate(AT + 8), run(8)))).closest('[data-quiz-run]') as HTMLElement;
     fireEvent.click(within(second).getByRole('button', { name: label }));
