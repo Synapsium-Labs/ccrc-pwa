@@ -20,6 +20,7 @@ import * as privateNamesModule from '../../shared/private-names.mjs';
 import { nameListStateCases } from './sim/privateNamesSets.js';
 import { parsedFile } from './scan/symbols.js';
 import { parseSource } from './scan/parse.js';
+import { systemEntropy } from '../src/time/system.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const issuer: PrivacyIssuer = { kind: 'ready', issue: () => ({ ok: true, id: 1 }) };
@@ -67,7 +68,7 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('an upload under the slot\'s key reads list, and privateNameHits finds a name with it', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha', 'zq-bravo-x9'], 1_000);
     const v = readPrivateNameList(h.store, h.ccrcDir);
@@ -79,7 +80,7 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('asked twice with no upload between, it answers the same entries array (one index build); after an upload, a new one', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     const a = readPrivateNameList(h.store, h.ccrcDir);
@@ -96,17 +97,17 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('the cached list is not served past a changed key: a replaced key reads key-mismatch at once', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     expect(readPrivateNameList(h.store, h.ccrcDir).state).toBe('list');
-    await writeNameListKey(h.ccrcDir, mintNameListKey(), 2_000, masked);
+    await writeNameListKey(h.ccrcDir, mintNameListKey(systemEntropy), 2_000, masked);
     expect(readPrivateNameList(h.store, h.ccrcDir)).toEqual({ state: 'unreadable', reason: 'key-mismatch' });
   });
 
   it('the slot removed under a stored list: key-missing, never none and never the cached list', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     expect(readPrivateNameList(h.store, h.ccrcDir).state).toBe('list');
@@ -116,13 +117,13 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('a key with no list (a minted key whose list write failed): list-missing', async () => {
     const h = home();
-    await writeNameListKey(h.ccrcDir, mintNameListKey(), 1_000, masked);
+    await writeNameListKey(h.ccrcDir, mintNameListKey(systemEntropy), 1_000, masked);
     expect(readPrivateNameList(h.store, h.ccrcDir)).toEqual({ state: 'unreadable', reason: 'list-missing' });
   });
 
   it('the list row removed with the slot kept: list-missing', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     expect(readPrivateNameList(h.store, h.ccrcDir).state).toBe('list');
@@ -132,7 +133,7 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it.skipIf(process.getuid?.() === 0)('a key slot that cannot be read: key-unreadable, with or without a list', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     const file = serverSecretPath(h.ccrcDir, NAME_LIST_KEY_SLOT);
     chmodSync(file, 0o000);
@@ -145,7 +146,7 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('a generation that reads and entries that cannot (a list row with its entries gone): store, never none', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     h.db.exec('DELETE FROM private_name_entries');
@@ -154,7 +155,7 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
 
   it('a store that cannot be read, or no store: store', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1_000, masked);
     await upload(h, key, ['zz-alpha'], 1_000);
     expect(readPrivateNameList(undefined, h.ccrcDir)).toEqual({ state: 'unreadable', reason: 'store' });
@@ -167,7 +168,7 @@ describe('the .server slot (the name list\'s key; the API decision model B share
   it('round-trips at 0600, records no tail with tail none, and tells the masker on the server lane', async () => {
     const h = home();
     const register = vi.fn(() => 'masked' as const);
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     expect(key).toMatch(/^[0-9a-f]{64}$/);
     const meta = await writeNameListKey(h.ccrcDir, key, 5_000, register);
     expect(meta).toEqual({ setAt: 5_000, tail: '', masked: true });
@@ -227,14 +228,14 @@ describe('the .server slot (the name list\'s key; the API decision model B share
 
   it('no programme\'s secrets read lists it: .server is not a programme name, and a programme\'s read shows nothing of it', async () => {
     const h = home();
-    await writeNameListKey(h.ccrcDir, mintNameListKey(), 1, masked);
+    await writeNameListKey(h.ccrcDir, mintNameListKey(systemEntropy), 1, masked);
     expect(readStoredSecrets(h.ccrcDir, SERVER_SECRETS_DIR)).toEqual({ state: 'invalid' });
     expect(readStoredSecrets(h.ccrcDir, 'prog-a')).toEqual({ state: 'ok', slots: [] });
   });
 
   it('the masker\'s re-key reads it: operatorSecretRows carries the server lane', async () => {
     const h = home();
-    const key = mintNameListKey();
+    const key = mintNameListKey(systemEntropy);
     await writeNameListKey(h.ccrcDir, key, 1, masked);
     const rows = await operatorSecretRows(h.ccrcDir, (laneId, value) => ({ laneId, fingerprint: value === key ? 'k' : 'other' }) as never);
     expect(rows.unreadable).toBe(false);
@@ -243,7 +244,7 @@ describe('the .server slot (the name list\'s key; the API decision model B share
 
   it('the start-up sweep removes a crash\'s temp in the server directory too', async () => {
     const h = home();
-    await writeNameListKey(h.ccrcDir, mintNameListKey(), 1, masked);
+    await writeNameListKey(h.ccrcDir, mintNameListKey(systemEntropy), 1, masked);
     const temp = path.join(h.ccrcDir, OPERATOR_SECRETS_DIR, SERVER_SECRETS_DIR, `.${NAME_LIST_KEY_SLOT}.secret.tmp-0123456789abcdef`);
     writeFileSync(temp, 'leftover', { mode: 0o600 });
     sweepOperatorSecretTemps(h.ccrcDir);

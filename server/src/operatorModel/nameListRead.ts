@@ -13,13 +13,13 @@
 // the answer carries anyway, never a name.
 //
 // THE KEY (ruled, 2264 F4; slug `name-list-key-in-a-server-slot`): 32 random bytes as hex, minted in memory by
-// `mintNameListKey`, written only by `writeNameListKey` (no tail kept; the masker is told the value), read only by
+// `mintNameListKey` from the entropy port (spec §11.5: chance comes through the ports), written only by `writeNameListKey` (no tail kept; the masker is told the value), read only by
 // `readNameListKey`, and removed by nothing.
-import { randomBytes } from 'node:crypto';
 import { NAME_LIST_KEY_SLOT } from '../../../shared/privateNames.js';
 import {
   readServerSecretValue, writeServerSecret, type OperatorSecretMeta, type RegisterSecret, type ServerSecretRead,
 } from '../coord/ledgersSecrets.js';
+import type { Entropy } from '../time/ports.js';
 import type { OperatorModelStore } from './store.js';
 import { nameListState, type NameEntry, type NameListKeyRead, type NameListStoreRead, type NameListVerdict } from './nameListState.js';
 
@@ -35,9 +35,10 @@ export function readNameListKey(ccrcDir: string): ServerSecretRead {
   return readServerSecretValue(ccrcDir, NAME_LIST_KEY_SLOT);
 }
 
-/** A new key, in memory only: 32 random bytes as hex. The upload door writes it, after building the list under it. */
-export function mintNameListKey(): string {
-  return randomBytes(32).toString('hex');
+/** A new key, in memory only: 32 random bytes as hex, from the entropy port. The upload door writes it, after building the
+ *  list under it. */
+export function mintNameListKey(entropy: Entropy): string {
+  return entropy.hex(32);
 }
 
 /** The one writer of the key slot: the value, with no tail recorded, registered with the egress masker. */
