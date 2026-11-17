@@ -11,7 +11,7 @@ departures and measurements the build added, by slug. No D-number is minted here
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
   the close was touched, and stays green after, with the one additive column set aside.
-- **Four departures,** each below. None changes a rule the plan states; each makes a rule measurable on this tree.
+- **Five departures,** each below. None changes a rule the plan states; each makes a rule measurable on this tree.
 
 ## Departures
 
@@ -20,6 +20,7 @@ departures and measurements the build added, by slug. No D-number is minted here
 | `lineage-recorded-at-is-seconds` | DT7: a lineage entry counts when its `recordedAt` is at or after the run's `openedAt` | `.prhistory`'s `recordedAt` is whole seconds (ccd writes `int(time.time())`) and `runs.openedAt` is milliseconds, and the fold converts neither. The window is measured in seconds: an entry counts when `recordedAt >= floor(openedAt / 1000)`, so one recorded in the second the run opened counts |
 | `stored-lineage-parse-throws-in-the-store` | Table 3 row 15: an unparsable lineage is `unmeasurable`, `lineage-unreadable` | `runs.prLineage` is parsed by the store's hydrator (`JSON.parse` in `hydrateRun`), so corrupt JSON text throws there and `readTarget` answers row 1, `unmeasured` (it holds). Row 15 is reached by a lineage that parses but is not a list of `{ pr, recordedAt }` entries. Holding is the safe side; a later piece may give the hydrator a measured read |
 | `census-allows-the-decider-and-the-close-argument` | Task A4 Step 2: no file outside `store.ts` and `doneTestRead.ts` reads `closePr` | The census counts a read as a member access, an index by name or a destructuring. `doneTests.ts` reads the gathered fact `closePr` (the decider, which the plan's §9 names the only one) and is allowed beside the gatherer; `close.ts` passes `closePr:` as a key of the writer's input, which is not a read |
+| `target-facts-reuse-read-failure` | §11 Task A3's interface spells `run: … \| 'absent' \| 'unreadable'` | The pair is declared once, as `shared/agent-protocol.ts#ReadFailure`, and `single-definition/vocabularies` refuses a second spelling, so `TargetFacts` names `ReadFailure`. Same two words |
 | `close-pr-merged-is-the-phase-readers-predicate` | DT7: `{ pr, merged, head }` | `merged` is `prstate.ts#isMergedRow`, the predicate every phase reader uses, so a pull request a merge train landed (closed with the train label, proven by the train record) records `merged: true`. `mergedFactsOf`, the landing line's reader, leaves such a row to its PR-keyed reader; the done test reads the run's PR as merged either way |
 
 ## Measured

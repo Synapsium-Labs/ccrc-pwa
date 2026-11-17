@@ -73,7 +73,7 @@ describe('readTarget: the one gatherer of a predicate\'s rows', () => {
     const b = build();
     const id = b.open();
     b.close(id, 'failed', null, { viaClosing: false, detail: 'abandon:never-started' });
-    expect(word(readTarget(b.coord, { predicate: 'run-closed', runId: id }))).toBe('ended:failed:abandon');
+    expect(word(readTarget(b.coord, { predicate: 'run-closed', runId: id }))).toBe('ended:abandon');
   });
 
   it('an open run is pending, and a done run closed before the column existed is unmeasurable', () => {

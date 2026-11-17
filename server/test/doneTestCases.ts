@@ -122,7 +122,7 @@ export function targetVerdictCases(m: Pick<DoneTestDeciders, 'targetVerdict'>): 
       for (const s of OPEN_STATES) expect(at(RUN_CLOSED, runFacts({ state: s }))).toBe(`pending:run-4-${s}`);
     },
     'row 5: run-closed on a failed run is ended, with its close detail\'s first word': () => {
-      expect(at(RUN_CLOSED, runFacts({ state: 'failed', closeDetail: 'abandon:never-started' }))).toBe('ended:failed:abandon');
+      expect(at(RUN_CLOSED, runFacts({ state: 'failed', closeDetail: 'abandon:never-started' }))).toBe('ended:abandon');
       expect(at(RUN_CLOSED, runFacts({ state: 'failed', closeDetail: null }))).toBe('ended:failed');
       expect(at(RUN_CLOSED, runFacts({ state: 'failed', closeDetail: 'The PR merged, honest' }))).toBe('ended:failed');
     },
@@ -196,7 +196,7 @@ export function targetVerdictCases(m: Pick<DoneTestDeciders, 'targetVerdict'>): 
       expect(at(PR_REPLACED, runFacts({ state: 'failed', closePr: null, lineage: [lin(6, 'merged')] }))).toBe('unmeasurable:not-this-runs-pr');
     },
     'row 17: review-passed on a failed work run is ended': () => {
-      expect(at(REVIEW, runFacts({ state: 'failed', closeDetail: 'abandon:x' }, [{ state: 'done' }]))).toBe('ended:failed:abandon');
+      expect(at(REVIEW, runFacts({ state: 'failed', closeDetail: 'abandon:x' }, [{ state: 'done' }]))).toBe('ended:abandon');
     },
     'row 18: review-passed with a review open is pending': () => {
       for (const s of OPEN_STATES) expect(at(REVIEW, runFacts({}, [{ state: 'done' }, { state: s }]))).toBe('pending:run-4-review-open');

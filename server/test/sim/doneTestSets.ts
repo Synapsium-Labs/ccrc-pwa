@@ -63,7 +63,7 @@ export const TARGET_VERDICT_SET: MutantSet<DoneTestDeciders> = {
     { id: 'DT-TV-25', old: "if (!isPr(pr) || typeof merged !== 'boolean'", new: "if (typeof merged !== 'boolean'" },
     { id: 'DT-TV-26', old: "|| typeof head !== 'string' || !isHead40(head)) return { kind: 'bad' };", new: ') return { kind: \'bad\' };' },
     { id: 'DT-TV-27', old: "return unmeasurable(isPrPhase(e.phase) ? `phase-${e.phase}` : 'phase-unknown');", new: 'return unmeasurable(`phase-${String(e.phase)}`);' },
-    { id: 'DT-TV-28', old: "return word === null ? 'failed' : `failed:${word}`;", new: "return 'failed';" },
+    { id: 'DT-TV-28', old: "/^[a-z][a-z0-9-]*/.exec(detail)?.[0]) ?? 'failed';", new: "null) ?? 'failed';" },
     { id: 'DT-TV-29', old: "if (facts.kind !== 'item') return unmeasurable('facts-mismatch');", new: '' },
     { id: 'DT-TV-30', old: "  if (r.state === 'failed') return ended(failedEvidence(r.closeDetail));\n  if (reviews === undefined)", new: '  if (reviews === undefined)' },
   ],

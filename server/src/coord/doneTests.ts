@@ -9,6 +9,7 @@
 import { TERMINAL_RUN_STATES, isPrPhase, isRunState } from '../../../shared/api.js';
 import { ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { isHead40 } from '../../../shared/landing.js';
+import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import {
   DONE_PREDICATES, DONE_TEST_BOUNDS, MEASURED_PREDICATES,
   type DonePredicate, type DoneTarget, type DoneTest, type TargetAnswer,
@@ -61,7 +62,7 @@ export type TargetRunFacts = {
 };
 export type TargetFacts =
   | { kind: 'threw'; why: string }
-  | { kind: 'run'; run: TargetRunFacts | 'absent' | 'unreadable'; reviews?: readonly { state: string }[] }
+  | { kind: 'run'; run: TargetRunFacts | ReadFailure; reviews?: readonly { state: string }[] }
   | { kind: 'item'; item: { state: string } | 'absent' };
 
 const passed = (evidence: string): TargetAnswer => ({ kind: 'passed', evidence });
@@ -104,11 +105,10 @@ function lineageEntry(lineage: unknown, pr: number, openedAt: number): { phase: 
   return best;
 }
 
-/** The first word of a failed run's close detail (`abandon:<reason>` is `abandon`), or none. */
-const failedEvidence = (detail: string | null): string => {
-  const word = detail === null ? null : /^[a-z][a-z0-9-]*/.exec(detail)?.[0] ?? null;
-  return word === null ? 'failed' : `failed:${word}`;
-};
+/** A failed run's evidence: its close detail's first word (`abandon:<reason>` is `abandon`), or `failed` when the detail
+ *  is absent or does not open with a lower-case word. Never the rest of the detail. */
+const failedEvidence = (detail: string | null): string =>
+  (detail === null ? null : /^[a-z][a-z0-9-]*/.exec(detail)?.[0]) ?? 'failed';
 
 function runClosed(id: number, r: TargetRunFacts): TargetAnswer {
   if (!isTerminal(r.state)) return pending(`run-${id}-${r.state}`);
