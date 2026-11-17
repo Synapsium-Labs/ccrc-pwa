@@ -2567,8 +2567,12 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # The organization label (accounts.sh's _ccrc_org), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
 # of `shared/accountOrg.ts#orgRelation` (org-relation.test.ts). One account is `same`; a missing label is `unknown`.
 _acct_org() { declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
-_org_rel() { local a b; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
-  if [[ -z "$a" || -z "$b" ]]; then echo unknown; elif [[ "$a" == "$b" ]]; then echo same; else echo other; fi; return 0; }
+# `_org_rel_of` is the relation itself, over two labels already in hand, with no fork; `_org_rel` reads both and asks it.
+_org_rel_of() {   # var a b a-label b-label -> sets var to same|other|unknown
+  local __r=other; if [[ "$2" == "$3" ]]; then __r=same; elif [[ -z "$4" || -z "$5" ]]; then __r=unknown
+  elif [[ "$4" == "$5" ]]; then __r=same; fi; printf -v "$1" '%s' "$__r"; }
+_org_rel() { local a b r; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
+  _org_rel_of r "$1" "$2" "$a" "$b"; echo "$r"; return 0; }
 # Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
 # CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
 # unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
@@ -19590,7 +19594,7 @@ _rescue_jitter_max() {   # id arm -> RESCUE_JITTER_MAX
   return 0
 }
 
-_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes] — run `ccd swap` in ITS OWN transient systemd unit.
+_dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes orgnear] — run `ccd swap` in ITS OWN transient systemd unit.
   # setsid is NOT enough: it detaches the tty but stays in the caller's CGROUP, so the
   # swap's own `systemctl stop` half-kills it mid-swap (left-over processes, dead session
   # never respawned — bit us 2026-07-05). systemd-run escapes the cgroup entirely.
@@ -19669,13 +19673,13 @@ _dispatch_swap() {   # id target [arm prev decided dfrom dto tx txbytes] — run
   # row's `lastswap` from before the caller stamped it (restored by a refusal),
   # the decision's epoch (the `ts` of a rescue's limits row), the degrade rung
   # (stamped at the act now, `_route_degrade_at_move`), and for a rescue the
-  # transcript and its size (output since then backs the rescue off). Each
+  # transcript and its size (output since then backs the rescue off), and a rescue's organization near miss. Each
   # value is `%q`-quoted, so a path cannot break out of the `bash -c` string.
   # Positional, all optional: a caller passing two arguments composes exactly
   # the old line plus empty words, which the act reads as "no gate" (an older
   # caller's dispatch) and so proceeds as it always did.
   local env="" k v i=3
-  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES; do
+  for k in ARM PREV DECIDED DFROM DTO TX TX_BYTES ORGNEAR; do
     printf -v v '%q' "${!i-}"; i=$((i + 1))
     env+="CCD_SWAP_$k=$v "
   done
@@ -20135,7 +20139,37 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
-_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule on the project side, 7 on the account side (the projection), 8 on the set side; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
+# THE ORGANIZATION TIE-BREAK (account organization plan §3, slugs `org-tie-break-only` and
+# `unknown-org-is-no-preference`). Organization decides only between EQUAL scores inside one bracket of
+# `_swap_target`'s candidate loop: a candidate that relates `same` to the current account (`_org_rel`) replaces an
+# equal best that does not. It never beats a lower score, a bracket or a gate. These read `_swap_target`'s locals by
+# dynamic scope (`cur`, `corg`, `corgr`, `corgs`). Every label is read once per call, at the first question, with ONE
+# `$( )` over the roster (`_org_cur`; `_ccrc_org` is generated from that roster, so an account off it has no label),
+# and each relation comes from that table through `_org_rel_of`, so a call costs one fork whatever the labels. An unlabelled current account answers "no preference" at once: its pick is today's.
+_org_cur() {
+  if [[ -z "$corgr" ]]; then corgr=1; local __a __o __t
+    __t=$(for __a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\t' "$__a"; _acct_org "$__a"; echo; done)
+    while IFS=$'\t' read -r __a __o; do [[ -n "$__a" && -n "$__o" ]] && corgs[$__a]=$__o; done <<<"$__t"
+    corg=${corgs[$cur]-}
+  fi; [[ -n "$corg" ]]; }
+_org_is() {   # word cand -> rc 0 when cand relates <word> to the current account, from `_org_cur`'s table
+  local __w; _org_rel_of __w "$cur" "$2" "$corg" "${corgs[$2]-}"; [[ "$__w" == "$1" ]]; }
+_org_tie() {   # cand best -> rc 0 when cand relates `same` to the current account and best does not
+  _org_cur && _org_is same "$1" && ! _org_is same "$2"; }
+# THE NEAR MISS (`meas.orgnear`, plan §3 and §9's Q2): the lowest score of a `same` candidate that lost to a
+# lower-scored `other` one. Measured only when the caller asks (`CCD_ORGNEAR_ASK`, the rescue sites), and handed
+# back as a SECOND stdout line, `orgnear=<n>`, because this function runs in a command substitution: a variable
+# would be lost, and its exit code already carries the rc vocabulary. Every caller that does not ask reads one line.
+_org_note() {   # var cand score -> lowers var to score when asked and cand relates `same`
+  [[ -n "${CCD_ORGNEAR_ASK:-}" && "$3" -lt "${!1}" ]] && _org_cur && _org_is same "$2" && printf -v "$1" '%s' "$3"
+  return 0; }
+_org_near_say() {   # winner bracket-same-min -> prints `orgnear=<n>` when an `other` winner beat a `same` loser (the min stays 999 unasked)
+  [[ "$2" -lt 999 ]] && _org_cur && _org_is other "$1" && printf 'orgnear=%s\n' "$2"; return 0; }
+_orgnear_cut() {   # target-var orgnear-var -> splits the asked-for `orgnear=` line off the destination
+  local __oc=${!1}; printf -v "$2" '%s' ""; [[ "$__oc" == *$'\n'orgnear=* ]] || return 0
+  printf -v "$2" '%s' "${__oc##*$'\n'orgnear=}"; printf -v "$1" '%s' "${__oc%%$'\n'*}"; }
+
+_swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, `CCD_ORGNEAR_ASK`, a second line `orgnear=<n>`: `_org_note`); rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule on the project side, 7 on the account side (the projection), 8 on the set side; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
   # THREE ANSWERS, NOT TWO (#67 review, S4/S5). `return 0` with empty stdout
   # used to mean BOTH "stay put, everything is fine" and "the crossing record
   # could not be read, so I decline to decide" — and the caller handles those
@@ -20172,7 +20206,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # must not leave a trail (slice 1, fix round 2). `default` and no record are
   # the same thing here: today's walk, byte for byte — every rc-2/3/4 pin in the
   # pool suites holds by construction because nothing below runs without `cls`.
-  local cls src pass pcls unserv unmeas
+  local cls src pass pcls unserv unmeas corg="" corgr="" bsame osame; local -A corgs=()
   _route_peek_to cls "$id" class; [[ "$cls" == default ]] && cls=""   # D-4963: the out-var form, no subshell
   # D-8123: `CCD_CLASS_GATE_OFF=1` reads as "no class". Only the rescue arm of `_auto_swap_check` sets it, once, for a
   # hard-blocked session whose class window came back undecidable (rc 5): a stranded session is worse than one placed
@@ -20361,7 +20395,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # that HAS a class and found no lane able to serve it.
   for pass in 1 2; do
     pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
-    unserv=0; unmeas=0
+    unserv=0; unmeas=0; bsame=999; osame=999
     for cand in $(_pool_for "$id"); do
       [[ "$cand" == "$cur" || " ${SWAP_TARGET_SKIP:-} " == *" $cand "* ]] && continue
       # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
@@ -20548,10 +20582,18 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       # the paragraph above derives. The two changes compose because one sets
       # the score and the other only chooses which bracket reads it.
       _authdead "$cand" && sc=101
+      # THE TIE GOES TO THE CURRENT ORGANIZATION (`_org_tie`, above), in both brackets alike: `(score, not-same-org,
+      # roster position)`. `_org_note` keeps each bracket's lowest `same` score for the near miss, asked only.
       if _is_home_able "$cand"; then
-        [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+        _org_note bsame "$cand" "$sc"
+        if [[ "$sc" -lt "$best_score" ]] || { [[ "$sc" -eq "$best_score" ]] && _org_tie "$cand" "$best"; }; then
+          best="$cand"; best_score="$sc"
+        fi
       else
-        [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
+        _org_note osame "$cand" "$sc"
+        if [[ "$sc" -lt "$obest_score" ]] || { [[ "$sc" -eq "$obest_score" ]] && _org_tie "$cand" "$obest"; }; then
+          obest="$cand"; obest_score="$sc"
+        fi
       fi
     done
     [[ -n "$best" ]] && break                                                    # a home-able candidate found at this class
@@ -20576,7 +20618,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # name itself stays exactly what an rc-0 move would have carried. Nothing is
   # stamped here: this function writes nothing, and `_auto_swap_check` is what
   # turns rc 6 into the `degraded` stamp and the journal row.
-  if [[ -n "$best" ]]; then echo "$best"; elif [[ -n "$obest" ]]; then echo "$obest"; else return 1; fi
+  if [[ -n "$best" ]]; then echo "$best"; _org_near_say "$best" "$bsame"
+  elif [[ -n "$obest" ]]; then echo "$obest"; _org_near_say "$obest" "$osame"; else return 1; fi
   [[ "$pass" -eq 2 ]] && return 6
   return 0
 }
@@ -21303,7 +21346,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   home the instant it has room again. A hard-blocked session (limit/spend banner up, or auth
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts authf authborn
-  local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
+  local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home orgnear=""
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
   #
@@ -21667,7 +21710,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # A HEALTHY PANE IS NOT STRANDED. `_strand_clear` tests `-e` first, so the
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
-  target=$(_rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  target=$(CCD_ORGNEAR_ASK="$hard_blocked" _rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  _orgnear_cut target orgnear   # a rescue asks for the near miss (`_org_note`); it rides the dispatch into the act's record
   # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
   # spec §5.4): a destination chosen one rung DOWN because every lane was
   # measured-unservable at the intended class. Put after that guard it would be
@@ -21707,7 +21751,8 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # on an unmeasured figure rather than degrade on a fabricated fact); with none the strand below stands as today.
   if [[ "$strc" -eq 5 && -n "$hard_blocked" ]]; then
     local ctarget crc
-    ctarget=$(CCD_CLASS_GATE_OFF=1 _rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); crc=$?
+    ctarget=$(CCD_CLASS_GATE_OFF=1 CCD_ORGNEAR_ASK=1 _rescue_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); crc=$?
+    _orgnear_cut ctarget orgnear
     if [[ "$crc" -eq 0 && -n "$ctarget" ]]; then
       echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
       target="$ctarget"; strc=0
@@ -21873,7 +21918,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     rtx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$rtx" ]] && rtxb=$(_plat_size "$rtx" 2>/dev/null) || { rtx=""; rtxb=""; }
     [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"   # D-6180: a dispatch ends the episode
     [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"   # D-6180: both arms' episodes
-    _dispatch_swap "$id" "$target" rescue "$last" "$now" "$dfrom" "$dto" "$rtx" "$rtxb"   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
+    _dispatch_swap "$id" "$target" rescue "$last" "$now" "$dfrom" "$dto" "$rtx" "$rtxb" ${orgnear:+"$orgnear"}   # an open rescue wait ends `swap` at cmd_swap's landing, never here: the swap can still be refused
     return 0
   fi
   # WAVE 3 §3.3, AND THE PLACEMENT IS THE WHOLE RULING. Everything from here
@@ -31667,8 +31712,16 @@ _swap_rescue_act_gate() {   # id wrapper -> rc 0 proceed as decided | 1 cancelle
 }
 
 cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — move a session to another account, conversation intact.
-  # Transcripts are plain JSONL with no account binding (validated 2026-07-03): carry the
-  # session's transcripts into the target config dir, flip the registry wrapper, restart.
+  # The transcript FILE has no account binding (validated 2026-07-03), so it carries: copy the
+  # session's transcripts into the target config dir, flip the registry wrapper, restart. The
+  # THINKING inside it is another matter: for some models it is bound to the Claude organization
+  # that wrote it, and in another organization the API drops it without an error (the platform's
+  # preserved-thinking docs, read 2026-11-16), so the session rereads its history with no thinking
+  # and thinks again; it is read again once the session is back in the first organization. ccrc
+  # knows an account's organization only by the operator's label (`_acct_org`), and relates two
+  # accounts by `_org_rel`. The rescue breaks load ties toward the session's own organization
+  # (`_swap_target`'s `_org_tie`) and never overrides load for it; this verb records the landing's
+  # relation as `meas.org`.
   # A manual swap is now pool-constrained exactly like an automatic one — see
   # the POOL POLICY block below — and `--cross-pool` is the operator's one way
   # past it. Only `--force` is unconstrained by pools: it overrides the
@@ -32103,9 +32156,14 @@ cmd_swap() {   # [--force] [--cross-pool] [--interrupt] id target-wrapper — mo
   # The array form is the `cmd_ws_add` idiom (`grep -n 'local lc_dec=()'
   # ccd/ccd`): an empty array under `set -u` needs bash >= 4.4, which this
   # file already requires.
-  local lc_cross=()
+  local lc_cross=() orgnear=""
   [[ -n "$crossing" ]] && lc_cross=(dec.crosspool 1)
-  _lc_done swap "$id" "" meas.from "$cur" meas.wrapper "$target" meas.uuid "$uuid" "${lc_cross[@]}"
+  # `meas.org`: the landing's relation to the account it left (`_org_rel`, so an unlabelled side is `unknown`, never
+  # `same`). `meas.orgnear`: the near miss the decision carried in (`_org_note`), digits only; with none it is
+  # empty, and `_lc_emit` drops an empty value, so the row carries no `orgnear`.
+  [[ "${CCD_SWAP_ORGNEAR:-}" =~ ^[0-9]{1,3}$ ]] && orgnear=$CCD_SWAP_ORGNEAR
+  _lc_done swap "$id" "" meas.from "$cur" meas.wrapper "$target" meas.uuid "$uuid" \
+    meas.org "$(_org_rel "$cur" "$target")" meas.orgnear "$orgnear" "${lc_cross[@]}"
   rm -f "$REG/$id.swapblocked"   # a completed swap supersedes an earlier refusal: a
                                  # banner left standing on a row that just worked teaches
                                  # the operator to ignore banners.
@@ -32800,7 +32858,7 @@ _wd_operator_hold_to() {   # var id wrapper -> rc 0 iff the operator's own hold 
 }
 
 _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everything else is a record and at most one log line. Always 0.
-  local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" why="" m age since
+  local id="$1" now="$2" n="$3" sign="" wrapper="" home="" hrc project="" last="" bts="" rw="" target="" trc dfrom="" dto="" tx="" txb="" lw="" why="" m age since orgnear=""
   if [[ -e "$REG/$id.hibernated" || -e "$REG/$id.stopped" ]]; then _watchdog_clear "$id"; return 0; fi
   _session_probe "$id"
   case "$PROBE_VERDICT" in
@@ -32877,9 +32935,9 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   # THE TARGET: measured room only, the normal rescue's skip lists, the class gate dropped once when the window is undecidable.
   _home_measured_to home "$id"; hrc=$?
   if [[ "$hrc" -eq 2 ]]; then home=""; else hrc=0; fi
-  target=$(CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
+  target=$(CCD_ORGNEAR_ASK=1 CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
   if [[ "$trc" -eq 5 ]]; then
-    target=$(CCD_CLASS_GATE_OFF=1 CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
+    target=$(CCD_ORGNEAR_ASK=1 CCD_CLASS_GATE_OFF=1 CCD_RESCUE_MEASURED_ONLY=1 _rescue_target "$id" "$wrapper" "$home" 1 "$hrc"); trc=$?
     if [[ "$trc" -eq 0 && -n "$target" ]]; then
       echo "$(date '+%F %T') class-gate-dropped $id: class window undecidable; rescuing without the class gate" >> "$REG/swap.log"
       # The Fable share ceiling goes with the gate (see `_auto_swap_check`'s retry): the move carries fable -> the rung below.
@@ -32887,6 +32945,7 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
       if [[ "$dfrom" == fable ]]; then dto=$(_class_below "$dfrom"); else dfrom=""; fi
     fi
   fi
+  _orgnear_cut target orgnear
   if [[ "$trc" -eq 6 ]]; then
     dfrom=$(_route_peek "$id" class); dto=$(_class_below "$dfrom")
     trc=0
@@ -32926,7 +32985,7 @@ _watchdog_one() {   # id now minutes -> a forced rescue bumps WD_FORCED; everyth
   tx=$(_transcript_path "$id" 2>/dev/null) && [[ -f "$tx" ]] && txb=$(_plat_size "$tx" 2>/dev/null) || { tx=""; txb=""; }
   [[ -e "$REG/$id.standdown" ]] && rm -f -- "$REG/$id.standdown"
   [[ -e "$REG/$id.standdownaff" ]] && rm -f -- "$REG/$id.standdownaff"
-  _dispatch_swap "$id" "$target" watchdog "$last" "$now" "$dfrom" "$dto" "$tx" "$txb" && WD_FORCED=$(( WD_FORCED + 1 ))
+  _dispatch_swap "$id" "$target" watchdog "$last" "$now" "$dfrom" "$dto" "$tx" "$txb" ${orgnear:+"$orgnear"} && WD_FORCED=$(( WD_FORCED + 1 ))
   return 0
 }
 

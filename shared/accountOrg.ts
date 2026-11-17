@@ -17,10 +17,14 @@ export interface OrgSide {
   readonly org: string | null;
 }
 
+/** An empty label is no label (PR A's review F3): bash's twin cannot tell `_ccrc_org` printing nothing from printing
+ *  an empty string, so neither twin reads `''` as a label two accounts could share. */
+const labelOf = (org: string | null): string | null => (org === '' ? null : org);
+
 /** `same` for one account or two with one label, `other` for two labels, `unknown` when either label is missing. */
 export function orgRelation(a: OrgSide, b: OrgSide): OrgRelation {
   if (a.id === b.id) return 'same';
-  if (a.org === null || b.org === null) return 'unknown';
+  if (labelOf(a.org) === null || labelOf(b.org) === null) return 'unknown';
   return a.org === b.org ? 'same' : 'other';
 }
 
@@ -42,8 +46,8 @@ export interface OrgSpread {
  *  (`org-spread-warns-never-refuses`): the caller words it beside the count. */
 export function orgSpread(labels: readonly (string | null)[] | 'unmeasured'): OrgSpread {
   if (labels === 'unmeasured') return { kind: 'unmeasured', orgs: 0, unlabelled: 0 };
-  const orgs = new Set(labels.filter((l): l is string => l !== null)).size;
-  const unlabelled = labels.filter((l) => l === null).length;
+  const orgs = new Set(labels.map(labelOf).filter((l): l is string => l !== null)).size;
+  const unlabelled = labels.filter((l) => labelOf(l) === null).length;
   const kind: OrgSpreadKind = orgs >= 2 ? 'many' : orgs === 0 ? 'none' : unlabelled > 0 ? 'partly' : 'one';
   return { kind, orgs, unlabelled };
 }

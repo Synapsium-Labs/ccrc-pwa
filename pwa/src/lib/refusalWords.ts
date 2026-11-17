@@ -292,6 +292,8 @@ const API_ERROR_TEXT: Record<string, string> = {
   // D-8181: a plan verb (and the plan sync before each write) refuses text a public repository's tracker must not carry;
   // the box names the class in its own detail, which is never shown.
   'linear-text-public': 'This text names a ticket id, a person or a private name, and this project is public, so it was not saved or sent. Say it in words a stranger could read.',
+  // D-8182: the hierarchy item route answers it when the item's action does not take that act.
+  'item-act-mismatch': 'That item does not take this action, so nothing was changed. Reload the item and choose again.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a

@@ -3,10 +3,10 @@
 // is `laneStateFixture.ts`; every launcher is a stub.
 import { describe, it, expect, beforeEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  HAVE_FLOCK, NODE_ID, addLane, answer, ccrcRun, laneBox, laneState, shadowAccountOp,
+  HAVE_FLOCK, NODE_ID, REPO, addLane, answer, ccrcRun, laneBox, laneState, shadowAccountOp,
 } from './laneStateFixture.js';
 
 beforeEach((ctx) => { if (!HAVE_FLOCK) ctx.skip(); });
@@ -219,5 +219,60 @@ describe('set --org (account organization A3)', () => {
     const r = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--method', 'login', '--attempt', 'a'.repeat(32), '--org', 'org-a']);
     expect(answer(r)['error']).toBe('bad-argument');
     expect(JSON.stringify(answer(r))).toContain('--org');
+  });
+});
+
+// PR A's review, carried into PR B (plan 2026-11-16-account-organization.md Task B1): F2, the label's shape is refused
+// before the stated account or the placement is written, and the refusal says nothing was; F4, the projection's
+// sentence names what the roster records in plain grammar.
+describe('set --org beside the other writes (account organization B1, PR A review F2 and F4)', () => {
+  it('an id-shaped or off-shape label beside --placement refuses before the placement is written (F2)', () => {
+    const home = laneBox('ccrc-set-org-first-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    const before = readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8');
+    for (const [v, word] of [['abcdef0123456789abcdef0123456789', 'org-looks-like-an-id'], ['Org-A', 'bad-argv']] as const) {
+      const r = ccrcRun(home, ['account', 'set', '--id', 'lane-c', '--placement', 'overflow', '--org', v]);
+      expect(r.code, v).toBe(2);
+      expect(answer(r)['error'], v).toBe(word);
+      const said = JSON.stringify(answer(r));
+      expect(said, v).toContain('Nothing was written.');
+      expect(said, v).not.toContain('placement was recorded');
+    }
+    expect(readFileSync(join(home, '.ccrc', 'accounts.json'), 'utf8')).toBe(before);
+    expect(homeAbleOf(home, 'lane-c')).toBe(true);
+  });
+
+  it('an id-shaped label beside --stated refuses before the stated account is written (F2)', () => {
+    const home = laneBox('ccrc-set-org-stated-');
+    const r = ccrcRun(home, ['account', 'set', '--id', 'lane-b', '--stated', '-', '--org', 'abcdef0123456789abcdef0123456789'],
+      'someone@example.invalid\n');
+    expect(r.code).toBe(2);
+    expect(answer(r)['error']).toBe('org-looks-like-an-id');
+    expect(JSON.stringify(answer(r))).toContain('Nothing was written.');
+    expect(laneState(home, 'lane-b')?.['identity']).toBeUndefined();
+  });
+
+  it('a projection that cannot be regenerated names the facts in plain grammar (F4)', () => {
+    const home = laneBox('ccrc-set-org-projection-');
+    expect(addLane(home, 'lane-c').code).toBe(0);
+    // The generator replaced by one that refuses: the facts write succeeds and the projection does not.
+    const deploy = join(home, 'ccrc', 'deploy');
+    rmSync(deploy);
+    mkdirSync(deploy);
+    for (const name of readdirSync(join(REPO, 'deploy'))) {
+      if (name !== 'gen-accounts.mjs') symlinkSync(join(REPO, 'deploy', name), join(deploy, name));
+    }
+    writeFileSync(join(deploy, 'gen-accounts.mjs'), "process.stderr.write('gen-accounts: a fixture refuses\\n');\nprocess.exit(1);\n");
+    for (const [flags, words] of [
+      [['--org', 'org-a'], "lane lane-c's organization label."],
+      [['--fable-billing', 'credits', '--org', 'org-b'], "lane lane-c's billing fact and organization label."],
+      [['--fable-billing', 'included', '--continuity', 'on', '--org', 'none'],
+        "lane lane-c's billing fact, continuity record and organization label."],
+    ] as const) {
+      const r = ccrcRun(home, ['account', 'set', '--id', 'lane-c', ...flags]);
+      expect(r.code, flags.join(' ')).toBe(1);
+      expect(answer(r)['error']).toBe('projection-failed');
+      expect(String(answer(r)['detail']), flags.join(' ')).toContain(`The roster records ${words}`);
+    }
   });
 });

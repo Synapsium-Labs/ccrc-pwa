@@ -262,7 +262,7 @@ describe('each verb\'s happy path (spec §5.4)', () => {
         res = await r.call(verb, o);
       }
       expect(res.statusCode, `${verb} ${res.body}`).toBe(200);
-      const made = r.calls.slice(before).filter((c) => !c.op.startsWith('Directory') && c.op !== 'KeyCheck');
+      const made = r.calls.slice(before).filter((c) => !c.op.startsWith('Directory') && c.op !== 'KeyCheck' && c.op !== 'ProjectStatuses' && c.op !== 'InitiativesProbe');
       expect(made.map((c) => c.op), verb).toEqual(files.map((f) => opNameOf(linearRecord(f).document)));
       made.forEach((c, i) => {
         const rec = linearRecord(files[i]!);

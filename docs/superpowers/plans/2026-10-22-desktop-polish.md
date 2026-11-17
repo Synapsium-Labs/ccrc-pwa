@@ -3904,6 +3904,107 @@ row per item with the measurement, the cause, the fix or the reason not, and the
 
 **Acceptance.** pwa's whole suite and ui's typecheck pass at the PR's tip; the new rows are red on `main`; the browser
 leg passes, with `confirm-focus.browser.test.ts` red on `main`'s Sheet.
+
+### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
+
+**Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
+(15 columns), is drawn once per ROW SEGMENT of a key, so the head of a key a program broke across rows, a whole short
+shape key or a short tail followed by text could run past the right edge, and every later redraw landed a row off,
+over tmux's status row too. Each claim below is labelled measured or inferred in `c39.md`, with the measurements, the
+options and the screenshots.
+
+**What was done.**
+- **Measured** (a real tmux at the drawer's 220 x 51 and a deterministic sweep over every start column, on headless
+  xterm, synthetic keys). Other rows move exactly when a mark is wider than the text it replaces and the excess reaches
+  the row's last column: a head under 15 columns starting at columns 207 to 220 (14 of 44 placements), a short tail
+  whose row's text is pushed past the edge, a whole 11-character `sk-` key ending at columns 217 to 220. Up to 48 of 51
+  rows differ on the pane's last rows, and tmux's relative move down writes over the status row. A key on one row
+  never moves another row (0 of 316 placements at each of three rows). C36's departure note is corrected in `c39.md`.
+- **Ruled.** No mark keeps the row's width without showing the key's length, so the options went to the coordinator
+  before any build: A (exact width) shows the length, B (never wider than 15) shows a short segment's width, G (the
+  label at 15 columns or wider, else one column) shows one bit per segment; all three were declined for that reason.
+  C, a constant one-column mark, shows nothing beyond today's constant mark and was ruled.
+- **The change.** The drawer draws `DRAWER_SECRET_MASK` (U+2327 `⌧`, East Asian Width Neutral, one column in xterm's
+  width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
+  parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
+  unchanged. No `ccd`, tmux window size or PWA change.
+- **Tests.** Seven cases in `drawer-mask-screen.test.ts`, red on `main` (heads at 207 to 220 at the edge and 7 columns
+  before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
+  ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
+  by digest from `main`, the sliced arm included; and, from review 2307's fix round, one mark per row a key touches for
+  keys of 11 to 8,192 characters, with no SGR beside a mark). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
+
+- **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
+  (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
+  never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its seven C39 cases are red on `main`'s masker;
+`secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
+fixture.
+
+**Rollback.** A plain revert.
+
+### Task C40: the sheet never lifts an aria-hidden it did not set (D-8698) — now
+
+**Why.** C38's third review (2310) found one gap, in two shapes, in how the Sheet tells the page's own hidden elements
+from Radix's marks. The `aria-hidden` package marks a node that is already hidden as uncontrolled and never puts its
+`aria-hidden` back. The Sheet took the page's own to be the hidden nodes with no Radix mark. So when a dialog still
+mounted had marked an element the page hid itself, the next sheet lifted that element as it closed, and it stayed
+announced for good. The two shapes are a sheet opened while the previous one is still in its exit (F2, a regression from
+`main` since C38) and two confirms overlapping over a sheet that holds a live region (F1). `c40.md` holds the
+measurements, the search of the app for F2, the mutants and the browser run.
+
+**What was done.**
+- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`, and a record it reads,
+  `ui/src/lib/modal-layers.ts`). An element the page hid itself is never lifted, whatever modal marked it. Every other
+  mark is lifted, whether it is the sheet's own or another modal's. C38's topmost-dialog rule, the re-hide on a reopen
+  during the exit and the focus guards are unchanged. A single sheet with no overlapping exit behaves as before.
+- **The record** (fix round 2, review 2334 F1 and F2). Each modal layer, `Sheet` and the command palette's drawer,
+  records at its panel's mount, before its own Radix hiding runs, what the page hid itself: the hidden nodes no modal has
+  marked, plus what every layer still mounted recorded.
+
+  The answer does not depend on tree order or on another modal's marks. So it removes the first build's cost (review
+  2323 F1: a sheet rendered before the closing menu kept the page hidden through its exit). It also removes round 1's
+  two costs: the palette's hand-off, and a layer that an effect closes one commit after the sheet under it. The ordering
+  of the read before Radix's hiding is inferred from, and verified against, the installed React and Radix sources. Its
+  effect is measured in jsdom and in Chrome.
+- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows and two extensions (25 rows):
+  - F2 and F1, red on `main`.
+  - The menu's hand-off with the opening sheet earlier in the tree, red on the first build.
+  - Four rows for the palette's hand-off (both tree orders, the palette closing or gone) and one for the effect-driven
+    layer, all red on round 1.
+  - Two StrictMode hand-offs.
+  - The focus guards staying hidden while a sheet closes.
+  - Section 1's first row closing its reopened sheet again, and the three-deep row asserted after the confirm unmounts.
+
+  `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds three groups:
+  - the stacked swap flow (Session actions, Swap account, its confirm, Cancel; review 2310 F4);
+  - the session menu's hand-off over a chat with and without a live region, red on `main`'s Sheet;
+  - the palette's hand-off to Show shortcuts, red on `main`'s and on round 1's.
+- **F2 in the app.** Seven handlers in five places close one modal and open another in one commit (found by a code
+  search); the session menu's rows and the palette's commands are the common ones. In Chrome, on one transcript with a
+  code block, the menu marked none of the elements the page hid itself. So F2 is not reached on that page with that
+  transcript. The browser rows plant such an element to hold the fix in the real flows.
+- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (review 2310 F6).
+
+- **D-8698** — `c40-lift-only-own-marks`: Task C40, issued on 2026-11-16. The Sheet never lifts an element the page hid
+  itself, whatever modal marked it, and lifts every other mark. What the page hid is a record each modal layer (`Sheet`
+  and the command palette's drawer) keeps at its panel's mount: the hidden nodes no modal has marked, plus what every
+  layer still mounted recorded (fix round 2, review 2334). It replaces two earlier reads, each of which cost a window
+  where the page stayed hidden through a sheet's exit while `main` announced it:
+  - the first build's read of every hidden node in the `open` effect (review 2323 F1);
+  - round 1's same read at the panel's mount (review 2334 F1, the palette's hand-off; F2, a layer an effect closes one
+    commit after the sheet under it).
+
+  No cost of this kind is known now. The only modal layers are the two that keep the record. A future Radix modal that
+  does not keep it would bring the old read's costs back, for its own marks only (inferred).
+
+**Acceptance.** The new jsdom rows are red on `main` (F2, F1), on the first build (the reversed tree order) or on round
+1 (the palette's hand-off, the effect-driven layer), and green at the tip; every C38 row stays green. The new browser
+file passes in Chrome. Its hand-off rows are red on `main`'s Sheet, and its palette rows are red on round 1's. Every pwa
+test file that renders a Sheet, a QuickConfirm or the command palette passes, as do ui's typecheck and the deviation-refs,
+dtbd and topology-clean guards.
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)

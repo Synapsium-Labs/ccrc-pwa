@@ -5,7 +5,7 @@
 // token: the operator acts in the console. Every write runs inside `serial`, the run writers' mutex, as the plan writes do;
 // the item acts later waves add to this file take the same door.
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { LINEAR_ITEM_ACTS, isLinearItemAct, isLinearItemAction, type CoordinatorPresence, type ItemAction } from '../../../shared/ledgers.js';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../../shared/plan.js';
 import { refuseRoute } from '../refuse.js';
 import type { CoordRoutesHandle } from './routes.js';
@@ -22,6 +22,10 @@ export interface HierarchyRouteOpts {
   presenceOf: (id: string) => CoordinatorPresence;
   /** Who is writing: the device the request's session names. */
   by: (req: FastifyRequest) => string;
+  /** One operator item's action by id (`CoordStore#itemById`); undefined (a test, a script): `unavailable`. */
+  itemOf?: (id: number) => { action?: ItemAction | null } | null;
+  /** Check again on an initiatives item: queue the probe for the workspace and answer at once (`PlanSync#checkInitiatives`). */
+  checkInitiatives?: (workspaceId: string) => Promise<boolean>;
   now?: () => number;
 }
 
@@ -100,6 +104,30 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
     }
+  });
+
+  /**
+   * `POST /api/items/:id/linear` `{ act, note?, owner? }`: the operator's act on a hierarchy item (§7). Session-gated, no box
+   * token. An act the item's action does not take (`LINEAR_ITEM_ACTS`) is `item-act-mismatch`. `check-again` queues the
+   * initiatives probe for the item's workspace and answers at once; the other acts' arms arrive with waves 4 and 7.
+   */
+  app.post('/api/items/:id/linear', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const b = isObject(req.body) ? req.body : null;
+    if (!Number.isInteger(id) || id < 1 || b === null || !isLinearItemAct(b['act'])) return refuseRoute(reply, 'bad-request', { detail: 'body' });
+    if (opts.itemOf === undefined) return refuseRoute(reply, 'unavailable');
+    const item = opts.itemOf(id);
+    if (item === null) return refuseRoute(reply, 'not-found');
+    const action = item.action ?? null;
+    if (!isLinearItemAction(action) || !LINEAR_ITEM_ACTS[action.verb].includes(b['act'])) return refuseRoute(reply, 'item-act-mismatch');
+    if ('workspaceId' in action && opts.checkInitiatives !== undefined) {
+      try {
+        return { ok: true, queued: await opts.checkInitiatives(action.workspaceId) };
+      } catch (err) {
+        return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+      }
+    }
+    return refuseRoute(reply, 'unavailable', { detail: 'act' });
   });
 
   /** `GET /api/hierarchy`: each project's settings with its owner now and whether that owner is live. In `MASKED_GET_ROUTES`. */

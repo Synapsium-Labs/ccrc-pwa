@@ -322,8 +322,9 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
 // ── the splice and the walk ────────────────────────────────────────────────
 
 /** `text` up to `limit`, each run of overlapping or touching `spans` (original spans, in any order; sorted here) as one
- *  `SECRET_MASK`: `accounts/mask.ts#SecretMasker`'s splice, and the shape-only mask's (D-7513). */
-export function spliceMasked(text: string, spans: [number, number][], limit: number): string {
+ *  `mark`: `accounts/mask.ts#SecretMasker`'s splice, and the shape-only mask's (D-7513). Every egress draws
+ *  `SECRET_MASK`; the drawer alone passes its one-column mark (`accounts/mask.ts#DRAWER_SECRET_MASK`, D-8694). */
+export function spliceMasked(text: string, spans: [number, number][], limit: number, mark: string = SECRET_MASK): string {
   spans.sort((x, y) => x[0] - y[0]);
   // Parts joined once (D-5995): appending to a string and testing its end on every span flattens it each time.
   const out: string[] = []; let at = 0; let masked = false;
@@ -332,7 +333,7 @@ export function spliceMasked(text: string, spans: [number, number][], limit: num
     const a = Math.max(a0, at); const b = Math.min(b0, limit);
     if (b <= at) continue;
     if (a > at) { out.push(text.slice(at, a)); masked = false; }
-    if (!masked) { out.push(SECRET_MASK); masked = true; }
+    if (!masked) { out.push(mark); masked = true; }
     at = b;
   }
   if (at < limit) out.push(text.slice(at, limit));

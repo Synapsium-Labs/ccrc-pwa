@@ -356,7 +356,7 @@ describe('POST /api/linear/workspaces: add verifies before it stores (spec §10.
     await r.stamp();
     expect((await add(r, WS.a.key)).statusCode).toBe(200);
     await r.fx.refresher.idle();
-    expect(r.calls.map((c) => c.op)).toEqual(['KeyCheck', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
+    expect(r.calls.map((c) => c.op)).toEqual(['KeyCheck', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers', 'ProjectStatuses', 'InitiativesProbe']);
   });
 
   it('never carries Linear\'s text, the key or its digest, in any answer', async () => {

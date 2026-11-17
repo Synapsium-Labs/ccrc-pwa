@@ -87,6 +87,7 @@ _is_pay_per_use	C1
 _codex_lanes	C1
 _acct_pool	C1
 _acct_org	C1
+_org_rel_of	C1
 _org_rel	C1
 _pool_sync_installed	C1
 _acct_pool_state	C1
@@ -320,6 +321,12 @@ _id_wrapper	C1
 _home_for	C1
 _home_measured_to	C1
 _avail	C1
+_org_cur	C1
+_org_is	C1
+_org_tie	C1
+_org_note	C1
+_org_near_say	C1
+_orgnear_cut	C1
 _swap_target	C1
 _pane_measurable	C3
 _pane_narrow_note	C1
