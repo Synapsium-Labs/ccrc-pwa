@@ -38,8 +38,8 @@ They decide every question the plan leaves open.
 | 1 | the proxy additions | D-8180 | #2612 | **merged** 2026-11-11 as `a9cfd134f` (no run) |
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
-| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | — | **dispatched** 2026-11-16: run 2243 (ticket `w3-plan-sync`) on a fresh child, branch `ws/linear-hier-w3`, five items (Tasks 3.1 to 3.5) |
-| 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | not started |
+| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **merged** 2026-11-17 as `806246f55` (head `77d1b427d`, by the merge queue; run 2243 closed done): run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17; review round 2 (run 2332) found 1 important (plan text only) and 9 advisories: **accepted**, enqueued at `a1fb568bf`; dequeued 2026-11-17 on a conflict with main in `laneSchedule.ts` and `lane-schedule.test.ts`, sent back as an ejection (base `f4905e009`) for one merge of main; merged at `77d1b427d`, review round 3 (run 2346, the held-out panel) clean, re-enqueued at `77d1b427d` |
+| 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | **dispatched** 2026-11-17: run 2337 (ticket `w4-drift`), a fresh child from `main`; Tasks 4.1–4.4 plus Task 4.5, wave 3's carried findings |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
 | 7 | the per-team migration: start, map propose and check, approve, apply, report, follow-up maps, put back; then the pilot team | D-8186 | — | not started |
@@ -69,8 +69,93 @@ They decide every question the plan leaves open.
   re-checked at wave 5's dispatch: if the Work card has not landed by then, the two coordinators agree who builds the
   section before either does. The Work card's WM0/WM1 and this programme's wave 4 both change `planStore.ts`,
   `planRoutes.ts`, `planPolicy.ts` and `ccd/ccrc-api`. Whichever lands second takes the next migration slot and merges
-  the other's store changes. If the operator rules that a phase becomes a label on each referenced issue (their item
-  356), that label is an owned field of the sync and the drift rules, built in a later wave of this programme.
+  the other's store changes.
+- **2026-11-16 — a phase becomes a label on each issue it references, written by the sync (the operator's ruling on
+  desktop-polish item 356, relayed by its coordinator).** The label is an owned field of the plan sync and of the
+  drift rules (design §5.3, §6, §7.2). A ticket may be referenced by more than one phase, so an issue may carry more
+  than one phase label. The phases come from the Work card's tables (`plan_phases`, `plan_phase_refs`, spec on #2913),
+  which are not built yet. So this is scope for a later wave of this programme, planned once those tables land; the
+  same rulings call a stage a phase, not a wave, on the console (items 354, 355).
+
+- **2026-11-16 — wave 3's seven departures are issued D-8675 to D-8681 (the whole block), defined in the plan's
+  "Deviations found" (where `deviation-refs.test.ts` reads definitions; its scan does not enter plan subdirectories),
+  with the full record in the wave's task note `docs/superpowers/plans/2026-11-10-linear-hierarchy/w3-plan-sync.md`.** conflict-detail (D-8675),
+  recovery-by-request-id (D-8676), link-by-fingerprint (D-8677), write-ask-destination-team (D-8678), pr-link-rule
+  (D-8679), requeue-keeps-bound (D-8680), no-unlink (D-8681). All were accepted as the worker proposed them. Waves 4 to 7
+  take a fresh block from the allocator. Carried to wave 4: what a project switched off after it was linked does to its
+  existing link (D-8681 leaves the link in place); `creator { id }` on `issueOwned` at the next capture; a project's
+  extra `teamIds` passed to the write policy.
+
+- **2026-11-16 — an epic may list no waves (the operator's answer to desktop-polish item 359, relayed by its
+  coordinator).** A run into a waveless epic names one of its tickets, and its wave is not checked against that epic.
+  A run that names no ticket, into a plan where any epic lists no waves, is refused `ticket-required`. Epics that list
+  waves keep `waves-not-contiguous`, `wave-overlap` and `wave-epic-mismatch`. The work-map plan's Task WM6 builds it
+  (`shared/plan.ts`, `planPolicy.ts`, `openRun.ts`), after its WM0 and WM1. The design's §4.1 "Wave" call and §16
+  call 2, and the plan's clause 21 (Task 6.1), are amended to match. Wave 4's Task 4.3 also changes `planPolicy.ts`,
+  and its Upkeep epic is a natural waveless epic: whichever of WM6 and wave 4 lands second builds on the other by
+  merge. The two coordinators agree the order at wave 4's dispatch.
+
+- **2026-11-16 — review 2311 of wave 3 (tip `35bb54112`): fix round 1, and a second deviation block (numbers 8699
+  to 8708, allocated for wave 3's fix round and waves 4 to 7).** Fixed in the round:
+  - F1, an unread statuses page or an `unknown` initiatives probe defers instead of failing every epic (D-8701);
+  - F2, a team key moved to another workspace creates no initiative there;
+  - F3, a bound ticket's team stays on its epic's project;
+  - F5, the snapshot leaves out put-back records, as Task 3.1 says;
+  - F6, an open checkpoint's milestone leaves `targetDate` alone; ccrc owns the date only once the checkpoint is met
+    (spec §6.2; the ruling is D-8700);
+  - F7, route-level and lane-wiring tests that go red on mutation;
+  - the advisories A2 (a mismatch with no old slot fails once), A5 (`item-act-mismatch`'s sentence), A7/A12 (a
+    failure's backoff holds) and A8 (the note's record).
+
+  D-8701's exit, ruled in the round: after 3 consecutive directory refills that read the initiatives probe as
+  `unknown`, the pass settles without the initiative step and mails the programme's coordinator once per workspace
+  and episode. It raises no "Turn on initiatives" item, because the probe never answers `off` and an unreadable probe
+  is not a feature that is off. An `on` reading later creates the initiative and links the projects.
+
+  Fix round 1 came back at `a1fb568bf` (main absorbed once). The worker ruled one point alone: unread project
+  statuses keep waiting on the backoff and mail the coordinator once per episode after 3 unread refills, with no
+  settle. Review round 2 (run 2332) is asked to judge that, the in-memory episode streaks (a restart can mail twice)
+  and M3 (a failure in one workspace holds the whole programme).
+
+  F4 is ledgered as D-8699 (ownership-by-name-first-page): proving ownership of an initiative or project with ten or
+  more same-named objects can fail. The fix needs `creator { id }` on the by-id documents in the frozen `ops.ts`, so it
+  waits for the next capture, on the operator's go. A1, A3, A4, A6, A10 and A11 are carried to wave 4.
+
+- **2026-11-17, review round 2 of wave 3 (run 2332), ruled by the coordinator.** Every ruling of fix round 1 is built
+  as ruled, each with a named test seen red. Wave 3 is accepted and lands at `a1fb568bf`. The rulings:
+  - F1 (the plan's interface text for `markSyncDue`, `deferSync` and `ensureTicketBound` is now false): the change
+    follows the plan's own outcome table ("deferred by the backoff"), so it is a departure in the interface text, not
+    in intent. It is D-8702 (failure-hold): `plan_sync_due.attempts` marks a failure's hold, `deferSync` takes
+    `why = failure | wait` and a wait resets the mark, `markSyncDue` keeps a held `dueAt`, and a held programme's
+    dispatch starts no pass. The coordinator defines it in the plan and amends the interface lines on this ledger PR,
+    after #2941 merges, so the worker's PR needs no further push.
+  - The worker's unruled calls are accepted. Unread project statuses keep waiting, with no settle, because the
+    workspace cannot sync until its statuses read; the cost is bounded in calls (about 36 to 108 directory calls an
+    hour per slot) and in mail (one an episode). The hold also covers rate-limited, malformed, a refused key, an
+    unreadable store and an ok answer with no id. The episode mail is once per programme, workspace and episode.
+  - Carried to wave 4: A1 (a restart loses the probe's settled mark, so a refill that reads `on` creates no initiative
+    until something marks the programme due: persist the mark or mark every programme due at boot); the in-memory
+    episode streaks (a restart can mail once more); M3 with A9 (a failing workspace starves the programme's later
+    steps in other workspaces: hold per workspace); A3 (three decisions left in planSync's L4: the probe re-check, the
+    held dispatch and `deferFor`); A4 (a project updated while its initiative failed re-sends its link once); A6 (the
+    probe mail misstates a bound initiative's wait and an unclosed end); A7 (a test that never asserts its second
+    statuses read); and round 1's A1, A3, A4 and A11.
+  - Carried to wave 7's brief: A5 (`ticketOfRun` reads tickets that were put back) and the F3/F5 interaction (a bound
+    ticket put back may take its held team off its project).
+  - Wording, fixed on this ledger PR: D-8699 retries at every requeue, refill and plan change, and only its mail is
+    once (A8); neither wait is bounded in time while refills fail, so "both waits are bounded" becomes "both are
+    bounded in calls and mail" (A2); M3 holds for as long as the failing workspace keeps failing, not 30 minutes (A9).
+
+- **2026-11-17 — wave 3 landed and wave 4 dispatched (the coordinator).** #2941 merged by the queue at `806246f55`
+  (head `77d1b427d`) and run 2243 closed `done`. On this ledger PR D-8702 (failure-hold) is defined in the plan's
+  "Deviations found" and the interface lines for `markSyncDue`, `deferSync` and `ensureTicketBound` are amended to
+  it; D-8699's wording, the wave 3 note's "bounded" sentence (A2) and its M3 line (A9) are corrected; wave 3's
+  checkboxes are ticked. The wave 3 note stays where it is, because the plan's D-8675..D-8702 cite it as their record.
+  Wave 4 (run 2337) carries wave 3's findings as a Task 4.5 of its own: five correctness fixes first (persist the
+  probe's settled mark or mark every programme due at boot; hold per workspace; the project's team before the issue's
+  create; adopt and move an object stranded by a team-key change; extra `teamIds` to the write policy), then six that the
+  worker may ask to defer. Desktop-polish's WM6 has not started, so wave 4 changes `planPolicy.ts` first; whichever
+  lands second merges the other once. Its coordinator was told at dispatch.
 
 ## Carried constraints
 
@@ -111,7 +196,10 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-Wave 3 (D-8182), the plan sync: plan Tasks 3.1 to 3.5, on a fresh child, building on `main` (waves 1 and 2 and FX2
-merged). Departures already ruled: D-8673 (no migration in this wave), D-8674 (abandoned → `Canceled`), and the FX2
-departures in D-8407 (milestone binds by name, "name not unique", the 80-character project name). New departures take
-numbers from this programme's block (numbers 8675 to 8681), issued by the coordinator.
+Wave 5 (D-8184), the console: plan Tasks 5.1, 5.3 and 5.4 (not Task 5.2's `PlanSection.tsx`, which the Work card
+replaces; see the ruling of 2026-11-16 above, re-checked at dispatch with desktop-polish's coordinator), on a fresh
+child once wave 4 has merged, because Task 5.3's Upkeep page reads wave 4's `GET /api/projects/:project/upkeep` and
+Task 5.4's controls act on wave 4's drift and Linear owner items. Every operator action is a console control, never a
+chat answer. The wave is judged at 390, 1280 and 1920 (plus the plan's 360 and 1470), with screenshots at each in the
+wave-done. `pwa/src/lib/api.ts` grows at most 40 net code lines. Before dispatch, list the open PRs touching the
+programme page and the Work card. New departures take what is left of D-8703 to D-8708, then a fresh block.
