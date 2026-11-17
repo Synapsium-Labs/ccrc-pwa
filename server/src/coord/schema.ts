@@ -3461,13 +3461,24 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
   // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
   // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
-  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 87`
-  // takes rule 3 and never names it. Overlaps A (#2949) took 85 and decision model A (#2948) 86, so this is 87 (the
-  // coordinator's word, 2026-11-17).
-  // RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry is counted):
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 88`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86 and row revisions (#2965) 87,
+  // so this is 88 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 87 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
