@@ -4040,16 +4040,27 @@ comes first. Each claim is labelled measured or inferred in `c41.md`, with the m
 - **C39's carries** (review 2326): F1, case 7's samples are loops; F2, `c39.md`'s "only a wider row" scoped to a
   segment that fits its row, with the terminal-wrap residual measured through a real tmux; F4, the count of C39 cases
   red on `main`; F5, the budget's figure; F6, C38's Rollback line restored.
+- **Fix round 1** (review 2352, `c41.md` §11). The drawer's window and pane history's slice overlap were one run's hold
+  (about 9 KiB), narrower than the rows of a key near the 8,192-byte ceiling with a colour escape or a wide indent on
+  each, so such a key could show whole (F1, F2): the drawer reads twice that for a key's rows and pane history 16 KiB
+  (the bound `secret-mask.test.ts` pins), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
+  it found in the hold: a colour tmux re-sends inside a row, a hold that expired inside the escape moving to the next
+  row, and a chunk cut inside a hyperlink's terminator. Eight more cases, seven red at a69085c93 and the budget's
+  fail-closed arm red on its mutant (F4); nine more mutants, each red. The 128-row and 12-unit bounds stay as they are:
+  a key past them shows in full with no mark and no notice, as on `main`, which for a key at the run ceiling is 66
+  columns or fewer with a two-column indent, 64 or fewer without (F3).
 
 - **D-8710** — `drawer-mask-row-join-n-rows`: Task C41, issued on 2026-11-17. The exact-bytes row join walks every row a
   key fills, bounded by the longest held length, and the drawer holds, reads ahead and taints by the rows a key spans,
   so a key across any number of rows is masked whatever the separator. Further departures are named by slug in
   `c41.md` §9: the two-row hold (`drawer-mask-two-row-hold`), the long shape key across a cut
-  (`drawer-mask-long-shape-across-cut`), the bounds (`drawer-mask-row-join-bounds`), and three put to the coordinator
-  and not changed (`shape-walk-narrow-rows`, `egress-no-row-join`, `drawer-mark-terminal-wrap`).
+  (`drawer-mask-long-shape-across-cut`), the bounds (`drawer-mask-row-join-bounds`), fix round 1's three holes in the
+  hold (`drawer-hold-run-across-escapes`, `drawer-flush-cut-row-escape`, `drawer-hold-string-escape-terminator`), and
+  five not changed, carried to a follow-up masking task (`shape-walk-narrow-rows`, `egress-no-row-join`,
+  `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`) or put to the coordinator (`drawer-mark-terminal-wrap`).
 
 **Acceptance.** Every server test of the masker passes at the PR's tip; ten of the eleven new cases are red on `main`'s
-masker; each mutant in `c41.md` §6 reds; deviation-refs, dtbd, topology-clean, single-definition and the server test
+masker, and seven of fix round 1's eight at a69085c93; each mutant in `c41.md` §6 reds; deviation-refs, dtbd, topology-clean, single-definition and the server test
 typecheck pass.
 
 **Rollback.** A plain revert.
