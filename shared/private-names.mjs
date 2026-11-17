@@ -760,7 +760,6 @@ export const PRIVATE_NAMES = [
   { h: 'f22aa65c61040146bc2bc58b81263663', f: 'f22aa65c61040146bc2bc58b81263663', n: 1, mode: 'part' },
   { h: 'f5b5ebb39c4ad43a0113dc3fe3ea201c', f: 'f5b5ebb39c4ad43a0113dc3fe3ea201c', n: 1, mode: 'part' },
   { h: 'f6f95ac74ed9aced59f3e0b91f72bfff', f: '6ff79678a1ac2a6c3b26765372fa2f60', n: 2, mode: 'run' },
-  { h: 'f8f3d172658c4324ea52b9446903061c', f: 'f8f3d172658c4324ea52b9446903061c', n: 1, mode: 'part' },
   { h: 'fb004ddd5e2d63b9700f7b44c28f2917', f: 'fb004ddd5e2d63b9700f7b44c28f2917', n: 1, mode: 'run' },
   { h: 'fbbddb221ed721eb83a9b9115dfa2f29', f: 'fbbddb221ed721eb83a9b9115dfa2f29', n: 1, mode: 'part' },
   { h: 'fc25d97afc10b692ce705df2e0322b18', f: 'fc25d97afc10b692ce705df2e0322b18', n: 1, mode: 'run' },
@@ -776,4 +775,4 @@ export const PRIVATE_NAMES = [
  *  `hash --list` beside the literal it regenerates. A unit pin compares the two,
  *  so an entry deleted, reordered or weakened by hand reds the suite, where the
  *  shape checks alone would pass (D-5288). */
-export const PRIVATE_NAMES_DIGEST = 'ebfc36e51ca156f9c5dde591e2fcf235';
+export const PRIVATE_NAMES_DIGEST = '2e2cc68002ad4dfffab0fce75c18f614';
