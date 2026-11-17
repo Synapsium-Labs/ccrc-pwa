@@ -399,11 +399,13 @@ const inboundIn = (linearId: string, over: Partial<Parameters<typeof upsertInbou
   linearId, workspaceId: 'ws-a', teamKey: 'AAA', identifier: `KEY-${linearId}`, title: 'T', body: 'B', seenAt: 5, ...over,
 });
 
-describe('migration 87 (D-8183)', () => {
-  it('migration 87 applies after 59 and 86', () => {
-    expect(MIGRATIONS.length).toBeGreaterThanOrEqual(87);
-    expect(MIGRATIONS[86]).toMatch(/CREATE TABLE linear_drift_marks\b/);
-    expect(MIGRATIONS.slice(0, 86).some((m) => /CREATE TABLE linear_drift_marks\b/.test(m))).toBe(false);
+describe("wave 4's migration (D-8183)", () => {
+  // Found by its content, not its slot: the entry is renumbered whenever another PR lands its migration first (D-8673).
+  it('applies after the plan model (59) and the decision-model records, once', () => {
+    const at = MIGRATIONS.findIndex((m) => /CREATE TABLE linear_drift_marks\b/.test(m));
+    expect(at).toBeGreaterThan(MIGRATIONS.findIndex((m) => /CREATE TABLE plan_epics\b/.test(m)));
+    expect(at).toBeGreaterThan(MIGRATIONS.findIndex((m) => /CREATE TABLE decision_records\b/.test(m)));
+    expect(MIGRATIONS.filter((m) => /CREATE TABLE linear_drift_marks\b/.test(m))).toHaveLength(1);
     for (const t of NEW_TABLES) {
       expect(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(t), t).toBeDefined();
     }

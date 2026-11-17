@@ -370,6 +370,18 @@ describe('GET /api/items/:id (D-8194)', () => {
     const r = await rig();
     for (const id of ['0', 'abc', '-1', '01']) expect((await read(r, id)).statusCode).toBe(400);
   });
+
+  it("answers the item's revision, here and on GET /api/waiting, raised after a tick (Overlord W2 row revisions, Task 4)", async () => {
+    const r = await rig();
+    const id = raise(r);
+    const waitingItem = async (): Promise<unknown> =>
+      ((await r.app.inject({ method: 'GET', url: '/api/waiting' })).json() as { waiting: WaitingView }).waiting.items.find((i) => i.id === id);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'open', revision: 0 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 0 });
+    expect((await tick(r, id)).statusCode).toBe(200);
+    expect((await read(r, id)).json()).toMatchObject({ ok: true, item: { id, state: 'checking', revision: 1 } });
+    expect(await waitingItem()).toMatchObject({ id, revision: 1 });
+  });
 });
 
 describe('GET /api/programmes/:slug/goals takes a session or the box token (EXEMPT-BUT-AUTHENTICATED, D-149\'s pattern)', () => {

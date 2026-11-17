@@ -3461,6 +3461,16 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
   // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark (the `updatedAt` it has read to)
   // and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
@@ -3476,10 +3486,9 @@ export const MIGRATIONS: readonly string[] = [
   // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 87` warns, reads as-is, names none of them and
-  // boots. The plan's number was 58; main ends at 86 and several open PRs hold 87, so this is 87 and is renumbered at landing
-  // if another lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry
-  // is counted):
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 88` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; row revisions (#2965) took 87, so this is 88, and it is renumbered at landing if another
+  // lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print 87 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

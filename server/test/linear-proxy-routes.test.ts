@@ -623,7 +623,7 @@ describe('the routes the PWA never calls take no body they do not declare', () =
 
 // D-8183 (design §7.7, plan task 4.4): in a managed team the plan owns the tickets, so a session's create, and its update
 // of a ticket the plan bound, are refused `plan-owned`; a comment, a link, a read, an unbound issue and an unmanaged team
-// are not. The rig is the real wiring: `Deps.plan` over the rig's own coord.db, seeded with the rows migration 87 holds.
+// are not. The rig is the real wiring: `Deps.plan` over the rig's own coord.db, seeded with the rows wave 4's migration holds.
 describe('plan-owned: a session writes no ticket in a managed team (D-8183)', () => {
   const managedRig = async (opts: { managed?: string; bound?: { teamKey: string } | null } = {}): Promise<ProxyRig> => {
     const db = memCoordDb();

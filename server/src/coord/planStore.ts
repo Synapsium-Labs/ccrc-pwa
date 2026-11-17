@@ -601,7 +601,7 @@ export function coordinatorIdsOf(db: DatabaseSync): string[] {
   return rows.map((r) => r.id as string);
 }
 
-// ── Drift, managed teams, inbound issues and the sync's streaks (D-8183, migration 87) ───────────────────────────────────
+// ── Drift, managed teams, inbound issues and the sync's streaks (D-8183, wave 4's migration) ───────────────────────────────────
 // Every write here is one statement and opens no transaction. `linear_drift_events.value` and `.actor` and
 // `linear_inbound.title` and `.body` hold Linear text: read only under `untrusted`.
 
