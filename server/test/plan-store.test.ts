@@ -17,7 +17,7 @@ import { hierarchySettingsOf, setHierarchySettings } from '../src/coord/planStor
 import {
   clearSettledProbes, driftEventsOf, driftMarkOf, driftRestoresOf, inboundByState, inboundOf, inboundWaiting, lastDriftCommentAt,
   managedTeams, markDriftCommented, recordDrift, setDriftItem, setDriftMark, setDriftSince, setInboundState, setStreak, settledProbes,
-  streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound,
+  streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound, markFailed, issueBound,
 } from '../src/coord/planStore.js';
 import {
   ADOPTED_FINGERPRINT, adoptIssueBindingInTx, bindingsOf, ensureUpkeepEpicInTx, inboundByIdentifier, inboundTicketInTx, moveTicketToProgrammeInTx,
@@ -558,6 +558,19 @@ describe('the drift pass\'s two lookups (D-8183)', () => {
     expect(bindingByLinearId(db, 'ws-b', 'lin-1')).toBeNull();
     expect(bindingByLinearId(db, 'ws-a', 'lin-2')).toBeNull();
     expect(planStorePort(db).bindingByLinearId('ws-a', 'lin-1')?.id).toBe(b.id);
+  });
+  it('issueBound matches a ticket binding holding the issue whatever its state, a failed one included (review 2386 F4)', () => {
+    declare('prog-a');
+    const tk = idOf("SELECT id FROM plan_tickets WHERE program = 'prog-a'");
+    const b = ensurePending(db, 'ticket', tk, 'ws-a', 'AAA');
+    expect(issueBound(db, 'ws-a', { id: null, identifier: null })).toBe(false);          // a pending binding holds no issue
+    markBound(db, b.id, 'lin-9', 'AAA-9', 'fp', 5);
+    expect(issueBound(db, 'ws-a', { id: 'lin-9', identifier: null })).toBe(true);
+    markFailed(db, b.id, 'linear-forbidden', 'in', 6);                                   // a refused write keeps the id (D-8680)
+    expect(issueBound(db, 'ws-a', { id: 'lin-9', identifier: null })).toBe(true);
+    expect(issueBound(db, 'ws-a', { id: null, identifier: 'AAA-9' })).toBe(true);
+    expect(issueBound(db, 'ws-b', { id: 'lin-9', identifier: 'AAA-9' })).toBe(false);
+    expect(issueBound(db, 'ws-a', { id: 'lin-8', identifier: 'AAA-8' })).toBe(false);
   });
   it('dueKeyOfBinding names the programme\'s slug for each kind of binding, and upkeep:<project> for an Upkeep epic', () => {
     declare('prog-a');

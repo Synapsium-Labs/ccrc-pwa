@@ -617,10 +617,11 @@ export function managedSince(db: DatabaseSync, workspaceId: string): number | nu
   return (r?.at as number | null | undefined) ?? null;
 }
 
-/** Whether the plan holds a bound ticket binding for a Linear issue, by its id or its identifier (D-8183: the proxy refuses a
- *  session's update of one in a managed team, `plan-owned`). Absent ids never match. */
+/** Whether the plan holds a ticket binding for a Linear issue, by its id or its identifier, WHATEVER ITS STATE (D-8183, §7.7: the
+ *  proxy refuses a session's update of one in a managed team, `plan-owned`). A `failed` binding keeps its issue (D-8680) and is
+ *  ccrc's as much as a `bound` one (review 2386 F4); a `pending` one holds no id yet. Absent ids never match. */
 export function issueBound(db: DatabaseSync, workspaceId: string, issue: { id: string | null; identifier: string | null }): boolean {
-  return db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'ticket' AND state = 'bound' AND workspaceId = ? AND (linearId = ? OR identifier = ?) LIMIT 1")
+  return db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'ticket' AND workspaceId = ? AND (linearId = ? OR identifier = ?) LIMIT 1")
     .get(workspaceId, issue.id ?? '', issue.identifier ?? '') !== undefined;
 }
 
