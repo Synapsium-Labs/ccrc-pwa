@@ -37,9 +37,9 @@ export function overlordAuthorityFileAt(ccrcDir: string, ops?: AppendOnlyFsOps):
 }
 
 /** Every Overlord authority table whose rows say "this box has chosen something", read by boot coherence beside the head row
- *  (Table 7.6a's "missing, beside any Overlord row"). Designation A added `overlord_designation` (X2); the ladder adds its tables,
- *  in its own pull request. Names only: each is a table this build's migrations create. */
-export const OVERLORD_AUTHORITY_TABLES: readonly string[] = ['overlord_designation'];
+ *  (Table 7.6a's "missing, beside any Overlord row"). Designation A added `overlord_designation` (X2); the ladder added
+ *  `overlord_ladder` and `overlord_latches`. Names only: each is a table this build's migrations create. */
+export const OVERLORD_AUTHORITY_TABLES: readonly string[] = ['overlord_designation', 'overlord_ladder', 'overlord_latches'];
 
 /** A read the writer could not make, named by what it could not read (review F6: a head row it could not read keeps the
  *  `rows` word), and the guard's `unmeasured` word for each. */
@@ -184,6 +184,11 @@ export class OverlordAuthorityJournal {
    * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
    * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
    * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
+   *
+   * The ONE retained-origin exception (ladder Q20): `journalPendingInTx` may state the retained `recordFrom` when recording
+   * an already-applied narrowing. The fold must see the chain from its last recorded value. Catch-up only stamps the record's
+   * sequence and clears its pending-origin marker; it never changes the rung, a latch's cap or any other authority value.
+   * Every ordinary writer still states the current row's value, read in this transaction.
    */
   appendInTx(db: DatabaseSync, entry: OverlordAuthorityMove): AuthorityAppend {
     let inTx: boolean;

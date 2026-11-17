@@ -36,6 +36,7 @@ const HEAD_MIGRATION = (() => {
 
 /** The designation table's migration (X2: boot coherence reads it beside the head row), found by its table. */
 const DESIGNATION_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_designation'))!;
+const LADDER_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_ladder'))!;
 
 type Fault = 'none' | 'open' | 'write' | 'fsync';
 interface Fx {
@@ -54,6 +55,7 @@ function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
   db.exec(DESIGNATION_MIGRATION); // `OVERLORD_AUTHORITY_TABLES` lists its table, so boot coherence reads it beside the head row
+  db.exec(LADDER_MIGRATION); // and the ladder's two tables, in the same list
   const fault = { now: 'none' as Fault };
   let wrote = false;
   const eio = (): never => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); };

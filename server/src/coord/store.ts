@@ -43,6 +43,7 @@ import {
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
 import * as designation from './overlordDesignationStore.js';
+import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
@@ -5425,6 +5426,14 @@ export class CoordStore {
   failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
   retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
+  ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
+  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite { return tx(this.db, () => ladder.setRungInTx(this.db, j, move)); }
+  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> { return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch)); }
+  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite { return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear)); }
+  /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
+  applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
