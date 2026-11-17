@@ -288,6 +288,9 @@ interface Unit {
   done: boolean;
 }
 
+/** The word the load's end hands `now`. It reaches no row: the end comes only once every unit has settled. */
+const NONE_OPEN = 'none-open';
+
 /** A load in flight (`startMockupLoad`): its end, and the load as it stands at any moment. */
 export interface MockupLoad {
   /** The load's end: the plan with its failures kept as rows (`loadMockupAssets` answers exactly this). */
@@ -407,15 +410,12 @@ export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader
       if (unit.kind === 'css') sheets.set(unit, answer.bytes);
     };
 
+    /** The load's end. It comes only once every unit has settled (none in flight, none left to start, every stylesheet
+     *  fed), so the load as it stands IS the end, and one rule, `now`'s, decides every row (review 2372 M-c). */
     const finish = (): void => {
-      const rows: MockupAssetRow[] = current.rows.map((row) => {
-        if (row.verdict.v !== 'inline' || row.size === null) return row;
-        const failure = failed.get(unitKeyOf(row.ref));
-        return failure === undefined ? row : { ...row, verdict: { v: 'failed', failure } };
-      });
       over = true;
       signal.removeEventListener('abort', onAbort);
-      resolve({ plan: { ...current, rows }, actualBytes, assets });
+      resolve(now(NONE_OPEN));
     };
 
     const start = (unit: Unit): void => {
