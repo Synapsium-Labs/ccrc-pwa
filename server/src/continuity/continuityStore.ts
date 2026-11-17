@@ -3,6 +3,8 @@
 // `startsSince` (the generations lane's); `continuity_generations` and `continuity_cursor` are written only through the
 // generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
 // here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
+// The renewal readings' section (W1, PR A) reads the closed-book spot probes by class and keeps the daily backstop's row,
+// `renewal_backstop_settings`, whose one writer is `setBackstop`, called only by its door.
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import {
   GENERATION_STATES, HOLD_OFF_MS, STATE_DEADLINE_S, isBookState, isGenerationOutcome, isGenerationState, isNoteKeyKind, isNoteKind,
@@ -20,6 +22,8 @@ import { isDigestCorrectionSubject } from '../coord/digest.js';
 import { isRulingSource, type Checkpoint, type CheckpointHandover, type CheckpointNote, type Ruling } from './checkpoint.js';
 import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
+import type { SpotProbe } from './probes.js';
+import { isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
 import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
 export type { StartLoadsReport } from './startLoads.js';
 
@@ -1316,5 +1320,55 @@ export function snapshotFacts(db: DatabaseSync, id: string): { ok: true; facts: 
     return typeof row.facts === 'string' ? { ok: true, facts: row.facts } : { ok: false, detail: `continuity_snapshots row ${id}: facts` };
   } catch (e) {
     return { ok: false, detail: `continuity_snapshots read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// ── The renewal readings (Overlord W1, plan `w1-renewal-readings.md`, PR A) ──────────────────────────────────────────────
+
+/** The graded closed-book spot probes of one model class, across generations, for the fitted ceiling (C41;
+ *  `renewalReadings.ts#fittedCeilingOf`): `kind = 'spot'`, `book = 'closed'`, graded `pass` or `fail`, with a depth. A
+ *  question graded `unmeasured` never counts toward the ceiling's window or its rate (review 2183 F6, slug
+ *  unmeasured-grades-never-fit-the-ceiling): the door could not grade it as served, which says nothing of the session's
+ *  recall. `at` is when the question was asked. One statement, no new index: the table holds one row per question asked. */
+export function closedSpotProbes(db: DatabaseSync, modelClass: string): { ok: true; spots: SpotProbe[] } | { ok: false; detail: string } {
+  try {
+    const rows = stmt(db, "SELECT id, depthTokens, grade, askedAt FROM continuity_probes WHERE kind = 'spot' AND book = 'closed' "
+      + "AND grade IN ('pass', 'fail') AND depthTokens IS NOT NULL AND modelClass = ? ORDER BY askedAt, id").all(modelClass) as Record<string, unknown>[];
+    const spots: SpotProbe[] = [];
+    for (const r of rows) {
+      const depthTokens = intOrNull(r.depthTokens); const at = intOrNull(r.askedAt);
+      if (depthTokens === null || at === null || (r.grade !== 'pass' && r.grade !== 'fail')) return { ok: false, detail: `continuity_probes row ${String(r.id)}: a spot probe` };
+      spots.push({ depthTokens, grade: r.grade, closed: true, modelClass, at });
+    }
+    return { ok: true, spots };
+  } catch (e) { return probeReadFailed(e); }
+}
+
+/** The daily backstop's setting (R19), narrowed through `isBackstopHour` and `isBackstopZone`: a row outside them, or no
+ *  row, reads `{ ok: false }` with what failed, never a default in its place. */
+export function backstopRead(db: DatabaseSync): BackstopRead {
+  try {
+    const r = stmt(db, 'SELECT hour, zone, isDefault, setAt FROM renewal_backstop_settings WHERE id = 1').get() as Record<string, unknown> | undefined;
+    if (r === undefined) return { ok: false, detail: 'renewal_backstop_settings has no row' };
+    const setAt = intOrNull(r.setAt);
+    if (!isBackstopHour(r.hour)) return { ok: false, detail: `renewal_backstop_settings.hour ${String(r.hour)}` };
+    if (!isBackstopZone(r.zone)) return { ok: false, detail: 'renewal_backstop_settings.zone is not a time zone' };
+    if (setAt === null || (r.isDefault !== 0 && r.isDefault !== 1)) return { ok: false, detail: 'renewal_backstop_settings row' };
+    return { ok: true, backstop: { hour: r.hour, zone: r.zone, isDefault: r.isDefault === 1, setAt } };
+  } catch (e) {
+    return { ok: false, detail: `renewal_backstop_settings read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The backstop's ONE writer, called only by its door (`POST /api/continuity/renewal-backstop`): the operator's hour and
+ *  zone, `isDefault` cleared, in one transaction. The door has validated both; the row exists from the migration. */
+export function setBackstop(db: DatabaseSync, b: { hour: number; zone: string; at: number }): { ok: boolean } {
+  try {
+    return tx(db, () => {
+      const r = stmt(db, 'UPDATE renewal_backstop_settings SET hour = ?, zone = ?, isDefault = 0, setAt = ? WHERE id = 1').run(b.hour, b.zone, b.at);
+      return { ok: Number(r.changes) === 1 };
+    });
+  } catch {
+    return { ok: false };
   }
 }

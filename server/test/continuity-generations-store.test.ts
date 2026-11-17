@@ -323,3 +323,40 @@ describe('the due columns, the accumulator and the hold-off', () => {
     expect(s.startsOf('lane-b-other', 5)).toEqual({ ok: true, rows: [] });
   });
 });
+
+describe('closedSpotProbes (Overlord W1, renewal readings PR A)', () => {
+  /** One question row of a round of the minted generation, written as the lane and the door would have left it. */
+  const probe = (s: CoordStore, gid: number, i: number, over: Record<string, unknown>): void => {
+    const row = { kind: 'spot', book: 'closed', grade: 'pass', depthTokens: 50_000, modelClass: 'opus', askedAt: NOW + i, ...over };
+    s.db.prepare('INSERT INTO continuity_probes (roundId, qid, sessionId, generationId, kind, cls, question, expected, depthTokens, modelClass, '
+      + 'askedAt, answeredAt, grade, book) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(`r${i}`, 'p1', ID, gid, row.kind, 'thread', `q${i}`, 'x', row.depthTokens as number | null, row.modelClass as string | null, row.askedAt,
+        NOW + i + 1, row.grade as string | null, row.book as string | null);
+  };
+
+  it('answers only closed spots of the class graded pass or fail with a depth, in asked order, never an unmeasured grade (F6)', () => {
+    const s = store();
+    s.mintGeneration(mintIn(startOf(s)), null, true);
+    const gid = only(s).id;
+    probe(s, gid, 3, { grade: 'fail' });
+    probe(s, gid, 1, {});
+    probe(s, gid, 2, { grade: 'unmeasured' });
+    probe(s, gid, 4, { book: 'open' });
+    probe(s, gid, 5, { book: 'unmeasured', grade: 'unmeasured' });
+    probe(s, gid, 6, { modelClass: 'sonnet' });
+    probe(s, gid, 7, { kind: 'compaction' });
+    probe(s, gid, 8, { depthTokens: null });
+    probe(s, gid, 9, { grade: null, book: null });
+    expect(s.closedSpotProbes('opus')).toEqual({ ok: true, spots: [
+      { depthTokens: 50_000, grade: 'pass', closed: true, modelClass: 'opus', at: NOW + 1 },
+      { depthTokens: 50_000, grade: 'fail', closed: true, modelClass: 'opus', at: NOW + 3 },
+    ] });
+    expect(s.closedSpotProbes('haiku')).toEqual({ ok: true, spots: [] });
+  });
+
+  it('answers `{ ok: false }` on a closed database', () => {
+    const s = store();
+    s.db.close();
+    expect(s.closedSpotProbes('opus')).toMatchObject({ ok: false });
+  });
+});

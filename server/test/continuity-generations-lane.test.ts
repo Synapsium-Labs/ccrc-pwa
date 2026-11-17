@@ -12,8 +12,9 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
+import { renewalDue } from '../src/continuity/renewalDue.js';
 import {
-  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, softTimesOf,
+  GENERATIONS_LANE, applyFedEvents, gatherGenerationReadings, generationsPass, renewalInputsOf, softTimesOf,
   type CompactionsMemo, type EmptyTries, type FedEvent, type GatherPorts, type GenReadings, type GenerationsDeps, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import type { CompactionsRead } from '../src/continuity/compactions.js';
@@ -1342,6 +1343,70 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(r.unread).toBe('probes');
     expect(f.logs.some((l) => l.includes('the probes could not be read'))).toBe(true);
     expect(gen(f).state).toBe('probing');
+  });
+});
+
+describe('the renewal readings\' seam (Overlord W1, renewal readings PR A)', () => {
+  const W1_FIELDS = ['fittedCeilingTokens', 'turns', 'backstopDue', 'modelDrift', 'termRaised', 'accountOutsideSet',
+    'classUnservable', 'accountLoadMove', 'classChanged', 'notLocal'] as const;
+  const W1 = { kind: 'unmeasured', why: 'W1' };
+  const unknown = { kind: 'unmeasured', why: 'unread' } as const;
+  function oneGen(): GenRow {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    return live(f.s)[0]!;
+  }
+
+  it('with no `w1`, each of the ten fields reads `W1` as before', () => {
+    const g = oneGen();
+    const i = renewalInputsOf(g, readings(usage(1, 2)), unknown, 0, unknown);
+    for (const k of W1_FIELDS) expect(i[k], k).toEqual(W1);
+  });
+
+  it('a `w1` naming one field changes only that field; an undefined field keeps `W1`', () => {
+    const g = oneGen();
+    const base = renewalInputsOf(g, readings(usage(1, 2)), unknown, 0, unknown);
+    const one = renewalInputsOf(g, { ...readings(usage(1, 2)), w1: { backstopDue: { kind: 'measured', value: true }, notLocal: undefined } },
+      unknown, 0, unknown);
+    expect(one).toEqual({ ...base, backstopDue: { kind: 'measured', value: true } });
+  });
+
+  it('`renewalDue` over a measured soft ceiling past 60% fires `soft-ceiling` for the Overlord, and is blind on it with no `w1`', () => {
+    const g: GenRow = { ...oneGen(), role: 'overlord' };
+    const r = readings(usage(70_000, 200_000));
+    const blind = renewalDue(renewalInputsOf(g, r, unknown, 0, unknown));
+    expect(blind.due).toBe(false);
+    expect(blind.blind).toContain('soft-ceiling');
+    const due = renewalDue(renewalInputsOf(g, { ...r, w1: { fittedCeilingTokens: { kind: 'measured', value: 100_000 } } }, unknown, 0, unknown));
+    expect(due).toMatchObject({ due: true, cls: 'soft', why: 'soft-ceiling' });
+  });
+
+  it('the gather asks `w1` with the base readings of the same sample and carries its `w1` and `soft`; with no port, neither', async () => {
+    const f = fixture();
+    f.start('startup', U1);
+    f.pass();
+    const g = live(f.s)[0]!;
+    const asked: GenReadings[] = [];
+    const base: GatherPorts = {
+      usage: async () => usage(5, 10), eventsStamp: async () => ({ ok: false, reason: 'absent' }), journalStamp: async () => ({ ok: false, reason: 'absent' }),
+      compactions: async () => ({ kind: 'absent' }), turnMark: async () => ({ ok: false, reason: 'absent' }) as never,
+      processStartedAt: async () => 100, release: async () => ({ kind: 'none' }),
+    };
+    const without = (await gatherGenerationReadings(f.s, base, new Map())).get(g.id)!;
+    expect('w1' in without || 'soft' in without).toBe(false);
+    const ceiling = { kind: 'measured', value: 7 } as const;
+    const quiet = { kind: 'measured', value: 1 } as const;
+    const withPort = (await gatherGenerationReadings(f.s, { ...base, w1: async (gen, b) => {
+      asked.push(b);
+      expect(gen.id).toBe(g.id);
+      return { w1: { fittedCeilingTokens: ceiling }, soft: { operatorQuietObservedMs: quiet } };
+    } }, new Map())).get(g.id)!;
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.usage).toEqual(usage(5, 10));
+    expect(withPort.w1).toEqual({ fittedCeilingTokens: ceiling });
+    expect(withPort.soft).toEqual({ operatorQuietObservedMs: quiet });
+    expect(withPort.usage).toEqual(usage(5, 10));
   });
 });
 
