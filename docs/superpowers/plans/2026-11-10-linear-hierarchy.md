@@ -192,6 +192,15 @@ number from `POST /api/ledger/deviations`.
   updates and never creates. Record: the wave 3 note.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
   (wave 4's open point). Record: the wave 3 note.
+- **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
+  by-name listing of 10, so with ten or more same-named objects ownership can fail; it fails once, mails once and retries
+  on the 30-minute backoff. Carried to the next capture (`creator { id }` on the by-id reads). Record: the wave 3 note.
+- **D-8700 (2026-11-17)** — milestone-target-date-once-met: a milestone's `targetDate` is ccrc's only from the day its
+  checkpoint is met; an open checkpoint's create and update leave it out of the input and the journal fields. Record:
+  the wave 3 note.
+- **D-8701 (2026-11-17)** — statuses-unread-distinct: project statuses never read are a directory miss, not "no status
+  of that type", and an `unknown` initiatives probe defers the initiative step, with a bounded exit after three unknown
+  refills. Record: the wave 3 note.
 
 ## Global Constraints
 

@@ -1,7 +1,10 @@
 # Linear hierarchy, wave 3: the plan sync (D-8182) — task note
 
 This note is the wave's record for the programme ledger. The coordinator folds it into the plan's ledger on its own
-pull request; this pull request does not edit the plan.
+pull request. This pull request edits the plan in one place only, under the coordinator's exception: it defines the
+wave's departure numbers, D-8675..D-8681 and D-8699..D-8701, in the plan's `## Deviations found`, where the deviation-refs
+scan reads definitions. That edit carries a `Ledger-Edit:` trailer on the head commit. It changes no other line and no
+checkbox.
 
 ## In short
 
@@ -24,7 +27,9 @@ pull request; this pull request does not edit the plan.
 
 ## Departures (defined in the plan)
 
-The coordinator issued these seven numbers for this wave (block D-8675..D-8681). Each one is defined briefly in the plan's own `## Deviations found`, where the deviation-refs scan reads definitions. This note keeps the full record.
+The coordinator issued these ten numbers for this wave: D-8675..D-8681 at the build, and D-8699..D-8701 in the review's
+fix round. Each is defined briefly in the plan's own `## Deviations found`, under the coordinator's exception, because
+the deviation-refs scan reads definitions only there. This note keeps the full record.
 
 - D-8675, conflict-detail (defined in the plan): `ops.ts` is frozen, so a repeated create's answers are recognised in
   `hierarchyOps.ts`'s create shapers, not in `ops.ts`'s error table. The two answers are "conflict on insert of
@@ -54,6 +59,31 @@ The coordinator issued these seven numbers for this wave (block D-8675..D-8681).
 - D-8681, no-unlink (defined in the plan): the brief's `SyncStep` listed `unlink`, but wave 3 builds none. A project
   whose initiatives are set off after it was linked keeps its link. The design's "Off by choice" (§9) covers only
   what comes next.
+- D-8699, ownership-by-name-first-page (defined in the plan): a known limit, carried to the next capture rather than fixed.
+  To prove an initiative or project is ccrc's own, the sync reads it by id and then reads a by-name listing of 10,
+  across the workspace and with no team filter. With ten or more same-named objects, ccrc's own can fall off that page,
+  so its ownership fails. It fails once, mails once per binding (measured: three requeues gave one mail), and retries on
+  the 30-minute backoff without converging. The fix needs `creator { id }` and the teams on `initiativeById` and
+  `projectById`, or an id filter, which is a document change in the frozen `ops.ts`. So it waits for the next capture,
+  together with `issueOwned`'s creator, and the operator's go.
+- D-8700, milestone-target-date-once-met (defined in the plan): a milestone's `targetDate` is ccrc's only from the day
+  its checkpoint is met (spec §6.2 "target date once met", §5.3). An open checkpoint's milestone create and update leave
+  `targetDate` out, both of the input and of the journal's fields list, so a date someone set in Linear survives a
+  rename. A met checkpoint sets it and owns it from then on. The plan's journal fields listed `targetDate` on every
+  update.
+- D-8701, statuses-unread-distinct (defined in the plan): "statuses never read" is kept apart from "no status of that
+  type". `ops.ts` is frozen, so the refresher records the read mark in the directory (`directory.ts`) beside the entries.
+  A failed statuses page keeps what was held for the key, mark included. The sync treats unread statuses as a directory
+  miss (refresh, then defer) and never fails an epic `status-missing` for them. This changes wave 2's pin in
+  `linear-directory-hierarchy.test.ts`, the programme's own. An initiatives probe answering `unknown` defers the
+  initiative step and leaves the projects' links alone, which also ends the double send of A3. The exit is bounded (the
+  coordinator's ruling):
+  - After three consecutive directory refills that all read `unknown` for a workspace, the pass settles without the
+    initiative step. The projects stay unlinked, and nothing stays due for ever.
+  - The programme's coordinator is mailed once per workspace and episode. The mail says ccrc cannot tell whether
+    initiatives are on there, so the initiative waits while projects, milestones and issues still sync.
+  - A later `on` reading creates the initiative, links the projects and ends the episode. No item is raised, because the
+    "Turn on initiatives" item stays tied to a measured `off`.
 
 ## The wave's rulings
 
