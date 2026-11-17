@@ -40,6 +40,26 @@ vi.mock('../src/lib/router', async (importOriginal) => ({
   navigate: vi.fn(),
   replaceFragment: vi.fn(),
 }));
+/** How many `onAuthRegained` listeners are subscribed now: the real announcer, wrapped only to count (review 2378 F3). */
+const authListeners = vi.hoisted(() => ({ live: 0 }));
+vi.mock('../src/lib/auth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/auth')>();
+  return {
+    ...real,
+    onAuthRegained: (fn: () => void): (() => void) => {
+      const off = real.onAuthRegained(fn);
+      authListeners.live += 1;
+      let on = true;
+      return () => {
+        if (on) {
+          on = false;
+          authListeners.live -= 1;
+        }
+        off();
+      };
+    },
+  };
+});
 /** The theme choice, as a store a case can move: it holds the console's real palette ids (`system`, `phosphor`, `light`, ...). */
 const themeChoice = vi.hoisted(() => ({ value: 'light', subs: new Set<() => void>() }));
 vi.mock('../src/lib/theme', async (importOriginal) => {
@@ -651,21 +671,44 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
   });
 
   it('a sign-in during a walk that answered no 401 starts nothing: the body mounts once and stops listening', async () => {
+    const before = authListeners.live;
     const h = harness();
     let walked!: (i: { urls: Record<string, string>; drafts: number; auth: number }) => void;
     h.imagesFn.mockImplementationOnce(() => new Promise((r) => { walked = r; }));
     render(frame(h));
     await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(1));
+    expect(authListeners.live, 'the body listens during its walk').toBe(before + 1);
     raiseAuthLost('expired');
     act(() => clearAuthLost());
     await act(async () => { walked({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 }); await Promise.resolve(); });
     await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    expect(authListeners.live, 'a walk with no 401 drops the listener').toBe(before);
     raiseAuthLost('expired');
     act(() => clearAuthLost());
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(h.imagesFn).toHaveBeenCalledTimes(1);
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  // Review 2378 F3: the drop after a walk with no 401 is measured by the live listeners, which is all it changes.
+  it('a walk with no 401 drops the sign-in listener: a sign-in after it finds no listener of the body and starts nothing', async () => {
+    const before = authListeners.live;
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 });
+    const { unmount } = render(frame(h));
+    await ready(h);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(authListeners.live, 'the mounted body holds no listener').toBe(before);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(authListeners.live).toBe(before);
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+    unmount();
+    expect(authListeners.live).toBe(before);
   });
 
   // Review 2361 F1: the run after sign-in is a new body, so it lands where its own outcome says, from `rendering`.
