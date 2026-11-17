@@ -201,6 +201,11 @@ number from `POST /api/ledger/deviations`.
 - **D-8701 (2026-11-17)** — statuses-unread-distinct: project statuses never read are a directory miss, not "no status
   of that type", and an `unknown` initiatives probe defers the initiative step, with a bounded exit after three unknown
   refills. Record: the wave 3 note.
+- **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
+  255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`), keeping the provenance line whole and
+  cutting the body with `…`; a description that fits is sent unchanged, so its fingerprint does not move. Measured live
+  on 2026-11-17: Linear refused every description over 255 characters (INVALID_INPUT), so most epics and every long
+  initiative failed `linear-invalid`. The full text stays in ccrc's plan.
 
 ## Global Constraints
 

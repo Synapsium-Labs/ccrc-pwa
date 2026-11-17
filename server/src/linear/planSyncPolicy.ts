@@ -116,6 +116,26 @@ export function fitProjectName(name: string): string {
   return `${cps.slice(0, LINEAR_PROJECT_NAME_MAX_CHARS - 1).join('').trimEnd()}…`;
 }
 
+/** Linear refuses an initiative's or a project's description over 255 characters (INVALID_INPUT, measured live
+ *  2026-11-17; D-8708). Counted in UTF-16 units, never fewer than code points, so the bound holds however Linear counts. */
+export const LINEAR_DESCRIPTION_MAX_CHARS = 255;
+
+/** D-8708: `body` (already through `linear-egress`, so the redactor never sees a cut text) with the ccrc provenance line,
+ *  fitted to {@link LINEAR_DESCRIPTION_MAX_CHARS}. The provenance line always survives whole: a body too long for both is
+ *  cut (never inside a surrogate pair), its trailing whitespace trimmed, and ended with `…`. A body that fits is
+ *  returned exactly as `withCcrcProvenance` gives it, so a bound object's fingerprint does not move. This is the planned
+ *  description's one source: the fingerprint, the journal's fields and the update path all read its answer, so a
+ *  binding that failed on an over-long description retries by itself once its planned input changes. The full text
+ *  stays in ccrc's plan. */
+export function fitLinearDescription(body: string): string {
+  const whole = withCcrcProvenance(body);
+  if (whole.length <= LINEAR_DESCRIPTION_MAX_CHARS) return whole;
+  const room = LINEAR_DESCRIPTION_MAX_CHARS - withCcrcProvenance('…').length;
+  const high = body.charCodeAt(room - 1);
+  const cut = body.slice(0, high >= 0xd800 && high <= 0xdbff ? room - 1 : room);
+  return withCcrcProvenance(`${cut.trimEnd()}…`);
+}
+
 export function initiativeDescription(s: SyncSnapshot): string {
   const parts: string[] = [];
   if (s.program.inShort !== null && s.program.inShort !== '') parts.push(s.program.inShort);
@@ -123,7 +143,7 @@ export function initiativeDescription(s: SyncSnapshot): string {
   const end = s.program.end;
   if (end !== null && end.outcome === 'abandoned') parts.push(`Abandoned on ${dayOf(end.at)}: ${end.why ?? ''}`.trimEnd());
   if (s.program.paused === true) parts.push('Paused: this programme is paused in ccrc.');
-  return withCcrcProvenance(egress(parts.join('\n\n')));
+  return fitLinearDescription(egress(parts.join('\n\n')));
 }
 
 export function projectDescription(epic: EpicRow & { checkpoints: CheckpointRow[] }, programmeTitle: string, initiativesOff: boolean): string {
@@ -133,7 +153,7 @@ export function projectDescription(epic: EpicRow & { checkpoints: CheckpointRow[
   if (epic.checkpoints.length > 0) {
     parts.push(epic.checkpoints.map((c) => `- [${c.state === 'met' ? 'x' : ' '}] ${c.title}${c.state === 'dropped' ? ' (dropped)' : ''}`).join('\n'));
   }
-  return withCcrcProvenance(egress(parts.join('\n\n')));
+  return fitLinearDescription(egress(parts.join('\n\n')));
 }
 
 const evidenceText = (e: CheckpointRow['evidence']): string => e === null ? '' : 'pr' in e ? `PR #${e.pr}` : 'itemId' in e ? `item #${e.itemId}` : e.path;
