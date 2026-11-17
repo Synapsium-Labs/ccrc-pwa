@@ -138,23 +138,28 @@ _fresh_pick_ok() {   # account side -> rc 0 the account may take this session at
   # A roster id (pool set Q9: the list is checked for shape only), enabled, not auth-dead, under the ceiling, served by the
   # session's pool side (`_pool_ok` rc 0: a crossing does not count, since a proven renewal ends it), and an Anthropic lane
   # (slug fresh-pick-anthropic-only-in-w1: C56 admits another provider's lane only if the operator lists it, which nothing
-  # records yet, so the piece that records it widens the server's list and this check together). Writes nothing.
+  # records yet, so the piece that records it widens the server's list and this check together). Writes nothing, except
+  # `_authdead`'s D-3524 expiry of a stale marker: `_authdead` removes a marker whose lane's credential changed since, as it
+  # does for every placement reader, because it is that marker's one owner (review 2336 F1, ruled: accepted, pinned).
   FRESH_PICK_FAIL=unknown; _is_valid_wrapper "$1" || return 1; FRESH_PICK_FAIL=disabled; _account_ok "$1" || return 1
   FRESH_PICK_FAIL=authdead; ! _authdead "$1" || return 1; FRESH_PICK_FAIL='at-ceiling'; _avail "$1" || return 1
   FRESH_PICK_FAIL=pool; _pool_ok "$1" "$2" || return 1; FRESH_PICK_FAIL=backend; _is_anthropic_backend "$1" || return 1; FRESH_PICK_FAIL=''
 }
 _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, at most cap (a NUL reads as a newline) | 1 no entry
-  # | 2 a link, not a regular file, not readable, or the read failed. Bounded in size and in time (`_plat_timeout 2`), so a
+  # | 2 a link, not a regular file, not readable, or the read failed, or `$REG` is not a searchable directory (it cannot say
+  # whether an entry stands, so never "no entry": review 2336 F2). Bounded in size and in time (`_plat_timeout 2`), so a
   # FIFO swapped in after the type test cannot block, as `_role_long_lived` reads `profile`; never `_route_get`, whose read is not.
   local LC_ALL=C IFS=' ' f="$REG/$2.$3" v; printf -v "$1" ''
-  [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
+  [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
   v=$( { _plat_timeout 2 head -c "$4" -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${v%x}"
 }
 # shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by the fresh start in PR C2
 _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|none; rc 1, var empty, FRESH_PICK_WHY = the cause
   # CALLED BY NOTHING YET (PR C1): PR C2 adds step 3 and `stay` and calls it last in the fresh start's re-measure. It
-  # WRITES NOTHING: no registry field, no stamp, no route row, no log line (the hold-down is read through its decider,
-  # `_route_holddown_holds`, which writes nothing either). No `acctorder` entry is today's behaviour: the current account.
+  # WRITES NOTHING, except `_authdead`'s D-3524 expiry of a stale marker (`_fresh_pick_ok`): no other registry field, no
+  # stamp, no route row, no log line (the hold-down is read through its decider, `_route_holddown_holds`, which writes
+  # nothing either). No `acctorder` entry is today's behaviour: the current account. The C locale makes the load parse
+  # byte-wise: a figure in other digits is no load under any caller's locale, and says nothing on stderr.
   # UNDECIDABLE IS A REFUSAL, NEVER A PICK (Review Focus 2): a list that is not a regular readable file, or not one
   # `_acctorder_valid` accepts (read at the cap + 1 bytes, so a longer one fails), a set side that cannot be read or parsed,
   # and a class that cannot be read or is off the route's vocabulary (slug fresh-pick-refuses-an-unreadable-class) each

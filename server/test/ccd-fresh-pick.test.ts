@@ -4,7 +4,8 @@
 // and answers the account a renewal's fresh start lands on: step 1, the first listed account under the soft line
 // (`FRESH_PICK_SOFT_PCT`) that serves the designated class, unless the hold-down holds; step 2, the same on the fallback
 // class (`FRESH_PICK_FALLBACK_CLASS`, Opus), only for a Fable-designated session. A list, set or class it cannot read is a
-// refusal, never a pick. It writes nothing. C1's decider is called by nothing but this file: C2 adds step 3, `stay` and the
+// refusal, never a pick. It writes nothing, except `_authdead`'s D-3524 expiry of a stale marker (review 2336 F1, ruled
+// accepted and pinned below). C1's decider is called by nothing but this file: C2 adds step 3, `stay` and the
 // wiring into the fresh start.
 //
 // The fixture: the session runs on a `pool-a` set; `claude-a`, `claude-b` and `claude-d` are in `pool-a`, `claude` is in
@@ -284,7 +285,7 @@ describe('refusals: undecidable is never a pick', () => {
   });
 });
 
-describe('writes nothing, and one verdict under any locale', () => {
+describe('writes nothing but `_authdead`\'s expiry of a stale marker, and one verdict under any locale', () => {
   it('the registry is byte- and time-identical after every answer', () => {
     const cases: Array<() => void> = [
       () => { route('fable', 'claude-b'); limits('claude-b', 20); sweep({ 'claude-b': 0.1 }); },
@@ -298,6 +299,57 @@ describe('writes nothing, and one verdict under any locale', () => {
       pick();
       expect(snapshot()).toEqual(before);
     }
+  });
+
+  it('the one write is _authdead\'s D-3524 expiry: an expired marker it asks about goes, a live one and an unasked one stay', () => {
+    // claude-d is disabled, so `_authdead` is never asked about it: its expired marker stays. claude-a's marker predates its
+    // credential file, so `_authdead` removes it (the marker's one owner, as for every placement reader), and claude-a then
+    // fails on load. claude-b's lane names no credential file, so its marker cannot expire: it stays, and claude-b is skipped.
+    for (const w of ['claude-d', 'claude-a']) {
+      const cred = path.join(h.home, h.sh(`_ccrc_secrets_file ${w}`));
+      fs.mkdirSync(path.dirname(cred), { recursive: true }); fs.writeFileSync(cred, 'x');
+      expect(h.sh(`_authdead_cred_src ${w}`)).toBe(cred);
+    }
+    expect(h.sh('_authdead_cred_src claude-b; echo "rc=$?"')).toBe('rc=1');
+    fs.writeFileSync(path.join(REG(), 'claude-d-disabled'), '');
+    fs.writeFileSync(path.join(REG(), 'claude-d-authdead'), '1000000000 auth-401');
+    fs.writeFileSync(path.join(REG(), 'claude-a-authdead'), '1000000000 auth-401');
+    fs.writeFileSync(path.join(REG(), 'claude-b-authdead'), `${now()} auth-401`);
+    route('fable', 'claude-d,claude-a,claude-b'); limits('claude-a', 80); limits('claude-b', 20); limits('claude-d', 20);
+    sweep({ 'claude-a': 0.1, 'claude-b': 0.1, 'claude-d': 0.1 });
+    const before = snapshot();
+    expect(pick()).toEqual({ pick: '', step: 'none', rc: 1,
+      why: 'no account on the ordered list can take it: claude-d disabled; claude-a load; claude-b authdead' });
+    expect(snapshot()).toEqual(before.filter((l) => !l.startsWith('claude-a-authdead ')));
+  });
+
+  it('a registry that cannot be searched refuses with the list sentence, never "no list"', () => {
+    if (process.getuid?.() === 0) return;   // root searches through the mode
+    route('fable', 'claude-b'); limits('claude-b', 20); sweep({ 'claude-b': 0.1 });
+    fs.chmodSync(REG(), 0o600);
+    try {
+      expect(pick()).toEqual({ pick: '', step: 'none', rc: 1, why: listWhy() });
+    } finally { fs.chmodSync(REG(), 0o755); }
+  });
+
+  it('a FIFO list is refused by the type test at once, never by waiting out the read bound', () => {
+    route('fable', null);
+    h.sh(`mkfifo "$REG/${ID}.acctorder"`);
+    const out = h.sh(`t0=$EPOCHREALTIME; _fresh_pick_to v ${ID} claude-a; rc=$?; t1=$EPOCHREALTIME; echo "$rc $t0 $t1"`);
+    const [rc, t0, t1] = out.split(' ');
+    expect(rc).toBe('1');
+    expect(Number(t1) - Number(t0), 'the 2 s read bound ran: the `! -f` test did not answer first').toBeLessThan(1);
+  });
+
+  it('the load parse is byte-wise under any caller\'s locale: a figure in other digits is no load, and says nothing on stderr', (ctx) => {
+    // `[0-9]` matches an Arabic-Indic digit under en_US.UTF-8; the decider's own `LC_ALL=C` keeps it out, so the figure
+    // reads as no load and no arithmetic error reaches stderr. CONTROL: the locale is live here, else the case is vacuous.
+    const live = h.sh(`export LC_ALL=en_US.UTF-8; s=$(printf '\\xd9\\xa3'); [[ "$s" =~ ^[0-9]$ ]] && echo live || echo dead`);
+    if (live !== 'live') { ctx.skip(); return; }
+    route('opus', 'claude-b');
+    const r = pick('claude-a', `export LC_ALL=en_US.UTF-8; exec 2>"$HOME/err"; _limit_score() { printf '\\xd9\\xa3'; };`);
+    expect(r).toEqual({ pick: '', step: 'none', rc: 1, why: 'no account on the ordered list can take it: claude-b load' });
+    expect(fs.readFileSync(path.join(h.home, 'err'), 'utf8')).toBe('');
   });
 
   it('the same bytes give the same verdict under LC_ALL=C and en_US.UTF-8', () => {
