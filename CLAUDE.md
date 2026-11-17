@@ -656,10 +656,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The Overlord's designation doors
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
-  coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. `GET /api/overlord/ladder`,
+  coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
   `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
   session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
-  takes the step-up. They register from `server/src/coord/overlordRoutes.ts`
+  takes the step-up. Both sets of doors register from `server/src/coord/overlordRoutes.ts`
   and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which

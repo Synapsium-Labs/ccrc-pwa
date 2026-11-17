@@ -396,7 +396,7 @@ describe(TABLES_PIN, () => {
       // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
       overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
-      overlord_designation: ['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'stopDone']
+      overlord_designation: ['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`),
       // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
       // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
