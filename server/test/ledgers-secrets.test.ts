@@ -863,6 +863,13 @@ describe('the tail floor is the masker\'s floor, in bytes (review 1389 A1)', () 
     }
   });
 
+  it('every trailing = is set aside, an inner = is not, and a long run of = stays linear (CodeQL js/polynomial-redos)', () => {
+    expect(secretTailOf(`${'a'.repeat(SECRET_TAIL_MIN - 1)}===`)).toBe('');
+    expect(secretTailOf(`${'a'.repeat(SECRET_TAIL_MIN - 2)}=a==`)).toBe('=a==');
+    expect(secretTailOf('='.repeat(SECRET_TAIL_MIN + 4))).toBe('');
+    expect(secretTailOf(`${'='.repeat(SECRET_VALUE_MAX - 1)}a`)).toBe('===a');
+  });
+
   it('a save at the floor minus one sends no tail, and at the floor sends the last four', async () => {
     const r = await rig();
     await r.stepUp();
