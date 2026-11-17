@@ -1326,6 +1326,13 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     await waitFor(() => expect(m.frame()).not.toBeNull());
     await flush();
     expect(authListeners.live).toBe(before + 1);
+    // Sign-in: the new attempt's start drops this attempt's listener and subscribes its own, so one listener stands.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'a.png']));
+    await flush();
+    expect(authListeners.live).toBe(before + 1);
     m.unmount();
     expect(authListeners.live).toBe(before);
   });
