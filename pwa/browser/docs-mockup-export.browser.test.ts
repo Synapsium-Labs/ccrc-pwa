@@ -111,6 +111,7 @@ const routes: Readonly<Record<string, OriginRoute>> = {
 };
 
 let origins: Origins;
+let dist: string;
 let server: DistServer;
 /** The first app row's latency, tap to download event, which the draft row's no-download window is taken from. */
 let appLatency: number | undefined;
@@ -683,7 +684,9 @@ const saveButton = (page: Page) => page.getByRole('button', { name: /^Save .*\.h
 
 describe('the real Save in the real app (the Export sheet, `downloadExport`, the confirm)', () => {
   beforeAll(async () => {
-    server = await serveDist(sharedDist());
+    // The run's one shared build (`browser/globalSetup.ts`), in the shape `test/browser-dist.test.ts` pins.
+    dist = sharedDist();
+    server = await serveDist(dist);
   }, 240_000);
 
   it('with no draft asset the first Save tap downloads (the control, and the latency the negative below takes its window from)', async () => {
