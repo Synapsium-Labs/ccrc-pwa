@@ -289,6 +289,31 @@ describe('retire', () => {
     expect(rowOf(db)).toMatchObject({ sessionId: null, generation: null, term: 2, designatedTerm: 1, pastIds: JSON.stringify([A]), stopsOwed: JSON.stringify([A]) });
     expect(designationRead(db)).toMatchObject({ kind: 'not-designated', row: { bound: null, term: 2 } });
   });
+  describe('the retired body\'s live generation (review 2349 F4)', () => {
+    const mintLive = (db: DatabaseSync): void => {
+      const start = insertStart(db, { sessionId: A, reportId: 'r-1', uuid: GEN, source: 'startup', model: 'claude-opus-5-5',
+        rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+      if (!start.ok) throw new Error('start not recorded');
+      expect(mintGeneration(db, { identity: A, sessionId: A, role: 'overlord', term: 1, rowIncarnation: null, startId: start.id,
+        startReportedAt: NOW, resumed: false, model: 'claude-opus-5-5', lane: null, host: null, outcome: 'crashed', mono: 1, proc: 'p', now: NOW },
+      null, true).ok).toBe(true);
+    };
+    const gens = (db: DatabaseSync): unknown[] => db.prepare('SELECT identity, state, outcome, walk, deadlineAt FROM continuity_generations').all();
+    it('a live retire ends the live overlord generation with outcome retired, so no live overlord row remains', () => {
+      const db = openDb(); const f = fake(db);
+      mintLive(db); live(db, f);
+      expect(retire(db, f, { actor: 'o', at: NOW + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+      expect(gens(db)).toEqual([{ identity: 'overlord', state: 'ended', outcome: 'retired', walk: null, deadlineAt: null }]);
+      expect(db.prepare("SELECT COUNT(*) AS n FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").get()).toEqual({ n: 0 });
+    });
+    it('a refused journal append leaves the generation live', () => {
+      const db = openDb(); const f = fake(db);
+      mintLive(db); live(db, f);
+      f.answer = () => refuse();
+      expect(retire(db, f, { actor: 'o', at: NOW + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: false });
+      expect(gens(db)).toMatchObject([{ identity: 'overlord', state: expect.not.stringMatching(/^ended$/), outcome: null }]);
+    });
+  });
   it('a live row with a pending rebind-shaped attempt cancels it as retired and owes both ids', () => {
     const db = openDb(); const f = fake(db);
     live(db, f);

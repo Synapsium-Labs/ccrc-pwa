@@ -43,8 +43,8 @@ export interface DesignateFacts {
  *  them through `isDesignationKebab`; a refusal the door answers is `OVERLORD_REFUSALS`' and admitted there. */
 export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pending', 'not-designated', 'not-pending',
   'generation-set', 'bad-outcome', 'not-run', 'set-side', 'pool-set', 'unknown-pool', 'create-failed', 'overlord-first-prompt',
-  // the body adapter's ccd verbs and its refusal word (`overlordBody.ts`)
-  'project-add', 'ws-add', 'keep-awake', 'account-refused'] as const;
+  // the body adapter's ccd verbs and the `ws-add` refusal words it reads (`overlordBody.ts`, `workspaceCreate.ts#classifyAddFailure`)
+  'project-add', 'ws-add', 'keep-awake', 'account-refused', 'slug-taken', 'bad-slug'] as const;
 export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
 
 export type DesignateVerdict =
@@ -68,6 +68,8 @@ export function overlordAccounts(set: PoolSet, cls: OverlordModelClass, f: Accou
   const ranked: { id: string; rank: number; at: number }[] = [];
   f.roster.accounts.forEach((a, at) => {
     if (f.limits[a.id]?.disabled === true) return;
+    // ccd's `--wrapper` refuses a lane that is not home-able, so it is neither counted nor picked (review 2349 F5).
+    if (!a.homeAble) return;
     // An Anthropic account only: an API-key lane (pay-per-use) and another provider's lane are left out; an undeclared
     // provider is not known to be Anthropic, so it is left out too. The provider is `exec.provider`, and `upstream` is
     // Anthropic by construction (`shared/roster.ts#rosterKindOf`'s rule; that function has one caller by a census pin, so

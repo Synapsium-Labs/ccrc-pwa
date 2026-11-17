@@ -388,6 +388,14 @@ export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, t
     + "AND o.state <> 'ended' AND o.sessionId <> ?)").run(term, sessionId, sessionId, sessionId));
 }
 
+/** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
+ *  the caller's transaction and opens none. */
+export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { changed: boolean } {
+  return changedOf(stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
+    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended'").run(sessionId));
+}
+
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
  *  Entering a state with a deadline sets that column's deadline from `STATE_DEADLINE_S`; staying in a state leaves it
  *  as it was (ruling I2: no function takes a new deadline for a state the row is already in); entering `active` or

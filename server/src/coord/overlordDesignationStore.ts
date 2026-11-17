@@ -13,7 +13,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { tx } from './tx.js';
 import type { OverlordAuthorityJournal, AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { OverlordAuthorityMove } from './overlordAuthority.js';
-import { restampOverlordGeneration } from '../continuity/continuityStore.js';
+import { endOverlordGeneration, restampOverlordGeneration } from '../continuity/continuityStore.js';
 import {
   ATTEMPT_OUTCOME_MAP, PENDING_KINDS, parseAccountPools, parseOverlordModel,
   type AttemptOutcome, type DesignationRead, type DesignationView, type OverlordModelClass, type PendingKind,
@@ -126,6 +126,9 @@ export type DesignateResult = { ok: true; changed: true } | { ok: false; reason:
 /** Insert or update the row with a pending designate attempt. Refuses `exists` when a session is bound or pending, read in the
  *  same transaction, so two racing designates are safe. It records the account set and the model class (C46, X2) and no
  *  designate record: that is `goLive`'s. The term, past ids, owed stops and last attempt of an earlier row are kept. */
+// Residual (review 2349 F11): the set record is appended, then the model-class record. If the second refuses, the first record
+// and its head row stay committed with no designation row, because `tx` commits on a normal return. That is reachable only when the
+// guard is already damaged (`journal-append` or `diverged`, each calling `writerFailed`); a throw would be worse, the record being a file.
 export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i: DesignateInput): DesignateResult {
   return tx(db, (): DesignateResult => {
     const h = held(db);
@@ -243,6 +246,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     const term = row.term + 1;
     const a = append(db, journal, { kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
+    endOverlordGeneration(db, bound); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
     const owed = p === null ? [bound] : withId([bound], p.sessionId);
     const stops = owed.reduce<readonly string[]>(withId, row.stopsOwed);
     const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at: i.at };

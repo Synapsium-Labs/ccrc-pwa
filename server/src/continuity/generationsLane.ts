@@ -754,7 +754,7 @@ function ctxReading(r: GenReadings | undefined): Reading<CtxReading> {
 function probeFactsOf(coord: Pick<GenerationsCoord, 'snapshotFacts' | 'liveNotes' | 'mailForRecipient'>, g: GenRow, kind: ProbeRoundKind,
   snapshotId: string | null, now: number): CardFacts | string {
   if (kind === 'spot') {
-    const notes = coord.liveNotes(g.identity);
+    const notes = coord.liveNotes(g.sessionId); // keyed by session id, as the note door writes (review 2349 F2)
     if (!notes.ok) return notes.detail;
     let mail: CardMail[];
     try {

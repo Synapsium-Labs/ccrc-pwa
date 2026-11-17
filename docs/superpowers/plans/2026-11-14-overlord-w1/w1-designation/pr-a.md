@@ -20,8 +20,11 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   calling `shared/roster.ts#rosterKindOf`, which a census pin keeps to one caller.
 - **`set-placement-carries-no-class`**: `SetPlacement` has no class field; a set the class empties reads `none`
   carrying the set.
-- **`designate-ccd-words-fold-the-create-words`**: `DESIGNATE_CCD_WORDS` holds the seven ccd words, the create's
-  `ws-title-v1` and `ws-wrapper-v1` among them, and the keep-awake word is ccd arms A's token `keep-awake-v1`.
+- **`designate-ccd-words-fold-the-create-words`**: `DESIGNATE_CCD_WORDS` holds the eight ccd words, the create's
+  `ws-title-v1` and `ws-wrapper-v1` among them. The keep-awake word is ccd arms A's token `keep-awake-v1`, and the last is
+  ccd arms C2's `fresh-pick-v1` (review 2349 F10, ruled), so a fleet box below arms C2 refuses `capability-missing`.
+- **`overlord-accounts-home-able-only`**: `overlordAccounts` skips an account that is not `homeAble`, because ccd's
+  `--wrapper` refuses one; it is neither counted toward the two nor picked (review 2349 F5).
 
 ## Task 1
 
@@ -46,7 +49,9 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
 ## Task 3 (the reads: `identityOf`, the role and the mail pace)
 
 - **`notes-keyed-by-session-id`**: notes (`liveNotes`, `appendNote`) stay keyed by the session id. The plan names only
-  the generation lookups, so only those go through `identityOf`.
+  the generation lookups, so only those go through `identityOf`. Every notes reader therefore reads by the generation
+  row's `sessionId`: the card facts (`cardFacts.ts`), the renewal seal (`renewalActs.ts#seal`) and the probe facts
+  (`generationsLane.ts#probeFactsOf`), so a restarted Overlord's notes reach its seal (review 2349 F2).
 - **`unmeasured-designation-reads-undecided-for-renewal-permit`**: in the generations lane an unmeasured designation
   fails the mint step (`unread: 'designation'`), and the role read for the renewal permit reads undecided between
   coordinator and plain, so a coordinator's renewal holds as a role change.
@@ -69,8 +74,20 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
 - **`keep-awake-failure-fails-the-create`**: a failed `keepAwake('on')` at the create (ccd's rc 1 on an unreadable
   marker, or a lost answer) is a failed create step: `failPending(…, 'create-failed')`, the stop owed and drained, 502.
   This replaces the plan's `awake: false`, so a 200 always says `awake: true`. A foreign marker (`kept-foreign`, rc 0)
-  succeeds and raises one operator item naming it, on the `overlord` programme's ledger, as the renewal act raises its
-  items (`raisedBy` `ccrc`).
+  succeeds and raises one operator item naming each foreign marker (`no-hibernate`, `no-roll` or both; review 2349 F8), on
+  the `overlord` programme's ledger, as the renewal act raises its items (`raisedBy` `ccrc`).
+- **`drain-markers-off-first`**: the drain turns the markers off first, then clears `poolset` and `acctorder`, then stops
+  (review 2349 F6, ruled). While `off` fails the id stays owed and its `acctorder` stays, so the capability floor's fact
+  stands as long as the markers do (arms notes A §3). This replaces the plan's clear-first order; the coordinator folds it.
+- **`fail-drains-when-failPending-throws`**: a failed step's `failPending` that throws still drains the id, and a stop
+  that then fails retries the write once so the id lands on `stopsOwed` (review 2349 F7).
+- **`designate-refuses-an-incoherent-journal`**: designate refuses `authority-rolled-back` (or `journal-unreadable` for an
+  unmeasured guard) before any row write or ccd call while the authority journal is not coherent (review 2349 F9, ruled).
+- **`retire-ends-the-generation-retired`**: retire of a live designation ends the retired body's live `overlord`
+  generation in its own transaction, with a new outcome word `retired` in `GENERATION_OUTCOME_MAP`, and the `ended`
+  state reads "a later generation replaced it, or the operator ended the binding" (review 2349 F4, ruled; PR B's rebind
+  uses the same word for the old body). An older build's row reader refuses an unknown outcome word and fails the whole
+  generations read: fail-closed by design, the same exposure review 2335 found for `resumed-other-org`.
 - **`retire-none-still-drains-owed-stops`**: a retire on a row that binds nothing writes nothing, but drains any stop an
   earlier attempt still owes, so a failed stop is not stranded until the next live or pending retire.
 - **`create-failed-answers-fleetFailed-502`**: a failed create step answers the existing `fleetFailed` 502 with `detail`
@@ -103,8 +120,13 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   caller pin is untouched. `overlord-body.test.ts` pins the stop's argv and its answers instead.
 - **`keep-awake-needs-its-line`**: an rc 0 `keep-awake` without its `awake <id>` or `released <id>` line is `ok: false`.
 - **`ensureProject-exists-is-ok`**: `project-add`'s `project exists` answer is `ok`.
-- **`create-leftbehind-is-yes`**: a refused `ws-add` that left a worktree behind answers `created: 'yes'`; a refusal
-  after which ccd made nothing answers `no`; a call cut short or lost is re-measured through the registry.
+- **`create-leftbehind-is-yes`**: only ccd's refusals made before the row exists answer `created: 'no'` (`slug-taken`,
+  `bad-slug`, `account-refused` with nothing left behind). A refusal that left a worktree behind, and ccd's own
+  `ws-add spawn failed` at rc 3 to 6 (the session exists, is claimed and is supervised), answer `yes`; every other answered
+  failure is re-measured through the registry (review 2349 F1). A call cut short or lost owes the stop even when the
+  re-measure reads absent (`unknown`), because ccd may yet make the session: the Global Constraint ("when ccd may have
+  made the session") governs, and Task 4's sentence that a measured absence answers `no` (review M8) yields to it
+  (review 2349 F3, ruled). An owed stop of an absent id is a no-op that `stopDone` clears.
 - **`one-session-host-builder`**: `renewalWiring.ts#renewalHostOf` builds the `SessionHost` for both the renewal acts and
   the designate door's first prompt, so its construction is not copied into `server.ts`.
 

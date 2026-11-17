@@ -1070,6 +1070,17 @@ describe('the probes (the probes piece, PR B, Tasks 5 and 6)', () => {
     expect(rounds(f.s).map((x) => [x.kind, x.depthTokens])).toEqual([['start', null], ['spot', 62_000]]);
   });
 
+  it('a restarted Overlord\'s notes, keyed by its session id, reach its spot round (review 2349 F2)', () => {
+    const f = active();
+    const g = gen(f);
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    expect(f.pass(at(f, usage(60_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 0 });
+    for (const k of ['a', 'b', 'c']) {
+      if (!f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread', waitsOn: 'w', next: `next ${k}`, revises: null, closes: false, at: f.t.ports.clock.wall() }).ok) throw new Error('note');
+    }
+    expect(f.pass(at(f, usage(62_000, 1_000_000), turn('idle')))).toMatchObject({ roundsOpened: 1 });
+  });
+
   /** A live coordinator proven active by a passed start round. */
   const active = (): Fixture => {
     const f = probing();

@@ -13,7 +13,7 @@ const GENERATION_STATE_MAP = {
   carded: 'the anchor is injected, the card is read, and the served hash comes back',
   probing: 'the probes run',
   degraded: 'no soft renewal; one operator item',
-  ended: 'a later generation replaced it (terminal)',
+  ended: 'a later generation replaced it, or the operator ended the binding (terminal)',
 } as const;
 export type GenerationState = keyof typeof GENERATION_STATE_MAP;
 export const GENERATION_STATES = Object.keys(GENERATION_STATE_MAP) as GenerationState[];
@@ -29,6 +29,10 @@ const GENERATION_OUTCOME_MAP = {
   'woken-elsewhere': 'a wake on another host replaced it',
   unmeasured: 'a start replaced it, and what that start was cannot be told from what the lane read',
   cleared: 'a /clear on the same row and account replaced it: asked for, but not by a renewal (review 2006)',
+  // The operator ended the Overlord's binding to this body; no later start of this body replaced it. An older build's row
+  // reader refuses an unknown outcome word and fails the whole generations read (fail-closed by design, the same exposure
+  // review 2335 found for `resumed-other-org`).
+  retired: "the operator ended the Overlord's binding to this body; no later start of this body replaced it",
 } as const;
 export type GenerationOutcome = keyof typeof GENERATION_OUTCOME_MAP;
 export const GENERATION_OUTCOMES = Object.keys(GENERATION_OUTCOME_MAP) as GenerationOutcome[];

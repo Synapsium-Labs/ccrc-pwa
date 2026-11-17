@@ -118,10 +118,19 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
       const detail = detailOf('ws-add', res);
       // A call that never started is a call that made nothing; a call cut short, or lost, may have made the session.
       if (res.ran === false && res.reason === 'spawn') return { ...refuse(detail), created: 'no' };
-      if (res.ran === false || cutShort(res) !== false) return { ...refuse(`ws-add's answer was lost: ${detail}`), created: await remeasured(id) };
-      // ccd answered. Its one refusal that leaves a worktree behind says so; every other one made nothing.
+      if (res.ran === false || cutShort(res) !== false) {
+        // A lost answer whose re-measure reads absent still owes the stop: ccd may yet make the session (review 2349 F3).
+        const seen = await remeasured(id);
+        return { ...refuse(`ws-add's answer was lost: ${detail}`), created: seen === 'no' ? 'unknown' : seen };
+      }
+      // ccd answered. Only its refusals made before the row exists answer `no`; ccd's own `spawn failed` (rc 3 to 6) says the session
+      // exists, is claimed and is supervised, so it answers `yes`; every other failure is re-measured from the registry (review 2349 F1).
       const failure = classifyAddFailure(res);
-      return { ...refuse(detail), created: failure.kind === 'account-refused' && failure.leftBehind ? 'yes' : 'no' };
+      if (failure.kind === 'slug-taken' || failure.kind === 'bad-slug' || (failure.kind === 'account-refused' && !failure.leftBehind)) {
+        return { ...refuse(detail), created: 'no' };
+      }
+      const spawned = res.exitCode !== undefined && res.exitCode >= 3 && res.exitCode <= 6 && res.stderr.includes(`ws-add spawn failed for ${id} `);
+      return { ...refuse(detail), created: failure.kind === 'account-refused' || spawned ? 'yes' : await remeasured(id) };
     }
     let generation: GenerationRead;
     try { generation = await deps.generationOf(id); } catch { generation = { kind: 'unreadable' }; }
@@ -165,9 +174,9 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
     // Rc 0 says the line it ends with, `awake <id>` or `released <id>`; a call without it is not the verb's answer.
     const line = which === 'on' ? `awake ${id}` : `released ${id}`;
     if (!res.stdout.split('\n').includes(line)) return refuse(`keep-awake answered without its line (${line})`);
-    // A marker someone else wrote stands (`kept-foreign <marker>`, rc 0): the call succeeded and the marker is named.
-    const foreign = /^kept-foreign (\S+)$/m.exec(res.stdout);
-    return { ok: true, foreign: foreign === null ? null : foreign[1]! };
+    // A marker someone else wrote stands (`kept-foreign <marker>`, rc 0): the call succeeded and every such marker is named, as
+    // `no-hibernate` and `no-roll` can both be foreign (review 2349 F8).
+    return { ok: true, foreign: [...res.stdout.matchAll(/^kept-foreign (\S+)$/gm)].map((m) => m[1]!) };
   }
 
   async function stop(id: string): Promise<StopAnswer> {

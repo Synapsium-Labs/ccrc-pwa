@@ -15,6 +15,7 @@ import {
 } from '../src/coord/overlordRoutes.js';
 import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend, AuthorityAppendError } from '../src/coord/overlordAuthorityJournal.js';
+import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { actorOf } from '../src/accounts/audit.js';
@@ -75,7 +76,7 @@ class FakeBody implements OverlordBody {
   ensure: BodyAnswer = { ok: true };
   createAnswer: (id: string) => CreateAnswer = () => ({ ok: true, generation: GEN });
   setAnswer: BodyAnswer = { ok: true };
-  keepAwakeAnswer: (state: 'on' | 'off') => KeepAwakeAnswer = () => ({ ok: true, foreign: null });
+  keepAwakeAnswer: (state: 'on' | 'off') => KeepAwakeAnswer = () => ({ ok: true, foreign: [] });
   stopAnswer: (id: string) => StopAnswer = () => ({ ok: true, absent: false });
   probe: Awaited<ReturnType<OverlordBody['poolAnswer']>> = ANSWER;
   /** Held by a test to freeze `create` mid-flight. */
@@ -122,7 +123,7 @@ class FakeHost {
 
 interface Rig {
   app: FastifyInstance; db: DatabaseSync; coord: CoordStore; gate: FakeGate; body: FakeBody; journal: FakeJournal; host: FakeHost;
-  facts: { ccdWords: string[] | null; builds: 'agreed' | 'skewed' | 'unknown' }; serialRuns: { n: number };
+  facts: { ccdWords: string[] | null; builds: 'agreed' | 'skewed' | 'unknown'; authority: AuthorityState }; serialRuns: { n: number };
   time: ReturnType<typeof fakeTime>;
 }
 
@@ -135,7 +136,7 @@ async function rig(opts: { serial?: 'real' | 'off' } = {}): Promise<Rig> {
   const coord = new CoordStore(db);
   const gate = fakeGate(); const body = new FakeBody(); const journal = fakeJournal(); const host = new FakeHost();
   const time = fakeTime();
-  const facts = { ccdWords: [...DESIGNATE_CCD_WORDS] as string[] | null, builds: 'agreed' as 'agreed' | 'skewed' | 'unknown' };
+  const facts = { ccdWords: [...DESIGNATE_CCD_WORDS] as string[] | null, builds: 'agreed' as 'agreed' | 'skewed' | 'unknown', authority: { kind: 'coherent' } as AuthorityState };
   const serialRuns = { n: 0 };
   let tail: Promise<unknown> = Promise.resolve();
   const serial: OverlordRouteDeps['serial'] = opts.serial === 'off'
@@ -147,7 +148,7 @@ async function rig(opts: { serial?: 'real' | 'off' } = {}): Promise<Rig> {
     clock: time.ports.clock, entropy: time.ports.entropy, dec: () => null,
     facts: {
       ccdWords: () => facts.ccdWords, serverWords: ['continuity-v1'], builds: () => facts.builds, roster: () => ROSTER,
-      limits: async () => HEALTHY, shares: async () => ({ kind: 'absent' }),
+      limits: async () => HEALTHY, shares: async () => ({ kind: 'absent' }), authority: () => facts.authority,
     },
   });
   await app.ready();
@@ -236,6 +237,15 @@ describe('every refusal reaches the wire with its status, and writes nothing', (
     expectNothingWritten(r);
   });
 
+  it('a fleet box below ccd arms C2 (no fresh-pick-v1) refuses capability-missing naming it (review 2349 F10)', async () => {
+    const r = await rig();
+    r.facts.ccdWords = DESIGNATE_CCD_WORDS.filter((w) => w !== 'fresh-pick-v1');
+    const res = await post(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['capability-missing']);
+    expect(res.json()).toMatchObject({ error: 'capability-missing', needs: ['fresh-pick-v1'] });
+    expectNothingWritten(r);
+  });
+
   it('launch-profile-unmet under build skew, and under an unmeasured agreement: 409, nothing created, no digest sent', async () => {
     const r = await rig();
     for (const builds of ['skewed', 'unknown'] as const) {
@@ -267,12 +277,24 @@ describe('every refusal reaches the wire with its status, and writes nothing', (
     expect((await post(r)).statusCode).toBe(200);
     r.db.exec("UPDATE overlord_designation SET accountPools = 'nope'");
     const before = r.body.log.length;
+    const rowBefore = rowOf(r); const seenBefore = r.journal.seen.length;
     const res = await post(r);
+    expect(rowOf(r)).toEqual(rowBefore);
+    expect(r.journal.seen).toHaveLength(seenBefore);
     expect(res.statusCode).toBe(REFUSAL_STATUS.unavailable);
     expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'the designation row could not be read' });
     expect(r.body.log.slice(before).map((c) => c.op)).toEqual(['poolAnswer']);
     expect((await del(r)).statusCode).toBe(503);
     expect((await get(r)).statusCode).toBe(503);
+  });
+
+  it('a designate whose fact read throws is 503 unavailable and writes nothing (review 2349 F12)', async () => {
+    const r = await rig();
+    r.coord.accountPoolEdges = () => { throw new Error('coord.db is locked'); };
+    const res = await post(r);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'unavailable', detail: 'coord.db is locked' });
+    expectNothingWritten(r);
   });
 
   it('overlord-exists for a bound row and for a pending one', async () => {
@@ -394,7 +416,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
     const r = await rig();
     r.body.setAnswer = { ok: false, detail: 'route write refused' };
     const { id } = await failed(r);
-    expect(r.body.ops().slice(3)).toEqual(['writeSet', 'writeSet', 'clearProfile', 'keepAwake-off', 'stop']);
+    expect(r.body.ops().slice(3)).toEqual(['writeSet', 'keepAwake-off', 'writeSet', 'clearProfile', 'stop']);
     expect(r.body.log.filter((c) => c.op === 'writeSet').at(-1)).toMatchObject({ id, extra: { poolset: '', acctorder: '' } });
     expect(r.body.alive.size).toBe(0);
     expect(r.host.delivered).toEqual([]);
@@ -402,7 +424,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
 
   it('a failed keep-awake fails the create (slug keep-awake-failure-fails-the-create): no prompt, the stop drained', async () => {
     const r = await rig();
-    r.body.keepAwakeAnswer = (s) => (s === 'on' ? { ok: false, detail: 'unreadable marker' } : { ok: true, foreign: null });
+    r.body.keepAwakeAnswer = (s) => (s === 'on' ? { ok: false, detail: 'unreadable marker' } : { ok: true, foreign: [] });
     const { id, detail } = await failed(r);
     expect(detail).toBe('unreadable marker');
     expect(r.host.delivered).toEqual([]);
@@ -419,6 +441,62 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
     expect(res.json().detail).toContain('no longer pending');
     expect(r.body.alive.size).toBe(0);
     expect(view(r)!.stopsOwed).toEqual([]);
+  });
+
+  it('a keep-awake off that fails leaves the id owed, the set in place and no stop (review 2349 F6)', async () => {
+    const r = await rig();
+    r.body.setAnswer = { ok: false, detail: 'route write refused' };
+    r.body.keepAwakeAnswer = (s) => (s === 'off' ? { ok: false, detail: 'marker unreadable' } : { ok: true, foreign: [] });
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    const id = res.json().sessionId as string;
+    expect(view(r)!.stopsOwed).toEqual([id]);
+    expect(r.body.count('stop')).toBe(0);
+    // Only the create's own set write ran: the drain wrote no clearing set and no cleared profile.
+    expect(r.body.count('writeSet')).toBe(1);
+    expect(r.body.count('clearProfile')).toBe(0);
+    r.body.keepAwakeAnswer = () => ({ ok: true, foreign: [] });
+    expect((await del(r)).json()).toEqual({ ok: true, changed: false, stopped: [id], owed: [] });
+  });
+
+  it('a failPending that throws still drains the id, and a stop that fails retries the write so it is owed (review 2349 F7)', async () => {
+    const r = await rig();
+    r.body.setAnswer = { ok: false, detail: 'route write refused' };
+    r.body.stopAnswer = () => ({ ok: false, detail: 'tmux is busy' });
+    const real = r.coord.failPending.bind(r.coord);
+    let calls = 0;
+    r.coord.failPending = (...a) => { if (++calls === 1) throw new Error('database is busy'); return real(...a); };
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    const id = res.json().sessionId as string;
+    expect(r.body.log.filter((c) => c.op === 'stop').map((c) => c.id)).toEqual([id]);
+    expect(calls).toBe(2);
+    expect(view(r)!.stopsOwed).toEqual([id]);
+  });
+
+  it('a failPending that throws drains the id; a stop that succeeds writes nothing more (review 2349 F7)', async () => {
+    const r = await rig();
+    r.body.setAnswer = { ok: false, detail: 'route write refused' };
+    r.coord.failPending = () => { throw new Error('database is busy'); };
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    expect(r.body.alive.size).toBe(0);
+  });
+
+  it('a row that reads unmeasured after failPending drains the id directly, and a failed stop leaves it owed (review 2349 F7)', async () => {
+    const r = await rig();
+    r.body.setAnswer = { ok: false, detail: 'route write refused' };
+    r.body.stopAnswer = () => ({ ok: false, detail: 'tmux is busy' });
+    const read = r.coord.designationRead.bind(r.coord); const realFail = r.coord.failPending.bind(r.coord);
+    let failed = false;
+    r.coord.failPending = (...a) => { failed = true; return realFail(...a); };
+    r.coord.designationRead = () => (failed ? { kind: 'unmeasured', why: 'the row is damaged' } : read());
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    const id = res.json().sessionId as string;
+    expect(r.body.log.filter((c) => c.op === 'stop').map((c) => c.id)).toEqual([id]);
+    const owed = r.db.prepare('SELECT stopsOwed FROM overlord_designation').get() as { stopsOwed: string };
+    expect(JSON.parse(owed.stopsOwed)).toEqual([id]);
   });
 
   it('a stop that fails stays owed, and the next retire drains it', async () => {
@@ -463,19 +541,33 @@ describe('a refused authority append', () => {
     });
   }
 
-  it('a retire of a live row maps the same way and leaves the row bound', async () => {
+  // The retire-of-a-live-row pin that stood here (review 2349 F12) was dropped: the real journal answers a narrowing `row-only` and
+  // never refuses it (X3b), so a fake that refused a retire pinned an answer no journal gives.
+
+  it('a second refused append (the model-class record) stops the attempt with the same word (review 2349 F12)', async () => {
     const r = await rig();
-    await post(r);
-    const id = view(r)!.pending!.sessionId;
-    r.coord.goLive(r.journal, id, GEN, 1);
-    for (const [error, word] of cases) {
-      r.journal.refuse = error;
-      const res = await del(r);
-      expect(res.statusCode).toBe(503);
-      expect(res.json()).toMatchObject({ error: word });
-      expect(view(r)!.bound).toMatchObject({ sessionId: id });
-    }
-    expect(r.body.count('stop')).toBe(0);
+    let n = 0;
+    const append = r.journal.appendInTx;
+    r.journal.appendInTx = (db, e) => (++n === 2 ? { ok: false, error: 'journal-append', detail: 'second record refused' } : append(db, e));
+    const res = await post(r);
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'journal-unreadable' });
+    expect(r.body.ops().filter((o) => o !== 'poolAnswer')).toEqual([]);
+    expect(r.host.delivered).toEqual([]);
+  });
+
+  it('while the authority journal is not coherent, designate refuses first: nothing written, no ccd call (review 2349 F9)', async () => {
+    const r = await rig();
+    r.facts.authority = { kind: 'rolled-back', cause: 'behind' };
+    const res = await post(r);
+    expect(res.statusCode).toBe(REFUSAL_STATUS['authority-rolled-back']);
+    expect(res.json()).toMatchObject({ error: 'authority-rolled-back' });
+    expect(r.body.log).toEqual([]);
+    expectNothingWritten(r);
+    r.facts.authority = { kind: 'unmeasured', why: 'journal' };
+    expect((await post(r)).json()).toMatchObject({ error: 'journal-unreadable' });
+    expect(r.body.log).toEqual([]);
+    expectNothingWritten(r);
   });
 });
 
@@ -565,7 +657,7 @@ describe('retire', () => {
     expect(r.journal.seen).toEqual([]);
     expect(view(r)).toMatchObject({ term: 0, pending: null, bound: null, lastAttempt: { outcome: 'retired', sessionId: id }, stopsOwed: [] });
     // The drain: the set cleared, the profile digest cleared, the markers off, the stop.
-    expect(r.body.ops().slice(-4)).toEqual(['writeSet', 'clearProfile', 'keepAwake-off', 'stop']);
+    expect(r.body.ops().slice(-4)).toEqual(['keepAwake-off', 'writeSet', 'clearProfile', 'stop']);
     expect(r.body.log.filter((c) => c.op === 'writeSet').at(-1)).toMatchObject({ id, extra: { poolset: '', acctorder: '' } });
     expect(r.body.alive.size).toBe(0);
   });
@@ -611,16 +703,16 @@ describe('retire', () => {
 // ── the keep-awake marker ───────────────────────────────────────────────────────────────────────────────────────────
 
 describe('a foreign keep-awake marker', () => {
-  it('succeeds, and raises exactly one operator item that names the marker', async () => {
+  it('succeeds, and raises exactly one operator item that names every foreign marker (review 2349 F8)', async () => {
     const r = await rig();
-    r.body.keepAwakeAnswer = (s) => (s === 'on' ? { ok: true, foreign: 'overlord-x.no-roll (written by another tool)' } : { ok: true, foreign: null });
+    r.body.keepAwakeAnswer = (s) => (s === 'on' ? { ok: true, foreign: ['no-hibernate', 'overlord-x.no-roll'] } : { ok: true, foreign: [] });
     const res = await post(r);
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ state: 'pending', awake: true, prompted: true });
     expect(view(r)!.pending).not.toBeNull();
     const rows = items(r);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.why).toContain('overlord-x.no-roll (written by another tool)');
+    expect(rows[0]!.why).toContain('no-hibernate, overlord-x.no-roll');
     expect(rows[0]!.title).toContain(res.json().sessionId);
     expect(r.body.count('stop')).toBe(0);
   });

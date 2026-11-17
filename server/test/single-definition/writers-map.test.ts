@@ -375,7 +375,7 @@ describe(TABLES_PIN, () => {
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
       // The designation's go-live restamps the pending body's generation with its term (Overlord W1 designation, X5).
-      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'mintGeneration', 'restampOverlordGeneration', 'setGenerationDue', 'setHoldOff',
+      continuity_generations: ['advanceObserved', 'clearShadowWalk', 'endOverlordGeneration', 'mintGeneration', 'restampOverlordGeneration', 'setGenerationDue', 'setHoldOff',
         'stepGeneration']
         .map((f) => `server/src/continuity/continuityStore.ts#${f}`),
       continuity_cursor: ['server/src/continuity/continuityStore.ts#advanceCursorIn'],

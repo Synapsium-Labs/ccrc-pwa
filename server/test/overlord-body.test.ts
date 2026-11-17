@@ -85,6 +85,22 @@ describe('create', () => {
     expect(await bodyOf(f).create(SLUG, ID, 'lane-a', ROUTE, null)).toMatchObject({ ok: false, created: 'no' });
   });
 
+  it('a ws-add that ccd answered with rc 3 to 6 and "spawn failed" made the session, whatever the registry reads (review 2349 F1)', async () => {
+    for (const rc of [3, 4, 5, 6]) {
+      const f = fake(() => refused(`ccd: ws-add spawn failed for ${ID} (spawn rc ${rc}) — see /reg/${ID}.spawn`, rc));
+      const absent = await bodyOf(f, { rowOf: async () => ({ kind: 'absent' }) }).create(SLUG, ID, 'lane-a', ROUTE, null);
+      expect(absent, `rc ${rc}`).toMatchObject({ ok: false, created: 'yes' });
+    }
+  });
+
+  it('an answered failure that is not a known pre-row refusal is re-measured from the registry (review 2349 F1)', async () => {
+    const f = fake(() => refused('ccd: could not write the registry row', 2));
+    const made = (rowOf: OverlordBodyDeps['rowOf']) => bodyOf(f, { rowOf }).create(SLUG, ID, 'lane-a', ROUTE, null);
+    expect(await made(async () => ({ kind: 'found' }))).toMatchObject({ created: 'yes' });
+    expect(await made(async () => ({ kind: 'absent' }))).toMatchObject({ created: 'no' });
+    expect(await made(async () => ({ kind: 'unlistable' }))).toMatchObject({ created: 'unknown' });
+  });
+
   it('a ws-add that never started made nothing', async () => {
     const f = fake(() => lost('spawn'));
     expect(await bodyOf(f).create(SLUG, ID, 'lane-a', ROUTE, null)).toMatchObject({ ok: false, created: 'no' });
@@ -105,12 +121,12 @@ describe('create', () => {
     expect(threw).toMatchObject({ ok: false, created: 'yes' });
   });
 
-  it('a LOST answer is re-measured in the registry: a row is yes, a measured absence no, an unreadable registry unknown', async () => {
+  it('a LOST answer is re-measured in the registry: a row is yes, a measured absence still owes the stop (unknown), an unreadable registry unknown', async () => {
     const created = async (answer: CcdResult, rowOf: OverlordBodyDeps['rowOf']): Promise<unknown> =>
       (await bodyOf(fake(() => answer), { rowOf }).create(SLUG, ID, 'lane-a', ROUTE, null) as { created?: string }).created;
     for (const answer of [lost('timeout'), lost('transport'), cutShort()]) {
       expect(await created(answer, async () => ({ kind: 'found' })), 'a row').toBe('yes');
-      expect(await created(answer, async () => ({ kind: 'absent' })), 'a measured absence').toBe('no');
+      expect(await created(answer, async () => ({ kind: 'absent' })), 'a measured absence owes the stop (review 2349 F3)').toBe('unknown');
       expect(await created(answer, async () => ({ kind: 'unlistable' })), 'an unlistable registry').toBe('unknown');
       expect(await created(answer, async () => ({ kind: 'unmeasurable' })), 'a row that cannot be assembled').toBe('unknown');
       expect(await created(answer, async () => { throw new Error('registry broke'); }), 'a throwing reader').toBe('unknown');
@@ -216,13 +232,18 @@ describe('the route writes and the probe', () => {
 describe('keepAwake', () => {
   it('on: the awake line is ok with no foreign marker', async () => {
     const f = fake(() => ok(`awake ${ID}\n`));
-    expect(await bodyOf(f).keepAwake(ID, 'on')).toEqual({ ok: true, foreign: null });
+    expect(await bodyOf(f).keepAwake(ID, 'on')).toEqual({ ok: true, foreign: [] });
     expect(f.calls).toEqual([['keep-awake', '--session', ID, '--state', 'on']]);
   });
 
   it('kept-foreign with rc 0 is ok, and names the marker', async () => {
     const out = `kept no-roll: not keep-awake's\nkept-foreign no-roll\nawake ${ID}\n`;
-    expect(await bodyOf(fake(() => ok(out))).keepAwake(ID, 'on')).toEqual({ ok: true, foreign: 'no-roll' });
+    expect(await bodyOf(fake(() => ok(out))).keepAwake(ID, 'on')).toEqual({ ok: true, foreign: ['no-roll'] });
+  });
+
+  it('every kept-foreign line is named, no-hibernate and no-roll both (review 2349 F8)', async () => {
+    const out = `kept-foreign no-hibernate\nkept-foreign no-roll\nawake ${ID}\n`;
+    expect(await bodyOf(fake(() => ok(out))).keepAwake(ID, 'on')).toEqual({ ok: true, foreign: ['no-hibernate', 'no-roll'] });
   });
 
   it('an unreadable marker, rc 1 and no awake line, is ok false and says which', async () => {
@@ -241,7 +262,7 @@ describe('keepAwake', () => {
   });
 
   it('off waits for the released line', async () => {
-    expect(await bodyOf(fake(() => ok(`released ${ID}\n`))).keepAwake(ID, 'off')).toEqual({ ok: true, foreign: null });
+    expect(await bodyOf(fake(() => ok(`released ${ID}\n`))).keepAwake(ID, 'off')).toEqual({ ok: true, foreign: [] });
     expect((await bodyOf(fake(() => ok(`awake ${ID}\n`))).keepAwake(ID, 'off')).ok).toBe(false);
   });
 });
@@ -379,12 +400,12 @@ describe('against a fixture HOME (makeCcdHarness)', () => {
   it('keepAwake: on, then kept-foreign beside someone else\'s marker, then off', async () => {
     seed();
     const body = fixtureBody();
-    expect(await body.keepAwake(ID, 'on')).toEqual({ ok: true, foreign: null });
+    expect(await body.keepAwake(ID, 'on')).toEqual({ ok: true, foreign: [] });
     expect(fs.readFileSync(filePath('no-roll'), 'utf8')).toBe('keep-awake v1');
-    expect(await body.keepAwake(ID, 'off')).toEqual({ ok: true, foreign: null });
+    expect(await body.keepAwake(ID, 'off')).toEqual({ ok: true, foreign: [] });
     expect(fs.existsSync(filePath('no-roll'))).toBe(false);
     fs.writeFileSync(filePath('no-roll'), 'an operator wrote this');
-    expect(await body.keepAwake(ID, 'on')).toEqual({ ok: true, foreign: 'no-roll' });
+    expect(await body.keepAwake(ID, 'on')).toEqual({ ok: true, foreign: ['no-roll'] });
     expect(fs.readFileSync(filePath('no-roll'), 'utf8')).toBe('an operator wrote this');
   });
 

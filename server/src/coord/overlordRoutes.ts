@@ -37,6 +37,7 @@ import type { LaneFacts } from '../../../shared/serviceability.js';
 import type { CoordStore } from './store.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
+import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { designateVerdict, overlordAccounts, retireVerdict, type AccountFacts } from './overlordDesignation.js';
 import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 
@@ -47,9 +48,9 @@ export type BodyAnswer = { ok: true } | { ok: false; detail: string };
 /** What a stop answers: `absent` is no registry row for the id, which the drain reads as stopped. */
 export type StopAnswer = { ok: true; absent: boolean } | { ok: false; detail: string };
 
-/** `ccd keep-awake` answers `kept-foreign <marker>` with rc 0 when a marker someone else wrote stands: `ok` with `foreign` set. A
+/** `ccd keep-awake` answers `kept-foreign <marker>` with rc 0 when a marker someone else wrote stands: `ok` with each `foreign` marker named. A
  *  marker it cannot read, or a lost answer, is `ok: false`. */
-export type KeepAwakeAnswer = { ok: true; foreign: string | null } | { ok: false; detail: string };
+export type KeepAwakeAnswer = { ok: true; foreign: readonly string[] } | { ok: false; detail: string };
 
 /** What the create learned: the incarnation, or why not and whether ccd may have made the session. `unknown` is read as `yes`. */
 export type CreateAnswer =
@@ -107,6 +108,8 @@ export interface OverlordRouteDeps {
     readonly roster: () => Roster;
     readonly limits: () => Promise<Record<string, AccountLimits>>;
     readonly shares: () => Promise<SharesRead>;
+    /** The authority guard's state (review 2349 F9). `index.ts` wires the guard with the journal, so only a test server omits it. */
+    readonly authority?: () => AuthorityState;
   };
 }
 
@@ -150,18 +153,24 @@ type Failure = AuthorityRefused | RowUnreadable | { readonly ok: false; readonly
 /** What a drain did: the ids stopped (an absent one included) and the ids that stay owed. */
 export interface DrainResult { readonly stopped: readonly string[]; readonly owed: readonly string[] }
 
-/** The one drain (review F5): for each id, clear the set and the profile digest, put the markers off, then stop. An `ok` stop, or
- *  `absent`, ends with `stopDone(id)`. A failed stop leaves the id owed and logs one line. The route clears and the markers are
- *  best effort: a stopped body's route record is inert, and a respawn of an owed id is stopped again by the next drain. */
+/** The one drain (review F5, F6 of review 2349): for each id, put the markers off FIRST; only when that succeeds clear the set and
+ *  the profile digest, then stop. An `ok` stop, or `absent`, ends with `stopDone(id)`. A failed `off` leaves the id owed with its
+ *  set in place and no stop, since a stopped body that kept its markers could be woken; a failed stop leaves the id owed too. The
+ *  route clears are best effort: a stopped body's route record is inert, and an owed id is stopped again by the next drain. */
 export async function drainOwedStops(
   deps: Pick<OverlordRouteDeps, 'body' | 'coord'>, ids: readonly string[],
 ): Promise<DrainResult> {
   const stopped: string[] = [];
   const owed: string[] = [];
   for (const id of [...new Set(ids)]) {
+    const off = await deps.body.keepAwake(id, 'off');
+    if (!off.ok) {
+      owed.push(id);
+      console.warn(`ccrc-server: the Overlord's body ${id} kept its keep-awake markers and stays owed: ${off.detail}`);
+      continue;
+    }
     await deps.body.writeSet(id, { poolset: '', acctorder: '' });
     await deps.body.clearProfile(id);
-    await deps.body.keepAwake(id, 'off');
     const s = await deps.body.stop(id);
     if (s.ok) { deps.coord.stopDone(id); stopped.push(id); continue; }
     owed.push(id);
@@ -200,6 +209,9 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
   };
 
+  const warnFail = (id: string, err: unknown): void =>
+    console.warn(`ccrc-server: the failed Overlord attempt ${id} could not be written: ${err instanceof Error ? err.message : String(err)}`);
+
   // GET: the row's view, the C56 list and the counted accounts under the row's set and class, and `unknown-pool` warnings.
   app.get('/api/overlord/designation', async (req, reply) => {
     if (!deps.gate(req, reply, { cap: null }).pass) return reply;
@@ -229,6 +241,11 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   });
 
   async function designate(reply: FastifyReply, parsed: DesignateBody, actor: string, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+    // A re-designate over a retired row journals both records as narrowings while the journal is not coherent, and builds a body
+    // that cannot go live: refuse before any row write or ccd call (review 2349 F9).
+    const auth = facts.authority?.() ?? { kind: 'coherent' };
+    if (auth.kind === 'rolled-back') return refuseRoute(reply, 'authority-rolled-back', { detail: `the authority journal reads rolled-back: ${auth.cause}` });
+    if (auth.kind === 'unmeasured') return refuseRoute(reply, 'journal-unreadable', { detail: `the authority journal reads unmeasured: ${auth.why}` });
     const slug = shortId();
     const id = workspaceId(OVERLORD_PROJECT, slug);
     // The probe asks about the id the door will create (plan question 2): no session exists yet, and the agent's answer to the
@@ -265,10 +282,16 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     /** Any failure after the row is written ends the attempt: record it, owe the stop of what may exist, drain, answer 502. The
      *  id is stopped even when the row no longer names it (a retire that ran between the steps), so nothing runs with no row. */
     const fail = async (detail: string, owesStop: boolean): Promise<FastifyReply> => {
-      coord.failPending(id, 'create-failed', deps.clock.wall(), owesStop);
+      // A `failPending` that throws (a busy database) must not skip the drain: the pending row then stands and the id is drained
+      // from here, and a stop that fails retries the write once so the id lands on `stopsOwed` (review 2349 F7).
+      let written = true;
+      try { coord.failPending(id, 'create-failed', deps.clock.wall(), owesStop); } catch (err) { written = false; warnFail(id, err); }
       const standing = coord.designationRead();
       const owed = standing.kind === 'unmeasured' || standing.row === null ? [] : standing.row.stopsOwed;
-      await drainOwedStops(deps, [...(owesStop ? [id] : []), ...owed]);
+      const drained = await drainOwedStops(deps, [...(owesStop || !written ? [id] : []), ...owed]);
+      if (!written && drained.owed.includes(id)) {
+        try { coord.failPending(id, 'create-failed', deps.clock.wall(), true); } catch (err) { warnFail(id, err); }
+      }
       return refuseRoute(reply, 'fleetFailed', { detail, sessionId: id });
     };
 
@@ -283,7 +306,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (!set.ok) return fail(set.detail, true);
     const awake = await body.keepAwake(id, 'on');
     if (!awake.ok) return fail(awake.detail, true);
-    if (awake.foreign !== null) raiseForeignMarker(id, awake.foreign);
+    if (awake.foreign.length > 0) raiseForeignMarker(id, awake.foreign);
     const sent = await deps.host.deliver(id, 'overlord-first-prompt');
 
     const f = await accountFactsOf().catch(() => null);
@@ -291,13 +314,14 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return { ok: true, state: 'pending', sessionId: id, deadlineAt, warnings, awake: true, prompted: sent.kind === 'sent' };
   }
 
-  /** A `.no-roll` marker someone else wrote stands on the new body: it keeps working, and the operator is told which marker. */
-  function raiseForeignMarker(id: string, marker: string): void {
+  /** A marker someone else wrote (`.no-hibernate`, `.no-roll` or both) stands on the new body: it keeps working, and ONE item names
+   *  each foreign marker (review 2349 F8). */
+  function raiseForeignMarker(id: string, markers: readonly string[]): void {
     try {
       coord.raiseItem({
         program: OVERLORD_PROJECT, runId: null, raisedBy: 'ccrc', kind: 'do',
         title: `The new Overlord body ${id} carries a keep-awake marker ccrc did not write`,
-        why: `Starting the Overlord asked for its keep-awake marker, and ccd found one it did not write (${marker}). The Overlord is running; `
+        why: `Starting the Overlord asked for its keep-awake marker, and ccd found one it did not write (${markers.join(', ')}). The Overlord is running; `
           + 'the marker is left where it is.',
         how: ['Look at who put the marker there.', 'Remove it if it is not wanted: the Overlord is kept awake by its own marker.'],
         options: null, neededBy: 'soon', soonLabel: 'keep awake', secretSlot: null,

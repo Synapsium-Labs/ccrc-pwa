@@ -13,6 +13,10 @@ import type { PoolSet } from '../../../shared/poolset.js';
 import type { AccountLimits } from '../../src/limits.js';
 import type { DesignationFact } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
+import { openCoordDb } from '../../src/coord/db.js';
+import { insertStart, mintGeneration } from '../../src/continuity/continuityStore.js';
+import type { AuthorityAppend } from '../../src/coord/overlordAuthorityJournal.js';
+import { mkTmp } from '../tmpHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -191,12 +195,12 @@ export function designateVerdictCases(m: DesignationModule): Record<string, Suit
         .toBe('refuse-input');
       expect(refuse(verdict({ accountPools: { pools: [], untagged: false } }))).toBe('overlord-single-account');
     },
-    'step 2: ccdWords null names all seven of ccd\'s words, project-add and the create\'s two among them': () => {
+    'step 2: ccdWords null names all eight of ccd\'s words, project-add and the create\'s two among them': () => {
       const v = verdict({ ccdWords: null });
       expect(v).toMatchObject({ act: 'refuse', word: 'capability-missing' });
       if (v.act !== 'refuse') throw new Error('no refusal');
       expect(v.needs).toEqual([...DESIGNATE_CCD_WORDS]);
-      expect(v.needs).toHaveLength(7);
+      expect(v.needs).toHaveLength(8);
       for (const w of ['project-add', 'ws-title-v1', 'ws-wrapper-v1', 'pool-set']) expect(v.needs).toContain(w);
     },
     'step 2: each missing ccd word and the server word is named, and only the missing ones': () => {
@@ -399,10 +403,44 @@ const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_M
     { id: 'I4 every id keyed overlord under a row', old: "  return sessionId;\n}\n\n/** The one narrowing", new: "  return 'overlord';\n}\n\n/** The one narrowing" },
   ], suite: identityOfCases };
 
+// ------------------------------------------------------------------------------------ retire's generation end (review 2349 F4)
+
+export type DesignationStoreModule = typeof import('../../src/coord/overlordDesignationStore.js');
+const STORE_MODULE = path.join(ROOT, 'server/src/coord/overlordDesignationStore.ts');
+const APPENDED = { ok: true, kind: 'appended', record: {} } as unknown as AuthorityAppend;
+
+/** A live designation over a minted generation, then a retire, over a coord db opened through the real migrations and an
+ *  appender that always appends: no live `overlord` generation may remain. */
+export function retireEndsGenerationCases(m: DesignationStoreModule): Record<string, SuiteCase> {
+  return {
+    'a live retire ends the retired body\'s live overlord generation': () => {
+      const db = openCoordDb(path.join(mkTmp('ccrc-designation-sim-'), 'coord.db'));
+      try {
+        const id = 'overlord-quiet-otter'; const now = 1_800_000_000_000; const j = { appendInTx: () => APPENDED };
+        const start = insertStart(db, { sessionId: id, reportId: 'r-1', uuid: '11111111-2222-3333-4444-555555555555', source: 'startup', model: 'claude-opus-5-5',
+          rowIncarnation: null, reportedAt: now, receivedAt: now });
+        if (!start.ok) throw new Error('start not recorded');
+        expect(mintGeneration(db, { identity: id, sessionId: id, role: 'overlord', term: 1, rowIncarnation: null, startId: start.id,
+          startReportedAt: now, resumed: false, model: 'claude-opus-5-5', lane: null, host: null, outcome: 'crashed', mono: 1, proc: 'p',
+          now }, null, true).ok).toBe(true);
+        expect(m.designatePending(db, j, { sessionId: id, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+          actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+        expect(m.goLive(db, j, id, '11111111-2222-3333-4444-555555555555', now + 1)).toMatchObject({ ok: true, changed: true });
+        expect(m.retire(db, j, { actor: 'operator-a', at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+        expect(db.prepare("SELECT COUNT(*) AS n FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").get()).toEqual({ n: 0 });
+      } finally { db.close(); }
+    },
+  };
+}
+const RETIRE_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
+    { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound);', new: '' },
+  ], suite: retireEndsGenerationCases };
+
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#overlordAccounts': ACCOUNTS_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#retireVerdict': RETIRE_SET as MutantSet<never>,
   'server/src/roleOf.ts#designationFactOf': DESIGNATION_FACT_SET as MutantSet<never>,
   'server/src/roleOf.ts#identityOf': IDENTITY_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignationStore.ts#retire': RETIRE_END_SET as MutantSet<never>,
 };

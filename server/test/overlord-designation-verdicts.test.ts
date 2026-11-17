@@ -3,9 +3,10 @@
 // against the real module, and reads the placement widening (the index's Q5).
 import { describe, it, expect } from 'vitest';
 import * as m from '../src/coord/overlordDesignation.js';
+import { parseRoster } from '../../shared/roster.js';
 import { projectHome, projectPlacement } from '../src/limits.js';
 import {
-  ROSTER, SET_A, SET_AB, designateVerdictCases, limit, overlordAccountsCases, retireVerdictCases,
+  ROSTER, SET_A, SET_AB, afacts, dfacts, designateVerdictCases, limit, overlordAccountsCases, retireVerdictCases,
 } from './sim/designationSets.js';
 
 const NO_EDGES = new Map<string, readonly string[]>();
@@ -13,6 +14,20 @@ const HEALTHY = { 'lane-a': limit(), 'lane-b': limit(), 'lane-c': limit(), 'lane
 
 describe('overlordAccounts', () => {
   for (const [name, fn] of Object.entries(overlordAccountsCases(m))) it(name, fn);
+});
+describe('a lane that is not home-able (review 2349 F5)', () => {
+  const acct = (id: string, homeAble: boolean) => ({
+    id, label: id, configDirSuffix: `.${id}`, exec: id === 'lane-a' ? { kind: 'upstream' } : { kind: 'generated', provider: 'anthropic' }, homeAble, hue: 'cyan',
+    telemetry: 'anthropic', continuity: { recordedAt: 1 }, pool: 'pool-a',
+  });
+  const roster = parseRoster({ version: 1, accounts: [acct('lane-a', true), acct('lane-c', false)] });
+  const facts = afacts({ 'lane-a': limit(), 'lane-c': limit() }, { roster });
+  it('is neither listed, counted nor picked', () => {
+    expect(m.overlordAccounts(SET_A, 'opus', facts)).toEqual({ list: ['lane-a'], counted: ['lane-a'], unmeasured: [] });
+  });
+  it('does not make a second account: the designate refuses overlord-single-account', () => {
+    expect(m.designateVerdict(dfacts({ accountPools: SET_A, accounts: facts }))).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 1 });
+  });
 });
 describe('designateVerdict', () => {
   for (const [name, fn] of Object.entries(designateVerdictCases(m))) it(name, fn);

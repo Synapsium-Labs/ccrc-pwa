@@ -2293,6 +2293,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     facts: {
       ccdWords: () => deps.fleetState?.ccdVerbs ?? null, serverWords: SERVER_CAPS, builds: () => inventoryBuildAgreement(deps.coord ?? { nodes: () => [] }),
       roster: () => deps.cfg.roster, limits: () => readLimits(deps.io, deps.cfg), shares: () => readSharesMeasured(deps.io, deps.cfg.registryDir),
+      authority: deps.overlordAuthorityGuard === undefined ? undefined : () => deps.overlordAuthorityGuard!.state(),
     },
   });
   registerResponseRoutes(app, { coord: deps.coord, time: deps.time, gate: accountGate, notice, actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off') });

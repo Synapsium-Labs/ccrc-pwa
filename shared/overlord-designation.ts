@@ -26,9 +26,10 @@ export type AttemptOutcome = keyof typeof ATTEMPT_OUTCOME_MAP;
 export const ATTEMPT_OUTCOMES: readonly AttemptOutcome[] = Object.keys(ATTEMPT_OUTCOME_MAP) as AttemptOutcome[];
 
 /** ccd's words designate and rebind require (Q33, ruled; `project-add`, review M10; the keep-awake token is ccd arms A's
- *  `keep-awake-v1`, X8), then the create's own two (slug `designate-asks-the-create-words`). */
+ *  `keep-awake-v1`, X8), then the create's own two (slug `designate-asks-the-create-words`), then ccd arms C2's `fresh-pick-v1` (review 2349 F10), so a
+ *  fleet box rolled back below arms C refuses `capability-missing`. */
 export const DESIGNATE_CCD_WORDS =
-  ['pool-set', 'keep-awake-v1', 'hibernate-fresh', 'launch-surface-v1', 'project-add', 'ws-title-v1', 'ws-wrapper-v1'] as const;
+  ['pool-set', 'keep-awake-v1', 'hibernate-fresh', 'launch-surface-v1', 'project-add', 'ws-title-v1', 'ws-wrapper-v1', 'fresh-pick-v1'] as const;
 /** The server's own words designate and rebind require (Q33: `continuity-v1`, W1a's last piece). */
 export const DESIGNATE_SERVER_WORDS = ['continuity-v1'] as const;
 
