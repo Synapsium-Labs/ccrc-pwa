@@ -28,6 +28,10 @@ ledger pull request; this file edits no ledger and no existing plan.
   `main` a second time (on the coordinator's word again) and took 86; decision model A (#2948) then landed 86, so in fix
   round 1 it merged `main` a third time (on the coordinator's word, 22474 and 22512) and the migration took the next
   slot, 87. Other open pull requests hold 87 too; whoever lands second renumbers at landing, on the coordinator's word.
+  The third merge moved one pin of main's own as well: `decision-model-records.test.ts` rolled a database back one version
+  to replay 86, so with 87 after it that test now undoes 87 first and rolls back to the version before the migration that
+  creates the decision tables, found by its text (CI's first run on the merge caught it; the fix round's re-run list did
+  not name that file).
 
 ## Fix round 1 (review run 2348, the coordinator's rulings)
 

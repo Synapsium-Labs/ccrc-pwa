@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
-import { COORD_SCHEMA_VERSION } from '../src/coord/schema.js';
+import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import {
   decisionAskStore, decisionRecordOf, decisionUsage, recordDecision, releaseDecisionReservations, reserveDecisionCalls,
   settleDecisionCalls, type DecisionRecordWrite,
@@ -155,7 +155,12 @@ describe('the migration', () => {
     const counts = (d: DatabaseSync) => Object.fromEntries(older.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
     const before = counts(db);
     expect(before['response_boots']).toBe(1);
-    db.exec(`DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${COORD_SCHEMA_VERSION - 1};`);
+    // The version before the migration that creates the two tables, found by its text, and every later migration undone
+    // first: 87 (asks.revision and operator_items.revision, Overlord W2 row revisions) followed it on main.
+    const back = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE decision_records'));
+    expect(back).toBe(COORD_SCHEMA_VERSION - 2);
+    db.exec('ALTER TABLE operator_items DROP COLUMN revision; ALTER TABLE asks DROP COLUMN revision;');
+    db.exec(`DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${back};`);
     db.close();
     const again = openCoordDb(file);
     expect(again.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });
