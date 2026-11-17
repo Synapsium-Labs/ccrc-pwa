@@ -1167,7 +1167,7 @@ describe('the rejection table is total, in both directions', () => {
         // THE DECISION MODEL (Overlord W2): `coord/decisionModel*.ts` name its outcomes, their reasons, its host kinds, bands
         // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
         // through `coord/decisionModel.ts#isDecisionModelWord`, derived from L0's lists and that file's, never NOT_CODES.
-        || isDecisionModelWord(tok),
+        || isDecisionModelWord(tok)
         // THE REMAINING-WORK DOOR (Overlord W2 remaining work A): `coord/programmeFactsStore.ts` names why it refused a
         // good body (`'too-many-open-edges'`), and `coord/programmeRemaining.ts` an edge target's predicate (`'run-closed'`,
         // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,
