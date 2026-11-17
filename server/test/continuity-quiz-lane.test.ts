@@ -98,7 +98,7 @@ describe('the item says what, how and why, and names every condition', () => {
       expect(all).toMatch(/ccrc quiz-record --report <file> --sha <hex>/);
       // The record path's real steps (plan `2026-11-17-overlord-quiz-record.md` Task 11): the runbook, the module, the
       // Confirm on the card, and never inside a W2 window (skip condition 3).
-      expect(all).toContain('docs/superpowers/programs/overlord/quiz-record-runbook.md');
+      expect(all).toContain('quiz-record-runbook.md, in the Overlord programme\'s docs');
       expect(all).toContain('node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs');
       expect(all).toMatch(/arms \(it runs step 0b's probes first/);
       expect(all).toMatch(/press Confirm on the pending run/);

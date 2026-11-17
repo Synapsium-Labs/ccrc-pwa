@@ -319,7 +319,7 @@ export function quizItemText(weekKey: string, baselineExists: boolean): { readon
     + ' Nothing waits on this week\'s run but the record itself.';
   const how = [
     'On the fleet box, in your own shell, never in a session\'s pane and never while a W2 window is open, run history\'s '
-      + 'single-arm quiz by hand as its runbook says (docs/superpowers/programs/overlord/quiz-record-runbook.md): once, its '
+      + 'single-arm quiz by hand as its runbook says (quiz-record-runbook.md, in the Overlord programme\'s docs): once, its '
       + 'setup, source, freeze and marker steps; each week, arms (it runs step 0b\'s probes first and stops if one fails), judge '
       + 'and report, with node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs. ccrc never runs it.',
     `Record the run from the same shell, within ${QUIZ_RECORD_MAX_AGE_DAYS} days of the arms run: ccrc quiz-record --report <file> --sha <hex>, with `
