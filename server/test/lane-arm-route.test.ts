@@ -135,7 +135,7 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       lane: 'launch-profile', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }, {
       lane: 'anchor-slot', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
-    }] });
+    }], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } } });
   });
 
   it('Live without a key answers 409 confirm-required with the facts and the key; with the key it is written', async () => {

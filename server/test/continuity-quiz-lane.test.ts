@@ -96,6 +96,14 @@ describe('the item says what, how and why, and names every condition', () => {
       expect(all).toMatch(/by hand/);                                     // 3: the driver by the operator's hand
       expect(all).toMatch(/never a W2 result, a PASS or a measured benefit/); // 4
       expect(all).toMatch(/ccrc quiz-record --report <file> --sha <hex>/);
+      // The record path's real steps (plan `2026-11-17-overlord-quiz-record.md` Task 11): the runbook, the module, the
+      // Confirm on the card, and never inside a W2 window (skip condition 3).
+      expect(all).toContain('docs/superpowers/programs/overlord/quiz-record-runbook.md');
+      expect(all).toContain('node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs');
+      expect(all).toMatch(/arms \(it runs step 0b's probes first/);
+      expect(all).toMatch(/press Confirm on the pending run/);
+      expect(all).toMatch(/never while a W2 window is open/);
+      expect(all).toMatch(/within 8 days of the arms run/);
     });
   }
 });

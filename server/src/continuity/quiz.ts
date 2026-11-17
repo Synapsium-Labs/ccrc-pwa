@@ -318,10 +318,15 @@ export function quizItemText(weekKey: string, baselineExists: boolean): { readon
         + 'no W1a lane can go live until it exists.')
     + ' Nothing waits on this week\'s run but the record itself.';
   const how = [
-    'On the fleet box, in your own shell and never in a session\'s pane, run history\'s replay quiz driver in its single-arm, '
-      + 'recall-on mode, by hand, as its runbook says. ccrc never runs it.',
-    'Record the run from the same shell: ccrc quiz-record --report <file> --sha <hex>, with the report file and the sha the '
-      + 'driver printed. It refuses inside a session.',
+    'On the fleet box, in your own shell, never in a session\'s pane and never while a W2 window is open, run history\'s '
+      + 'single-arm quiz by hand as its runbook says (docs/superpowers/programs/overlord/quiz-record-runbook.md): once, its '
+      + 'setup, source, freeze and marker steps; each week, arms (it runs step 0b\'s probes first and stops if one fails), judge '
+      + 'and report, with node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs. ccrc never runs it.',
+    `Record the run from the same shell, within ${QUIZ_RECORD_MAX_AGE_DAYS} days of the arms run: ccrc quiz-record --report <file> --sha <hex>, with `
+      + 'the week\'s single-report.json and the sha report printed. It refuses inside a session and a pane, and records the run '
+      + 'as pending.',
+    'Then open Settings, Automation, Shadow lanes and press Confirm on the pending run, or Discard if it should not count. Only '
+      + 'a confirmed run counts: the first one confirmed while every W1a lane is in shadow becomes the baseline.',
     'The conditions this record keeps (the W0-28 ruling): the history store is opened read-only, and no session runs a writing '
       + 'form of `ccrc history`; no history marker is written (steer, agents-on and the rest stay yours); the driver runs by '
       + 'your hand; and the baseline is never a W2 result, a PASS or a measured benefit of recall: a row holds the score and '
