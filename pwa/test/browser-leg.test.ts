@@ -11,6 +11,9 @@
 //   that throw is what makes a box with no Chrome a red leg rather than a skipped one.
 // - `devWorkerSafeEntries` (`vite.config.ts`) applies only when serving, and never under vitest: each half has its own
 //   case, measured by calling the plugin's own `apply` with VITEST unset and then set.
+// - The parse gates of `browser/mockup-parse.browser.test.ts` print their medians whenever the leg runs in CI, not only on
+//   request (`browser/measure.ts`; native Docs reader C2's first item, review run 2318 minor 7): the decision's arms each
+//   have a case, and the browser file reads its print switch from that one function and nowhere else.
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -20,6 +23,7 @@ import { configDefaults } from 'vitest/config';
 import { loadConfigFromFile, type ConfigEnv, type Plugin, type PluginOption, type UserConfig } from 'vite';
 import { DEFAULT_CHROME, resolveChrome } from '../browser/harness';
 import { FILE_MS, SLOW_FIRST, SlowFirstSequencer, balancedShard, slowFirst } from '../browser/slowFirst';
+import { printsGateMedians } from '../browser/measure';
 
 const PWA = path.join(import.meta.dirname, '..');
 
@@ -211,5 +215,26 @@ describe("the dev alias's scope: serve only, never under vitest (W4 review 412, 
     expect(process.env['VITEST'], 'this case must run under vitest').toBeDefined();
     expect(apply('serve')).toBe(false);
     expect(apply('build')).toBe(false);
+  });
+});
+
+describe("the parse gates print their medians in CI, not only on request (C2's first item, review run 2318 minor 7)", () => {
+  it('prints on request (CCRC_MEASURE=1) and whenever the leg runs in CI (CI=true or GITHUB_ACTIONS=true)', () => {
+    expect(printsGateMedians({ CCRC_MEASURE: '1' })).toBe(true);
+    expect(printsGateMedians({ CI: 'true' })).toBe(true);
+    expect(printsGateMedians({ GITHUB_ACTIONS: 'true' })).toBe(true);
+  });
+
+  it('prints nothing otherwise: no variable, or a value that is not a request', () => {
+    expect(printsGateMedians({})).toBe(false);
+    expect(printsGateMedians({ CCRC_MEASURE: '0', CI: 'false', GITHUB_ACTIONS: '' })).toBe(false);
+  });
+
+  it('the browser file takes its print switch from printsGateMedians and reads no environment variable of its own', () => {
+    const source = readFileSync(path.join(PWA, 'browser', 'mockup-parse.browser.test.ts'), 'utf8');
+    expect(source).toContain("import { printsGateMedians } from './measure';");
+    expect(source).toContain('const MEASURE = printsGateMedians(process.env);');
+    expect(source.match(/process\.env\[/g) ?? []).toEqual([]);
+    expect(source.match(/process\.env\.\w/g) ?? []).toEqual([]);
   });
 });

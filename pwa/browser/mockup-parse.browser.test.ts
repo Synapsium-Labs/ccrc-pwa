@@ -59,8 +59,10 @@
 // A fixture counts against the 12 when Chromium parses it, so the foreign rows (refused on v3) cost nothing there.
 // The shapes v2 REFUSES (the old divergence shape `<span><div></span>`, and the misnested `<b><div></b>`, plain and with
 // distinct attributes) are no Chrome fixtures any more: `test/mockup-prescan.test.ts` holds them as refusals.
-// Under `CCRC_MEASURE=1` each gate prints one `M5B8-MEASURE` line through stderr: shape, parameters, bytes, the pre-scan's
-// tags/depth/formatting, the DOM size and the three times with their median, after one line naming the engine. A run
+// Under `CCRC_MEASURE=1`, and whenever the leg runs in CI (`browser/measure.ts`; C2's first item, review run 2318 minor 7, so
+// a hosted runner's medians are on record), each gate prints one `M5B8-MEASURE` line through stderr: shape, parameters,
+// bytes, the pre-scan's tags/depth/formatting, the DOM size and the three times with their median, after one line naming
+// the engine. The gate is the same either way. A run
 // builds at most 12 fixtures (the memo check below), each at most 2 MiB, all in memory, each timed three times (the
 // control once).
 //
@@ -74,6 +76,7 @@ import {
 } from '../src/docs/mockup/policy';
 import { prescanMockup, type MockupPrescan } from '../src/docs/mockup/prescan';
 import { resolveChrome } from './harness';
+import { printsGateMedians } from './measure';
 
 /** The budget M5.B8 pins (base 5.6.2): a parse of an admitted page finishes within it. */
 const PARSE_BUDGET_MS = 1000;
@@ -81,7 +84,8 @@ const PARSE_BUDGET_MS = 1000;
 const FIXTURE_MAX_BYTES = 2 * 1024 * 1024;
 /** The most fixtures one run generates (plan Task 5 step 4). */
 const FIXTURE_MAX_COUNT = 12;
-const MEASURE = process.env['CCRC_MEASURE'] === '1';
+/** Whether each gate prints its median line (`printsGateMedians`): on request, and in CI. */
+const MEASURE = printsGateMedians(process.env);
 
 /** The formatting elements the shape cycles through. `a` and `nobr` are left out: a second one while the first is
  *  active runs the parser's adoption agency and removes the earlier, so they would not stay active at F. */
