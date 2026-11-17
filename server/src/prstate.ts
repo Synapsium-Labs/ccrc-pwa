@@ -205,6 +205,22 @@ export function mergedFactsOf(line: CcdPrLine): PrMergedFacts | null {
   return { pr: number, head: headRefOid, base: baseRefName, mergedAt, mergeCommit };
 }
 
+/** A run's own bound pull request as its close measured it (Overlord W2 done tests A, DT7): the bound row of the close's
+ *  verified line, merged by the same predicate every phase reader uses (`isMergedRow`, a train landing included). The
+ *  `.prhistory` lineage never says that a run's own PR merged, so the close records this and the done-test reader reads
+ *  it. The row is the run's own only when the verified claim names its number (`claimPr`): a later wave on the same
+ *  workspace that opened no PR still sees wave 1's merged row bound to the branch, and records nothing (review 2377 F1).
+ *  Null then, and when no row is bound, or the bound row names no number or no 40-hex head: never a guess. */
+export interface ClosePrFacts { pr: number; merged: boolean; head: string }
+export function closePrFactsOf(line: CcdPrLine, claimPr: number | null): ClosePrFacts | null {
+  if (claimPr === null) return null;
+  const row = boundRow(line.rows, line.baseShort, line.branch);
+  if (row === null || typeof row.number !== 'number' || !Number.isSafeInteger(row.number) || row.number <= 0) return null;
+  if (row.number !== claimPr) return null;
+  if (typeof row.headRefOid !== 'string' || !isHead40(row.headRefOid)) return null;
+  return { pr: row.number, merged: isMergedRow(row, line.baseShort, line.branch), head: row.headRefOid };
+}
+
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 const RUNNING = new Set(['PENDING', 'IN_PROGRESS', 'QUEUED', 'WAITING', 'EXPECTED', 'REQUESTED']);
 const MAX_CHECK_NAMES = 10;
