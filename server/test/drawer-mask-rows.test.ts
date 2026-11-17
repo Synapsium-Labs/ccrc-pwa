@@ -1,6 +1,6 @@
 // D-8710 — A KEY ACROSS ANY NUMBER OF ROWS IS MASKED, WHATEVER SEPARATES THEM (desktop polish Task C41).
 //
-// MEASURED (review 2326 F3, O1, O2; `docs/superpowers/plans/2026-10-22-desktop-polish/c41.md`): the exact-bytes row join
+// MEASURED (review 2326 F3, O1, O2; `docs/superpowers/programs/desktop-polish/c41.md`): the exact-bytes row join
 // took a run that ends its row together with the NEXT row's leading run only, so a fingerprinted key that no shape
 // matches, drawn by a program onto three or more rows, reached the drawer and pane history with every byte and no mark,
 // under every row separator. Through a real tmux 3.6 at 220 columns, a 500-character key drawn on three rows arrived
@@ -356,9 +356,11 @@ describe('D-8710 — a key whose rows are longer than what a drawer holds for on
 
   it('a key at the run ceiling at 118 columns with a colour escape on every row, cut anywhere, is never drawn (F1)', () => {
     // tmux's form: a cursor position, a two-column indent and the program's colour before each row, the reset after it:
-    // 70 rows, 10,512 bytes. The drawer read only the last 9,280 bytes of a chunk, so when the chain of rows ran past
-    // that window it was cut unannounced: the rows before the hold went out unjoined, and at one cut every byte of the
-    // key was drawn with no mark (review 2352 F1; 155 of 10,511 cuts leaked on a69085c93).
+    // 70 rows, 10,526 bytes with the command and the prompt. The drawer read only the last 9,280 bytes of a chunk, so
+    // when the chain of rows ran past that window it was cut unannounced: the rows before the hold went out unjoined, and
+    // at one cut every byte of the key was drawn with no mark (review 2352 F1; 155 of 10,511 cuts leaked on a69085c93).
+    // The window holds 18,496 bytes now, so this row no longer cuts it: it pins the walk through coloured rows, and
+    // review 2370's rows below cut the window.
     const key = keyOf(8_192, 2352);
     const m = fingerprinted(key);
     try {
@@ -371,9 +373,10 @@ describe('D-8710 — a key whose rows are longer than what a drawer holds for on
   }, 300_000);
 
   it('a 6,000-byte key at 64 columns after a 100-column indent, cut anywhere past one run\'s hold, is never drawn (F1)', () => {
-    // 94 rows, 16,553 bytes: each row's indent is a hundred blanks, so the rows a key spans run past the window from far
-    // into the text (review 2352 F1: 269 of 16,073 cuts leaked, one the whole key). A cut before 9,000 bytes leaves the
-    // window the whole chain; the sweep runs from there to the end.
+    // 94 rows, 16,083 bytes: each row's indent is a hundred blanks, so the rows a key spans ran past the one run's window
+    // (9,280 bytes) from far into the text (review 2352 F1: 269 of 16,073 cuts leaked, one the whole key). The window holds
+    // 18,496 bytes now, the whole chain at every cut, so this row pins the walk through indented rows; review 2370's rows
+    // below cut the window. The sweep runs from 9,000 bytes, past one run's hold, to the end.
     const key = keyOf(6_000, 2353);
     const m = fingerprinted(key);
     try {
@@ -540,4 +543,346 @@ describe('D-8710 — a key whose rows are longer than what a drawer holds for on
       m.close();
     }
   }, 300_000);
+});
+
+describe('D-8710 — a key the drawer holds in part, or past its window, is never drawn (review 2370)', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  const SGR = '\x1b[38;2;153;153;153m';
+  /** `out` with its escapes read away (a key coloured per character is drawn with an escape between its bytes). */
+  const plain = (out: string): string =>
+    out.replace(/\x1b(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\)|[PX^_][^\x1b]*\x1b\\|[ -/]*[0-~])/g, '');
+  /** Whether `out`, its escapes read away, holds a slice of 8 of `key`. */
+  const leaks = (key: string): ((out: string) => boolean) => {
+    const grams = new Set<string>();
+    for (let i = 0; i + 8 <= key.length; i++) grams.add(key.slice(i, i + 8));
+    return (raw) => { const out = plain(raw); for (let i = 0; i + 8 <= out.length; i++) if (grams.has(out.slice(i, i + 8))) return true; return false; };
+  };
+  /** The cuts `from`, `from + step`, ... below `to` whose two chunks draw a slice of `key`, or not `rows` marks (the
+   *  first five), and the one-chunk text too. `rows` null: a key the stream ends inside is withheld, so only its bytes
+   *  are counted. */
+  const badCuts = (m: SecretMasker, key: string, text: string, rows: number | null, step: number, from = 1, to = text.length): string[] => {
+    const shows = leaks(key);
+    const bad: string[] = [];
+    const check = (what: string, sent: string): void => {
+      const marks = count(sent, DRAWER_SECRET_MASK);
+      if (shows(sent) || (rows !== null && marks !== rows)) bad.push(`${what}: ${shows(sent) ? 'key bytes drawn' : 'no key bytes'}, ${marks} marks`);
+    };
+    check('one chunk', throughDrawer(m, [{ text, quietMs: 40 }]));
+    for (let c = from; c < to && bad.length < 5; c += step) {
+      check(`cut at ${c}`, throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]));
+    }
+    return bad;
+  };
+  /** `text` in chunks of `size` from `phase`, each `quietMs` apart. */
+  const chunked = (text: string, size: number, phase: number, quietMs: number): { text: string; quietMs: number }[] => {
+    const out = phase > 0 ? [{ text: text.slice(0, phase), quietMs }] : [];
+    for (let c = phase; c < text.length; c += size) out.push({ text: text.slice(c, c + size), quietMs });
+    out[out.length - 1]!.quietMs = 40;
+    return out;
+  };
+  /** `s` broken into rows of `cols`, joined by `sep`. */
+  const rowsOf = (s: string, cols: number, sep: string): string => {
+    const r: string[] = [];
+    for (let i = 0; i < s.length; i += cols) r.push(s.slice(i, i + cols));
+    return r.join(sep);
+  };
+
+  it('a key whose last row is short, then a short row, is masked to its end wherever the cut (F1)', () => {
+    // A 3,011-byte key at 100 columns (its last row 11 bytes), then `  Saved.` on the next row. The walk stops at the
+    // short row (a row under 12 units only begins a key's rows), so the hold begins inside the key: the rows before it
+    // went out masked with the held rows read after them, but the held rows went out later with only the 1 KiB of
+    // context, which no longer held the key's head, and the last 11 bytes were drawn (review 2370 F1, on e37701c43).
+    const key = keyOf(3_011, 2370);
+    const m = fingerprinted(key);
+    try {
+      for (const sep of ['\r\n  ', '\r\n']) {
+        const text = `${at(4, 1)}$ show\r\n  ${rowsOf(key, 100, sep)}\r\n  Saved.\r\n`;
+        expect(badCuts(m, key, text, 31, 1), JSON.stringify(sep)).toEqual([]);
+      }
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a key, then rows of another wrapped token that fill the walk\'s bound, is masked wherever the cut (F1)', () => {
+    // A 6,000-byte key at 100 columns, then 4,000 units of another token wrapped the same way: the rows after the key
+    // spend the walk's bound, so the hold begins inside the key, and its held rows were drawn later with 1 KiB of context
+    // (review 2370 F1: 4,300 key bytes in one chunk, on e37701c43). Every 7th cut.
+    const key = keyOf(6_000, 2371);
+    const other = keyOf(4_004, 2372).slice(4).toUpperCase().replace(/-/g, 'Z');
+    const m = fingerprinted(key);
+    try {
+      const text = `${at(4, 1)}$ show\r\n  ${rowsOf(key, 100, '\r\n  ')}\r\n  ${rowsOf(other, 100, '\r\n  ')}\r\n`;
+      expect(badCuts(m, key, text, 60, 7)).toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a fully written key whose rows run past the window, in 4 KiB chunks, is never drawn (F2)', () => {
+    // An 8,192-byte key at 64 columns, each row after a cursor position and an indent of 90 or 130 blanks: 20,617 and
+    // 25,737 bytes, past the 18 KiB window. The walk reached the window's first row and held from there, so the rows
+    // before it went out with what the drawer had (a key not yet whole: drawn) and the held rows later with 1 KiB of
+    // context (review 2370 F2: the whole key at 21 and 43 of 43 phases, on e37701c43). Such a chain is read again over
+    // the whole text now, and held from where it starts. 43 phases of the 4 KiB grid, with no quiet between chunks and
+    // with one hold's quiet (the expired hold's path).
+    for (const indent of [90, 130]) {
+      const key = keyOf(8_192, 2373 + indent);
+      const m = fingerprinted(key);
+      try {
+        const shows = leaks(key);
+        let text = `${at(4, 1)}$ show-key\r\n`;
+        let r = 0;
+        for (let i = 0; i < key.length; i += 64, r++) text += `${at(5 + (r % 40), 1)}${' '.repeat(indent)}${key.slice(i, i + 64)}`;
+        text += `\r\n${at(46, 1)}$ `;
+        const bad: string[] = [];
+        for (const quietMs of [0, 7]) {
+          for (let phase = 0; phase < 4_096 && bad.length < 5; phase += 96) {
+            const sent = throughDrawer(m, chunked(text, 4_096, phase, quietMs));
+            if (shows(sent) || count(sent, DRAWER_SECRET_MASK) !== 128) {
+              bad.push(`indent ${indent}, ${quietMs} ms, phase ${phase}: ${shows(sent) ? 'key bytes drawn' : 'no key bytes'}, ${count(sent, DRAWER_SECRET_MASK)} marks`);
+            }
+          }
+        }
+        expect(bad).toEqual([]);
+      } finally {
+        m.close();
+      }
+    }
+  }, 300_000);
+
+  it('a key after a styled listing, with 90 styled rows after it, is never drawn wherever the cut (F2)', () => {
+    // The listing form of review 2352's row (about 176 bytes a row for 64 columns), a 1,600-byte key on 25 rows, then 90
+    // more listing rows, while an 8,192-byte key is held too: the chain from the end runs past the window, and the key's
+    // rows the hold took were drawn later (review 2370 F2: 122 of 2,263 cuts, up to 1,216 bytes, on e37701c43). Every
+    // 13th cut from the key's first row to the end.
+    const key = keyOf(1_600, 2374);
+    const m = fingerprinted(key, keyOf(8_192, 2375));
+    try {
+      const listing = keyOf(100 * 64 + 4, 2376).slice(4).replace(/-/g, 'x').toUpperCase();
+      const after = keyOf(90 * 64 + 4, 2377).slice(4).replace(/-/g, 'y').toUpperCase();
+      const pre = (r: number): string =>
+        `${at(r % 50 + 1, 1)}${SGR}\x1b[48;2;20;20;20m\x1b]8;;https://example.com/a/fairly/long/path/to/row/${r}\x1b\\`;
+      const post = '\x1b]8;;\x1b\\\x1b[39;49m';
+      let text = `${at(1, 1)}$ list\r\n`;
+      let r = 0;
+      for (let i = 0; i < listing.length; i += 64, r++) text += pre(r) + listing.slice(i, i + 64) + post;
+      const keyAt = text.length;
+      for (let i = 0; i < key.length; i += 64, r++) text += pre(r) + key.slice(i, i + 64) + post;
+      for (let i = 0; i < after.length; i += 64, r++) text += pre(r) + after.slice(i, i + 64) + post;
+      text += `\r\n${at(50, 1)}$ `;
+      expect(badCuts(m, key, text, 25, 13, keyAt)).toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a key coloured per character whose bytes pass the window, ending a chunk, is never drawn (F3)', () => {
+    // 1,200 and 2,000 characters, each after its own 24-bit colour: 22,460 and 37,425 bytes on one row. A window with
+    // no row break is all one row that began before it: read as the whole text, its first byte proved where the run
+    // joined across escapes started, the hold began there, and every byte before it was drawn (review 2370 F3: 70 of 402
+    // sampled cuts, up to the whole key, on e37701c43). About 400 cuts each: the stream ending after the key (the key is
+    // withheld: no mark yet), and a prompt after it (one mark).
+    for (const n of [1_200, 2_000]) {
+      const key = keyOf(n, 2378 + n);
+      const m = fingerprinted(key, keyOf(8_192, 2379));
+      try {
+        let text = `${at(4, 1)}$ show\r\n`;
+        for (let i = 0; i < n; i++) text += `\x1b[38;2;${(i * 7) % 256};${(i * 13) % 256};${(i * 29) % 256}m${key[i]}`;
+        expect(badCuts(m, key, text, null, Math.floor(text.length / 400)), `${n} characters, the stream ending`).toEqual([]);
+        const prompt = `${text}\x1b[39m\r\n${at(30, 1)}$ `;
+        expect(badCuts(m, key, prompt, 1, Math.floor(text.length / 400)), `${n} characters, a prompt after`).toEqual([]);
+        // A hold that expires with the key half written (a 7 ms gap at the cut): the flush reads the held run back over
+        // the whole held text too, so nothing of it goes out before the rest arrives.
+        const shows = leaks(key);
+        const gapped: number[] = [];
+        for (let c = 200; c < text.length && gapped.length < 5; c += Math.floor(text.length / 100)) {
+          const sent = throughDrawer(m, [{ text: prompt.slice(0, c), quietMs: 7 }, { text: prompt.slice(c), quietMs: 40 }]);
+          if (shows(sent) || count(sent, DRAWER_SECRET_MASK) !== 1) gapped.push(c);
+        }
+        expect(gapped, `${n} characters, a 7 ms gap at the cut`).toEqual([]);
+      } finally {
+        m.close();
+      }
+    }
+    // 6,000 characters (112,270 bytes): past one run's hold (9,216 units) even in the view that reads each escape as one
+    // unit, so a flush whose walk read back only that far sent the key's head unjoined (12 of 60 cuts, the whole key).
+    const key = keyOf(6_000, 2392);
+    const m = fingerprinted(key, keyOf(8_192, 2379));
+    try {
+      const shows = leaks(key);
+      let text = `${at(4, 1)}$ show\r\n`;
+      for (let i = 0; i < 6_000; i++) text += `\x1b[38;2;${(i * 7) % 256};${(i * 13) % 256};${(i * 29) % 256}m${key[i]}`;
+      const prompt = `${text}\x1b[39m\r\n${at(30, 1)}$ `;
+      const gapped: number[] = [];
+      for (let c = 200; c < text.length && gapped.length < 5; c += Math.floor(text.length / 60)) {
+        const sent = throughDrawer(m, [{ text: prompt.slice(0, c), quietMs: 7 }, { text: prompt.slice(c), quietMs: 40 }]);
+        if (shows(sent) || count(sent, DRAWER_SECRET_MASK) !== 1) gapped.push(c);
+      }
+      expect(gapped, '6,000 characters, a 7 ms gap at the cut').toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a chain just inside the window is held from its start wherever the cut (F4)', () => {
+    // The block of the pane-history row (five escapes before each of 128 rows of 64 and five after), drawn with CR LF
+    // between its rows: 17,930 bytes, a chain that the window (18,496 bytes) holds whole, at every 3rd cut across it
+    // (review 2370 F4: no drawer row cut a chain between 17.5 and 18.4 KB).
+    const pre = `  ${SGR}\x1b[48;2;20;20;20m\x1b[1m\x1b[3m\x1b[4m`;
+    const post = '\x1b[24m\x1b[23m\x1b[22m\x1b[49m\x1b[39m';
+    const key = keyOf(8_192, 2380);
+    const m = fingerprinted(key);
+    try {
+      let text = `$ show\r\n`;
+      for (let i = 0; i < key.length; i += 64) text += `${pre}${key.slice(i, i + 64)}${post}\r\n`;
+      text += '$ ';
+      expect(text.length).toBe(17_930);
+      expect(badCuts(m, key, text, 128, 3)).toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  /** A block of `key` at 64 columns, `escapes` bytes of escapes (two blanks of indent among them) on each row. */
+  const escapedBlock = (key: string, escapes: number): { block: string; rows: number } => {
+    let pre = `  ${SGR}\x1b[48;2;20;20;20m`;
+    while (pre.length < escapes - 25) pre += '\x1b[1m';
+    const post = '\x1b[24m\x1b[23m\x1b[22m\x1b[49m\x1b[39m';
+    const lines: string[] = [];
+    for (let i = 0; i < key.length; i += 64) lines.push(`${pre}${key.slice(i, i + 64)}${post}`);
+    return { block: `key:\n${lines.join('\n')}\ndone\n`, rows: lines.length };
+  };
+  /** Ordinary lines up to `n` units. */
+  const ordinary = (n: number): string => {
+    let t = '';
+    for (let i = 0; t.length < n; i++) t += `line ${i} of ordinary output\n`;
+    return t;
+  };
+
+  it('pane history: a key block of 21,898 or 38,282 bytes is masked across the slice boundary wherever it lies (F2)', async () => {
+    // An 8,192-byte key at 64 columns with 104 or 232 bytes of escapes on every row: longer than the 18 KiB overlap, so
+    // rows past the cut showed, up to the whole key from the larger block (review 2370 F2: 32 of 106 and 180 of 184
+    // placements, on e37701c43). The slice before the cut now reads on while the drawer's walk back from its lookahead
+    // still reaches the cut, and the match's spans past the cut carry into the next slice.
+    const key = keyOf(8_192, 2385);
+    const m = fingerprinted(key);
+    try {
+      const shows = leaks(key);
+      for (const [escapes, size] of [[104, 21_898], [232, 38_282]] as const) {
+        const { block, rows } = escapedBlock(key, escapes);
+        expect(block.length).toBe(size);
+        const bad: string[] = [];
+        for (let filler = 64 * 1024 - block.length - 200; filler < 64 * 1024 + 200 && bad.length < 5; filler += 211) {
+          const before = ordinary(filler);
+          const out = await m.maskTextSliced(`${before}${block}${'tail line\n'.repeat(50)}`, { rows: true });
+          const marks = count(out, SECRET_MASK);
+          if (shows(out) || marks !== rows) bad.push(`${size} bytes at ${before.length}: ${shows(out) ? 'key bytes shown' : 'no key bytes'}, ${marks} marks`);
+        }
+        expect(bad).toEqual([]);
+      }
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('pane history: a key block past the lookahead\'s 256 KiB goes out masked on both sides of each cut (F2)', async () => {
+    // About 2.1 KB of escapes on each of 128 rows: a 277,386-byte block, past what the lookahead reads (256 KiB), so no
+    // slice reads the key whole. The rows of the chain on either side of each cut go out masked, never raw (the
+    // coordinator's ruling on review 2370 F2); on e37701c43 the whole key showed at every placement.
+    const key = keyOf(8_192, 2386);
+    const m = fingerprinted(key);
+    try {
+      const shows = leaks(key);
+      const { block, rows } = escapedBlock(key, 2_100);
+      expect(block.length).toBe(277_386);
+      for (const filler of [1_000, 30_000, 60_000, 64 * 1024 - 5_000]) {
+        const out = await m.maskTextSliced(`${ordinary(filler)}${block}${'tail line\n'.repeat(50)}`, { rows: true });
+        expect(shows(out), `at ${filler}`).toBe(false);
+        expect(count(out, SECRET_MASK), `at ${filler}`).toBe(rows);
+      }
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('pane history: key-free text past 18 KiB keeps its bytes, wrapped or coloured', async () => {
+    // Plain wrapped text never grows the lookahead (the walk stops within a key's own bytes, well inside 18 KiB), so its
+    // bytes are main's. Upper case, so no slice of 8 of it can be a held key's.
+    const m = fingerprinted(keyOf(8_192, 2387), keyOf(300, 2388));
+    try {
+      const blob = keyOf(300_004, 2389).slice(4).toUpperCase().replace(/-/g, '+');
+      let wrapped = '';
+      for (let i = 0; i < blob.length; i += 76) wrapped += `${blob.slice(i, i + 76)}\n`;
+      let coloured = '';
+      for (let i = 0; i < 40_000; i++) coloured += `${i % 700 === 699 ? '\n' : ''}\x1b[3${i % 8}m${'ABCDEFGH'[i % 8]}`;
+      for (const [name, text] of [['prose', ordinary(300_000)], ['a wrapped blob', wrapped], ['colour on every character', coloured]] as const) {
+        expect(await m.maskTextSliced(text, { rows: true }), name).toBe(text);
+      }
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a key whose rows run past the drawer\'s 256 KiB hold goes out masked, at once, never raw (F2)', () => {
+    // About 2.1 KB of escapes on each of 128 rows of 64: 277,514 bytes, past the most a drawer holds for a key's rows
+    // (`WHOLE_HELD_MAX`). The text goes out in the push that brings it, the chain's rows masked, and the rows that go on
+    // with it in later chunks too: failing closed as pane history's cap does (the coordinator's ruling on review 2370
+    // F2). Held instead, past the cap, it was sent as one run past a hold, and the whole key showed at every phase.
+    const key = keyOf(8_192, 2394);
+    const m = fingerprinted(key);
+    try {
+      const shows = leaks(key);
+      let pre = `  ${SGR}\x1b[48;2;20;20;20m`;
+      while (pre.length < 2_075) pre += '\x1b[1m';
+      const post = '\x1b[24m\x1b[23m\x1b[22m\x1b[49m\x1b[39m';
+      const rows: string[] = [];
+      for (let i = 0; i < key.length; i += 64) rows.push(`${pre}${key.slice(i, i + 64)}${post}`);
+      const text = `$ show\r\n${rows.join('\r\n')}\r\n$ `;
+      expect(text.length).toBe(277_514);
+      const bad: string[] = [];
+      for (const size of [4_096, 65_536]) {
+        for (let phase = 0; phase < size; phase += size / 8) {
+          const sent = throughDrawer(m, chunked(text, size, phase, 0));
+          if (shows(sent) || count(sent, DRAWER_SECRET_MASK) < 128) bad.push(`${size}, phase ${phase}: ${shows(sent) ? 'key bytes drawn' : 'no key bytes'}, ${count(sent, DRAWER_SECRET_MASK)} marks`);
+        }
+      }
+      expect(bad).toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
+  it('a run longer than one run\'s hold, or joined across escapes past any key, is sent at once, never held (F8)', () => {
+    // An open run past what a drawer holds for one run is no key's (D-5995's bound on what a drawer holds): it goes out
+    // in the push that brings it, failing closed on a begun shape, and the drawer holds nothing of it. So does a run of
+    // one-character pieces between colour escapes longer than any key held (9,000 characters, an 8,192-byte key held):
+    // read over the whole text, the walk finds it no key's and holds none of it.
+    vi.useFakeTimers();
+    const m = fingerprinted(keyOf(300, 2382), keyOf(8_192, 2383));
+    try {
+      const pieces = keyOf(9_004, 2384).slice(4).replace(/-/g, 'x');
+      let glued = '$ rainbow\r\n';
+      for (let i = 0; i < pieces.length; i++) glued += `\x1b[3${i % 8}m${pieces[i]}`;
+      const out0: string[] = [];
+      const d0 = m.drawer((t) => out0.push(t));
+      d0.push(glued);
+      expect(out0.join('')).toBe(glued);
+      d0.dispose();
+      const run = keyOf(12_004, 2381).slice(4).replace(/-/g, 'x');
+      const out: string[] = [];
+      const d = m.drawer((t) => out.push(t));
+      d.push(`$ echo\r\n${run}`);
+      expect(out.join('')).toBe(`$ echo\r\n${run}`);
+      d.dispose();
+      const out2: string[] = [];
+      const d2 = m.drawer((t) => out2.push(t));
+      d2.push(`$ echo\r\n${skOf(12_000)}`);
+      expect(out2.join('')).toBe(`$ echo\r\n${DRAWER_SECRET_MASK}`);
+      d2.dispose();
+    } finally {
+      m.close();
+    }
+  });
 });

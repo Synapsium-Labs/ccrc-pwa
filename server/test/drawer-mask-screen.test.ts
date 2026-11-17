@@ -437,7 +437,7 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
 
 // D-8710 — A KEY A PROGRAM DRAWS ACROSS THREE OR MORE ROWS IS MASKED ON EVERY ROW (desktop polish Task C41).
 //
-// MEASURED (review 2326 F3; `docs/superpowers/plans/2026-10-22-desktop-polish/c41.md`): the exact-bytes row join read a
+// MEASURED (review 2326 F3; `docs/superpowers/programs/desktop-polish/c41.md`): the exact-bytes row join read a
 // run that ends its row with the next row's leading run only, so a fingerprinted key a program drew on three or more
 // rows reached the screen with every byte and no mark, under every row separator: the review's 45 characters at
 // 17/20/8 and 12/15/15/3, and a 500-character key at 220 columns, which a real tmux 3.6 forwards with a cursor position

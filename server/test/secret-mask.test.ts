@@ -1386,7 +1386,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     const slices = events.filter((e): e is number => e !== 'pause');
     expect(slices.length).toBeGreaterThan(30);
     expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
-    // The overlap a slice carries (its context and its lookahead) is a few KiB: one held run plus slack. This bound pins
+    // The overlap a slice carries (its context and its lookahead) is the chain hold, 18 KiB (two held runs). This bound pins
     // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
     // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
     expect(overlaps.length).toBe(slices.length * 2);
