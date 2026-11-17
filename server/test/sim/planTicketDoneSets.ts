@@ -50,7 +50,7 @@ export const TICKET_DONE_VERDICT_SET = set([
   // { pr }: each landing-line answer removed.
   { id: 'EV-8', old: "    if (l === null || l.kind === 'no-entry') {", new: '    if (l === null) {' },
   { id: 'EV-9', old: "    if (l.kind === 'unreadable') return refuse(", new: "    if (false) return refuse(" },
-  { id: 'EV-10', old: "    if (l.kind === 'not-landed') return refuse(", new: "    if (false) return refuse(" },
+  { id: 'EV-10', old: "    if (l.kind === 'unlanded') return refuse(", new: "    if (false) return refuse(" },
   // F2: the evidence-already-stored rule, its auto-ticket exception, and a pull request being one project's.
   { id: 'ST-1', old: '  if (taken !== undefined) return refuse(', new: '  if (false) return refuse(' },
   { id: 'ST-2', old: "  const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;", new: '  const ownAuto = null;' },

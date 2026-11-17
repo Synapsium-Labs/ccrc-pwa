@@ -16,6 +16,7 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 | `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`) | `server/src/coord/planRoutes.ts` | Measured: `plan-ticket-done.test.ts` |
 | `evidence-unverified` in `PLAN_REFUSALS` (409); `ticket-required` a `RunRefuseCode` (409); `plan-ticket-done-v1` a `ServerCap`; `TicketDoneEvidence`, `PlanTicketDoneBody` | `shared/plan.ts`, `shared/refusal.ts`, `shared/api.ts` | Measured: `plan-vocabulary.test.ts` |
 | The client row `plan.ticket-done`, refused `capability-missing` locally without `plan-ticket-done-v1` | `ccd/ccrc-api` | Measured: `ccrc-api.test.ts` |
+| `ticket-required` named in the coordinator's corpus (one line in the `runs open` refusal list; the verb's own section is WM5's) | `ccd/coordinator-skill/references/plan.md` | Measured: `coordinator-skill.test.ts` (red in CI's first run, review finding 9's census) |
 | The gate's EXEMPT row and the census rows | `server/src/auth/gate.ts`, `auth-gate.test.ts`, `box-token-census.test.ts`, `README.md`, `census-w3/claimant*.ts`, `ccrc-api-closed.test.ts` | Measured: those suites |
 
 ## 2. The migration slot
@@ -82,6 +83,7 @@ Measured (load 10.37), every one killed:
 - Claimed by this task (measured): 4843 (the spec, the plan, this note, WM0's note, `shared/api.ts`, `gate.ts`,
   `store.ts`, the new tests, the census tests not held elsewhere, the mutation floors), 4844 (`planRunFacts.ts`, the new
   cases and sets, the shared fixture), 4848 (`plan-phases.test.ts`).
+- Claimed by this task for the CI fix (measured): 4864 (`ccd/coordinator-skill/references/plan.md`).
 - Co-edited under the Linear hierarchy wave 4's claims 4783, 4787, 4791 and 4824 (`schema.ts`, `planStore.ts`,
   `planRoutes.ts`, `planPolicy.ts`, `ccd/ccrc-api`, `shared/plan.ts`, `shared/refusal.ts`, `plan-store`, `ccrc-api`,
   `ccrc-api-closed`, `auth-gate`, `coord-db`, `run-close-switch` and `refusal-status` tests): the coordinator's grant (mail
@@ -109,5 +111,7 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 9 | The hand mutants | 10.37 | 7 of 7 killed |
 | 10 | `single-definition`, `rings`, `coord-policy-rings`, and the guards `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean` | 12.61 | 54 files, 1756 passed |
 | 11 | `box-token-census` (after the README lines) with the two new files | 10.75 | 121 passed |
+| 12 | After CI's first run (shard 7 of 12 red on two guards: `coordinator-skill.test.ts`, `ticket-required` named nowhere in the skill; `mail-routes.test.ts`, the landing fact's kind `not-landed` an undeclared kebab token, renamed `unlanded`): those two, the two new files, `ccrc-api-closed`, `run-routes`, `mail-inbox-skills`, `routing-references`, `dead-coordinator-prose` | 8.94 | 9 files, 801 passed |
+| 13 | `mutation-floors` for the four new keys and the floors-and-sets check, after the rename | 6.91 | 5 passed |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.

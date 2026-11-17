@@ -11,6 +11,8 @@ A run is refused at `runs open` when the plan does not allow it:
   with `plan put` below, with `home`, then open the run again.
 - `wave-epic-mismatch`: no live epic lists this wave, or the `ticket` you named belongs to another epic than the one that
   lists the wave. Revise the plan (`plan put`, or `plan ticket-move`) so the wave and the ticket share an epic.
+- `ticket-required`: the plan has phases, you named no `ticket`, and the epic that lists this wave still has an open
+  ticket no run has started. Open again naming that ticket, so the run's work is counted against it.
 - `ticket-unavailable`: the ticket you named is done, dropped, already started by another run, or an Upkeep ticket. Name
   another ticket, or open with none and the run gets a new one.
 - `plan-closed`: the plan was ended with `plan close`; nothing opens under it.

@@ -636,7 +636,7 @@ export interface TicketDoneFacts {
   ticket: { id: number; key: string; project: string; state: TicketState; runId: number | null };
   evidence: TicketDoneEvidence;
   run: { program: string; kind: string; state: string; ticketId: number | null; ticketKey: string | null } | null;
-  landed: { kind: 'landed' } | { kind: 'not-landed'; state: string } | { kind: 'no-entry' } | { kind: 'unreadable'; detail: string } | null;
+  landed: { kind: 'landed' } | { kind: 'unlanded'; state: string } | { kind: 'no-entry' } | { kind: 'unreadable'; detail: string } | null;
   stored: readonly { ticketId: number; key: string; project: string; evidence: TicketDoneEvidence }[];
 }
 
@@ -645,7 +645,7 @@ export interface TicketDoneFacts {
 export function landedFactOf(entries: readonly { pr: number; state: string }[], pr: number): NonNullable<TicketDoneFacts['landed']> {
   const mine = entries.filter((e) => e.pr === pr);
   if (mine.length === 0) return { kind: 'no-entry' };
-  return mine.some((e) => e.state === 'landed') ? { kind: 'landed' } : { kind: 'not-landed', state: mine[mine.length - 1]!.state };
+  return mine.some((e) => e.state === 'landed') ? { kind: 'landed' } : { kind: 'unlanded', state: mine[mine.length - 1]!.state };
 }
 
 /** THE evidence rule of `plan ticket-done` (spec §4.1, review 2375 F2), and the ticket's own state in `plan ticket-move`'s
@@ -674,7 +674,7 @@ export function ticketDoneVerdict(f: TicketDoneFacts): { ok: true } | Refused {
       return refuse('evidence-unverified', `the landing line of ${t.project} holds no pull request ${ev.pr}: name the run that carried it`);
     }
     if (l.kind === 'unreadable') return refuse('evidence-unverified', `the landing line of ${t.project} could not be read (${l.detail})`);
-    if (l.kind === 'not-landed') return refuse('evidence-unverified', `pull request ${ev.pr} of ${t.project} is ${l.state}, not landed`);
+    if (l.kind === 'unlanded') return refuse('evidence-unverified', `pull request ${ev.pr} of ${t.project} is ${l.state}, not landed`);
   }
   const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;
   const taken = f.stored.find((s) => s.ticketId !== t.id && s.ticketId !== ownAuto && (

@@ -110,7 +110,7 @@ export const DONE_CASES: TicketDoneCase[] = [
   { name: 'verdict: a pull request landed for the ticket\'s project verifies',
     run: (m) => { expect(word(m.ticketDoneVerdict(facts({ pr: 7 })))).toBe('ok'); } },
   { name: 'verdict: a pull request the landing line holds but has not landed is refused evidence-unverified',
-    run: (m) => { expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { landed: { kind: 'not-landed', state: 'pinned' } })))).toBe('evidence-unverified'); } },
+    run: (m) => { expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { landed: { kind: 'unlanded', state: 'pinned' } })))).toBe('evidence-unverified'); } },
   { name: 'verdict: a pull request with no landing entry is refused evidence-unverified, naming the run instead',
     run: (m) => {
       const v = m.ticketDoneVerdict(facts({ pr: 7 }, { landed: { kind: 'no-entry' } }));
@@ -121,8 +121,8 @@ export const DONE_CASES: TicketDoneCase[] = [
     run: (m) => {
       expect(m.landedFactOf([], 7)).toEqual({ kind: 'no-entry' });
       expect(m.landedFactOf([{ pr: 8, state: 'landed' }], 7)).toEqual({ kind: 'no-entry' });
-      expect(m.landedFactOf([{ pr: 7, state: 'pinned' }], 7)).toEqual({ kind: 'not-landed', state: 'pinned' });
-      expect(m.landedFactOf([{ pr: 7, state: 'ejected' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'not-landed', state: 'queued' });
+      expect(m.landedFactOf([{ pr: 7, state: 'pinned' }], 7)).toEqual({ kind: 'unlanded', state: 'pinned' });
+      expect(m.landedFactOf([{ pr: 7, state: 'ejected' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'unlanded', state: 'queued' });
       expect(m.landedFactOf([{ pr: 7, state: 'landed' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'landed' });
     } },
   { name: 'verdict: an unreadable landing line is refused evidence-unverified',
