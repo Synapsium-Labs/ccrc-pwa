@@ -60,6 +60,13 @@ const item = (s: CoordStore, now = NOW): number => s.raiseItem({
   how: ['Open Settings', 'Switch it on'], options: null, neededBy: 'soon', soonLabel: 'before wave 6', secretSlot: null,
 }, now);
 const live = { programmeHasOpenRun: false };
+/** A bound write the store takes whole (the push outbox's, Overlord W1): a push due now, with its tag. */
+const bound = () => ({
+  prepared: { payload: { title: 'Needs an answer', body: 'Which one?', sessionId: 'lane-a', tag: 'ask-lane-a' }, pushId: 'a'.repeat(32), service: true },
+  due: { due: 'now' as const }, viewing: false,
+});
+const outboxRowsOf = (s: CoordStore, id: number): number =>
+  (s.db.prepare("SELECT COUNT(*) AS n FROM push_outbox WHERE sourceKind = 'ask' AND sourceId = ?").get(id) as { n: number }).n;
 
 /** One effective or refused write: `seed` makes the rows (its ids, in order), `act` is the writer, `returns` what it
  *  answers (matched as an object when it is one), and `after` the rows the write leaves, from the rows before it. */
@@ -84,11 +91,24 @@ const CASES: readonly WriteCase[] = [
     act: (s, [id]) => s.takeAskForAnswer(id!, 999), returns: { ok: false, why: 'ask-moved' }, after: same, revision: 'same' },
   { name: 'takeAskForAnswer refuses a declined ask', table: 'asks', seed: (s) => { const id = ask(s); s.declineAsk(id, NOW + 1); return [id]; },
     act: (s, [id]) => s.takeAskForAnswer(id!, 1000), returns: { ok: false, why: 'declined' }, after: same, revision: 'same' },
+  { name: 'takeAskForAnswer takes a released ask (a late answer, D-5289)', table: 'asks',
+    seed: (s) => { const id = ask(s); s.releaseAsk(id, NOW + 1); return [id]; },
+    act: (s, [id]) => s.takeAskForAnswer(id!, 1000), returns: { ok: true, from: 'released' }, after: set({ state: 'answering' }), revision: 'same' },
+  { name: 'takeAskForAnswer refuses an answered ask', table: 'asks',
+    seed: (s) => { const id = taken(s); s.settleAsk(id, 'lane-b', 'a', NOW + 2); return [id]; },
+    act: (s, [id]) => s.takeAskForAnswer(id!, 1000), returns: { ok: false, why: 'already-answered' }, after: same, revision: 'same' },
+  { name: 'takeAskForAnswer refuses an ask that is not there', table: 'asks', seed: (s) => [ask(s)],
+    act: (s, [id]) => s.takeAskForAnswer(id! + 1, 1000), returns: { ok: false, why: 'unknown-ask' }, after: same, revision: 'same' },
+  { name: 'takeAskForAnswer refuses an ask already being answered', table: 'asks', seed: (s) => [taken(s)],
+    act: (s, [id]) => s.takeAskForAnswer(id!, 1000), returns: { ok: false, why: 'not-held' }, after: same, revision: 'same' },
   // CoordStore.untakeAsk: the hold's rollback.
   { name: 'untakeAsk puts an answering ask back', table: 'asks', seed: (s) => [taken(s)],
     act: (s, [id]) => s.untakeAsk(id!, 'held'), returns: true, after: set({ state: 'held' }), revision: 'same' },
   { name: 'untakeAsk refuses an ask that is not answering', table: 'asks', seed: (s) => [ask(s)],
     act: (s, [id]) => s.untakeAsk(id!, 'released'), returns: false, after: same, revision: 'same' },
+  { name: 'untakeAsk puts a late answer back to released', table: 'asks',
+    seed: (s) => { const id = ask(s); s.releaseAsk(id, NOW + 1); expect(s.takeAskForAnswer(id, 1000).ok).toBe(true); return [id]; },
+    act: (s, [id]) => s.untakeAsk(id!, 'released'), returns: true, after: set({ state: 'released' }), revision: 'same' },
   { name: 'a take then an untake leaves the row as it was', table: 'asks', seed: (s) => [ask(s)],
     act: (s, [id]) => { expect(s.takeAskForAnswer(id!, 1000).ok).toBe(true); return s.untakeAsk(id!, 'held'); },
     returns: true, after: same, revision: 'same' },
@@ -108,6 +128,14 @@ const CASES: readonly WriteCase[] = [
     act: (s, [id]) => s.declineAsk(id!, NOW + 4), returns: true, after: set({ state: 'declined', releasedAt: NOW + 4 }), revision: 'raise' },
   { name: 'declineAsk refuses a released ask', table: 'asks', seed: (s) => { const id = ask(s); s.releaseAsk(id, NOW + 1); return [id]; },
     act: (s, [id]) => s.declineAsk(id!, NOW + 4), returns: false, after: same, revision: 'same' },
+  { name: 'declineAsk with its bound write declines, stamps the reach and writes one outbox row, in one transaction', table: 'asks',
+    seed: (s) => [ask(s)], act: (s, [id]) => ({ ref: s.declineAsk(id!, NOW + 4, bound()), outbox: outboxRowsOf(s, id!) }),
+    returns: { ref: { due: { due: 'now' }, viewing: false }, outbox: 1 },
+    after: set({ state: 'declined', releasedAt: NOW + 4, reachedOperatorAt: NOW + 4 }), revision: 'raise' },
+  { name: 'declineAsk with its bound write refuses a released ask and writes nothing', table: 'asks',
+    seed: (s) => { const id = ask(s); s.releaseAsk(id, NOW + 1); return [id]; },
+    act: (s, [id]) => ({ ref: s.declineAsk(id!, NOW + 4, bound()), outbox: outboxRowsOf(s, id!) }),
+    returns: { ref: false, outbox: 0 }, after: same, revision: 'same' },
   // CoordStore.staleAsk: the dialog went.
   { name: 'staleAsk stales a held ask', table: 'asks', seed: (s) => [ask(s)],
     act: (s) => s.staleAsk('d-1', 'lane-a', NOW + 5), returns: true, after: set({ state: 'stale', releasedAt: NOW + 5 }), revision: 'raise' },

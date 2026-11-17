@@ -27,3 +27,24 @@ ledger pull request; this file edits no ledger and no existing plan.
   (on the coordinator's word) and took 84; responses B (#2914) and overlaps A (#2949) then landed 84 and 85, so it merged
   `main` a second time (on the coordinator's word again) and the migration took the next slot, 86. Other open pull
   requests hold 86 too; whoever lands second renumbers at landing, on the coordinator's word, never on its own.
+
+## Fix round 1 (review run 2348, the coordinator's rulings)
+
+- **F1:** a statement of either table whose SET list the census cannot read is red as unreadable, never skipped: an
+  UPDATE whose table is not followed by `SET` itself (an alias, `INDEXED BY`, a `${…}`), and a SET list holding a
+  `${…}`. One control per form, through the scan.
+- **F2:** the shared scan's verb pattern reads any letter case, `UPDATE OR <word>`, a schema-qualified name and a quoted
+  one. `writers-map` answers exactly as before: the scan's table and writer pairs over every coord.db table are the same
+  278 before and after, and the census still sees the thirteen UPDATEs and two INSERTs of Table R1, nothing more.
+- **F3:** the scan splits each joined string on its top-level `;` (outside quotes, brackets and SQL comments) and keys
+  each write by its statement, so each `UPDATE` of a multi-statement `exec` is judged on its own SET list. Two controls:
+  the second of two UPDATEs of different tables, and of the same table, missing its raise.
+- **F4:** a `REPLACE INTO` or `INSERT OR REPLACE` of either table is red whatever it names (it deletes and re-inserts
+  the row at revision 0). Two controls.
+- **F5:** the characterization gains `declineAsk`'s bound in-transaction arm, won and lost, `takeAskForAnswer` from
+  `released`, `untakeAsk(…, 'released')`, and the `already-answered`, `unknown-ask` and `not-held` refusals. Run
+  green on `main`'s source (41 cases, the revision checks set aside) and at the tip (42).
+- **F6:** no change, as ruled.
+- **Mutation:** seven mutants of the new arms (each unreadable form, the substitution in a SET list, the REPLACE arm,
+  the statement split, the letter case, the `OR` arm, the qualified and quoted name), each killed by exactly its
+  controls, each file restored from a saved copy.
