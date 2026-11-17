@@ -38,7 +38,7 @@ They decide every question the plan leaves open.
 | 1 | the proxy additions | D-8180 | #2612 | **merged** 2026-11-11 as `a9cfd134f` (no run) |
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
-| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1 |
+| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17, review round 2 is run 2332 |
 | 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | not started |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
@@ -111,6 +111,11 @@ They decide every question the plan leaves open.
   `unknown`, the pass settles without the initiative step and mails the programme's coordinator once per workspace
   and episode. It raises no "Turn on initiatives" item, because the probe never answers `off` and an unreadable probe
   is not a feature that is off. An `on` reading later creates the initiative and links the projects.
+
+  Fix round 1 came back at `a1fb568bf` (main absorbed once). The worker ruled one point alone: unread project
+  statuses keep waiting on the backoff and mail the coordinator once per episode after 3 unread refills, with no
+  settle. Review round 2 (run 2332) is asked to judge that, the in-memory episode streaks (a restart can mail twice)
+  and M3 (a failure in one workspace holds the whole programme).
 
   F4 is ledgered as D-8699 (ownership-by-name-first-page): proving ownership of an initiative or project with ten or
   more same-named objects can fail. The fix needs `creator { id }` on the by-id documents in the frozen `ops.ts`, so it
