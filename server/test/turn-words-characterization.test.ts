@@ -39,7 +39,7 @@ describe('every reader of the status word, per word', () => {
         statusUnmeasured: false, dialogPending: false, background: null, subagents: null, stranded: null,
         swapBlocked: null, substrate: null,
       },
-      optedOut: false, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1,
+      overlord: false, optedOut: false, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1,
       store: { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
       live: {
         kind: 'read', word: { ok: true, word },

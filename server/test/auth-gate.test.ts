@@ -101,7 +101,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWENTY-ONE files register routes since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
+/** TWENTY-TWO files register routes since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
  *  box-token route, registered from `registerCoordRoutes` and written in a file of its own); THIRTEEN since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
@@ -134,6 +134,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/planRoutes.ts'),
   ...scanRoutes('coord/hierarchyRoutes.ts'),
   ...scanRoutes('continuity/routes.ts'),
+  ...scanRoutes('coord/overlordRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
 ];
 
@@ -693,7 +694,10 @@ describe('the scanner is looking at something', () => {
     // 256 since the remaining-work door (Overlord W2 remaining work A), in `coord/programmeRemainingRoute.ts`: `POST
     // /api/coord/programmes/:slug/remaining`, one box-token machine lane IN EXEMPT: the HTTP half 252 -> 253, the gated count
     // stays 157, the exempt-HTTP count 94 -> 95.
-    expect(ROUTES.length).toBe(256);
+    // 259 since the Overlord's designation doors (Overlord W1 designation A, 2026-11-16), in `coord/overlordRoutes.ts`: `GET
+    // /api/overlord/designation`, `POST` and `DELETE /api/overlord/designate`, session-gated and NOT EXEMPT, no box token: the HTTP
+    // half 253 -> 256, the gated count 157 -> 160, the exempt-HTTP count stays 95.
+    expect(ROUTES.length).toBe(259);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -874,7 +878,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 256 scanned + the static wildcard when the bundle is built.
+    // 259 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1550,9 +1554,13 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // The private-name list's upload (Overlord W2, private names B): the account gate with `cap: null` and a step-up, so
     // dark it answers `auth-off` (501) and armed with a session that has not stepped up `step-up-required` (403): BY DESIGN.
     'PUT /api/overlord/private-names',
+    // The Overlord's designation doors (Overlord W1 designation A): each asks the account gate with `cap: null` (the two writes
+    // with a step-up too), whose first refusal is `auth-off` (501) dark and `unauthenticated` (401) armed with no session, so
+    // dark and anonymous differ BY DESIGN.
+    'GET /api/overlord/designation', 'POST /api/overlord/designate', 'DELETE /api/overlord/designate',
   ]);
 
-  it('FLAG_AWARE is exactly those twenty — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those twenty-three — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1570,8 +1578,10 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'DELETE /api/auth/passkey/:id',
       'DELETE /api/linear/connection',
       'DELETE /api/linear/workspaces/:id',
+      'DELETE /api/overlord/designate',
       'DELETE /api/programmes/:slug/secrets/:slot',
       'GET /api/auth/passkeys',
+      'GET /api/overlord/designation',
       'POST /api/accounts/revoke-ack',
       'POST /api/auth/login',
       'POST /api/auth/logout',
@@ -1584,6 +1594,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/step-up/start',
       'POST /api/linear/workspaces',
       'POST /api/linear/workspaces/:id/check',
+      'POST /api/overlord/designate',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
       'PUT /api/overlord/private-names',
@@ -1595,7 +1606,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 253 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 256 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1659,7 +1670,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 253 HTTP routes, not the 95 exempt.
+          //    is not itself flag-aware — the assertion that covers all 256 HTTP routes, not the 95 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

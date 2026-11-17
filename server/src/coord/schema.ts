@@ -3537,6 +3537,27 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
   `,
+
+  // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
+  // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
+  // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 91`
+  // takes rule 3, never names it. Renewal readings A (#2962) landed 88, remaining work A (#2951) 89 and account organization D (#2958) 90, so this is 91; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 90 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_designation (id INTEGER PRIMARY KEY CHECK (id = 1), sessionId TEXT, generation TEXT,
+    pendingId TEXT, pendingGeneration TEXT, pendingKind TEXT CHECK (pendingKind IN ('designate','rebind')),
+    pendingSince INTEGER, pendingDeadlineAt INTEGER, pendingActor TEXT,
+    term INTEGER NOT NULL CHECK (term >= 0), designatedTerm INTEGER NOT NULL CHECK (designatedTerm >= 0),
+    model TEXT NOT NULL CHECK (model IN ('fable','opus')), accountPools TEXT NOT NULL,
+    pastIds TEXT NOT NULL DEFAULT '[]', actor TEXT NOT NULL, attemptId TEXT, attemptOutcome TEXT, attemptAt INTEGER,
+    stopsOwed TEXT NOT NULL DEFAULT '[]', updatedAt INTEGER NOT NULL,
+    CHECK ((sessionId IS NULL) = (generation IS NULL)), CHECK ((pendingId IS NULL) = (pendingKind IS NULL)),
+    CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
+    CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
