@@ -35,6 +35,11 @@ export type LadderEffect =
   | { readonly kind: 'one-under-operator'; readonly floor: Rung }
   | { readonly kind: 'read-by'; readonly reader: LadderReader }
   | { readonly kind: 'server-words' };
+/** The discriminators of the effect union, checked against every variant. */
+const LADDER_EFFECT_KIND_MAP = {
+  cap: true, 'one-under-operator': true, 'read-by': true, 'server-words': true,
+} as const satisfies Record<LadderEffect['kind'], true>;
+export const LADDER_EFFECT_KINDS = Object.keys(LADDER_EFFECT_KIND_MAP) as LadderEffect['kind'][];
 
 const LADDER_NOTICE_MAP = { none: 'nothing', push: 'one push', item: 'one operator item' } as const;
 export type LadderNotice = keyof typeof LADDER_NOTICE_MAP;
@@ -110,6 +115,8 @@ export const NARROWING_WHYS = Object.keys(NARROWING_WHY_MAP) as NarrowingWhy[];
 export type NarrowingState =
   | { readonly state: 'done' }
   | { readonly state: 'taking-effect'; readonly why: NarrowingWhy };
+const NARROWING_STATE_MAP = { done: true, 'taking-effect': true } as const satisfies Record<NarrowingState['state'], true>;
+export const NARROWING_STATES = Object.keys(NARROWING_STATE_MAP) as NarrowingState['state'][];
 
 /** Plan question 23: the `needs` words no server build carries yet, each with its wave; shrink-only. */
 export const RUNG_WORDS_NOT_YET_SHIPPED = { 'overlord-route-v1': 'W2', 'overlord-answer-v1': 'W3' } as const;

@@ -35,6 +35,8 @@ describe('every exported union has its runtime list', () => {
     expect(L0.LADDER_ACT_KINDS).toEqual(['read', 'write-note', 'acknowledge']);
     expect(L0.CONDITION_READINGS).toEqual(['standing', 'lifted', 'unmeasured']);
     expect(L0.NARROWING_WHYS).toEqual(['no-witness-yet', 'witness-unmeasured', 'not-journalled']);
+    expect(L0.LADDER_EFFECT_KINDS).toEqual(['cap', 'one-under-operator', 'read-by', 'server-words']);
+    expect(L0.NARROWING_STATES).toEqual(['done', 'taking-effect']);
   });
   it('the L1 file exports no type or interface the wire carries (it declares no wire type of its own)', () => {
     const src = readFileSync(path.join(ROOT, 'server/src/coord/overlordLadder.ts'), 'utf8');
@@ -53,6 +55,17 @@ describe('every exported union has its runtime list', () => {
     const src = readFileSync(path.join(ROOT, 'shared/overlord-ladder.ts'), 'utf8');
     expect(src).not.toMatch(/^\s*import\b/m);
     expect(src).not.toMatch(/\bfrom\s+['"]/);
+  });
+});
+
+describe('ladder kebab census', () => {
+  it('admits the vocabulary owners and refuses unrecognised words', () => {
+    for (const word of [...L0.LADDER_EFFECT_KINDS, ...L0.NARROWING_STATES, ...L0.NARROWING_WHYS,
+      ...L0.LADDER_CAUSES, ...L0.LADDER_READERS, ...L0.LADDER_ACT_KINDS,
+      'rung-unreadable', 'card-probe-note', 'not-yet']) expect(m.isLadderKebab(word)).toBe(true);
+    for (const word of ['read-bye', 'server-word', 'rung-unknown', 'some-other-word', '']) {
+      expect(m.isLadderKebab(word)).toBe(false);
+    }
   });
 });
 

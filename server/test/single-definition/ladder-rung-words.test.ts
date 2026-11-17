@@ -59,23 +59,40 @@ const code = (f: string): string =>
 const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(code(f))).map(rel).sort();
 
 const HOME = 'shared/overlord-ladder.ts';
-const FOUR = String.raw`'off'\s*(?:\||,)\s*'chat'\s*(?:\||,)\s*'advise'\s*(?:\||,)\s*'full'`;
+// Scan whole consecutive literal lists, rather than one order or quote style. Extra literals are allowed, but all four
+// distinct rung words must be in the same list; separate smaller lists must never be joined into a false positive.
+const literalList = (separator: '|' | ','): RegExp => {
+  const sep = separator === '|' ? String.raw`\|` : ',';
+  const literal = String.raw`(?:'[^'\n]*'|"[^"\n]*")`;
+  return new RegExp(`${literal}(?:\\s*${sep}\\s*${literal})+`, 'g');
+};
+const hasRungList = (text: string, separator: '|' | ','): boolean =>
+  [...text.matchAll(literalList(separator))].some(([list]) => {
+    const words = [...list.matchAll(/(['"])(.*?)\1/g)].map((m) => m[2]);
+    return RUNGS.every((r) => words.includes(r));
+  });
+const rungListHolders = (separator: '|' | ','): string[] =>
+  ALL.filter((f) => hasRungList(code(f), separator)).map(rel).sort();
 
 describe('one home for the rung words and the rung cells (F15)', () => {
   it('CONTROL: the scan sees the home file, and a spelled-out union would be found', () => {
     expect(ALL.map(rel)).toContain(HOME);
-    expect(new RegExp(FOUR).test(`type R = 'off' |\n  'chat' | 'advise'  |  'full';`)).toBe(true);
-    expect(new RegExp(FOUR).test(`['off', 'chat', 'advise', 'full']`)).toBe(true);
-    expect(new RegExp(FOUR).test(`'off' | 'chat' | 'advise'`)).toBe(false);
+    expect(hasRungList(`type R = 'off' |\n  'chat' | 'advise' | 'full';`, '|')).toBe(true);
+    expect(hasRungList(`type R = "full" | 'off' | "chat" | 'advise';`, '|')).toBe(true);
+    expect(hasRungList(`["full", 'advise', "off", 'chat']`, ',')).toBe(true);
+    expect(hasRungList(`['extra', 'chat', 'off', 'full', 'advise']`, ',')).toBe(true);
+    expect(hasRungList(`'off' | 'chat' | 'advise'`, '|')).toBe(false);
+    expect(hasRungList(`['off', 'chat']; ['advise', 'full']`, ',')).toBe(false);
+    expect(hasRungList(`['off', 'off', 'chat', 'advise']`, ',')).toBe(false);
   });
   it('no `\'off\' | \'chat\' | \'advise\' | \'full\'` union is spelled anywhere', () => {
-    expect(holders(new RegExp(String.raw`'off'\s*\|\s*'chat'\s*\|\s*'advise'\s*\|\s*'full'`))).toEqual([]);
+    expect(rungListHolders('|')).toEqual([]);
   });
   it('no SQL `IN (...)` list of the four rung words is spelled anywhere', () => {
     expect(holders(new RegExp(String.raw`\bIN\s*\(\s*'off'\s*,\s*'chat'`, 'i'))).toEqual([]);
   });
-  it('the four words are spelled in order as one list in no file (the authority journal reads RUNGS)', () => {
-    expect(holders(new RegExp(FOUR))).toEqual([]);
+  it('the four words are spelled as one list in no file (the authority journal reads RUNGS)', () => {
+    expect(rungListHolders(',')).toEqual([]);
   });
   it('RUNG_MAP and RUNG_CELL_MAP are defined in the home file and nowhere else', () => {
     expect(holders(/\bconst RUNG_MAP\b/)).toEqual([HOME]);
