@@ -1948,6 +1948,84 @@ note on the real-library pins, and the row map's Changes, G5 and M8.9 rows.
 {"id": "NDR-D1-FR1-B5-NO-RECORD", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "          window.__childPorts.push(d.href);\n", "new": "", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control", "browser": true, "status": "red", "red": "Tests  1 failed | 23 skipped (24): M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect", "sha256": "2870b434cb1c952e1f5f22e9aa24d0f87e965c687b22e319acf1af30b131ca49", "restored": true, "at": "59a77e58d"}
 ```
 
+**Fix round 2 (review run 2424, round 2 of 3, at `644b1c871`; the coordinator's rulings, mail 23635).** One commit per item.
+Besides this block, F2 and F3 correct D1's Results in place (Task 12's bullet on `readerHistory.ts`, and the row map's
+"Files outside Task 12's Modify list"), and the item found beyond the review corrects the close's replay sentence and two
+sentences of fix round 1's block in place.
+- F1 (important; fix it), `5bb6c2c1b`, harness only. The M8.B5 control's "still achieves no effect" claims were not tied to
+  the child's ops having reached the reader: with the child's ops never posted, the control passed, at `644b1c871` and at
+  `84617b0ef` alike (the reviewer's measurement). And in the load-first ordering (the srcdoc's own load first, 2 of 27 runs
+  unforced), the held 'navigated' call ran in the same task that answered the child's word, so the frame went, and with it
+  the answer and every op, while the control still passed (the panel read this from the tree; the row
+  `NDR-D1-FR2-B5-GATE-ON-WORD` below now shows it). Now:
+  - (a) the parent hook counts what the reader's own end of the port receives, each message after the reader's own handler
+    has run it (behind `holdLoadForChild` it wraps the page's `MessageChannel`, and finds that end as the channel whose
+    other end the library hands the frame with its hello), and the control asserts that the reader's port received every op the child sent, in order, and that the reader fell back once,
+    on the child's forged ready (`nonce`, from `ReaderFrame`'s own "ccrc: reader fell back (…)" line, read with a bounded
+    poll). A child that never speaks fails it by name.
+  - (b) the later held load listener calls (the library's 'navigated' fallback, which removes the frame) wait until the
+    reader's port has received every op the child sends, so they can drop neither the hello nor the parent's answer; the
+    comment that said the answer came "before any held call can remove the frame" now says this. What can still remove the
+    frame before the ops arrive is the reader's own 2 s watchdog, and then the control fails naming `timeout`: no ordering
+    passes with nothing checked.
+  - (c) a second control, "load first", forces that ordering at its worst: the srcdoc navigates only once the parent hook
+    has taken its own load call, and the parent answers the child's word only once it holds the child's load call too, so
+    the 'navigated' fallback is pending before the child can speak. It asserts the two held load calls, then everything
+    the first control asserts.
+  Everything new sits behind `holdLoadForChild`, which only the two controls set: no product file changes, and the wall
+  cases read none of it (they set no `holdLoadForChild`, and the one shared line, the hand-off in the parent's
+  `contentWindow` wrapper, does nothing without it). Rows (the fence below), each red: `NDR-D1-FR2-B5-NEVER-SPEAKS` (the
+  ops post removed from `speak()`, as the ruling asked: both controls fail, the port received `[]`);
+  `NDR-D1-FR2-B5-LAST-OP-ONLY` (the child sends only the forged ready: the reason is still `nonce`, and the port record
+  fails both controls, `[ 'ready' ]`); `NDR-D1-FR2-B5-GATE-ON-WORD` (the later gate opens on the child's word again, as at
+  `644b1c871`: the load-first control fails, its port received `[]`); and fix round 1's two rows, run again against the
+  new file, each red on the word's message in both controls. The W8a row `W8A-T10-M9` (the library lets an op before ready
+  take effect), replayed in the item found beyond the review, now fails both controls as well: the mount that the child's
+  routed navigate starts shows on the reader's port. Measured: the whole file alone, 20 runs one after another at
+  the fix round's head, 25 passed in each of the 20 (53 to 72 s a run, the file checked byte for byte against the commit
+  before each run), after one first run, 25 passed.
+- F2 (minor), `481ecfeab`: Task 12's bullet on `readerHistory.ts` now names the exception: an `absent-path` answer for the
+  base, and only that word and only for the base, reads as the empty text (corrected in place above).
+- F3 (minor), `def3fb5b8`: the row map's "Files outside Task 12's Modify list" now names
+  `pwa/browser/reader-frame.browser.test.ts` (Task 13's list, not Task 12's), with the addendum's mail 23545, fix round 2's
+  mail 23635 and claim 4845 (corrected in place above).
+- F4 (the reproduce lens's view of F1): counted once, under F1, as the reviewer did; no separate change.
+- Found beyond the review, `295dc7706`: the replay of earlier rows missed two plans. The W8a plan and the W5h-a plan write
+  their rows as indented JSON arrays, and both earlier enumerations (the close's, and fix round 1's) read one row per line,
+  so neither saw them. An enumeration of every plan in both formats, by each id's latest recording, finds 50 rows that sit
+  on a file D1 changed (source or test) and apply at the tip, none replayed before: 47 W8a rows and 3 W5h-a rows. 38 of
+  them have been in scope since the close's tip `b0934f5a2` (the W8a rows on `ReaderFrame.tsx`, `policy.ts`, `bridge.ts` or
+  `DocsScreen.tsx`, or run by `reader-frame.test.tsx`, `reader-policy.test.ts` or `reader-bridge.test.ts`, and the three
+  W5h-a rows on `DocsLeaf.tsx` and `DocsScreen.tsx`), and 12 since fix round 1's addendum (the W8a rows that run
+  `reader-frame.browser.test.ts`). All 50 ran at `5bb6c2c1b`, each red, and are appended to the earlier-rows fence above,
+  which now holds 172; the close's sentence and fix round 1's two sentences are corrected in place. `W8A-T11-M2` applied at
+  D1's base and not at its tip, because Task 12 moved the version onto the mount input; it is re-recorded on the current
+  line as `NDR-D1-RP-W8A-T11-M2` (the fence below), red. `W8A-T7-M1`, `W8A-T7-M16` and `W8A-T10-M10` did not apply at D1's
+  base either (the last is the library's bootstrap text, which 1.1.0 does not have), so they are not D1's. The W8a and
+  W5h-a plans are not edited.
+- The rows (the fence below), each applied to a saved copy outside the work tree, restored and its sha256 checked, at the
+  code tip `5bb6c2c1b`: F1's three, each red; fix round 1's two B5 rows, run again, each red; and `NDR-D1-RP-W8A-T11-M2`,
+  red. The 50 earlier rows are in the earlier-rows fence above.
+- Suites, at the code tip `5bb6c2c1b` (the commits after it change only the plan):
+  - `reader-frame.browser.test.ts`, the one code file this round changes, whole and alone: a first run, 25 passed, then 20
+    runs one after another, 25 passed in each;
+  - the four unit files that read the browser files (`browser-leg`, `browser-dist`, `browser-tools`, `command-registry`),
+    73 passed; pwa `tsc --noEmit` rc 0;
+  - the server guards that read this change (fix round 1's set): 68 files, 2 125 passed and 3 skipped, `deviation-refs`
+    among them after a fetch of main (`457997a78`);
+  - the plan-text guards (`deviation-refs`, `anchors`, `citations`, `dtbd`, `public-text`, `topology-clean`, `docs-parity`,
+    `crossrepo-prose`, `ci-ledger-guard`, `ledger-crosstree`, `growth-caps`, `growth-check`) on the corrected close before
+    its commit, 341 passed and 3 skipped, and again after the Results commit.
+
+```json
+{"id": "NDR-D1-FR2-B5-NEVER-SPEAKS", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "        for (const m of (CFG.onHello || [])) p.postMessage(m);\n", "new": "", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control", "browser": true, "status": "red", "red": "Tests  2 failed | 23 skipped (25): M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect", "sha256": "7105c6fdccd9814be1abfa435bd83a135194855116687c0946f1ed26e2df143b", "restored": true, "at": "5bb6c2c1b"}
+{"id": "NDR-D1-FR2-B5-LAST-OP-ONLY", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "for (const m of (CFG.onHello || [])) p.postMessage(m);", "new": "for (const m of (CFG.onHello || []).slice(-1)) p.postMessage(m);", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control", "browser": true, "status": "red", "red": "Tests  2 failed | 23 skipped (25): M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect", "sha256": "7105c6fdccd9814be1abfa435bd83a135194855116687c0946f1ed26e2df143b", "restored": true, "at": "5bb6c2c1b"}
+{"id": "NDR-D1-FR2-B5-GATE-ON-WORD", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "(ran === 0 ? state.up : state.spoke)", "new": "(ran === 0 ? state.up : window.__childPorts.length > 0)", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control, load first", "browser": true, "status": "red", "red": "Tests  1 failed | 24 skipped (25): M8.B5 control, load first: the srcdoc's own load is taken before the child's, and the navigated fallback waits for the child's ops", "sha256": "7105c6fdccd9814be1abfa435bd83a135194855116687c0946f1ed26e2df143b", "restored": true, "at": "5bb6c2c1b"}
+{"id": "NDR-D1-FR1-B5-CHILD-NO-PORT", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "                return t.postMessage(...a);", "new": "                return t.postMessage(a[0], a[1]);", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control", "browser": true, "status": "red", "red": "Tests  2 failed | 23 skipped (25): M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect", "sha256": "7105c6fdccd9814be1abfa435bd83a135194855116687c0946f1ed26e2df143b", "restored": true, "at": "5bb6c2c1b"}
+{"id": "NDR-D1-FR1-B5-NO-RECORD", "pkg": "pwa", "file": "browser/reader-frame.browser.test.ts", "old": "          window.__childPorts.push(d.href);\n", "new": "", "tests": ["browser/reader-frame.browser.test.ts"], "t": "M8.B5 control", "browser": true, "status": "red", "red": "Tests  2 failed | 23 skipped (25): M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect", "sha256": "7105c6fdccd9814be1abfa435bd83a135194855116687c0946f1ed26e2df143b", "restored": true, "at": "5bb6c2c1b"}
+{"id": "NDR-D1-RP-W8A-T11-M2", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "        ...(seed === null ? {} : { version: seed }),\n", "new": "", "tests": ["test/reader-frame.test.tsx"], "status": "red", "red": "Tests  1 failed | 66 passed (67): refinement (k): a committed doc reaches the mount with its commit and no draft flag, a draft with its head and the flag", "sha256": "78e0dc19c3cebeef923dd478b0820e52b159da4699a7eb2418338cd281e9d26e", "restored": true, "at": "5bb6c2c1b", "repoints": "W8A-T11-M2 (the W8a plan's recording): Task 12 moved the version from the document to the mount input"}
+```
+
 ## Where things stand
 
 ### Agreed
