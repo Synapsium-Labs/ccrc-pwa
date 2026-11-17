@@ -96,7 +96,13 @@ run-close 21, switches 20, auth gate 347, box-token 60 and mutation floors 184.
 The masking suite passed 95 cases with one skipped but timed out on the ordinary-text streaming case at 20 seconds;
 that case also timed out alone. An untouched main snapshot attempt was killed by the shared memory cap, so it is
 not proof of a baseline failure. No timeout or masker behavior was changed. Exact-tip CI must settle this remaining
-local verification gap. Final committed growth and CI/CodeQL results are still due.
+local verification gap. Armed committed growth passed 96 cases: schema +25, store +7, server composition +3, all other checked rows
+unchanged; no waiver and no over-limit row. The final policy, authority and complete guard lists were then run
+one file at a time: 62 files and 2,100 cases passed. Exact-tip CI/CodeQL results are still due.
+
+For this new remote branch there is no PR to label before its initial push. The initial push opens no pull-request
+CI run; PR creation carries `full-ci` atomically, so the first PR-triggered run receives it. No preliminary fast
+run or additional build-round push is intended.
 
 **Later:** authority journal B supplies the off-volume witness and its two cause rows; W2 adds `off`'s mail, request
 and pending-act effects; W3 adds hold release. No substitute side effects are introduced here.
