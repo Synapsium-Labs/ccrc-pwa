@@ -111,8 +111,11 @@ export const OPEN_EDGES_PER_PROGRAMME_MAX = 20;
 export const EDGE_WHY_MAX = 200;
 /** Remaining work B's measured end of an edge, in characters, cut whole and masked. */
 export const EDGE_EVIDENCE_MAX = 300;
-/** An edge whose target has read unmeasured this long moves to `target-unmeasurable` and stops blocking (question 3). This
- *  block's one millisecond count, not the overlaps block's: `token-shared.test.ts` holds it as a ruled-separate week. */
+/** How long an edge's target may keep answering unmeasured before the edge moves to `target-unmeasurable` and stops
+ *  blocking; a measured answer before then resets the clock. Seven days is the plan's ruled exit (question 3, review
+ *  2265): long enough that a reader down for a few days never releases a block it could still measure, short enough
+ *  that a target nothing can read stops holding the forecast within a week. Its own fact, not any other week: it only
+ *  shares the number (`token-shared.test.ts` names it in a row of its own). This block's one millisecond count. */
 export const EDGE_UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
 /** Whether the edge arm that clears edges has shipped. Remaining work B sets it true; until then the forecast counts no
  *  edge in `blocking` or health, and lists edges as "clearing not shipped" (review 2265, F1). */

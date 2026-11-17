@@ -517,14 +517,48 @@ describe(TABLES_PIN, () => {
     expect(markCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(MARK_CALLS);
   });
   // What a programme says is left (Overlord W2 remaining work A, plan w2-remaining-work.md Task 2): `programme_remaining`
-  // is append-only, so no UPDATE or DELETE names it anywhere, even inside its one writer (which the map above cannot tell
-  // from the INSERT), and the writer is reached only from the remaining-work door.
+  // is append-only, so no statement that changes or removes a row names it anywhere, even inside its one writer (which the
+  // map above cannot tell from the INSERT): UPDATE, DELETE, REPLACE INTO, INSERT OR REPLACE, or an INSERT whose
+  // ON CONFLICT clause does an UPDATE (review 2347, F4). The writer is reached only from the remaining-work door, and it
+  // never changes an edge: the edge's state columns are remaining work B's `settleEdge`'s.
   const remainingCallSites = callSitesOf('insertRemaining');
-  it('no UPDATE or DELETE names programme_remaining anywhere: append-only', () => {
-    const files = ALL.filter((f) => !rel(f).startsWith('pwa/'));
-    const named = files.filter((f) => /(?:UPDATE|DELETE\s+FROM)\s+programme_remaining\b/.test(
-      readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, '')));
-    expect(named.map(rel)).toEqual([]);
+  const uncommented = (t: string): string => t.replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, '');
+  const rowChanges = (table: string) => (text: string): boolean => {
+    const code = uncommented(text);
+    if (new RegExp(`(?:UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO|INSERT\\s+OR\\s+REPLACE\\s+INTO)\\s+${table}\\b`).test(code)) return true;
+    // An upsert names no table after its UPDATE: read each INSERT into the table up to the call that runs it.
+    return [...code.matchAll(new RegExp(`INTO\\s+${table}\\b`, 'g'))]
+      .some((m) => /ON\s+CONFLICT[^]*?DO\s+UPDATE/.test(code.slice(m.index).split(/\)\s*\.(?:run|get|all|iterate)\(/)[0]!));
+  };
+  const remainingChanges = rowChanges('programme_remaining');
+  const edgeChanges = rowChanges('programme_edges');
+  const insertRemainingBody = (text: string): string => {
+    const from = text.indexOf('export function insertRemaining(');
+    return from < 0 ? '' : text.slice(from, text.indexOf('\n}\n', from));
+  };
+  it.each([
+    'UPDATE programme_remaining SET reason = ?', 'DELETE FROM programme_remaining WHERE id = ?',
+    'REPLACE INTO programme_remaining (id) VALUES (?)', 'INSERT OR REPLACE INTO programme_remaining (id) VALUES (?)',
+    "db.prepare('INSERT INTO programme_remaining (id) VALUES (?) ' +\n  'ON CONFLICT(id) DO UPDATE SET reason = excluded.reason').run(1)",
+  ])('CONTROL: the append-only scan sees %s', (sql) => {
+    expect(remainingChanges(sql)).toBe(true);
+    expect(remainingChanges(sql.replace('programme_remaining', 'programme_edges'))).toBe(false);
+  });
+  it('CONTROL: an INSERT followed by another statement\'s upsert is not read as an upsert of programme_remaining', () => {
+    expect(remainingChanges("p('INSERT INTO programme_remaining (id) VALUES (?)').run(1);\np('INSERT INTO t (id) VALUES (?) ON CONFLICT(id) DO UPDATE SET n = 1').run(1);")).toBe(false);
+  });
+  it('no statement that changes or removes a row names programme_remaining anywhere: append-only', () => {
+    expect(ALL.filter((f) => !rel(f).startsWith('pwa/') && remainingChanges(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+  });
+  it('insertRemaining never changes or removes an edge: it only inserts into programme_edges', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    expect(insertRemainingBody(text)).toMatch(/INSERT INTO programme_edges/);
+    expect(edgeChanges(insertRemainingBody(text))).toBe(false);
+    // CONTROL: the same body with an edge UPDATE planted before its return is caught.
+    const planted = text.replace('    return { ok: true, id, added, kept };',
+      "    db.prepare(\"UPDATE programme_edges SET state = 'met' WHERE id = ?\").run(id);\n    return { ok: true, id, added, kept };");
+    expect(planted).not.toBe(text);
+    expect(edgeChanges(insertRemainingBody(planted))).toBe(true);
   });
   it('insertRemaining is called exactly once outside the store, inside the remaining-work door', () => {
     expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([

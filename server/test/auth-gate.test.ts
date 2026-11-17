@@ -758,7 +758,7 @@ describe('the scanner is looking at something', () => {
       'POST /api/programmes/:slug/modifications/merged',
       // The eleventh file's one (the coordinator call record, D-8126): lost if `coord/coordCallsRoute.ts` stopped being read.
       'POST /api/coord/programmes/:slug/calls',
-      // The fourteenth file's one (the remaining-work door, Overlord W2): lost if `coord/programmeRemainingRoute.ts` stopped being read.
+      // The twentieth file's one (the remaining-work door, Overlord W2): lost if `coord/programmeRemainingRoute.ts` stopped being read.
       'POST /api/coord/programmes/:slug/remaining',
       // The tenth file's five (the reader lab's door): a scanner that stopped reading `readerLab/routes.ts` would lose them all.
       'POST /api/reader-lab/runs', 'GET /api/reader-lab/runs/:nonce', 'POST /api/reader-lab/runs/:nonce/close',
