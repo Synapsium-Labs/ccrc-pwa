@@ -116,7 +116,9 @@ import { delegationAdoptionHealthOf } from '../../../shared/api.js';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt.js';
 import { delegationAdoptSignInRefusal, delegationAdoptViewOf } from './delegation-adopt-switch.js';
 import { checksModeAt } from './landing.js';
-import { refuseAdvance, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import { refuseAdvance, refuseOtherLane, refuseRateLimited, refuseRoute, refuseRun } from '../refuse.js';
+import type { OtherLane } from './otherLanes.js';
+import { otherLaneReadsOf } from './otherLaneReads.js';
 import { TESTBOX_SYNC_REFUSAL } from '../testbox.js';
 import { notRanSentence } from '../unmeasured.js';
 import { createHash } from 'node:crypto';
@@ -734,12 +736,15 @@ export function registerCoordRoutes(
   // `refuseRoute` since coordinator-first Task 11b (D-5298), which also hands
   // the verdict to `POST /api/runs`' `attribution` gate as a fact — one check,
   // two callers, the same words and statuses as the inline sends it replaced.
+  // Overlord W1 other lanes (H10, C48): the one reads instance of these routes. A `lane` named after the attribution
+  // passed asks whether the attributed id is the Overlord's body (`refuseOtherLane`); no lane, no change.
+  const otherLaneReads = otherLaneReadsOf({ coord: { designationRead: () => deps.coord!.designationRead() }, io: deps.io, cfg: deps.cfg });
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'sessionUuid',
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid' | 'sessionUuid', lane?: OtherLane,
   ): Promise<boolean> => {
     const v = await attributionVerdict(deps.io, deps.cfg, whoId, whoUuid, uuidField);
     if (!v.ok) refuseRoute(reply, v.error, { detail: v.detail });
-    return v.ok;
+    return v.ok && (lane === undefined || await refuseOtherLane(reply, lane, whoId, otherLaneReads));
   };
 
   /** One refusal, recorded and answered. The record is the point: spec:147-148
@@ -983,6 +988,8 @@ export function registerCoordRoutes(
       return refuse(reply, 'stale-uuid', { fromId, fromUuid, toId, kind, subject, runId },
         'fromUuid does not match the registry — stale sender');
     }
+    // Overlord W1 other lanes (H10): the Overlord's body sends no mail by this door, run mail included. Unrecorded.
+    if (!(await refuseOtherLane(reply, 'peerMail', fromId, otherLaneReads))) return;
 
     // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
     // existing registry row. Resolving a role to a concrete session id happens
@@ -1571,6 +1578,7 @@ export function registerCoordRoutes(
       // (D-2342, the same reason `dispatch.ts`'s `project-mismatch` rung reads
       // `.project` this way). Never `sessionProject`, which reads the runs
       // table and so answers only for a session that has been a worker.
+      otherLaneReads,
       claimantProject: async (who) => {
         const r = await fieldMeasured(deps.io, deps.cfg.registryDir, who, 'project');
         if (!r.ok) return r.reason === 'absent' ? { kind: 'none' } : { kind: 'unreadable' };
@@ -1874,6 +1882,10 @@ export function registerCoordRoutes(
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
       case 'heir-is-a-worker':
         return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
+      // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read and
+      // the heir's launch profile could not rule that out (502). `error` words; nothing was re-pointed or measured.
+      case 'overlord-not-a-coordinator': case 'unmeasured':
+        return refuseRoute(reply, r.kind, { detail: r.detail });
       // spec §2.3: `which` names the side that is not a registry id. The HEIR is
       // this request's own value, so `bad-session-id` (400), the status main's
       // refusal table (`shared/refusal.ts`) gives that word, where `bad-session`
@@ -3899,7 +3911,7 @@ export function registerCoordRoutes(
         detail: `intent exceeds ${CLAIM_INTENT_MAX_BYTES} bytes — it renders on PeerSummary, it is not a spec` });
     }
 
-    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid', 'claimTake'))) return;
 
     if (runId !== null) {
       const read = coord.run(runId);
@@ -4026,7 +4038,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
+    if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid', 'claimRelease'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
     // terminal row falls through to the store, whose answer is the honest
     // `claim-terminal`/`unknown-claim` — `not-owner` is only ever said about
@@ -4329,10 +4341,10 @@ export function registerCoordRoutes(
 
   /** The two attributed landing writes: body parse (L1), measured attribution, then ONE synchronous store call inside
    *  `coordMutex` with no await between the store's facts, decision and write. The setter is the attributed `byId`. */
-  const landingWrite = async (req: FastifyRequest, reply: FastifyReply, kind: 'entry' | 'order') => {
+  const landingWrite = async (req: FastifyRequest, reply: FastifyReply, kind: 'entry' | 'order', lane: OtherLane) => {
     const parsed = parseLandingWrite(kind, req.body);
     if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: `the landing ${kind} body is not a closed, well-formed request` });
-    if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid'))) return;
+    if (!(await requireAttribution(reply, parsed.request.byId, parsed.request.byUuid, 'byUuid', lane))) return;
     return coordMutex.run(async () => {
       const r = actLandingWrite(landingCommandOf(parsed), Date.now(), { write: (c, at) => deps.coord!.writeLandingAuthority(c, at), notice });
       if (!r.ok) { const { ok: _ok, error, ...extra } = r; return refuseRoute(reply, error, extra); }
@@ -4343,12 +4355,12 @@ export function registerCoordRoutes(
   app.post('/api/landing/entries', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/entries')) return;
-    return await landingWrite(req, reply, 'entry');
+    return await landingWrite(req, reply, 'entry', 'landingEntries');
   });
   app.post('/api/landing/order', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     if (!requireMailToken(req, reply, 'POST /api/landing/order')) return;
-    return await landingWrite(req, reply, 'order');
+    return await landingWrite(req, reply, 'order', 'landingOrder');
   });
 
   /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
@@ -4753,7 +4765,7 @@ export function registerCoordRoutes(
     } else {
       return refuseRoute(reply, 'bad-request', { detail: 'kind ask or approval' });
     }
-    if (!(await requireAttribution(reply, fromId as string, fromUuid as string, 'fromUuid'))) return;
+    if (!(await requireAttribution(reply, fromId as string, fromUuid as string, 'fromUuid', 'questionRule'))) return;
     const qid = parseQuestionId((req.params as { id: string }).id);
     if (qid === null) return refuseRoute(reply, 'bad-request');
     if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
@@ -4775,7 +4787,7 @@ export function registerCoordRoutes(
     if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
       return refuseRoute(reply, 'bad-request', { detail: 'fromId/fromUuid strings' });
     }
-    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid', 'questionRelease'))) return;
     const qid = parseQuestionId((req.params as { id: string }).id);
     if (qid === null) return refuseRoute(reply, 'bad-request');
     if (qid.kind === 'session' || qid.kind !== kind) return refuseRoute(reply, 'kind-mismatch');
@@ -4831,7 +4843,7 @@ export function registerCoordRoutes(
       return refuseRoute(reply, 'not-owner',
         { detail: 'byId is not the session in the path: a session declares its own intent and no other session\'s' });
     }
-    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid', 'coordinatorIntent'))) return;
 
     const generationOf = (id: string) => childReclaimGenerationRead(deps.io, deps.cfg.registryDir, id);
     const incarnation = (await settleParentIncarnations(generationOf, await readParentGenerations(generationOf, [byId]))).get(byId);

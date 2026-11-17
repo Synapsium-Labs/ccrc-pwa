@@ -538,6 +538,19 @@ describe('the coordinator question (D-8199): Release or Hand over, one tap then 
     expect(screen.getByText('It coordinates 2 open runs. What happens to them?')).toBeInTheDocument();
   });
 
+  // Overlord W1 other lanes (C48): a hand-over to the Overlord's body is refused like any refused move.
+  it('a move refused because the heir is the Overlord says so, and nothing was stopped or archived', async () => {
+    const archive = vi.fn().mockRejectedValueOnce(refusal({ error: 'claims-not-moved', moved: [], notMoved: [RUN7, RUN8],
+      refusal: { kind: 'overlord-not-a-coordinator' } })) as unknown as Archive;
+    const self = s({ role: 'coordinator' });
+    mount(self, { archive, runs, sessions: [self, HEIR] });
+    fireEvent.change(screen.getByRole('combobox', { name: 'Hand over to' }), { target: { value: 'demo-heir' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over to heir' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Hand over and archive' }));
+    expect(await screen.findByText('Its runs could not be moved: that session is the Overlord, which never takes a programme. '
+      + 'Nothing was stopped or archived.')).toBeInTheDocument();
+  });
+
   it('Stop only on a session that claims runs hands the choice to the stop, never ending the programme', async () => {
     const onStopOnly = vi.fn();
     // "Stop only" is offered after a refusal the phone cannot fix; the frame says the session claims runs.

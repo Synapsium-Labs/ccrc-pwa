@@ -23,7 +23,7 @@ import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '..
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
 import { ensureSession } from '../session/useEnsure';
-import type { ResumeHeir } from './resumeHeirs';
+import { OVERLORD_HEIR_TEXT, type ResumeHeir } from './resumeHeirs';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -84,6 +84,10 @@ function reclaimErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return RECLAIM_COPY.unknown;
   const body = typeof err.body === 'object' && err.body !== null
     ? (err.body as Record<string, unknown>) : {};
+  // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read (502), whose
+  // `detail` is the evidence. By the WORD; an older server never sends either, and an older console says `unknown`.
+  if (body.error === 'overlord-not-a-coordinator') return OVERLORD_HEIR_TEXT;
+  if (body.error === 'unmeasured' && typeof body.detail === 'string' && body.detail.trim() !== '') return body.detail.trim();
   // D-5971: the WORD, not the status (the door answers it 502, the table's status; an older server's kickoff
   // answered the same word 503). `detail` is the only thing separating this code's two producers — an
   // unlistable registry and a tmux that did not answer (D-1139).

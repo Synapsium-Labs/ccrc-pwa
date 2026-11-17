@@ -8,6 +8,8 @@ import type { WatcherCoordPort } from './ports.js';
 import { CLAIMS_MOVE_REFUSALS, isRegistryId, sessionLifecycle, type SessionLifecycle } from '../../../shared/api.js';
 import { readSession, type SessionFacts } from '../sessionReading.js';
 import type { ClaimantDeadCause } from '../deadCoordinator.js';
+import { decideOtherLane } from './otherLanes.js';
+import { otherLaneReadsOf } from './otherLaneReads.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -271,6 +273,9 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
   // the NEW claimant is a live worker of another run (spec §12)
   | { ok: false; kind: 'heir-is-a-worker'; by: string }
+  // Overlord W1 other lanes (C48): the heir is the Overlord's body, or the designation could not be read and the heir's
+  // launch profile could not rule that out. `error` words through `refuseRoute`, not `ReclaimRefuseCode`s.
+  | { ok: false; kind: 'overlord-not-a-coordinator' | 'unmeasured'; detail: string }
   /** spec §2.3. `which` names the side that is not a registry id. `heir` is this
    *  request's `claimedBy`, refused by `readSessionRecord`'s `bad-id` before any
    *  listing; the route answers 400. `claimant` is the run's STORED `claimedBy`,
@@ -398,6 +403,10 @@ export async function reclaimRun(
       return _x;
     }
   }
+  // Overlord W1 other lanes (C48): the Overlord's body is never an heir. Right after rung 3 (the heir's row and shape)
+  // and before the heir's worker rung, the project read and rung 4's measurement, so a refusal measures no pane.
+  const heirLane = await decideOtherLane('runReclaim', to, otherLaneReadsOf(deps));
+  if (heirLane.kind === 'refuse') return { ok: false, kind: heirLane.word, detail: heirLane.detail };
   let heirProject: string | null | undefined;
   if (to !== from) {
     // §12 / D-3011: a worker of SOMEBODY ELSE's open run may not inherit a

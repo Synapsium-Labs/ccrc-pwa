@@ -20,3 +20,7 @@ export function resumeHeirs(
     .map((s) => ({ id: s.id, name: sessionLabel(s) }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
+
+/** The reclaim door and the archive hand-over refuse an heir that is the Overlord's body (Overlord W1 other lanes, C48),
+ *  answered `overlord-not-a-coordinator`. Both sheets say it in this one sentence. */
+export const OVERLORD_HEIR_TEXT = 'that session is the Overlord, which never takes a programme';

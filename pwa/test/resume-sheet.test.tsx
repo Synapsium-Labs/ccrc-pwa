@@ -308,6 +308,27 @@ describe('ResumeSheet — the reclaim refusals, each with its own sentence', () 
     expect(screen.queryByText(/this build does not recognise/i)).toBeNull();
   });
 
+  // Overlord W1 other lanes (C48): the heir is the Overlord's body.
+  it('403 overlord-not-a-coordinator — says the heir is the Overlord, never the fallback', async () => {
+    reclaimFailing(new ApiError(403, {
+      ok: false, error: 'overlord-not-a-coordinator', detail: 'the heir lane-a-overlord-quiet-oak is the Overlord\'s body',
+    }));
+    expect(await screen.findByText('that session is the Overlord, which never takes a programme')).toBeInTheDocument();
+    expect(screen.queryByText(/this build does not recognise/i)).toBeNull();
+  });
+
+  it('502 unmeasured — the designation could not be read, said in the server\'s own detail', async () => {
+    reclaimFailing(new ApiError(502, {
+      ok: false, error: 'unmeasured', detail: 'the Overlord\'s designation could not be read (bad class word); transient, retry',
+    }));
+    expect(await screen.findByText(/the Overlord's designation could not be read \(bad class word\)/)).toBeInTheDocument();
+  });
+
+  it('an older answer (a 403 with no word this build knows) still renders as before', async () => {
+    reclaimFailing(new ApiError(403, { ok: false, error: 'some-later-word' }));
+    expect(await screen.findByText(/this build does not recognise/i)).toBeInTheDocument();
+  });
+
   it('502 registry-unmeasurable — the box could not look, and says the box could not look', async () => {
     reclaimFailing(new ApiError(502, {
       ok: false, error: 'registry-unmeasurable', detail: 'the registry directory could not be listed',

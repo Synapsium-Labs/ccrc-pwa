@@ -38,7 +38,8 @@ import type { RouteRefusal } from '../../../shared/refusal.js';
 import { cleanName } from '../../../shared/unprintable.js';
 import type { AttributionRead } from '../coord/openRun.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
-import { refuseRateLimited, refuseRoute } from '../refuse.js';
+import { refuseOtherLane, refuseRateLimited, refuseRoute } from '../refuse.js';
+import { linearLaneOf, type OtherLaneReads } from '../coord/otherLanes.js';
 import { valueDigestHex } from '../token/files.js';
 import { callLinear, type FetchLike, type LinearCall } from './client.js';
 import type { LinearJournal, LinearJournalCode, LinearSettledOutcome, LinearWriteOp } from './journal.js';
@@ -93,6 +94,8 @@ export interface LinearProxyDeps {
   mailToken: () => string | BoxTokenHolder | null;
   /** The box-token lanes' sender check, `attributionVerdict` over the registry (`coord/attribution.ts`). */
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
+  /** Overlord W1 other lanes (H10): the reads a write verb's refusal of the Overlord's body asks (`refuseOtherLane`). */
+  otherLaneReads: OtherLaneReads;
   /** The ONE rate service, the ONE refresher, the ONE journal and the policy point, each passed through as it is. */
   rate: LinearRateService | null;
   refresher: LinearRefresher | null;
@@ -291,6 +294,9 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
     if (!who.ok) return refuseRoute(reply, 'bad-request', { detail: who.field });
     const attributed = await deps.attribute(who.id, who.uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    // Overlord W1 other lanes (H10): a write verb refuses the Overlord's body, before the validator and any call to Linear.
+    const lane = linearLaneOf(verb);
+    if (lane !== null && !(await refuseOtherLane(reply, lane, who.id, deps.otherLaneReads))) return reply;
 
     // 5. The body and the query against the operation's validator, then `linear-egress` over the outbound text.
     const params = req.params as { id?: unknown };
