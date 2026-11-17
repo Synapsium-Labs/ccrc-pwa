@@ -38,7 +38,7 @@ const CAT = {
     { id: 'model-6.1-delta', label: 'Model 6.1 Delta', efforts: ['medium'] },
   ],
 };
-const LABELS = laneClassModels(parseRegistry(REG), parseCatalogue(CAT));
+const CLASS_LABELS = laneClassModels(parseRegistry(REG), parseCatalogue(CAT));
 
 const AT = '2026-11-16T10:00:00Z';
 const advClass = (c: ModelClass): Record<string, unknown> => c === C2
@@ -56,7 +56,7 @@ const PENDING = { class: C1, from: 'model-6.1-gamma', to: 'model-6.2-gamma', eff
 /** One `show` answer, as `deploy/models-op.mjs`'s `describe` prints it (the keys this reader reads, plus a few). */
 function showJson(lane: string, over: Record<string, unknown> = {}): string {
   return `${JSON.stringify({
-    ok: true, op: 'show', id: lane, anthropic: false, registry: REG, labels: LABELS,
+    ok: true, op: 'show', id: lane, anthropic: false, registry: REG, labels: CLASS_LABELS,
     advance: { state: 'ok', classes: ADV_CLASSES, pending: PENDING }, windowNotices: [], ...over,
   })}\n`;
 }
@@ -84,7 +84,7 @@ function rig(answer: ModelsAsked | (() => Promise<ModelsAsked>)) {
   return { base, io, reads, calls, read: () => readLaneModels(io, base.cfg.ccrcDir, 'lane-a') };
 }
 /** The files path's reading of the same seeded lane. */
-const FILES: LaneModelsRead = { kind: 'read', classes: LABELS };
+const FILES: LaneModelsRead = { kind: 'read', classes: CLASS_LABELS };
 
 describe('readLaneModels through the op (D-8686)', () => {
   it('an exited show gives the files path\'s classes, reads no file, and asks show once', async () => {
@@ -133,9 +133,9 @@ describe('readLaneModels through the op (D-8686)', () => {
     const noKey = JSON.parse(showJson('lane-a')) as Record<string, unknown>;
     delete noKey.advance;
     const a = await rig(exited(`${JSON.stringify(noKey)}\n`)).read();
-    expect(a).toEqual({ kind: 'read', classes: LABELS, advance: { state: 'unreported', ...none } });
+    expect(a).toEqual({ kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', ...none } });
     const b = await rig(exited(showJson('lane-a', { advance: { state: 'ok', classes: ADV_CLASSES } }))).read();
-    expect(b).toEqual({ kind: 'read', classes: LABELS, advance: { state: 'unreported', ...none } });
+    expect(b).toEqual({ kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', ...none } });
   });
 
   it('an ok whose classes fail parseAdvance, or an unknown state, makes the whole answer unreadable', async () => {
@@ -235,21 +235,21 @@ describe('readLaneModels through the op (D-8686)', () => {
   it('missing labels, a label whose model is not the pin, a bad pin or a bad efforts list is unreadable', async () => {
     const r = (over: Record<string, unknown>) => rig(exited(showJson('lane-a', over))).read();
     expect(await r({ labels: undefined })).toEqual({ kind: 'unreadable' });
-    expect(await r({ labels: { ...LABELS, [C1]: { ...LABELS[C1], model: 'model-6.0-gamma' } } })).toEqual({ kind: 'unreadable' });
-    expect(await r({ labels: { ...LABELS, [C3]: { model: null } } })).toEqual({ kind: 'unreadable' });
-    expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: 'low' } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...CLASS_LABELS, [C1]: { ...CLASS_LABELS[C1], model: 'model-6.0-gamma' } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...CLASS_LABELS, [C3]: { model: null } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...CLASS_LABELS, [C0]: { ...CLASS_LABELS[C0], efforts: 'low' } } })).toEqual({ kind: 'unreadable' });
     // an array is not enough: every element must be a string
-    expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: ['low', 5] } } })).toEqual({ kind: 'unreadable' });
-    expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: [null] } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...CLASS_LABELS, [C0]: { ...CLASS_LABELS[C0], efforts: ['low', 5] } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...CLASS_LABELS, [C0]: { ...CLASS_LABELS[C0], efforts: [null] } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ registry: { ...REG, classes: { ...PIN, [C0]: 5 } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ registry: 'x' })).toEqual({ kind: 'unreadable' });
   });
 
   it('a label row without efforts (an older ccrc) reads efforts as null', async () => {
-    const thin = Object.fromEntries(CLASSES.map((c) => [c, { model: LABELS[c].model, label: LABELS[c].label }]));
+    const thin = Object.fromEntries(CLASSES.map((c) => [c, { model: CLASS_LABELS[c].model, label: CLASS_LABELS[c].label }]));
     const got = await rig(exited(showJson('lane-a', { labels: thin }))).read();
     if (got.kind !== 'read') throw new Error(got.kind);
-    for (const c of CLASSES) expect(got.classes[c]).toEqual({ model: LABELS[c].model, label: LABELS[c].label, efforts: null });
+    for (const c of CLASSES) expect(got.classes[c]).toEqual({ model: CLASS_LABELS[c].model, label: CLASS_LABELS[c].label, efforts: null });
   });
 
   it.each([
@@ -389,7 +389,7 @@ describe('the mixed pairs (D-8688)', () => {
       expect(seen).toEqual([['models', 'lane-a', 'show']]);
       expect(got.kind).toBe('read');
       expect(got.kind === 'read' && got.advance?.state).toBe('ok');
-      expect(got.kind === 'read' && got.classes).toEqual(LABELS);
+      expect(got.kind === 'read' && got.classes).toEqual(CLASS_LABELS);
     });
   });
 
