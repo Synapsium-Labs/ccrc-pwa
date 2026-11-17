@@ -1,6 +1,7 @@
 # The programme's work map: what is done and what remains, on its page
 
-**Spec** · 2026-11-16 · Status: Draft, for the operator · Owner: the operator · Linear: none · Related:
+**Spec** · 2026-11-16 · Status: Approved by the operator (item 363), amended for review 2268 in WM0 (2026-11-17) ·
+Owner: the operator · Linear: none · Related:
 `docs/superpowers/specs/2026-11-10-linear-hierarchy-design.md` (the plan model this builds on: programme, epic,
 checkpoint, ticket), `docs/superpowers/plans/2026-11-10-linear-hierarchy.md` (its Task 5.2, which this supersedes),
 `docs/superpowers/specs/2026-10-31-programme-ledgers-design.md` (Goals, Waiting on you),
@@ -18,8 +19,8 @@ alone, and **done is derived from evidence the server checks**, never typed. A p
 references. The view carries both axes; the card leads with the phases, as the operator ruled: each ticket in a phase
 has one line, a status and a tag naming its epic. A strip under the headline ("11 of 21
 done") gives each epic's count and its checkpoints. The card is the hierarchy plan's Task 5.2, its Plan section,
-extended. Check §2 (measured), §3 (the model), §4 (status and done), §5 (the card), §8 (what this touches in the
-hierarchy design) and the one question still open in "Waiting on you" (Q5); the operator has ruled the other four.
+extended. Check §2 (measured), §3 (the model), §4 (status and done), §5 (the card) and §8 (what this touches in the
+hierarchy design). The operator has ruled all five of the design's questions (R129 to R133).
 
 ## 1. Context
 
@@ -47,16 +48,22 @@ holds, never typed; a carry is a recorded act, never inferred from two phases na
 axes, so which one leads is a choice in the card alone; and a change to the hierarchy's approved work model is the
 operator's, so this design avoids each one it can and asks about the one it cannot (Q5).
 
-The operator then answered the design's first four questions, each with its recommendation:
+The operator then answered the design's five questions, each with its recommendation:
 
-| # | Question | The operator's answer |
-|---|---|---|
-| R129 | Q3: the word for a stage | "Phase for a stage; wave stays the machine's run number" |
-| R130 | Q2: which axis leads the card | "Phases lead, in order; each ticket tagged with its epic; a strip of each epic's count and checkpoints under the headline" |
-| R131 | Q4: what a phase becomes in Linear | "A label on each issue a phase references, written by the sync" |
-| R132 | Q1: plans for live programmes | "Yes: each live programme's coordinator declares its plan at its next wave boundary" |
+| # | Item | Question | The operator's answer |
+|---|---|---|---|
+| R129 | 355 | Q3: the word for a stage | "Phase for a stage; wave stays the machine's run number" |
+| R130 | 354 | Q2: which axis leads the card | "Phases lead, in order; each ticket tagged with its epic; a strip of each epic's count and checkpoints under the headline" |
+| R131 | 356 | Q4: what a phase becomes in Linear | "A label on each issue a phase references, written by the sync" |
+| R132 | 353 | Q1: plans for live programmes | "Yes: each live programme's coordinator declares its plan at its next wave boundary" |
+| R133 | 359 | Q5: may an epic list no wave range | Yes: an epic may list no waves. WM6 builds it |
 
-*Table 1b. The operator's answers to the design's questions.*
+*Table 1b. The operator's answers to the design's questions, with the operator item each was asked in. The operator then
+approved the spec (item 363: "start the build at WM0").*
+
+The coordinator's rulings on review 2268 (2026-11-17): the hierarchy's "the coordinator closes it with a reason" is kept,
+not narrowed. A ticket closed that way is a separate outcome that reads "closed" with its reason and counts apart from
+done and outstanding, as dropped does. Only verified evidence makes done (§4.1, D11).
 
 What the page draws today (`pwa/src/ledgers/ProgrammeScreen.tsx`, sourced): the head (name, current wave, wave counts,
 coordinator), Goals (the pinned "In short", a link to the spec, changes since approval), Waiting on you (a count, or what
@@ -84,7 +91,7 @@ measured on `origin/main`, and runs and plans on the live server, on 2026-11-16.
 | Programme | Shape | Stored plan | Plan files | Ledger Waves table | Runs |
 |---|---|---|---|---|---|
 | desktop-polish | One plan, 73 task headings in tracks, 132 waves, open-ended | None | 4 of 274 checkboxes ticked, though most tasks merged | 40 rows for waves 1 to 42, stale against wave 132 | Titled by task ("Desktop polish: Task C35, …") |
-| overlord | Stages W0, W1a, W1 to W6; W1 is 29 pieces in 67 pull requests, with 49 plan files in its W1 folder | None | 0 of 1,513 ticked | 28 rows; W1 reads "not planned yet" while it is being built | Titled by stage or piece ("plan: W1 inbox and reads") |
+| overlord | Stages W0, W1a, W1 to W6; W1 is 29 pieces in 67 pull requests, with 48 plan files in its W1 folder (49 with the index plan beside it) | None | 0 of 1,513 ticked | 28 rows; W1 reads "not planned yet" while it is being built | Titled by stage or piece ("plan: W1 inbox and reads") |
 | terminal-drawer-fit (small) | 4 waves, then a successor | None | One plan per wave | 4 rows, once a month stale (D-5013) | 1 run, `planned` |
 | box-token-lifecycle (finished) | 2 spec waves built as 4 runs; 2 for later | None | Four plans | 6 rows, stale: row 2a still reads PLANNED, rows 2c and 3a are missing | Too old for the closed-runs read |
 | Two programmes in other projects | 6 epics with 26 tickets, and 1 epic | **Declared** | Not read | Not read | Each run attaches to one ticket |
@@ -157,7 +164,8 @@ them to phase 3. Phase 3 references the whole of a second epic. A run still does
 
 - **The work** is the hierarchy design's, unchanged: programme, epic, checkpoint, ticket (its §3 and §4), mirrored to
   Linear as initiative, project, milestone and issue. Epics keep their wave ranges and every rule on them. Whether an
-  epic may run without a wave range, so that feature-sized epics run side by side, is the operator's question Q5.
+  epic may run without a wave range, so that feature-sized epics run side by side, was the operator's question Q5,
+  answered yes (R133); WM6 builds it.
 - **A phase** is new. A programme has an ordered list of phases, each with a key, a title and a one-line summary.
 - **A phase references** the epics and tickets it takes on (O2). A reference names either a whole epic or one ticket,
   and a phase may hold both kinds. The phase owns nothing: dropping a phase keeps its references stored and changes no
@@ -167,9 +175,18 @@ them to phase 3. Phase 3 references the whole of a second epic. A run still does
   `op: 'carry'`, from phase A to a later phase B. Only a recorded carry reads "carried to phase B" in A and "from phase
   A" in B. Two phases that name one ticket without a carry, for example through two whole-epic references, both keep it
   as their work.
+- **A recorded carry is never undone or corrupted without a refusal (F12 of review 2268).** `plan phase-ref` refuses
+  `bad-carry` the `remove` of either end of a recorded carry: in A, the ticket reference marked carried to B, and in B,
+  the ticket reference the carry wrote. A `plan put` whose phase order would put a carry's target at or before its
+  source is refused `bad-carry` too. A carry is written in one transaction, and both verbs refuse `plan-closed` once the
+  plan has ended. The one way a carry stops counting is dropping its target phase, which needs a reason (`droppedWhy`)
+  and is itself recorded: the ticket is again A's own work (§3.1).
 - **A whole-epic reference** means every ticket of that epic that is not dropped, including tickets added to the epic
   later (D15). This is what "takes on the guide" means in plain words, and it needs no re-reference when a coordinator
-  adds a ticket. A carry works on a ticket that a phase holds through a whole-epic reference, too.
+  adds a ticket. A carry works on a ticket that a phase holds through a whole-epic reference, too. When the epic is
+  dropped, only its open tickets drop with it (`dropEpicInto`); its done tickets stay done, so the reference still holds
+  them and the phase keeps them as done work. A reference to an epic left with no ticket that is not dropped reads as
+  nothing (D18).
 - **Status lives on the ticket.** A ticket's status is the one Table 6 derives (§4), whichever phase it is read under.
   A phase's progress is computed from the statuses of what it references. A phase stores no state at all.
 - **Waves stay the machine's.** A wave is a run's number (§2.3). The card never uses it as a stage.
@@ -182,24 +199,35 @@ each ticket once. Each ticket in that set reads by the first row that matches:
 | A referenced ticket that is | Reads in this phase | Counts in this phase as |
 |---|---|---|
 | Dropped | Not shown | Not counted |
+| Closed with a reason (the hierarchy's "the coordinator closes it", §4) | "closed", with its reason | Closed: counted apart, neither done nor outstanding |
 | Carried out of this phase (a recorded carry to a phase that is not dropped) | "carried to phase N", with its status now | Carried: not this phase's work, whatever happens to it later |
-| Done | Its status | This phase's work, done |
+| Done, and its evidence verifies (Table 6 row 3) | Its status | This phase's work, done |
+| Left open when the plan ended (Table 6 row 5) | "left open when the plan closed" | Left open: counted apart, neither done nor outstanding |
 | Anything else | Its status | This phase's work, outstanding |
 
 *Table 6a. How a phase reads its tickets, first match wins. A carried ticket stays carried in the phase it left even
-after it is done in a later phase.*
+after it is done in a later phase. "Done" is the verified status (F9 of review 2268): a ticket marked done whose
+evidence does not verify (Table 6 row 4, group held) is outstanding work, so its phase does not finish. No verb
+re-records evidence in this build, so such a ticket stays held until its evidence verifies again.*
 
-- **"N of M done" counts the phase's own work:** its referenced tickets, less the dropped and the carried out. Carried
-  tickets are counted apart: "5 of 8 done · 1 carried to phase 3".
-- **A phase is finished** when it references at least one ticket and all of its own work is done. Its finish time is the
-  latest of its own tickets' done times and its carries' times, so it is derived, never typed. When any of those times
-  is not known (a ticket done before this build, §4.1), the phase reads "finished, date unknown". A finished phase folds
-  to its line.
+- **"N of M done" counts the phase's own work:** its referenced tickets, less the dropped, the closed, the carried out
+  and the left open. Each of those is counted apart: "5 of 8 done · 1 carried to phase 3".
+- **A phase is finished** when its own work holds at least one ticket, or it records at least one carry out, and all
+  of its own work is done (F14 of review 2268). A phase with neither is **empty** and never finished, so a phase whose
+  every reference reads as nothing is not finished on the spot. In an ended plan, a phase with a ticket left open reads
+  "left open" and is not finished. Its finish time is the latest of its own tickets' done times and its carries' times,
+  so it is derived, never typed. When any of those times is not known, the phase reads "finished, date unknown". A
+  finished phase folds to its line.
 - **A ticket carried twice** (phase 1 to 2, then 2 to 3) reads "carried to phase 2" in phase 1, "from phase 1 · carried
-  to phase 3" in phase 2, and "from phase 2" in phase 3. A carry into a phase that is later dropped no longer counts:
-  the ticket is again the earlier phase's own work.
-- **The headline counts each ticket once (D16).** "11 of 21 done" counts the programme's distinct tickets that are not
-  dropped, whatever phases reference them. The epic strip counts each epic's own tickets once in the same way.
+  to phase 3" in phase 2, and "from phase 2" in phase 3. A ticket may be carried into one phase from two (each its
+  own work there through a whole-epic reference), so "from" names every phase whose recorded carry names this one, in
+  phase order. A carry into a phase that is later dropped no longer counts: the ticket is again the earlier phase's
+  own work.
+- **The headline counts each ticket once (D16).** "11 of 21 done" counts the programme's distinct tickets that are
+  neither dropped nor closed (nor left open in an ended plan), whatever phases reference them; closed and left-open
+  tickets are counted apart. The epic strip counts each epic's own tickets once in the same way. A dropped
+  epic that still holds a done ticket keeps its chip, marked dropped, with its done tickets counted, so the strip's
+  counts add up to the headline's (F3 of review 2268).
 - **A ticket no phase references** sits in a last group, "Not in a phase", so nothing in the plan is left off the card.
 
 ## 4. Status: one word per ticket, derived, never typed
@@ -209,40 +237,52 @@ This section defines each status and the fact it comes from. One decider compute
 | # | When | Status | Group | Footing |
 |---|---|---|---|---|
 | 1 | The ticket is `dropped` | dropped (not shown, never counted) | dropped | Measured: the plan |
-| 2 | The ticket is `done` and its evidence verifies on this read | done | done | Measured: the run it names is `done`, or the pull request it names is `landed` on the landing line (§4.1) |
-| 3 | The ticket is `done` but its evidence no longer verifies | "marked done, but …" with the reason | held | Measured: the same reads, failing |
-| 4 | An open operator item names the ticket's run (`ItemView.runId`), or names an `operator-act` checkpoint of the ticket | waiting on you | waiting on you | Measured: the items |
-| 5 | The ticket's run carries a stuck verdict (`RunSummary.stuck`) | stuck | held | Measured: the run verdicts reader |
-| 6 | The run is `planned` and waits behind another run (`blockedBy`) | blocked | held | Measured: the run verdicts reader |
-| 7 | The run is `dispatched` or `working` | working | in progress | Measured |
-| 8 | The run is `unknown` | state unknown | in progress | Measured: the server could not read the run's state |
-| 9 | The run is `awaiting-review` | in review | in progress | Measured |
-| 10 | The run is `merging` or `closing` | merging | in progress | Measured |
-| 11 | The run is `planned` and not blocked | queued | in progress | Measured |
-| 12 | The ticket is `open` with no run | not started | not started | Measured: the plan |
+| 2 | The coordinator closed the ticket with a reason (the hierarchy's approved transition, built by its Task 4.3) | "closed" with its reason | closed | Measured: what that task stores for the close |
+| 3 | The ticket is `done` and its evidence verifies on this read | done | done | Measured: the run it names is `done`, or the pull request it names is `landed` on the landing line (§4.1) |
+| 4 | The ticket is `done` but its evidence no longer verifies, or none is stored | "marked done, but …" with the reason ("no evidence stored" for the second) | held | Measured: the same reads, failing, or the empty column |
+| 5 | The plan has ended (`plan close`) and the ticket is not done | left open when the plan closed | left open | Measured: the plan's end |
+| 6 | An open operator item names the ticket's run (`ItemView.runId`), or names an `operator-act` checkpoint of the ticket | waiting on you | waiting on you | Measured: the items |
+| 7 | The ticket's run carries a stuck verdict (`RunSummary.stuck`) | stuck | held | Measured: the run verdicts reader |
+| 8 | The run is `planned` and waits behind another run (`blockedBy`) | blocked | held | Measured: the run verdicts reader |
+| 9 | The run is `dispatched` or `working` | working | in progress | Measured |
+| 10 | The run is `unknown` | state unknown | in progress | Measured: the server could not read the run's state |
+| 11 | The run is `awaiting-review` | in review | in progress | Measured |
+| 12 | The run is `merging` or `closing` | merging | in progress | Measured |
+| 13 | The run is `planned` and not blocked | queued | in progress | Measured |
+| 14 | The ticket is `open` with no run | not started | not started | Measured: the plan |
 
-*Table 6. The status decider, first match wins. Every row reads a stored or measured fact.*
+*Table 6. The status decider, first match wins. Every row reads a stored or measured fact. With `failed`, which only
+the no-plan fallback uses (§5.1), these are the fifteen statuses of D3, in nine groups. Rows 2, 4's second case and 5
+were added for review 2268 (F10, F1, F4).*
 
-- **The groups** say who acts: "waiting on you" is only the operator's (row 4), and "held" is the machine's or the
-  coordinator's (rows 3, 5 and 6). So "waiting" on the page always means the operator.
-- **Rows 5 and 6 need the run verdicts reader**, which the server fills in memory on its first pass. Before that pass,
-  or after a restart, the reader is empty: rows 5 and 6 are skipped, and the source line says "stuck and blocked not
+- **The groups** say who acts: "waiting on you" is only the operator's (row 6), and "held" is the machine's or the
+  coordinator's (rows 4, 7 and 8). So "waiting" on the Work card always means the operator; the page head's run count
+  is the runs' own word, not the card's (F25 of review 2268).
+- **Closed and left open count apart.** Like dropped, they are in no "N of M" and no outstanding count. Each has its
+  own count on the headline's line ("· 2 closed"), so nothing the plan declared disappears.
+- **Rows 7 and 8 need the run verdicts reader**, which the server fills in memory on its first pass. Before that pass,
+  or after a restart, the reader is empty: rows 7 and 8 are skipped, and the source line says "stuck and blocked not
   read yet". The decider takes the verdict as three cases, never folding "not read" into "not stuck".
 - **A failed run** returns its ticket to `open` with no run (`onRunAdvancedInTx`), so the ticket reads "not started"
   again, and its row adds "last run failed" with a link to that run.
 - **Review runs** never make rows. A review shows on its work run's row as "in review".
-- **A run's own ticket and a declared ticket's evidence.** When a run that minted its own ticket (`run-<id>`) is the
-  evidence of a declared ticket, the run's ticket folds into the declared one and is not counted twice.
+- **A run's own ticket and a declared ticket's evidence.** A piece of evidence closes at most one ticket (§4.1), so
+  when a run that minted its own ticket (`run-<id>`) is the evidence of a declared ticket, it is the evidence of exactly
+  that one: the run's ticket folds into it and is not counted twice.
 
 ```mermaid
 flowchart LR
   T["Ticket"] --> D{"dropped?"}
   D -- "yes" --> X["not shown"]
-  D -- "no" --> F{"done?"}
+  D -- "no" --> C{"closed with<br/>a reason?"}
+  C -- "yes" --> CL["closed"]
+  C -- "no" --> F{"done?"}
   F -- "yes" --> V{"evidence<br/>verifies?"}
   V -- "yes" --> OK["done"]
-  V -- "no" --> MU["marked done, but …"]
-  F -- "no" --> I{"open item<br/>on it?"}
+  V -- "no, or none" --> MU["marked done, but …"]
+  F -- "no" --> E{"plan<br/>ended?"}
+  E -- "yes" --> LO["left open"]
+  E -- "no" --> I{"open item<br/>on it?"}
   I -- "yes" --> W["waiting on you"]
   I -- "no" --> S{"run stuck<br/>or blocked?"}
   S -- "yes" --> B["stuck / blocked"]
@@ -261,18 +301,28 @@ ticket state, without changing the hierarchy's work model.
 - **Done carries its evidence and its time (D11).** Today a ticket reaches `done` only when its run closes `done`, and
   nothing records when or on what evidence. This build adds two nullable columns to `plan_tickets`, `doneAt` and
   `doneEvidence` (`{ runId }` or `{ pr }`), written only by the plan store. The done arm of `onRunAdvancedInTx` writes
-  `{ runId }` and the time. A new verb, `plan ticket-done <slug>`, does the same for a ticket the coordinator closes:
-  this is the hierarchy's own approved transition, "the coordinator closes it" (its §4.1 table), which its wave 2 did not
-  build, held to evidence instead of a bare reason.
+  `{ runId }` and the time. A new verb, `plan ticket-done <slug>`, does the same for a ticket finished another way, held
+  to evidence. It is a new transition beside the hierarchy's, not a narrowing of it: the hierarchy's approved "the
+  coordinator closes it with a reason" (its §4.1 table, built by its Task 4.3's `take … close: { why }`) is kept as it
+  is, and such a ticket reads "closed" with its reason, counted apart from done and outstanding (Table 6 row 2; the
+  coordinator's ruling on review 2268's F10). Only verified evidence makes "done".
 - **The evidence is verified when it is recorded, and again on every read.** `{ runId }` verifies when that run is a
-  work run of this programme and its state is `done`. `{ pr }` verifies when the landing line holds that pull request
-  for the programme's project in state `landed` ("merged into its base"). The server holds no other merge fact for a
-  bare pull request number, so in a project with no landing line the verb refuses `{ pr }` and the coordinator names
-  the run that carried it. The verb refuses `evidence-unverified` when the evidence does not hold, and `ticket-not-open`
-  for a ticket not `open` or one a run holds. On a read, evidence that no longer holds makes the ticket read "marked done,
-  but …" with the reason (Table 6, row 3).
-- **A ticket done before this build** has no stored evidence. It reads done, and its time is its run's `closedAt` when a
-  run of this programme names it, or unknown otherwise ("finished, date unknown" on its phase).
+  work run of this programme, its state is `done`, and its own ticket is an auto ticket (`run-<id>`) or none, so a run
+  that did one declared ticket is never the evidence of another. `{ pr }` verifies when the landing line holds that
+  pull request for the ticket's own project in state `landed` ("merged into its base"); the ticket's project, not the
+  programme's home, because a re-projected ticket's pull request lands in its own project (F19 of review 2268). The
+  server holds no other merge fact for a bare pull request number, so in a project with no landing line the verb
+  refuses `{ pr }` and the coordinator names the run that carried it. A piece of evidence closes at most one ticket:
+  evidence already stored on another ticket of the programme does not verify (F2 of review 2268). The verb refuses
+  `evidence-unverified` when the evidence does not hold, and reuses `plan ticket-move`'s words for the same conditions
+  (F21): `plan-runs-open` for a ticket a run holds, and `plan-bad-body` for a ticket that is not `open`. On a read,
+  evidence that no longer holds makes the ticket read "marked done, but …" with the reason (Table 6, row 4).
+- **A ticket done before this build** gets its evidence from WM1's migration (F1 of review 2268). Measured on `main`:
+  the only writer of `done` is the done arm of `onRunAdvancedInTx`, which leaves the ticket's `runId` set, so every done
+  ticket names a done run of its own programme. The migration back-fills `doneEvidence` `{ runId }` from it and `doneAt`
+  from that run's `closedAt` (null when the run has none, which reads "finished, date unknown" on its phase). A done
+  ticket that still has no stored evidence reads "marked done, but no evidence stored" (Table 6, row 4), never an
+  unchecked done.
 - **A work run names its ticket, in a plan that declares phases (D10).** Today `runs open` with no `ticket` mints a
   ticket of its own (`run-<id>`), and the declared ticket the run was doing stays `open`, counted twice. In a plan that
   declares at least one phase, a work run that opens into an epic with an open declared ticket that no run holds must
@@ -295,6 +345,9 @@ epic's count and its checkpoints.*
 ![Phone: one column, Goals, Work, Waiting on you, Runs](2026-11-16-programme-work-map/phone.png)
 *Figure 4. Phone at 390 wide. One column: Goals, Work, Waiting on you, Runs.*
 
+The mockups' sample Runs card interleaves two epics' waves, which only WM6 admits (Q5, answered yes in R133); until WM6
+lands, a programme's epics keep contiguous wave ranges (F11 of review 2268).
+
 The card, top to bottom:
 
 1. **The headline.** "11 of 21 done", then the outstanding counts by group ("3 in progress · 1 waiting on you · 6 not
@@ -313,9 +366,11 @@ The card, top to bottom:
    ago it moved, the item link and when it is needed, "carried to phase 3" or "from phase 2").
 6. **Done when.** A folded last line, "Done when · 1 of 3 proved", which opens the programme's definition of done, each
    entry marked proved or not, as the hierarchy's Task 5.2 specified.
-7. **Open in Linear**, on each epic chip's checkpoint row and once for the initiative, only where the plan object is
-   bound (after the hierarchy's sync, §2.2). With initiatives off for the project, the card says why there is no
-   initiative link, as Task 5.2 specified.
+7. **Open in Linear**, on each epic chip's checkpoint row and once for each initiative, only where the plan object is
+   bound (after the hierarchy's sync, §2.2). A plan whose epics sit in two Linear workspaces has an initiative in each
+   (`PlanView.initiatives`, one per workspace), and the card draws a link or a note for each, never one for all (F7 of
+   review 2268). With initiatives off for a project, the card says why there is no initiative link there, as Task 5.2
+   specified.
 
 **Placement (D5).** Work goes directly below Goals, as asked. On desktop, Waiting on you moves to the top of the right
 column, above Runs, so a long list never pushes it out of view. On a phone the order is Goals, Work, Waiting on you,
@@ -338,10 +393,13 @@ Four cases are kept apart, each with its own words, so that none reads as anothe
 - **Declared, with no tickets to count** (a plan with no epics, only checkpoints, or every ticket dropped): "The plan
   is declared but lists no work yet." The strip shows any epics and checkpoints. Never the runs fallback.
 - **Ended** (`plan close`): the headline says "Plan closed as done on 2026-11-20", or "Plan abandoned on 2026-11-20:
-  <why>". A ticket still open reads "left open when the plan closed", in no outstanding count.
-- **Not readable** (one of the reads behind the card fails): the plan read still answers, and its `work` carries the
-  failure's word, so the card says "The work could not be read: <reason>" and keeps the view it last drew. An absent
-  `work` means only an older server, and draws no card.
+  <why>". A ticket still open reads "left open when the plan closed", in its own group, `left-open`, in no outstanding
+  count and no "N of M" (Table 6 row 5). A phase with such a ticket reads "left open" and is not finished.
+- **Not readable** (one of the reads behind `work` fails): the plan read still answers, and its `work` carries the
+  failure's word, so the card says "The work could not be read: <reason>". When the plan read itself fails, the route
+  refuses as any read does and answers no `plan` and no `work`. Either way the programme page (WM4), not the card,
+  keeps the view it last drew and says the read failed (F15 of review 2268). An absent `work` means only an older
+  server, and draws no card.
 
 Two more rules apply to every planned programme:
 
@@ -401,31 +459,47 @@ serves it. The console only draws the words.*
   key like epics: a phase that disappears needs `droppedWhy`. An absent `phases` key leaves the stored phases as they
   are. A put's references are added to what is stored, never replace it, so a put written before a carry can never undo
   the carry. A new reference to an unknown or dropped epic or ticket is refused `unknown-ref`; a reference already
-  stored to an object dropped since is kept and reads as nothing. At most 24 phases, like epics.
+  stored to an object dropped since is kept and reads as nothing (a whole-epic reference to a dropped epic still holds
+  its done tickets, §3). A put whose phase order puts a recorded carry's target at or before its source is refused
+  `bad-carry` (F12). At most 24 phases, like epics.
 - **One verb for a reference (D17).** `plan phase-ref` adds one reference, removes one, or carries a ticket from phase A
   to a later phase B. A carry writes, in A, a ticket reference marked carried to B (even when A holds the ticket through
-  a whole-epic reference), and in B a ticket reference. It is refused `bad-carry` when the ticket is not A's work, B is
-  not later than A, either phase is dropped, or the ticket is done.
+  a whole-epic reference), and in B a ticket reference, both in one transaction. It is refused `bad-carry` when the
+  ticket is not A's work, B is not later than A, either phase is dropped, or the ticket is done. `add` and `remove` name
+  a phase that is not dropped; an unknown or dropped phase, or a reference to an unknown or dropped object, is refused
+  `unknown-ref`, and so is a `remove` of a reference the phase does not hold. **Which removes are refused (F12):** the
+  `remove` of a ticket reference that is either end of a recorded carry, the source's reference marked carried (to a
+  phase that is not dropped) or the reference in the carry's target, is refused `bad-carry`; every other remove is
+  allowed. The verb refuses `plan-closed` once the plan has ended, as `plan put` does.
+- **A phase's number is derived once (F6).** A phase's number is its 1-based place among the phases that are not
+  dropped, in order. One pure function in `planPolicy.ts` (L1) derives it, and both the plan read's `PhaseView.number`
+  (WM0) and the work map's phase and carry numbers (WM2) take it from there, so the console never counts positions.
 - **The done facts (D11).** WM1's migration adds `plan_tickets.doneAt` and `plan_tickets.doneEvidence`, nullable. The
   plan store writes them (`onRunAdvancedInTx`'s done arm and `markTicketDone`), and nothing else does.
 - **The new refusals.** `ticket-required` is a `RunRefuseCode` (`RUN_REFUSE_CODE_MAP` in `shared/api.ts`,
   `OpenRunConflict` and `RUN_REFUSAL_STATUS` in `shared/refusal.ts`, `OpenRunConflictCode` in `openRun.ts`), beside
-  `ticket-unavailable`, decided in `planGate` after `wave-epic-mismatch`. `unknown-ref`, `bad-carry`, `ticket-not-open`
-  and `evidence-unverified` join `PLAN_REFUSALS`. Each has its status (`REFUSAL_STATUS` or `RUN_REFUSAL_STATUS`). Only
-  the coordinator's client sends these verbs, and no plan word has a console sentence today (measured in
-  `pwa/src/lib/refusalWords.ts`), so the build adds none.
+  `ticket-unavailable`, decided in `planGate` after `wave-epic-mismatch`. `unknown-ref`, `bad-carry` (WM0) and
+  `evidence-unverified` (WM1) join `PLAN_REFUSALS`; `plan ticket-done` reuses `plan-runs-open` and `plan-bad-body` for
+  a held or not-open ticket, as `plan ticket-move` does, so no `ticket-not-open` is added (F21). Each has its status
+  (`REFUSAL_STATUS` or `RUN_REFUSAL_STATUS`). Only the coordinator's client sends these verbs, and the only plan word
+  with a console sentence today is `linear-text-public` (measured in `pwa/src/lib/refusalWords.ts`), so the build adds
+  none, and WM0 corrects `PLAN_REFUSALS`' doc comment, which says every word has one (F20).
 - **The two new routes** (`POST /api/programmes/:slug/plan/phases/refs` and `…/plan/tickets/done`) take the caller's
   identity from the query through the plan routes' shared door, like every plan verb, never from the body. Each has a
-  row in `ccd/ccrc-api` behind a capability word the server advertises (`plan-phases-v1`, `plan-ticket-done-v1`), so a
-  newer client facing an older server stops with "server too old" before it sends.
+  row in `ccd/ccrc-api` behind a capability word the server advertises (`plan-phases-v1`, `plan-ticket-done-v1`, each a
+  `ServerCap` in `SERVER_CAP_MAP`, `shared/api.ts`), so a newer client facing an older server stops with "server too
+  old" before it sends (F5).
 - **One decider (D2).** `workMapOf` in `server/src/coord/workMap.ts` is the only place a ticket's status, a phase's
   progress, a carry's reading and a finish time are decided. It is pure: it takes the stored plan (phases, references
   and done facts included), the plan's end, the programme's work runs, the run verdicts (or "not read"), the open
   items, and each recorded evidence's verdict, read by the route.
-- **The view carries both axes (D20).** `WorkMapView` lists each ticket once, with its epic and its phases (and carries),
-  then a phase grouping and an epic grouping that refer to tickets by key. The card leads with the phases (R130).
-- **The wire (D4).** `PlanView` gains `phases`; the plan read's answer gains an optional `work` beside `plan`, which is
-  either a `WorkMapView` or a failure's word (D19). Additive, no `FLEET_PROTO` bump; an older server omits both.
+- **The view carries both axes (D20).** `WorkMapView` lists each ticket once, with its epic and its phases (and carries,
+  each with the phase's number), then a phase grouping and an epic grouping that refer to tickets by key. The card leads
+  with the phases (R130).
+- **The wire (D4).** `PlanView` gains an optional `phases` (its reader is `ccrc-api plan show`, the coordinator's, and
+  later the hierarchy's sync, R131); the plan read's answer gains an optional `work` beside `plan` (its reader is the
+  Work card), which is either a `WorkMapView` or a failure's word (D19). Additive, no `FLEET_PROTO` bump; an older
+  server omits both (F6).
 - **No second plan model.** Nothing reads plan files or ledger tables, and the work levels are the hierarchy's.
 - **Freshness (D7).** The console reads the plan on arrival, and again when one of this programme's runs changes state or
   stuck verdict, or one of its items changes, in the frames it already has. The source line says when it last read.
@@ -441,7 +515,7 @@ designs meet.
 | A Plan section on the programme page, reading `GET /api/programmes/:slug/plan` | **Kept**: the same read, with `work` added |
 | Each epic with its state, "3 of 5 met" and its open tickets | **Changed**: each epic is a chip in the strip with its ticket count and checkpoints met; its tickets appear inside the phases, tagged |
 | The done-when list, each entry marked proved or not | **Kept**: the card's folded "Done when" line |
-| *Open in Linear* for each epic and the initiative; a note when initiatives are off | **Kept**: `WorkMapView` carries each epic's link and the initiative's link and state; links draw only once the sync binds the object (its wave 3) |
+| *Open in Linear* for each epic and the initiative; a note when initiatives are off | **Kept**: `WorkMapView` carries each epic's link and each workspace's initiative link and state (`initiatives`, one per workspace, as `PlanView` carries them); links draw only once the sync binds the object (its wave 3) |
 | "No plan declared yet" | **Changed**: the runs fallback, and three more states kept apart (§5.1) |
 | Phone: epic cards; laptop: epics as rows; wide: two columns | **Changed**: phases lead at every width (§5, R130) |
 | Not in 5.2 | **Added**: phases, ticket statuses, carries, the epic filter |
@@ -452,18 +526,31 @@ links to that page once it exists.*
 
 Where else the two meet:
 
-- **The work model is unchanged.** Epics, checkpoints and tickets keep their fields, states and rules; nothing in its §3
-  or §4.1 changes unless the operator answers Q5 yes. The additions are a new axis and new facts beside it: phases and
-  their references, and a ticket's done time and evidence (its §4.2 gains the tables and columns of §7).
-- **`plan ticket-done`** builds the §4.1 table's approved transition "the coordinator closes it", held to evidence.
+- **The work model is unchanged, except as Q5 rules.** Epics, checkpoints and tickets keep their fields, states and
+  rules; the one change to its §3 and §4.1 is the operator's yes to Q5 (R133), which WM6 builds. Its §4.1 transition
+  "the coordinator closes it with a reason" is kept as it is, not narrowed (the coordinator's ruling on review 2268's
+  F10): a ticket closed that way reads "closed" with its reason, counted apart from done and outstanding. The additions
+  are a new axis and new facts beside it: phases and their references, and a ticket's done time and evidence (its §4.2
+  gains the tables and columns of §7).
+- **`plan ticket-done`** is a new transition beside that one: it records a ticket finished another way with evidence
+  that verifies, and only that makes "done".
 - **`ticket-required`** applies only to a plan that declares phases, so a plan made under the hierarchy design alone
   keeps today's gate; it follows its clause 21 ("every run opens with its ticket").
-- **Overlaps with its unbuilt work.** Its wave 3 is in flight now with a claim on `planStore.ts` (claim 4577 when this
-  was written), which WM0 and WM1 also change, so they wait for that claim or work under a co-edit grant from its
-  holder. Its Task 4.1 also adds a migration and changes `planStore.ts`; its Task 4.3 changes `planRoutes.ts`,
-  `planPolicy.ts` and `ccd/ccrc-api`; its Task 6.1 writes `ccd/coordinator-skill/references/plan.md` and clause 21,
-  whose test pins that the file names only verbs whose routes exist. Whichever lands second takes the next migration
-  slot and builds on the other's store. Neither writes the other's tables, so the plan model keeps one writer.
+- **Overlaps with its unbuilt work.** Its waves change the plan files this build changes (`planStore.ts`,
+  `planRoutes.ts`, `planPolicy.ts`, `schema.ts`, `shared/plan.ts`, `shared/refusal.ts`, `ccd/ccrc-api` and their tests),
+  so each task here re-reads the live claims list (`ccrc-api claims list`) for every file it touches and waits for a
+  holder's release or works under its co-edit grant (F13 of review 2268). For example, on 2026-11-17 its wave 4 holds
+  claims 4728, 4732 and 4737 on most of WM0's server files, and WM0 builds under its co-edit grant. Its Task 4.1 also
+  adds a migration and changes `planStore.ts`; its Task 4.3 changes `planRoutes.ts`, `planPolicy.ts` and
+  `ccd/ccrc-api`. Whichever lands second takes the next migration slot and builds on the other's store. Neither writes
+  the other's tables, so the plan model keeps one writer.
+- **Its Task 6.1, in both directions (F8 of review 2268).** That task writes `ccd/coordinator-skill/references/plan.md`
+  and clause 21, and its test pins that the file names only verbs whose routes exist. The other direction binds this
+  build: `coordinator-skill.test.ts` pins every plan-added run refusal, with its recovery, in both `plan.md` and
+  `api.md`, and Task 6.1's test will pin every plan verb and coordinator-facing plan refusal in `plan.md`. So WM5 adds
+  `plan phase-ref` and `plan ticket-done`, the words `unknown-ref`, `bad-carry` and `evidence-unverified` with their
+  recoveries to `plan.md`, and `ticket-required` with its recovery to both `plan.md` and `api.md`, raising that pin's
+  count of plan-added run refusals from five to six.
 - **Its §10.1** has each live programme's coordinator declare its plan as the migration's first half. R132 brings that
   act forward. `plan ticket-done` refuses a ticket that is not `open`, so it never acts on a
   ticket the migration has already closed, and the migration closes nothing a coordinator closed first.
@@ -475,14 +562,13 @@ Where else the two meet:
 ## 9. Decisions
 
 These are the design's decisions. D1 to D20 are mine, on the brief's rulings, the operator's rulings O1 to O4 and the
-coordinator's rulings on the review. Q1 to Q5 are the operator's: Q1 to Q4 are ruled (R129 to R132), and Q5 is
-open.
+coordinator's rulings on the reviews. Q1 to Q5 are the operator's, all ruled (R129 to R133).
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
 | D1 | The source of the work list | Stored plan; headings; checkboxes; ledger tables; runs | The stored plan (§2) | Proposed |
 | D2 | Where status is decided | In the console; in the route; one L1 decider | One pure decider, `workMapOf` | Proposed |
-| D3 | Status words | Free text; the run's state word; a fixed table | Twelve words, first match, in the groups done, in progress, waiting on you, held and not started (Table 6) | Proposed |
+| D3 | Status words | Free text; the run's state word; a fixed table | Fifteen statuses in nine groups (WM2's `WORK_STATUSES` and `WORK_GROUPS`): Table 6's fourteen rows, first match, and `failed` for the no-plan fallback; the groups done, in progress, waiting on you, held, not started, dropped, closed, left open and failed. "Carried" is not a status: a phase's reading of a ticket (Table 6a), worded by the card (F22) | Proposed |
 | D4 | The wire | A new route; a new frame; fields on the plan read | `phases` on `PlanView`, `work` beside it, additive | Proposed |
 | D5 | Placement | Work below Waiting on you; Work below Goals | Below Goals; Waiting on you to the right column on desktop | Proposed |
 | D6 | The Runs card | Merge; replace; keep both | Keep both and link them | Proposed |
@@ -490,7 +576,7 @@ open.
 | D8 | The hierarchy's Task 5.2 | Build both; build 5.2 alone; supersede | The card supersedes 5.2 (Table 7) | Proposed |
 | D9 | A programme with no plan | Nothing; parse plan files; runs so far | The runs so far, under a note | Proposed |
 | D10 | A run that names no ticket | Allow; match by words; require one | Require one in a plan that declares phases, while its epic has an open declared ticket no run holds | Proposed |
-| D11 | How a ticket becomes done | Typed; a run only; evidence, verified and stored | Evidence with its time, verified when recorded and on every read (§4.1); the hierarchy's approved "coordinator closes it" | Coordinator's ruling |
+| D11 | How a ticket becomes done | Typed; a run only; evidence, verified and stored | Evidence with its time, verified when recorded and on every read, one ticket per piece of evidence (§4.1). The hierarchy's "the coordinator closes it with a reason" is kept, not narrowed: a separate outcome, "closed", counted apart (review 2268, F10) | Coordinator's ruling |
 | D12 | Runs from before the plan | Hide; count; fold apart | One folded group, not counted | Proposed |
 | D14 | Where the sequence lives | A field on the ticket; a copy of tickets; references | Phases and a reference table, one writer, the plan store | Proposed |
 | D15 | A whole-epic reference | The tickets at the time; every ticket now and later | Every ticket of the epic that is not dropped, now and later | Proposed |
@@ -503,20 +589,23 @@ open.
 | Q2 | The axis that leads the card | Phases; epics; a switch | Phases, with epic tags and the strip | Ruled (R130) |
 | Q3 | The word for a stage | Phase; wave | Phase | Ruled (R129) |
 | Q4 | Phases in Linear | Nothing; a label; a milestone; a cycle | A label on each issue, written by the sync | Ruled (R131) |
-| Q5 | An epic without a wave range | Keep every epic on a range; allow an epic with none | Recommended: allow it | Waiting |
+| Q5 | An epic without a wave range | Keep every epic on a range; allow an epic with none | Allow it, as a choice per epic (WM6) | Ruled (R133, item 359) |
 
-*Table 8. Decisions. "Proposed" is mine, for the operator to check while reading. D13 (optional epic waves) is no
-longer mine: it is Q5.*
+*Table 8. Decisions. "Proposed" is mine; the operator approved the spec with them (item 363). D13 (optional epic
+waves) is no longer mine: it is Q5.*
 
 ## 10. Testing and proof
 
 - **The sequence.** `plan put` stores phases and their references; an absent `phases` leaves them; a put adds
   references and never removes one; `plan phase-ref` adds, removes and carries one; a new reference to an unknown or
   dropped object is refused, and one stored before the drop is kept; dropping a phase leaves its tickets alone; each
-  `bad-carry` case is refused.
-- **Done.** A run closing `done` stores its time and `{ runId }`; `plan ticket-done` stores evidence that verifies and
-  refuses evidence that does not, a ticket not `open`, a held ticket, a `{ pr }` in a project with no landing line, and
-  a caller that is not the coordinator.
+  `bad-carry` case is refused; the `remove` of either end of a recorded carry and a put that reorders a carry's target
+  before its source are refused `bad-carry`, and every other remove is allowed; both verbs refuse `plan-closed`; a
+  phase's number counts only phases not dropped.
+- **Done.** A run closing `done` stores its time and `{ runId }`; the migration back-fills a done ticket's evidence from
+  its run; `plan ticket-done` stores evidence that verifies and refuses evidence that does not, evidence already stored
+  on another ticket, a run whose own ticket is a declared one, a ticket not `open`, a held ticket, a `{ pr }` in a
+  project with no landing line, and a caller that is not the coordinator.
 - **The run gate.** `ticket-required` refuses a run with no ticket into an epic with an open declared ticket, only in a
   plan that declares phases; a plan with no phases opens it as today; a ticket a run holds does not count.
 - **The decider.** `server/test/work-map.test.ts`: one case per row of Tables 6 and 6a; the verdicts reader empty skips
@@ -524,9 +613,11 @@ longer mine: it is Q5.*
   whole-epic references to one epic keep its tickets in both phases and count them once; a recorded carry reads both
   ways; a ticket carried and done later stays carried in the earlier phase; a ticket carried twice reads at each step;
   a carry into a dropped phase is void; a phase's finish time is its latest own done or carry time, or unknown; a
-  ticket in no phase sits in "Not in a phase"; the four plan states of §5.1; evidence that no longer verifies reads
-  "marked done, but …"; a run's own ticket folds into the declared ticket it is evidence of. It joins `MUTANT_SETS`
-  with a floor measured at merge.
+  ticket in no phase sits in "Not in a phase"; the four plan states of §5.1; evidence that no longer verifies, or none
+  stored, reads "marked done, but …"; a closed ticket reads closed and counts apart; an ended plan's open ticket is in
+  the left-open group and its phase is not finished; an empty phase is never finished; a dropped epic's done tickets
+  stay in its whole-epic phase and on its chip; a ticket carried into one phase from two names both; a run's own ticket
+  folds into the declared ticket it is evidence of. It joins `MUTANT_SETS` with a floor measured at merge.
 - **The card.** jsdom tests for the headline, the strip, its filter and checkpoints, carries, folds, every status word
   and the four plan states; a browser test of the programme page at 360, 390, 1280, 1470 and 1920 wide, in both skins
   and both themes.
@@ -551,17 +642,21 @@ longer mine: it is Q5.*
     boundary after WM0, WM1, WM3 and WM4 have landed, so no coordinator declares phases before the verbs exist, and no
     run is refused against a plan the console cannot show. The plan's WM5 carries the notice to every live coordinator
     and the back-fill of finished tickets with their evidence (§4.1). Until then a programme's card shows the fallback.
+  - **R133 (Q5, item 359).** An epic may list no wave range, as a choice per epic. Today every epic lists a contiguous
+    range of waves and a run's wave picks its epic (§2.3), so parallel pieces cannot sit in one feature-sized epic and
+    epics end up as stages, which leaves the strip repeating the phases. With this, an epic may list no waves; a run
+    into it names one of its tickets, and the ticket gives the epic. A run with no ticket whose wave no epic lists, in a
+    plan where any epic lists no waves, is refused `ticket-required`, not `wave-epic-mismatch` (F24 of review 2268,
+    aligned to WM6). An epic that lists waves keeps every rule it has, so the stored plans stay valid. This changes the
+    hierarchy spec's §4.1 (its "Wave" design call) and §16 call 2, and its plan's clause 21 ("epics plan-sized with
+    their waves"). The build holds it as one task of its own, WM6.
+- The operator approved the spec (item 363, "start the build at WM0"), and the coordinator's rulings on review 2268
+  (2026-11-17): the hierarchy's close with a reason is kept as its own outcome, "closed" (F10), and F1 to F25 are
+  carried into WM0's first commit as amendments.
 
 ### Waiting on you
 
-- **Q5. May an epic have no wave range?** Recommended: yes, as a choice per epic. Today every epic lists a contiguous
-  range of waves and a run's wave picks its epic (§2.3), so parallel pieces cannot sit in one feature-sized epic and
-  epics end up as stages, which leaves the strip repeating the phases. With yes, an epic may list no waves; a run into
-  it names one of its tickets, the ticket gives the epic, and a run with no ticket into such a plan is refused
-  `ticket-required`. An epic that lists waves keeps every rule it has, so the stored plans stay valid. This changes the
-  hierarchy spec's §4.1 (its "Wave" design call) and §16 call 2, and its plan's clause 21 ("epics plan-sized with their
-  waves"). With no, nothing changes, and a programme that wants feature epics models them as phases instead. The build
-  holds this as one task of its own, WM6, which waits for this answer.
+- Nothing. Every question of the design is ruled.
 
 ### Later
 
