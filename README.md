@@ -5755,8 +5755,8 @@ ledger branches included, with no trailer escape, to the repo's review judge's l
 renamed in under `docs/superpowers/specs/` or `docs/superpowers/plans/` is a dated spec
 (`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`) or a dated plan (`YYYY-MM-DD-<slug>.md`),
 directly in that directory. The
-guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
-(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs in enforce mode
+(`LEDGER_GUARD_MODE: enforce` in `ci.yml`), so a violation of either arm fails the check.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
