@@ -162,6 +162,25 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
   }
 }
 
+/** The designation as this call reads it, or `unmeasured` (a read that throws included). */
+export function designationReadOf(coord: Pick<CoordStore, 'designationRead'>): DesignationFact | 'unmeasured' {
+  try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
+}
+
+/** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
+export function liveGenerationOf(
+  coord: Pick<CoordStore, 'liveGenerations' | 'designationRead' | 'laneArmSetting'>, id: string,
+  continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null,
+) {
+  const gens = coord.liveGenerations();
+  const fact = designationReadOf(coord);
+  if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
+  const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
+  if (row === undefined) return 'no-generation' as const;
+  const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
+  return { row, state: effectiveGeneration(row, live).state };
+}
+
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
   // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
   // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
@@ -292,10 +311,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
     console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
   };
-  /** The designation as this call reads it, or `unmeasured` (a read that throws included). */
-  const designationReadOf = (coord: CoordStore): DesignationFact | 'unmeasured' => {
-    try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
-  };
   /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
   const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
     const gens = coord.liveGenerations();
@@ -424,16 +439,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     return { id, b: by };
   };
   const refuseNote = (reply: FastifyReply, r: NoteVerdictRefusal, more = '') => refuseRoute(reply, r, { detail: `${NOTE_DETAIL[r]}${more}` });
-  /** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
-  const liveGenerationOf = (coord: CoordStore, id: string) => {
-    const gens = coord.liveGenerations();
-    const fact = designationReadOf(coord);
-    if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
-    const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
-    if (row === undefined) return 'no-generation' as const;
-    const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
-    return { row, state: effectiveGeneration(row, live).state };
-  };
 
   /**
    * `POST /api/sessions/:id/notes { byId, byUuid, key, kind, waitsOn, next, revises?, closes? }`: append one note. A
@@ -486,7 +491,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
     const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id)(input.key), id);
     const live = coord.liveNotes(id);
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
     const verdict = noteVerdict(input, keyFact, live.ok ? live.notes.length : 'unmeasured', revised);
     // The detail names the key only when the revised note, if any, is a live note of the caller's; else the note's id.
@@ -577,7 +582,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     const asked = handoverAsked(typeof gen === 'string' ? gen : gen.state);
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
