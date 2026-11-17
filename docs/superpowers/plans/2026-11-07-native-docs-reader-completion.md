@@ -899,8 +899,11 @@ review fix round below.
 - `load.ts` exports its own `parseSrcset` and `base64Of` (two keywords, no behaviour change; coordinator, mail 22461), so the
   snapshot reads `srcset` with the one grammar and encodes with the one helper. `DocImage.tsx` keeps its own private base64 loop,
   which predates C1: a known duplicate for a later wave.
-- Process: the wiring's tests were written after its code (the snapshot's and the timed-out mapping's were written first). Each
-  test is shown discriminating by its measured mutation row; that is the evidence, not a red-first record.
+- Process: the wiring's tests were written after its code (the snapshot's and the timed-out mapping's were written first), a
+  process note and no deviation (review run 2361's M3). Each test is shown discriminating by its measured mutation row, which is
+  the evidence, not a red-first record: `NDR-C2-T9-FRAME-SANDBOX-OMITTED`, `-SIZE-BEFORE-ESCAPING`, `-WAIT-NOT-TIMED-OUT`,
+  `-DRAFT-CONFIRM-SKIPPED`, `-GATE-WORD` and `-VIEW-PUBLISH-DROPPED`, and `NDR-C2-T9FR-DRAFT-COUNT`, `-WITHDRAW-ON-MOVE` and
+  `-CLEANUP-WITHDRAW`, each red in the fences and replayed red by review run 2361 at `b63b130df`.
 - Scans: M4.EX2's scope gains `exportMockup.ts`; M4.EX16's homes gain `buildExport.tsx`'s `iframe` and `srcDoc`; clause W8a allows
   the `srcdoc` STRING at `exportMockup.ts` exactly (its strip list names the attribute to drop it), each with planted controls.
 - M5.B10's reading (the browser rows): "in each, a click on a former link fires no second load" is asserted on the two builds whose
