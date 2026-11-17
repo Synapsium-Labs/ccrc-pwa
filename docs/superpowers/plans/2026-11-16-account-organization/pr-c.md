@@ -127,7 +127,7 @@ The review found no reason not to land, and three minor findings, all fixed:
 - **Nits:** `_org_near_say`'s unread score argument is gone (N2), and `journalparse.ts`'s count comments say forty-two
   (N3). N1 is left as it is, as ruled.
 
-`ccd-swap-target-org` has 31 cases now. Its mutants were re-run against the new code, and all 20 were killed (table
+`ccd-swap-target-org` has 31 cases now. Its 19 mutants were re-run against the new code, and all were killed (new ones in the table
 below). The labelled budget case fails on the code before this round (120/43 against 114/43).
 
 | Mutant (fix round 2) | Killed by |
@@ -151,3 +151,6 @@ runs green armed.
 - The fleet test slice's shared memory cap (6G) OOM-killed `shellcheck` on `ccd/ccrc` inside
   `shellcheck-ratchet.test.ts`, a file this PR does not touch. Measured by hand instead: `ccd/ccd` gives the same 32
   findings with the same codes before and after this change, so its pin holds.
+- In fix round 2 the slice's cap (shared with other sessions' runs) OOM-killed the full tests type check and
+  `shellcheck` on `ccd/ccd`, each twice. The four edited test files were type-checked through a narrow project that
+  extends `test/tsconfig.tests.json` (clean), and CI's full run arbitrates both.
