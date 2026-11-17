@@ -3558,15 +3558,31 @@ export const MIGRATIONS: readonly string[] = [
     CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
     CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
   `,
+
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
   // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
   // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
   // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
-  // nothing on an existing table: an older build opening a file at `user_version 92` takes rule 3, never names them. This
+  // nothing on an existing table: an older build opening a file at `user_version 93` takes rule 3, never names them. This
   // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
-  // (#2958) 90 and designation A (#2950) 91 first, so WM0 took the next slot each time (the coordinator's terms: the
-  // second to land takes it). RE-MEASURE the slot before merge (it must print 91 before this entry is counted):
+  // (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 first, so WM0 took the next slot each time (the
+  // coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 92 before this
+  // entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
