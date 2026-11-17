@@ -1,6 +1,6 @@
 # The programme's work map: what is done and what remains, on its page
 
-**Spec** · 2026-11-16 · Status: Approved by the operator (item 363), amended for review 2268 in WM0 (2026-11-17) ·
+**Spec** · 2026-11-16 · Status: Approved by the operator (item 363), amended for review 2268 in WM0 and for reviews 2375 and 2382 in its fix rounds (2026-11-17) ·
 Owner: the operator · Linear: none · Related:
 `docs/superpowers/specs/2026-11-10-linear-hierarchy-design.md` (the plan model this builds on: programme, epic,
 checkpoint, ticket), `docs/superpowers/plans/2026-11-10-linear-hierarchy.md` (its Task 5.2, which this supersedes),
@@ -199,16 +199,18 @@ each ticket once. Each ticket in that set reads by the first row that matches:
 | A referenced ticket that is | Reads in this phase | Counts in this phase as |
 |---|---|---|
 | Dropped | Not shown | Not counted |
-| Closed with a reason (the hierarchy's "the coordinator closes it", §4) | "closed", with its reason | Closed: counted apart, neither done nor outstanding |
+| Closed with a reason (the hierarchy's "the coordinator closes it with a reason", §4) | "closed", with its reason | Closed: counted apart, neither done nor outstanding |
 | Carried out of this phase (a recorded carry to a phase that is not dropped) | "carried to phase N", with its status now | Carried: not this phase's work, whatever happens to it later |
 | Done, and its evidence verifies (Table 6 row 3) | Its status | This phase's work, done |
-| Left open when the plan ended (Table 6 row 5) | "left open when the plan closed" | Left open: counted apart, neither done nor outstanding |
+| Left open when the plan ended (Table 6 row 5, a ticket marked done whose evidence does not verify included) | "left open when the plan closed" | Left open: counted apart, neither done nor outstanding |
 | Anything else | Its status | This phase's work, outstanding |
 
 *Table 6a. How a phase reads its tickets, first match wins. A carried ticket stays carried in the phase it left even
-after it is done in a later phase. "Done" is the verified status (F9 of review 2268): a ticket marked done whose
-evidence does not verify (Table 6 row 4, group held) is outstanding work, so its phase does not finish. No verb
-re-records evidence in this build, so such a ticket stays held until its evidence verifies again.*
+after it is done in a later phase. "Done" is the verified status (F9 of review 2268): in a live plan, a ticket marked
+done whose evidence does not verify (Table 6 row 4, group held) is outstanding work, so its phase does not finish. No
+verb re-records evidence in this build, so such a ticket stays held until its evidence verifies again. In an ended plan
+the decider reads Table 6's row 5 before row 4, so the same ticket reads left open, and an ended plan shows no
+outstanding work (the coordinator's ruling on review 2382 L3-F1).*
 
 - **"N of M done" counts the phase's own work:** its referenced tickets, less the dropped, the closed, the carried out
   and the left open. Each of those is counted apart: "5 of 8 done · 1 carried to phase 3".
@@ -241,8 +243,8 @@ This section defines each status and the fact it comes from. One decider compute
 | 1 | The ticket is `dropped` | dropped (not shown, never counted) | dropped | Measured: the plan |
 | 2 | The coordinator closed the ticket with a reason (the hierarchy's approved transition, built by its Task 4.3) | "closed" with its reason | closed | Measured: what that task stores for the close |
 | 3 | The ticket is `done` and its evidence verifies on this read | done | done | Measured: the run it names is `done`, or the pull request it names is `landed` on the landing line (§4.1) |
-| 4 | The ticket is `done` but its evidence no longer verifies, or none is stored | "marked done, but …" with the reason ("no evidence stored" for the second) | held | Measured: the same reads, failing, or the empty column |
-| 5 | The plan has ended (`plan close`) and the ticket is not done | left open when the plan closed | left open | Measured: the plan's end |
+| 4 | The ticket is `done` but its evidence no longer verifies, or none is stored (in a plan that has not ended; an ended plan reads row 5 first) | "marked done, but …" with the reason ("no evidence stored" for the second) | held | Measured: the same reads, failing, or the empty column |
+| 5 | The plan has ended (`plan close`) and the ticket is not done by row 3 (one marked done whose evidence does not verify included) | left open when the plan closed | left open | Measured: the plan's end |
 | 6 | An open operator item names the ticket's run (`ItemView.runId`), or names an `operator-act` checkpoint of the ticket | waiting on you | waiting on you | Measured: the items |
 | 7 | The ticket's run carries a stuck verdict (`RunSummary.stuck`) | stuck | held | Measured: the run verdicts reader |
 | 8 | The run is `planned` and waits behind another run (`blockedBy`) | blocked | held | Measured: the run verdicts reader |
@@ -255,7 +257,9 @@ This section defines each status and the fact it comes from. One decider compute
 
 *Table 6. The status decider, first match wins. Every row reads a stored or measured fact. With `failed`, which only
 the no-plan fallback uses (§5.1), these are the fifteen statuses of D3, in nine groups. Rows 2, 4's second case and 5
-were added for review 2268 (F10, F1, F4).*
+were added for review 2268 (F10, F1, F4). For a plan that has ended, row 5 is read before row 4, so a ticket marked done
+whose evidence does not verify reads left open there; a live plan keeps this order (the coordinator's ruling on review
+2382 L3-F1).*
 
 - **The groups** say who acts: "waiting on you" is only the operator's (row 6), and "held" is the machine's or the
   coordinator's (rows 4, 7 and 8). So "waiting" on the Work card always means the operator; the page head's run count
@@ -397,8 +401,9 @@ Four cases are kept apart, each with its own words, so that none reads as anothe
 - **Declared, with no tickets to count** (a plan with no epics, only checkpoints, or every ticket dropped): "The plan
   is declared but lists no work yet." The strip shows any epics and checkpoints. Never the runs fallback.
 - **Ended** (`plan close`): the headline says "Plan closed as done on 2026-11-20", or "Plan abandoned on 2026-11-20:
-  <why>". A ticket still open reads "left open when the plan closed", in its own group, `left-open`, in no outstanding
-  count and no "N of M" (Table 6 row 5). A phase with such a ticket reads "left open" and is not finished.
+  <why>". A ticket not done reads "left open when the plan closed", one marked done whose evidence does not verify
+  included, in its own group, `left-open`, in no outstanding count and no "N of M" (Table 6 row 5, read before row 4
+  in an ended plan), so an ended plan shows no outstanding work. A phase with such a ticket reads "left open" and is not finished.
 - **Not readable** (one of the reads behind `work` fails): the plan read still answers, and its `work` carries the
   failure's word, so the card says "The work could not be read: <reason>". When the plan read itself fails, the route
   refuses as any read does and answers no `plan` and no `work`. Either way the programme page (WM4), not the card,
@@ -463,9 +468,9 @@ serves it. The console only draws the words.*
   key like epics: a phase that disappears needs `droppedWhy`. An absent `phases` key leaves the stored phases as they
   are. A put's references are added to what is stored, never replace it, so a put written before a carry can never undo
   the carry. A new reference to an unknown or dropped epic or ticket is refused `unknown-ref` wherever it stands in the
-  put, on a dropped phase and on a phase the same put drops included, while other content on a dropped phase (its
-  title, summary and position) is ignored, as `diffPlan` ignores it on a dropped epic (the coordinator's ruling on
-  review 2375 F9). A reference already stored to an object dropped since is kept and reads as nothing (a whole-epic reference to a dropped epic still holds
+  put, on a dropped phase and on a phase the same put drops included, while other content on such a phase (its
+  title, summary and position, and its valid new references) is ignored, as `diffPlan` ignores it on a dropped epic
+  (the coordinator's ruling on review 2375 F9); a reference such a phase already holds is never judged again there. A reference already stored to an object dropped since is kept and reads as nothing (a whole-epic reference to a dropped epic still holds
   its done tickets, §3). A put whose phase order puts a recorded carry's target at or before its source is refused
   `bad-carry` (F12). At most 24 phases, like epics.
 - **One verb for a reference (D17).** `plan phase-ref` adds one reference, removes one, or carries a ticket from phase A
@@ -609,14 +614,18 @@ waves) is no longer mine: it is Q5.*
 
 - **The sequence.** `plan put` stores phases and their references; an absent `phases` leaves them; a put adds
   references and never removes one; `plan phase-ref` adds, removes and carries one; a new reference to an unknown or
-  dropped object is refused, and one stored before the drop is kept; dropping a phase leaves its tickets alone; each
-  `bad-carry` case is refused; the `remove` of either end of a recorded carry and a put that reorders a carry's target
-  before its source are refused `bad-carry`, and every other remove is allowed; both verbs refuse `plan-closed`; a
-  phase's number counts only phases not dropped.
+  dropped object is refused, and one stored before the drop is kept; a new reference to an unknown or dropped object
+  is refused on a dropped phase and on a phase the same put drops too (review 2375 F9), where a reference the phase
+  already holds is kept and a valid new one is not stored (review 2382 L1-F1, L2-F1); dropping a phase leaves its
+  tickets alone; each `bad-carry` case is refused; the `remove` of either end of a recorded carry and a put that
+  reorders a carry's target before its source are refused `bad-carry`, and every other remove is allowed, a stored
+  reference to an object dropped since included (review 2375 F14); a carry whose source phase is dropped since still
+  holds its target's reference (review 2375 F10); both verbs refuse `plan-closed`; a phase's number counts only phases
+  not dropped.
 - **Done.** A run closing `done` stores its time and `{ runId }`; the migration back-fills a done ticket's evidence from
   its run; `plan ticket-done` stores evidence that verifies (a run whose own ticket is this ticket, an auto ticket or
   none, the auto ticket's own stored evidence included) and refuses evidence that does not, evidence already stored on
-  another declared ticket, a run whose own ticket is another declared one, a ticket not `open`, a held ticket, a `{ pr }` in a
+  another ticket of the programme except on the run's own auto ticket, a run whose own ticket is another declared one, a ticket not `open`, a held ticket, a `{ pr }` in a
   project with no landing line, and a caller that is not the coordinator.
 - **The run gate.** `ticket-required` refuses a run with no ticket into an epic with an open declared ticket, only in a
   plan that declares phases; a plan with no phases opens it as today; a ticket a run holds does not count.
@@ -626,8 +635,8 @@ waves) is no longer mine: it is Q5.*
   ways; a ticket carried and done later stays carried in the earlier phase; a ticket carried twice reads at each step;
   a carry into a dropped phase is void; a phase's finish time is its latest own done or carry time, or unknown; a
   ticket in no phase sits in "Not in a phase"; the four plan states of §5.1; evidence that no longer verifies, or none
-  stored, reads "marked done, but …"; a closed ticket reads closed and counts apart; an ended plan's open ticket is in
-  the left-open group and its phase is not finished; an empty phase is never finished; a dropped epic's done tickets
+  stored, reads "marked done, but …"; a closed ticket reads closed and counts apart; an ended plan's open ticket, and its
+  ticket marked done whose evidence does not verify, are in the left-open group and its phase is not finished; an empty phase is never finished; a dropped epic's done tickets
   stay in its whole-epic phase and on its chip; a ticket carried into one phase from two names both; a run's own ticket
   folds into the declared ticket it is evidence of. It joins `MUTANT_SETS` with a floor measured at merge.
 - **The card.** jsdom tests for the headline, the strip, its filter and checkpoints, carries, folds, every status word
@@ -665,6 +674,11 @@ waves) is no longer mine: it is Q5.*
 - The operator approved the spec (item 363, "start the build at WM0"), and the coordinator's rulings on review 2268
   (2026-11-17): the hierarchy's close with a reason is kept as its own outcome, "closed" (F10), and F1 to F9 and F12 to
   F25 are carried into WM0's first commit as amendments, F11 as one sentence, F26 is moot and F27 one dropped sentence.
+- The coordinator's rulings on review 2375 (2026-11-17): a new reference to an unknown or dropped object is refused
+  everywhere in a put, a dropped phase and one the same put drops included (F9); a carry from a dropped source stands
+  (F10); a stored reference to an object dropped since may be removed (F14).
+- The coordinator's rulings on review 2382 (2026-11-17): an ended plan shows no outstanding work, so Table 6 reads row
+  5 before row 4 there, decided by the decider and only worded by the card (L3-F1).
 
 ### Waiting on you
 

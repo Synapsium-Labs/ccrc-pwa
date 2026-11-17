@@ -3,7 +3,9 @@
 // Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor each in mutation-floors.json. The brief's red checks:
 // each bad-carry arm removed (BC-1 to BC-5), the unknown-ref checks (UR-*), the droppedWhy requirement (DW-1) and review
 // 2268 F12's refusals (F12-1 and F12-2 for the remove of a carry's two ends, F12-3 for a put that reorders a carry), and
-// review 2375's rows F5 to F10 and F14 (F7's bound sits in the put's parse; its mutants ride the put's set).
+// review 2375's rows F5 to F10 and F14 (F7's bound sits in the put's parse; its mutants ride this set under the
+// `#diffPhases` key, which names more than that function: disclosed, kept as ruled, review 2382 L2-F2), and review 2382's
+// L1-F1 and L2-F1 (a dropped or dropping phase's held and new references).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PHASE_CASES, type PlanPolicyModule } from '../planPhasesCases.js';
@@ -45,6 +47,11 @@ export const DIFF_PHASES_SET = set([
   // Review 2375 F9: a new reference is judged on a phase the put drops, and on a dropped phase, before the rest is ignored.
   { id: 'F9-1', old: '      const adds = newRefs(p, was);\n      if (!adds.ok) return adds;\n      if (was.droppedWhy === null) changes', new: '      if (was.droppedWhy === null) changes' },
   { id: 'F9-2', old: '    const adds = newRefs(p, was);\n    if (!adds.ok) return adds;\n    if (was !== undefined && was.droppedWhy !== null) continue;', new: '    if (was !== undefined && was.droppedWhy !== null) continue;\n    const adds = newRefs(p, was);\n    if (!adds.ok) return adds;' },
+  // Review 2382 L1-F1: a reference a dropped or dropping phase already holds is skipped there too, never re-judged.
+  { id: 'L1-F1', old: '      const adds = newRefs(p, was);\n      if (!adds.ok) return adds;\n      if (was.droppedWhy === null) changes', new: '      const adds = newRefs(p, undefined);\n      if (!adds.ok) return adds;\n      if (was.droppedWhy === null) changes' },
+  { id: 'L1-F1b', old: '    const adds = newRefs(p, was);\n    if (!adds.ok) return adds;\n    if (was !== undefined && was.droppedWhy !== null) continue;', new: '    const adds = newRefs(p, was !== undefined && was.droppedWhy !== null ? undefined : was);\n    if (!adds.ok) return adds;\n    if (was !== undefined && was.droppedWhy !== null) continue;' },
+  // Review 2382 L2-F1: a phase the put drops stores none of the put's valid new references.
+  { id: 'L2-F1', old: '      if (was.droppedWhy === null) changes.phases.drop.push({ id: was.id, why: p.droppedWhy });\n      continue;', new: '      if (was.droppedWhy === null) changes.phases.drop.push({ id: was.id, why: p.droppedWhy });\n      for (const r of adds.refs) changes.refs.push({ phaseKey: p.key, kind: r.kind, key: r.key });\n      continue;' },
   // F12: a put that orders a carry's target at or before its source.
   { id: 'F12-3', old: 'if (from !== undefined && to !== undefined && to <= from) {', new: 'if (false) {' },
   { id: 'F12-3b', old: 'if (from !== undefined && to !== undefined && to <= from) {', new: 'if (from !== undefined && to !== undefined && to < from - 1) {' },

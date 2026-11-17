@@ -182,6 +182,19 @@ export const PHASE_CASES: PhaseCase[] = [
     expect(said(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2', [{ kind: 'epic', key: 'e3' }], 'cut'), ph('p3'), ph('pd')]))))
       .toBe('unknown-ref: phase p2: no epic e3 that is not dropped');
   } },
+  { name: 'a dropped phase restated, and one dropped, while holding references to objects dropped since: ok, nothing stored (review 2382 L1-F1)', run: (m) => {
+    const held: Ref[] = [{ kind: 'ticket', refId: 13 }, { kind: 'epic', refId: 3 }];
+    const refs = [{ kind: 'ticket' as const, key: 't3' }, { kind: 'epic' as const, key: 'e3' }];
+    const none = { ok: true, changes: { phases: { insert: [], update: [], drop: [] }, refs: [] } };
+    expect(m.diffPhases(STORED, phases([], [], [], held), put([...LIVE3, ph('pd', refs)]))).toEqual(none);
+    expect(m.diffPhases(STORED, phases([], [], [], held), put([...LIVE3, ph('pd', refs, 'cut')]))).toEqual(none);
+    expect(m.diffPhases(STORED, phases([], held), put([ph('p1'), ph('p2', refs, 'cut'), ph('p3'), ph('pd')])))
+      .toEqual({ ok: true, changes: { phases: { insert: [], update: [], drop: [{ id: 102, why: 'cut' }] }, refs: [] } });
+  } },
+  { name: 'a phase the put drops while naming a live new reference: dropped, and the reference is not stored (review 2382 L2-F1)', run: (m) => {
+    expect(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2', [{ kind: 'ticket', key: 't4' }], 'cut'), ph('p3'), ph('pd')])))
+      .toEqual({ ok: true, changes: { phases: { insert: [], update: [], drop: [{ id: 102, why: 'cut' }] }, refs: [] } });
+  } },
   { name: 'unknown-ref: a put\'s new reference to a dropped or unknown object', run: (m) => {
     expect(word(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'ticket', key: 't3' }])])))).toBe('unknown-ref');
     expect(word(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'epic', key: 'e3' }])])))).toBe('unknown-ref');
