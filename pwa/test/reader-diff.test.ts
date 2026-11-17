@@ -354,7 +354,18 @@ describe('readerDiff: the real parser\'s data-line', () => {
     ['LF, final newline', (s) => `${s}\n`],
     ['CRLF, no final newline', (s) => s.replace(/\n/g, '\r\n')],
     ['CRLF, final newline', (s) => `${s}\n`.replace(/\n/g, '\r\n')],
+    ['lone CR, no final newline', (s) => s.replace(/\n/g, '\r')],
+    ['lone CR, final newline', (s) => `${s}\n`.replace(/\n/g, '\r')],
   ];
+
+  /** The line count of `after` by the diff's own model: the end of the one range `readerDiff('', after)` answers. */
+  function diffLineCount(after: string): number {
+    const { ranges } = avail('', after);
+    if (ranges.length === 0) return 0;
+    expect(ranges).toHaveLength(1);
+    return ranges[0]![1];
+  }
+  const largestEnd = (blocks: { end: number }[]): number => Math.max(0, ...blocks.map((b) => b.end));
   const beforeText = 'para one\n\npara three\n\npara five';
   const afterText = 'para one\n\nfresh paragraph\n\npara three\n\npara five';
 
@@ -373,6 +384,9 @@ describe('readerDiff: the real parser\'s data-line', () => {
         expect(b.start).toBeGreaterThanOrEqual(1);
         expect(b.end).toBeLessThanOrEqual(count);
       }
+      // the diff's own line count is the model the data-line is read against, and this text ends in a block
+      expect(diffLineCount(after)).toBe(count);
+      expect(largestEnd(blocks)).toBe(diffLineCount(after));
     });
   }
 
@@ -381,6 +395,18 @@ describe('readerDiff: the real parser\'s data-line', () => {
     const count = linesOf(after).length;
     expect(count).toBe(1);
     for (const b of renderedLines(after)) expect(b.end).toBeLessThanOrEqual(count);
+    expect(largestEnd(renderedLines(after))).toBe(diffLineCount(after));
+  });
+
+  it('an empty after has no diff line and no rendered block', () => {
+    expect(diffLineCount('')).toBe(0);
+    expect(largestEnd(renderedLines(''))).toBe(0);
+  });
+
+  it('a text that ends in blank lines has at least as many diff lines as its last rendered block ends', () => {
+    for (const after of ['para\n\n\n', 'para\r\n\r\n\r\n', 'para\r\r\r', 'para\n\n\nmore\n\n']) {
+      expect(diffLineCount(after), JSON.stringify(after)).toBeGreaterThanOrEqual(largestEnd(renderedLines(after)));
+    }
   });
 });
 
