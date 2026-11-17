@@ -201,6 +201,16 @@ describe('the route writes and the probe', () => {
     ]);
   });
 
+  it('writeClass (the model class Settings door, designation C) is one route --set of class alone, behind route-v1', async () => {
+    const f = fake(() => ok());
+    expect(await bodyOf(f).writeClass(ID, 'fable')).toEqual({ ok: true });
+    expect(await bodyOf(f).writeClass('--set', 'opus')).toMatchObject({ ok: false });
+    expect(await bodyOf(f, { fleetState: () => ({ ccdVerbs: WORDS.filter((x) => x !== 'route-v1') }) }).writeClass(ID, 'opus')).toMatchObject({ ok: false });
+    expect(f.calls).toEqual([['route', '--session', ID, '--set', 'class=fable']]);
+    expect(allowed(f.calls[0]!)).toBe(true);
+    expect(await bodyOf(fake(() => refused('ccd: route refused'))).writeClass(ID, 'opus')).toMatchObject({ ok: false, detail: expect.stringContaining('route exited 1') });
+  });
+
   it('a missing word answers ok false and runs nothing: pool-set for the set, route-v1 for both, pool-set for the probe', async () => {
     const without = (w: string): OverlordBodyDeps['fleetState'] => () => ({ ccdVerbs: WORDS.filter((x) => x !== w) });
     const f = fake(() => ok());
@@ -373,6 +383,15 @@ describe('against a fixture HOME (makeCcdHarness)', () => {
     expect(await body.writeSet(ID, { poolset: '', acctorder: '' })).toEqual({ ok: true });
     expect(fs.existsSync(filePath('poolset'))).toBe(false);
     expect(fs.existsSync(filePath('acctorder'))).toBe(false);
+  });
+
+  it('writeClass writes the session\'s class through the real ccd, fable included', async () => {
+    seed();
+    const body = fixtureBody();
+    expect(await body.writeClass(ID, 'fable')).toEqual({ ok: true });
+    expect(fs.readFileSync(filePath('class'), 'utf8').trim()).toBe('fable');
+    expect(await body.writeClass(ID, 'opus')).toEqual({ ok: true });
+    expect(fs.readFileSync(filePath('class'), 'utf8').trim()).toBe('opus');
   });
 
   it('clearProfile clears profiledigest', async () => {
