@@ -195,6 +195,10 @@ The migration is entry 87 on this branch: overlaps (#2949) landed 85 and decisio
 Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17), and the landing merge absorbed decision model A
 (86 -> 87, mail 22510, under this run's standing renumber license). Others may hold 87 too; the second to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
+Moving to 87 put this entry after decision model A's, so that PR's migration case (`decision-model-records.test.ts`, which assumed
+its entry was the last) now finds its own slot. The text is renewal readings A's (#2962), taken with its holder's yes, and its guard is widened to accept
+an index on a table a later entry creates, since the DROP TABLE removes it (this entry's `continuity_renew_requests_by_session`). Mutant measured: a guard that
+accepts no later index reds it (1 failed, 12 passed).
 
 ## Stable exports for W1's consumers
 
