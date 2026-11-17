@@ -406,6 +406,50 @@ describe('a second load tears the frame down (M5.15; base 5.6.6)', () => {
     expect(screen.queryByText(MOCKUP_TEXT.navigatedAway)).toBeNull();
   });
 
+  it('a build published over a showing frame is a NEW element, so a browser never reloads one iframe in place and calls it a navigation (review I1)', async () => {
+    // jsdom never reloads a changed srcdoc; a browser does, and fires a second load on the SAME element, which the frame
+    // reads as the document navigating away. The view therefore gives each published build its own element.
+    let answers = 0;
+    const reader: MockupAssetReader = {
+      read: async () => {
+        answers += 1;
+        return answers === 1 ? { kind: 'failed', failure: 'auth' } : { kind: 'ok', bytes: bytesOf(1, 2, 3) };
+      },
+    };
+    const m = mount({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    await flush();
+    const first = m.frame()!;
+    const firstDoc = first.getAttribute('srcdoc');
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(m.frame()!.getAttribute('srcdoc')).not.toBe(firstDoc));
+    await flush();
+    const second = m.frame()!;
+    expect(second).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+    // The new element's one load (jsdom fires it by itself) is its page, and the frame stands.
+    expect(screen.queryByText(MOCKUP_TEXT.navigatedAway)).toBeNull();
+    expect(m.frame()).toBe(second);
+  });
+
+  it('a new context whose assets changed also publishes into a NEW element (review I1)', async () => {
+    const reads = fakeReader();
+    const gate = (entries: DocsEntry[]): Setup => ({ html: '<img src="a.png"><img src="b.png">', context: ctxOf(entries), reader: reads.reader });
+    const m = mount(gate([entry('specs', 'a.png')]));
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    await flush();
+    const first = m.frame()!;
+    const firstDoc = first.getAttribute('srcdoc');
+    m.again(gate([entry('specs', 'a.png'), entry('specs', 'b.png')]));
+    await waitFor(() => expect(m.frame()!.getAttribute('srcdoc')).not.toBe(firstDoc));
+    await flush();
+    expect(m.frame()).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+    expect(screen.queryByText(MOCKUP_TEXT.navigatedAway)).toBeNull();
+  });
+
   it('Reload mockup keeps a Load external choice made in this view', async () => {
     const m = mount({ html: '<img src="https://cdn.example/a.png">' });
     await waitFor(() => expect(m.frame()).not.toBeNull());

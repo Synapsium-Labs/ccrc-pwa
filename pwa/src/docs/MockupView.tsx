@@ -384,7 +384,10 @@ function MockupLive(p: MockupViewProps & {
           return;
         }
         end({ s: 'loaded', result });
+        // Each published build gets its own frame element: a new srcdoc on a showing iframe is reloaded in place by a
+        // browser, and its second `load` would read as the document navigating away (review I1).
         setLoaded({ extract, result });
+        setNonce((n) => n + 1);
       },
       (error: unknown) => {
         end({ s: 'ended' });
