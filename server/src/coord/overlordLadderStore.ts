@@ -55,9 +55,9 @@ export type LadderRungRead =
 export type LadderWrite =
   | { readonly ok: true; readonly changed: false }
   | { readonly ok: true; readonly changed: true; readonly journalled: boolean; readonly recordSequence: number | null }
-  | { readonly ok: false; readonly error: AuthorityAppendError };
+  | { readonly ok: false; readonly error: AuthorityAppendError | 'row-changed' };
 
-export interface RungMoveInput { to: Rung; actor: string; at: number; opKey: string }
+export interface RungMoveInput { from: Rung; to: Rung; actor: string; at: number; opKey: string }
 export interface LatchRaiseInput { cause: string; cap: Rung; detail: string; raisedBy: string; at: number; opKey: string }
 export interface LatchClearInput { cause: string; actor: string; at: number; opKey: string }
 export interface StricterLadder { operatorRung: Rung; latches: readonly { cause: string; cap: Rung }[] }
@@ -194,6 +194,12 @@ export function journalPendingInTx(db: DatabaseSync, journal: AuthorityAppender,
  *  `journalPendingInTx`, then re-reads the rung, appends `authority-rung {from, to}`, and reacts to the answer (question 3).
  *  Writes nothing (answers `changed: false`) when the row already holds `to`; over an absent row `chat` is the rung held. */
 export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: RungMoveInput): LadderWrite {
+  const before = heldRung(db);
+  const wordBefore = before === null ? LADDER_DEFAULT_RUNG : before.operatorRung;
+  // An unknown word normalizes to full for the journal, but may only be braked to off.
+  if (!isRung(wordBefore) && move.to !== 'off') return { ok: false, error: 'row-changed' };
+  const origin = isRung(wordBefore) ? wordBefore : 'full';
+  if (origin !== move.from) return { ok: false, error: 'row-changed' };
   journalPendingInTx(db, journal, move.opKey);
   const held = heldRung(db);
   const word = held === null ? LADDER_DEFAULT_RUNG : held.operatorRung;
@@ -268,14 +274,15 @@ export function clearLatchInTx(db: DatabaseSync, journal: AuthorityAppender, cle
 export function applyRestoreInTx(db: DatabaseSync, stricter: StricterLadder, confirmSequence: number, at: number): void {
   const held = heldRung(db);
   const was = held === null ? LADDER_DEFAULT_RUNG : held.operatorRung;
-  const same = held !== null && was === stricter.operatorRung;
+  const selected = held !== null && isRung(was) && rungRank(was) < rungRank(stricter.operatorRung) ? was : stricter.operatorRung;
+  const same = held !== null && was === selected;
   if (held === null || !same) {
-    const down = !isRung(was) || rungRank(stricter.operatorRung) < rungRank(was);
+    const down = !isRung(was) || rungRank(selected) < rungRank(was);
     db.prepare(`INSERT INTO overlord_ladder (id, operatorRung, actor, updatedAt, recordSequence, recordFrom, narrowedAt)
       VALUES (1, ?, 'restore', ?, ?, NULL, ?)
       ON CONFLICT(id) DO UPDATE SET operatorRung = excluded.operatorRung, actor = excluded.actor, updatedAt = excluded.updatedAt,
         recordSequence = excluded.recordSequence, recordFrom = NULL, narrowedAt = excluded.narrowedAt`)
-      .run(stricter.operatorRung, at, confirmSequence, down ? at : null);
+      .run(selected, at, confirmSequence, down ? at : null);
   } else if (held.recordSequence === null) {
     db.prepare("UPDATE overlord_ladder SET actor = 'restore', updatedAt = ?, recordSequence = ?, recordFrom = NULL WHERE id = 1 AND recordSequence IS NULL")
       .run(at, confirmSequence);

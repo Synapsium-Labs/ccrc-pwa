@@ -36,8 +36,8 @@ export type LadderConditionInputsFor<T extends Readonly<Record<string, { readonl
 export type LadderConditionInputs = LadderConditionInputsFor<typeof LADDER_CAUSE_MAP>;
 type InputStore = Pick<CoordStore, 'designationRead' | 'liveGenerations' | 'laneArmSetting' | 'ladderRungRead'>;
 type RowStore = Pick<CoordStore, 'ladderRows'>;
-export interface NarrowingWitness { recordHeld(recordSequence: number): 'held' | 'not-yet' | 'unmeasured' }
-export const NO_WITNESS_YET: NarrowingWitness = { recordHeld: () => 'not-yet' };
+export interface NarrowingWitness { heldFor(recordSequence: number): 'held' | 'not-yet' | 'unmeasured' }
+export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 
 export function ladderConditionInputs(deps: { coord: InputStore; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null }): LadderConditionInputs {
   return {
@@ -75,7 +75,7 @@ export function ladderRead(coord: RowStore, inputs: LadderConditionInputs, witne
     const effective = effectiveRung({ operatorRung: rows.rung === null ? { kind: 'default' } : { kind: 'set', rung: rows.rung.operatorRung }, latches: rows.standing, conditions, causeTable: LADDER_CAUSE_MAP, serverCaps });
     const narrowing = (seq: number | null): NarrowingState => {
       if (seq === null) return narrowingState(null, 'not-yet');
-      try { return narrowingState(seq, witness.recordHeld(seq)); } catch { return narrowingState(seq, 'unmeasured'); }
+      try { return narrowingState(seq, witness.heldFor(seq)); } catch { return narrowingState(seq, 'unmeasured'); }
     };
     return { kind: 'measured', rows, effective, conditions,
       lastChange: rows.rung === null ? null : { narrowing: rows.rung.narrowedAt === null ? null : narrowing(rows.rung.recordSequence) },

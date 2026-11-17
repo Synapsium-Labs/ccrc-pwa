@@ -60,7 +60,7 @@ export const LADDER_CAUSE_MAP = {
   },
   'rung-word-missing': {
     kind: 'condition', effect: { kind: 'server-words' }, notice: 'none',
-    spec: 'the server lacks the capability word of the operator\'s rung (the W2 route plan, RV8; a row Table 7.5a does not have)',
+    spec: 'the operator\'s rung is above the highest rung whose word the server holds (the W2 route plan, RV8)',
   },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;

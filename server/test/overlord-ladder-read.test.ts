@@ -51,7 +51,7 @@ describe('composed ladder read', () => {
   it('caps an unmeasured condition and catches a throwing witness', () => {
     const { db, coord } = store();
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'full', 'actor', 1, 7, NULL, 1)");
-    const read = ladderRead(coord, { ...lifted, 'generation-degraded': () => { throw Error('offline'); } }, { recordHeld: () => { throw Error('offline'); } }, ['overlord-answer-v1']);
+    const read = ladderRead(coord, { ...lifted, 'generation-degraded': () => { throw Error('offline'); } }, { heldFor: () => { throw Error('offline'); } }, ['overlord-answer-v1']);
     expect(read).toMatchObject({ effective: { rung: 'chat', binding: [{ cause: 'generation-degraded', reading: 'unmeasured' }] }, lastChange: { narrowing: { state: 'taking-effect', why: 'witness-unmeasured' } } });
     expect(ladderRead(coord, { ...lifted, 'generation-degraded': () => 'unmeasured' }, NO_WITNESS_YET, ['overlord-answer-v1'])).toMatchObject({ effective: { rung: 'chat', binding: [{ cause: 'generation-degraded', reading: 'unmeasured' }] } });
     db.close();
@@ -60,7 +60,7 @@ describe('composed ladder read', () => {
     const { db, coord } = store();
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'chat', 'actor', 1, 7, NULL, 1)");
     for (const [held, expected] of [['not-yet', { state: 'taking-effect', why: 'no-witness-yet' }], ['held', { state: 'done' }], ['unmeasured', { state: 'taking-effect', why: 'witness-unmeasured' }]] as const) {
-      expect(ladderRead(coord, lifted, { recordHeld: () => held }, [])).toMatchObject({ lastChange: { narrowing: expected } });
+      expect(ladderRead(coord, lifted, { heldFor: () => held }, [])).toMatchObject({ lastChange: { narrowing: expected } });
     }
     db.close();
   });

@@ -98,6 +98,46 @@ function writeRig(options: { gateError?: string; actor?: string; caps?: string[]
 }
 
 describe('ladder write safeguards', () => {
+  it('refuses Pause if a readable full rung becomes an unknown word before the write', async () => {
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    db.exec("INSERT INTO overlord_ladder VALUES (1, 'full', 'actor', 1, 1, NULL, NULL)");
+    const coord = new CoordStore(db); const app = Fastify(); const entries: unknown[] = [];
+    const ladderCoord = { ladderRows: () => coord.ladderRows(), setRung: coord.setRung.bind(coord), clearLatch: coord.clearLatch.bind(coord),
+      ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'future'"); return read; } };
+    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(), loweringActor: () => 'flag-off',
+      journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
+    } as unknown as OverlordRouteDeps);
+    const res = await app.inject({ method: 'POST', url: '/api/overlord/pause' });
+    expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
+    expect(entries).toEqual([]); expect(db.prepare('SELECT operatorRung FROM overlord_ladder').get()).toMatchObject({ operatorRung: 'future' });
+    await app.close(); db.close();
+  });
+  it('refuses a classified lowering if the rung changes before the writer', async () => {
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    db.exec("INSERT INTO overlord_ladder VALUES (1, 'advise', 'actor', 1, 1, NULL, NULL)");
+    const coord = new CoordStore(db); const app = Fastify(); const entries: unknown[] = [];
+    const ladderCoord = { ladderRows: () => coord.ladderRows(), setRung: coord.setRung.bind(coord), clearLatch: coord.clearLatch.bind(coord),
+      ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'off'"); return read; } };
+    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(), loweringActor: () => 'flag-off',
+      journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
+    } as unknown as OverlordRouteDeps);
+    const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'chat' } });
+    expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
+    expect(entries).toEqual([]); expect(db.prepare('SELECT operatorRung FROM overlord_ladder').get()).toMatchObject({ operatorRung: 'off' });
+    await app.close(); db.close();
+  });
+  it('refuses a lowering with a ladder but no actor port', async () => {
+    const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
+    const coord = new CoordStore(db); const app = Fastify();
+    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(),
+      ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
+    } as unknown as OverlordRouteDeps);
+    const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'off' } });
+    expect(res.statusCode).toBe(503); expect(res.json()).toMatchObject({ error: 'unavailable' });
+    await app.close(); db.close();
+  });
   it.each(['auth-off', 'step-up-required'])('refuses raise and clear on %s before composed reads', async (error) => {
     const r = writeRig({ gateError: error }); r.put('off'); r.latch('invalid');
     expect((await r.post('rung', { rung: 'chat' })).json()).toMatchObject({ error });
@@ -114,7 +154,7 @@ describe('ladder write safeguards', () => {
     expect(b.asks).toHaveLength(1); await b.app.close(); b.db.close();
   });
   it.each(['flag-off', 'device:lane-a'])('lowers without a gate with actor %s and a held witness', async (actor) => {
-    const r = writeRig({ actor, witness: { recordHeld: () => 'held' } });
+    const r = writeRig({ actor, witness: { heldFor: () => 'held' } });
     expect((await r.post('rung', { rung: 'off' })).json()).toMatchObject({ changed: true, narrowing: { state: 'done' }, recordSequence: 7 });
     expect(r.db.prepare('SELECT actor FROM overlord_ladder').get()).toMatchObject({ actor });
     expect(r.asks).toEqual([]); await r.app.close(); r.db.close();
@@ -180,7 +220,7 @@ describe('ladder write safeguards', () => {
   });
   it('a raise does not ask the narrowing witness', async () => {
     let calls = 0;
-    const r = writeRig({ witness: { recordHeld: () => { calls++; return 'held'; } } }); r.put('off');
+    const r = writeRig({ witness: { heldFor: () => { calls++; return 'held'; } } }); r.put('off');
     expect((await r.post('rung', { rung: 'chat' })).json()).toMatchObject({ changed: true, narrowing: null });
     expect(calls).toBe(0); await r.app.close(); r.db.close();
   });
@@ -348,7 +388,7 @@ describe('ladder GET', () => {
       [7, 'held', { state: 'done' }],
       [7, 'unmeasured', { state: 'taking-effect', why: 'witness-unmeasured' }],
     ] as const) {
-      const { app, db } = rig({ recordHeld: () => witness });
+      const { app, db } = rig({ heldFor: () => witness });
       db.prepare("INSERT INTO overlord_ladder VALUES (1, 'chat', 'actor', 1, ?, NULL, 1)").run(sequence);
       db.prepare("INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy, raiseSequence) VALUES ('latch-a', 'chat', 'detail', 1, 'actor', ?)").run(sequence);
       const res = await app.inject({ method: 'GET', url: '/api/overlord/ladder' });

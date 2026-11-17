@@ -698,7 +698,8 @@ describe('the scanner is looking at something', () => {
     // /api/overlord/designation`, `POST` and `DELETE /api/overlord/designate`, session-gated and NOT EXEMPT, no box token: the HTTP
     // half 253 -> 256, the gated count 157 -> 160, the exempt-HTTP count stays 95.
     // 260 with the session-gated ladder read: HTTP 256 -> 257, exempt stays 95.
-    // Three ladder writes are session-gated; lowering works dark and a clear takes step-up.
+    // 263 with the three session-gated ladder writes: HTTP 257 -> 260, gated 161 -> 164, exempt stays 95;
+    // lowering works dark and a clear takes step-up.
     expect(ROUTES.length).toBe(263);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.

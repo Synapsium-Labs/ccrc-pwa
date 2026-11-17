@@ -60,7 +60,8 @@ function oracle(f: Facts): Rung {
   for (const l of f.latches) caps.push(rungRank(l.cap));
   for (const c of f.conditions) {
     if (c.reading === 'lifted') continue;
-    const r = f.causeTable[c.cause]!;
+    const r = Object.hasOwn(f.causeTable, c.cause) ? f.causeTable[c.cause] : undefined;
+    if (r === undefined || r.kind !== 'condition') { caps.push(rungRank('off')); continue; }
     if (r.effect.kind === 'cap') caps.push(rungRank(r.effect.cap));
     else if (r.effect.kind === 'one-under-operator') caps.push(Math.max(rungRank(r.effect.floor), op - 1));
     else if (r.effect.kind === 'server-words') caps.push(highest);
@@ -84,7 +85,15 @@ function* allFacts(): Generator<Facts> {
           const s = rest % states; rest = Math.floor(rest / states);
           if (s > 0) conditions.push(cond(cause, READINGS[s - 1]!));
         }
-        for (const serverCaps of wordSets) yield facts({ operatorRung, latches, conditions, serverCaps });
+        for (const serverCaps of wordSets) {
+          yield facts({ operatorRung, latches, conditions, serverCaps });
+          // A bounded cross-product adds each unknown cap and each unknown reading beside every known latch subset.
+          // Sampling known-condition combinations keeps the mutation floor's runtime bounded.
+          if (c % 64 === 0) for (const cap of RUNGS) for (const reading of [undefined, ...READINGS]) {
+            yield facts({ operatorRung, latches: [...latches, { cause: 'latch-z', cap }],
+              conditions: reading === undefined ? conditions : [...conditions, cond('condition-z', reading)], serverCaps });
+          }
+        }
       }
     }
   }
@@ -95,8 +104,8 @@ function* allFacts(): Generator<Facts> {
 function* narrowings(f: Facts): Generator<Facts> {
   const op = f.operatorRung.kind === 'set' ? f.operatorRung.rung : 'chat';
   for (const r of RUNGS) if (rungRank(r) < rungRank(op)) yield { ...f, operatorRung: setRung(r) };
-  for (const l of LATCHES) if (!f.latches.some((x) => x.cause === l.cause)) yield { ...f, latches: [...f.latches, l] };
-  for (const cause of CONDITION_CAUSES) {
+  for (const l of [...LATCHES, ...RUNGS.map((cap) => ({ cause: 'latch-z', cap }))]) if (!f.latches.some((x) => x.cause === l.cause)) yield { ...f, latches: [...f.latches, l] };
+  for (const cause of [...CONDITION_CAUSES, 'condition-z']) {
     const at = f.conditions.find((c) => c.cause === cause);
     for (const reading of ['standing', 'unmeasured'] as const) {
       if (at?.reading === reading) continue;
@@ -256,13 +265,17 @@ export function effectiveRungCases(m: LadderModule): Record<string, SuiteCase> {
         const got = m.effectiveRung(f);
         n++;
         if (got.rung !== oracle(f)) throw new Error(`oracle ${oracle(f)} != ${got.rung} for ${JSON.stringify(f)}`);
+        for (const binding of got.binding) {
+          const row = Object.hasOwn(f.causeTable, binding.cause) ? f.causeTable[binding.cause] : undefined;
+          if (binding.known !== (row?.kind === binding.kind)) throw new Error(`wrong known flag for ${binding.cause}`);
+        }
         if (rank(got.rung) > rank(got.operatorRung)) throw new Error(`above the operator rung: ${JSON.stringify(f)}`);
         for (const g of narrowings(f)) {
           const after = m.effectiveRung(g).rung;
           if (rank(after) > rank(got.rung)) throw new Error(`narrowing raised ${got.rung} to ${after}: ${JSON.stringify(f)} -> ${JSON.stringify(g)}`);
         }
       }
-      expect(n).toBe(5 * 16 * 4 ** CONDITION_CAUSES.length * 4);
+      expect(n).toBe(5 * 16 * 4 * (4 ** CONDITION_CAUSES.length + (4 ** CONDITION_CAUSES.length / 64) * 4 * 4));
     },
     'PROPERTY: unmeasured reads exactly as standing, and the default reads as chat': () => {
       const asUnmeasured = (b: { reading: string; kind: string }): object => ({ ...b, reading: b.kind === 'latch' ? 'standing' : 'unmeasured' });

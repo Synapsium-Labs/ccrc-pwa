@@ -149,7 +149,8 @@ const AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled
   'journal-append': 'journal-unreadable',
 };
 
-const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled-back' | 'journal-unreadable'>> = {
+const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError | 'row-changed', 'authority-rolled-back' | 'journal-unreadable' | 'unavailable'>> = {
+  'row-changed': 'unavailable',
   'authority-rolled-back': 'authority-rolled-back', 'authority-unmeasured': 'authority-rolled-back',
   'bad-entry': 'journal-unreadable', 'not-in-transaction': 'journal-unreadable', 'journal-append': 'journal-unreadable',
 };
@@ -424,12 +425,12 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     }
     // W1 Pause and off change only the rung. W2 cancels undelivered mail/kickoffs and nudges,
     // moves requests to needs-you and settles pending acts; W3 releases holds with one push.
-    const result = ladder.coord.setRung(ladder.journal ?? deps.journal, { to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
+    const result = ladder.coord.setRung(ladder.journal ?? deps.journal, { from: verdict.from, to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
     if (!result.ok) return ladderRefusal(reply, result);
     if (!result.changed) return { ok: true, changed: false, rung: verdict.to };
     let held: 'held' | 'not-yet' | 'unmeasured' = 'not-yet';
     if (verdict.kind === 'lower' && result.recordSequence !== null) {
-      try { held = (ladder.witness ?? NO_WITNESS_YET).recordHeld(result.recordSequence); } catch { held = 'unmeasured'; }
+      try { held = (ladder.witness ?? NO_WITNESS_YET).heldFor(result.recordSequence); } catch { held = 'unmeasured'; }
     }
     return { ...result, rung: verdict.to, narrowing: verdict.kind === 'lower' ? narrowingState(result.recordSequence, held) : null };
   });

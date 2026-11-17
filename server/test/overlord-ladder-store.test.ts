@@ -72,8 +72,11 @@ const putLatch = (db: DatabaseSync, cause: string, cap: string, seq: number | nu
     .run(cause, cap, 'because', NOW - 1, 'lane-a', seq);
 };
 
-const setRung = (db: DatabaseSync, f: Fake, to: Rung, over: { opKey?: string; actor?: string } = {}): LadderWrite =>
-  tx(db, () => setRungInTx(db, f, { to, actor: over.actor ?? 'operator-a', at: NOW, opKey: over.opKey ?? 'op-1' }));
+const setRung = (db: DatabaseSync, f: Fake, to: Rung, over: { opKey?: string; actor?: string } = {}): ReturnType<typeof setRungInTx> => {
+  const read = ladderRungRead(db);
+  const from = read.kind !== 'current' || read.current.kind === 'unreadable' ? 'full' : read.current.kind === 'default' ? 'chat' : read.current.rung;
+  return tx(db, () => setRungInTx(db, f, { from, to, actor: over.actor ?? 'operator-a', at: NOW, opKey: over.opKey ?? 'op-1' }));
+};
 const raise = (db: DatabaseSync, f: Fake, cause = 'latch-a', cap: Rung = 'chat', opKey = 'op-r'): ReturnType<typeof raiseLatchInTx> =>
   tx(db, () => raiseLatchInTx(db, f, { cause, cap, detail: 'why', raisedBy: 'lane-a', at: NOW, opKey }));
 const clear = (db: DatabaseSync, f: Fake, cause = 'latch-a', opKey = 'op-c'): LadderWrite =>
@@ -132,6 +135,19 @@ describe('the reads', () => {
 });
 
 describe('setRungInTx', () => {
+  it('refuses a non-off target over an unknown word even when its normalized origin is full', () => {
+    const db = openDb(); const journal = fake(db); put(db, 'future');
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'full', to: 'chat', actor: 'actor', at: NOW, opKey: 'race' })))
+      .toEqual({ ok: false, error: 'row-changed' });
+    expect(journal.seen).toEqual([]); expect(rungRow(db)).toMatchObject({ operatorRung: 'future' });
+  });
+  it('refuses a classified origin that changed before its transaction', () => {
+    const db = openDb(); const journal = fake(db); put(db, 'off');
+    const result = tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'chat', actor: 'actor', at: NOW, opKey: 'race' }));
+    expect(result).toEqual({ ok: false, error: 'row-changed' });
+    expect(journal.seen).toEqual([]);
+    expect(rungRow(db)).toMatchObject({ operatorRung: 'off' });
+  });
   it('a lowering appends authority-rung with the default as from when there is no row, and writes the row with the record\'s sequence and narrowedAt', () => {
     const db = openDb();
     const f = fake(db);
@@ -442,10 +458,10 @@ describe('catch-up through the real authority journal', () => {
 
   it('replays pending narrowings with a 128-character shared operation key, folds to the rows, and never appends twice', () => {
     const { db, journal, setState } = realJournal();
-    expect(tx(db, () => setRungInTx(db, journal, { to: 'advise', actor: 'operator-a', at: NOW, opKey: 'original' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'advise', actor: 'operator-a', at: NOW, opKey: 'original' })))
       .toMatchObject({ ok: true, journalled: true, recordSequence: 1 });
     setState({ kind: 'unmeasured', why: 'journal' });
-    expect(tx(db, () => setRungInTx(db, journal, { to: 'off', actor: 'operator-a', at: NOW, opKey: 'narrow' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'off', actor: 'operator-a', at: NOW, opKey: 'narrow' })))
       .toMatchObject({ ok: true, journalled: false });
     expect(tx(db, () => raiseLatchInTx(db, journal, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: 'lane-a', at: NOW, opKey: 'raise' })))
       .toMatchObject({ ok: true, journalled: false });
@@ -474,7 +490,7 @@ describe('catch-up through the real authority journal', () => {
 
   it('the real appender refuses an ordinary move that lies about from to disguise a widening', () => {
     const { db, journal, failures } = realJournal();
-    expect(tx(db, () => setRungInTx(db, journal, { to: 'off', actor: 'operator-a', at: NOW, opKey: 'initial' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'off', actor: 'operator-a', at: NOW, opKey: 'initial' })))
       .toMatchObject({ ok: true, journalled: true });
     const answer = tx(db, () => journal.appendInTx(db, { kind: 'authority-rung', opKey: 'lying', from: 'full', to: 'chat' }));
     expect(answer).toMatchObject({ ok: false, error: 'authority-rolled-back' });
@@ -506,6 +522,11 @@ describe('applyRestoreInTx (question 22)', () => {
     tx(db, () => applyRestoreInTx(db, stricter, 55, NOW));
   };
 
+  it.each([9, null])('never widens a stricter stored rung, retaining or stamping sequence %s', (sequence) => {
+    const db = openDb(); put(db, 'off', { seq: sequence, from: sequence === null ? 'chat' : null });
+    restore(db, { operatorRung: 'advise', latches: [] });
+    expect(rungRow(db)).toMatchObject({ operatorRung: 'off', recordSequence: sequence ?? 55, actor: sequence === null ? 'restore' : 'operator-a' });
+  });
   it('writes the stricter rung over a higher one, stamped with the Confirm sequence, and appends nothing', () => {
     const db = openDb();
     put(db, 'advise');
@@ -513,6 +534,10 @@ describe('applyRestoreInTx (question 22)', () => {
     expect(rungRow(db)).toMatchObject({ operatorRung: 'off', actor: 'restore', updatedAt: NOW, recordSequence: 55, recordFrom: null, narrowedAt: NOW });
   });
 
+  it('uses the supplied rung for an absent database row', () => {
+    const db = openDb(); restore(db, { operatorRung: 'advise', latches: [] });
+    expect(rungRow(db)).toMatchObject({ operatorRung: 'advise', actor: 'restore', recordSequence: 55 });
+  });
   it('writes the stricter rung when there is no row', () => {
     const db = openDb();
     restore(db, { operatorRung: 'off', latches: [] });
