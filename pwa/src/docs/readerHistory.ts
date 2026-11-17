@@ -1,6 +1,6 @@
 // One reader body's history lifecycle (native Docs reader, completion plan Task 12 part B; the rich-docs spec's G5, G6 and
 // M8.22). Ring L4 delivery: it reads, sequences and checks that its body is still the live one, and decides nothing the
-// policy owners decide. The decisions are `reader/history.ts`'s (`readerVersionSeed`, `readerVersionMove`,
+// policy owners decide. The decisions are `reader/history.ts`'s (`readerServedHash`, `readerLogAsk`, `readerVersionSeed`, `readerVersionMove`,
 // `readerChangesBase`) and `reader/diff.ts`'s (`readerDiff`); the page a version move opens is `docsLocation`'s and
 // `docsPageUrl`'s, a show's text is `docMarkdownSource`'s, and every read goes through the screen's own loaders and queue.
 //
@@ -21,7 +21,7 @@ import { docsLocation } from './docsLinks';
 import type { DocsHistoryLoader, DocsLoaders } from './failures';
 import type { FetchQueue } from './fetchQueue';
 import { readerDiff } from './reader/diff';
-import { readerChangesBase, readerVersionMove, readerVersionSeed, type ReaderVersionSeed } from './reader/history';
+import { readerChangesBase, readerServedHash, readerVersionMove, readerVersionSeed, type ReaderVersionSeed } from './reader/history';
 
 /** The key of the day filter in a history entry's state. */
 export const READER_ONLY_STATE_KEY = 'ccrcReaderOnly';
@@ -105,7 +105,7 @@ export function useReaderOnly(): string | null {
 export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
   const ended = (): boolean => i.signal.aborted;
   const draft = i.show.source === 'draft';
-  const served = (draft ? i.show.head : i.show.commit) ?? '';
+  const served = readerServedHash(i.show) ?? '';
   const pin = i.pin;
 
   /** The committed log at the opened pin: `null` for anything that is not a complete answer. */

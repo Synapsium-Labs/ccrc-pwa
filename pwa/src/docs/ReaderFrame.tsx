@@ -59,7 +59,7 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
-import { readerVersionSeed } from './reader/history';
+import { readerServedHash, readerVersionSeed } from './reader/history';
 import { startReaderHistory } from './readerHistory';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
@@ -353,7 +353,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // after the images, so the frame is seeded when it mounts; a body that ended or landed meanwhile mounts nothing.
       const shown = first.props.show;
       const seed = history === null
-        ? readerVersionSeed((shown.source === 'draft' ? shown.head : shown.commit) ?? '', shown.source === 'draft', null, null)
+        ? readerVersionSeed(readerServedHash(shown) ?? '', shown.source === 'draft', null, null)
         : await history.seed;
       if (ac.signal.aborted || landed) return;
 

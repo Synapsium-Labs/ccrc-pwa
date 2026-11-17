@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { DocPin, DocsLogEntry, DocsLogOk } from '../../shared/docs';
 import {
   READER_SEED_DATE_MAX_UNITS, READER_SEED_MAX_COMMITS, READER_SEED_MAX_PARENTS, READER_SEED_SUBJECT_MAX_UNITS,
-  readerChangesBase, readerVersionMove, readerVersionSeed,
+  readerChangesBase, readerServedHash, readerVersionMove, readerVersionSeed,
 } from '../src/docs/reader/history';
 
 const SHA40 = 'a'.repeat(40);
@@ -259,5 +259,30 @@ describe('readerChangesBase', () => {
 
   it('a hash that is not a full commit answers null', () => {
     for (const sha of ['abc1234', 'A'.repeat(40), '', `${SHA40} `]) expect(readerChangesBase(committed, sha)).toBeNull();
+  });
+});
+
+describe('readerServedHash', () => {
+  it('a committed show is served at its commit, never its head', () => {
+    expect(readerServedHash({ source: 'committed', commit: SHA40, head: SHA64 })).toBe(SHA40);
+    expect(readerServedHash({ source: 'committed', commit: SHA64 })).toBe(SHA64);
+  });
+
+  it('a draft is served at its head, never its commit', () => {
+    expect(readerServedHash({ source: 'draft', head: SHA40, commit: SHA64 })).toBe(SHA40);
+    expect(readerServedHash({ source: 'draft', head: SHA64 })).toBe(SHA64);
+  });
+
+  it('an absent field answers null, for either source', () => {
+    expect(readerServedHash({ source: 'committed' })).toBeNull();
+    expect(readerServedHash({ source: 'draft' })).toBeNull();
+    expect(readerServedHash({ source: 'committed', head: SHA40 })).toBeNull();
+    expect(readerServedHash({ source: 'draft', commit: SHA40 })).toBeNull();
+  });
+
+  it('it does not validate: a value that is not a full commit comes back as it is, for the seed to refuse', () => {
+    expect(readerServedHash({ source: 'committed', commit: 'abc' })).toBe('abc');
+    expect(readerServedHash({ source: 'committed', commit: '' })).toBe('');
+    expect(readerVersionSeed(readerServedHash({ source: 'committed', commit: 'abc' }) ?? '', false, null, null)).toBeNull();
   });
 });

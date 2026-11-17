@@ -2,7 +2,7 @@
 // plain values, no I/O, no timer, no DOM, no React, no library import (the shapes below mirror the shared Markdown
 // library's, which the type test holds equal) and no `lib/api.ts`. `bridge.ts` hands the answers to the frame and
 // the Docs screen acts on them: this file decides and does nothing else.
-import { isDocsCommit, type DocPin, type DocsLogOk } from '../../../../shared/docs';
+import { isDocsCommit, type DocPin, type DocsLogOk, type DocsShowOk } from '../../../../shared/docs';
 
 /** One commit of the document, in the library's seed shape. */
 export interface ReaderCommit {
@@ -71,6 +71,12 @@ function commitsOfLog(log: DocsLogOk | null): readonly ReaderCommit[] | null {
     commits.push(c);
   }
   return commits;
+}
+
+/** The hash a show was served at: a draft's head, a committed show's commit, `null` when the field is absent. It does not
+ *  validate: `readerVersionSeed` refuses a value that is not a full commit. */
+export function readerServedHash(show: Pick<DocsShowOk, 'source' | 'commit' | 'head'>): string | null {
+  return (show.source === 'draft' ? show.head : show.commit) ?? null;
 }
 
 /** The version seed for one body, or `null` when `sha` is not a full served commit (40 or 64 lower-case hex; a value
