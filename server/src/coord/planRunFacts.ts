@@ -12,6 +12,9 @@ export function planFactsOf(plan: PlanStorePort, coord: CoordStore, slug: string
   return {
     required: stored.required,
     ended: plan.planEndOf(slug) !== null,
+    // Programme work map WM1: a plan that declares a phase (dropped ones included: it was declared) names its tickets at open.
+    phased: plan.phasesOf(slug).length > 0,
+    tickets: (epicId) => stored.epics.find((e) => e.id === epicId)?.tickets ?? [],
     epics: stored.epics,
     ticket: (key) => {
       for (const e of stored.epics) {

@@ -117,6 +117,14 @@ export const DONE_CASES: TicketDoneCase[] = [
       expect(word(v)).toBe('evidence-unverified');
       expect(v.ok ? '' : v.detail).toContain('name the run');
     } },
+  { name: 'landed: what one project\'s landing line says of a pull request',
+    run: (m) => {
+      expect(m.landedFactOf([], 7)).toEqual({ kind: 'no-entry' });
+      expect(m.landedFactOf([{ pr: 8, state: 'landed' }], 7)).toEqual({ kind: 'no-entry' });
+      expect(m.landedFactOf([{ pr: 7, state: 'pinned' }], 7)).toEqual({ kind: 'not-landed', state: 'pinned' });
+      expect(m.landedFactOf([{ pr: 7, state: 'ejected' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'not-landed', state: 'queued' });
+      expect(m.landedFactOf([{ pr: 7, state: 'landed' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'landed' });
+    } },
   { name: 'verdict: an unreadable landing line is refused evidence-unverified',
     run: (m) => { expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { landed: { kind: 'unreadable', detail: 'landing-fenced' } })))).toBe('evidence-unverified'); } },
 

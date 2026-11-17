@@ -1,6 +1,6 @@
 // The plan verbs' routes (Linear hierarchy design 2026-11-10 §4.3, D-8181): `plan put`, `plan show`, `plan met`,
 // `plan ticket-add`, `plan ticket-move`, `plan epic-drop` and `plan close`, and `plan phase-ref` (programme work map WM0,
-// D-8715), with the phases `plan put` stores and `plan show` answers. L4: they own the reply and decide nothing;
+// D-8715), with the phases `plan put` stores and `plan show` answers, and `plan ticket-done` (WM1, D-8727). L4: they own the reply and decide nothing;
 // `planPolicy.ts` parses the bodies and judges the diff, the caller and the programme's end, and `planStore.ts` (through the
 // `PlanStorePort`, never `coord.db`) is the table. The box token comes first, then the identity pair from the QUERY, then the
 // registry's attribution, then the caller check. Every plan WRITE runs its checks and its store write inside `serial`, the
@@ -25,7 +25,8 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { BindingRow, PhaseRow, PlanStorePort, StoredPlan } from './planStore.js';
 import {
   diffPhases, diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPhaseRef, parsePlanPut, parsePlanTicketAdd,
-  parsePlanTicketMove, dropEpicInto, phaseNumbers, phaseRefVerdict, planCallerVerdict, ticketIsHeld,
+  parsePlanTicketDone, parsePlanTicketMove, dropEpicInto, phaseNumbers, phaseRefVerdict, planCallerVerdict, ticketDoneVerdict,
+  ticketIsHeld, landedFactOf, type TicketDoneFacts,
 } from './planPolicy.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
 
@@ -387,6 +388,46 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     }
     if (workspaceClash(ws, project, target.project)) return { refuse: 'ticket-workspace-mismatch', detail: `ticket ${m.ticket} would be in another workspace than epic ${target.key}` };
     plan.updateTicket(ticket.id, patch, opts.now());
+    return { ok: true, plan: viewOf(plan, coord, slug) };
+  }));
+
+  // `plan ticket-done` (programme work map WM1, D-8727; spec §4.1 D11): a ticket finished another way is recorded done with
+  // evidence that verifies. The route gathers the facts (the run and its own ticket, the landing line of the ticket's own
+  // project, the evidence the programme's tickets already hold); `ticketDoneVerdict` decides; `markTicketDone` writes.
+  app.post('/api/programmes/:slug/plan/tickets/done', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets/done')),
+  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+    const parsed = parsePlanTicketDone(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const verdict = ownerVerdict(caller, owner);
+    if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator records a ticket done' };
+    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    const { ticket: key, evidence } = parsed.done;
+    const found = ticketOf(stored, key);
+    if (found === undefined) return { refuse: 'unknown-ticket', detail: `no ticket ${key}` };
+    const t = found.ticket;
+    let run: TicketDoneFacts['run'] = null;
+    if ('runId' in evidence) {
+      const read = coord.run(evidence.runId);
+      if (!read.ok) return { refuse: 'evidence-unverified', detail: `run ${evidence.runId} could not be read (${read.kind})` };
+      const own = read.run === null ? null : plan.ticketOfRun(evidence.runId);
+      run = read.run === null || own === null ? null
+        : { program: read.run.program, kind: read.run.kind, state: read.run.state, ticketId: own.ticketId, ticketKey: own.key };
+    }
+    let landed: TicketDoneFacts['landed'] = null;
+    if ('pr' in evidence) {
+      const read = coord.readLanding(t.project);
+      landed = read.ok ? landedFactOf(read.facts.entries, evidence.pr) : { kind: 'unreadable', detail: read.error };
+    }
+    const storedEvidence = plan.doneFactsOf(slug).flatMap((d) =>
+      d.evidence === null || d.evidence === 'malformed' ? [] : [{ ticketId: d.ticketId, key: d.key, project: d.project, evidence: d.evidence }]);
+    const v = ticketDoneVerdict({
+      program: slug, ticket: { id: t.id, key: t.key, project: t.project, state: t.state, runId: t.runId }, evidence, run, landed,
+      stored: storedEvidence,
+    });
+    if (!v.ok) return { refuse: v.word, detail: v.detail };
+    plan.markTicketDone(t.id, evidence, opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 

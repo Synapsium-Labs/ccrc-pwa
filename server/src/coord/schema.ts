@@ -3593,6 +3593,25 @@ export const MIGRATIONS: readonly string[] = [
     carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
     CHECK (carriedTo IS NULL OR kind = 'ticket'));
   `,
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
+  // A ticket's done time and evidence (programme work map WM1, D-8727; spec 2026-11-16 §4.1, D11): `plan_tickets.doneAt`
+  // and `doneEvidence`, JSON `{ runId }` or `{ pr }`. Written by `planStore.ts` alone (the done arm of `onRunAdvancedInTx`
+  // and `markTicketDone`), and by this migration's back-fill: every `done` ticket that names a run gets `{ runId }` from
+  // it and `doneAt` from that run's `closedAt` (NULL when the run has none). Measured on main before this entry: the done
+  // arm is the only writer of `done` and leaves `runId` set, so every done ticket names its done run (review 2268 F1).
+  // The JSON is spelled as `JSON.stringify({ runId })` spells it. TWO NULLABLE COLUMNS on an existing table: an older
+  // build opening a file at `user_version 94` takes rule 3, never names them, and its done arm leaves them NULL, which
+  // the work map reads as "no evidence stored". WM0 (#2974) took 93, so this is 94 on today's main. RE-MEASURE the slot
+  // before the PR and before merge (it must print 93 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE plan_tickets ADD COLUMN doneAt INTEGER;      -- when the ticket was done; NULL is unknown or not done
+  ALTER TABLE plan_tickets ADD COLUMN doneEvidence TEXT;   -- {"runId":n} or {"pr":n}; NULL is none stored
+  UPDATE plan_tickets SET doneEvidence = '{"runId":' || runId || '}',
+    doneAt = (SELECT r.closedAt FROM runs r WHERE r.id = plan_tickets.runId)
+    WHERE state = 'done' AND runId IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

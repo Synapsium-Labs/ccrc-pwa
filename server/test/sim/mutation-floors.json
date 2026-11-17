@@ -166,5 +166,9 @@
   "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
   "server/src/coord/planPolicy.ts#phaseNumbers": 1,
   "server/src/coord/planPolicy.ts#diffPhases": 1,
-  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1
+  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1,
+  "server/src/coord/planPolicy.ts#runMustNameTicket": 1,
+  "server/src/coord/planPolicy.ts#parsePlanTicketDone": 1,
+  "server/src/coord/planPolicy.ts#ticketDoneVerdict": 1,
+  "server/src/coord/planPolicy.ts#landedFactOf": 1
 }

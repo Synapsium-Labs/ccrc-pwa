@@ -433,8 +433,9 @@ describe('the client stays closed', () => {
     // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
     // no splice and no fill) to eighty-four. `programme.remaining` (Overlord W2 remaining work A, which takes the probe answer's
     // rule: refuse a body naming either key, then append the pane's pair LAST, review 2265 F9) to eighty-five. `plan.phase-ref` (programme work map WM0) to eighty-six; it takes the caller's
-    // own body and fills none (the identity rides the query, as for the other `plan` rows).
-    expect(routeKeys().size).toBe(86);
+    // own body and fills none (the identity rides the query, as for the other `plan` rows). `plan.ticket-done` (WM1) to
+    // eighty-seven, the same way.
+    expect(routeKeys().size).toBe(87);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
