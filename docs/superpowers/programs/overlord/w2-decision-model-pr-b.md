@@ -72,7 +72,7 @@ saved copy). The arm door's `shadow` lands in the same pull request as this suit
 
 ## 3. What the plan left open, and how it is built
 
-- **The migration slot.** 91 by position (account organization D, #2958, landed 90). Three tables and an index, no seed.
+- **The migration slot.** 93 by position: account organization D (#2958) landed 90, designation A (#2950) 91 and done tests A (#2964) 92. Three tables and an index, no seed.
 - **The refusal words.** `shared/refusal.ts#DECISION_MODEL_REFUSALS`, ten words with their statuses (question 13), registered
   in `OVERLORD_GROUPS` and in Table 11.6 with the data file.
 - **The authority kind.** `authority-decision-row`, `{ kind, opKey, row, gate, from, to }`; `authorityFold` gains
