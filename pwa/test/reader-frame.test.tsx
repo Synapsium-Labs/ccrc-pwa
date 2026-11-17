@@ -857,6 +857,32 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     expect(lastBar(p2)).toBeNull();
   });
 
+  it('sign-in withdraws the old mount\'s bar until the new mount is ready, then publishes the new one (completion plan Task 8; review M7d)', async () => {
+    const h = harness();
+    let release!: (v: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h, 'host-bar', publish));
+    const first = await ready(h);
+    act(() => { first.onReady(); });
+    const oldBar = lastBar(publish);
+    expect(oldBar).not.toBeNull();
+    // Sign-in returns: the destroyed mount's bar must not stand while the new run is still asking for its images.
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(h.handle.destroy).toHaveBeenCalledTimes(1));
+    expect(lastBar(publish)).toBeNull();
+    // The new mount is up and ready: its own bar is published.
+    release({ urls: {}, drafts: 0, auth: 0 });
+    await waitFor(() => expect(h.inputs).toHaveLength(2));
+    act(() => { h.inputs[1]!.onReady(); });
+    const newBar = lastBar(publish);
+    expect(newBar).not.toBeNull();
+    expect(newBar).not.toBe(oldBar);
+  });
+
   it('the slot\'s bar is read as the mount starts: a later change does not remount', async () => {
     const h = harness();
     const publish = vi.fn<(bar: ReaderBar | null) => void>();
