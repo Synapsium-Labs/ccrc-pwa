@@ -1,13 +1,19 @@
 // One reader body's history lifecycle (native Docs reader, completion plan Task 12 part B; the rich-docs spec's G5, G6 and
 // M8.22). Ring L4 delivery: it reads, sequences and checks that its body is still the live one, and decides nothing the
-// policy owners decide. The decisions are `reader/history.ts`'s (`readerServedHash`, `readerLogAsk`, `readerVersionSeed`, `readerVersionMove`,
-// `readerChangesBase`) and `reader/diff.ts`'s (`readerDiff`); the page a version move opens is `docsLocation`'s and
-// `docsPageUrl`'s, a show's text is `docMarkdownSource`'s, and every read goes through the screen's own loaders and queue.
+// policy owners decide. The decisions are `reader/history.ts`'s (`readerServedHash`, `readerLogAsk`, `readerVersionSeed`,
+// `readerVersionMove`, `readerChangesBase`, `readerChangesTexts`) and `reader/diff.ts`'s (`readerDiff`); the page a version
+// move opens is `docsLocation`'s and `docsPageUrl`'s, and a show's text is `docMarkdownSource`'s.
 //
 // `startReaderHistory` runs once per body, as the body's render starts, so the doc's commit list is read beside the render
-// and the images. Everything it hands out is closed over that body's immutable pin and text and its `AbortSignal`: a body
-// that has ended (its key changed, it fell back, it unmounted) answers `null` or does nothing, so a late answer never
-// reaches the next body.
+// and the images. What it hands out is closed over that body's immutable pin and text and checks that the body is still the
+// live one: a body that has ended (its key changed, it fell back, it unmounted) answers `null` or does nothing, so a late
+// answer never reaches the next body. Its two kinds of read differ:
+// - `changes` reads the head and the base through the screen's own file loader and fetch queue, with the body's
+//   `AbortSignal`, so a body that ends aborts them;
+// - the log is read through the screen's history loader, which takes no signal and is not queued, so the read is not
+//   cancellable: a body that ends first resolves its seed `null` at once and drops the late answer, and a remount reads the
+//   log again. The mount waits for the seed with no client time limit, as the docs loaders have none by design (the server
+//   bounds the read).
 //
 // The day filter a version list is cut to (`only`) is kept in the visit's `history.state` and never in the URL (M8.22): the
 // URL names the commit, and the same URL is two entries with two filters when the user went back. `openVersion` records
