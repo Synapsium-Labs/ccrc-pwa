@@ -4000,8 +4000,9 @@ measurements, the search of the app for F2, the mutants and the browser run.
   The record as merged had one cost of another kind (corrected by Task C42, review 2343 F1): a node the page un-hid while
   a layer was open stayed in every later layer's record as the page's own, so a later layer that mounted while the first
   was still mounted hid it again and nothing lifted it; it stayed hidden for good (measured in jsdom; no route in the app
-  reaches it, inferred from a code search). Task C42 (D-8714) removed it. One narrower shape, also open before C40, is
-  still open (measured; `c42.md`). The only modal layers are the two that keep the record. A future Radix modal that
+  reaches it, inferred from a code search). Task C42 (D-8714) removed it for the sheets (measured); the palette as the
+  outer layer, and a hide the page makes during a later layer, stay open (`c42.md`). The only modal layers are the two
+  that keep the record. A future Radix modal that
   kept no record would not bring back the old read's window: its marks on an element the page hid itself would hide that
   element from a later sheet's record, so the sheet would lift it and it would stay announced for good, C38's original
   failure (review 2310 F2; review 2343 F6; inferred from code).
@@ -4022,39 +4023,48 @@ B's record took X in from A's as the page's own; B's Radix hid X again, nothing 
 dialog had gone (F1, a regression from `main` in that one shape; no route in `pwa/src` or `ui/src` reaches it). The
 review also found the record's prune unpinned (F2), a reopen during the exit that puts back a mark another modal has
 since taken off (F3, on `main` before C40), the palette's Chrome row without its overlap control (F4), and five text
-slips (F5 to F9). `c42.md` holds the measurements, each row and what reds it, and the mutants.
+slips (F5 to F9). Review 2353 of the first build found that build's filter ineffective under StrictMode, three deep with
+a layer held in its exit, and when B closes before A, and ruled the deletion variant (fix round 1). `c42.md` holds the
+measurements, each row and what reds it, and the mutants.
 
 **What was done.**
-- **F1, at the record.** A node inherited from another layer's record stays in the new layer's page-own set only while it
-  still carries `aria-hidden="true"`. A node the page un-hid is then lifted as the new layer closes, like any other mark.
-  Every C38 and C40 row stays green, and no caller changed.
+- **F1, at the record.** A node in a still-mounted layer's record that no longer carries `aria-hidden="true"` is deleted
+  from that record, which the layer's sheet holds by reference, and is not taken into the new layer's. So no layer keeps
+  a node the page un-hid as its own, and whichever closes last lifts it, like any other mark. The rule the record keeps:
+  a page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark,
+  and is lost. Every C38 and C40 row stays green, and no caller changed.
 - **F3, in the sheet.** A reopen during the exit puts back only the lifted nodes that a modal still marks
   (`data-aria-hidden`), so a node whose mark the palette's undo removed is not hidden again with no mark.
-- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows (36): six F1 rows (a direct DOM removal and a portal whose
-  `aria-hidden` a state change un-sets; the hand-off in both tree orders and B over A with A closed by code), red at
-  `main` (6c2d705d2); three controls where the page never un-hides X; the F2 row (the record forgets a layer whose panel
-  has left), red when the prune is removed; and the F3 row, red at `main`. `sheet-stack-hide.browser.test.ts`'s palette
-  group reads the overlap right after Show shortcuts, checks the focus, and adds the still-closing variant (10 rows).
-- **Text.** The StrictMode comments now follow React 19's order (F5); `c40.md` and the D-8698 entry are corrected on
-  the cost, on a modal that keeps no record (F6), on the mutant table (F7) and on the row counts (F8); the browser file's
-  header names the read and the palette group (F9).
+- **Tests.** `sheet-trap-hide.test.tsx` has 55 rows (30 new). The F1 rows cover three models of the page's un-hide (a
+  direct removal, a portal un-set by state, and a portal writing `aria-hidden="false"`) and four shapes (the hand-off in
+  both tree orders, B over A with A closed by code, and B closing before A); four hand-offs run under StrictMode, and
+  one three-deep chain keeps a layer in its exit. Each un-hide shape has a control where the page never un-hides X. Two
+  rows pin the "hide during a layer" class as it stands. One row each covers the prune (through the palette), S15 (a
+  layer leaving under the palette) and F3. `sheet-stack-hide.browser.test.ts`'s palette group reads the overlap right
+  after Show shortcuts, names the focused element at each read, and keeps the still-closing variant (10 rows).
+- **Text.** The StrictMode comments follow React 19's order and say what survives its undo (F5, review 2353 F8);
+  `c40.md` and the D-8698 entry are corrected on the cost, on a modal that keeps no record (F6), on the mutant table (F7)
+  and on the row counts (F8); the browser file's header names each read's moment and the palette group (F9).
 
-- **D-8714** — `c42-record-forgets-unhidden`: Task C42, issued on 2026-11-17. A modal layer's record takes in another
-  layer's node as the page's own only while that node still carries `aria-hidden="true"` (review 2343 F1), and a reopen
-  during the exit puts back only nodes a modal still marks (F3). Two further departures, by slug:
-  - `c42-prune-row-via-palette`: the brief's sequential shape for F2 (sheet A, the page un-hides X, sheet B) no longer
-    needs the prune once F1's filter is in, so a row of that shape stays green with the prune removed (measured). The F2
-    row goes through the palette instead: its mark hides X again before the sheet's record, and only a forgotten layer's
-    record would keep X as the page's own then.
-  - `c42-reverse-close-residual`: one shape keeps a node hidden for good after C42, as it did before C40. The page un-hides
-    X while A is open, B opens over A (and hides X), B closes before A. A recorded X as the page's own, so A's close
-    leaves it, and the package's uncontrolled mark keeps the `aria-hidden` after both unmount. Measured at C42's tip, at
-    6c2d705d2 and at f8251a39d; no route in the app reaches it (inferred, review 2343's search). Not fixed: telling the
-    page's re-hide from a modal's needs more than the record holds.
+- **D-8714** — `c42-record-forgets-unhidden`: Task C42, issued on 2026-11-17. A node in a mounted modal layer's record
+  that no longer carries `aria-hidden="true"` is deleted from that record and not taken into the new one (review 2343
+  F1, review 2353's variant), and a reopen during the exit puts back only nodes a modal still marks (F3). The rule: the
+  page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark and
+  is lost (the node ends announced; measured, two rows pin it; at `main` 6c2d705d2 both shapes ended hidden, and before
+  C40, at f8251a39d, one ended announced and one hidden, so this is a change from `main` in a shape no route reaches). The
+  palette as the outer layer keeps a node it hid after the page un-hid it (it never lifts its own marks; measured by
+  review 2353). The prune is now a bound on what the record retains, not a guard any row can tell apart (measured; why
+  is inferred). Further departures, by slug:
+  - `c42-prune-row-via-palette`: the brief's sequential shape for F2 needs no prune once the record filters a node the
+    page un-hid (measured), so the F2 row goes through the palette; since the variant it reds only with the delete
+    removed too (measured).
+  - `c42-reverse-close-residual`, narrowed to `c42-palette-outer`: the reverse close (B over A, B closes before A) is
+    fixed for sheets (measured: three rows); a palette as the outer layer stays open.
 
-**Acceptance.** The F1 and F3 rows are red at `main` and green at the tip; the F2 row is red with the prune removed; every
-C38 and C40 row stays green; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs,
-dtbd and topology-clean guards pass.
+**Acceptance.** The F1, StrictMode, three-deep, reverse-close and F3 rows are red at `main` or at the first build
+(296a56403) and green at the tip; every control stays hidden; every C38 and C40 row stays green; each mutant reds the
+rows `c42.md` names; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs, dtbd and
+topology-clean guards pass.
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)

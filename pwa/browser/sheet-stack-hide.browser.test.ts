@@ -15,14 +15,16 @@
 // - Review 2334 F1 and review 2343 F4, the command palette's hand-off: Control+K, Show shortcuts, then Escape on the
 //   shortcuts sheet, with an element planted at the body's level. The palette is still animating out as the sheet opens
 //   (`['closed', 'open']`, read right after the click); the Escape comes once the palette is gone, or while it is still
-//   closing. The page is announced as the sheet closes, and the focus is not inside a hidden container.
+//   closing. The page is announced as the sheet closes, and each read names the focused element (review 2353 F6).
 // In all of them, every element the page hid itself before the first sheet opened is still hidden at each read and after
 // every sheet has gone (Task C40: the sheet never lifts an aria-hidden it did not set). The page is read as its hidden
 // containers (every `aria-hidden` element outside the dialogs that the page did not hide itself, the focus guards aside),
-// not as `main`'s ancestors, which a live region inside `main` keeps visible (review 2323 F3). Each read is a
-// `page.evaluate` right after the click or key press returns, while the dialog is still animating out (review 2334 F8,
-// review 2343 F9); what the page hid itself is the sheet's own record, taken in its panel's callback ref as the panel
-// mounts (`ui/src/lib/modal-layers.ts`), which these rows measure by its effect.
+// not as `main`'s ancestors, which a live region inside `main` keeps visible (review 2323 F3). Every read is a
+// `page.evaluate`, at one of three moments (review 2334 F8, reviews 2343 and 2353 F9): a closing read right after the
+// click or key press returns, while the dialog is still animating out (each row's state control holds that); an open
+// read after a poll for the dialogs and 300 ms; and an after read once every dialog has unmounted, 100 ms on. The stacked
+// row's read once its confirm has unmounted follows its poll at once. What the page hid itself is the sheet's own record, taken in its panel's callback ref as the panel mounts
+// (`ui/src/lib/modal-layers.ts`), which these rows measure by its effect.
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // browser/sheet-stack-hide.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -106,6 +108,9 @@ interface Layers {
   readonly active: string;
   /** The elements hidden before the first sheet opened that are no longer `aria-hidden="true"`. */
   readonly lostOwn: readonly string[];
+  /** Where the focus is: `page` (outside every dialog), or the dialog holding it, as its title and state
+   *  (`Shortcuts:closed`), the palette's drawer being `palette:<state>`. */
+  readonly focusIn: string;
 }
 
 /** Remember every element hidden from assistive technology before any sheet opens, by reference, on the window. */
@@ -135,7 +140,10 @@ const read = (page: Page): Promise<Layers> => page.evaluate(() => {
   const focusHidden = active !== null && active !== document.body && !open.some((d) => d.contains(active)) && up(active);
   const activeName = active === null || active === document.body ? 'BODY'
     : (active.getAttribute('aria-label') ?? active.textContent ?? '').trim().slice(0, 40);
-  return { dialogs, pageMarks, page: pageMarks.length > 0, focusHidden, active: activeName, lostOwn };
+  const holder = active === null ? null : active.closest('[role="dialog"]');
+  const focusIn = holder === null ? 'page'
+    : `${holder.querySelector('[role="combobox"]') !== null ? 'palette' : (holder.querySelector('h2')?.textContent ?? '').trim()}:${holder.getAttribute('data-state')}`;
+  return { dialogs, pageMarks, page: pageMarks.length > 0, focusHidden, active: activeName, lostOwn, focusIn };
 });
 
 describe('Session actions, Swap account, its confirm, Cancel (Task C40, review 2310 F4)', () => {
@@ -305,12 +313,27 @@ describe('the command palette\'s hand-off to a sheet (Task C40, review 2334 F1; 
           expect(closing.dialogs.map((d) => d.state), paletteGone ? 'CONTROL: the shortcuts sheet is animating out'
             : 'CONTROL: the palette and the shortcuts sheet are both animating out').toEqual(paletteGone ? ['closed'] : ['closed', 'closed']);
           expect(closing.pageMarks, 'the page\'s containers are still aria-hidden while the sheet the palette handed to closes').toEqual([]);
+          // Review 2353 F6: the focused element itself. Measured: the focus is in the closing shortcuts sheet, except that at
+          // 1280 with the palette still closing the Escape puts it in the closing palette's input (outside C42; c42.md).
+          if (paletteGone) {
+            expect(closing.focusIn, 'the focus is not in the closing shortcuts sheet').toBe('Keyboard shortcuts:closed');
+          } else {
+            expect(closing.focusIn, 'the focus is not in a closing dialog').toMatch(/:closed$/);
+          }
           expect(closing.focusHidden, 'the focus is inside an aria-hidden container while the sheet closes').toBe(false);
           expect(closing.lostOwn, 'the closing sheet lifted an element the page hid itself').toEqual([]);
           await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(0);
           await page.waitForTimeout(100);
           const after = await read(page);
           expect(after.pageMarks, 'the page stayed hidden after the sheet left').toEqual([]);
+          // Measured (five runs at each width): with the palette gone, Radix leaves the focus on the body once the sheet has
+          // left; with the palette still closing, it ends on a page control, the one named "Fleet" at 390 and the one named
+          // "❯Select a session" at 1280. Where it lands then is measured, not explained.
+          if (paletteGone) expect(after.active, 'CONTROL: Radix left the focus on the body').toBe('BODY');
+          else {
+            expect([after.focusIn, after.active], 'the focus moved off the page control it lands on')
+              .toEqual(['page', view.width === 390 ? 'Fleet' : '❯Select a session']);
+          }
           expect(after.focusHidden, 'the focus is inside an aria-hidden container after the sheet left').toBe(false);
           expect(after.lostOwn, 'an element the page hid itself was left announced for good').toEqual([]);
           expect(errors).toEqual([]);
