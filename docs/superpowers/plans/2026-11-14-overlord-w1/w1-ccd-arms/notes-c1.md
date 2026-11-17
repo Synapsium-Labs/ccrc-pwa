@@ -63,3 +63,5 @@ Measured with `growthCheck.ts`'s own counting (`codeLines`), against the merge b
   count line and the three rows); its hunks and these are apart, so whichever lands second merges `main` once.
 - Locally unmeasured, left to CI: the shellcheck ratchet and the tests typecheck are each killed by the local test
   slice's 6 GB memory cap, as PR A's and PR B's were. `shellcheck -S warning` reports nothing on `ccd/lib/long-lived.sh`.
+- The first full CI run's shellcheck ratchet found one SC2100 the lone-file lint cannot see: over the spliced program text,
+  `FRESH_PICK_FAIL=at-ceiling` reads as a subtraction. The word is quoted now (`'at-ceiling'`), and the program pin stays at 82.

@@ -140,7 +140,7 @@ _fresh_pick_ok() {   # account side -> rc 0 the account may take this session at
   # (slug fresh-pick-anthropic-only-in-w1: C56 admits another provider's lane only if the operator lists it, which nothing
   # records yet, so the piece that records it widens the server's list and this check together). Writes nothing.
   FRESH_PICK_FAIL=unknown; _is_valid_wrapper "$1" || return 1; FRESH_PICK_FAIL=disabled; _account_ok "$1" || return 1
-  FRESH_PICK_FAIL=authdead; ! _authdead "$1" || return 1; FRESH_PICK_FAIL=at-ceiling; _avail "$1" || return 1
+  FRESH_PICK_FAIL=authdead; ! _authdead "$1" || return 1; FRESH_PICK_FAIL='at-ceiling'; _avail "$1" || return 1
   FRESH_PICK_FAIL=pool; _pool_ok "$1" "$2" || return 1; FRESH_PICK_FAIL=backend; _is_anthropic_backend "$1" || return 1; FRESH_PICK_FAIL=''
 }
 _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, at most cap (a NUL reads as a newline) | 1 no entry
