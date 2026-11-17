@@ -33,10 +33,10 @@ export interface RowUnreadable { readonly ok: false; readonly reason: 'unmeasure
 /** The actor is not one the attribution adapter minted for the operator at `operator` strength (gates A, review M6): no row. */
 export interface ActorRefused { readonly ok: false; readonly reason: 'actor' }
 
-/** The one actor check a designation writer makes: minted by the adapter (`isRecordedActor`), kind `operator` and strength
- *  `operator`, so a door can neither forge a strength by building the object by hand nor pass a session's attributed actor. */
+/** The one actor check a designation writer makes: minted by the adapter (`isRecordedActor`), kind `operator`, issuer
+ *  `account-gate` and strength `operator`: neither a forged object, a session actor nor a console-only actor may write. */
 const actorRefused = (a: unknown): boolean =>
-  !isRecordedActor(a) || a.kind !== 'operator' || a.strength !== 'operator';
+  !isRecordedActor(a) || a.kind !== 'operator' || a.issuer !== 'account-gate' || a.strength !== 'operator';
 const ACTOR_REFUSED: ActorRefused = { ok: false, reason: 'actor' };
 /** The actor's four values, in the column order every writer spells: subject, kind, issuer, strength. */
 const actorCols = (a: ActorWire): [string, string, string, string] => [a.subject, a.kind, a.issuer, a.strength];
@@ -83,7 +83,9 @@ function narrow(r: Raw): DesignationView | string {
     pending = { sessionId: pendingId, kind: kind as PendingKind, deadlineAt, since, actor: pa.actor.subject, actorDetail: pa.actor,
       generation: strOrNull(r['pendingGeneration']) };
   } else if (r['pendingKind'] !== null && r['pendingKind'] !== undefined) return 'a pending kind stands with no pending id';
-  else if (PENDING_ACTOR_COLUMNS.some((c) => r[c] !== null && r[c] !== undefined)) return 'a pending actor stands with no pending id';
+  // An older build clears the pending subject and id, but does not know the three additive metadata columns.
+  // With no pending subject or id, those stale columns describe no actor and must not wedge the designation.
+  else if (r['pendingActor'] !== null && r['pendingActor'] !== undefined) return 'a pending actor stands with no pending id';
   const term = intOrNull(r['term']); const designatedTerm = intOrNull(r['designatedTerm']);
   if (term === null || term < 0 || designatedTerm === null || designatedTerm < 0) return 'a term is not a count';
   const model = parseOverlordModel(r['model']);

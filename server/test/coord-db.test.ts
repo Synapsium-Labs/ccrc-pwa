@@ -747,9 +747,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[89] (prevLane on continuity_generations, the previous generation's account, account organization D),
     // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, a run's own bound PR as its close measured it, Overlord W2 done tests A),
-    // and MIGRATIONS[92] (the designation actor columns, Overlord W1 gates A).
-    expect(COORD_SCHEMA_VERSION).toBe(93);
-    expect(MIGRATIONS.length).toBe(93);
+    // and MIGRATIONS[92] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0),
+    // and MIGRATIONS[93] (the designation actor columns, Overlord W1 gates A).
+    expect(COORD_SCHEMA_VERSION).toBe(94);
+    expect(MIGRATIONS.length).toBe(94);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -867,8 +868,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
     // and MIGRATIONS[90] (overlord_designation, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, Overlord W2 done tests A),
-    // and MIGRATIONS[92] (the designation actor columns, gates A); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(93);
+    // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0),
+    // and MIGRATIONS[93] (the designation actor columns, gates A); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(94);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -3038,6 +3040,47 @@ describe('coord.db: what each goals version rests on (Overlord W1, portfolio B; 
       .toEqual([{ inShort: 'x', ratifiedBy: null, ratifiedAt: null, ratifiedActor: null, doneWhenBy: null }]);
     expect(db.prepare('SELECT text, ratifiedBy, ratifiedAt, ratifiedActor FROM programme_modifications').all())
       .toEqual([{ text: 'y', ratifiedBy: null, ratifiedAt: null, ratifiedActor: null }]);
+    db.close();
+  });
+});
+
+describe('coord.db: the programme\'s phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14)', () => {
+  /** Found by its DDL, so every case below follows the entry wherever it sits; the one `toBe` on it is the measured slot,
+   *  pinned on purpose and re-pinned by whichever of two branches holding one slot merges second (review 2375 F15). */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_phases (')) + 1;
+
+  it('TWO NEW TABLES and nothing on an existing table, after the plan tables', () => {
+    expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_tickets (')) + 1);
+    expect(SLOT).toBe(93);
+    const statements = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean);
+    expect(statements.map((x) => x.split('(')[0]!.trim())).toEqual(['CREATE TABLE plan_phases', 'CREATE TABLE plan_phase_refs']);
+  });
+
+  it('reaches a database ALREADY at the version before it: both tables land empty and every plan row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+    raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+    raw.exec("INSERT INTO plan_epics (program, project, waves, key, ordinal, title, summary, state) VALUES ('prog-a', 'project-a', '[1]', 'e1', 0, 'E', 's', 'planned')");
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect([db.prepare('SELECT count(*) AS n FROM plan_phases').get(), db.prepare('SELECT count(*) AS n FROM plan_phase_refs').get()])
+      .toEqual([{ n: 0 }, { n: 0 }]);
+    expect(db.prepare('SELECT key, state FROM plan_epics').all()).toEqual([{ key: 'e1', state: 'planned' }]);
+    db.close();
+  });
+
+  it('a phase key is unique per programme, a reference once per phase, and a carry has its time and is a ticket\'s', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    db.exec("INSERT INTO plan_phases (program, key, ordinal, title, summary) VALUES ('prog-a', 'p1', 0, 'P', 's'), ('prog-a', 'p2', 1, 'P', 's')");
+    expect(() => db.exec("INSERT INTO plan_phases (program, key, ordinal, title, summary) VALUES ('prog-a', 'p1', 2, 'P', 's')")).toThrow(/UNIQUE/);
+    db.exec("INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (1, 'ticket', 7)");
+    expect(() => db.exec("INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (1, 'ticket', 7)")).toThrow(/UNIQUE/);
+    expect(() => db.exec("INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (1, 'wave', 7)")).toThrow(/CHECK/);
+    expect(() => db.exec("INSERT INTO plan_phase_refs (phaseId, kind, refId, carriedTo) VALUES (1, 'ticket', 8, 2)")).toThrow(/CHECK/);
+    expect(() => db.exec("INSERT INTO plan_phase_refs (phaseId, kind, refId, carriedTo, carriedAt) VALUES (1, 'epic', 3, 2, 5)")).toThrow(/CHECK/);
     db.close();
   });
 });

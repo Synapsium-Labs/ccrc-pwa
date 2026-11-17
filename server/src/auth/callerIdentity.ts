@@ -12,6 +12,10 @@ import type { IncarnationRead } from '../continuity/timerLane.js';
  * IDENTITY IS ATTRIBUTION, not authentication: the box token plus a session's id and current uuid is a fact any
  * process of the fleet's one UNIX user can read, and the answer's `strength` says so. An adapter keeps every
  * distinction it receives: an unreadable registry is never a stale uuid, an absent generation is never a measured one.
+ *
+ * The compile-time brand refuses the pinned string, AccountActor and plain ActorWire shapes only. A spread, JSON
+ * round trip or cast can still type-check as RecordedActor: the adapter's private run-time WeakSet, checked by the
+ * designation writers through isRecordedActor, is the provenance guard for those copies, not this TypeScript brand.
  */
 
 declare const recordedActorBrand: unique symbol;

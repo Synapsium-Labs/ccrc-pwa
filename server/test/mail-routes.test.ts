@@ -580,6 +580,27 @@ describe('the rejection table is total, in both directions', () => {
   const isDoneTestWordHere = (tok: string, elsewhere: string): boolean =>
     isDoneTestKebab(tok) && !elsewhere.includes(`'${tok}'`);
 
+  // Gates A, review F9: these words are identifiers only in their declaring coordination file.
+  const outsideIdentityHome = (...homes: string[]): string =>
+    readdirSync(coordDir).filter((f) => f.endsWith('.ts') && !homes.includes(f))
+      .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  const isOverlordDoorWordHere = (tok: string, elsewhere: string): boolean =>
+    Object.prototype.hasOwnProperty.call(OVERLORD_DOORS, tok) && !elsewhere.includes(`'${tok}'`);
+  const isActorIssuerWordHere = (tok: string, elsewhere: string): boolean =>
+    (ACTOR_ISSUERS as readonly string[]).includes(tok) && !elsewhere.includes(`'${tok}'`);
+
+  it('CONTROL: door keys and actor issuers are not admitted when another coordination file quotes them', () => {
+    for (const [word, guard] of [['portfolio-rank', isOverlordDoorWordHere], ['account-gate', isActorIssuerWordHere]] as const) {
+      expect(guard(word, "export const x = 'not-this-word';")).toBe(true);
+      expect(guard(word, `export const planted = '${word}';`)).toBe(false);
+      expect(guard(word, `// ${word}, unquoted`)).toBe(true);
+      expect(guard('not-an-identity-word', '')).toBe(false);
+    }
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    expect(self).toContain('|| isOverlordDoorWordHere(tok, outsideDoors)');
+    expect(self).toContain('|| isActorIssuerWordHere(tok, outsideIssuers)');
+  });
+
   it('every declared INGRESS/DONE-AUTHORITY code is emitted somewhere in server/src/coord', () => {
     // 'undeliverable' is the one DELIVERY-group code (MAIL_REJECT_CODES's own
     // comment names three groups: ingress, delivery, done-authority). It is
@@ -895,6 +916,8 @@ describe('the rejection table is total, in both directions', () => {
       'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
     const elsewhere = outsideDoneTests();
+    const outsideDoors = outsideIdentityHome('overlordDoors.ts');
+    const outsideIssuers = outsideIdentityHome('schema.ts', 'overlordDesignationStore.ts');
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
@@ -1213,10 +1236,10 @@ describe('the rejection table is total, in both directions', () => {
         // never a `refused` or `reject.code`. Admitted through L0's guards, derived from `REMAINING_REFUSALS` and
         // `EDGE_PREDICATES`, never NOT_CODES.
         || isRemainingRefusal(tok) || isEdgePredicate(tok)
-        // The door registry's own keys identify routes, never refusals; derive them from the one table.
-        || Object.prototype.hasOwnProperty.call(OVERLORD_DOORS, tok)
-        // The designation migration stores L0's actor issuers, not mail or run refusal codes.
-        || (ACTOR_ISSUERS as readonly string[]).includes(tok),
+        // The door registry's own keys identify routes only there; another quoting file needs its own guard.
+        || isOverlordDoorWordHere(tok, outsideDoors)
+        // Actor issuers are stored in schema.ts and checked in overlordDesignationStore.ts, not mail or run refusal codes.
+        || isActorIssuerWordHere(tok, outsideIssuers),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, Overlord refusal or designation word`).toBe(true);
     }
   });

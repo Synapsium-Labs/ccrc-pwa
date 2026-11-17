@@ -46,10 +46,21 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
   against a bounded scratch snapshot of main's own source. The PR carries the red/green and mutant tables.
 
 ## For the coordinator
-- **Designation C's setters**: designation C (run 2397) adds `setModelClass` and `setAccountSet`, which take the gate's actor
-  as a string. Whichever of us lands second switches them to `RecordedActor`, `isRecordedActor`, the four live columns and
-  `reason: 'actor'` (agreed by mail).
-- **Migration slot**: this PR's migration is positional at 93 after absorbing #2964 (which took 92); the second lander renumbers.
+- **Landing contract: designation C (#2992), the ladder (#2994), and gates A**: whichever of these three lands second
+  does its part at both crossings. Designation C adds `setModelClass` and `setAccountSet`; the ladder adds its read and
+  operator-write doors. Their integration must preserve this whole list:
+  - (a) Add the new `OVERLORD_DOORS` rows (`operator`, `admin` for writes and `view` for ladder GET) and update the exact
+    rows-on-landing list in `server/test/overlord-doors-census.test.ts`.
+  - (b) Route new handlers through `deps.identity.operator(g.actor)`, map `reason: 'actor'` to `internal`, and supply the
+    required identity dependency in designation C's `overlord-settings-doors` and `overlord-designate-route` test rigs.
+  - (c) Make `setModelClass` and `setAccountSet` take `RecordedActor`; check runtime provenance, kind `operator`, issuer
+    `account-gate` and strength `operator`; include `ActorRefused` in their results; and write all four live actor columns
+    together through `SET_ACTOR`, never the subject alone.
+  - (d) Convert designation C's string-actor fixtures for `designatePending`, `retire` and the setters in
+    `overlord-settings-doors`, `overlord-designation-store` and `sim/designationSets` to minted actors.
+  - (e) Designation B's forthcoming `rebindPending` writes all four pending actor columns and clears through `CLEAR_PENDING`.
+- **Migration slot**: main's #2974 took 93 after #2964 took 92. This fix round preserves both and takes measured slot 94;
+  a later landing collision must re-measure the next free slot under the coordinator's license.
 
 - **Additive absorption**: kept both migration and census additions under the standing license; the shared decision-model record case was kept verbatim.
 
@@ -110,7 +121,8 @@ from its holder before editing; their separate lane-arm import and clause are un
 
 The isolated browser attempt built the PWA, then failed setup because no Chrome executable was available:
 all 24 cases were skipped, so it neither reproduced nor cleared the original browser assertion. The next full CI
-run must measure it; it is not classified as a flake. The external judge's pending proof requires non-author
+run at `89f16fa91` passed the reader-frame file, 24/24; the coordinator then recorded the first red as a flake.
+The external judge's pending proof requires non-author
 review. Its weakened-test flags were checked against the diff: the ledger-secret rig only gains the identity
 dependency, and the private-name rig gains an additional refusal/no-write test; no existing assertions were removed.
 
@@ -119,3 +131,44 @@ After the holder approved the actor-issuer import and membership clause too, the
 the passing file result is retained with that caveat, not presented as a complete local suite pass. The repair
 adds only the two explained in-process tags, an own-key check of `OVERLORD_DOORS`, and membership in L0's derived
 `ACTOR_ISSUERS` list. No production behavior, route guard, refusal vocabulary or sibling test assertion changes.
+
+### Review round 1: landing and hardening
+
+The coordinator authorized one fix-round push after review at `89f16fa91`, with no second review required. This round:
+
+- **F1** preserves main's migration 93 from #2974 and appends the actor columns at measured slot 94, updates both
+  `coord-db` counts and comments, and keeps WM0's two drops in the rollback fixture before replaying all 41 entries.
+  Both additive mutation-floor sets are retained; the shared `decision-model-records` case is unchanged.
+- **F2** expands the landing contract above to cover designation C (#2992), the ladder (#2994), and designation B's
+  `rebindPending`, including registry rows, route dependencies, writer result types, fixtures and pending columns.
+- **F5** requires issuer `account-gate` in the writers' shared actor guard. A genuinely minted `console()` actor is
+  refused without a row write; the account-gate actor remains the passing control.
+- **F6** adds the parsed-call census in `server/test/single-definition/caller-identity.test.ts`: only `server.ts`
+  constructs `attributionIdentity`, exactly once. A planted second construction is caught; disabling that guard
+  measured one red control, then restoring the saved source passed both cases. Its named-call limitation is explicit.
+- **F7** states the compile-time brand's limit in the port header: spread, JSON and cast can compile; the private
+  runtime WeakSet, checked by the writers, is the provenance guard for those copies.
+- **F8** reads a NULL pending id and subject as cleared despite stale additive actor metadata. The fixture models an
+  old build's clear, then proves the new reader works and a new designate overwrites all four pending columns.
+  A standing subject without a pending id, and a standing attempt with half an actor, remain unmeasured.
+- **F9** scopes door-key admission to `overlordDoors.ts`, and issuer-word admission to `schema.ts` plus
+  `overlordDesignationStore.ts` (the new F5 check). The held-file owner approved both exact scopes. A planted
+  cross-file control measured red against the global admissions; the restored complete file passed 61/61. The
+  owner's separate import and Shadow lanes card clause are untouched.
+
+The F5/F8 regression run measured five expected failures before the production fixes and 23/23 afterward.
+All 50 ring/single-definition files passed individually, including the new minter census; the review-listed identity,
+route, auth, token and rollback checks passed, with auth now 344 cases after main's additions. The 16-file serial
+foreground command exceeded the harness's 600-second call budget during its last file, which the harness moved to
+background automatically; it completed with exit 0 and that last file passed 18/18. No duplicate ran concurrently.
+
+The isolated migration/replay file passed 149/149 and the isolated secret-store routes file passed 78/78.
+Mutation floors passed 178/178 with both additive registrations retained. Server-source typechecking and the isolated
+six-pin actor type contract passed; the whole tests-inclusive and PWA projects remain CI's assigned measurement.
+The migration file took 627 seconds: despite a 600-second foreground timeout, the harness let it finish automatically
+in background, exit 0. No other heavy command ran until its completion was reported.
+
+**Carried, not changed here:** F3's per-door identity-port census and answer-marks registry ruling belong to gates B's
+Task 6; F4's stronger account-gate mint distinction belongs there too. F10's fixed 400 is documented above. F11
+remains evidence wording: the old-writer object-binding failures are not themselves behavioural guard proof; the
+measured mutants provide that proof. The first full-run signal remains `suite: red`, `failure: shallow`.

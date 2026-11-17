@@ -199,6 +199,18 @@ describe('a writer refuses an actor the port did not mint for the operator', () 
     expect(retire(db, journal, { actor: caller.actor, at: NOW + 1, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
   });
 
+  it('designatePending and retire refuse a minted console actor and write nothing: issuer must be account-gate', () => {
+    const caller = identity.console(true, 'device-a');
+    if (caller.kind !== 'signed-in') throw new Error('the console has a measured device');
+    const db = openDb();
+    expect(des(db, caller.actor)).toEqual({ ok: false, reason: 'actor' });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM overlord_designation').get()).toEqual({ n: 0 });
+    expect(des(db).ok).toBe(true);
+    const before = db.prepare('SELECT * FROM overlord_designation').get();
+    expect(retire(db, journal, { actor: caller.actor, at: NOW + 1, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
+    expect(db.prepare('SELECT * FROM overlord_designation').get()).toEqual(before);
+  });
+
   it('past the brand, the kind must be operator and the strength operator: each check refuses on its own', () => {
     const trusted = (over: Partial<RecordedActor>): RecordedActor => {
       const a = Object.freeze({ ...OPERATOR, ...over }) as RecordedActor;
@@ -226,16 +238,33 @@ describe('designationRead never answers a half actor', () => {
     db.exec(`UPDATE overlord_designation SET ${col} = NULL`);
     expect(designationRead(db)).toMatchObject({ kind: 'unmeasured' });
   });
-  it.each(PENDING_COLS.map((c) => [c]))('a pending actor column (%s) standing with no pending attempt reads unmeasured', (col) => {
+  it('a pending subject standing with no pending attempt reads unmeasured', () => {
     const db = openDb();
     fill(db);
     expect(failPending(db, A, 'create-failed', NOW + 1, false).ok).toBe(true);
-    expect(designationRead(db)).toMatchObject({ kind: 'not-designated' });
+    db.exec("UPDATE overlord_designation SET pendingActor = 'device-a abcdef01'");
+    expect(designationRead(db)).toMatchObject({ kind: 'unmeasured' });
+  });
+  it('an old-build pending clear leaves metadata behind but the new build reads cleared and can designate again', () => {
+    const db = openDb();
+    fill(db);
+    // The old build knows only these pending columns; its clear never names the three additive metadata columns.
+    db.exec(`UPDATE overlord_designation SET pendingId = NULL, pendingGeneration = NULL, pendingKind = NULL,
+      pendingSince = NULL, pendingDeadlineAt = NULL, pendingActor = NULL`);
+    expect(cols(db, PENDING_COLS)).toEqual([null, 'operator', 'account-gate', 'operator']);
+    expect(designationRead(db)).toMatchObject({ kind: 'not-designated', row: { pending: null } });
+    expect(des(db, RETIRER)).toEqual({ ok: true, changed: true });
+    expect(cols(db, PENDING_COLS)).toEqual(four(RETIRER));
+  });
+  it.each(PENDING_COLS.slice(1).map((c) => [c]))('a cleared pending slot ignores stale %s metadata', (col) => {
+    const db = openDb();
+    fill(db);
+    expect(failPending(db, A, 'create-failed', NOW + 1, false).ok).toBe(true);
     const value: Record<string, string> = {
-      pendingActor: 'device-a abcdef01', pendingActorKind: 'operator', pendingActorIssuer: 'account-gate', pendingActorStrength: 'operator',
+      pendingActorKind: 'operator', pendingActorIssuer: 'session-cookie', pendingActorStrength: 'attributed',
     };
     db.exec(`UPDATE overlord_designation SET ${col} = '${value[col]!}'`);
-    expect(designationRead(db)).toMatchObject({ kind: 'unmeasured' });
+    expect(designationRead(db)).toMatchObject({ kind: 'not-designated', row: { pending: null } });
   });
   it('a live actor whose strength column holds a word the reader does not know reads unmeasured', () => {
     const db = openDb();

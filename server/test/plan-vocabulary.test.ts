@@ -1,7 +1,7 @@
 // D-8181, Task 2.1: the plan vocabulary (`shared/plan.ts`, L0) and the words it adds to the shared lists.
 import { describe, it, expect } from 'vitest';
 import {
-  PLAN_REFUSALS, isPlanKebab, isPlanKey, PLAN_BOUNDS, EPIC_STATES, TICKET_STATES, HIERARCHY_STATES,
+  PLAN_REFUSALS, isPlanKebab, isPlanKey, PLAN_BOUNDS, EPIC_STATES, TICKET_STATES, HIERARCHY_STATES, PHASE_REF_KINDS, PHASE_REF_OPS,
   LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
 } from '../../shared/plan.js';
 import { REFUSAL_STATUS, ROUTE_REFUSALS, RUN_REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -13,16 +13,19 @@ describe('the plan vocabulary (D-8181)', () => {
     const want: Record<string, number> = {
       'not-plan-owner': 403, 'not-linear-owner': 403, 'unknown-epic': 404, 'unknown-checkpoint': 404, 'unknown-ticket': 404,
       'plan-too-large': 400, 'plan-bad-body': 400, 'waves-not-contiguous': 400, 'dropped-needs-reason': 400,
+      // programme work map WM0 (D-8715): an absent or dropped reference reads like the other absent objects
+      'unknown-ref': 404,
     };
     for (const w of PLAN_REFUSALS) {
       expect(ROUTE_REFUSALS as readonly string[], w).toContain(w);
       expect(REFUSAL_STATUS[w as keyof typeof REFUSAL_STATUS], w).toBe(want[w] ?? 409);
     }
-    expect(PLAN_REFUSALS).toHaveLength(21);
+    expect(PLAN_REFUSALS).toHaveLength(23);
   });
 
   it('isPlanKebab admits the plan words and refuses run-unreadable', () => {
-    for (const w of [...PLAN_REFUSALS, ...EPIC_STATES, ...TICKET_STATES, ...HIERARCHY_STATES, 'operator-act', 'follow-up', 'put-back']) {
+    for (const w of [...PLAN_REFUSALS, ...EPIC_STATES, ...TICKET_STATES, ...HIERARCHY_STATES, 'operator-act', 'follow-up', 'put-back',
+      ...PHASE_REF_KINDS, ...PHASE_REF_OPS]) {
       expect(isPlanKebab(w), w).toBe(true);
     }
     expect(isPlanKebab('run-unreadable')).toBe(false);
@@ -38,7 +41,10 @@ describe('the plan vocabulary (D-8181)', () => {
   });
 
   it('the bounds and reserved words are what the plan names', () => {
-    expect(PLAN_BOUNDS).toEqual({ epics: 24, checkpointsPerEpic: 16, ticketsPerBody: 200, titleChars: 255, summaryChars: 500, bodyBytes: 65_536, reasonChars: 500 });
+    expect(PLAN_BOUNDS).toEqual({
+      epics: 24, checkpointsPerEpic: 16, ticketsPerBody: 200, titleChars: 255, summaryChars: 500, bodyBytes: 65_536, reasonChars: 500,
+      phases: 24, refsPerPhase: 200,
+    });
     expect([LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE]).toEqual(['linear-sync', 'upkeep', 'Upkeep']);
   });
 
@@ -83,5 +89,11 @@ describe('the plan vocabulary (D-8181)', () => {
     }
     expect(REFUSAL_STATUS['plan-closed']).toBe(409);
     expect(SERVER_CAPS as readonly string[]).toContain('plan-v1');
+  });
+
+  it('the phase vocabulary (programme work map WM0, D-8715): its lists, its two refusals and its capability word', () => {
+    expect([PHASE_REF_KINDS, PHASE_REF_OPS]).toEqual([['epic', 'ticket'], ['add', 'remove', 'carry']]);
+    expect([REFUSAL_STATUS['unknown-ref'], REFUSAL_STATUS['bad-carry']]).toEqual([404, 409]);
+    expect(SERVER_CAPS as readonly string[]).toContain('plan-phases-v1');
   });
 });
