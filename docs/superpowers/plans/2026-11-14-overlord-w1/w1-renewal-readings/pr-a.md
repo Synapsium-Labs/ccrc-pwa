@@ -21,6 +21,11 @@ file is what the coordinator folds into the plan's ledger; the plan itself is no
   (#2948) then landed 86, and on the coordinator's word (and its standing license) this branch merged `main` once more and
   renumbered to 87 (the slot count on that `main` printed 86). Other open pull requests hold 87 as well; the second to land
   renumbers on the coordinator's word.
+  Moving off the end of the list redded decision model A's migration case (`decision-model-records.test.ts`), which rolled
+  back to `COORD_SCHEMA_VERSION - 1` and so assumed its entry was the last. The case now finds its entry by its DDL, as
+  `coord-db.test.ts`'s `dead_claimants` case does, drops the tables any later entry creates with its own, and reds with a
+  named message on a later entry it cannot undo (an `ALTER TABLE` or an index); measured red before, green after, and red
+  again with the old `COORD_SCHEMA_VERSION - 1`.
 - `GET` and `POST /api/continuity/renewal-backstop`, session-gated, never EXEMPT, no box token, with their census rows:
   `auth/gate.ts`, `auth-gate.test.ts` (253 routes, 250 HTTP, gated 155, after the hierarchy item route of #2941), `box-token-census.test.ts`, `CLAUDE.md`,
   `secret-mask.test.ts`, `rings/fastify-l4.data.ts`, `coord-db.test.ts`, `run-close-switch.test.ts`,
