@@ -176,13 +176,16 @@ describe('the bounded field reads of _keep_awake_ours and _role_long_lived, pinn
     }
   });
 
-  it('a registry that cannot be searched: both read the entry as absent (skipped as root)', () => {
+  // The one change the shared reader brings, made on its own before the move (slug field-reads-refuse-an-unsearchable-registry):
+  // a registry that cannot be searched cannot say whether an entry stands, so it is never "absent" (review 2336 F2's rule).
+  // Before, `off` answered `released` over markers it could not see, and a profile it could not see read "not long-lived".
+  it('a registry that cannot be searched: unreadable and undecidable, never absent (skipped as root)', () => {
     if (process.getuid?.() === 0) return;
     fs.writeFileSync(at('no-roll'), 'keep-awake v1'); fs.writeFileSync(profileAt(), 'overlord');
     fs.chmodSync(REG(), 0o600);
     try {
-      expect(ours()).toBe('1:absent');
-      expect(rc()).toBe(1);
+      expect(ours()).toBe('1:unreadable');
+      expect(rc()).toBe(2);
     } finally { fs.chmodSync(REG(), 0o755); }
   });
 });

@@ -66,6 +66,7 @@ _keep_awake_ours() {   # id marker -> rc 0 iff $REG/<id>.<marker> is a regular, 
   # longer file or a NUL, turned into a newline, is not the stamp) and in time (`_plat_timeout 2`, so a FIFO swapped in
   # between the -f test and the open cannot block). C locale: the same bytes give one verdict under any caller's locale.
   local LC_ALL=C IFS=' ' f="$REG/$1.$2" v
+  KEEP_AWAKE_READ=unreadable; [[ -d "$REG" && -x "$REG" ]] || return 1
   KEEP_AWAKE_READ=absent; [[ -e "$f" || -L "$f" ]] || return 1
   KEEP_AWAKE_READ=unreadable; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 1
   v=$( { _plat_timeout 2 head -c 65 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 1
@@ -88,6 +89,7 @@ _role_long_lived() {   # id -> rc 0 long-lived | 1 not (no profile entry, or the
   # profiles file jq cannot read are all undecidable (rc 2), which every caller reads as long-lived: it fails safe (question
   # 5). The read is bounded in size (17 bytes) and time (`_plat_timeout 2`: a FIFO swapped in after the -f test cannot block).
   local LC_ALL=C IFS=' ' f="$REG/$1.profile" p v
+  [[ -d "$REG" && -x "$REG" ]] || return 2
   [[ -e "$f" || -L "$f" ]] || return 1
   [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
   p=$( { _plat_timeout 2 head -c 17 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; p="${p%x}"
