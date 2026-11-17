@@ -702,9 +702,12 @@ export class SecretMasker {
     let chainSeen = 0;
     const textOf = (v: View, pieces: readonly [number, number][]): string =>
       (pieces.length === 1 ? v.t.slice(pieces[0]![0], pieces[0]![1]) : pieces.map(([a, b]) => v.t.slice(a, b)).join(''));
-    /** Records one candidate occurrence, counting the new ones of this pass in `seen`. Its id is its original first and
-     *  last bytes and its count of pieces: two candidates alike in those are the same rows of the same text. */
-    const consider = (v: View, pieces: readonly [number, number][]): void => {
+    /** Records one candidate occurrence, counting the new ones of this pass in `seen`. Its id is its original spans, so
+     *  the two views of a text count a candidate they share once (D-5995); a candidate of three or more pieces is named
+     *  by its view (`vi`), its original first and last bytes and its count of pieces instead, which name one candidate
+     *  within one view (the count fixes its rows, its last byte its trim), so the other view's candidate of the same
+     *  bounds, a different text where an escape splits a row, is never taken for it (D-8710, the security review). */
+    const consider = (v: View, pieces: readonly [number, number][], vi = 0): void => {
       let n = 0;
       for (const [a, b] of pieces) n += b - a;
       if (n > maxLen || n * 3 < minLen || (ascii && !lens.has(n))) return;
@@ -713,8 +716,8 @@ export class SecretMasker {
       const bytes = text === null ? n : Buffer.byteLength(text, 'utf8');
       if (!lens.has(bytes)) return;
       const first = spanIn(v, pieces[0]![0], pieces[0]![1]);
-      const id = pieces.length === 1 ? `${first[0]},${first[1]}`
-        : `${first[0]},${spanIn(v, pieces[pieces.length - 1]![0], pieces[pieces.length - 1]![1])[1]},${pieces.length}`;
+      const id = pieces.length <= 2 ? pieces.map(([a, b]) => spanIn(v, a, b).join(',')).join(';')
+        : `${vi}:${first[0]},${spanIn(v, pieces[pieces.length - 1]![0], pieces[pieces.length - 1]![1])[1]},${pieces.length}`;
       if (occ.has(id)) return;
       occ.set(id, { at: first[0], text, bytes, v, pieces });
       seen++;
@@ -738,7 +741,7 @@ export class SecretMasker {
     const longest = maxLen + 2 * TRIM_MAX;
     const coarse = runExpr(false, minUnits);
     const fine = runExpr(true, minUnits);
-    for (const v of views) {
+    for (const [vi, v] of views.entries()) {
       const t = v.t;
       // The coarse runs long enough to hold a candidate, in order; inside one that holds a fine delimiter, its fine
       // runs too (a fine run never crosses a coarse delimiter). The limit is read only between runs, so every
@@ -831,7 +834,7 @@ export class SecretMasker {
                 const pieces: [number, number][] = [h];
                 for (let k = i; k < m; k++) pieces.push([ra[k]!, rb[k]!]);
                 pieces.push([ra[m]!, rb[m]! - y]);
-                consider(v, pieces);
+                consider(v, pieces, vi);
               }
             }
           }

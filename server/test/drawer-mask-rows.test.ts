@@ -185,6 +185,27 @@ describe('D-8710 — the exact-bytes row join walks every row a key spans', () =
     }
   });
 
+  it('the rows the drawer sends before a hold are read with the rows it holds', () => {
+    // The hold stops once the rows it walks back over hold the most a held key and its trims can (here 45 + 32 bytes):
+    // a 70-character row and the 10-character row before it. The key's head, 35 characters ending the row before, is
+    // sent ahead of the hold, and is masked only because it is read with the held rows after it (the lookahead).
+    const key = keyOf(45, 61);
+    const m = fingerprinted(key);
+    try {
+      const filler = keyOf(70, 62).replace(/-/g, 'z');
+      for (const s of [SEPS[3]!, SEPS[0]!]) {
+        const text = `${at(10, 1)}key: ${key.slice(0, 35)}${s.sep(11)}${key.slice(35)}${s.sep(12)}${filler}${s.sep(13)}`;
+        for (const quietMs of [0, 40]) {
+          const sent = throughDrawer(m, [{ text, quietMs }, { text: `more words\r\n`, quietMs: 40 }]);
+          expect(slicesIn(key, sent), `${s.name}, ${quietMs} ms quiet`).toEqual([]);
+          expect(count(sent, DRAWER_SECRET_MASK), `${s.name}, ${quietMs} ms quiet: marks`).toBe(2);
+        }
+      }
+    } finally {
+      m.close();
+    }
+  });
+
   it('through the drawer, an expired hold anywhere but at a row break never draws a key', () => {
     // A quiet gap after the cut: the hold expires and the run is withheld until it ends. A gap exactly at a row break
     // (the cut lands between a row's last byte and the next row's first run byte) is D-5995's accepted gap: a quiet row
