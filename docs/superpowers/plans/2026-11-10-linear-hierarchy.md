@@ -209,10 +209,17 @@ number from `POST /api/ledger/deviations`.
   The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
   Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
 - **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
-  255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`), keeping the provenance line whole and
-  cutting the body with `…`; a description that fits is sent unchanged, so its fingerprint does not move. Measured live
-  on 2026-11-17: Linear refused every description over 255 characters (INVALID_INPUT), so most epics and every long
-  initiative failed `linear-invalid`. The full text stays in ccrc's plan.
+  255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`, counted in UTF-16 units), keeping the
+  provenance line whole and cutting the body at its end with `…`; a description that fits is sent unchanged. Measured
+  live on 2026-11-17: Linear refused every description over 255 characters (INVALID_INPUT), so most epics and every
+  long initiative failed `linear-invalid`. The full text stays in ccrc's plan. The status notes come first so the cut
+  never takes one: the initiative reads Abandoned, Paused, In short, done-when; the project reads Dropped, "Part of",
+  summary, checkpoints; a note longer than the room is itself cut. That order moves the fingerprint of a bound
+  description that carries a note, so each such object takes one update on deploy. The public-text gate judges the
+  unfitted body and title as well as the fitted text. A milestone's description is fitted the same way (Kind first),
+  as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
+  body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
+  not a departure. Record: the ledger, review run 2364.
 
 ## Global Constraints
 

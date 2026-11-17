@@ -4,7 +4,8 @@
 import { describe, expect, it } from 'vitest';
 import type { CheckpointRow, EpicRow, StoredPlan } from '../src/coord/planStore.js';
 import {
-  fitLinearDescription, initiativeDescription, LINEAR_DESCRIPTION_MAX_CHARS, planSyncSteps, projectDescription, type SyncSnapshot, type SyncStep,
+  fitLinearDescription, initiativeDescription, LINEAR_DESCRIPTION_MAX_CHARS, milestoneDescription, plannedFingerprint, planSyncSteps, projectDescription,
+  type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { withCcrcProvenance } from '../src/linear/hierarchyOps.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
@@ -28,16 +29,19 @@ const directory = {
     { id: U(33), name: 'C', type: 'completed' }, { id: U(34), name: 'X', type: 'canceled' }],
 };
 
-function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; inShort?: string; doneWhen?: string[] } = {}): SyncSnapshot {
+function snap(o: {
+  epic?: Partial<EpicRow>; cps?: CheckpointRow[]; inShort?: string; doneWhen?: string[]; mode?: 'public' | 'private'; paused?: boolean;
+  initiatives?: 'on' | 'off';
+} = {}): SyncSnapshot {
   const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: [] }] };
   return {
     program: {
       slug: 'prog', rowid: 7, title: 'The programme', end: null, inShort: o.inShort ?? 'Short words',
-      doneWhen: (o.doneWhen ?? ['It works']).map((text) => ({ text, proved: false })),
+      doneWhen: (o.doneWhen ?? ['It works']).map((text) => ({ text, proved: false })), ...(o.paused === undefined ? {} : { paused: o.paused }),
     },
     plan, bindings: [],
     workspaces: [{ workspaceId: WS, initiatives: 'on', directory, teams: [{ id: U(1), key: 'AAA' }] }],
-    projects: [{ project: 'proj-a', teamKey: 'AAA', workspaceId: WS, mode: 'private', initiatives: 'on' }],
+    projects: [{ project: 'proj-a', teamKey: 'AAA', workspaceId: WS, mode: o.mode ?? 'private', initiatives: o.initiatives ?? 'on' }],
     privateTrackerKeys: [],
   };
 }
@@ -124,6 +128,126 @@ describe('fitLinearDescription (D-8708)', () => {
       expect(d).not.toMatch(/[\uD800-\uDFFF]/u);
       expect(d.slice(0, -PROVENANCE_TAIL.length).endsWith('𝔸…')).toBe(true);
     }
+  });
+});
+
+// Fix round 1 of the review (run 2364), each case seen red first.
+const ROOM = LINEAR_DESCRIPTION_MAX_CHARS - `…${PROVENANCE_TAIL}`.length;
+/** A tracker id the public-text gate refuses, placed so the fit's cut leaves only `AA…` of it in the sent text. */
+const STRADDLE = `${'w'.repeat(ROOM - 3)} AAA-123 is the ticket`;
+type Skip = Extract<SyncStep, { kind: 'skip' }>;
+const skipOf = (s: SyncSnapshot, kind: string): Skip | undefined =>
+  planSyncSteps(s).steps.find((x): x is Skip => x.kind === 'skip' && x.local.kind === kind);
+
+describe('F1: the public-text gate judges the unfitted text as well as the sent one', () => {
+  it('the straddling fixture is cut inside the id', () => {
+    const d = fitLinearDescription(STRADDLE);
+    expect(d).toContain(' AA…');
+    expect(d).not.toContain('AAA-123');
+  });
+
+  it('an initiative whose In short carries an id across the cut is refused text-public', () => {
+    const s = snap({ mode: 'public', inShort: STRADDLE });
+    expect(skipOf(s, 'programme')).toMatchObject({ why: 'text-public' });
+    expect(planSyncSteps(s).steps.some((x) => x.kind === 'create' && x.op === 'initiativeCreate')).toBe(false);
+  });
+
+  it('a project whose summary carries an id across the cut is refused text-public', () => {
+    const s = snap({ mode: 'public', epic: { summary: STRADDLE } });
+    expect(skipOf(s, 'epic')).toMatchObject({ why: 'text-public' });
+  });
+
+  it('a project whose title carries an id across the name cut is refused text-public', () => {
+    const s = snap({ mode: 'public', epic: { title: `${'w'.repeat(76)} AAA-123` } });
+    expect(skipOf(s, 'epic')).toMatchObject({ why: 'text-public' });
+  });
+
+  it('a milestone whose dropped reason carries an id across the cut is refused text-public', () => {
+    const dropped: CheckpointRow = { ...cp(1, 'Checkpoint one'), state: 'dropped', droppedWhy: STRADDLE };
+    const s = snap({ mode: 'public', cps: [dropped] });
+    const bound = createOf(snap({ mode: 'public' }), 'projectCreate');
+    const withProject: SyncSnapshot = { ...s, bindings: [{
+      id: 111, workspaceId: WS, teamKey: 'AAA', localKind: 'epic', localId: 1, linearId: U(501), identifier: null, fingerprint: bound.fingerprint,
+      syncedAt: 1, state: 'bound', failedAt: null, failedWord: null, failedInputs: null, driftCount: 0, driftSince: null, heldItemId: null,
+    }, {
+      id: 121, workspaceId: WS, teamKey: 'AAA', localKind: 'checkpoint', localId: 1, linearId: U(601), identifier: null, fingerprint: 'stale',
+      syncedAt: 1, state: 'bound', failedAt: null, failedWord: null, failedInputs: null, driftCount: 0, driftSince: null, heldItemId: null,
+    }] };
+    expect(skipOf(withProject, 'checkpoint')).toMatchObject({ why: 'text-public' });
+  });
+});
+
+describe('F2: the status notes come first, so the cut never takes one', () => {
+  const LONG = 'v'.repeat(240);
+  it('a Paused note on a long initiative changes the sent text and its fingerprint, and is in it', () => {
+    const plain = createOf(snap({ inShort: LONG }), 'initiativeCreate');
+    const paused = createOf(snap({ inShort: LONG, paused: true }), 'initiativeCreate');
+    expect(descriptionOf(paused)).toContain('Paused: this programme is paused in ccrc.');
+    expect(descriptionOf(paused)).not.toBe(descriptionOf(plain));
+    expect(paused.fingerprint).not.toBe(plain.fingerprint);
+    expect(descriptionOf(paused).length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+  });
+
+  it('an Abandoned note on a long initiative is in the sent text', () => {
+    const s = snap({ inShort: LONG });
+    s.program.end = { outcome: 'abandoned', why: 'the work moved', at: Date.UTC(2026, 10, 3) };
+    expect(initiativeDescription(s)).toContain('Abandoned on 2026-11-03: the work moved');
+  });
+
+  it('a Dropped note on a long project changes the sent text and its fingerprint, and is in it', () => {
+    const e = { ...epic({ summary: LONG }), checkpoints: [] };
+    const plain = projectDescription(e, 'The programme', false);
+    const dropped = projectDescription({ ...e, state: 'dropped', droppedWhy: 'not needed now' }, 'The programme', false);
+    expect(dropped).toContain('Dropped: not needed now');
+    expect(dropped).not.toBe(plain);
+    expect(plannedFingerprint({ description: dropped })).not.toBe(plannedFingerprint({ description: plain }));
+  });
+
+  it('a Part of note on a long project (initiatives off) changes the sent text and its fingerprint, and is in it', () => {
+    const plain = createOf(snap({ epic: { summary: LONG }, initiatives: 'on' }), 'projectCreate');
+    const partOf = createOf(snap({ epic: { summary: LONG }, initiatives: 'off' }), 'projectCreate');
+    expect(descriptionOf(partOf)).toContain('Part of The programme.');
+    expect(descriptionOf(partOf)).not.toBe(descriptionOf(plain));
+    expect(partOf.fingerprint).not.toBe(plain.fingerprint);
+  });
+
+  it('a note longer than the room is itself cut, with the ellipsis and the provenance line kept', () => {
+    const e = { ...epic({ summary: 'The summary' }), checkpoints: [], state: 'dropped' as const, droppedWhy: 'r'.repeat(400) };
+    const d = projectDescription(e, 'The programme', false);
+    expect(d.length).toBe(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(d.startsWith('Dropped: rrr')).toBe(true);
+    expect(d.endsWith(`r…${PROVENANCE_TAIL}`)).toBe(true);
+  });
+});
+
+describe('A1, A2, A3, A7: the fitter\'s edges', () => {
+  it('A1: a body ending with the provenance line and trailing whitespace is never doubled', () => {
+    const body = `x${PROVENANCE_TAIL}${' '.repeat(250)}`;
+    expect(fitLinearDescription(body)).toBe(`x${PROVENANCE_TAIL}`);
+  });
+
+  it('A2: a non-ASCII body (em dashes, ellipses) is bounded in UTF-16 units and in code points', () => {
+    const d = fitLinearDescription('A step — then another… '.repeat(20));
+    expect(d.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect([...d].length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(d).toContain('—');
+    expect(d.endsWith(`…${PROVENANCE_TAIL}`)).toBe(true);
+  });
+
+  it('A3: the cap is the literal 255: a text that would be 256 is cut to 255 or less', () => {
+    const body = 'q'.repeat(256 - PROVENANCE_TAIL.length);
+    expect(withCcrcProvenance(body).length).toBe(256);
+    expect(fitLinearDescription(body).length).toBeLessThanOrEqual(255);
+    expect(fitLinearDescription('q'.repeat(255 - PROVENANCE_TAIL.length)).length).toBe(255);
+  });
+
+  it('A7: a milestone description is fitted, Kind first and the dropped reason cut', () => {
+    const c: CheckpointRow = { ...cp(1, 'Checkpoint one'), state: 'dropped', droppedWhy: 'r'.repeat(500) };
+    const d = milestoneDescription(c);
+    expect(d.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(d.startsWith('Kind: acceptance\n\nDropped: rrr')).toBe(true);
+    expect(d.endsWith(`…${PROVENANCE_TAIL}`)).toBe(true);
+    expect(milestoneDescription(cp(1, 'Checkpoint one'))).toBe(`Kind: acceptance${PROVENANCE_TAIL}`);
   });
 });
 

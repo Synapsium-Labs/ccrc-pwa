@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { CoordStore } from '../src/coord/store.js';
+import { recordReading } from '../src/coord/linkingStore.js';
 import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type NewTicket, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { FetchLike } from '../src/linear/client.js';
@@ -51,7 +52,9 @@ const scripted = (ask: CcrcOpAsk): CcrcOpOutcome => {
 };
 
 interface Rig {
-  plan: PlanStorePort; t: { now: number }; sync: PlanSync; fx: ReturnType<typeof linearServicesFake>;
+  plan: PlanStorePort; coord: CoordStore; t: { now: number }; sync: PlanSync; fx: ReturnType<typeof linearServicesFake>;
+  /** The pull request each run opened, as `prOfRun` answers it (A4: the PR link). */
+  prs: Map<number, number>;
   /** Every ask the pass sent, with the real `runCcrcOp`'s answer to it. */
   sent: { ask: CcrcOpAsk; real: CcrcOpOutcome }[];
 }
@@ -64,6 +67,8 @@ async function rig(): Promise<Rig> {
   const db = memCoordDb();
   const coord = new CoordStore(db);
   db.prepare('INSERT INTO project_linking (project, teamKey, override) VALUES (?, ?, ?)').run('project-a', 'AAA', 'private');
+  // A measured repository, so a run's pull request gives the issue a PR link (§5.6).
+  recordReading(db, 'project-a', { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'absent', at: T });
   applyPlanChanges(db, SLUG, changes({
     epics: { insert: [{ key: 'e1', project: 'project-a', waves: [1], ordinal: 0, title: 'Epic one', summary: 'Summary' }], update: [], drop: [] },
     checkpoints: { insert: [{ epicKey: 'e1', key: 'c1', ordinal: 0, title: 'Checkpoint one', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] },
@@ -73,7 +78,7 @@ async function rig(): Promise<Rig> {
   // The journal's own coord.db, apart from the plan's: what is measured is the journal's acceptance, not the pass's rows.
   const fx = linearServicesFake({ clock: () => t.now });
   const offline: FetchLike = async () => { throw new Error('no network in this test'); };
-  const r = { plan: planStorePort(db), t, fx, sent: [] } as unknown as Rig;
+  const r = { plan: planStorePort(db), coord, t, fx, sent: [], prs: new Map<number, number>() } as unknown as Rig;
   r.sync = new PlanSync({
     coord, plan: r.plan, ccrcDir, readLinearStore: () => readLinearStore(ccrcDir),
     call: async (ask) => {
@@ -85,6 +90,7 @@ async function rig(): Promise<Rig> {
     directory: { get: () => DIR, filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
     directoryMiss: () => undefined, markSlotRejected: async () => undefined,
     now: () => t.now, privateTrackerKeys: [],
+    prOfRun: (runId) => { const n = r.prs.get(runId); return n === undefined ? null : { number: n, branch: null }; },
   });
   return r;
 }
@@ -110,18 +116,27 @@ describe('the plan sync\'s asks against the real journal', () => {
     expect(journalRows(r)).toContainEqual({ op: 'comment', fields: 'body' });
   });
 
-  it('every write the pass sends, through creation, a dropped ticket and an abandoned programme, passes the journal', async () => {
+  it('every write the pass sends, through creation, a dropped ticket, a PR, a met checkpoint and an abandoned programme, passes the journal', async () => {
     const r = await rig();
     await tick(r);
     const t1 = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === 't1')!;
     r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [], update: [], drop: [{ id: t1.id, why: 'not needed' }] } }), OWNER, r.t.now, null);
+    await tick(r);
+    // A4: a run on the other ticket opens a pull request (the PR link), and the checkpoint is met (the milestone update).
+    const e1 = r.plan.planOf(SLUG).epics[0]!;
+    const t2 = e1.tickets.find((x) => x.key === 't2')!;
+    const run = r.coord.openRun({ program: SLUG, title: 'Wave 1', project: 'project-a', wave: 1, waveOf: 1, claimedBy: OWNER, homeProject: 'project-a',
+      ticket: { kind: 'existing', id: t2.id, epicId: e1.id, reproject: null } });
+    if ('refused' in run) throw new Error(`open refused ${String(run.refused)}`);
+    r.prs.set((run as { id: number }).id, 7);
+    r.plan.markCheckpointMet(e1.checkpoints[0]!.id, { pr: 7 }, r.t.now);
     await tick(r);
     r.plan.closePlan(SLUG, 'abandoned', 'the work moved elsewhere', r.t.now);
     await tick(r);
     const writes = r.sent.filter((s) => LINEAR_CCRC_OPS[s.ask.op]?.class === 'write');
     expect(new Set(writes.map((s) => s.ask.op))).toEqual(new Set([
       'initiativeCreate', 'projectCreate', 'projectMilestoneCreate', 'issueCreate', 'initiativeToProjectCreate',
-      'issueComment', 'issueUpdate', 'initiativeUpdate', 'projectUpdate',
+      'issueComment', 'issueUpdate', 'initiativeUpdate', 'projectUpdate', 'issueLink', 'projectMilestoneUpdate',
     ]));
     expect(writes.filter((s) => !s.real.ok && s.real.word === 'journal-unavailable').map((s) => `${s.ask.op}:${s.ask.fields.join(',')}`)).toEqual([]);
     // And, as a list check, every field each ask names is on its op's closed list.
