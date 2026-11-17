@@ -9,8 +9,8 @@ that entry. That edit carries a `Ledger-Edit:` trailer on the head commit. It ch
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 88: row
-    revisions, #2965, took 87 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 89: row
+    revisions, #2965, took 87 and renewal readings A, #2962, took 88 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
@@ -98,6 +98,21 @@ The brief's eleven items, each fixed with a test seen red first and its guard pr
 
 The executor's own notes: the dispatch wait starts its pass inside the timer race, since finding the ticket's workspace
 reads the Linear store; four tests that forced a row due at a fixed clock now advance the clock past the workspace hold.
+
+## After D-8708 (#2973) landed
+
+The merge of `main` took #2973's description fitter (Linear's 255-character cap) into the sync's deciders beside this
+wave's changes there, and three notes of its review (run 2368) came to this wave:
+- **The Restored lines survive the cap.** A milestone's restored description (`restoredDescription`, L1) puts this
+  Restored line and the two newest Linear holds FIRST, newest first, then the planned text, and fits the whole to 255:
+  the fit cuts from the end, so it shortens the plan's text and, past that, drops the oldest line first. The comparison
+  strips the lines, the provenance line and a cut's `…` from both sides, and accepts Linear's text as a prefix of the
+  plan's when Restored lines stand before it (a person's other edit is still drift). Tests with a long body, red first,
+  and the prefix rule proved by mutation.
+- **The fitter's untested edges** (`plan-sync-description.test.ts`): fitting is idempotent; a bound description carrying a
+  note takes one update and then none; the non-ASCII case carries an astral character, so its code-point bound and its
+  UTF-16 bound differ. These pin behaviour that held already, so none was red first.
+- **A known safe-direction false refusal** (an id-like token running into letters, cut to the id): left, as ruled.
 
 ## Follow-ups
 

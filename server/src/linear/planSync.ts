@@ -48,7 +48,7 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { RESTORED_LINE_PREFIX, restoredLines } from './driftPolicy.js';
+import { restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
   withoutPutBack, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
@@ -345,13 +345,12 @@ export class PlanSync {
     });
   }
 
-  /** A milestone's restore replaces its update's description with the planned one carrying the last Restored lines Linear holds
-   *  and this one (a milestone takes no comment in Linear, D-8407); the step's fingerprint stays the plan's, the lines are not plan text. */
+  /** A milestone's restore replaces its update's description with `restoredDescription`: this Restored line and the two newest
+   *  Linear holds, first, then the planned text, fitted to Linear's cap (a milestone takes no comment in Linear, D-8407; D-8708);
+   *  the step's fingerprint stays the plan's, the lines are not plan text. */
   private withRestoredLine(step: Restorable, t: RestoreTarget): Restorable {
     if (t.restoredLine === undefined || step.kind !== 'update' || step.op !== 'projectMilestoneUpdate') return step;
-    const held = (t.restoredLine.linearDescription ?? '').split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX));
-    const planned = String(step.input['description'] ?? '');
-    const description = restoredLines(held.length === 0 ? planned : `${planned}\n\n${held.join('\n')}`, t.restoredLine.line);
+    const description = restoredDescription(String(step.input['description'] ?? ''), t.restoredLine.linearDescription, t.restoredLine.line);
     return { ...step, input: { ...step.input, description } };
   }
 

@@ -1,8 +1,9 @@
 // D-8183, Task 4.1: the drift deciders (`linear/driftPolicy.ts`, L1, pure).
+import { LINEAR_DESCRIPTION_MAX_CHARS, fitLinearDescription } from '../src/linear/planSyncPolicy.js';
 import { describe, it, expect } from 'vitest';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent, notDrift,
-  restoreComment, restoredLine, restoredLines, withoutRestoredLines, type OwnedFields,
+  restoreComment, restoredDescription, restoredLine, restoredLines, withoutRestoredLines, type OwnedFields,
   DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
 } from '../src/linear/driftPolicy.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
@@ -128,12 +129,39 @@ describe('restored lines', () => {
     expect(withoutRestoredLines(d)).toBe('Body');
     expect(withoutRestoredLines('Body\n\nmore')).toBe('Body\n\nmore');
   });
-  it('restoredLines keeps three', () => {
+  it('restoredLines keeps three, newest first, before the body', () => {
     let d = 'Body';
     for (let n = 1; n <= 5; n += 1) d = restoredLines(d, `Restored on 2026-11-0${n}: ccrc put back this milestone's name.`);
     const lines = d.split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX));
-    expect(lines.map((l) => l.slice(12, 22))).toEqual(['2026-11-03', '2026-11-04', '2026-11-05']);
-    expect(d.startsWith('Body\n\nRestored on 2026-11-03')).toBe(true);
+    expect(lines.map((l) => l.slice(12, 22))).toEqual(['2026-11-05', '2026-11-04', '2026-11-03']);
+    expect(d.startsWith('Restored on 2026-11-05')).toBe(true);
+    expect(d.endsWith('\n\nBody')).toBe(true);
+    expect(withoutRestoredLines(d)).toBe('Body');
+  });
+  // The coordinator's note from #2973's review: Linear caps a description at 255, and the fit cuts from the end, so the lines go
+  // first (newest first) and survive; the plan's text is what the cut shortens.
+  const LONG = `Kind: acceptance\n\nDropped: ${'a reason that runs on and on '.repeat(20).trim()}`;
+  it('a long milestone body keeps its Restored lines, newest first, under the 255 cap', () => {
+    const planned = fitLinearDescription(LONG);
+    const held = ['2026-11-01', '2026-11-02'].map((day) => `Restored on ${day}: ccrc put back this milestone's name.`);
+    const line = restoredLine('name', at);
+    const d = restoredDescription(planned, `${planned}\n\n${held.join('\n')}`, line);
+    expect(d.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(d.startsWith(line)).toBe(true);
+    expect(d.split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX))).toEqual([line, held[1], held[0]]);
+    expect(d.endsWith(LINEAR_CCRC_PROVENANCE_LINE)).toBe(true);
+    // Restoring again over it keeps three and stays under the cap.
+    const again = restoredDescription(planned, d, restoredLine('sortOrder', at + 86_400_000));
+    expect(again.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(again.split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX))).toHaveLength(3);
+  });
+  it('a restored description whose plan text the cap shortened reads as no drift', () => {
+    const planned = fitLinearDescription(LONG);
+    const d = restoredDescription(planned, planned, restoredLine('name', at));
+    const p: OwnedFields = { name: 'M', description: planned, targetDate: undefined, sortOrder: 1, projectId: 'p' };
+    expect(driftedFields({ ...p, description: d }, p, 'milestone')).toEqual([]);
+    // A person's edit is still drift, Restored lines or not.
+    expect(driftedFields({ ...p, description: `${restoredLine('name', at)}\n\nKind: something else` }, p, 'milestone')).toEqual(['description']);
   });
 });
 

@@ -2,6 +2,8 @@
 // on a tmp dir, Linear faked at the `call` port (a scripted answer per op) and, end to end, at `FetchLike` through `runCcrcOp`.
 // The programme is synced first by the real plan sync (every object bound, fingerprints current), a test-inserted
 // `linear_migrations` row `applied` makes team AAA managed, and Linear's copy is whatever `lin.over` says it is.
+import { LINEAR_DESCRIPTION_MAX_CHARS } from '../src/linear/planSyncPolicy.js';
+import { withoutRestoredLines } from '../src/linear/driftPolicy.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
@@ -197,9 +199,12 @@ describe('the drift pass (D-8183)', () => {
     expect(upd).toHaveLength(1);
     const lines = String(upd[0]!.input['description']).split('\n').filter((l) => l.startsWith('Restored on '));
     expect(lines).toHaveLength(3);
-    expect(lines[0]).toBe(held[1]);                                         // the oldest is dropped
-    expect(lines[2]).toBe(`Restored on ${new Date(r.t.now).toISOString().slice(0, 10)}: ccrc put back this milestone's name.`);
-    expect(String(upd[0]!.input['description']).startsWith(planned)).toBe(true);
+    // Newest first, so the 255 cap's cut at the end never takes it; the oldest is dropped.
+    expect(lines[0]).toBe(`Restored on ${new Date(r.t.now).toISOString().slice(0, 10)}: ccrc put back this milestone's name.`);
+    expect(lines.slice(1)).toEqual([held[2], held[1]]);
+    const desc = String(upd[0]!.input['description']);
+    expect(desc.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect(withoutRestoredLines(desc)).toBe(planned);                      // the planned text follows, whole when it fits
     expect(opsOf(r, 'drift-restore').filter((o) => /Comment$/.test(o))).toEqual([]);   // no comment op: a milestone takes none
     expect(driftEventsOf(r.db, bindingOf(r, 'checkpoint').id, 0)).toEqual([expect.objectContaining({ field: 'name', restored: true, commentedAt: null })]);
   });

@@ -13,7 +13,8 @@
  * pass writes nothing); the caller measures that and passes `current`.
  */
 import { withCcrcProvenance } from './hierarchyOps.js';
-import { egress } from './planSyncPolicy.js';
+import { egress, fitLinearDescription } from './planSyncPolicy.js';
+import { LINEAR_CCRC_PROVENANCE_LINE } from './ops.js';
 
 export type DriftKind = 'initiative' | 'project' | 'milestone' | 'issue';
 
@@ -42,19 +43,43 @@ export const RESTORED_LINE_PREFIX = 'Restored on ';
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
 const isRestored = (l: string): boolean => l.startsWith(RESTORED_LINE_PREFIX);
 
-/** The description without its Restored lines, and without the blank lines that leave trailing. Text with none is unchanged. */
+/** The description without its Restored lines, and without the blank lines they leave at either end. Text with none is
+ *  unchanged. */
 export function withoutRestoredLines(description: string): string {
   const lines = description.split('\n');
   if (!lines.some(isRestored)) return description;
-  return lines.filter((l) => !isRestored(l)).join('\n').replace(/\s+$/u, '');
+  return lines.filter((l) => !isRestored(l)).join('\n').replace(/^\s+/u, '').replace(/\s+$/u, '');
 }
 
-/** The description keeping its last two Restored lines and `line`, three at most, at the end after one blank line. */
+/** The description with `line` and the two newest Restored lines it already holds (three at most), FIRST and newest first,
+ *  then one blank line and the rest. First, because Linear caps a description at 255 characters and the fit cuts from the
+ *  end (`fitLinearDescription`, D-8708): the lines survive, and the oldest is the first a cut would take. A line's day is
+ *  its sort key (`Restored on YYYY-MM-DD`), so lines an older build wrote at the end are ordered too. */
 export function restoredLines(description: string, line: string): string {
-  const kept = description.split('\n').filter(isRestored).slice(-2);
-  const base = withoutRestoredLines(description).replace(/\s+$/u, '');
-  const tail = [...kept, line].join('\n');
-  return base === '' ? tail : `${base}\n\n${tail}`;
+  const kept = description.split('\n').filter(isRestored).sort().reverse().slice(0, 2);
+  const base = withoutRestoredLines(description);
+  const head = [line, ...kept].join('\n');
+  return base === '' ? head : `${head}\n\n${base}`;
+}
+
+/** The plan's text of a description, for the comparison and the restore: without its Restored lines, without ccrc's
+ *  provenance line, and without the `…` a fit ends a cut body with. */
+function descriptionCore(description: string): string {
+  let t = normalText(withoutRestoredLines(normalText(description)));
+  if (t.endsWith(LINEAR_CCRC_PROVENANCE_LINE)) t = t.slice(0, -LINEAR_CCRC_PROVENANCE_LINE.length);
+  t = t.replace(/\s+$/u, '');
+  if (t.endsWith('…')) t = t.slice(0, -1);
+  return t.replace(/\s+$/u, '');
+}
+
+/** A milestone's restored description (§7.2; a milestone takes no comment, D-8407): `line` and the two newest Restored lines
+ *  Linear's copy holds, first, then the planned text, fitted to Linear's cap. The fit cuts the plan's text, never a line
+ *  that fits, so the record survives; the comparison accepts the shortened text (`sameOwned`). */
+export function restoredDescription(planned: string, linearDescription: string | null, line: string): string {
+  const held = (linearDescription ?? '').split('\n').filter(isRestored);
+  const core = descriptionCore(planned);
+  const withHeld = held.length === 0 ? core : `${held.join('\n')}\n\n${core}`;
+  return fitLinearDescription(restoredLines(withHeld, line));
 }
 
 // ── The comparison ──
@@ -78,9 +103,12 @@ function sameOwned(field: string, linear: OwnedFields[string], planned: OwnedFie
     return ls.size === ps.size && [...ps].every((x) => ls.has(x));
   }
   if (typeof l === 'string' && typeof p === 'string') {
-    return field === 'description'
-      ? normalText(withoutRestoredLines(normalText(l))) === normalText(withoutRestoredLines(normalText(p)))
-      : normalText(l) === normalText(p);
+    if (field !== 'description') return normalText(l) === normalText(p);
+    const lc = descriptionCore(l);
+    const pc = descriptionCore(p);
+    // A restored milestone's description carries its Restored lines first, so the 255 cap's fit shortened the plan's text after
+    // them (`restoredDescription`): what Linear holds then is the plan's text cut at its end, a prefix of it.
+    return lc === pc || (normalText(l).split('\n').some(isRestored) && pc.startsWith(lc));
   }
   return l === p;
 }

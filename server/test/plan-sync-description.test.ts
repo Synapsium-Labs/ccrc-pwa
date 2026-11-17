@@ -226,10 +226,14 @@ describe('A1, A2, A3, A7: the fitter\'s edges', () => {
     expect(fitLinearDescription(body)).toBe(`x${PROVENANCE_TAIL}`);
   });
 
-  it('A2: a non-ASCII body (em dashes, ellipses) is bounded in UTF-16 units and in code points', () => {
-    const d = fitLinearDescription('A step — then another… '.repeat(20));
+  it('A2: a non-ASCII body (em dashes, ellipses, an astral character) is bounded in UTF-16 units and in code points', () => {
+    // The astral character (two UTF-16 units, one code point) makes the two counts differ, so each bound means something
+    // (the review of #2973, run 2368).
+    const d = fitLinearDescription('A step — then another… \u{1F680} '.repeat(20));
     expect(d.length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
     expect([...d].length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    expect([...d].length).toBeLessThan(d.length);
+    expect(d).toContain('\u{1F680}');
     expect(d).toContain('—');
     expect(d.endsWith(`…${PROVENANCE_TAIL}`)).toBe(true);
   });
@@ -253,3 +257,30 @@ describe('A1, A2, A3, A7: the fitter\'s edges', () => {
 
 // Measured on main at 96bfc150b, before the fit: the fingerprint of the short epic's project create.
 const SHORT_EPIC_FINGERPRINT = '1e563b359dab678b';
+
+// The review of #2973 (run 2368), carried to wave 4 (D-8183): what the fix left untested.
+describe('the fitter is stable, and a fitted note reads current', () => {
+  it('fitting is idempotent: a fitted text fits to itself', () => {
+    for (const body of ['short', LONG_SUMMARY.repeat(3), '\u{1F680}'.repeat(300), `x${PROVENANCE_TAIL}`]) {
+      const once = fitLinearDescription(body);
+      expect(fitLinearDescription(once)).toBe(once);
+    }
+  });
+
+  it('a bound description carrying a note takes one update, then none on the next pass', () => {
+    const s = snap({ epic: { summary: LONG_SUMMARY.repeat(3), state: 'dropped', droppedWhy: 'not needed now' }, initiatives: 'off' });
+    const bound = {
+      id: 40, localKind: 'epic' as const, localId: 1, workspaceId: WS, teamKey: 'AAA', linearId: U(40), identifier: null,
+      fingerprint: 'stored-before-the-fit', syncedAt: 1, state: 'bound' as const, failedAt: null, failedWord: null, failedInputs: null,
+      driftCount: 0, driftSince: null, heldItemId: null,
+    };
+    s.bindings = [bound];
+    const first = planSyncSteps(s).steps.filter((x) => x.kind === 'update' && x.bindingId === 40);
+    expect(first).toHaveLength(1);
+    const update = first[0] as Extract<SyncStep, { kind: 'update' }>;
+    expect(String(update.input['description'])).toContain('Dropped: not needed now');
+    expect(String(update.input['description']).length).toBeLessThanOrEqual(LINEAR_DESCRIPTION_MAX_CHARS);
+    s.bindings = [{ ...bound, fingerprint: update.fingerprint }];
+    expect(planSyncSteps(s).steps.filter((x) => 'bindingId' in x && x.bindingId === 40)).toEqual([]);
+  });
+});
