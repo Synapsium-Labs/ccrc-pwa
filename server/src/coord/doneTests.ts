@@ -6,7 +6,7 @@
 // Ring: L1, context C5 Coordination. Pure: no clock, no I/O. Both are first match and total, and an answer's evidence is
 // ids and words only, never text a session wrote. A fact the gatherer could not read never moves an answer to `passed` or
 // `ended` (DT3, the property in `done-tests-policy.test.ts`).
-import { TERMINAL_RUN_STATES, isPrPhase, isRunState } from '../../../shared/api.js';
+import { TERMINAL_RUN_STATES, isPrPhase, isRunState, type PrPhase } from '../../../shared/api.js';
 import { ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { isHead40 } from '../../../shared/landing.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
@@ -68,8 +68,21 @@ export type TargetFacts =
 const passed = (evidence: string): TargetAnswer => ({ kind: 'passed', evidence });
 const ended = (evidence: string): TargetAnswer => ({ kind: 'ended', evidence });
 const pending = (evidence: string): TargetAnswer => ({ kind: 'pending', evidence });
+/** Why a target is unmeasurable, each a fixed word, or a lineage entry's other phase as `phase-<PrPhase>` (Table 3). */
+const TARGET_WHY_MAP = {
+  'close-record-unreadable': true, 'no-close-record': true, 'lineage-unreadable': true, 'not-this-runs-pr': true,
+  'phase-unknown': true, 'reviews-unread': true, 'state-unknown': true, 'verdict-not-recorded': true,
+  'facts-mismatch': true, 'no-such-row': true, 'run-unreadable': true,
+} as const satisfies Record<string, true>;
+type TargetWhy = keyof typeof TARGET_WHY_MAP | `phase-${PrPhase}`;
+
+/** Every kebab word this context spells, for `mail-routes.test.ts`'s code scan: a predicate, a done test's refusal and why
+ *  a target is unmeasurable. None is a mail rejection or a run refusal: a refusal is `bad-request` at its door (DT9). */
+export const isDoneTestKebab = (tok: string): boolean => (DONE_PREDICATES as readonly string[]).includes(tok)
+  || Object.hasOwn(DONE_TEST_REFUSAL_MAP, tok) || Object.hasOwn(TARGET_WHY_MAP, tok);
+
 const unmeasured = (why: string): TargetAnswer => ({ kind: 'unmeasured', why });
-const unmeasurable = (why: string): TargetAnswer => ({ kind: 'unmeasurable', why });
+const unmeasurable = (why: TargetWhy): TargetAnswer => ({ kind: 'unmeasurable', why });
 
 const isTerminal = (s: string): boolean => (TERMINAL_RUN_STATES as readonly string[]).includes(s);
 const isItemState = (s: string): s is ItemState => (ITEM_STATES as readonly string[]).includes(s);

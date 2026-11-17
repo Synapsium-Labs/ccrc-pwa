@@ -59,6 +59,7 @@ import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
+import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -1160,6 +1161,11 @@ describe('the rejection table is total, in both directions', () => {
         // rejection or a run refusal. Admitted through the exported guard, derived from L0's pair tables and
         // `RELAY_CONFLICT_WHY_MAP`, never NOT_CODES.
         || isOverlapsKebab(tok)
+        // THE DONE TESTS (Overlord W2 done tests A): `coord/doneTests.ts` and `coord/doneTestRead.ts` name a predicate, a
+        // done test's refusal and why a target is unmeasurable as literals. A word rides a target's answer or the door's
+        // `bad-request`, never a mail rejection or a run refusal. Admitted through the exported guard, derived from L0's
+        // `DONE_PREDICATES` and that file's own maps, never NOT_CODES.
+        || isDoneTestKebab(tok)
         || isReceiptDrop(tok),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word or receipt drop word`).toBe(true);
     }
