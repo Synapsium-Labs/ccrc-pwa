@@ -62,15 +62,12 @@ cmd_keep_awake() {   # ccd keep-awake --session <id> --state on|off — set or c
 _keep_awake_ours() {   # id marker -> rc 0 iff $REG/<id>.<marker> is a regular, readable file, not a link, holding exactly the
   # stamp; rc 1 otherwise, never rc 2 (every caller but `off` treats "not provably ours" one way). It sets KEEP_AWAKE_READ
   # to one of four words, so `off` alone tells a foreign marker from one it cannot read: `ours`, `absent` (no entry, -e and
-  # -L both false), `foreign` (readable, other bytes) or `unreadable`. The read is bounded twice: in size (65 bytes, so a
-  # longer file or a NUL, turned into a newline, is not the stamp) and in time (`_plat_timeout 2`, so a FIFO swapped in
-  # between the -f test and the open cannot block). C locale: the same bytes give one verdict under any caller's locale.
-  local LC_ALL=C IFS=' ' f="$REG/$1.$2" v
-  KEEP_AWAKE_READ=unreadable; [[ -d "$REG" && -x "$REG" ]] || return 1
-  KEEP_AWAKE_READ=absent; [[ -e "$f" || -L "$f" ]] || return 1
-  KEEP_AWAKE_READ=unreadable; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 1
-  v=$( { _plat_timeout 2 head -c 65 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 1
-  KEEP_AWAKE_READ=foreign; [[ "${v%x}" == "$KEEP_AWAKE_STAMP" ]] || return 1
+  # -L both false), `foreign` (readable, other bytes) or `unreadable`. The read is the one bounded field read
+  # (`_fresh_pick_field_to`, review 2336 F3): in size (65 bytes, so a longer file or a NUL, turned into a newline, is not the
+  # stamp) and in time (a FIFO swapped in after the type test cannot block). C locale: one verdict under any caller's locale.
+  local LC_ALL=C IFS=' ' kv
+  _fresh_pick_field_to kv "$1" "$2" 65; case $? in 1) KEEP_AWAKE_READ=absent; return 1 ;; 2) KEEP_AWAKE_READ=unreadable; return 1 ;; esac
+  KEEP_AWAKE_READ=foreign; [[ "$kv" == "$KEEP_AWAKE_STAMP" ]] || return 1
   KEEP_AWAKE_READ=ours
 }
 
@@ -87,12 +84,9 @@ _role_long_lived() {   # id -> rc 0 long-lived | 1 not (no profile entry, or the
   # entry at the route field `profile` is today's behaviour. An entry that is a link, not a regular file or not readable,
   # bytes outside the field's `^[a-z]{1,16}$`, a row that is absent, a key that is absent or not a boolean, or a launch
   # profiles file jq cannot read are all undecidable (rc 2), which every caller reads as long-lived: it fails safe (question
-  # 5). The read is bounded in size (17 bytes) and time (`_plat_timeout 2`: a FIFO swapped in after the -f test cannot block).
-  local LC_ALL=C IFS=' ' f="$REG/$1.profile" p v
-  [[ -d "$REG" && -x "$REG" ]] || return 2
-  [[ -e "$f" || -L "$f" ]] || return 1
-  [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
-  p=$( { _plat_timeout 2 head -c 17 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; p="${p%x}"
+  # 5). The read is the one bounded field read (`_fresh_pick_field_to`, review 2336 F3), 17 bytes and time-bounded.
+  local LC_ALL=C IFS=' ' p v
+  _fresh_pick_field_to p "$1" profile 17; case $? in 1) return 1 ;; 2) return 2 ;; esac
   [[ "$p" =~ ^[a-z]{1,16}$ ]] || return 2
   v=$(jq -r --arg r "$p" '.[$r].longLived | if type == "boolean" then . else error("no boolean") end' "$LAUNCH_PROFILES_JSON" 2>/dev/null) || return 2
   case "$v" in true) return 0 ;; false) return 1 ;; *) return 2 ;; esac
@@ -150,10 +144,11 @@ _fresh_pick_ok() {   # account side -> rc 0 the account may take this session at
 _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, at most cap (a NUL reads as a newline) | 1 no entry
   # | 2 a link, not a regular file, not readable, or the read failed, or `$REG` is not a searchable directory (it cannot say
   # whether an entry stands, so never "no entry": review 2336 F2). Bounded in size and in time (`_plat_timeout 2`), so a
-  # FIFO swapped in after the type test cannot block, as `_role_long_lived` reads `profile`; never `_route_get`, whose read is not.
-  local LC_ALL=C IFS=' ' f="$REG/$2.$3" v; printf -v "$1" ''
-  [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
-  v=$( { _plat_timeout 2 head -c "$4" -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${v%x}"
+  # FIFO swapped in after the type test cannot block; never `_route_get`, whose read is not. THE ONE BOUNDED FIELD READ of
+  # this library (review 2336 F3): `_keep_awake_ours` and `_role_long_lived` read their fields through it too.
+  local LC_ALL=C IFS=' ' __ff="$REG/$2.$3" __fv; printf -v "$1" ''   # `__`-named, so no caller's var is shadowed
+  [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$__ff" || -L "$__ff" ]] || return 1; [[ -L "$__ff" || ! -f "$__ff" || ! -r "$__ff" ]] && return 2
+  __fv=$( { _plat_timeout 2 head -c "$4" -- "$__ff" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${__fv%x}"
 }
 # shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by the fresh start in PR C2
 _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|none; rc 1, var empty, FRESH_PICK_WHY = the cause
