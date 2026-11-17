@@ -3461,20 +3461,32 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
   // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
   // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
   // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
   // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
   // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
-  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 87` takes rule 3 (it warns,
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 88` takes rule 3 (it warns,
   // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
   // ROLLBACK EXPOSURE (review 2335 F1): `resumed-other-org` is the first trigger word added after the vocabulary shipped.
   // An older build's `genRowOf` refuses a row whose `dueWhy` or `blind` carries a word it does not know, and
   // `liveGenerations` is all-or-failure, so one such row fails that build's whole generations read (fail-closed by design,
   // review 2003 F13). It takes a rollback below this PR onto a database that already holds such a row.
-  // Overlaps (#2949) landed 85 and decision model A (#2948) 86, so this is 87 (the coordinator's word, 2026-11-17).
-  // RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry is counted):
+  // Overlaps (#2949) landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, so this is 88 (the
+  // coordinator's word, 2026-11-17). RE-MEASURE the slot before the PR and before merge (it must print 87 before this
+  // entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

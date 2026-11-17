@@ -57,7 +57,7 @@ import type { AnswerMarksRead } from './answerMarkStore.js';
 import { askForMark, markableAsks } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, operatorSecretLaneId, slotChains, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
@@ -105,7 +105,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot, action: row.action,
+    secretSlot: row.secretSlot, action: row.action, revision: row.revision,
     secretSet: secret === null ? null
       : 'unreadable' in secret ? { unreadable: true }
         // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review
@@ -638,9 +638,8 @@ const PROGRAMME_UNCLAIMED_SENTENCE =
  *  escape), the `{"value":""}` around it and room to spare (plan PL6; review 1391 A-9: 16384 refused a value the panel takes).
  *  On the secret's route the body IS the secret, so its body errors are fixed words (`credentialBodyRoute`). */
 export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
-/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
- *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
-export const SLOT_WAIT_MS = 30_000;
+/** How long an act on a slot waits for that slot's previous act (`SLOT_WAIT_MS`, `ledgersSecrets.ts`, review 1391 A-3). */
+export { SLOT_WAIT_MS };
 
 /** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
  *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
@@ -1086,32 +1085,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
    * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
    */
-  const slotChains = new Map<string, Promise<void>>();
-  /** Runs `act` once the slot's previous act has finished, or answers `busy` when that takes longer than the deadline (review
-   *  1391 A-3). A waiter that gives up releases its own place at once, so the one after it waits only for the act still
-   *  running, and the map entry stays until that act is done: the deadline never lets two acts of one slot run together. */
-  const slotWait = deps.slotWaitMs ?? SLOT_WAIT_MS;
-  const underSlot = async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
-    const before = slotChains.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const mine = new Promise<void>((resolve) => { release = resolve; });
-    const chain = before.then(() => mine);
-    slotChains.set(key, chain);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), slotWait); });
-    const first = await Promise.race([before.then(() => 'ready' as const), late]);
-    clearTimeout(timer);
-    if (first === 'late') {
-      release();
-      return busy();
-    }
-    try {
-      return await act();
-    } finally {
-      release();
-      if (slotChains.get(key) === chain) slotChains.delete(key);
-    }
-  };
+  /** Each act on a slot runs once that slot's previous act has finished, or answers `busy` past the deadline (`slotChains`,
+   *  `ledgersSecrets.ts`, review 1391 A-3). */
+  const underSlot = slotChains(deps.slotWaitMs ?? SLOT_WAIT_MS);
   /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
    *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
   const noStore = noStoreRoute.onRequest;

@@ -147,5 +147,6 @@
   "server/src/coord/overlaps.ts#pairBlocks": 1,
   "server/src/coord/overlaps.ts#blockingPairs": 1,
   "shared/private-names.mjs#hashEntry": 1,
-  "shared/private-names.mjs#privateNameHits": 1
+  "shared/private-names.mjs#privateNameHits": 1,
+  "server/src/operatorModel/nameListState.ts#nameListState": 1
 }

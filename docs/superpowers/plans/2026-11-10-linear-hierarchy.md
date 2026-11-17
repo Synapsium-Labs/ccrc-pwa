@@ -193,14 +193,21 @@ number from `POST /api/ledger/deviations`.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
   (wave 4's open point). Record: the wave 3 note.
 - **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
-  by-name listing of 10, so with ten or more same-named objects ownership can fail; it fails once, mails once and retries
-  on the 30-minute backoff. Carried to the next capture (`creator { id }` on the by-id reads). Record: the wave 3 note.
+  by-name listing of 10, so with ten or more same-named objects ownership can fail. The binding is retried at every
+  requeue, directory refill and plan change, and only its mail is once. Carried to the next capture (`creator { id }` on
+  the by-id reads). Record: the wave 3 note.
 - **D-8700 (2026-11-17)** — milestone-target-date-once-met: a milestone's `targetDate` is ccrc's only from the day its
   checkpoint is met; an open checkpoint's create and update leave it out of the input and the journal fields. Record:
   the wave 3 note.
 - **D-8701 (2026-11-17)** — statuses-unread-distinct: project statuses never read are a directory miss, not "no status
   of that type", and an `unknown` initiatives probe defers the initiative step, with a bounded exit after three unknown
   refills. Record: the wave 3 note.
+- **D-8702 (2026-11-17)** — failure-hold: a deferring failure's backoff holds against every later due mark.
+  `plan_sync_due.attempts` marks the hold; `deferSync(db, program, until, why)` takes `why = 'failure' | 'wait'`, where a
+  failure increments `attempts` and a wait resets it to 0; `markSyncDue` and `markSyncDueInTx` keep the earlier `dueAt`,
+  and keep a held `dueAt` even when it is later; and a held programme's dispatch (`ensureTicketBound`, read through `heldSyncUntil`) starts no pass.
+  The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
+  Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
 
 ## Global Constraints
 
@@ -821,8 +828,8 @@ binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:
     `markFailed(db, id: number, word: string, inputs: string, now: number): void`,
     `requeueFailed(db, where: { workspaceId?: string; bindingId?: number; olderThan?: number }): number` (back to
     `pending`, clearing the three `failed*` columns; Task 3.2's rules), `bindingsOf(db, program: string): BindingRow[]`
-  - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`), `dueSyncs(db, now: number): string[]`,
-    `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number): void` (increments `attempts`)
+  - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`, and a held one, D-8702), `dueSyncs(db, now: number): string[]`,
+    `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number, why: 'failure' | 'wait'): void` (a failure increments `attempts`, a wait resets it, D-8702)
   - settings: `hierarchySettingsOf(db, project)`, `setHierarchySettings(db, project, s: HierarchySettingsBody, by: string, at: number)`
 
 - [x] **Step 1: Write the failing tests** — `migration 57 applies on a file at 56 and an older build's SELECTs still run`;
@@ -1169,17 +1176,17 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
     `publicTextVerdict` (Task 2.7) first; a refused text yields `{ kind: 'skip', why: 'text-public' }` for that object,
     which the pass turns into a `failed` binding and one mail to the coordinator (§6.1).
 
-- [ ] **Step 1: Write the failing tests** — `a fresh plan yields initiative, projects, milestones, issues in that order`;
+- [x] **Step 1: Write the failing tests** — `a fresh plan yields initiative, projects, milestones, issues in that order`;
   `no milestone step until its project is bound`; `initiatives off: no initiative step and the project description names the programme`;
   `a renamed epic yields one project update, a matching fingerprint none`; `a missing status type fails the step, not the pass`
   (a `skip` with `status-missing` for that object, every other step still emitted); `requestIdOf is stable and v4-shaped`;
   `fingerprintOf ignores key order`; `a public project's issue text carries no Linear URL and no identifier`;
   `a public project's ticket whose stored title names KEY-123 is skipped text-public, every other step emitted`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-policy.test.ts`.
-- [ ] **Step 3: Implement**; pure. Whether a create sends `id: requestId` is read per kind from FX2's README answer 1;
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-policy.test.ts`.
+- [x] **Step 3: Implement**; pure. Whether a create sends `id: requestId` is read per kind from FX2's README answer 1;
   a kind with no caller id is marked `bindBy: 'name-and-creator'` on its step.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync's deciders (D-8182)`.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync's deciders (D-8182)`.
 
 ### Task 3.2: The plan sync
 
@@ -1253,7 +1260,7 @@ access regained), when the initiatives probe turns `on`, when its project's team
 `PLAN_SYNC_BACKOFF_MS`'s last step (30 min) has passed since `failedAt`. A retry that fails again with the same word
 mails nothing more. `plan show` shows `failed` and its word on the epic, checkpoint or ticket (`sync`, `syncWord`).
 
-- [ ] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
+- [x] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
 
 ```ts
 it('a due programme is synced once after the debounce, objects bound in order', …);
@@ -1279,11 +1286,11 @@ it('a failed binding retried after the ceiling and refused again mails nothing m
 it('plan show names a failed binding and its word', …);
 ```
 
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
-- [ ] **Step 3: Implement**; `watch.ts` gains one `runLane('linearPlanSync', …)` call; a test building a watcher ends
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
+- [x] **Step 3: Implement**; `watch.ts` gains one `runLane('linearPlanSync', …)` call; a test building a watcher ends
   with `quietAtTestEnd`.
-- [ ] **Step 4: Run to pass** — plus `test/watcher-quiet-census.test.ts test/consolidation-census.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync (D-8182)`.
+- [x] **Step 4: Run to pass** — plus `test/watcher-quiet-census.test.ts test/consolidation-census.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync (D-8182)`.
 
 ### Task 3.3: Moves and closes
 
@@ -1311,7 +1318,7 @@ it('plan show names a failed binding and its word', …);
     `unsynced`; a key of the same workspace → the move above; a key of another workspace → `markFailed` and a
     `ticket-workspace-mismatch` mail.
 
-- [ ] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
+- [x] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
   `plan met on the last checkpoint after the last run closes the epic, and its project completes`,
   `the last epic settling done with programs.state done ends the programme and completes the initiative`,
   `a dropped ticket's cancel comment names its droppedWhy`,
@@ -1320,10 +1327,10 @@ it('plan show names a failed binding and its word', …);
   driven through `closeRun`), `plan close abandoned cancels projects and open issues with the reason`,
   `a cleared team key leaves bindings and syncs nothing for that project`,
   `a team key moved to another workspace fails the bindings and moves nothing`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-lifecycle.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/plan-sync.test.ts test/plan-sync-policy.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync moves and closes (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-lifecycle.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/plan-sync.test.ts test/plan-sync-policy.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync moves and closes (D-8182)`.
 
 ### Task 3.4: The dispatch wait, the ticket's branch name and the pull request link
 
@@ -1334,7 +1341,9 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
 **Interfaces:**
 - Produces:
   - `PlanSync.ensureTicketBound(runId: number, budgetMs: number): Promise<{ identifier: string | null }>` — joins the
-    pass in flight for the run's programme, or starts one through `passFor` with deadline `now + budgetMs`, and waits
+    pass in flight for the run's programme, or starts one through `passFor` with deadline `now + budgetMs` unless the
+    programme is held by a failure's backoff (`heldSyncUntil`, D-8702), when it starts none and answers null (a ticket
+    already bound answers its identifier first), and waits
     at most `budgetMs`; it never starts a second pass for a key in flight (Task 3.2's single flight), so a wave's
     parallel dispatches share one pass; `PLAN_SYNC_DISPATCH_WAIT_MS = 12_000`.
   - `slugForTicket(identifier: string, given: string | undefined, title: string): string` — `key-123-<words>`,
@@ -1348,16 +1357,16 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
     (`attachmentLinkURL`, as the ccrc actor). Not bound in time: dispatch as today, and the sync adds the link when the
     issue appears.
 
-- [ ] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
+- [x] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
   `a public project's slug never carries the identifier, and the sync links the PR`;
   `a resumed work run in a private project with a bound ticket dispatches with no slug and gets the attachment link`;
   `Linear slow: dispatch goes after 12 s with today's slug`; `a dispatch during a lane pass joins that pass and sends
   no create of its own`; `three parallel dispatches of one wave start one pass`;
   `the wait never runs inside coordMutex` (the mutex gate test still green with the new call site); `slugForTicket fits 31 characters`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
-- [ ] **Step 3: Implement**; `routes.ts` grows by the call only.
-- [ ] **Step 4: Run to pass** — plus `test/run-routes.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): dispatch waits for its ticket's issue (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
+- [x] **Step 3: Implement**; `routes.ts` grows by the call only.
+- [x] **Step 4: Run to pass** — plus `test/run-routes.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): dispatch waits for its ticket's issue (D-8182)`.
 
 ### Task 3.5: The initiatives-off item and the hierarchy item route
 
@@ -1374,12 +1383,12 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
     token: refuses `item-act-mismatch` for an act its action does not take; `check-again` queues the refresher's probe
     for that workspace and answers at once. Wave 4 and wave 7 add the other acts' arms in this route.
 
-- [ ] **Step 1: Write the failing tests** — `one item per workspace however many programmes wait`; `a probe that reads on settles the item`;
+- [x] **Step 1: Write the failing tests** — `one item per workspace however many programmes wait`; `a probe that reads on settles the item`;
   `a project set off raises nothing`; `check-again queues the probe`; `approve on an initiatives item is item-act-mismatch`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-items.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the initiatives-off item and the hierarchy item route (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-items.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the initiatives-off item and the hierarchy item route (D-8182)`.
 
 ---
 
@@ -1676,10 +1685,12 @@ executable block runs).
 
 **Interfaces:**
 - Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
-  plan-sized with their waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
+  plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
   is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
   team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
-  by the clause line alone.
+  by the clause line alone. (Clause 21's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
+  an epic may list no waves, built by the work-map plan's Task WM6. Wave 6 writes the clause as amended here, and
+  `references/plan.md` names `ticket-required` once WM6 has landed.)
 - `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
   `plan triage` (never another programme's plan). It names only verbs whose client row and route exist by wave 6:
   `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus

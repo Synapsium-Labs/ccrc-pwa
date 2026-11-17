@@ -29,6 +29,8 @@ export interface ItemRow {
   action: ItemAction | null;
   /** Before this time `itemsFor` leaves the item out (the coordinator-first hold, A21); NULL when it is not held. */
   heldUntil: number | null;
+  /** The row's revision (Overlord W2): raised by each move, 0 at the raise; bookkeeping writes leave it. */
+  revision: number;
 }
 /** One move of one item. `act` is an `ItemAct` or `raise`, `block`, `unblock`. */
 export interface ItemEventRow {
@@ -53,7 +55,7 @@ type ItemRowRaw = Omit<ItemRow, 'how' | 'options' | 'action'> & { how: string; o
 
 const ITEM_COLS =
   'id, program, runId, raisedBy, kind, title, why, how, options, neededBy, soonLabel, secretSlot, state, answer, note, ' +
-  'raisedAt, tickedAt, closedAt, recommended, recommendedWhy, action, heldUntil';
+  'raisedAt, tickedAt, closedAt, recommended, recommendedWhy, action, heldUntil, revision';
 
 /** The row's JSON `string[]` columns are written by `raiseItem` alone, from a typed array, so a value that does not
  *  parse as one is a corrupt file, not a distinction to fold: it throws, naming the item, rather than reading as an
@@ -70,7 +72,7 @@ function itemRowOf(r: ItemRowRaw): ItemRow {
     neededBy: r.neededBy, soonLabel: r.soonLabel, secretSlot: r.secretSlot, state: r.state,
     answer: r.answer, note: r.note, raisedAt: r.raisedAt, tickedAt: r.tickedAt, closedAt: r.closedAt,
     recommended: r.recommended, recommendedWhy: r.recommendedWhy,
-    action: r.action === null ? null : actionOf(r.id, r.action), heldUntil: r.heldUntil,
+    action: r.action === null ? null : actionOf(r.id, r.action), heldUntil: r.heldUntil, revision: r.revision,
   };
 }
 
@@ -185,7 +187,7 @@ function moveItemInTx(
   const closes = verdict.to === 'done' || verdict.to === 'withdrawn' || verdict.to === 'dismissed';
   const answer = act === 'tick' && fields.answer !== undefined ? fields.answer : row.answer;
   const note = act === 'return' && fields.note !== undefined ? fields.note : row.note;
-  db.prepare('UPDATE operator_items SET state = ?, tickedAt = ?, closedAt = ?, answer = ?, note = ? WHERE id = ?')
+  db.prepare('UPDATE operator_items SET state = ?, tickedAt = ?, closedAt = ?, answer = ?, note = ?, revision = revision + 1 WHERE id = ?')
     .run(verdict.to, act === 'tick' ? now : row.tickedAt, closes ? now : null, answer, note, id);
   writeItemEvent(db, id, now, act, actor, fields.note ?? null);
   return { ok: true, item: itemById(db, id) as ItemRow };

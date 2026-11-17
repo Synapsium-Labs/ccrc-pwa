@@ -54,14 +54,14 @@ const rawRow = (f: Fixture, id: number): Record<string, unknown> =>
 const rowCount = (f: Fixture): number => (f.db.prepare('SELECT count(*) AS c FROM operator_messages').get() as { c: number }).c;
 
 describe('operator-model.db: the shared opener at 0600', () => {
-  it('a fresh open migrates to schema 1 and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
+  it('a fresh open migrates to schema 2 (private names B: the name list) and creates the file at 0600 under a 0o022 umask, and its -wal and -shm too', () => {
     const p = defaultOperatorModelDbPath(mkTmp('ccrc-opmodel-'));
     const old = process.umask(0o022);
     let db: DatabaseSync;
     try { db = openOperatorModelDb(p); } finally { process.umask(old); }
     opened.push(db);
-    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(1);
-    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(1);
+    expect(OPERATOR_MODEL_SCHEMA_VERSION).toBe(2);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(2);
     db.prepare("INSERT INTO read_ledger (at, door, caller, scope, count, outcome, generationRead) VALUES (1, 'board', 'operator', 's', 0, 'ok', 'not-a-session')").run();
     for (const f of [p, `${p}-wal`, `${p}-shm`]) expect(statSync(f).mode & 0o777, f).toBe(0o600);
     expect(path.basename(p)).toBe('operator-model.db');
@@ -86,7 +86,7 @@ describe('operator-model.db: the shared opener at 0600', () => {
       opened.push(b);
       expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(4);
       expect(warn).toHaveBeenCalledTimes(1);
-      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 4, this build knows 1/);
+      expect(String(warn.mock.calls[0]![0])).toMatch(/^ccrc-server: operator-model\.db is at schema 4, this build knows 2/);
     } finally { warn.mockRestore(); }
   });
 });

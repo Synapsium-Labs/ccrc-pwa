@@ -223,9 +223,13 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
     if (open) {
       // Only a reopen DURING the exit puts back what this sheet lifted: Radix's hiding is still in place then, and hides
       // nothing again. Once the panel has gone Radix hides afresh, and a node put back before it would read as hidden by
-      // the page itself, which Radix's undo never clears.
+      // the page itself, which Radix's undo never clears. Only a node a modal still marks is put back (Task C42, D-8714;
+      // review 2343 F3): the mark of another modal lifted here may have gone since (the palette's, once its exit ends and
+      // its undo runs), and a node put back with no mark is lifted by no close and cleared by no undo.
       if (el !== null && el.isConnected) {
-        for (const node of lifted.current) if (node.isConnected) node.setAttribute('aria-hidden', 'true');
+        for (const node of lifted.current) {
+          if (node.isConnected && node.hasAttribute('data-aria-hidden')) node.setAttribute('aria-hidden', 'true');
+        }
       }
       lifted.current = [];
       return;

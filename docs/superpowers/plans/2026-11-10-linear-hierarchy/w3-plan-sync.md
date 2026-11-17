@@ -62,8 +62,8 @@ the deviation-refs scan reads definitions only there. This note keeps the full r
 - D-8699, ownership-by-name-first-page (defined in the plan): a known limit, carried to the next capture rather than fixed.
   To prove an initiative or project is ccrc's own, the sync reads it by id and then reads a by-name listing of 10,
   across the workspace and with no team filter. With ten or more same-named objects, ccrc's own can fall off that page,
-  so its ownership fails. It fails once, mails once per binding (measured: three requeues gave one mail), and retries on
-  the 30-minute backoff without converging. The fix needs `creator { id }` and the teams on `initiativeById` and
+  so its ownership fails. It is retried at every requeue, directory refill and plan change without converging, and it
+  mails once per binding (measured: three requeues gave one mail). The fix needs `creator { id }` and the teams on `initiativeById` and
   `projectById`, or an id filter, which is a document change in the frozen `ops.ts`. So it waits for the next capture,
   together with `issueOwned`'s creator, and the operator's go.
 - D-8700, milestone-target-date-once-met (defined in the plan): a milestone's `targetDate` is ccrc's only from the day
@@ -124,7 +124,7 @@ Review 2311 sent the wave back for one round. Each fix had a test written first 
 
 | Finding | What changed |
 |---|---|
-| F1 (D-8701) | Statuses never read are a directory miss, and an `unknown` probe defers the initiative step. Both waits are bounded and mail the coordinator once per episode. |
+| F1 (D-8701) | Statuses never read are a directory miss, and an `unknown` probe defers the initiative step. Both are bounded in calls and mail the coordinator once per episode; neither is bounded in time while refills fail. |
 | A3 | Ended by F1. A failed initiative keeps its projects' links, and no project is newly linked to it. |
 | F2 | The initiative's workspaces come from the programme's own bindings, plus the placements of epics that are unbound or bound there. A re-keyed project creates nothing in its new workspace. The old initiative is still updated and is closed at the end. |
 | F3, M2 | A bound ticket's team stays in its epic project's `teamIds` whatever its project key does, and inside one workspace until the move binds. |
@@ -224,7 +224,7 @@ From the final review's triage, fine to follow up:
   - A4: a PR link is sent again when the PR's lookup answers nothing for one pass.
   - A11: ccrc's own object made under an old team is stranded failed if the key changes between a lost create reply
     and the recovery.
-  - M3: a failure in one workspace holds the whole programme for up to 30 minutes, including its other workspaces' work.
+  - M3: a failure in one workspace holds the whole programme for as long as that workspace keeps failing, including its other workspaces' work.
     Holding per workspace is the fix.
   - The episode counts live in memory: a restart restarts a streak, so a long episode can mail twice.
   - The probe's 3-refill count is taken when a pass reads the directory, not when each refill lands. So a refill that

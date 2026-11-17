@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { mulberry32 } from '../fakeTime.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
+import * as PRIVATE_NAMES_REAL from '../../../shared/private-names.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -383,7 +384,104 @@ export const PRIVATE_NAME_HITS_SET: MutantSet<PrivateNamesModule> = {
   suite: hitsCases,
 };
 
+// ── PR B, Task 5: the name list's decider `nameListState` (Table P1, plan question 9) ──────────────────────────────────
+
+export type NameListStateModule = typeof import('../../src/operatorModel/nameListState.js');
+type StoreRead = Parameters<NameListStateModule['nameListState']>[0];
+type KeyRead = Parameters<NameListStateModule['nameListState']>[1];
+
+/** The decider's cases, over a module: Table P1 row by row, the canary in all four fields, the very entries array, and the
+ *  monotonicity property. `private-names-list.test.ts` runs them against the real module. */
+export function nameListStateCases(m: NameListStateModule, names: PrivateNamesModule): Record<string, SuiteCase> {
+  const listUnder = (key: string): Entry[] =>
+    [names.entryOf(names.CANARY, 'part', key) as Entry, ...(names.entriesOf(NAMES.part.name, 'part', key) as Entry[])];
+  const L1 = listUnder(K1);
+  const L2 = listUnder(K2);
+  const list = (entries: Entry[], over: Partial<Extract<StoreRead, { kind: 'list' }>> = {}): StoreRead =>
+    ({ kind: 'list', uploadedAt: 1_000, rows: 1, generation: 1, entries, ...over });
+  const absent: KeyRead = { kind: 'absent' };
+  const unreadable: KeyRead = { kind: 'unreadable' };
+  const present: KeyRead = { kind: 'present', key: K1 };
+  const decide = m.nameListState;
+  const rows: [string, StoreRead, KeyRead, unknown][] = [
+    ['no list row, slot absent: none', { kind: 'none' }, absent, { state: 'none' }],
+    ['no list row, slot present: list-missing', { kind: 'none' }, present, { state: 'unreadable', reason: 'list-missing' }],
+    ['no list row, slot unreadable: key-unreadable', { kind: 'none' }, unreadable, { state: 'unreadable', reason: 'key-unreadable' }],
+    ['a list, slot absent: key-missing', list(L1), absent, { state: 'unreadable', reason: 'key-missing' }],
+    ['a list, slot unreadable: key-unreadable', list(L1), unreadable, { state: 'unreadable', reason: 'key-unreadable' }],
+    ['a list, its canary under another key: key-mismatch', list(L2), present, { state: 'unreadable', reason: 'key-mismatch' }],
+    ['the store failed: store, whatever the slot', { kind: 'failed' }, absent, { state: 'unreadable', reason: 'store' }],
+    ['the store failed, slot present: store', { kind: 'failed' }, present, { state: 'unreadable', reason: 'store' }],
+    ['the store failed, slot unreadable: store', { kind: 'failed' }, unreadable, { state: 'unreadable', reason: 'store' }],
+    ['a list with no entry: key-mismatch', list([]), present, { state: 'unreadable', reason: 'key-mismatch' }],
+  ];
+  const cases: Record<string, SuiteCase> = {};
+  for (const [name, store, key, want] of rows) cases[`Table P1: ${name}`] = () => { expect(decide(store, key)).toEqual(want); };
+  cases['Table P1: a list under the key answers that key and the very entries array, with rows, time and generation'] = () => {
+    const v = decide(list(L1, { rows: 3, uploadedAt: 7, generation: 4 }), present);
+    expect(v).toEqual({ state: 'list', list: { key: K1, entries: L1 }, rows: 3, uploadedAt: 7, generation: 4 });
+    expect(v.state === 'list' && v.list.entries).toBe(L1);
+  };
+  cases['the canary is compared in all four fields'] = () => {
+    const c = L1[0]!;
+    const flip = (hex: string): string => `${hex.slice(0, -1)}${hex.endsWith('0') ? '1' : '0'}`;
+    for (const off of [{ ...c, h: flip(c.h) }, { ...c, f: flip(c.f) }, { ...c, n: c.n + 1 }, { ...c, mode: 'exact' as const }]) {
+      expect(decide(list([off, ...L1.slice(1)]), present)).toEqual({ state: 'unreadable', reason: 'key-mismatch' });
+    }
+  };
+  cases['monotone: making any input worse never moves an unreadable answer to list or none'] = () => {
+    const stores: StoreRead[] = [{ kind: 'none' }, list(L1), list(L2), { kind: 'failed' }];
+    const keys: KeyRead[] = [absent, unreadable, present, { kind: 'present', key: K2 }];
+    // A list made worse is one whose canary is under no key a slot holds here (a third fixture key).
+    const L3 = listUnder('fixture-key-three-003');
+    const worseStores = (st: StoreRead): StoreRead[] => [{ kind: 'failed' }, ...(st.kind === 'list' ? [list(L3)] : [])];
+    const worseKeys = (k: KeyRead): KeyRead[] => (k.kind === 'unreadable' ? [] : [unreadable]);
+    let checked = 0;
+    for (const st of stores) for (const k of keys) {
+      if (decide(st, k).state !== 'unreadable') continue;
+      for (const w of worseStores(st)) { expect(decide(w, k).state).toBe('unreadable'); checked++; }
+      for (const w of worseKeys(k)) { expect(decide(st, w).state).toBe('unreadable'); checked++; }
+    }
+    expect(checked).toBeGreaterThan(8);
+  };
+  return cases;
+}
+
+export const NAME_LIST_STATE_KEY = 'server/src/operatorModel/nameListState.ts#nameListState';
+
+export const NAME_LIST_STATE_SET: MutantSet<NameListStateModule> = {
+  modulePath: path.join(ROOT, 'server/src/operatorModel/nameListState.ts'),
+  mutants: [
+    {
+      id: 'N1 list-missing answered none',
+      old: "key.kind === 'absent' ? { state: 'none' } : { state: 'unreadable', reason: 'list-missing' }",
+      new: "{ state: 'none' }",
+    },
+    { id: 'N2 a failed store answered none', old: "if (store.kind === 'failed') return { state: 'unreadable', reason: 'store' };", new: "if (store.kind === 'failed') return { state: 'none' };" },
+    { id: 'N3 a failed store not checked', old: "if (store.kind === 'failed') return { state: 'unreadable', reason: 'store' };\n", new: '' },
+    { id: 'N4 an unreadable slot read as absent', old: "if (key.kind === 'unreadable') return { state: 'unreadable', reason: 'key-unreadable' };\n", new: '' },
+    {
+      id: 'N5 an unreadable slot with no list answered none',
+      old: "if (key.kind === 'unreadable') return { state: 'unreadable', reason: 'key-unreadable' };",
+      new: "if (key.kind === 'unreadable') return store.kind === 'none' ? { state: 'none' } : { state: 'unreadable', reason: 'key-unreadable' };",
+    },
+    { id: 'N6 key-missing not checked', old: "if (key.kind === 'absent') return { state: 'unreadable', reason: 'key-missing' };\n", new: '' },
+    {
+      id: 'N7 key-missing answered list',
+      old: "if (key.kind === 'absent') return { state: 'unreadable', reason: 'key-missing' };",
+      new: "if (key.kind === 'absent') return { state: 'list', list: { key: '', entries: store.entries }, rows: store.rows, uploadedAt: store.uploadedAt, generation: store.generation };",
+    },
+    { id: 'N8 the canary check skipped', old: "if (!canaryUnder(store.entries, key.key)) return { state: 'unreadable', reason: 'key-mismatch' };\n", new: '' },
+    { id: 'N9 the canary compared on h alone', old: 'first.h === c.h && first.f === c.f && first.n === c.n && first.mode === c.mode', new: 'first.h === c.h' },
+    { id: 'N10 the canary checked under the salt', old: "entryOf(CANARY, 'part', key)", new: "entryOf(CANARY, 'part')" },
+    { id: 'N11 an empty list passes the canary', old: 'if (first === undefined) return false;', new: 'if (first === undefined) return true;' },
+    { id: 'N12 the list answers a copy of its entries', old: 'entries: store.entries as NameEntry[] }', new: 'entries: [...store.entries] }' },
+  ],
+  suite: (mod) => nameListStateCases(mod, PRIVATE_NAMES_REAL),
+};
+
 export const PRIVATE_NAMES_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [PRIVATE_NAMES_KEY_KEY]: PRIVATE_NAMES_KEY_SET as MutantSet<never>,
   [PRIVATE_NAME_HITS_KEY]: PRIVATE_NAME_HITS_SET as MutantSet<never>,
+  [NAME_LIST_STATE_KEY]: NAME_LIST_STATE_SET as MutantSet<never>,
 };
