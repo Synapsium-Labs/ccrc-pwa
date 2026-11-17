@@ -653,7 +653,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `PUT /api/overlord/private-names` (the upload, which replaces the list, behind the account gate's step-up, so it refuses while
   sign-in is dark) and `GET /api/overlord/private-names` (whether a list is stored, never what is in it), consult no box token
   either and are session-gated when armed; they register from `server/src/operatorModel/nameListRoutes.ts`, which the census
-  reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The replay quiz's
+rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
+run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
+either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is
+the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and it records a run as pending only. Both
+register from `server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a
+hand-kept `QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

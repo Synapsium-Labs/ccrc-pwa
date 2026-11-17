@@ -112,6 +112,10 @@ const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
  *  the upload `PUT` and the status read `GET /api/overlord/private-names`, are the operator's and session-gated:
  *  `NAME_LIST_DOORS`. */
 const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
+/** The replay quiz's record path (Overlord W1a quiz record): a routes file of its own. Its one box-token lane is the record
+ *  door, `POST /api/continuity/quiz-runs`, whose caller is the operator's shell on the fleet box (`ccrc quiz-record`), gated
+ *  in its own onRequest; its rule door is the operator's, session-gated with a step-up: `QUIZ_SESSION_DOORS`. */
+const QUIZ_SRC = read('server/src/continuity/quizRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -226,10 +230,11 @@ const CALLS_LANES = lanesIn(CALLS_SRC);
 const REMAINING_LANES = lanesIn(REMAINING_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const QUIZ_LANES = lanesIn(QUIZ_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -322,9 +327,14 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
  *  EXEMPT. */
 const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-names'];
 
+/** The replay quiz's rule door (Overlord W1a quiz record): the operator confirms or discards a recorded run, behind a session
+ *  and the account gate's step-up. Hand-kept for the NAME only, compared with the quiz file's registrations in both directions
+ *  below; it consults no box token and does not sit in EXEMPT. */
+const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS, ...NAME_LIST_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -376,7 +386,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
   'eighty-five',
   // Overlord W2 remaining work A: POST /api/coord/programmes/:slug/remaining, a box-token lane in the remaining-work door's file: eighty-six machine lanes in all.
-  'eighty-six'];
+  'eighty-six',
+  // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: eighty-seven machine lanes in all.
+  'eighty-seven'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -530,7 +542,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
+    // …and the quiz file's one (Overlord W1a quiz record): the operator's record door, by name.
+    expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost its box-token lane, or the rule door gained a token check').toEqual(['POST /api/continuity/quiz-runs']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -560,6 +574,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'nameListRoutes.ts and NAME_LIST_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...NAME_LIST_DOORS].sort());
     expect(lanesIn(NAME_LIST_SRC), 'a name list door consults the box token — both are the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
+  it('QUIZ_SESSION_DOORS is exactly the rest of what the quiz file registers, in both directions; none is a lane or EXEMPT', () => {
+    const rest = registrationsIn(QUIZ_SRC).map((r) => r.key).filter((k) => !QUIZ_LANES.includes(k));
+    expect(rest.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'continuity/quizRoutes.ts and QUIZ_SESSION_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...QUIZ_SESSION_DOORS].sort());
+    for (const key of rest) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    expect(GATE_SRC, 'the record door is a box-token lane in EXEMPT').toContain(`  ['POST /api/continuity/quiz-runs',`);
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {

@@ -86,6 +86,7 @@ import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/ro
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
+import { registerQuizRoutes } from './continuity/quizRoutes.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactRefusal } from './continuity/compactOwner.js';
@@ -2193,6 +2194,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
     masker: deps.masker,
   });
+  // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
+  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a

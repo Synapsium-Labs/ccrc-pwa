@@ -282,10 +282,10 @@ export function quizRecordVerdict(i: {
 export const QUIZ_ITEM_PROGRAMME = 'overlord';
 
 /** THE RECORD PATH'S GATE (ask 434; slug quiz-item-waits-for-the-record-path). The weekly item asks the operator to run the
- *  quiz and record it with `ccrc quiz-record`; until the single-arm mode and that verb with its door ship (the plan's
- *  Task 3, a later pull request under its own plan), there is nothing the operator can do, so the lane raises nothing. That
- *  pull request sets this true beside the door, and `continuity-quiz-lane.test.ts` pins the two together. */
-export const QUIZ_RECORD_READY: boolean = false;
+ *  quiz and record it with `ccrc quiz-record`; while that verb and its door were absent the lane raised nothing. They ship
+ *  now (`quizRoutes.ts`, plan `2026-11-17-overlord-quiz-record.md` Task 8), so this is true, and
+ *  `continuity-quiz-lane.test.ts` pins the two together. */
+export const QUIZ_RECORD_READY: boolean = true;
 
 /** The ISO week a wall time falls in, in UTC (slug quiz-week-is-utc: the Settings time zone ships in W1), as `YYYY-Www`, and
  *  the ms of its Monday 00:00 UTC. */
