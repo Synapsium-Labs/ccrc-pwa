@@ -19,10 +19,14 @@
 // take-up plan, refinement (i)).
 // A body stays where it landed until its `bodyKey` changes (`MarkdownBody` keys this component by it), so a fallback
 // never mounts again. The reason of G3, G4 and G6 is kept for the console and never reaches the page.
-// One thing runs the body again in place: images that answered 401 (`ReaderImages.auth`). Those images show the frame's own
+// One thing starts the body again: images that answered 401 (`ReaderImages.auth`). Those images show the frame's own
 // "not loaded" chip, and signing in cures them, so a body whose images reported one listens for `onAuthRegained` (the plain
-// view's precedent, `useImageSrc`) and, when it fires, tears the mount down, gives its drafts back and runs the render, the
-// images and the mount again, once per sign-in. A body whose images reported none never listens.
+// view's precedent, `useImageSrc`) and, when it fires, `ReaderFrame` starts a NEW body (it keys the body by the count of
+// those sign-ins): the old body's cleanup tears the mount down and gives its drafts back, and the new body runs the render,
+// the images and the mount from `rendering`, its "Formatting…" note shown, once per sign-in. A run inside the old body would
+// start where that body landed, and `readerBodyReducer` takes `plain` only from `rendering` and `ready` only from
+// `mounting`, so a second render that timed out or was refused would land nowhere (review 2361 F1). A body whose images
+// reported none never listens.
 //
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
@@ -146,11 +150,13 @@ function ReaderBarShown(p: { readonly bar: ReaderBar }): null {
  *  this, so `null` here has one meaning: that answer was not Markdown, and the caller has shown it already. */
 export function ReaderFrame(p: ReaderFrameProps): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
+  /** How many times sign-in has returned over a body with 401 images: the body's key, so each one starts a new body. */
+  const [signedIn, setSignedIn] = useState(0);
   if (src.kind !== 'markdown') return null;
-  return <ReaderBody {...p} text={src.text} />;
+  return <ReaderBody key={signedIn} {...p} text={src.text} onSignedIn={() => setSignedIn((n) => n + 1)} />;
 }
 
-function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode {
+function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSignedIn: () => void }): ReactNode {
   const { text } = p;
   const bytes = useMemo(() => utf8ByteLength(text), [text]);
   const overGate = bytes > DOCS_RENDER_GATE_BYTES;
@@ -161,8 +167,6 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
   const [ask, setAsk] = useState<Ask | null>(null);
-  /** How many times sign-in has returned over a body with 401 images: part of the effect's deps, so each one runs it again. */
-  const [signedIn, setSignedIn] = useState(0);
   /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
   const [bar, setBar] = useState<ReaderBar | null>(null);
   const barSlot = useContext(ReaderBarContext);
@@ -294,11 +298,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         uncount(counted);
       }
       if (images.auth > 0) {
-        // Sign-in returned: this run ends (the cleanup below) and the next one asks the images again.
+        // Sign-in returned: `ReaderFrame` starts a new body, whose run asks the images again; this body's cleanup ends this run.
         unwatchAuth = onAuthRegained(() => {
           unwatch();
-          setBar(null);
-          setSignedIn((n) => n + 1);
+          live.current.props.onSignedIn();
         });
       }
 
@@ -377,7 +380,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       drop();
       giveBack();
     };
-  }, [overGate, text, bytes, signedIn]);
+  }, [overGate, text, bytes]);
 
   /** A write from a sheet's own button: the sheet closes when it lands and stays, saying so, when the clipboard refuses. */
   const writeFromSheet = (text: string, onRefused: () => void): void => {

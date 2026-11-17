@@ -11,7 +11,7 @@ import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
-  DOC_MARKDOWN_ACTION, docGateSentence, docsPlainNote,
+  DOC_FORMATTING, DOC_MARKDOWN_ACTION, docGateSentence, docsPlainNote,
 } from '../src/docs/DocMarkdown';
 import { ReaderFrame, lazyMountReader, type ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
@@ -628,6 +628,68 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
     expect(h.handle.destroy).toHaveBeenCalledTimes(1);
     // The first run's draft count went back before the second run counted its own.
     expect(h.onDraftAsset.mock.calls).toEqual([[1], [-1], [1]]);
+  });
+
+  // Review 2361 F1: the run after sign-in is a new body, so it lands where its own outcome says, from `rendering`.
+  /** A harness whose first run mounts with a 401 image and whose render after sign-in answers `second`. */
+  function armed(second: () => Promise<ReaderRenderOutcome>): Harness {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.renderFn.mockResolvedValueOnce(RENDERED).mockImplementationOnce(second);
+    return h;
+  }
+  /** The first mount is ready (no note), then sign-in returns and the second render is asked. */
+  async function signInAgain(h: Harness): Promise<void> {
+    const first = await ready(h);
+    act(() => { first.onReady(); });
+    expect(screen.queryByText(DOC_FORMATTING)).toBeNull();
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.renderFn).toHaveBeenCalledTimes(2));
+  }
+
+  it('a second run whose render times out lands on the plain view with the timeout note and mounts nothing more', async () => {
+    const h = armed(async () => ({ kind: 'timeout', budgetMs: 4000 }));
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByText(docsPlainNote({ kind: 'timeout', budgetMs: 4000 }))).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).toHaveBeenCalledTimes(1);
+    expect(h.parser).not.toHaveBeenCalled();
+    expect(container.querySelector('.docs-reader')).toBeNull();
+  });
+
+  it('a second run whose render is refused lands on the plain view, which formats the body itself', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = armed(async () => ({ kind: 'refused', why: 'container-depth', line: 3, value: 99 }));
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.docs-reader')).toBeNull();
+    expect(warn.mock.calls.map((c) => String(c[0]))).toContain('ccrc: reader not rendered (refused: container-depth at line 3)');
+  });
+
+  it('a second run whose render rejects lands on the plain view', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = armed(async () => { throw new Error('the worker went away'); });
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.docs-reader')).toBeNull();
+  });
+
+  it('while the second run renders, the "Formatting…" note shows, and it goes once the new mount is ready', async () => {
+    let release!: (o: ReaderRenderOutcome) => void;
+    const h = armed(() => new Promise((r) => { release = r; }));
+    render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByText(DOC_FORMATTING)).toBeInTheDocument();
+    release(RENDERED);
+    await waitFor(() => expect(h.inputs).toHaveLength(2));
+    act(() => { h.inputs[1]!.onReady(); });
+    expect(screen.queryByText(DOC_FORMATTING)).toBeNull();
   });
 
   it('asks once: a second sign-in after a body with no 401 left does nothing', async () => {
