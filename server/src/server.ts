@@ -2684,7 +2684,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
-  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, identity, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers

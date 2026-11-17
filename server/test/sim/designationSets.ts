@@ -448,7 +448,8 @@ export function retireEndsGenerationCases(m: DesignationStoreModule): Record<str
           actor: OPERATOR, at: now, opKey: 'op-designate-1' }).ok).toBe(true);
         expect(m.goLive(db, PENDING_J, bound, '66666666-7777-8888-9999-000000000000', now + 1)).toMatchObject({ ok: true, changed: true });
         mintOverlord(db, id, now);
-        db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o'").run(id);
+        db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o', "
+          + "pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'").run(id);
         expect(m.retire(db, PENDING_J, { actor: OPERATOR, at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
         expect(liveOverlordGenerations(db)).toBe(0);
       } finally { db.close(); }

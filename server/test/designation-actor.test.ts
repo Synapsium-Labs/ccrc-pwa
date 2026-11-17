@@ -3,14 +3,14 @@
 // held; the writers take a `RecordedActor` only, minted by the identity port for the operator at `operator` strength; every
 // pending clear nulls the four pending actor columns together; and `designationRead()` answers `unmeasured` for a half actor.
 // Over a coord db opened through the real migrations and a fake authority appender (the store suite's shape).
-import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
-  designatePending, designationRead, failPending, goLive, retire, type AuthorityAppender, type DesignateInput,
+  designatePending, designationRead, failPending, goLive, retire, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
 import { actorOf } from '../src/accounts/audit.js';
@@ -18,6 +18,15 @@ import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import type { RecordedActor } from '../src/auth/callerIdentity.js';
 import { ACTOR_ISSUER_MAP, ACTOR_KIND_MAP, CALLER_STRENGTH_MAP } from '../../shared/overlord-identity.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+
+// The writers' kind and strength checks sit behind the brand, and the adapter mints no actor that fails exactly one of them
+// (a session's actor fails both). So each is pinned on its own through a test-only brand: an object put in TRUSTED passes
+// `isRecordedActor` here, and nothing else changes (the real brand still answers for every other object).
+const { TRUSTED } = vi.hoisted(() => ({ TRUSTED: new WeakSet<object>() }));
+vi.mock('../src/auth/attributionIdentity.js', async (importOriginal) => {
+  const m = await importOriginal<typeof import('../src/auth/attributionIdentity.js')>();
+  return { ...m, isRecordedActor: (a: unknown): boolean => m.isRecordedActor(a) || (typeof a === 'object' && a !== null && TRUSTED.has(a)) };
+});
 
 let template = '';
 const opened: DatabaseSync[] = [];
@@ -190,12 +199,22 @@ describe('a writer refuses an actor the port did not mint for the operator', () 
     expect(retire(db, journal, { actor: caller.actor, at: NOW + 1, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
   });
 
-  it('designatePending answers `actor` for a minted operator-kind actor whose strength is not operator, and for a minted session-kind one', () => {
-    // A copy is never minted, so the brand check refuses these first; the kind and strength checks are pinned by the session
-    // actor above, which IS minted and fails both.
+  it('past the brand, the kind must be operator and the strength operator: each check refuses on its own', () => {
+    const trusted = (over: Partial<RecordedActor>): RecordedActor => {
+      const a = Object.freeze({ ...OPERATOR, ...over }) as RecordedActor;
+      TRUSTED.add(a);
+      return a;
+    };
+    const control = trusted({});
     const db = openDb();
-    const bad: DesignateInput['actor'][] = [{ ...OPERATOR, strength: 'attributed' }, { ...OPERATOR, kind: 'session' }] as unknown as RecordedActor[];
-    for (const a of bad) expect(des(db, a)).toEqual({ ok: false, reason: 'actor' });
+    expect(des(db, trusted({ kind: 'session' }))).toEqual({ ok: false, reason: 'actor' });
+    expect(des(db, trusted({ kind: 'server' }))).toEqual({ ok: false, reason: 'actor' });
+    expect(des(db, trusted({ strength: 'attributed' }))).toEqual({ ok: false, reason: 'actor' });
+    expect(des(db, trusted({ strength: 'workload' }))).toEqual({ ok: false, reason: 'actor' });
+    expect(retire(db, journal, { actor: trusted({ kind: 'session' }), at: NOW, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
+    expect(retire(db, journal, { actor: trusted({ strength: 'attributed' }), at: NOW, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
+    // CONTROL: the same object with both checks met passes, so each refusal above is its check's, never the brand's.
+    expect(des(db, control)).toEqual({ ok: true, changed: true });
   });
 });
 

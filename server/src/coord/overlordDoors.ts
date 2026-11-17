@@ -52,6 +52,8 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
+  'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),
+  'private-names-write': operator('PUT', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'admin'),
   card: continuity('GET', '/api/sessions/:id/card', 'view', false),
   // The card's recording page: the one registration a second row names (question 12), because its last page records a read.
   'card-record': continuity('GET', '/api/sessions/:id/card', 'view', true),

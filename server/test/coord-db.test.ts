@@ -864,8 +864,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
-    // and MIGRATIONS[90] (overlord_designation, Overlord W1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(91);
+    // and MIGRATIONS[90] (overlord_designation, Overlord W1)
+    // and MIGRATIONS[91] (the designation actor columns, gates A); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(92);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

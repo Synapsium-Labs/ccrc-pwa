@@ -19,7 +19,8 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const OVERLORD_ROUTES = 'server/src/coord/overlordRoutes.ts';
 const CONTINUITY_ROUTES = 'server/src/continuity/routes.ts';
 const LEDGERS_ROUTES = 'server/src/coord/ledgersRoutes.ts';
-const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES] as const;
+const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
+const FILES = [OVERLORD_ROUTES, CONTINUITY_ROUTES, LEDGERS_ROUTES, NAME_LIST_ROUTES] as const;
 /** Table 11.1d's server words (the later waves' words join here when their pieces land). */
 const SERVER_WORDS = ['continuity-v1', 'timers-v1', 'overlord-v1'];
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
@@ -48,13 +49,13 @@ describe('the door table against the routes files', () => {
   it('the scan finds registrations in each file (a zero would make every other test vacuous)', () => {
     for (const f of FILES) expect(regs[f]!.length, f).toBeGreaterThan(0);
   });
-  it('every row is registered in the file it names, and that file is one of the three read here', () => {
+  it('every row is registered in the file it names, and that file is one of the files read here', () => {
     for (const [key, r] of rows) {
       expect(FILES as readonly string[], key).toContain(r.file);
       expect(regs[r.file], key).toContain(rowRegistration(r));
     }
   });
-  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES]) {
+  for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES]) {
     it(`${f}: every registration has a row or a NOT_OVERLORD_DOORS entry`, () => {
       expect(unaccounted(f, regs[f]!)).toEqual([]);
     });
@@ -69,8 +70,8 @@ describe('the door table against the routes files', () => {
       expect(e.why.length, k).toBeGreaterThan(10);
     }
   });
-  it('CONTROL: a planted registration with no row or entry is found, in each of the two files', () => {
-    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES]) {
+  it('CONTROL: a planted registration with no row or entry is found, in each exhaustively scanned file', () => {
+    for (const f of [OVERLORD_ROUTES, CONTINUITY_ROUTES, NAME_LIST_ROUTES]) {
       const planted = `${sourceOf(f)}\napp.post('/api/planted/door', async () => 1);\n`;
       expect(unaccounted(f, registrationsOf(planted, f)), f).toEqual(['POST /api/planted/door']);
     }
@@ -111,7 +112,7 @@ describe('the table itself', () => {
   });
   it('the rows on landing are the plan\'s, with the goals ratify door already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'portfolio-rank', 'goals-ratify',
+      'designate', 'retire', 'designation', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
       'card', 'card-record', 'notes-write', 'notes-read', 'handover', 'probe-read', 'probe-answer',
     ]);
   });
