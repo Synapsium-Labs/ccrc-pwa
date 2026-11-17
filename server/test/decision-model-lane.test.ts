@@ -90,6 +90,8 @@ function rig(opts: { host?: Host } = {}): Rig {
   mkdirSync(dir, { recursive: true });
   writeFileSync(path.join(dir, 'coord.db'), template);
   const db = openCoordDb(path.join(dir, 'coord.db'));
+  // A lane pass is hundreds of small transactions: no fsync on a throwaway fixture, so a loaded box's disk does not set the pace.
+  db.exec('PRAGMA synchronous = OFF');
   const ft = fakeTime({ wallMs: T0 });
   let journal!: OverlordAuthorityJournal;
   const guard = new OverlordAuthorityGuard({ healTornTail: () => journal.healTornTail(db), measure: () => journal.measure(db) });
