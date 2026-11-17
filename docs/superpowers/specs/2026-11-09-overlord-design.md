@@ -7441,6 +7441,16 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `ask-is-cheaper` | The answer doors | `askOrAct` says asking costs less than a wrong act | H34 |
 | `defer` | The answer doors, under a grant | The decision model's blind check (`grant.inside`) did not answer a clear yes, so the matter goes to the operator | H6, H26 |
 | `relay-carries-method` | Relay | The decision model's `relay.method` row says the addition prescribes a method | H6, R12 |
+| `decision-row-unknown` | The decision-model doors (arm, off, ceiling) | The path names no row of the decision model's catalogue. Answered 404 | H6 |
+| `key-unset` | The decision-model arm door; the key door | Arm: the host or its key is not set yet. Key: no key is in the body and none is stored. Answered 409 | H6 |
+| `key-required` | The decision-model key door | The endpoint's origin differs from the stored host's and the body carries no key, so the old key would go to a new place. Answered 409 | H6 |
+| `private-state-host` | The decision-model arm door | The row asks about private state and the host is `hosted`, so it is never asked there. Answered 409 | H6 |
+| `line-not-admitted` | The decision-model arm door | Arming a row on a line: no line is admitted, the named line is not the current one, or it does not stand under today's host, model and row revision. Answered 409 | H6 |
+| `canary-unmet` | The decision-model arm door | The line's canary has not held: not run, partial, or more than 5% of its full set crossed. Answered 409 | H6 |
+| `bad-ceiling` | The decision-model ceiling door | The ceiling is outside 50 to 5,000 calls a day. Answered 400 | H6 |
+| `bad-endpoint` | The decision-model key door | The endpoint does not parse, carries userinfo, a query or a fragment, is not `https:` for a hosted host, or a local host's address is not loopback or private (a key leaves over `http:` only to loopback). Answered 400 | H6 |
+| `row-changed` | The decision-model arm, off and ceiling doors | The row is not what the operator last read (`expected`), so the move would act on a stale view. Answered 409 | H6 |
+| `stored-not-applied` | The decision-model key door | The key was stored (or removed), but the host record and the holds were not written; send it again. Answered 503 | H6 |
 | `egress-refused` | Relay, answer, kickoff, brief | The body quotes an `overlord-only` entry or hits the private-name list. One word, no detail, counted and throttled | H9, H31 |
 | `request-not-yours` | `POST /api/runs` | The request's owner is not the run's programme | H22 |
 | `dependency-cycle` | The `blocked` request door | The named dependency makes a cycle | H22 |
