@@ -51,6 +51,8 @@ import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
+import { planSyncFor } from './linear/planSync.js';
+import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
 import { testboxCaptureTransport } from './buildCaptureLane.js';
@@ -369,6 +371,12 @@ deps.plan = planStorePort(coord.db);
 // The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 deps.linearPolicy = allowAll;
+// The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
+deps.planSync = planSyncFor({
+  coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
+  privateTrackerKeys: cfg.privateTrackerKeys, readLinearStore: () => readLinearStore(cfg.ccrcDir),
+  currentFleet: () => watcher.currentFleet(),
+});
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown
 // runs the `roster` sub and writes a `reconcile` row. `masker` is read only when an answer lands, after it exists.

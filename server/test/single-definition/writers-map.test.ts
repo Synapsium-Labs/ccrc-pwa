@@ -313,7 +313,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs',
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
@@ -425,6 +425,10 @@ describe(TABLES_PIN, () => {
       continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
       operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
       operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
+      // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
+      // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
+      decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
+      decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
     });
   });
 

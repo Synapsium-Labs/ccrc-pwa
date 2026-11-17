@@ -551,7 +551,7 @@ describe('the proxy spends the slot\'s proxy lane, keyed by the attributed sessi
     expect(t.source).toBe('linear');
     proxy.fx.refresher.queueDirectory({ source: 'file', id: WS.a.id });
     await proxy.fx.refresher.idle();
-    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['Issue', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
+    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['Issue', 'DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers', 'ProjectStatuses', 'InitiativesProbe']);
   }, 120_000);
 
   it('seventeen sessions spending the proxy lane leave the legacy slot\'s title lookups and Check again running', async () => {
@@ -593,7 +593,7 @@ describe('the proxy spends the slot\'s proxy lane, keyed by the attributed sessi
     const before = proxy.calls.length;
     proxy.fx.refresher.queueDirectory(LEGACY_SLOT);
     await proxy.fx.refresher.idle();
-    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers']);
+    expect(proxy.calls.slice(before).map((c) => c.op)).toEqual(['DirectoryStates', 'DirectoryLabels', 'DirectoryProjects', 'DirectoryUsers', 'ProjectStatuses', 'InitiativesProbe']);
     expect((await proxy.call('issue', { ref: 'BBB-1' })).statusCode).toBe(200);
     expect(drain(proxy.fx.rate, { lane: 'proxy', slot: LEGACY_SLOT, calls: 1 }).n).toBe(LINEAR_LANE_CALLS_PER_HOUR.proxy - 1);
   });
@@ -635,8 +635,8 @@ describe('the Settings routes spend the floor, and the one service (spec §6.7, 
       await s.fx.refresher.idle();
       expect((await s.req('POST', `${WORKSPACES}/${WS.a.id}/check`)).statusCode).toBe(200);
       await s.fx.refresher.idle();
-      // The slot's floor starts at 50: the add's directory refresh took four pages, the check one, its directory four.
-      expect(drain(s.fx.rate, { lane: 'floor', slot: a, calls: 1 }).n).toBe(50 - 4 - 1 - 4);
+      // The slot's floor starts at 50: the add's directory refresh took six calls (the four collections, the project statuses, the initiatives probe), the check one, its directory six.
+      expect(drain(s.fx.rate, { lane: 'floor', slot: a, calls: 1 }).n).toBe(50 - 6 - 1 - 6);
       const n = s.calls.length;
       const checked = await s.req('POST', `${WORKSPACES}/${WS.a.id}/check`);
       expect([checked.statusCode, JSON.parse(checked.body)]).toEqual([429, { ok: false, error: 'rate-limited', detail: 'workspace', retryAfterS: 18 }]);

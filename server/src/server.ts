@@ -2117,6 +2117,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
+    itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
