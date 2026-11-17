@@ -476,7 +476,7 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
 export type DeferCause =
   | 'rate-limited' | 'unreachable' | 'timeout' | 'policy-unavailable' | 'journal-unavailable' | 'malformed' | 'linear-unauthorised'
   | 'store-unreadable' | 'created-without-id' | 'workspace-blocked'
-  | 'directory-missing' | 'viewer-unknown' | 'initiatives-unknown';
+  | 'directory-missing' | 'statuses-unread' | 'viewer-unknown' | 'initiatives-unknown';
 /** What a deferral is: a `failure` holds its backoff against every later mark (A7/A12), a `wait` is ordinary; and how long it
  *  waits: the escalating `backoff` step, the short `directory` wait for a fill, or `until` a time the cause carries. */
 export interface Deferral { why: SyncDeferral; wait: 'backoff' | 'directory' | 'until' }
@@ -494,9 +494,47 @@ const DEFERRALS: Readonly<Record<DeferCause, Deferral>> = {
   'directory-missing': { why: 'wait', wait: 'directory' },
   'viewer-unknown': { why: 'wait', wait: 'directory' },
   'initiatives-unknown': { why: 'wait', wait: 'backoff' },
+  'statuses-unread': { why: 'wait', wait: 'backoff' },           // I1: a page that keeps failing is retried on the backoff
 };
 /** M5: the one table of what each deferral is; the executor asks it at every site that defers. */
 export function deferralOf(cause: DeferCause): Deferral { return DEFERRALS[cause]; }
+
+// ── D-8701's episodes: the bounded waits (coordinator ruling, mail 22220; review I1) ──
+
+/** How many consecutive directory fills reading the same unsettled answer bound an episode. */
+export const DIRECTORY_EPISODE_REFILLS = 3;
+/** One workspace's run of fills that read an unsettled answer (initiatives `unknown`, or statuses never read), for one key:
+ *  `since` is its first fill (it names the episode), `refills` how many distinct fills it has seen, the first included. */
+export interface DirectoryStreak { keyDigest: string; since: number; lastFilledAt: number; refills: number }
+/** What one look at a workspace's directory read: no fill held (`none`), or a fill whose answer is settled or not. */
+export interface FillLook { keyDigest: string; filledAt: number | null; reading: 'none' | 'settled' | 'unsettled' }
+
+/** The streak after one look. No fill changes nothing; a settled fill ends the episode; an unsettled fill starts one (or a
+ *  new one for another key), and a fill not seen before counts once however many passes look at it. */
+export function nextDirectoryStreak(prev: DirectoryStreak | undefined, look: FillLook): DirectoryStreak | undefined {
+  if (look.reading === 'none' || look.filledAt === null) return prev;
+  if (look.reading === 'settled') return undefined;
+  if (prev === undefined || prev.keyDigest !== look.keyDigest) return { keyDigest: look.keyDigest, since: look.filledAt, lastFilledAt: look.filledAt, refills: 1 };
+  return look.filledAt === prev.lastFilledAt ? prev : { ...prev, lastFilledAt: look.filledAt, refills: prev.refills + 1 };
+}
+
+const bounded = (st: DirectoryStreak | undefined): boolean => st !== undefined && st.refills >= DIRECTORY_EPISODE_REFILLS;
+
+/** The initiatives probe's waits (`planSyncSteps`' `waits`): a workspace whose streak is short still waits (ask a refill,
+ *  defer); one at the bound is settled without its initiative (projects unlinked) and its coordinator is told once. The
+ *  pass settles when nothing waits. */
+export function probeWaitsVerdict(waits: readonly string[], streakOf: (workspaceId: string) => DirectoryStreak | undefined): { waitOn: string[]; bounded: string[] } {
+  return { waitOn: waits.filter((ws) => !bounded(streakOf(ws))), bounded: waits.filter((ws) => bounded(streakOf(ws))) };
+}
+
+/** The workspaces a pass waits on for their directory: the short wait while any has no directory at all, else the backoff
+ *  for statuses never read (I1); never settled (nothing there can be built), and each unread workspace at the bound is told. */
+export function directoryWaitVerdict(waiting: readonly { workspaceId: string; missing: 'directory' | 'statuses'; streak: DirectoryStreak | undefined }[]): { cause: 'directory-missing' | 'statuses-unread'; tell: string[] } {
+  return {
+    cause: waiting.some((w) => w.missing === 'directory') ? 'directory-missing' : 'statuses-unread',
+    tell: waiting.filter((w) => w.missing === 'statuses' && bounded(w.streak)).map((w) => w.workspaceId),
+  };
+}
 
 /**
  * D-8701 (statuses-unread-distinct): whether a workspace's directory is a miss for the sync, so the pass asks the refresher

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, issueReadVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
   requeueVerdict, requestIdOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -368,6 +368,37 @@ describe('M5: what a deferral is (L1, D-8182)', () => {
     ['directory-missing', { why: 'wait', wait: 'directory' }],
     ['viewer-unknown', { why: 'wait', wait: 'directory' }],
     ['initiatives-unknown', { why: 'wait', wait: 'backoff' }],
+    ['statuses-unread', { why: 'wait', wait: 'backoff' }],             // I1: escalates, never every 10 s
   ];
   it.each(ROWS)('deferralOf(%s)', (cause, d) => { expect(deferralOf(cause)).toEqual(d); });
+});
+
+describe('D-8701 episodes: bounded waits (coordinator ruling, mail 22220; I1)', () => {
+  const DIG = 'digest-a';
+  it('a streak counts each new fill that reads unsettled, from the first; a settled fill ends it; no fill changes nothing', () => {
+    expect(DIRECTORY_EPISODE_REFILLS).toBe(3);
+    let st = nextDirectoryStreak(undefined, { keyDigest: DIG, filledAt: 100, reading: 'unsettled' });
+    expect(st).toEqual({ keyDigest: DIG, since: 100, lastFilledAt: 100, refills: 1 });
+    expect(nextDirectoryStreak(st, { keyDigest: DIG, filledAt: 100, reading: 'unsettled' })).toBe(st);   // the same fill again
+    st = nextDirectoryStreak(st, { keyDigest: DIG, filledAt: 200, reading: 'unsettled' });
+    expect(st).toMatchObject({ since: 100, refills: 2 });
+    expect(nextDirectoryStreak(st, { keyDigest: DIG, filledAt: null, reading: 'none' })).toBe(st);
+    expect(nextDirectoryStreak(st, { keyDigest: DIG, filledAt: 300, reading: 'settled' })).toBeUndefined();   // the episode ends
+    expect(nextDirectoryStreak(st, { keyDigest: 'digest-b', filledAt: 300, reading: 'unsettled' })).toEqual({ keyDigest: 'digest-b', since: 300, lastFilledAt: 300, refills: 1 });
+  });
+
+  const streak = (refills: number) => ({ keyDigest: DIG, since: 1, lastFilledAt: refills, refills });
+  it('the probe: a workspace waits until its streak reaches the bound, then the pass settles without it and tells', () => {
+    const of = new Map([['ws-1', streak(2)], ['ws-2', streak(3)], ['ws-3', streak(7)]]);
+    expect(probeWaitsVerdict(['ws-1', 'ws-2', 'ws-3', 'ws-4'], (ws) => of.get(ws))).toEqual({ waitOn: ['ws-1', 'ws-4'], bounded: ['ws-2', 'ws-3'] });
+    expect(probeWaitsVerdict([], () => undefined)).toEqual({ waitOn: [], bounded: [] });
+  });
+
+  it('unread statuses: wait on the backoff (a missing directory on the short wait), and tell once the bound is reached', () => {
+    expect(directoryWaitVerdict([{ workspaceId: 'ws-1', missing: 'statuses', streak: streak(1) }])).toEqual({ cause: 'statuses-unread', tell: [] });
+    expect(directoryWaitVerdict([{ workspaceId: 'ws-1', missing: 'statuses', streak: streak(3) }, { workspaceId: 'ws-2', missing: 'statuses', streak: undefined }]))
+      .toEqual({ cause: 'statuses-unread', tell: ['ws-1'] });
+    expect(directoryWaitVerdict([{ workspaceId: 'ws-1', missing: 'statuses', streak: streak(3) }, { workspaceId: 'ws-2', missing: 'directory', streak: undefined }]))
+      .toEqual({ cause: 'directory-missing', tell: ['ws-1'] });
+  });
 });

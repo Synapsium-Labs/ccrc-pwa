@@ -41,8 +41,8 @@ import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
-  withoutPutBack, type AdoptionAsk, type DeferCause, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, nextDirectoryStreak, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
+  withoutPutBack, type AdoptionAsk, type DeferCause, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -114,6 +114,12 @@ export class PlanSync {
   private readonly notConfigured = new Set<string>();
   /** Workspaces whose key Linear refused (401): no call until the time. */
   private readonly blockedUntil = new Map<string, number>();
+  /** D-8701's episodes (the bounded waits): each workspace's streak of fills reading `unknown` initiatives (`probe|<ws>`) or
+   *  project statuses never read (`statuses|<ws>`). In process memory: a restart starts the streak again. */
+  private readonly streaks = new Map<string, DirectoryStreak>();
+  /** The programmes settled without their initiative at a probe episode's bound, by workspace: marked due again when that
+   *  workspace's directory is next refilled (the ruling's re-check "on the next refill"). */
+  private readonly probeSettled = new Map<string, Set<string>>();
 
   constructor(private readonly deps: PlanSyncDeps) {}
 
@@ -149,6 +155,7 @@ export class PlanSync {
    *  snapshot.) */
   private async requeueSweep(now: number): Promise<void> {
     const slots = slotsOf(await this.deps.readLinearStore());
+    this.recheckSettledProbes(slots, now);
     for (const p of this.deps.coord.programs()) {
       let requeued = false;
       for (const b of this.deps.plan.bindingsOf(p.slug)) {
@@ -158,6 +165,19 @@ export class PlanSync {
         requeued = this.requeue(b, requeueVerdict(b, { kind: 'time', filledAt, olderThan: now - LAST_BACKOFF_MS })) || requeued;
       }
       if (requeued) this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
+    }
+  }
+
+  /** A programme settled without its initiative at a probe episode's bound is due again once its workspace's directory was
+   *  refilled since (or the episode ended): the next pass reads the probe again, creating and linking the initiative on `on`. */
+  private recheckSettledProbes(slots: Map<string, SlotInfo>, now: number): void {
+    for (const [ws, slugs] of this.probeSettled) {
+      const slot = slots.get(ws);
+      const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
+      const streak = this.streaks.get(`probe|${ws}`);
+      if (streak !== undefined && (filledAt === null || filledAt === streak.lastFilledAt)) continue;
+      for (const slug of slugs) this.deps.plan.markSyncDue(slug, now - PLAN_SYNC_DEBOUNCE_MS);
+      this.probeSettled.delete(ws);
     }
   }
 
@@ -349,7 +369,15 @@ export class PlanSync {
           // An initiative waiting on the probe (it reads `unknown`): ask the refresher for a refill and come back on the
           // backoff, so the programme is never settled without its initiative (fix round 1, F1). The refresher's own window
           // bounds what the asks cost.
-          const waitsOn = waits.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
+          // Past the episode's bound (D-8701, ruling of mail 22220) it is settled without the initiative, its coordinator told
+          // once, and no refill is asked for it: the next refill or plan change looks again.
+          const probe = probeWaitsVerdict(waits, (ws) => this.streaks.get(`probe|${ws}`));
+          for (const ws of probe.bounded) {
+            this.mailEpisode(slug, ws, 'probe');
+            const settled = this.probeSettled.get(ws) ?? new Set<string>();
+            this.probeSettled.set(ws, settled.add(slug));
+          }
+          const waitsOn = probe.waitOn.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
           if (waitsOn.length > 0) {
             for (const slot of waitsOn) this.deps.directoryMiss(slot.ref, slot.digest);
             this.deferFor(slug, 'initiatives-unknown');
@@ -358,8 +386,14 @@ export class PlanSync {
           plan.clearSyncDue(slug); this.attempts.delete(slug); return 'done';
         }
         const until = actionable.flatMap((s) => (s.workspaceId === null ? [] : [this.blockedUntil.get(s.workspaceId) ?? 0]));
-        if (actionable.some((s) => s.workspaceId !== null && waiting.has(s.workspaceId))) this.deferFor(slug, 'directory-missing');
-        else if (Math.max(0, ...until) > this.deps.now()) this.deferFor(slug, 'workspace-blocked', { until: Math.max(...until) });
+        const waitedOn = [...new Set(actionable.flatMap((s) => (s.workspaceId !== null && waiting.has(s.workspaceId) ? [s.workspaceId] : [])))];
+        if (waitedOn.length > 0) {
+          // I1: statuses never read wait on the backoff, and past the bound the coordinator is told once per episode.
+          const unread = new Set(built.unread);
+          const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streaks.get(`statuses|${ws}`) })));
+          for (const ws of w.tell) this.mailEpisode(slug, ws, 'statuses');
+          this.deferFor(slug, w.cause);
+        } else if (Math.max(0, ...until) > this.deps.now()) this.deferFor(slug, 'workspace-blocked', { until: Math.max(...until) });
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
       const flow = await this.execute(slug, runnable[0]!, built, deadlineAt);
@@ -376,7 +410,7 @@ export class PlanSync {
   }
 
   /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). */
-  private snapshot(slug: string, store: LinearStoreRead): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[] } | null {
+  private snapshot(slug: string, store: LinearStoreRead): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
     const rowid = plan.programmeRowId(slug);
     const prog = coord.programs().find((p) => p.slug === slug);
@@ -401,6 +435,7 @@ export class PlanSync {
       };
     });
     const waiting: string[] = [];
+    const unread: string[] = [];
     const workspaces: SyncSnapshot['workspaces'] = [];
     // The workspaces the projects resolve to, and those the programme's initiative is bound in (F2: an old workspace's
     // initiative is still updated and closed after a team key moved away).
@@ -409,10 +444,17 @@ export class PlanSync {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
       const directory = this.deps.directory.get(slot.ref, slot.digest);
+      const statuses = this.deps.directory.projectStatusesRead(slot.ref, slot.digest);
       // D-8701: statuses never read wait for a refill as a missing directory does; they are never "no status of that type".
-      if (directoryMissed(directory, this.deps.directory.projectStatusesRead(slot.ref, slot.digest))) {
+      if (directoryMissed(directory, statuses)) {
         waiting.push(workspaceId); this.deps.directoryMiss(slot.ref, slot.digest);
+        if (directory !== null) unread.push(workspaceId);
       }
+      // The episodes' streaks see each fill once, whichever programme's pass reads it first.
+      const filledAt = this.deps.directory.filledAt(slot.ref, slot.digest);
+      const look = (unsettled: boolean): FillLook => ({ keyDigest: slot.digest, filledAt, reading: directory === null ? 'none' : unsettled ? 'unsettled' : 'settled' });
+      this.observe(`probe|${workspaceId}`, look(directory?.initiatives === 'unknown'));
+      this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
     const goals = coord.goalsFor(slug);
@@ -425,7 +467,7 @@ export class PlanSync {
       },
       plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
     };
-    return { snap, slots, waiting };
+    return { snap, slots, waiting, unread };
   }
 
   /** §5.6: the PR of each bound ticket's run, as a URL on the project's measured repository (an unmeasured repository has no
@@ -719,6 +761,25 @@ export class PlanSync {
     if (s.bindingId === null) return;
     this.deps.plan.markFailed(s.bindingId, word, s.inputs, this.deps.now());
     this.mailFailed(s, word);
+  }
+
+  /** One look at a workspace's fill, written into its streak (L1's `nextDirectoryStreak` decides). */
+  private observe(key: string, look: FillLook): void {
+    const next = nextDirectoryStreak(this.streaks.get(key), look);
+    if (next === undefined) this.streaks.delete(key); else this.streaks.set(key, next);
+  }
+
+  /** D-8701's episode mail: once per programme, workspace and episode (its first fill names it), in a fixed sentence. */
+  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses'): void {
+    const streak = this.streaks.get(`${kind}|${workspaceId}`);
+    if (streak === undefined) return;
+    if (kind === 'probe') {
+      this.mailOnce(slug, `Linear sync: workspace ${workspaceId} initiatives-unknown since ${streak.since} (${slug})`,
+        `ccrc cannot tell whether initiatives are on in the Linear workspace ${workspaceId}, so the initiative of ${slug} there is waiting. Its projects, milestones and issues still sync, not linked to an initiative; ccrc looks again at the next directory refill or plan change.`);
+    } else {
+      this.mailOnce(slug, `Linear sync: workspace ${workspaceId} statuses-unread since ${streak.since} (${slug})`,
+        `ccrc could not read the project statuses of the Linear workspace ${workspaceId}, so nothing of ${slug} in that workspace syncs until they read. The sync retries on its backoff.`);
+    }
   }
 
   /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */

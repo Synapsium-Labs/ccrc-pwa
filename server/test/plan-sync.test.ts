@@ -521,6 +521,120 @@ describe('every outcome has one handling', () => {
   });
 });
 
+describe('D-8701 episodes: the bounded waits (coordinator ruling, mail 22220; I1)', () => {
+  const episodeMails = (r: Rig, word: string) => mails(r).filter((m) => m.subject.includes(word));
+  /** One directory refill (a new `filledAt` for the slot's key), then a tick once the programme is due. */
+  async function refill(r: Rig): Promise<void> {
+    r.dir.filledAt = r.t.now + 1;
+    r.t.now = Math.max(r.t.now + 2, dueAt(r) ?? 0) + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+  }
+  async function unknownStreak(): Promise<Rig> {
+    const r = await rig({ directory: { ...DIRECTORY, initiatives: 'unknown' } });
+    await r.sync.tick(afterDebounce(r));                    // refill 1 (the fill the pass first sees)
+    await refill(r); await refill(r);                       // refills 2 and 3: the bound
+    return r;
+  }
+
+  it('the probe: after 3 refills that all read unknown the pass settles without the initiative, and asks no more refills', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, initiatives: 'unknown' } });
+    await r.sync.tick(afterDebounce(r));
+    expect(dueAt(r)).not.toBeNull();
+    await refill(r);
+    expect(dueAt(r)).not.toBeNull();                       // two refills: still waiting
+    await refill(r);
+    expect(dueAt(r)).toBeNull();                           // the third: settled
+    expect(opsOf(r)).toEqual(['projectCreate', 'projectMilestoneCreate', 'issueCreate']);
+    const asked = r.misses.length;
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.misses).toHaveLength(asked);                   // past the bound the probe asks no refill
+    expect(dueAt(r)).toBeNull();
+  });
+
+  it('the probe: one mail per episode, not one per pass; a later unknown streak is a new episode', async () => {
+    const r = await unknownStreak();
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+    const m = episodeMails(r, 'initiatives-unknown')[0]!;
+    expect(m.toId).toBe(OWNER);
+    expect(m.body).toContain('cannot tell whether initiatives are on');
+    for (let i = 0; i < 3; i += 1) { r.plan.markSyncDue(SLUG, r.t.now); r.t.now += PLAN_SYNC_DEBOUNCE_MS + 1; await r.sync.tick(r.t.now); }
+    await refill(r);
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+    r.dir.entries = DIRECTORY;                               // on: the episode ends (the initiative is created and linked)
+    await refill(r);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(opsOf(r)).toContain('initiativeCreate');
+    r.dir.entries = { ...DIRECTORY, initiatives: 'unknown' };   // unknown again, and the initiative has an update waiting
+    r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme A renamed', SLUG);
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await refill(r); await refill(r);
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+    await refill(r);
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(2);    // a new episode: its own mail
+  });
+
+  it('the probe: on after the streak creates the initiative and links the projects, with no plan change', async () => {
+    const r = await unknownStreak();
+    expect(dueAt(r)).toBeNull();
+    const from = r.asks.length;
+    r.dir.entries = DIRECTORY;                               // the next refill reads on
+    await refill(r);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(opsOf(r).slice(from)).toEqual(['initiativeCreate', 'initiativeToProjectCreate']);
+    expect(dueAt(r)).toBeNull();
+  });
+
+  it('the probe: no operator item is raised on unknown', async () => {
+    const r = await unknownStreak();
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
+  });
+
+  it('unread statuses: the wait escalates on the backoff rather than repeating every 10 s', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[0]);
+    r.t.now = dueAt(r)! + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[1]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('unread statuses: one mail per episode after 3 unread refills; the programme keeps waiting', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(0);
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+    expect(episodeMails(r, 'statuses-unread')[0]!.body).toContain('could not read the project statuses');
+    await refill(r); await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+    expect(dueAt(r)).not.toBeNull();
+    expect(r.asks).toEqual([]);
+    expect(bindingsOf(r).filter((b) => b.state === 'failed')).toEqual([]);
+  });
+
+  it('unread statuses: a refill that reads them ends the episode and the workspace syncs', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    await refill(r); await refill(r);
+    r.dir.entries = DIRECTORY;
+    r.dir.statuses = 'read';
+    await refill(r);
+    expect(bindingOfKind(r, 'epic')?.state).toBe('bound');
+    expect(dueAt(r)).toBeNull();
+    r.dir.entries = { ...DIRECTORY, projectStatuses: [] };   // a later unread streak is a new episode
+    r.dir.statuses = 'unread';
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [], update: [{ id: r.plan.planOf(SLUG).epics[0]!.id, title: 'Renamed epic' }], drop: [] } }), OWNER, r.t.now, null);
+    await refill(r); await refill(r); await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(2);
+  });
+});
+
 describe('A7/A12: a deferring failure holds its backoff', () => {
   it('a plan write, a run transition or an attach never pulls a programme deferred for a failure back to now', async () => {
     const r = await rig();
