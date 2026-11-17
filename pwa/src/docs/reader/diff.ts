@@ -137,7 +137,14 @@ function search(a: Int32Array, b: Int32Array, spent: number): Uint8Array | null 
 
 /** The lines of `after` that `before` lacks, and where lines of `before` are gone, or the name of the bound that refused it. */
 export function readerDiff(before: string, after: string): ReaderDiff {
-  if (utf8Bytes(before) > DOCS_MAX_DOC_BYTES || utf8Bytes(after) > DOCS_MAX_DOC_BYTES) {
+  // Every UTF-16 code unit is at least one UTF-8 byte, so a side longer than the cap in code units is over it in bytes
+  // too, and is refused without the byte counter walking it. `utf8Bytes` decides the sides that pass this test.
+  if (
+    before.length > DOCS_MAX_DOC_BYTES ||
+    after.length > DOCS_MAX_DOC_BYTES ||
+    utf8Bytes(before) > DOCS_MAX_DOC_BYTES ||
+    utf8Bytes(after) > DOCS_MAX_DOC_BYTES
+  ) {
     return { kind: 'unavailable', why: 'bytes' };
   }
   const beforeLines = splitLines(before);

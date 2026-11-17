@@ -20,6 +20,20 @@ import {
   type ReaderDiff,
 } from '../src/docs/reader/diff';
 
+// A pass-through of the L0 byte counter that records the length of every string it is asked about, so a case can say
+// what `readerDiff` did and did not hand it. The fixtures below use the real `utf8Bytes` through the same wrapper.
+const utf8Calls = vi.hoisted(() => ({ lengths: [] as number[] }));
+vi.mock('../../shared/utf8', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../../shared/utf8')>();
+  return {
+    ...real,
+    utf8Bytes: (s: string): number => {
+      utf8Calls.lengths.push(s.length);
+      return real.utf8Bytes(s);
+    },
+  };
+});
+
 type Available = Extract<ReaderDiff, { kind: 'available' }>;
 
 /** The diff, which the case expects to be available. */
@@ -207,6 +221,14 @@ describe('readerDiff: the bytes bound', () => {
 
   it('one byte over on the after side is unavailable for bytes', () => {
     expect(readerDiff('a', `${atCap()}x`)).toEqual({ kind: 'unavailable', why: 'bytes' });
+  });
+
+  it('a side longer than the cap in UTF-16 code units is refused without the byte counter reading it', () => {
+    const long = 'x'.repeat(DOCS_MAX_DOC_BYTES + 1);
+    utf8Calls.lengths.length = 0;
+    expect(readerDiff(long, 'a')).toEqual({ kind: 'unavailable', why: 'bytes' });
+    expect(readerDiff('a', long)).toEqual({ kind: 'unavailable', why: 'bytes' });
+    for (const length of utf8Calls.lengths) expect(length).toBeLessThanOrEqual(DOCS_MAX_DOC_BYTES);
   });
 
   it('bytes are refused before lines: too many bytes and too many lines say bytes', () => {
