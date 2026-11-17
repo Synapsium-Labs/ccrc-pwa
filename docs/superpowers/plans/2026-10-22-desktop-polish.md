@@ -4017,7 +4017,8 @@ dtbd and topology-clean guards.
 **Why.** Review 2326 (F3) found an exact-bytes leak on `main` that C39 neither caused nor changed: the masker joined a
 run that ends its row with the next row's leading run only, so a fingerprinted key a program draws on three or more
 rows reached the drawer whole. The same review saw two related shapes (O1, O2). This is secret masking, so fail-closed
-comes first. Each claim is labelled measured or inferred in `c41.md`, with the measurements, the mutants and the costs.
+comes first. Each claim is labelled measured or inferred in the task note, `docs/superpowers/programs/desktop-polish/c41.md` (`c41.md` below; moved out of
+`plans/` in fix round 2 by the operator's ruling), with the measurements, the mutants and the costs.
 
 **What was done.**
 - **Measured on `main`** (synthetic keys; byte probes of the masker and the drawer; a private tmux 3.6 server with a
@@ -4046,11 +4047,23 @@ comes first. Each claim is labelled measured or inferred in `c41.md`, with the m
   overlap by as much (18 KiB; `secret-mask.test.ts`'s overlap bound moved from 16 to 18 KiB, its one changed line, with
   its claim holder's consent, by the coordinator's ruling), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
   it found in the hold: a colour tmux re-sends inside a row, a hold that expired inside the escape moving to the next
-  row, and a chunk cut inside a hyperlink's terminator. Nine more cases: seven red at a69085c93, a 17,802-byte block
-  across a slice boundary red at 29219c442 (16 KiB of overlap), and the budget's fail-closed arm red on its mutant (F4);
-  ten more mutants, each red. The 128-row and 12-unit bounds stay as they are:
-  a key past them shows in full with no mark and no notice, as on `main`, which for a key at the run ceiling is 66
-  columns or fewer with a two-column indent, 64 or fewer without (F3).
+  row, and a chunk cut inside a hyperlink's terminator. Nine more cases: eight red at a69085c93 (review 2370 F12; this
+  line said seven), the 17,802-byte block across a slice boundary among them and red at 29219c442 (16 KiB of overlap)
+  too, and the budget's fail-closed arm red on its mutant (F4); ten more mutants, each red. The 128-row and 12-unit
+  bounds stay as they are: a key past them shows in full with no mark and no notice, as on `main`, which for a key at the
+  run ceiling is 66 columns or fewer after a five-column prefix with a two-column indent on its other rows, 64 or fewer
+  with the prefix and no indent, and 63 or fewer with neither (F3; measured in fix round 2, review 2370 F15).
+- **Fix round 2** (review 2370, `c41.md` §12). Two holes in round 1's own mechanism, each less than `main` leaks. The
+  drawer sent a key's held rows later with only 1 KiB of context, so a key whose hold began inside it drew its tail
+  (F1): now a match's spans in held text carry to where that text is sent. At a chain longer than its 18 KiB window the
+  drawer held from the window's first row, and a window with no row break read its first byte as the chain's start, so
+  up to the whole key could show; pane history did the same past its 18 KiB overlap (F2, F3): now such a chain is read
+  again over the whole text and withheld from its start, pane history's lookahead reads on while the same walk still
+  reaches the cut and carries the match into the next slice, and past 256 KiB both send the chain's rows masked (the
+  coordinator's rulings). Eleven more cases (29 in all), eight red at e37701c43 for key bytes drawn; the F4 row, the F8
+  row and a key-free pane-history row pass there and red on their mutants or pin bytes. The secret-mask overlap pin
+  stays at 18 KiB; the comment above it changed with its claim holder's consent. The task note moved to
+  `docs/superpowers/programs/desktop-polish/c41.md` by the operator's ruling (coordinator mail 23009).
 
 - **D-8710** — `drawer-mask-row-join-n-rows`: Task C41, issued on 2026-11-17. The exact-bytes row join walks every row a
   key fills, bounded by the longest held length, and the drawer holds, reads ahead and taints by the rows a key spans,
@@ -4062,7 +4075,7 @@ comes first. Each claim is labelled measured or inferred in `c41.md`, with the m
   `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`) or put to the coordinator (`drawer-mark-terminal-wrap`).
 
 **Acceptance.** Every server test of the masker passes at the PR's tip; ten of the eleven new cases are red on `main`'s
-masker, and seven of fix round 1's eight at a69085c93; each mutant in `c41.md` §6 reds; deviation-refs, dtbd, topology-clean, single-definition and the server test
+masker, eight of fix round 1's nine at a69085c93, and eight of fix round 2's eleven at e37701c43 (`c41.md` §12); each mutant in `c41.md` §6 reds, but for those §6 names surviving by design (bounds that now set only cost, and an arm no chain reaches); deviation-refs, dtbd, topology-clean, single-definition and the server test
 typecheck pass.
 
 **Rollback.** A plain revert.
