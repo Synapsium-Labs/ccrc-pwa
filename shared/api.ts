@@ -13833,7 +13833,8 @@ export function credentialMaskSource(id: CredentialMaskId): string {
   return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
 }
 
-/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513), except the drawer
+ *  (`DRAWER_SECRET_MASK`, D-8694). */
 export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */

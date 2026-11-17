@@ -142,3 +142,34 @@ describe('set-facts writes the organization label (account organization A3)', ()
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 });
+
+// `org-check` (account organization B1, PR A's review F2): the label's gate alone, which the verb asks read-only before
+// its first write. It shares `set-facts`' gate, so both refuse alike, and both say nothing was written.
+describe('org-check: the label gate, read-only (account organization B1)', () => {
+  const check = (...flags: string[]): { code: number | null; stdout: string } => {
+    const r = spawnSync(process.execPath, [OP, 'org-check', ...flags], { encoding: 'utf8' });
+    return { code: r.status, stdout: r.stdout };
+  };
+
+  it('admits a label and the clear word, silently', () => {
+    expect(check('--org', 'org-a')).toEqual({ code: 0, stdout: '' });
+    expect(check('--org', 'none')).toEqual({ code: 0, stdout: '' });
+  });
+
+  it('refuses an id shape and an off-shape name as set-facts does, saying nothing was written', () => {
+    const file = rosterFile();
+    for (const [v, word] of [['0f8e2c1a-1b2c-4d3e-8f90-123456789abc', 'org-looks-like-an-id'],
+      ['abcdef0123456789abcdef0123456789', 'org-looks-like-an-id'], ['Org-A', 'bad-argv'], ['none-of-it x', 'bad-argv']] as const) {
+      const alone = check('--org', v);
+      expect(alone.code, v).toBe(2);
+      const said = JSON.parse(alone.stdout) as { error: string; detail: string };
+      expect(said.error, v).toBe(word);
+      expect(said.detail, v).toMatch(/Nothing was written\.$/);
+      expect(JSON.parse(op(file, 'lane-a', '--org', v).stdout), v).toEqual(said);
+    }
+  });
+
+  it('takes no key but --org', () => {
+    expect(check('--file', '/nonexistent', '--org', 'org-a').code).toBe(2);
+  });
+});
