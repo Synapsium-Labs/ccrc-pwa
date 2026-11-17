@@ -159,32 +159,35 @@ export function targetVerdictCases(m: Pick<DoneTestDeciders, 'targetVerdict'>): 
     'pr-merged on an unparsable closePr is unmeasurable before the lineage is read': () => {
       expect(at(PR_REPLACED, runFacts({ closePr: '{', lineage: [lin(5, 'merged')] }))).toBe('unmeasurable:close-record-unreadable');
     },
-    'row 12: a PR the run replaced, merged inside its window, passes through the lineage': () => {
-      expect(at(PR_REPLACED, runFacts({ closePr: closePr(7, false), lineage: [lin(5, 'merged')] }))).toBe('passed:pr-5');
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged')] }))).toBe('passed:pr-5');
-      expect(at(PR_REPLACED, runFacts({ state: 'failed', closePr: null, lineage: [lin(5, 'merged', OPENED_S)] }))).toBe('passed:pr-5');
-    },
-    'row 12: the window is the run\'s own, measured in seconds: an entry before it does not count': () => {
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S - 1)] }))).toBe('unmeasurable:not-this-runs-pr');
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S - 1), lin(5, 'closed', OPENED_S + 9)] })))
-        .toBe('ended:pr-5-closed');
-    },
-    'the newest in-window entry for the PR decides': () => {
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'open', OPENED_S + 1), lin(5, 'merged', OPENED_S + 9)] })))
-        .toBe('passed:pr-5');
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S + 9), lin(5, 'closed', OPENED_S + 1)] })))
-        .toBe('passed:pr-5');
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(6, 'merged'), lin(5, 'closed')] }))).toBe('ended:pr-5-closed');
-    },
-    'row 13: a closed in-window entry is ended': () => {
-      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'closed')] }))).toBe('ended:pr-5-closed');
-    },
-    'row 14: another PrPhase word, or a word outside it, is unmeasurable': () => {
-      for (const w of ['open', 'draft', 'none', 'unknown', 'unchecked', 'no-commits']) {
-        expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, w)] }))).toBe(`unmeasurable:phase-${w}`);
+    'row 12 (F2): a PR only the lineage names is unattributed, never passed or ended, whatever its phase': () => {
+      for (const w of ['merged', 'closed', 'open', 'draft', 'MERGED', 'x']) {
+        expect(at(PR_REPLACED, runFacts({ closePr: closePr(7, false), lineage: [lin(5, w)] }))).toBe('unmeasurable:lineage-unattributed');
+        expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, w)] }))).toBe('unmeasurable:lineage-unattributed');
       }
-      for (const w of ['MERGED', 'landed', 7, null]) expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, w as string)] })))
-        .toBe('unmeasurable:phase-unknown');
+      expect(at(PR_REPLACED, runFacts({ state: 'failed', closePr: null, lineage: [lin(5, 'merged', OPENED_S)] })))
+        .toBe('unmeasurable:lineage-unattributed');
+    },
+    'row 12 (F2), the timing case: wave 1\'s PR recorded inside wave 2\'s window, when wave 2 opened its own, is unattributed': () => {
+      // ccd appends the OUTGOING PR to `.prhistory` when the bound number is replaced, stamped when it is observed: inside
+      // the window of the run that replaced it. Nothing attributes the entry to a run, so it never answers for this one.
+      expect(at(PR_REPLACED, runFacts({ closePr: closePr(7, true), lineage: [lin(5, 'merged', OPENED_S + 120)] })))
+        .toBe('unmeasurable:lineage-unattributed');
+      expect(at(PR_REPLACED, runFacts({ closePr: closePr(7, false), lineage: [lin(5, 'merged', OPENED_S + 120)] })))
+        .toBe('unmeasurable:lineage-unattributed');
+    },
+    'row 12: the window is the run\'s own, measured in seconds: an entry before it is not this run\'s PR': () => {
+      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S - 1)] }))).toBe('unmeasurable:not-this-runs-pr');
+      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S)] }))).toBe('unmeasurable:lineage-unattributed');
+      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(5, 'merged', OPENED_S - 1), lin(5, 'closed', OPENED_S + 9)] })))
+        .toBe('unmeasurable:lineage-unattributed');
+      expect(at(PR_REPLACED, runFacts({ closePr: null, lineage: [lin(6, 'merged'), lin(5, 'merged', OPENED_S - 1)] })))
+        .toBe('unmeasurable:not-this-runs-pr');
+    },
+    'a later PR-less wave after wave 1\'s PR merged (F1): no close record, and wave 1\'s PR passes neither target': () => {
+      // What the close records for a claim that names no PR (`closePrFactsOf`): nothing, never the earlier wave's row.
+      const f = runFacts({ closePr: null, lineage: [lin(5, 'merged')] });
+      expect(at(RUN_CLOSED, f)).toBe('unmeasurable:no-close-record');
+      expect(at(PR_REPLACED, f)).toBe('unmeasurable:lineage-unattributed');
     },
     'row 15: an unparsable lineage is unmeasurable': () => {
       for (const l of ['[]', null, {}, [null], [{ pr: '5', recordedAt: OPENED_S + 1 }], [{ pr: 5 }], [7]]) {
@@ -209,6 +212,13 @@ export function targetVerdictCases(m: Pick<DoneTestDeciders, 'targetVerdict'>): 
       expect(at(REVIEW, runFacts({}, []))).toBe('pending:run-4-no-review');
       expect(at(REVIEW, runFacts({ state: 'working' }, []))).toBe('pending:run-4-no-review');
       expect(at(REVIEW, runFacts({}, [{ state: 'failed' }, { state: 'failed' }]))).toBe('pending:run-4-no-review');
+    },
+    'review-passed naming a run that is not a work run is facts-mismatch (F6)': () => {
+      for (const kind of ['review', 'unknown', 'bogus']) {
+        expect(at(REVIEW, runFacts({ kind }, [{ state: 'done' }]))).toBe('unmeasurable:facts-mismatch');
+        expect(at(REVIEW, runFacts({ kind }, []))).toBe('unmeasurable:facts-mismatch');
+        expect(at(REVIEW, runFacts({ kind, state: 'failed' }, []))).toBe('unmeasurable:facts-mismatch');
+      }
     },
     'review-passed with reviews unread, or a review state outside RunState, is unmeasurable': () => {
       expect(at(REVIEW, runFacts({}))).toBe('unmeasurable:reviews-unread');
@@ -237,6 +247,10 @@ export function targetVerdictCases(m: Pick<DoneTestDeciders, 'targetVerdict'>): 
           if (state === 'bogus') expect(word(a)).toBe('unmeasurable:state-unknown');
           else if (OPEN_STATES.includes(state) && t !== REVIEW) expect(word(a)).toBe(`pending:run-4-${state}`);
           else if (a.kind === 'passed' && t === RUN_CLOSED) expect([closePr(7, true), closePr(5, true)]).toContain(c);
+          // F2: pr-merged passes or ends only on the run's own close record naming that PR, never on the lineage.
+          else if ((a.kind === 'passed' || a.kind === 'ended') && t.predicate === 'pr-merged') {
+            expect(JSON.parse(c as string)).toMatchObject({ pr: t.pr });
+          }
           n++;
         }
       }

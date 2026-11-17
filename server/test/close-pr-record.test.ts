@@ -10,6 +10,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
 import { closePrFactsOf, type CcdPrLine } from '../src/prstate.js';
+import { readTarget } from '../src/coord/doneTestRead.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -42,7 +43,17 @@ describe('closePrFactsOf: the bound row of the close\'s own measured line', () =
     ['a row a merge train landed', [prRow(B, 'CLOSED', { landedInTrain: true })], { pr: 7, merged: true, head: HEAD }],
     ['the highest bound number of two', [prRow(B, 'MERGED', { number: 5 }), prRow(B, 'OPEN', { number: 9 })], { pr: 9, merged: false, head: HEAD }],
   ])('%s', (_name, rows, want) => {
-    expect(closePrFactsOf(line(rows))).toEqual(want);
+    expect(closePrFactsOf(line(rows), want.pr)).toEqual(want);
+  });
+
+  // F1 (review 2377): the close records a PR only when the verified claim names it. A later wave on the same workspace
+  // that opened no PR of its own still sees wave 1's merged row bound to the branch (its head is an ancestor of the tip).
+  it.each([
+    ['a claim that names no PR, over wave 1\'s merged bound row', [prRow(B, 'MERGED', { number: 5 })], null],
+    ['a claim that names another PR than the bound row', [prRow(B, 'MERGED', { number: 5 })], 9],
+    ['a claim that names a lower PR than the highest bound row', [prRow(B, 'MERGED', { number: 5 }), prRow(B, 'OPEN', { number: 9 })], 5],
+  ])('%s records nothing', (_name, rows, claimPr) => {
+    expect(closePrFactsOf(line(rows), claimPr)).toBeNull();
   });
 
   it.each([
@@ -54,7 +65,7 @@ describe('closePrFactsOf: the bound row of the close\'s own measured line', () =
     ['a row with a short head', [prRow(B, 'MERGED', { headRefOid: 'abc123' })]],
     ['a row with no head', [prRow(B, 'MERGED', { headRefOid: undefined })]],
   ])('%s answers null, never a guess', (_name, rows) => {
-    expect(closePrFactsOf(line(rows))).toBeNull();
+    expect(closePrFactsOf(line(rows), 7)).toBeNull();
   });
 });
 
@@ -148,6 +159,18 @@ describe('the close writes runs.closePr in its own transaction', () => {
     const run = okRun(b.coord.run(id))!;
     expect(run.prLineage.map((e) => [e.pr, e.phase])).toEqual([[5, 'merged']]);
     expect(b.stored(id)).toEqual({ pr: 7, merged: false, head: HEAD });
+  });
+
+  it('a later PR-less wave after wave 1\'s PR merged (F1) records nothing, and neither target passes on wave 1\'s PR', async () => {
+    const s = 'project-a-r8';
+    const b = build([prRow(`ws/${s}`, 'MERGED', { number: 5 })]);
+    const id = b.open(s, 2);
+    const none = { branchTip: TIP, prNumber: null, prPhase: 'none', handoffCommit: TIP };
+    expect(await closeRun(b.deps, id, { fingerprint: none, final: true }, 'coordinator')).toMatchObject({ ok: true, state: 'done' });
+    expect(b.stored(id)).toBeNull();
+    expect(readTarget(b.coord, { predicate: 'run-closed', runId: id })).toEqual({ kind: 'unmeasurable', why: 'no-close-record' });
+    expect(readTarget(b.coord, { predicate: 'pr-merged', runId: id, pr: 5 })).not.toMatchObject({ kind: 'passed' });
+    expect(readTarget(b.coord, { predicate: 'pr-merged', runId: id, pr: 5 })).not.toMatchObject({ kind: 'ended' });
   });
 
   it('the run summary on the wire carries no closePr', async () => {

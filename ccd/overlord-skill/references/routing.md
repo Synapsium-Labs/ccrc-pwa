@@ -43,8 +43,8 @@ open), or you.
 ## The done test
 
 A done test names one to five predicates, each at most once, and nothing else: no prose, no other field. The five are
-`run-closed` (a linked work run closed and its own pull request merged), `pr-merged` (a linked run's pull request
-merged), `goals-modified` (a goals modification cites the request, and its pull request merged when it names one),
+`run-closed` (a linked work run closed and its own pull request merged), `pr-merged` (a linked run's own pull request,
+the one its close recorded, merged), `goals-modified` (a goals modification cites the request, and its pull request merged when it names one),
 `review-passed` and `operator-confirms`. The server measures them from its own rows. Two read `unmeasurable` in W2:
 `review-passed`, because no row records a review's verdict, and a request's `operator-confirms`, because no item links
 to a request yet. So a test needs at least one of `run-closed`, `pr-merged` or `goals-modified`, or it is refused; a test

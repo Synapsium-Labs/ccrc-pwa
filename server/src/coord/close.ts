@@ -444,9 +444,10 @@ async function closeWorkRun(
   // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
   // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281). The run's own bound PR,
   // from the line `verifyDone` already measured, rides the same transaction (Overlord W2 done tests A, DT7); a close
-  // that measured no line records none, and nothing here reads the fleet again.
+  // that measured no line, or whose verified claim names no PR or another one, records none (review 2377 F1), and
+  // nothing here reads the fleet again.
   const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: recordedHandoff(plan, verified),
-    program: run.program, viaClosing: true, closePr: line === null ? null : closePrFactsOf(line) });
+    program: run.program, viaClosing: true, closePr: line === null ? null : closePrFactsOf(line, plan.claim.prNumber) });
   const committed = decideClose({ step: 'commit', closed, acted: true });
   if (committed.kind !== 'go') return stopped(deps, committed);
   noteGone(deps, id, causedBy, fleet);

@@ -273,7 +273,9 @@ export interface RunRow extends RunSummary {
    *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
    *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
   unattributed: boolean;
-  /** Migration 85 (Overlord W2 done tests A, DT7): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none.
+  /** `schema.ts`'s `runs.closePr` entry (Overlord W2 done tests A, DT7; its slot moves at landing, so it is not named
+   *  here): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none, and NULL when the verified claim named no
+   *  PR or another one (review 2377 F1).
    *  Parsed only by the done-test reader, which answers a malformed value `unmeasurable`; stripped by `toRunSummary`. */
   closePr: string | null;
 }
@@ -3268,7 +3270,7 @@ export class CoordStore {
     /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
      *  `abandon:<reason>`; every other caller passes nothing. */
     detail?: string;
-    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line)` when it measured a line. ONE writer of
+    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line, claim.prNumber)`. ONE writer of
      *  `runs.closePr`, in this transaction; absent or null writes nothing, so the column stays NULL. */
     closePr?: ClosePrFacts | null;
   }): AdvanceResult {

@@ -6,7 +6,7 @@
 // Ring: L1, context C5 Coordination. Pure: no clock, no I/O. Both are first match and total, and an answer's evidence is
 // ids and words only, never text a session wrote. A fact the gatherer could not read never moves an answer to `passed` or
 // `ended` (DT3, the property in `done-tests-policy.test.ts`).
-import { TERMINAL_RUN_STATES, isPrPhase, isRunState, type PrPhase } from '../../../shared/api.js';
+import { TERMINAL_RUN_STATES, isRunState } from '../../../shared/api.js';
 import { ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { isHead40 } from '../../../shared/landing.js';
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
@@ -68,13 +68,13 @@ export type TargetFacts =
 const passed = (evidence: string): TargetAnswer => ({ kind: 'passed', evidence });
 const ended = (evidence: string): TargetAnswer => ({ kind: 'ended', evidence });
 const pending = (evidence: string): TargetAnswer => ({ kind: 'pending', evidence });
-/** Why a target is unmeasurable, each a fixed word, or a lineage entry's other phase as `phase-<PrPhase>` (Table 3). */
+/** Why a target is unmeasurable, each a fixed word (Table 3). */
 const TARGET_WHY_MAP = {
   'close-record-unreadable': true, 'no-close-record': true, 'lineage-unreadable': true, 'not-this-runs-pr': true,
-  'phase-unknown': true, 'reviews-unread': true, 'state-unknown': true, 'verdict-not-recorded': true,
+  'lineage-unattributed': true, 'reviews-unread': true, 'state-unknown': true, 'verdict-not-recorded': true,
   'facts-mismatch': true, 'no-such-row': true, 'run-unreadable': true,
 } as const satisfies Record<string, true>;
-type TargetWhy = keyof typeof TARGET_WHY_MAP | `phase-${PrPhase}`;
+type TargetWhy = keyof typeof TARGET_WHY_MAP;
 
 /** Every kebab word this context spells, for `mail-routes.test.ts`'s code scan: a predicate, a done test's refusal and why
  *  a target is unmeasurable. None is a mail rejection or a run refusal: a refusal is `bad-request` at its door (DT9). */
@@ -101,21 +101,22 @@ function closePrOf(raw: unknown): ClosePr {
   return { kind: 'ok', pr, merged };
 }
 
-/** The newest lineage entry for `pr` recorded in the run's own window, or null; `bad` when the lineage is unreadable.
- *  `.prhistory`'s `recordedAt` is whole SECONDS (ccd's `int(time.time())`) and `openedAt` milliseconds, so the window is
- *  measured in seconds: an entry recorded in the second the run opened counts (slug `lineage-recorded-at-is-seconds`). */
-function lineageEntry(lineage: unknown, pr: number, openedAt: number): { phase: unknown } | null | 'bad' {
+/** Whether the lineage names `pr` in the run's own window; `bad` when the lineage is unreadable. It only tells "not
+ *  this run's PR" from "unattributed": the fold keeps entries by the shared workspace branch and ccd stamps an outgoing
+ *  PR when it is replaced, inside the replacing run's window, so no entry says whose it is (review 2377 F2, slug
+ *  `pr-merged-reads-the-own-close-only`). `.prhistory`'s `recordedAt` is whole SECONDS (ccd's `int(time.time())`) and
+ *  `openedAt` milliseconds, so the window is measured in seconds (slug `lineage-recorded-at-is-seconds`). */
+function lineageNames(lineage: unknown, pr: number, openedAt: number): boolean | 'bad' {
   if (!Array.isArray(lineage)) return 'bad';
   const from = Math.floor(openedAt / 1000);
-  let best: { phase: unknown; at: number } | null = null;
+  let named = false;
   for (const e of lineage) {
     if (typeof e !== 'object' || e === null) return 'bad';
     const { pr: n, recordedAt } = e as { pr?: unknown; recordedAt?: unknown };
     if (typeof n !== 'number' || typeof recordedAt !== 'number') return 'bad';
-    if (n !== pr || recordedAt < from) continue;
-    if (best === null || recordedAt >= best.at) best = { phase: (e as { phase?: unknown }).phase, at: recordedAt };
+    if (n === pr && recordedAt >= from) named = true;
   }
-  return best;
+  return named;
 }
 
 /** A failed run's evidence: its close detail's first word (`abandon:<reason>` is `abandon`), or `failed` when the detail
@@ -132,20 +133,22 @@ function runClosed(id: number, r: TargetRunFacts): TargetAnswer {
   return c.merged ? passed(`pr-${c.pr}`) : ended(`pr-${c.pr}-not-merged`);
 }
 
+/** `pr-merged` means "this run's PR N merged" (review 2377 F2): only the run's own close record answers it. An unreadable
+ *  record is unmeasurable before the lineage is read (slug `pr-merged-unreadable-close-is-unmeasurable`), and a PR only
+ *  the lineage names is `lineage-unattributed`, never passed or ended. */
 function prMerged(id: number, pr: number, r: TargetRunFacts): TargetAnswer {
   if (!isTerminal(r.state)) return pending(`run-${id}-${r.state}`);
   const c = closePrOf(r.closePr);
   if (c.kind === 'bad') return unmeasurable('close-record-unreadable');
   if (c.kind === 'ok' && c.pr === pr) return c.merged ? passed(`pr-${pr}`) : ended(`pr-${pr}-not-merged`);
-  const e = lineageEntry(r.lineage, pr, r.openedAt);
-  if (e === 'bad') return unmeasurable('lineage-unreadable');
-  if (e === null) return unmeasurable('not-this-runs-pr');
-  if (e.phase === 'merged') return passed(`pr-${pr}`);
-  if (e.phase === 'closed') return ended(`pr-${pr}-closed`);
-  return unmeasurable(isPrPhase(e.phase) ? `phase-${e.phase}` : 'phase-unknown');
+  const named = lineageNames(r.lineage, pr, r.openedAt);
+  if (named === 'bad') return unmeasurable('lineage-unreadable');
+  return unmeasurable(named ? 'lineage-unattributed' : 'not-this-runs-pr');
 }
 
+/** A review run never has reviews of its own: a `review-passed` target naming one is the wrong row (review 2377 F6). */
 function reviewPassed(id: number, r: TargetRunFacts, reviews: readonly { state: string }[] | undefined): TargetAnswer {
+  if (r.kind !== 'work') return unmeasurable('facts-mismatch');
   if (r.state === 'failed') return ended(failedEvidence(r.closeDetail));
   if (reviews === undefined) return unmeasurable('reviews-unread');
   if (reviews.some((v) => !isRunState(v.state))) return unmeasurable('state-unknown');

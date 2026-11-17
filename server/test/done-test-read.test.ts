@@ -52,12 +52,12 @@ describe('readTarget: the one gatherer of a predicate\'s rows', () => {
     expect(word(readTarget(b.coord, { predicate: 'pr-merged', runId: id, pr: 7 }))).toBe('passed:pr-7');
   });
 
-  it('a PR the run replaced, merged inside its window, passes pr-merged through the filtered lineage', () => {
+  it('a PR only the lineage names, merged inside the run\'s window, is unattributed: only the run\'s own close answers (F2)', () => {
     const b = build();
     const id = b.working();
     b.coord.foldPrLineage(id, [{ pr: 5, branch: 'ws/a', phase: 'merged', recordedAt: b.openedSeconds(id) + 5 }]);
     b.close(id, 'done', { pr: 7, merged: false, head: HEAD });
-    expect(word(readTarget(b.coord, { predicate: 'pr-merged', runId: id, pr: 5 }))).toBe('passed:pr-5');
+    expect(word(readTarget(b.coord, { predicate: 'pr-merged', runId: id, pr: 5 }))).toBe('unmeasurable:lineage-unattributed');
     expect(word(readTarget(b.coord, { predicate: 'run-closed', runId: id }))).toBe('ended:pr-7-not-merged');
   });
 
