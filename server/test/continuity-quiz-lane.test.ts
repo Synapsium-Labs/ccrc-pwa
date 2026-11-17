@@ -13,7 +13,7 @@ import {
   QUIZ_ITEM_PROGRAMME, QUIZ_RECORD_READY, quizItemText, quizLaneVerdict, quizWeek, type QuizLaneFacts,
 } from '../src/continuity/quiz.js';
 import { runQuizLane, type QuizLanePort } from '../src/continuity/quizLane.js';
-import { insertQuizRun, quizLanePortOf } from '../src/continuity/quizStore.js';
+import { insertQuizRun, quizLanePortOf, ruleQuizRun } from '../src/continuity/quizStore.js';
 import { ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX } from '../../shared/ledgers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { Bus } from '../src/bus.js';
@@ -106,11 +106,15 @@ const setup = (recordReady = true) => {
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   return { coord, port: quizLanePortOf(coord, recordReady) };
 };
-const recordRun = (coord: CoordStore, at: number, sha = 'a'): void => {
-  insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: at, report: {
+/** Records a run (pending), and rules on it unless `rule` is null: a confirmed run is the baseline when it is the first. */
+const recordRun = (coord: CoordStore, at: number, sha = 'a', rule: 'confirm' | 'discard' | null = 'confirm'): void => {
+  const r = insertQuizRun(coord.db, { recordedBy: 'operator', recordedAt: at, report: {
     measuredAt: at, reportSha: SHA(sha), questionsSha: SHA('b'), questions: 40, families: 6, score: 0.7, lo: 0.6, hi: 0.8,
     judgeModel: 'judge-a', ccrcRelease: 'v1', claudeBuilds: ['2.1.0'], steerArmed: 'no', agentsOnArmed: 'no',
-  } }, (lane) => coord.laneArmSetting(lane));
+  }, extra: { answered: 40, correct: 28, runFailed: 0, absent: 0, arm: 'treatment', settingsMode: 'restricted', pilot: 'skipped-by-ruling', ci: 95, method: 'percentile', bootstrapB: 10000,
+      inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
+  if (!r.ok) throw new Error('insert failed');
+  if (rule !== null) ruleQuizRun(coord.db, { id: r.id, action: rule, at, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
 };
 const quizItems = (coord: CoordStore) => coord.itemsFor(QUIZ_ITEM_PROGRAMME, MON + 30 * DAY).open;
 
@@ -144,6 +148,17 @@ describe('the lane over the store', () => {
     expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
     expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
     expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', true).title]);
+  });
+
+  it('a pending run holds its week but is no baseline; a discarded run holds nothing (quiz-run-pending-until-confirmed)', () => {
+    const { coord, port } = setup();
+    recordRun(coord, MON + 3_600_000, 'a', null);
+    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
+    expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
+    expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', false).title]);
+    const fresh = setup();
+    recordRun(fresh.coord, MON + 3_600_000, 'a', 'discard');
+    expect(runQuizLane(fresh.port, MON + DAY, () => {})).toMatchObject({ kind: 'raised' });
   });
 
   it('a failed read raises nothing', () => {

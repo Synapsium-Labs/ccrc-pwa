@@ -76,6 +76,8 @@
   "server/src/continuity/compactOwner.ts#compactRefusal": 1,
   "server/src/continuity/quiz.ts#quizBaseline": 1,
   "server/src/continuity/quiz.ts#validQuizReport": 1,
+  "server/src/continuity/quiz.ts#quizRuleVerdict": 1,
+  "server/src/continuity/quiz.ts#quizRecordVerdict": 1,
   "server/src/continuity/quiz.ts#quizLaneVerdict": 1,
   "server/src/continuity/quiz.ts#quizWeek": 1,
   "server/src/coord/portfolio.ts#portfolioOrder": 1,

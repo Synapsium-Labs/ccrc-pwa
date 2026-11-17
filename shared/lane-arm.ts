@@ -85,8 +85,36 @@ export interface LaneArmRowView {
   marker: string | null;
 }
 
-/** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order. */
-export interface LaneArmView { lanes: LaneArmRowView[] }
+/** The replay quiz's bootstrap as the server checks a single-arm report's interval against it (plan
+ *  `2026-11-17-overlord-quiz-record.md` §5 rule 6): a frozen copy of three of `deploy/history-gate.mjs#BOOTSTRAP`'s values,
+ *  which `continuity-quiz-route.test.ts` compares with the driver's own. L0 because the server may not import the driver. */
+export const QUIZ_BOOTSTRAP = Object.freeze({ ci: 95, method: 'percentile', B: 10000 } as const);
+
+/** One pending replay quiz run, as the card shows it (plan §6): when the arms ran, the score and its interval, the questions,
+ *  families and counts. The operator confirms or discards it there. */
+export interface LaneArmQuizPending {
+  id: number;
+  measuredAt: number;
+  score: number;
+  lo: number;
+  hi: number;
+  questions: number;
+  families: number;
+  answered: number;
+  runFailed: number;
+  absent: number;
+}
+
+/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet")
+ *  and the pending runs, oldest first (or why they could not be read). */
+export interface LaneArmQuizView {
+  baseline: { state: 'recorded'; at: number } | { state: 'not-yet' } | { state: 'unreadable'; detail: string };
+  pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
+}
+
+/** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order, and the
+ *  replay quiz's block. `quizBaseline` is additive: an older server sends none, and the card then shows no block. */
+export interface LaneArmView { lanes: LaneArmRowView[]; quizBaseline?: LaneArmQuizView }
 
 /** `POST /api/coord/lane-arm`'s body: one row's choice, plus `confirm` only as the key a 409 `confirm-required` answered
  *  with. Shadow never needs one. */
@@ -191,4 +219,17 @@ export const LANE_ARM_TEXT = {
   baselineMissing: 'This lane goes live only after the replay quiz\'s baseline is recorded, so a later change can be compared '
     + 'with it; the baseline is the first quiz run recorded while every one of these lanes is in shadow.',
   baselineUnreadable: 'The server could not read whether the replay quiz\'s baseline is recorded',
+  quizBaseline: {
+    recorded: (date: string): string => `Replay quiz baseline: recorded ${date}`,
+    notYet: 'Replay quiz baseline: not yet',
+    unreadable: 'Replay quiz baseline: could not be read',
+  },
+  quizPending: (date: string, r: LaneArmQuizPending): string => `Replay quiz run, ${date}: score ${r.score.toFixed(2)} `
+    + `(${r.lo.toFixed(2)} to ${r.hi.toFixed(2)}), ${r.questions} questions over ${r.families} families, ${r.answered} answered, `
+    + `${r.runFailed} failed to run, ${r.absent} absent`,
+  quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
+  quizConfirm: 'Confirm',
+  quizDiscard: 'Discard',
+  quizRuleNote: 'Confirm counts the run; the first one confirmed while every W1a lane is in shadow becomes the baseline. '
+    + 'Discard keeps the row and never counts it.',
 } as const;
