@@ -385,6 +385,24 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
   }
 }
 
+/** The designate arm's re-stamp (Overlord designation plan Task 1, X5), `overlordDesignationStore.ts#goLive`'s: the body's live
+ *  generation, minted under its own session id (or already `overlord`), takes identity `overlord` and the raised `term`. It
+ *  runs INSIDE the caller's transaction (`tx` does not nest), so it opens none and answers `changed: false` rather than
+ *  throwing when the identity `overlord` already holds a live generation of another session (the live-identity index). */
+export function restampOverlordGeneration(db: DatabaseSync, sessionId: string, term: number): { changed: boolean } {
+  return changedOf(stmt(db, "UPDATE continuity_generations SET identity = 'overlord', term = ? WHERE sessionId = ? AND state <> 'ended' "
+    + "AND identity IN (?, 'overlord') AND NOT EXISTS (SELECT 1 FROM continuity_generations o WHERE o.identity = 'overlord' "
+    + "AND o.state <> 'ended' AND o.sessionId <> ?)").run(term, sessionId, sessionId, sessionId));
+}
+
+/** Retire's writer (Overlord designation A, F4): end the live `overlord` generation of `sessionId` with outcome `retired`, as a mint
+ *  ends one (state, outcome, walk and deadlines), so a later designate's first mint finds no live `overlord` row. It runs INSIDE
+ *  the caller's transaction and opens none. */
+export function endOverlordGeneration(db: DatabaseSync, sessionId: string): { changed: boolean } {
+  return changedOf(stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = 'retired', walk = NULL, deadlineAt = NULL, "
+    + "shadowDeadlineAt = NULL WHERE identity = 'overlord' AND sessionId = ? AND state <> 'ended'").run(sessionId));
+}
+
 /** One step of a walk: the machine's next view, written to the walk's column (`effectiveGeneration`'s `column`).
  *  Entering a state with a deadline sets that column's deadline from `STATE_DEADLINE_S`; staying in a state leaves it
  *  as it was (ruling I2: no function takes a new deadline for a state the row is already in); entering `active` or

@@ -211,6 +211,7 @@ import {
 import { renderMailNudge } from './coord/envelope.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
+import { DesignationEpisode } from './continuity/designationEpisode.js';
 import { configDirFor } from './config.js';
 import { refusalSentence } from './wsaudit.js';
 import {
@@ -1265,6 +1266,7 @@ export class FleetWatcher {
    *  was making it, and there is nothing left to guard once the process is
    *  gone. */
   private mailInFlight = new Set<string>();
+  private readonly designationEpisode = new DesignationEpisode();
   /** D-5838: when each PARKED delivery's box was last probed, so the probe runs
    *  at most every `MAIL_PARK_PROBE_MS` per row. In memory: a restart probes once
    *  more, which costs one capture. */
@@ -8217,6 +8219,11 @@ export class FleetWatcher {
     // matching how `uuidByToId` and `sessionProjects` are built from `records`
     // — the store returns rows, the sweep shapes them into what it will ask.
     const coordinators = new Set(store.openCoordinatorIds());
+    // The designation, read once a sweep; unmeasured, nothing is delivered this pass (the pace of a pending Overlord is no `plain`'s).
+    const designation = this.designationEpisode.observe(() => store.designationRead(), (why) => { this.pushOne({ kind: 'update',
+      sessionId: '', project: '', title: 'Mail held', body: `The Overlord designation could not be read (${why}), so mail waits.`,
+      tag: 'designation-unmeasured' }, this.activeProjects); });
+    if (designation === 'unmeasured') return;
     // The renewal act's hold (Overlord W1a): each session's live generation by its `state` column, read once a sweep (a
     // failed read holds nothing, as before the act existed); `renewalHoldsMail` decides, before any attempt is counted.
     const gens = store.liveGenerations();
@@ -8264,7 +8271,7 @@ export class FleetWatcher {
         // Neither condition changes — only the threshold each is measured
         // against.
         const pace = mailPaceOf(roleOf(roleFactsOf(d.toId, { child: rec?.child ?? { kind: 'unreadable' },
-          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured' })));
+          childRunKind: 'unmeasured', openCoordinators: coordinators, intentDeclared: 'unmeasured', designation })));
         const last = this.mailCooldown.get(d.toId) ?? 0;
         if (now - last < pace.cooldownMs) { gated(d, 'cooldown'); continue; }
         // registry ladder: `records` came from `readRegistryMeasured` above,

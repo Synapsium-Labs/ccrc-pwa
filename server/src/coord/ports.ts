@@ -68,7 +68,7 @@ export type WatcherCoordMember =
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'
   | 'declineApproval' | 'declineAsk' | 'delegationEventStats' | 'delegationRunStamps' | 'deleteDelegationEventsBetween' | 'deleteGoneSince' | 'deleteResponsesThrough' | 'deleteRunCloseAnchor' | 'deleteRunCloseWarning'
   | 'deliveredUnacked'
-  | 'delivery' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'drainUntold' | 'driftAwaitingReview'
+  | 'delivery' | 'designationRead' | 'digestApprovals' | 'digestAsks' | 'dispatchAbandonSetting' | 'dispatchNode' | 'drainUntold' | 'driftAwaitingReview'
   | 'driftFindingRows' | 'driftFindingsOpenAt' | 'driftHeldQuestions' | 'driftOpenRuns' | 'driftOutstandingDeliveries'
   | 'driftPushesOnDay' | 'driftStallToldRows' | 'dueDeliveries' | 'firstMailIdWithPrefix' | 'foldPrLineage' | 'generationsCursor' | 'goalsStamp' | 'goneSince'
   | 'handoverOf' | 'hasMailWithSubject' | 'hasNotice' | 'hasOutstandingMail' | 'heldApprovalRowsByChild' | 'heldApprovalsFor'
