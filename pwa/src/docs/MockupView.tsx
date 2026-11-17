@@ -19,8 +19,7 @@
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
 import {
-  docsApi, docsPageUrl, resolveDocRef,
-  type DocSectionSlug, type DocsFailure, type DocsPageLocation, type DocsShowOk,
+  docsPageUrl, type DocSectionSlug, type DocsFailure, type DocsPageLocation, type DocsShowOk,
 } from '../../../shared/docs';
 import { openExternal, CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
@@ -33,19 +32,21 @@ import { GATE_BODY, usePublishExportBody, type ExportBody, type MockupExportAsse
 import { DocsPageLink } from './DocsTreeView';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence,
-  kib, mockupVerdictSentence, pluralS,
+  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, fillSentence, pluralS,
 } from './docsText';
 import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
 import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, type MockupExtract } from './mockup/load';
-import { parseMockupOrigin, scriptTextOrigins } from './mockup/origins';
+import {
+  censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
+} from './mockup/census';
+import { scriptTextOrigins } from './mockup/origins';
 import { parseMockup } from './mockup/parse';
 import { MockupContextMismatch, planMockupAssets } from './mockup/plan';
 import {
   MOCKUP_AUTO_RENDER_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH, MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS,
 } from './mockup/policy';
-import type { HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupAssetRow, MockupContext } from './mockup/ports';
+import type { HttpsOrigin, MockupAssetPlan, MockupAssetReader, MockupAssetResult, MockupContext } from './mockup/ports';
 import { prescanMockup, type MockupPrescan } from './mockup/prescan';
 
 type Leaf = DocsPageLocation & { kind: 'path' };
@@ -60,142 +61,6 @@ export interface MockupViewProps {
   readonly relist: () => void;
   /** The leaf's own Download button (D-8711). */
   readonly download: ReactNode;
-}
-
-/** The characters of a reference the census shows, before its ellipsis. */
-const REF_TEXT_UNITS = 120;
-
-/** A reference as the census and the links list show it (base 5.6.7): cut at 120 code units with "…", and every
- *  character outside printable ASCII as `U+XXXX`, so an author's text can neither run long nor pass for another character. */
-export function censusRefText(raw: string): string {
-  const cut = raw.length > REF_TEXT_UNITS ? raw.slice(0, REF_TEXT_UNITS) : raw;
-  let out = '';
-  for (const ch of cut) {
-    const cp = ch.codePointAt(0) ?? 0;
-    out += cp >= 0x20 && cp <= 0x7e ? ch : `U+${cp.toString(16).toUpperCase().padStart(4, '0')}`;
-  }
-  return raw.length > REF_TEXT_UNITS ? `${out}…` : out;
-}
-
-/** Whether the parsed page has anything a script run would change (base 5.6.5): a `script` element, an `on*` attribute, a
- *  `javascript:` URL in `href`, `src`, `action` or `formaction`, or a `meta http-equiv=refresh`. */
-function pageHasScripts(doc: Document): boolean {
-  if (doc.querySelector('script') !== null) return true;
-  for (const el of doc.querySelectorAll('*')) {
-    if (el.localName === 'meta' && (el.getAttribute('http-equiv') ?? '').trim().toLowerCase() === 'refresh') return true;
-    for (const a of el.attributes) {
-      const name = a.localName.toLowerCase();
-      if (name.startsWith('on')) return true;
-      if (name === 'href' || name === 'src' || name === 'action' || name === 'formaction') {
-        // A browser drops tab, LF and CR anywhere in a URL and trims C0 controls and space at its ends.
-        if (/^[\u0000- ]*javascript:/i.test(a.value.replace(/[\t\n\r]/g, ''))) return true;
-      }
-    }
-  }
-  return false;
-}
-
-/** The origins Load external lists: each distinct origin of an `external` row and of the script-text census that
- *  `parseMockupOrigin` accepts for this host, `src` origins first (plan order), then the rest in script order. A refused
- *  origin (this console's own host, an IP literal, `localhost`, anything not a plain https origin) is in `refused`. */
-interface Origins {
-  readonly offered: readonly { readonly origin: HttpsOrigin; readonly scriptText: boolean }[];
-  readonly refused: ReadonlySet<string>;
-}
-function originsOf(rows: readonly MockupAssetRow[], scriptOrigins: readonly string[], host: string): Origins {
-  const offered: { origin: HttpsOrigin; scriptText: boolean }[] = [];
-  const refused = new Set<string>();
-  const take = (raw: string, scriptText: boolean): void => {
-    const o = parseMockupOrigin(raw, host);
-    if (o === null) {
-      refused.add(raw);
-      return;
-    }
-    if (!offered.some((x) => x.origin === o)) offered.push({ origin: o, scriptText });
-  };
-  for (const row of rows) if (row.verdict.v === 'external') take(row.verdict.origin, false);
-  for (const o of scriptOrigins) take(o, true);
-  return { offered, refused };
-}
-
-interface CensusRow {
-  readonly key: string;
-  readonly ref: string;
-  readonly target: string | null;
-  /** The in-app route of an in-section doc target. */
-  readonly href: string | null;
-  readonly sentence: string;
-  readonly hint: boolean;
-  readonly size: string | null;
-  readonly draft: boolean;
-  readonly scriptText: boolean;
-  readonly state: 'loaded' | 'kept' | 'not-loaded';
-}
-
-/** One row per reference, in this order: the plan's rows, the unsupported elements, the dropped `srcset` candidates, the
- *  origins named in script text. */
-function censusOf(
-  rows: readonly MockupAssetRow[], extract: MockupExtract, scriptOrigins: readonly string[], origins: Origins, page: Leaf,
-): CensusRow[] {
-  const routeOf = (section: DocSectionSlug, path: string): string =>
-    docsPageUrl(docsLocation({ kind: 'project', project: page.project, ref: page.ref },
-      { kind: 'path', section, path, dirSlash: false, at: page.at }));
-  const out: CensusRow[] = [];
-  for (const row of rows) {
-    const v = row.verdict;
-    let target: string | null = null;
-    let doc: { section: DocSectionSlug; path: string } | null = null;
-    if (v.v === 'inline') {
-      doc = { section: v.pin.section, path: v.pin.path };
-    } else if (v.v === 'external') {
-      target = v.origin;
-    } else {
-      const slash = row.ref.basePath.indexOf('/');
-      const r = resolveDocRef({ section: row.ref.basePath.slice(0, slash) as DocSectionSlug, path: row.ref.basePath.slice(slash + 1) }, row.ref.raw);
-      if (r.kind === 'doc') doc = { section: r.section, path: r.path };
-      else if (r.kind === 'repo') target = r.repoPath;
-    }
-    if (doc !== null) target = `${doc.section}/${doc.path}`;
-    const offered = v.v === 'external' && origins.offered.some((o) => o.origin === v.origin);
-    const size = row.size === null ? null
-      : row.size.kind === 'listed' ? kib(row.size.bytes) : fillSentence(MOCKUP_TEXT.upTo, { size: kib(row.size.bytes) });
-    out.push({
-      key: row.ref.key, ref: censusRefText(row.ref.raw), target,
-      href: doc !== null && v.v !== 'missing' ? routeOf(doc.section, doc.path) : null,
-      sentence: mockupVerdictSentence(v, offered), hint: offered, size,
-      draft: v.v === 'inline' && v.draft, scriptText: false,
-      state: v.v === 'inline' ? 'loaded' : v.v === 'kept' ? 'kept' : 'not-loaded',
-    });
-  }
-  for (const u of extract.unsupported) {
-    out.push({
-      key: u.key, ref: censusRefText(`<${u.element}>`), target: null, href: null,
-      sentence: MOCKUP_VERDICT_SENTENCE.unsupported.element, hint: false, size: null, draft: false,
-      scriptText: false, state: 'not-loaded',
-    });
-  }
-  extract.dropped.forEach((d, i) => {
-    out.push({
-      key: `d${i}`, ref: censusRefText(d.text), target: null, href: null, sentence: MOCKUP_VERDICT_SENTENCE.dropped,
-      hint: false, size: null, draft: false, scriptText: false, state: 'not-loaded',
-    });
-  });
-  scriptOrigins.forEach((o, i) => {
-    const offered = origins.offered.some((x) => x.origin === o);
-    out.push({
-      key: `s${i}`, ref: censusRefText(o), target: o, href: null,
-      sentence: offered ? MOCKUP_VERDICT_SENTENCE.external : MOCKUP_VERDICT_SENTENCE.refusedOrigin, hint: offered, size: null,
-      draft: false, scriptText: true, state: 'not-loaded',
-    });
-  });
-  return out;
-}
-
-/** The distinct draft pins the build inlined (by their API URL), which the banner counts. */
-function draftPinsOf(rows: readonly MockupAssetRow[], project: string): number {
-  const pins = new Set<string>();
-  for (const row of rows) if (row.verdict.v === 'inline' && row.verdict.draft) pins.add(docsApi.file(project, row.verdict.pin));
-  return pins.size;
 }
 
 /** The view's one hand-drawn button: a bordered `.docs-leaf-action`, as Source and Download are. `pressed` is a toggle's state. */
@@ -463,13 +328,19 @@ function MockupLive(p: MockupViewProps & {
     }
   }, [full]);
 
-  const census = useMemo(
-    () => (loaded === null || build === null || origins === null ? [] : censusOf(build.plan.rows, loaded.extract, scriptOrigins, origins, page)),
-    [loaded, build, origins, scriptOrigins, page],
+  // The in-app route of a doc target: the one builder of a page location (`docsLocation`), at this page's project, ref and version.
+  const routeOf = useMemo<RouteOf>(
+    () => (section: DocSectionSlug, path: string): string => docsPageUrl(docsLocation(
+      { kind: 'project', project: page.project, ref: page.ref }, { kind: 'path', section, path, dirSlash: false, at: page.at },
+    )),
+    [page.project, page.ref, page.at],
   );
-  const notLoaded = census.filter((r) => r.state === 'not-loaded').length;
-  const loadedCount = census.filter((r) => r.state === 'loaded').length;
-  const links = useMemo(() => linksOf(doc, page), [doc, page]);
+  const census = useMemo(
+    () => (loaded === null || build === null || origins === null ? [] : censusOf(build.plan.rows, loaded.extract, scriptOrigins, origins, routeOf)),
+    [loaded, build, origins, scriptOrigins, routeOf],
+  );
+  const { loaded: loadedCount, notLoaded } = censusCounts(census);
+  const links = useMemo(() => linksOf(doc, page, routeOf), [doc, page, routeOf]);
 
   const leafUrl = urlOf(page, 'inline');
   const fullUrl = urlOf(page, 'full');
@@ -513,9 +384,7 @@ function MockupLive(p: MockupViewProps & {
   const framed = build !== null && build.ok;
   const offeredCount = origins === null ? 0 : origins.offered.length;
   const scriptsOffBadge = hasScripts && !scripted;
-  const conservative = build !== null
-    && build.plan.rows.some((r) => r.size !== null && r.size.kind === 'class-cap')
-    && build.plan.rows.some((r) => r.verdict.v === 'skipped' && r.verdict.why === 'over-budget');
+  const conservative = build !== null && hasConservativeAdmission(build.plan.rows);
 
   return (
     <div className="docs-mockup" data-frame={full ? 'full' : 'inline'} data-state={framed ? 'framed' : 'loading'}>
@@ -616,33 +485,6 @@ function MockupLive(p: MockupViewProps & {
       {full && !framed && build !== null && <SourceActions text={p.text} download={p.download} />}
     </div>
   );
-}
-
-/** One link of the page for the links list: where the pure resolver says it goes. */
-type PageLink =
-  | { readonly kind: 'doc'; readonly text: string; readonly href: string }
-  | { readonly kind: 'external'; readonly text: string; readonly url: string }
-  | { readonly kind: 'text'; readonly text: string };
-
-function linksOf(doc: Document, page: Leaf): PageLink[] {
-  const out: PageLink[] = [];
-  for (const el of doc.querySelectorAll('a[href], area[href]')) {
-    const raw = el.getAttribute('href') ?? '';
-    const text = censusRefText(raw);
-    const r = resolveDocRef({ section: page.section, path: page.path }, raw);
-    if (r.kind === 'doc' && !(r.section === page.section && r.path === page.path)) {
-      out.push({
-        kind: 'doc', text,
-        href: docsPageUrl(docsLocation({ kind: 'project', project: page.project, ref: page.ref },
-          { kind: 'path', section: r.section, path: r.path, dirSlash: false, at: page.at })),
-      });
-    } else if (r.kind === 'external' && (r.scheme === 'http' || r.scheme === 'https')) {
-      out.push({ kind: 'external', text, url: r.url });
-    } else {
-      out.push({ kind: 'text', text });
-    }
-  }
-  return out;
 }
 
 function LinkRow(p: { readonly link: PageLink }): ReactNode {

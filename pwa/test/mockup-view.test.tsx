@@ -14,7 +14,6 @@ import {
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { DocsScreen } from '../src/screens/DocsScreen';
 import { MockupView, type MockupViewProps } from '../src/docs/MockupView';
-import { censusRefText } from '../src/docs/MockupView';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
 import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE } from '../src/docs/docsText';
@@ -636,14 +635,6 @@ describe('Source (base 5.6.7)', () => {
 });
 
 describe('the census rows and the links list (M5.14; base 5.6.6, 5.6.7)', () => {
-  it('cuts a reference at 120 code units with an ellipsis and shows every non-ASCII character as U+XXXX', () => {
-    expect(censusRefText('a'.repeat(120))).toBe('a'.repeat(120));
-    expect(censusRefText('a'.repeat(121))).toBe('a'.repeat(120) + '…');
-    expect(censusRefText('é.png')).toBe('U+00E9.png');
-    expect(censusRefText('\u{1F600}')).toBe('U+1F600');
-    expect(censusRefText('b'.repeat(119) + 'é!')).toBe('b'.repeat(119) + 'U+00E9…');
-  });
-
   it('a census row shows the cut, escaped reference; its target; its size; a draft chip; and a doc target links in-app', async () => {
     const long = `${'p'.repeat(130)}.png`;
     const html = `<img src="a.png"><img src="${long}"><img src="é.png">`;

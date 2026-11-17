@@ -43,6 +43,10 @@ export const MOCKUP_MAX_OPEN_FORMATTING = 16;
  *  read a 108 ms median alone on the fleet box (local). 32 keeps 4.6x headroom over the docs' 7. */
 export const MOCKUP_MAX_ATTRIBUTES = 32;
 
+/** The characters of a reference the census and the links list show before their ellipsis (base 5.6.7): 120 code units,
+ *  so an author's text cannot run a row long. `censusRefText` (`census.ts`) is its one reader. */
+export const MOCKUP_CENSUS_REF_UNITS = 120;
+
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
 export const MOCKUP_FORMATTING_ELEMENTS: ReadonlySet<string> = new Set([
   'a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 's', 'small', 'strike', 'strong', 'tt', 'u',
