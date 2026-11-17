@@ -5,7 +5,7 @@ import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
   requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
-import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld } from '../src/linear/inboundPolicy.js';
+import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld, keyWaitMail } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
 const U = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -661,10 +661,28 @@ describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
     expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: false });
     expect(inboundActVerdict('linear-unauthorised', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: true });
   });
-  it('malformed is retried on the steps and given up once the hold has passed the last (review 2394 N1)', () => {
-    expect(inboundActVerdict('malformed', { until: 0, step: 3 }, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', hold: { step: 4 } });
-    expect(inboundActVerdict('malformed', { until: 0, step: 4 }, { now: 0, backoffSteps: steps })).toEqual({ kind: 'give-up' });
+  // Review 2408 F2: the give-up counts the close's own malformed answers, as the plan sync counts a binding's, never the
+  // workspace's hold step, which every retry word of every close in the workspace moves. The step is the wait only.
+  it('malformed is given up on the close\'s own count past the last step, whatever the workspace\'s step (review 2394 N1, 2408 F2)', () => {
+    expect(inboundActVerdict('malformed', { until: 0, step: 4 }, { now: 0, backoffSteps: steps, malformedSeen: 1 })).toMatchObject({ kind: 'retry', hold: { step: 5 } });
+    expect(inboundActVerdict('malformed', { until: 0, step: 0 }, { now: 0, backoffSteps: steps, malformedSeen: 4 })).toMatchObject({ kind: 'retry', hold: { step: 1 } });
+    expect(inboundActVerdict('malformed', { until: 0, step: 0 }, { now: 0, backoffSteps: steps, malformedSeen: 5 })).toEqual({ kind: 'give-up' });
     expect(inboundActVerdict('rate-limited', { until: 0, step: 9 }, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry' });
+  });
+  // Review 2408 A-3: a rate limit's Retry-After floors the wait, as the plan sync floors the same deferral.
+  it('a rate limit waits at least the answer\'s Retry-After (review 2408 A-3)', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 1000, backoffSteps: steps, floorMs: 300_000 })).toMatchObject({ hold: { until: 301_000 } });
+    expect(inboundActVerdict('rate-limited', undefined, { now: 1000, backoffSteps: steps, floorMs: 0 })).toMatchObject({ hold: { until: 31_000 } });
+  });
+  // Review 2408 A-2: each key word has its own mail, which says what ccrc does for that word.
+  it('the two key words mail apart, and the not-configured mail says ccrc tries at every beat (review 2408 A-2)', () => {
+    const row = { identifier: 'AAA-1', teamKey: 'AAA', title: 't', body: null };
+    const none = keyWaitMail(row, 'not-configured');
+    const refused = keyWaitMail(row, 'linear-unauthorised');
+    expect(none.subject).not.toBe(refused.subject);
+    expect(none.body).toContain('ccrc tries again at every beat and closes the issue once a key is set');
+    expect(none.body).not.toContain('growing interval');
+    expect(refused.body).toContain('on a growing interval');
   });
   it('inboundHeld is true strictly before until', () => {
     expect(inboundHeld(undefined, 5)).toBe(false);

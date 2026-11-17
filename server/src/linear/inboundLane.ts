@@ -46,6 +46,9 @@ export class InboundLane {
    *  sync's one owner (`keyRefused`), and this lane honours `keyBlockedUntil`. A restart forgets these holds, which costs one
    *  call, and the next refusal holds again. Only a close done whole (its cancel ok) clears one (review 2394 N1). */
   private readonly holds = new Map<string, InboundHold>();
+  /** Each close's own count of malformed answers, by its issue's linearId: what the give-up counts (review 2408 F2), as the plan
+   *  sync counts a binding's. In this process, as `holds` is; a close done whole or given up drops its count. */
+  private readonly malformed = new Map<string, number>();
 
   constructor(private readonly deps: Deps) {}
 
@@ -174,11 +177,12 @@ export class InboundLane {
           ...base, op: 'issueComment', fields: ['body'],
           input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
         });
-        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment.word, slot); return; }
+        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment, slot); return; }
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
-        if (!update.ok) { this.refused(fresh, update.word, slot); return; }
+        if (!update.ok) { this.refused(fresh, update, slot); return; }
         plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
         this.holds.delete(row.workspaceId);                 // the whole close landed, never only its comment (N1)
+        this.malformed.delete(row.linearId);
       });
     }
   }
@@ -186,15 +190,21 @@ export class InboundLane {
   /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold
    *  schedule (and, for a key word, mails the owner once). Any other word gives the close up: the row is written FIRST (`actedAt`
    *  set, so `act` skips it for good, across restarts; the reason carries the refusal), and only then is the owner mailed once. */
-  private refused(row: InboundRow, word: string, slot: SlotInfo): void {
+  private refused(row: InboundRow, out: { word: string; retryAfterS?: number }, slot: SlotInfo): void {
     const now = this.deps.now();
-    const v = inboundActVerdict(word, this.holds.get(row.workspaceId), { now, backoffSteps: PLAN_SYNC_BACKOFF_MS });
+    const { word } = out;
+    const malformedSeen = word === 'malformed' ? (this.malformed.get(row.linearId) ?? 0) + 1 : 0;
+    if (word === 'malformed') this.malformed.set(row.linearId, malformedSeen);
+    const v = inboundActVerdict(word, this.holds.get(row.workspaceId), {
+      now, backoffSteps: PLAN_SYNC_BACKOFF_MS, malformedSeen, floorMs: out.retryAfterS === undefined ? 0 : out.retryAfterS * 1000,
+    });
     if (v.kind === 'retry') {
       if (v.hold !== null) this.holds.set(row.workspaceId, v.hold);
       if (v.keyRefused && v.hold !== null) this.deps.planSync.keyRefused(row.workspaceId, slot, v.hold.until);   // a 401 holds both lanes (A-3)
-      if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row));
+      if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row, word));
       return;
     }
+    this.malformed.delete(row.linearId);
     this.deps.plan.setInboundState(row.linearId, { actedAt: now, reason: givenUpReason(row.reason, word) });
     this.mailOwnerOnce(row, closeRefusedMail(row, word));
   }

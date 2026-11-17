@@ -50,7 +50,7 @@ interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
   asks: CcrcOpAsk[]; presence: Record<string, CoordinatorPresence>; presenceFn: { current: (id: string) => CoordinatorPresence };
   viaCalls: string[][]; fleet: { ids: Set<string> };
-  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' };
+  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' | 'timeout' | 'not-configured'; retryAfterS: number };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
   /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
   rejected: number[];
@@ -100,13 +100,14 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'] }, rejected: [] as number[],
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0 }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
   const call = async (ask: CcrcOpAsk): Promise<CcrcOpOutcome> => {
     r.asks.push(ask);
-    if (r.lin.fail.has(ask.op)) return (r.lin.failWord === 'rate-limited' ? { ok: false, word: 'rate-limited', retryAfterS: 0 } : { ok: false, word: r.lin.failWord, maybeSent: false }) as CcrcOpOutcome;
+    // `fail` names an op, or a whole pass as `pass:<name>` (review 2408 F1: the plan sync's own call refused).
+    if (r.lin.fail.has(ask.op) || r.lin.fail.has(`pass:${ask.pass}`)) return (r.lin.failWord === 'rate-limited' ? { ok: false, word: 'rate-limited', retryAfterS: r.lin.retryAfterS } : { ok: false, word: r.lin.failWord, maybeSent: false }) as CcrcOpOutcome;
     if (ask.op === 'changedIssues') return ok({ nodes: r.lin.issues, next: null });
     if (ask.op.startsWith('changed')) return ok({ nodes: [], next: null });
     if (ask.op === 'projectsByName' || ask.op === 'initiativesByName') return ok({ nodes: [] });
@@ -581,7 +582,7 @@ describe('plan triage (D-8183)', () => {
     await passAt(r, second + 120_000);
     expect(comments()).toBe(3);
     expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
-    expect(mails(r, 'Linear inbound: AAA-12 waits for the Linear key%').map((m) => [m.toId, m.kind])).toEqual([[OWNER, 'status']]);
+    expect(mails(r, 'Linear inbound: AAA-12 waits: its Linear key was refused%').map((m) => [m.toId, m.kind])).toEqual([[OWNER, 'status']]);
     // the key is fixed: the next try after the wait lands, and the hold clears
     r.lin.fail.clear();
     await passAt(r, r.t.now + 600_000);
@@ -636,7 +637,7 @@ describe('plan triage (D-8183)', () => {
 
   // A-2, the coordinator's ruling (b): with no key configured the close is refused LOCALLY (the call goes through the real
   // `runCcrcOp`, whose key read answers before any fetch), it is retried at every beat with no hold, as the plan sync does, and
-  // the team's owner is mailed once for the episode, not once per beat.
+  // the team's owner is mailed once for the issue (the coordinator's "once per episode", review 2408 A-2), not once per beat.
   it('a close with no key configured sends no Linear call, retries each beat and mails the owner once (A-2)', async () => {
     const r = await rig();
     await detect(r, [node(12)]);
@@ -655,7 +656,7 @@ describe('plan triage (D-8183)', () => {
     for (let i = 0; i < 3; i += 1) { r.t.now += 60_000; await lane.tick(r.t.now); }
     expect(tried.filter((op) => op === 'issueComment')).toHaveLength(3);   // one try a beat: no hold
     expect(fetched).toEqual([]);                                            // and not one of them reached Linear
-    expect(mails(r, 'Linear inbound: AAA-12 waits for the Linear key%')).toHaveLength(1);
+    expect(mails(r, 'Linear inbound: AAA-12 waits for a Linear key%')).toHaveLength(1);
     expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
   });
 
@@ -674,6 +675,91 @@ describe('plan triage (D-8183)', () => {
     r.plan.markSyncDue('prog-a', r.t.now);
     await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS);
     expect(r.asks.filter((a) => a.pass === 'plan-sync')).toEqual([]);   // the plan sync sends nothing into the refused workspace
+  });
+
+  // Review 2408 F1, A-3's other direction: a 401 on the plan sync's own call holds the workspace's inbound closes too, through
+  // keyBlockedUntil, so no close write goes out into a workspace whose key Linear refused until the block ends.
+  it('a 401 on the plan sync holds the inbound closes of that workspace until the block ends (review 2408 F1)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.failWord = 'linear-unauthorised';
+    r.lin.fail.add('pass:plan-sync');
+    r.plan.markSyncDue('prog-a', r.t.now);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS);
+    expect(r.rejected).toHaveLength(1);
+    const until = r.sync.keyBlockedUntil(WS.a.id);
+    expect(until).toBeGreaterThan(r.t.now);
+    r.lin.fail.clear();
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.asks.length = 0;
+    await passAt(r, until - 1);
+    expect(writes(r)).toEqual([]);                                // the key's block stands: no close write
+    await passAt(r, until);
+    expect(writes(r).map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(rowOf(r, 12)!.actedAt).toBe(until);
+  });
+
+  // Review 2408 F2: the malformed give-up counts the close's own answers. Four ordinary refusals of another close move the
+  // workspace's hold step to the end of the schedule, and a give-up leaves it there; a first malformed answer to a new close
+  // then waits on the hold. It is not given up.
+  it('a first malformed answer to a close waits, whatever other closes did to the workspace\'s step (review 2408 F2)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'timeout';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000, 600_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(4);
+    r.lin.failWord = 'linear-forbidden';
+    r.lin.issues = [node(13)];                                     // this pass also finds a new issue, AAA-13
+    await passAt(r, r.t.now + 1_800_000);
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBe('linear-forbidden');
+    const triaged = await triage(r, { issue: 'AAA-13', decision: 'close', reason: 'noise' });
+    expect(triaged.statusCode).toBe(200);
+    r.lin.failWord = 'malformed';
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1_800_000);
+    expect(writes(r).map((a) => a.op)).toEqual(['issueComment']);  // AAA-13's first answer, malformed
+    expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });
+    expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
+    expect(mails(r, 'Linear inbound: AAA-13 could not be closed%')).toEqual([]);
+  });
+
+  // Review 2408 A-2: each key word mails the owner once for the issue under its own subject, saying what ccrc does for it.
+  it('not configured, then refused: the owner is mailed once for each, under its own subject (review 2408 A-2)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'not-configured';
+    r.lin.fail.add('issueComment');
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + 60_000);
+    r.lin.failWord = 'linear-unauthorised';
+    await passAt(r, r.t.now + 60_000);
+    await passAt(r, r.t.now + 1_800_000);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(5);
+    const got = mails(r, 'Linear inbound: AAA-12 waits%Linear key%');
+    expect(got.map((m) => m.subject)).toEqual(['Linear inbound: AAA-12 waits for a Linear key', 'Linear inbound: AAA-12 waits: its Linear key was refused']);
+    expect(got[0]!.body).toContain('ccrc tries again at every beat and closes the issue once a key is set');
+  });
+
+  // Review 2408 A-3: a rate limit's Retry-After floors the close's wait, as the plan sync floors the same deferral.
+  it('a rate-limited close waits out the answer\'s Retry-After before it is tried again (review 2408 A-3)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'rate-limited';
+    r.lin.retryAfterS = 300;
+    r.lin.fail.add('issueComment');
+    const comments = (): number => r.asks.filter((a) => a.op === 'issueComment').length;
+    await passAt(r, r.t.now + 1);
+    const first = r.t.now;
+    await passAt(r, first + 30_000);
+    expect(comments()).toBe(1);                                   // the first step is 30 s, but Linear asked for 5 min
+    await passAt(r, first + 299_999);
+    expect(comments()).toBe(1);
+    await passAt(r, first + 300_000);
+    expect(comments()).toBe(2);
   });
 
   it('raise makes a decide item for the operator, and its answer comes back to the owner', async () => {

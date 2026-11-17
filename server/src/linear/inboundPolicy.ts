@@ -123,30 +123,43 @@ export interface InboundHold { until: number; step: number }
 export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold | null; mailsOwner: boolean; keyRefused: boolean };
 /** What a refused close write means. `not-configured` is retried at the next beat with no hold (`hold` null, A-2). A retry
  *  word holds the workspace: its wait is the deferral table's, the step of
- *  `backoffSteps` (the last repeats) the prior hold reached, and the step moves only when the deferral waits on the backoff.
+ *  `backoffSteps` (the last repeats) the prior hold reached, and the step moves only when the deferral waits on the backoff;
+ *  `floorMs` (a rate limit's Retry-After) floors that wait, as the plan sync floors it (review 2408 A-3).
  *  `mailsOwner` is true for the words only the key's owner can clear; `keyRefused` for the key's refusal (a 401), which the plan
  *  sync's one owner records for both lanes (review 2394 A-3). `malformed` (an answer outside the grammar) is given up once the
- *  hold has passed the last backoff step, as the plan sync fails a binding (review 2394 N1). Any other word gives the close up. */
-export function inboundActVerdict(word: string, prior: InboundHold | undefined, o: { now: number; backoffSteps: readonly number[] }): InboundActVerdict {
+ *  close's OWN malformed answers, this one included (`malformedSeen`), pass the last backoff step, as the plan sync counts a
+ *  binding's (review 2394 N1). The workspace's hold step is the wait only: every retry word of every close moves it, so it
+ *  never decides a give-up (review 2408 F2). Any other word gives the close up. */
+export function inboundActVerdict(
+  word: string, prior: InboundHold | undefined, o: { now: number; backoffSteps: readonly number[]; malformedSeen?: number; floorMs?: number },
+): InboundActVerdict {
   if (BEAT_WORDS.has(word)) return { kind: 'retry', hold: null, mailsOwner: KEY_WORDS.has(word), keyRefused: false };
   if (!RETRY_WORDS.has(word)) return { kind: 'give-up' };
+  if (word === 'malformed' && (o.malformedSeen ?? 1) > o.backoffSteps.length) return { kind: 'give-up' };
   const step = prior?.step ?? 0;
-  if (word === 'malformed' && step >= o.backoffSteps.length) return { kind: 'give-up' };
   const d = deferralOf(word as DeferCause);
   const backoffMs = o.backoffSteps[Math.min(step, o.backoffSteps.length - 1)]!;
   return {
     kind: 'retry', mailsOwner: KEY_WORDS.has(word), keyRefused: word === 'linear-unauthorised',
-    hold: { until: deferralUntil(d, { now: o.now, backoffMs, directoryWaitMs: 0 }), step: deferralUsesBackoff(d) ? step + 1 : step },
+    hold: { until: deferralUntil(d, { now: o.now, backoffMs, floorMs: o.floorMs ?? 0, directoryWaitMs: 0 }), step: deferralUsesBackoff(d) ? step + 1 : step },
   };
 }
 /** Whether a workspace's hold still stands at `now`. */
 export const inboundHeld = (hold: InboundHold | undefined, now: number): boolean => hold !== undefined && now < hold.until;
 
-/** The owner's one mail when the close waits for the Linear key (not configured, or refused). Durable once per issue, by subject. */
-export function keyWaitMail(row: InboundText): { subject: string; body: string } {
+/** The owner's one mail when the close waits for the Linear key, one subject per word, so each is mailed once per issue (durable,
+ *  by subject; the coordinator's "once per episode" is once per issue, review 2408 A-2). Each says what ccrc does for that word:
+ *  `not-configured` is tried at every beat (A-2 (b)), a refused key on the failure-hold steps. */
+export function keyWaitMail(row: InboundText, word: string): { subject: string; body: string } {
+  if (word === 'not-configured') {
+    return {
+      subject: `Linear inbound: ${row.identifier} waits for a Linear key`,
+      body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but no Linear key is configured for that workspace, so the close waits. Set the key in Settings → Linear; ccrc tries again at every beat and closes the issue once a key is set.`,
+    };
+  }
   return {
-    subject: `Linear inbound: ${row.identifier} waits for the Linear key`,
-    body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but ccrc's Linear key for that workspace is not configured or was refused, so the close waits. Fix the key in Settings; ccrc tries again on a growing interval.`,
+    subject: `Linear inbound: ${row.identifier} waits: its Linear key was refused`,
+    body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but Linear refused ccrc's key for that workspace, so the close waits. Replace the key in Settings → Linear; ccrc tries again on a growing interval and closes the issue once the key is accepted.`,
   };
 }
 
