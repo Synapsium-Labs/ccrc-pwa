@@ -865,3 +865,42 @@ describe('the goals versions\' ratification columns: every write in ledgersStore
     expect(writes(files)).toEqual(EXPECTED);
   });
 });
+
+// Overlord W2 done tests A (plan `w2-done-tests.md` DT7): `runs.closePr`, a run's own bound PR as its close measured it,
+// has ONE writer, `CoordStore.closeRun`, in the close's transaction. A second statement that writes the column, anywhere
+// under server/src, is a further entry and reds here. KNOWN WIDTH: a statement split from its verb across string pieces.
+describe('runs.closePr: one writer, CoordStore.closeRun', () => {
+  const writers = (files: readonly string[]): string[] => {
+    const out = new Set<string>();
+    for (const f of files) {
+      const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
+      if (!text.includes('closePr')) continue;
+      const syms = parseFile(f).symbols;
+      for (const m of text.matchAll(/'[^'\n]*'|"[^"\n]*"|`[^`]*`/g)) {
+        if (!/\b(?:UPDATE|INSERT)\b/.test(m[0]) || !/\bclosePr\b/.test(m[0])) continue;
+        const inner = syms.filter((s) => s.start <= m.index! && m.index! < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
+        out.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
+      }
+    }
+    return [...out].sort();
+  };
+
+  it('CONTROL: an UPDATE naming the column is found by its function; a SELECT and a comment are not', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { tmpdir } = await import('node:os');
+    const d = mkdtempSync(path.join(tmpdir(), 'writers-closepr-'));
+    try {
+      const f = path.join(d, 'a.ts');
+      writeFileSync(f, [
+        "export function upd(): void { db.prepare('UPDATE runs SET closePr = ? WHERE id = ?'); }",
+        "export function sel(): void { db.prepare('SELECT closePr FROM runs'); }",
+        '// UPDATE runs SET closePr = NULL',
+      ].join('\n'));
+      expect(writers([f])).toEqual([`${rel(f)}#upd`]);
+    } finally { rmSync(d, { recursive: true, force: true }); }
+  });
+
+  it('its one writer, by name, under server/src', () => {
+    expect(writers(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual(['server/src/coord/store.ts#CoordStore.closeRun']);
+  });
+});

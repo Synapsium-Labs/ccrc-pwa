@@ -3558,6 +3558,21 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
   // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark for each changed* kind (the
   // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped; D-8723) and when it
@@ -3576,11 +3591,11 @@ export const MIGRATIONS: readonly string[] = [
   // `linear_sync_streaks` and `linear_probe_settled` (D-8723) persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 92` warns, reads as-is, names none of them and
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 93` warns, reads as-is, names none of them and
   // boots. The plan's number was 58; row revisions (#2965) took 87, renewal readings A (#2962) 88, remaining work A (#2951)
-  // 89, account organization D (#2958) 90 and designation A (#2950) 91, so this is 92, and it is renumbered at landing if
-  // another lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is
-  // counted):
+  // 89, account organization D (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92, so this is 93, and it is
+  // renumbered at landing if another lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print
+  // 92 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

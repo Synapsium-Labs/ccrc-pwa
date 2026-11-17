@@ -63,6 +63,7 @@ import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
+import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -569,6 +570,14 @@ describe('the rejection table is total, in both directions', () => {
   const sources = (): string =>
     readdirSync(coordDir).filter((f) => f.endsWith('.ts'))
       .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  // The done tests' words are admitted only where they are spelled: in `doneTests.ts` and `doneTestRead.ts`. The same word
+  // quoted in any other coordination file needs a guard of its own (review 2377 F8).
+  const DONE_TEST_FILES = ['doneTests.ts', 'doneTestRead.ts'];
+  const outsideDoneTests = (): string =>
+    readdirSync(coordDir).filter((f) => f.endsWith('.ts') && !DONE_TEST_FILES.includes(f))
+      .map((f) => readFileSync(path.join(coordDir, f), 'utf8')).join('\n');
+  const isDoneTestWordHere = (tok: string, elsewhere: string): boolean =>
+    isDoneTestKebab(tok) && !elsewhere.includes(`'${tok}'`);
 
   it('every declared INGRESS/DONE-AUTHORITY code is emitted somewhere in server/src/coord', () => {
     // 'undeliverable' is the one DELIVERY-group code (MAIL_REJECT_CODES's own
@@ -615,6 +624,19 @@ describe('the rejection table is total, in both directions', () => {
       readdirSync(injectDir).filter((f) => f.endsWith('.ts'))
         .map((f) => readFileSync(path.join(injectDir, f), 'utf8')).join('\n');
     for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+  });
+
+  it('CONTROL (review 2381 N3): a done-test word is admitted only while no other coordination file quotes it', () => {
+    // Planted sources, never the tree: the word alone, quoted in another file, quoted only unquoted, and a word that is not
+    // the done tests' at all.
+    expect(isDoneTestWordHere('lineage-unattributed', "export const x = 'not-this-word';")).toBe(true);
+    expect(isDoneTestWordHere('lineage-unattributed', "export const planted = 'lineage-unattributed';")).toBe(false);
+    expect(isDoneTestWordHere('lineage-unattributed', '// lineage-unattributed in a comment, unquoted')).toBe(true);
+    expect(isDoneTestWordHere('mail-nudge', '')).toBe(false);
+    // The scan asks the scoped check, never the bare guard: this file's own guard chain names it.
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    expect(self).toContain('|| isDoneTestWordHere(tok, elsewhere)');
+    expect(self.includes('|| isDoneTestKebab' + '(tok)')).toBe(false);
   });
 
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
@@ -868,6 +890,7 @@ describe('the rejection table is total, in both directions', () => {
       'partly-measured',
       'land-probe-paused',    // `coord/lineageRead.ts`: the global pause marker's FILE NAME under `$REG`, wave 3b's; a path segment
     ]);
+    const elsewhere = outsideDoneTests();
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
@@ -1169,6 +1192,11 @@ describe('the rejection table is total, in both directions', () => {
         // rejection or a run refusal. Admitted through the exported guard, derived from L0's pair tables and
         // `RELAY_CONFLICT_WHY_MAP`, never NOT_CODES.
         || isOverlapsKebab(tok)
+        // THE DONE TESTS (Overlord W2 done tests A): `coord/doneTests.ts` and `coord/doneTestRead.ts` name a predicate, a
+        // done test's refusal and why a target is unmeasurable as literals. A word rides a target's answer or the door's
+        // `bad-request`, never a mail rejection or a run refusal. Admitted through the exported guard, derived from L0's
+        // `DONE_PREDICATES` and that file's own maps, never NOT_CODES, and only while no other coordination file quotes it.
+        || isDoneTestWordHere(tok, elsewhere)
         || isReceiptDrop(tok)
         // THE DECISION MODEL (Overlord W2): `coord/decisionModel*.ts` name its outcomes, their reasons, its host kinds, bands
         // and egress words as literals. A word rides a check or a record, never a `refused` or `reject.code`. Admitted
