@@ -2168,6 +2168,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8183: the plan owns the tickets of a managed team (`plan-owned`).
+    managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
+    boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
   registerLinkingRoutes(app, {

@@ -17,6 +17,7 @@ import {
 import { RATELIMITED_ERRORS } from './linearFetchFake.js';
 import { linearRecord, recordedAnswer } from './linearRecorded.js';
 import { memCoordDb } from './linearServicesFake.js';
+import { planStorePort } from '../src/coord/planStore.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 
 
@@ -617,5 +618,72 @@ describe('the routes the PWA never calls take no body they do not declare', () =
       headers: { 'x-ccrc-mail-token': 'e'.repeat(64), 'content-type': 'application/json' }, payload: '[1]' });
     expect([res.statusCode, bodyOf(res)['error']]).toEqual([400, 'bad-request']);
     expect(BODIES[v]).toBeDefined();
+  });
+});
+
+// D-8183 (design §7.7, plan task 4.4): in a managed team the plan owns the tickets, so a session's create, and its update
+// of a ticket the plan bound, are refused `plan-owned`; a comment, a link, a read, an unbound issue and an unmanaged team
+// are not. The rig is the real wiring: `Deps.plan` over the rig's own coord.db, seeded with the rows migration 87 holds.
+describe('plan-owned: a session writes no ticket in a managed team (D-8183)', () => {
+  const managedRig = async (opts: { managed?: string; bound?: { teamKey: string } | null } = {}): Promise<ProxyRig> => {
+    const db = memCoordDb();
+    const r = await open({ db, over: { plan: planStorePort(db) } });
+    db.prepare("INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, 'applied', 1, 1, 1)")
+      .run(WS.a.id, opts.managed ?? 'AAA');
+    if (opts.bound !== null) {
+      db.prepare("INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, state) VALUES ('ticket', 1, ?, ?, ?, 'AAA-12', 'bound')")
+        .run(WS.a.id, (opts.bound ?? { teamKey: 'AAA' }).teamKey, IDS.issue);
+    }
+    return r;
+  };
+
+  it('create in a managed team is plan-owned and sends nothing', async () => {
+    const r = await managedRig();
+    const res = await r.call('create');
+    expect([res.statusCode, bodyOf(res)['error'], bodyOf(res)['detail']]).toEqual([409, 'plan-owned', 'file it through ccrc-api plan ticket-add']);
+    expect(r.calls, 'no fetch at all, not even the resolve').toEqual([]);
+    expect(r.rows()).toMatchObject([{ op: 'create', outcome: 'refused', code: 'plan-owned', teamKey: 'AAA' }]);
+  });
+
+  it('update of a bound issue in a managed team is plan-owned', async () => {
+    const r = await managedRig();
+    const res = await r.call('update', { ref: 'AAA-12' });
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([409, 'plan-owned']);
+    expect(r.calls.map((c) => c.op), 'only the read-only resolve ran').toEqual(['ResolveIssue']);
+    expect(r.rows()).toMatchObject([{ op: 'update', outcome: 'refused', code: 'plan-owned', teamKey: 'AAA', target: 'AAA-12' }]);
+  });
+
+  it('update of an unbound issue in a managed team passes', async () => {
+    const r = await managedRig({ bound: null });
+    const res = await r.call('update', { ref: 'AAA-12' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.calls.map((c) => c.op)).toEqual(['ResolveIssue', 'IssueUpdate']);
+  });
+
+  it('update of a bound issue in a team that is not managed passes', async () => {
+    const r = await managedRig({ managed: 'BBB' });
+    const res = await r.call('update', { ref: 'AAA-12' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.calls.map((c) => c.op)).toEqual(['ResolveIssue', 'IssueUpdate']);
+  });
+
+  it('create in an unmanaged team passes', async () => {
+    const r = await managedRig({ managed: 'BBB' });
+    const res = await r.call('create');
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.calls.map((c) => c.op)).toContain('IssueCreate');
+  });
+
+  it('comment on a bound issue passes', async () => {
+    const r = await managedRig();
+    const res = await r.call('comment', { ref: 'AAA-12' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.calls.map((c) => c.op)).toEqual(['ResolveIssue', 'CommentCreate']);
+  });
+
+  it('a managed team is compared without case', async () => {
+    const r = await managedRig({ managed: 'aaa' });
+    const res = await r.call('create');
+    expect([res.statusCode, bodyOf(res)['error']]).toEqual([409, 'plan-owned']);
   });
 });

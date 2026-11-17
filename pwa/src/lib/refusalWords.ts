@@ -298,6 +298,9 @@ const API_ERROR_TEXT: Record<string, string> = {
   // `plan take` answer `issue-not-inbound` for an issue that is not waiting for that caller; the box names neither the owner nor the issue.
   'not-linear-owner': 'Only the Linear owner of this team decides what becomes of an issue filed in Linear, so nothing was changed. Ask the owner, or name another one on the project.',
   'issue-not-inbound': 'That issue is not waiting for this decision: it was already decided, or it was not handed to you. Nothing was changed.',
+  // D-8183: the Linear proxy answers it to a session that creates a ticket in a team the plan manages, or updates one the plan bound;
+  // the plan files and writes those tickets itself.
+  'plan-owned': 'The plan owns the tickets of this Linear team, so nothing was written to Linear. File the work through the plan instead.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a

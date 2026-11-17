@@ -617,6 +617,13 @@ export function managedSince(db: DatabaseSync, workspaceId: string): number | nu
   return (r?.at as number | null | undefined) ?? null;
 }
 
+/** Whether the plan holds a bound ticket binding for a Linear issue, by its id or its identifier (D-8183: the proxy refuses a
+ *  session's update of one in a managed team, `plan-owned`). Absent ids never match. */
+export function issueBound(db: DatabaseSync, workspaceId: string, issue: { id: string | null; identifier: string | null }): boolean {
+  return db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'ticket' AND state = 'bound' AND workspaceId = ? AND (linearId = ? OR identifier = ?) LIMIT 1")
+    .get(workspaceId, issue.id ?? '', issue.identifier ?? '') !== undefined;
+}
+
 export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermark: string; passAt: number } | null {
   const r = db.prepare('SELECT watermark, passAt FROM linear_drift_marks WHERE workspaceId = ?').get(workspaceId) as Raw | undefined;
   return r === undefined ? null : { watermark: r.watermark as string, passAt: r.passAt as number };
@@ -899,7 +906,7 @@ const PORT_FUNCTIONS = {
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
-  managedTeams, driftMarkOf, setDriftMark, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
+  managedTeams, issueBound, driftMarkOf, setDriftMark, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
   setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
   settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, dueKeyOfBinding, managedSince,
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier,

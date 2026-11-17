@@ -17,8 +17,8 @@
  *
  * THE ORDER OF CHECKS (spec §6.3) is the handler's order: attribution (`coord/attribution.ts`), the operation's
  * validator with `linear-egress` over the outbound text, routing (a miss queues the background refresher and answers
- * at once), the session's and the slot's buckets in one take, the slot's key read from its file for each Linear call,
- * the resolve and the moved-issue rule, the policy point, the journal's `pending` row, names from the directory (a
+ * at once), a create in a managed team (`plan-owned`, D-8183), the session's and the slot's buckets in one take, the slot's key read from its file for each Linear call,
+ * the resolve and the moved-issue rule, an update of a bound issue in a managed team (`plan-owned`), the policy point, the journal's `pending` row, names from the directory (a
  * miss queues the refresher), the operation's one call, shaping with `viaFleet`, and the journal's outcome. A refusal
  * answers at once and nothing after it runs. Nothing before the resolve calls Linear, and a route makes at most two
  * Linear calls: the resolve, then the operation.
@@ -98,6 +98,10 @@ export interface LinearProxyDeps {
   refresher: LinearRefresher | null;
   journal: LinearJournal | null;
   policy: LinearWritePolicy | null;
+  /** D-8183: whether a team is one the plan manages in a workspace, and whether the plan holds a bound ticket for an issue
+   *  there. Absent: never managed, never bound, so a box with no plan store behaves as before. */
+  managed?: (workspaceId: string, teamKey: string) => boolean;
+  boundIssue?: (workspaceId: string, issue: { id: string | null; identifier: string | null }) => boolean;
   /** Test seams: the network, a call's deadline and the clock the route's budget is measured on. */
   fetch?: FetchLike;
   timeoutMs?: number;
@@ -127,6 +131,7 @@ const TOKEN_DETAIL: Readonly<Record<'legacy' | 'bad' | 'unconfigured', string>> 
 const DETAIL = {
   legacyUnlearned: 'the saved Linear key has not learned its workspace yet: press Check again in Settings → Linear',
   noSlot: 'no Linear key in Settings reaches this call',
+  planOwned: 'file it through ccrc-api plan ticket-add',
   noKey: "the workspace's key is missing or unusable: add it again in Settings → Linear",
   detailsUnknown: "this workspace's key has not been checked: press Check again in Settings → Linear",
   workspaceUnknown: 'no Linear key in Settings is for that workspace',
@@ -351,6 +356,11 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
       return retryAfterS === undefined ? refuseRoute(reply, word, extra) : refuseAfter(reply, word, retryAfterS, extra);
     };
 
+    // D-8183: a create in a team the plan manages is the plan's to file; refused before any budget is spent or call made.
+    if (row.op === 'create' && input.team !== null && deps.managed?.(slot.workspaceId, input.team) === true) {
+      return refuseWrite('refused', 'plan-owned', { detail: DETAIL.planOwned });
+    }
+
     // 4 and 7. The session's buckets and the slot's proxy lane, in one take of the worst case (two calls with a resolve).
     const take = rate.take({ lane: 'proxy', slot: slot.ref, calls: plan === null ? 1 : 2, session: { id: who.id, write } });
     if (!take.ok) return refuseWrite('refused', 'rate-limited', { detail: take.detail }, take.retryAfterS);
@@ -394,6 +404,12 @@ export function registerLinearProxyRoutes(app: FastifyInstance, deps: LinearProx
         }
         const moved = linearMoved(input, resolved);
         if (moved !== null) return refuseWrite('refused', 'issue-moved', moved.identifier === null ? {} : { detail: moved.identifier });
+      }
+
+      // D-8183: an update of a ticket the plan bound, in a team it manages, is the plan's to write; before the policy point.
+      if (row.op === 'update' && resolved?.issue != null && deps.managed?.(slot.workspaceId, resolved.issue.teamKey) === true
+        && deps.boundIssue?.(slot.workspaceId, resolved.issue) === true) {
+        return refuseWrite('refused', 'plan-owned', { detail: DETAIL.planOwned });
       }
 
       // 10 and 11. The policy point, asked with the resolved team, then the journal's pending row (spec §8, §7).

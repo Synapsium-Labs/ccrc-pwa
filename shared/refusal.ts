@@ -85,7 +85,7 @@ export type ProjectAddRefusal = (typeof PROJECT_ADD_REFUSALS)[number];
 export const LINEAR_PROXY_REFUSALS = [
   'bad-field', 'team-unknown', 'workspace-unknown', 'name-unknown', 'team-ambiguous', 'workspace-required', 'name-ambiguous',
   'issue-moved', 'policy-denied', 'policy-unavailable', 'journal-unavailable', 'linear-unauthorised', 'linear-forbidden',
-  'linear-invalid',
+  'linear-invalid', 'plan-owned',
 ] as const;
 export type LinearProxyRefusal = (typeof LINEAR_PROXY_REFUSALS)[number];
 
