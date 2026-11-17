@@ -633,8 +633,9 @@ describe(CAPS_PIN, () => {
 
 // THE PRIVATE STORE'S TABLES (Overlord W1, private store A; spec §9.1, C29). `operator-model.db` is a second SQLite file with
 // one owner, `OperatorModelStore`: `recordMessage` is the one INSERT of a message, `moveMessage` the one writer of its state and
-// stamps (by the message moves table), and `recordRead` the one writer of the read ledger. MAY ONLY SHRINK.
-const PRIVATE_TABLES = ['operator_messages', 'read_ledger'] as const;
+// stamps (by the message moves table), and `recordRead` the one writer of the read ledger; `replacePrivateNames` is the one
+// writer of the uploaded name list's two tables (Overlord W2, private names B). MAY ONLY SHRINK.
+const PRIVATE_TABLES = ['operator_messages', 'read_ledger', 'private_name_list', 'private_name_entries'] as const;
 describe('the private store\'s tables: every SQL write is an OperatorModelStore method, by name, may only shrink', () => {
   it('CONTROL: a second UPDATE of operator_messages in another function is named, beside the store\'s own', async () => {
     const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
@@ -651,7 +652,7 @@ describe('the private store\'s tables: every SQL write is an OperatorModelStore 
       ].join('\n'));
       const w = tableWriters([f], PRIVATE_TABLES);
       expect(Object.fromEntries(Object.entries(w).map(([t, ws]) => [t, ws.map((s) => s.replace(/^.*#/, ''))])))
-        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [] });
+        .toEqual({ operator_messages: ['OperatorModelStore.moveMessage', 'sneak'], read_ledger: [], private_name_list: [], private_name_entries: [] });
     } finally { rmSync(d, { recursive: true, force: true }); }
   });
 
@@ -661,6 +662,8 @@ describe('the private store\'s tables: every SQL write is an OperatorModelStore 
     expect(tableWriters(files, PRIVATE_TABLES)).toEqual({
       operator_messages: [`${S}moveMessage`, `${S}recordMessage`],
       read_ledger: [`${S}recordRead`],
+      private_name_list: [`${S}replacePrivateNames`],
+      private_name_entries: [`${S}replacePrivateNames`],
     });
   });
 });
