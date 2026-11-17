@@ -10,7 +10,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DocPin, DocsPageLocation } from '../../shared/docs';
 import { ExportSheet, type ExportBuilder } from '../src/docs/ExportSheet';
-import { EXPORT_FACT, EXPORT_TEXT, fillSentence } from '../src/docs/docsText';
+import { EXPORT_FACT, EXPORT_TEXT, MOCKUP_TEXT, fillSentence } from '../src/docs/docsText';
+import { MOCKUP_CENSUS_ROW_CAP } from '../src/docs/mockup/policy';
 import type { ExportInput, ExportMockupFacts, ExportResult } from '../src/docs/export/buildExport';
 import { exportInputOf, firstHeading, type ExportRequest } from '../src/docs/export/exportInput';
 import { exportWorktreeLabel } from '../src/docs/export/provenance';
@@ -182,6 +183,22 @@ describe('the export sheet: a mockup file that inlines uncommitted files asks be
     expect(screen.getByText(EXPORT_TEXT.mockupOmitted)).toBeInTheDocument();
     expect(screen.getByText('specs/gone.png')).toBeInTheDocument();
   });
+
+  it.each([MOCKUP_CENSUS_ROW_CAP, MOCKUP_CENSUS_ROW_CAP + 1])(
+    'the assets left out draw at most MOCKUP_CENSUS_ROW_CAP rows, then one closed line for the rest (D-8712): %i', async (n) => {
+      const omitted = Array.from({ length: n }, (_, i) => `docs/superpowers/specs/gone-${i}.png`);
+      sheet(async () => builder(answer({ inlined: [], omitted })), request());
+      await screen.findByRole('button', { name: SAVE });
+      const list = screen.getByText(EXPORT_TEXT.mockupOmitted).closest('.docs-export-note');
+      if (list === null) throw new Error('no list');
+      const rows = [...list.querySelectorAll('li')].map((li) => li.textContent);
+      expect(rows).toHaveLength(Math.min(n, MOCKUP_CENSUS_ROW_CAP));
+      expect(rows.at(-1)).toBe(`docs/superpowers/specs/gone-${Math.min(n, MOCKUP_CENSUS_ROW_CAP) - 1}.png`);
+      const more = fillSentence(MOCKUP_TEXT.moreNotListed, { n: n - MOCKUP_CENSUS_ROW_CAP });
+      if (n > MOCKUP_CENSUS_ROW_CAP) expect(list.querySelector('ul + p')?.textContent).toBe(more);
+      else expect(list.querySelector('ul + p')).toBeNull();
+    },
+  );
 
   it('a new build (Retry after a chunk that did not load) starts with the confirm closed', async () => {
     let tries = 0;

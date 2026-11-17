@@ -34,9 +34,10 @@ import { renderHast } from '../../lib/renderHast';
 import { SVG_DATA_PREFIX, planImageRef, rasterDataUrl, svgDataUrl } from '../DocImage';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DetachedUrls } from '../docsLinks';
-import { DOC_IMAGE_TEXT, EXPORT_TEXT, fillSentence, kib, pluralS } from '../docsText';
+import { DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_TEXT, fillSentence, kib, pluralS } from '../docsText';
 import type { MockupExportAssets, MockupLoadEnd } from '../exportBody';
 import { TIMED_OUT, buildMockupSnapshot, heldInUseOrder, mockupDiagramCount } from '../mockup/exportMockup';
+import { capRows } from '../mockup/census';
 import type { MockupAssetPlan, MockupAssetResult } from '../mockup/ports';
 import { exportColouring, type ExportColouring } from './colouring';
 import { settleExportAssets, type ExportAsset, type ExportAssets } from './exportAssets';
@@ -347,18 +348,23 @@ interface MockupTry {
   readonly notes: readonly string[];
 }
 
-/** One titled list of the wrapper's chrome: its heading, then one `li` per child. */
-function MockupList(p: { readonly heading: string; readonly children: ReactNode }): ReactNode {
+/** One titled list of the wrapper's chrome: its heading, then one `li` per child, then, when `more` rows are not drawn, the
+ *  one closed line that says how many. */
+function MockupList(p: { readonly heading: string; readonly more?: number; readonly children: ReactNode }): ReactNode {
   return (
     <section className="ccrc-export-provenance" aria-label={p.heading}>
       <h2 className="ccrc-export-note">{p.heading}</h2>
       <ul className="ccrc-export-notes">{p.children}</ul>
+      {p.more !== undefined && p.more > 0 && <p className="ccrc-export-note">{fillSentence(MOCKUP_TEXT.moreNotListed, { n: p.more })}</p>}
     </section>
   );
 }
 
 function MockupContent(p: { readonly title: string; readonly html: string; readonly facts: ExportMockupFacts; readonly links: ReactNode }): ReactNode {
   const { facts } = p;
+  // The assets left out, one label each, drawn on every size-fit try: the first rows, then how many more (D-8712). The
+  // result's `facts` keep the whole list, for the sheet, which caps its own.
+  const omitted = capRows(facts.omitted);
   return (
     <article className="doc-body">
       {facts.inlined.length > 0 && (
@@ -373,7 +379,7 @@ function MockupContent(p: { readonly title: string; readonly html: string; reado
         </MockupList>
       )}
       {facts.omitted.length > 0 && (
-        <MockupList heading={EXPORT_TEXT.mockupOmitted}>{facts.omitted.map((o, i) => <li key={i}>{o}</li>)}</MockupList>
+        <MockupList heading={EXPORT_TEXT.mockupOmitted} more={omitted.more}>{omitted.shown.map((o, i) => <li key={i}>{o}</li>)}</MockupList>
       )}
       {p.links}
       {/* A srcdoc is transparent and mockups are authored on white (base 5.6.7): the frame's holder draws in the light

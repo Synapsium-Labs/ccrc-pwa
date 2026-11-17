@@ -8,7 +8,8 @@
 //     fold's two totals, the conservative-admission note and the draft count the screen's banner takes;
 //   - `linksOf`: where each `a[href]` and `area[href]` of the page goes;
 //   - `censusRefText`: a reference as shown (cut at `MOCKUP_CENSUS_REF_UNITS`, every non-ASCII character as `U+XXXX`);
-//   - `capRows`: the rows a fold draws (at most `MOCKUP_CENSUS_ROW_CAP`) and how many more it does not list.
+//   - `capRows`: the rows a fold or an Export list of the assets left out draws (at most `MOCKUP_CENSUS_ROW_CAP`) and how
+//     many more it does not list.
 // The route of an in-app target is the caller's (`routeOf`): `docsLocation` stays the one builder of a Docs page location.
 import { docsApi, resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
 import { fillSentence, kib, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, mockupVerdictSentence } from '../docsText';
@@ -168,8 +169,9 @@ export function draftPinsOf(rows: readonly MockupAssetRow[], project: string): n
   return pins.size;
 }
 
-/** The rows an on-screen fold draws: at most `MOCKUP_CENSUS_ROW_CAP`, the first ones in order, and how many more it does not
- *  list. Totals (a fold's summary) are counted over the whole list, never over `shown`. */
+/** The rows a capped list draws (an on-screen fold, and the Export sheet's and the saved file's list of the assets left
+ *  out, D-8712): at most `MOCKUP_CENSUS_ROW_CAP`, the first ones in order, and how many more it does not list. Totals (a
+ *  fold's summary) are counted over the whole list, never over `shown`. */
 export function capRows<T>(rows: readonly T[]): { readonly shown: readonly T[]; readonly more: number } {
   if (rows.length <= MOCKUP_CENSUS_ROW_CAP) return { shown: rows, more: 0 };
   return { shown: rows.slice(0, MOCKUP_CENSUS_ROW_CAP), more: rows.length - MOCKUP_CENSUS_ROW_CAP };

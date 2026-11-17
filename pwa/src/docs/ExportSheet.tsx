@@ -7,16 +7,18 @@
 // microtask, so an installed app keeps the click's user activation (M4.EX13). A mockup's file that inlines uncommitted
 // files (spec 5.6.9, M5.EX5) first asks: the first tap on Save saves nothing and shows "This file includes {k}
 // uncommitted file{s} from {label}.", and the Save click after it, the same synchronous call, is the gesture. The sheet
-// lists a mockup's inlined files and the assets left out, as the file lists them. It never renders the file, never reads its
+// lists a mockup's inlined files and the assets left out, as the file lists them (the assets left out capped at
+// `MOCKUP_CENSUS_ROW_CAP` rows, then one closed line for the rest: D-8712). It never renders the file, never reads its
 // bytes, and holds no sink. A chunk that does not load is "Export could not start" with Retry; a build that throws is
 // "Export failed"; a body alone over the limit is "use Download". Every word is docsText.ts's.
 import { useEffect, useState, type ReactNode } from 'react';
 import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
 import { mib } from './DocMarkdown';
-import { EXPORT_TEXT, fillSentence, kib, pluralS } from './docsText';
+import { EXPORT_TEXT, MOCKUP_TEXT, fillSentence, kib, pluralS } from './docsText';
 import type { ExportInput, ExportMockupFacts, ExportResult } from './export/buildExport';
 import { exportInputOf, type ExportRequest } from './export/exportInput';
 import { exportWorktreeLabel, type ExportFact } from './export/provenance';
+import { capRows } from './mockup/census';
 import { downloadExport } from './objectUrls';
 
 /** The builder's chunk, as the sheet calls it. A test injects one. */
@@ -45,12 +47,14 @@ function errorName(e: unknown): string {
 /** A file's size as Save says it: KiB under 1 MiB, else MiB. */
 const sizeOf = (bytes: number): string => (bytes < 1048576 ? kib(bytes) : mib(bytes));
 
-/** One titled list of the sheet: its heading, then one `li` per child. */
-function SheetList(p: { readonly heading: string; readonly children: ReactNode }): ReactNode {
+/** One titled list of the sheet: its heading, then one `li` per child, then, when `more` rows are not drawn, the one closed
+ *  line that says how many. */
+function SheetList(p: { readonly heading: string; readonly more?: number; readonly children: ReactNode }): ReactNode {
   return (
     <div className="docs-export-note">
       <p>{p.heading}</p>
       <ul>{p.children}</ul>
+      {p.more !== undefined && p.more > 0 && <p>{fillSentence(MOCKUP_TEXT.moreNotListed, { n: p.more })}</p>}
     </div>
   );
 }
@@ -59,6 +63,8 @@ function SheetList(p: { readonly heading: string; readonly children: ReactNode }
  *  out. */
 function MockupLists(p: { readonly facts: ExportMockupFacts }): ReactNode {
   const { facts } = p;
+  // One label per asset left out, and a hostile page can name about 100 000: the first rows, then how many more (D-8712).
+  const omitted = capRows(facts.omitted);
   return (
     <>
       {facts.inlined.length > 0 && (
@@ -72,7 +78,9 @@ function MockupLists(p: { readonly facts: ExportMockupFacts }): ReactNode {
           ))}
         </SheetList>
       )}
-      {facts.omitted.length > 0 && <SheetList heading={EXPORT_TEXT.mockupOmitted}>{facts.omitted.map((o, i) => <li key={i}>{o}</li>)}</SheetList>}
+      {facts.omitted.length > 0 && (
+        <SheetList heading={EXPORT_TEXT.mockupOmitted} more={omitted.more}>{omitted.shown.map((o, i) => <li key={i}>{o}</li>)}</SheetList>
+      )}
     </>
   );
 }

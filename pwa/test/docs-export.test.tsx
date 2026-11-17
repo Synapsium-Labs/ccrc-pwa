@@ -19,13 +19,13 @@ import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
 import {
   DOC_IMAGE_TEXT, DOC_LINK_INERT_SENTENCE, ENTRY_BADGE_TEXT, EXPORT_MISSING_SENTENCE, EXPORT_PLAIN_SENTENCE, EXPORT_TEXT,
-  EXPORT_WAIT_TEXT, fillSentence,
+  EXPORT_WAIT_TEXT, MOCKUP_TEXT, fillSentence,
 } from '../src/docs/docsText';
 import { GATE_BODY, READER_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
 import { extractMockupRefs, startMockupLoad } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { planMockupAssets } from '../src/docs/mockup/plan';
-import { MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
+import { MOCKUP_CENSUS_ROW_CAP, MOCKUP_MAX_ASSET_BYTES } from '../src/docs/mockup/policy';
 import type { MockupAssetReader, MockupAssetResult } from '../src/docs/mockup/ports';
 import { buildExport, type ExportBodyInput, type ExportInput, type ExportLimits, type ExportResult } from '../src/docs/export/buildExport';
 import { exportColouring, type ExportColouring } from '../src/docs/export/colouring';
@@ -1136,6 +1136,21 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     expect(ended.inner.getElementById('a')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.failed);
     expect(ended.result.mockup?.inlined).toEqual([]);
   });
+
+  it.each([MOCKUP_CENSUS_ROW_CAP, MOCKUP_CENSUS_ROW_CAP + 1])(
+    'the saved file lists at most MOCKUP_CENSUS_ROW_CAP assets left out, then one closed line for the rest, and the result keeps every one (D-8712): %i',
+    async (n) => {
+      const html = mockupPage(Array.from({ length: n }, (_, i) => `<img src="https://ext.example/i${i}.png" alt="">`).join(''));
+      const { doc, result } = await builtMockup(html);
+      const shown = listOf(doc, EXPORT_TEXT.mockupOmitted);
+      expect(shown).toHaveLength(Math.min(n, MOCKUP_CENSUS_ROW_CAP));
+      expect(shown[0]).toBe('https://ext.example/i0.png');
+      expect(shown.at(-1)).toBe(`https://ext.example/i${Math.min(n, MOCKUP_CENSUS_ROW_CAP) - 1}.png`);
+      expect(result.mockup?.omitted).toHaveLength(n);
+      const closing = doc.querySelector(`section[aria-label="${EXPORT_TEXT.mockupOmitted}"] p`)?.textContent ?? null;
+      expect(closing).toBe(n > MOCKUP_CENSUS_ROW_CAP ? fillSentence(MOCKUP_TEXT.moreNotListed, { n: n - MOCKUP_CENSUS_ROW_CAP }) : null);
+    },
+  );
 
   it('an attempt that settles inside the wait is inlined; the wait is awaited, not polled', async () => {
     const input = await mockupInput(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(100) });

@@ -47,10 +47,11 @@ export const MOCKUP_MAX_ATTRIBUTES = 32;
  *  so an author's text cannot run a row long. `censusRefText` (`census.ts`) is its one reader. */
 export const MOCKUP_CENSUS_REF_UNITS = 120;
 
-/** The most rows each on-screen fold of the viewer draws, the census and the links list alike (base 5.6.7): 500. A page may
- *  name thousands of references; past this the fold lists the first 500 and one closed line says how many more are not listed.
- *  The fold summaries still count every reference, and the saved Export is not cut by it. `capRows` (`census.ts`) is its one
- *  reader. */
+/** The most rows each capped list draws (base 5.6.7, D-8712): 500. That is each on-screen fold of the viewer, the census and
+ *  the links list alike, and the Export's list of the assets left out, on the sheet and in the saved file. A page may name
+ *  thousands of references; past this the list shows the first 500 and one closed line says how many more are not listed.
+ *  The fold summaries still count every reference, and the saved file's links list is not cut by it (the file's own byte
+ *  cap bounds it). `capRows` (`census.ts`) is its one reader. */
 export const MOCKUP_CENSUS_ROW_CAP = 500;
 
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
