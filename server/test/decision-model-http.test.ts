@@ -21,11 +21,18 @@ const REQ: DecisionWireRequest = { model: 'model-a', state: { part: { quoted: 'u
   questions: { k1: { type: 'noul', instructions: 'Q?', criteria: { true: 'y', false: 'n' } } } };
 const GOOD = JSON.stringify({ model: 'model-a', answers: { k1: { type: 'noul', noul: 0.9 } } });
 
-type Step = { status: number; body?: string; latencyMs?: number } | { error: true; latencyMs?: number } | { hang: true };
+type Step = { status: number; body?: string; latencyMs?: number } | { error: true; latencyMs?: number } | { hang: true }
+  | { status: number; stream: AsyncIterable<Uint8Array> };
+
+/** A body as the adapter reads it: chunks of at most 16 KiB. */
+async function* chunks(text: string): AsyncGenerator<Uint8Array> {
+  const bytes = new TextEncoder().encode(text);
+  for (let at = 0; at < bytes.length; at += 16384) yield bytes.subarray(at, at + 16384);
+}
 
 interface Harness { ft: FakeTime; calls: { url: string; init: Parameters<DecisionFetch>[1] }[]; resolved: string[] }
 
-const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw'; key?: DecisionKeyRead } = {}) => {
+const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw'; key?: DecisionKeyRead | 'throw' } = {}) => {
   const ft = fakeTime();
   const h: Harness = { ft, calls: [], resolved: [] };
   const fetch: DecisionFetch = async (url, init) => {
@@ -35,9 +42,10 @@ const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw';
     if ('hang' in step) {
       return new Promise((_, reject) => init.signal.addEventListener('abort', () => reject(new Error('aborted'))));
     }
+    if ('stream' in step) return { status: step.status, body: step.stream };
     if (step.latencyMs !== undefined) ft.advance(step.latencyMs);
     if ('error' in step) throw new Error('network down');
-    return { status: step.status, text: async () => step.body ?? '' };
+    return { status: step.status, body: chunks(step.body ?? '') };
   };
   const resolve = async (name: string): Promise<readonly string[]> => {
     h.resolved.push(name);
@@ -45,7 +53,10 @@ const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw';
     return opts.addresses ?? ['127.0.0.1'];
   };
   const make = (endpoint: string, kind: 'hosted' | 'local' | 'zero-retention' = 'local') => createHttpDecisionModel(
-    { kind, endpoint }, () => opts.key ?? { kind: 'value', value: KEY }, { fetch, resolve, time: ft.ports, isPrivateAddress });
+    { kind, endpoint }, () => {
+      if (opts.key === 'throw') throw new Error('the key store broke');
+      return opts.key ?? { kind: 'value', value: KEY };
+    }, { fetch, resolve, time: ft.ports, isPrivateAddress });
   return { h, make };
 };
 
@@ -138,6 +149,27 @@ describe('createHttpDecisionModel: what it receives, and what it answers', () =>
     expect(await edge.make(LOCAL).ask(REQ)).toMatchObject({ ok: true });
   });
 
+  it('an endless body: reading stops at the first chunk past 64 KiB, and the stream is closed (review 2324 F6)', async () => {
+    let read = 0;
+    let closed = false;
+    const endless: AsyncIterable<Uint8Array> = { [Symbol.asyncIterator]: () => ({
+      next: async () => { read += 1; return { done: false, value: new Uint8Array(16384) }; },
+      return: async () => { closed = true; return { done: true, value: undefined }; },
+    }) };
+    const { make } = harness([{ status: 200, stream: endless }]);
+    expect(await make(LOCAL).ask(REQ)).toEqual({ ok: false, outcome: 'malformed', why: 'too-large', ms: 0, attempts: 1 });
+    expect(read).toBe(5);
+    expect(closed).toBe(true);
+  });
+
+  it('a key reader that throws: no request, unavailable no-key, 0 attempts (review 2324 F3)', async () => {
+    const { h, make } = harness([], { key: 'throw' });
+    const c = await make(LOCAL).ask(REQ);
+    expect(c).toEqual({ ok: false, outcome: 'unavailable', why: 'no-key', status: null, ms: 0, attempts: 0 });
+    expect(h.calls).toHaveLength(0);
+    expect(h.ft.pending()).toBe(0);
+  });
+
   it('a key that reads absent or unreadable: no request, unavailable no-key, 0 attempts', async () => {
     for (const kind of ['absent', 'unreadable'] as const) {
       const { h, make } = harness([], { key: { kind } });
@@ -149,24 +181,43 @@ describe('createHttpDecisionModel: what it receives, and what it answers', () =>
 });
 
 describe('createHttpDecisionModel: the endpoint is checked at each call (question 6, ruling F8)', () => {
-  it('a local host whose name now resolves to a public address is refused before any fetch', async () => {
-    const { h, make } = harness([], { addresses: ['127.0.0.1', PUBLIC] });
+  it('a local host named by a host name is refused before any resolve or fetch: endpoint-not-literal (review 2324 F2)', async () => {
+    const { h, make } = harness([{ status: 200, body: GOOD }], { addresses: ['10.0.0.7'] });
     const c = await make('https://model.lan-a:8443/ask').ask(REQ);
-    expect(c).toEqual({ ok: false, outcome: 'unavailable', why: 'endpoint-not-private', status: null, ms: 0, attempts: 0 });
+    expect(c).toEqual({ ok: false, outcome: 'unavailable', why: 'endpoint-not-literal', status: null, ms: 0, attempts: 0 });
+    expect(h.resolved).toEqual([]);
     expect(h.calls).toHaveLength(0);
-    expect(h.resolved).toEqual(['model.lan-a']);
     expect(h.ft.pending()).toBe(0);
   });
 
-  it('a local host on a private address over https: asked', async () => {
+  it('a local host on localhost is resolved and checked: loopback is asked, a public answer refused', async () => {
+    const ok = harness([{ status: 200, body: GOOD }], { addresses: ['127.0.0.1'] });
+    expect(await ok.make('http://localhost:9000/ask').ask(REQ)).toMatchObject({ ok: true });
+    expect(ok.h.resolved).toEqual(['localhost']);
+    const bad = harness([], { addresses: ['127.0.0.1', PUBLIC] });
+    expect(await bad.make('https://localhost:8443/ask').ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'endpoint-not-private' });
+    expect(bad.h.calls).toHaveLength(0);
+  });
+
+  it('a local host on a public literal is refused before any fetch', async () => {
+    const { h, make } = harness([], { addresses: [PUBLIC] });
+    const c = await make(`https://${PUBLIC}:8443/ask`).ask(REQ);
+    expect(c).toEqual({ ok: false, outcome: 'unavailable', why: 'endpoint-not-private', status: null, ms: 0, attempts: 0 });
+    expect(h.calls).toHaveLength(0);
+    expect(h.resolved).toEqual([PUBLIC]);
+  });
+
+  it('a local host on a private literal over https: asked', async () => {
     const { h, make } = harness([{ status: 200, body: GOOD }], { addresses: ['10.0.0.7'] });
-    expect(await make('https://model.lan-a:8443/ask').ask(REQ)).toMatchObject({ ok: true });
+    expect(await make('https://10.0.0.7:8443/ask').ask(REQ)).toMatchObject({ ok: true });
     expect(h.calls).toHaveLength(1);
   });
 
   it('an http endpoint on a private but not loopback address is refused: a key goes over http to loopback only', async () => {
     const { h, make } = harness([], { addresses: ['10.0.0.7'] });
-    expect(await make('http://model.lan-a:8000/ask').ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'endpoint-not-private' });
+    expect(await make('http://model.lan-a:8000/ask', 'zero-retention').ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'endpoint-not-private' });
+    expect(await harness([], { addresses: ['10.0.0.7'] }).make('http://10.0.0.7:8000/ask').ask(REQ))
+      .toMatchObject({ outcome: 'unavailable', why: 'endpoint-not-private' });
     expect(h.calls).toHaveLength(0);
   });
 
@@ -179,7 +230,7 @@ describe('createHttpDecisionModel: the endpoint is checked at each call (questio
   it('a name that does not resolve, or resolves to nothing: unreachable, 0 attempts', async () => {
     for (const addresses of ['throw', []] as const) {
       const { h, make } = harness([], { addresses });
-      expect(await make('https://model.lan-a/ask').ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'unreachable', attempts: 0 });
+      expect(await make('http://model.lan-a/ask', 'zero-retention').ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'unreachable', attempts: 0 });
       expect(h.calls).toHaveLength(0);
     }
   });
@@ -190,11 +241,11 @@ describe('createHttpDecisionModel: the endpoint is checked at each call (questio
     expect(h.resolved).toEqual([]);
   });
 
-  it('an endpoint that does not parse: unreachable, 0 attempts, origin empty', async () => {
+  it('an endpoint that does not parse: its own word, 0 attempts, origin null (review 2324 F4)', async () => {
     const { h, make } = harness([]);
     const m = make('not a url');
-    expect(m.origin).toBe('');
-    expect(await m.ask(REQ)).toMatchObject({ outcome: 'unavailable', why: 'unreachable', attempts: 0 });
+    expect(m.origin).toBeNull();
+    expect(await m.ask(REQ)).toEqual({ ok: false, outcome: 'unavailable', why: 'endpoint-unparseable', status: null, ms: 0, attempts: 0 });
     expect(h.calls).toHaveLength(0);
   });
 });

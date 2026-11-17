@@ -4,12 +4,14 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   DECISION_ROW_DEFAULT, type DecisionCheck, type DecisionHostKind, type DecisionRowId, type DecisionRowSide,
 } from '../../shared/decisionModel.js';
 import { openCoordDb } from '../src/coord/db.js';
+import { isPrivateAddress } from '../src/coord/decisionModel.js';
 import { gatherDecisions, type DecisionAskDeps } from '../src/coord/decisionModelAsk.js';
+import { createHttpDecisionModel } from '../src/coord/decisionModelHttp.js';
 import type { DecisionCall, DecisionModel, DecisionWireRequest } from '../src/coord/decisionModelPort.js';
 import { decisionAskStore } from '../src/coord/decisionModelStore.js';
 import { FIELDS } from './decisionModelCases.js';
@@ -41,11 +43,15 @@ const setup = (o: {
   arming?: Partial<Record<DecisionRowId, DecisionRowSide>>; host?: typeof LOCAL_HOST | typeof HOSTED_HOST | null;
   answer?: (req: DecisionWireRequest) => DecisionCall | Promise<DecisionCall>; modelKind?: DecisionHostKind;
   currentLine?: { id: number; line: number } | null; egress?: 'clear' | 'hit' | 'no-list' | 'unreadable';
+  screen?: (texts: readonly string[]) => 'clear' | 'hit' | 'no-list' | 'unreadable';
+  model?: (h: { kind: DecisionHostKind; endpoint: string }, time: DecisionAskDeps['time']) => DecisionModel;
+  settleFails?: boolean;
 } = {}) => {
   const ft = fakeTime();
   const d: Double = { calls: [], built: [] };
+  const store = decisionAskStore(db);
   const deps: DecisionAskDeps = {
-    store: decisionAskStore(db),
+    store: o.settleFails ? { ...store, settle: () => false } : store,
     time: ft.ports,
     arming: (row) => o.arming?.[row] ?? DECISION_ROW_DEFAULT,
     currentLine: () => o.currentLine ?? null,
@@ -53,6 +59,7 @@ const setup = (o: {
     keySet: () => true,
     modelFor: (h): DecisionModel => {
       d.built.push(h);
+      if (o.model !== undefined) return o.model(h, ft.ports);
       return {
         kind: o.modelKind ?? h.kind, origin: new URL(h.endpoint).origin,
         ask: async (req) => {
@@ -61,11 +68,12 @@ const setup = (o: {
         },
       };
     },
-    egress: () => o.egress ?? 'clear',
+    egress: (texts) => o.screen?.(texts) ?? o.egress ?? 'clear',
     stateHash: (state) => createHash('sha256').update(JSON.stringify(state)).digest('hex'),
   };
   return { deps, d, ft };
 };
+afterEach(() => { vi.restoreAllMocks(); });
 const one = (row: DecisionRowId, extra: object = {}) => ({ rows: [row], fields: new Map([[row, FIELDS[row]]]), refs: new Map(), ...extra });
 
 describe('gatherDecisions: the one caller (Task 5)', () => {
@@ -217,5 +225,80 @@ describe('gatherDecisions: the one caller (Task 5)', () => {
     const { deps, d } = setup({ arming: { 'relay.method': SHADOW }, host: null });
     expect(await gatherDecisions(deps, one('relay.method'))).toEqual([{ row: 'relay.method', outcome: 'unavailable', why: 'host-unset', ms: 0, attempts: 0 }]);
     expect(d.built).toHaveLength(0);
+  });
+});
+
+describe('gatherDecisions: review 2324', () => {
+  it('F1: two routing rows with different states: the secret in the second is screened, and never sent', async () => {
+    const SECRET = 'SECRET-PRIVATE-VALUE';
+    const screened: string[][] = [];
+    const { deps, d } = setup({ arming: { 'programme.pick': SHADOW, 'programme.any': SHADOW }, host: HOSTED_HOST,
+      screen: (texts) => { screened.push([...texts]); return texts.some((t) => t.includes(SECRET)) ? 'hit' : 'clear'; } });
+    const first = FIELDS['programme.pick'];
+    await gatherDecisions(deps, { rows: ['programme.pick'], fields: new Map([['programme.pick', first]]), refs: new Map() });
+    expect(d.calls).toHaveLength(1);
+    const second = { ...FIELDS['programme.any'], request: SECRET };
+    const checks = await gatherDecisions(deps, { rows: ['programme.pick', 'programme.any'],
+      fields: new Map([['programme.pick', first], ['programme.any', second]]), refs: new Map() });
+    expect(checks[0]).toMatchObject({ row: 'programme.pick', outcome: 'answered', reused: true });
+    expect(checks[1]).toEqual({ row: 'programme.any', outcome: 'not-asked', why: 'egress-hit', ms: 0, attempts: 0 });
+    for (const call of d.calls) expect(JSON.stringify(call)).not.toContain(SECRET);
+    expect(screened.some((t) => t.includes(SECRET))).toBe(true);
+    expect(counts('programme.any')).toEqual({ serve: 1, maintain: 0, reserved: 0, unavailableMs: 0 });
+  });
+
+  it('F1: a row is recorded under the state it was asked with', async () => {
+    const { deps, d } = setup({ arming: { 'programme.pick': SHADOW, 'programme.any': SHADOW } });
+    const second = { ...FIELDS['programme.any'], request: 'another request' };
+    await gatherDecisions(deps, { rows: ['programme.pick', 'programme.any'],
+      fields: new Map([['programme.pick', FIELDS['programme.pick']], ['programme.any', second]]), refs: new Map() });
+    expect(d.calls).toHaveLength(2);
+    expect(d.calls.map((c) => (c.state['request'] as { quoted: string }).quoted)).toEqual(['add a door', 'another request']);
+    const hashes = db.prepare('SELECT row, stateHash FROM decision_records ORDER BY id').all() as { row: string; stateHash: string }[];
+    expect(hashes.find((h) => h.row === 'programme.any')!.stateHash)
+      .toBe(createHash('sha256').update(JSON.stringify(second)).digest('hex'));
+  });
+
+  it('F3: an ask that throws: the gather throws, and no reservation stands', async () => {
+    const { deps } = setup({ arming: { 'relay.method': SHADOW }, answer: () => { throw new Error('adapter bug'); } });
+    await expect(gatherDecisions(deps, one('relay.method'))).rejects.toThrow(/adapter bug/);
+    expect(counts('relay.method')).toEqual({ serve: 0, maintain: 0, reserved: 0, unavailableMs: 0 });
+  });
+
+  it('F3: a key reader that throws, through the one adapter: no-key, no request, and no reservation stands', async () => {
+    let fetched = 0;
+    const { deps } = setup({ arming: { 'relay.method': SHADOW }, model: (h, time) => createHttpDecisionModel(h,
+      () => { throw new Error('the key store broke'); },
+      { fetch: async () => { fetched += 1; throw new Error('no fetch'); }, resolve: async () => ['127.0.0.1'], time, isPrivateAddress }) });
+    expect(await gatherDecisions(deps, one('relay.method')))
+      .toEqual([{ row: 'relay.method', outcome: 'unavailable', why: 'no-key', ms: 0, attempts: 0 }]);
+    expect(fetched).toBe(0);
+    expect(counts('relay.method')).toEqual({ serve: 0, maintain: 0, reserved: 0, unavailableMs: 0 });
+  });
+
+  it('F3: a settle the store could not write is logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const { deps } = setup({ arming: { 'relay.method': SHADOW }, settleFails: true });
+    await gatherDecisions(deps, one('relay.method'));
+    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/^ccrc-server: decision model: the settle of relay\.method on .* failed/));
+  });
+
+  it('F4: an adapter whose endpoint does not parse: endpoint-unparseable, never host-changed, the reservation released', async () => {
+    const { deps, d } = setup({ arming: { 'relay.method': SHADOW },
+      model: (h) => ({ kind: h.kind, origin: null, ask: async () => { throw new Error('never asked'); } }) });
+    expect(await gatherDecisions(deps, one('relay.method')))
+      .toEqual([{ row: 'relay.method', outcome: 'unavailable', why: 'endpoint-unparseable', ms: 0, attempts: 0 }]);
+    expect(d.calls).toHaveLength(0);
+    expect(counts('relay.method')).toEqual({ serve: 0, maintain: 0, reserved: 0, unavailableMs: 0 });
+  });
+
+  it('F5: a key holding an unreadable record: asked again, and the check names no record for this answer', async () => {
+    const { deps, d } = setup({ arming: { 'relay.method': SHADOW } });
+    await gatherDecisions(deps, one('relay.method'));
+    db.prepare("UPDATE decision_records SET verdict = 'maybe'").run();
+    const [c] = await gatherDecisions(deps, one('relay.method'));
+    expect(c).toMatchObject({ outcome: 'answered', reused: false, recordId: null });
+    expect(d.calls).toHaveLength(2);
+    expect(records()).toBe(1);
   });
 });

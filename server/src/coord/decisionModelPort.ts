@@ -14,28 +14,31 @@ export type { DecisionWireRequest };
  *  `no-key` is the key read failing between the plan and the call (the caller planned with a key); no request is sent. */
 export type DecisionCall =
   | { ok: true; answer: unknown; ms: number; attempts: number }
-  | { ok: false; outcome: 'unavailable'; why: 'timeout' | 'unreachable' | 'server-error' | 'endpoint-not-private' | 'no-key';
+  | { ok: false; outcome: 'unavailable'; why: 'timeout' | 'unreachable' | 'server-error' | 'endpoint-not-private' | 'no-key'
+      | 'endpoint-not-literal' | 'endpoint-unparseable';
       status: number | null; ms: number; attempts: number }
   | { ok: false; outcome: 'auth-failed' | 'refused' | 'over-size'; status: number; ms: number; attempts: number }
-  | { ok: false; outcome: 'malformed'; why: DecisionMalformedWhy; ms: number; attempts: number };
+  | { ok: false; outcome: 'malformed'; why: Extract<DecisionMalformedWhy, 'not-json' | 'too-large'>; ms: number; attempts: number };
 
 export interface DecisionModel {
   /** The host kind this adapter was built from (question 1): the caller refuses one that differs from its plan's. */
   readonly kind: DecisionHostKind;
-  /** The endpoint's scheme, host and port, as the record keys it (review 2262 F20). */
-  readonly origin: string;
+  /** The endpoint's scheme, host and port, as the record keys it (review 2262 F20); null when the endpoint does not parse,
+   *  which the caller answers as its own word, never as another host (review 2324 F4). */
+  readonly origin: string | null;
   ask(req: DecisionWireRequest): Promise<DecisionCall>;
 }
 
-/** The `fetch` the adapter is handed, injectable so no test reaches a network. Its body is read as text, so the adapter
- *  measures the 64 KiB cap and a body that is not JSON itself. */
+/** The `fetch` the adapter is handed, injectable so no test reaches a network. Its body is read chunk by chunk, so the
+ *  adapter stops at the 64 KiB cap while reading (review 2324 F6) and tells a body that is not JSON itself. A `Response`'s
+ *  `body` (a web `ReadableStream`) is such an iterable; null reads as an empty body. */
 export type DecisionFetch = (url: string, init: {
   method: 'POST';
   headers: Record<string, string>;
   body: string;
   signal: AbortSignal;
   redirect: 'error';
-}) => Promise<{ status: number; text: () => Promise<string> }>;
+}) => Promise<{ status: number; body: AsyncIterable<Uint8Array> | null }>;
 
 // ── the records and the day counts, as the one caller reads and writes them ─────────────────────────────────────────
 

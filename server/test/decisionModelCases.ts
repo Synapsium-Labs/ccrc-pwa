@@ -1,6 +1,6 @@
 // Overlord W2, the decision-model port (plan docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model.md, Task 2):
-// the cases over `planDecision`, `serveCap`, `maintainCap`, `bandOf`, `isPrivateAddress`, `encodeDecisionRequest` and
-// `readDecisionAnswers`, each over hand-built inputs. `decision-model-decide.test.ts` runs them against the real module and
+// the cases over `planDecision`, `serveCap`, `maintainCap`, `bandOf`, `isPrivateAddress`, `isLiteralHost`,
+// `encodeDecisionRequest`, `decisionRequestGroups` and `readDecisionAnswers`, each over hand-built inputs. `decision-model-decide.test.ts` runs them against the real module and
 // `sim/decisionModelSets.ts` against each mutant, so one list of cases is both the suite and the mutation floor's judge.
 import { expect } from 'vitest';
 import {
@@ -11,7 +11,7 @@ import type * as DecisionModel from '../src/coord/decisionModel.js';
 import type { DecisionFields, DecisionQuestionKey, PlanInput } from '../src/coord/decisionModel.js';
 
 export type DecisionModelModule = Pick<typeof DecisionModel, 'planDecision' | 'serveCap' | 'maintainCap' | 'bandOf'
-  | 'isPrivateAddress' | 'encodeDecisionRequest' | 'readDecisionAnswers'>;
+  | 'isPrivateAddress' | 'isLiteralHost' | 'encodeDecisionRequest' | 'decisionRequestGroups' | 'readDecisionAnswers'>;
 
 export interface DecisionModelCase { name: string; run: (m: DecisionModelModule) => void }
 
@@ -116,6 +116,19 @@ export const PLAN_CASES: DecisionModelCase[] = [
       .toEqual({ do: 'skip', outcome: 'not-asked', why: 'missing-field' });
     expect(m.planDecision(plan('programme.pick', { fields: { ...FIELDS['programme.pick'], request: '' } })).do).toBe('skip');
     expect(m.planDecision(plan('readback.adds', { fields: { request: 'r', readback: 'b' } }))).toEqual(ASK);
+    // A required list holding an empty text is missing too (review 2324 F6).
+    for (const candidates of [[''], ['programme-a', '']]) {
+      expect(m.planDecision(plan('programme.pick', { fields: { ...FIELDS['programme.pick'], candidates, goals: candidates.map(() => 'g') } })))
+        .toEqual({ do: 'skip', outcome: 'not-asked', why: 'missing-field' });
+    }
+  } },
+  { name: 'plan: a fact is a short server-made value: 200 characters ask, 201 are over-size (review 2324 F6)', run: (m) => {
+    expect(m.planDecision(plan('goals.conflict', { fields: { ...FIELDS['goals.conflict'], signal: 'x'.repeat(200) } }))).toEqual(ASK);
+    expect(m.planDecision(plan('goals.conflict', { fields: { ...FIELDS['goals.conflict'], signal: 'x'.repeat(201) } })))
+      .toMatchObject({ outcome: 'over-size' });
+    expect(m.planDecision(plan('readback.omits', { fields: { ...FIELDS['readback.omits'], doneTest: 'x'.repeat(201) } })))
+      .toMatchObject({ outcome: 'over-size' });
+    expect(m.planDecision(plan('goals.conflict', { fields: { ...FIELDS['goals.conflict'], a: 'x'.repeat(201) } }))).toEqual(ASK);
   } },
   { name: 'plan: a field of 8000 characters asks and of 8001 is over-size; a list entry counts the same', run: (m) => {
     expect(m.planDecision(plan('relay.method', { fields: { part: 'x'.repeat(8000) } }))).toEqual(ASK);
@@ -220,6 +233,10 @@ export const ADDRESS_CASES: DecisionModelCase[] = [
       expect(m.isPrivateAddress(junk, false), junk).toBe(false);
     }
   } },
+  { name: 'addresses: a local host is an IPv4 or IPv6 literal or localhost; any other name is not (review 2324 F2)', run: (m) => {
+    for (const lit of ['127.0.0.1', '10.0.0.7', '::1', 'fe80::1', '::ffff:10.0.0.1', 'localhost']) expect(m.isLiteralHost(lit), lit).toBe(true);
+    for (const name of ['model.lan-a', 'localhost.lan-a', '', '10.0.0', '::g']) expect(m.isLiteralHost(name), name).toBe(false);
+  } },
 ];
 
 const OPAQUE = Array.from({ length: 40 }, (_, i) => `k${String(i).padStart(3, '0')}`);
@@ -313,14 +330,50 @@ export const ENCODE_CASES: DecisionModelCase[] = [
   } },
   { name: 'encode: a field over 8000 characters, or a request over 32768 bytes, refuses over-size', run: (m) => {
     expect(enc(m, ['relay.method'], { 'relay.method': { part: 'x'.repeat(8001) } })).toEqual({ refused: 'over-size', row: 'relay.method' });
-    const big = { a: 'x'.repeat(8000), b: 'y'.repeat(8000), signal: 'z'.repeat(8000) };
+    const big = { a: 'x'.repeat(8000), b: 'y'.repeat(8000), signal: 'z'.repeat(200) };
     expect('refused' in enc(m, ['goals.conflict'], { 'goals.conflict': big })).toBe(false);
-    const wide = { a: 'é'.repeat(8000), b: 'é'.repeat(8000), signal: 'é'.repeat(1000) };
+    expect(enc(m, ['goals.conflict'], { 'goals.conflict': { ...big, signal: 'z'.repeat(201) } }))
+      .toEqual({ refused: 'over-size', row: 'goals.conflict' });
+    const wide = { a: 'é'.repeat(8000), b: 'é'.repeat(8000), signal: 'é'.repeat(200) };
     expect(enc(m, ['goals.conflict'], { 'goals.conflict': wide })).toEqual({ refused: 'over-size', row: 'goals.conflict' });
   } },
   { name: 'encode: rows of two groups, or running out of opaque ids, is a caller bug and throws', run: (m) => {
     expect(() => enc(m, ['relay.method', 'scope.widens'])).toThrow(/group/);
     expect(() => m.encodeDecisionRequest(['relay.method'], new Map([['relay.method', FIELDS['relay.method']]]), 'model-a', [])).toThrow(/opaque/);
+    // Duplicate opaque ids would key two questions alike (review 2324 F6).
+    expect(() => m.encodeDecisionRequest(['relay.method'], new Map([['relay.method', FIELDS['relay.method']]]), 'model-a',
+      ['k1', 'k2', 'k1'])).toThrow(/duplicate/);
+  } },
+  { name: 'encode: a required list holding an empty text refuses missing-field (review 2324 F6)', run: (m) => {
+    const blank = { request: 'r', candidates: ['programme-a', ''], goals: ['g', 'h'] };
+    expect(enc(m, ['programme.pick', 'programme.any'], { 'programme.pick': blank, 'programme.any': blank }))
+      .toEqual({ refused: 'missing-field', row: 'programme.pick' });
+  } },
+];
+
+const hash = (f: DecisionFields): string => JSON.stringify(f);
+export const GROUP_CASES: DecisionModelCase[] = [
+  { name: 'groups: one askedWith group with one state is one request, in first-seen order', run: (m) => {
+    const state = FIELDS['programme.pick'];
+    expect(m.decisionRequestGroups(['programme.pick', 'programme.any', 'relay.method'],
+      (r) => (r === 'relay.method' ? FIELDS['relay.method'] : state), hash)).toEqual([
+      { rows: ['programme.pick', 'programme.any'], state, stateHash: hash(state) },
+      { rows: ['relay.method'], state: FIELDS['relay.method'], stateHash: hash(FIELDS['relay.method']) },
+    ]);
+  } },
+  { name: 'groups: rows of one group whose states differ are two requests, each with its own state (review 2324 F1)', run: (m) => {
+    const other = { ...FIELDS['programme.any'], request: 'another request' };
+    const groups = m.decisionRequestGroups(['programme.pick', 'programme.any'],
+      (r) => (r === 'programme.pick' ? FIELDS['programme.pick'] : other), hash);
+    expect(groups).toEqual([
+      { rows: ['programme.pick'], state: FIELDS['programme.pick'], stateHash: hash(FIELDS['programme.pick']) },
+      { rows: ['programme.any'], state: other, stateHash: hash(other) },
+    ]);
+  } },
+  { name: 'groups: two rows of different groups with equal states stay two requests', run: (m) => {
+    const same = { part: 'p' };
+    expect(m.decisionRequestGroups(['relay.method', 'goals.conflict'], () => same, hash).map((g) => g.rows))
+      .toEqual([['relay.method'], ['goals.conflict']]);
   } },
 ];
 
@@ -401,5 +454,5 @@ export const READ_CASES: DecisionModelCase[] = [
 ];
 
 export const ALL_DECISION_MODEL_CASES: DecisionModelCase[] = [
-  ...PLAN_CASES, ...CAP_CASES, ...BAND_CASES, ...ADDRESS_CASES, ...ENCODE_CASES, ...READ_CASES,
+  ...PLAN_CASES, ...CAP_CASES, ...BAND_CASES, ...ADDRESS_CASES, ...ENCODE_CASES, ...GROUP_CASES, ...READ_CASES,
 ];

@@ -1,5 +1,6 @@
 // The decision-model port's mutant sets (Overlord W2, plan w2-decision-model.md Task 2 Step 5; the floors rule is D-8217's):
-// `planDecision`, `serveCap`, `maintainCap`, `isPrivateAddress`, `encodeDecisionRequest`, `readDecisionAnswers` and `bandOf`,
+// `planDecision`, `serveCap`, `maintainCap`, `isPrivateAddress`, `isLiteralHost`, `encodeDecisionRequest`,
+// `decisionRequestGroups`, `readDecisionAnswers` and `bandOf`,
 // each run against every case of `../decisionModelCases.ts` loaded over the mutated copy of server/src/coord/decisionModel.ts.
 // Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor each in mutation-floors.json. The plan's named mutants are
 // DM-PLAN-1 to DM-PLAN-10, DM-ADDR-1 and -2, DM-READ-1 and -2 and DM-BAND-1.
@@ -73,10 +74,28 @@ export const DECISION_ENCODE_SET = set([
   { id: 'DM-ENC-5 no swapped pair', old: "(order === 'a' ? named : [...named].reverse())", new: 'named' },
   { id: 'DM-ENC-6 the pair under its own names', old: '    if (swapped && i < 2) {', new: '    if (false) {' },
   { id: 'DM-ENC-7 no byte cap', old: '.length > DECISION_REQUEST_MAX_BYTES) return { refused', new: '.length > Infinity) return { refused' },
-  { id: 'DM-ENC-8 no field cap', old: 'texts(v).some((t) => t.length > DECISION_FIELD_MAX_CHARS))) return { refused', new: 'false)) return { refused' },
+  { id: 'DM-ENC-8 no field cap', old: "if (overFieldCap(r, f)) return { refused: 'over-size', row: r };", new: "if (false) return { refused: 'over-size', row: r };" },
   { id: 'DM-ENC-9 no group check', old: "  if (rows.some((r) => !group.includes(r))) throw", new: '  if (false) throw' },
   { id: 'DM-ENC-10 one order only', old: "q.orders === 'both' ? (['a', 'b'] as const) : (['a'] as const)", new: "(['a'] as const)" },
   { id: 'DM-ENC-11 goals list unchecked', old: 'if (goals.length !== slugs.length)', new: 'if (false)' },
+  // Review 2324 F6: a fact capped as a short server-made value; duplicate opaque ids; a required list holding an empty text.
+  { id: 'DM-ENC-12 facts take the field cap', old: "?.kind === 'fact' ? DECISION_FACT_MAX_CHARS : DECISION_FIELD_MAX_CHARS", new: "?.kind === 'fact' ? DECISION_FIELD_MAX_CHARS : DECISION_FIELD_MAX_CHARS" },
+  { id: 'DM-ENC-13 duplicate opaque ids', old: '  if (new Set(opaque).size !== opaque.length) throw', new: '  if (false) throw' },
+  { id: 'DM-ENC-14 an empty text in a list', old: 'v.length === 0 || v.some((t) => t.length === 0)', new: 'v.length === 0' },
+]);
+
+export const DECISION_GROUP_SET = set([
+  // Review 2324 F1: the screen, the key, the size and the send read one state. Grouping by the lead alone screens the lead's
+  // fields again and sends another row's.
+  { id: 'DM-GROUP-1 group by the lead alone', old: 'const key = `${DECISION_QUESTIONS[r].askedWith[0]!} ${stateHash}`;', new: 'const key = DECISION_QUESTIONS[r].askedWith[0]!;' },
+  { id: 'DM-GROUP-2 group by the state alone', old: 'const key = `${DECISION_QUESTIONS[r].askedWith[0]!} ${stateHash}`;', new: 'const key = stateHash;' },
+]);
+
+export const DECISION_LITERAL_SET = set([
+  // Review 2324 F2: a `local` host names a literal address.
+  { id: 'DM-LIT-1 IPv4 only', old: "return hostname === 'localhost' || ipv4(hostname) !== null || ipv6(hostname) !== null;", new: "return hostname === 'localhost' || ipv4(hostname) !== null;" },
+  { id: 'DM-LIT-2 any name', old: "return hostname === 'localhost' || ipv4(hostname) !== null || ipv6(hostname) !== null;", new: 'return hostname.length > 0;' },
+  { id: 'DM-LIT-3 no localhost', old: "return hostname === 'localhost' || ipv4(hostname) !== null || ipv6(hostname) !== null;", new: 'return ipv4(hostname) !== null || ipv6(hostname) !== null;' },
 ]);
 
 export const DECISION_READ_SET = set([
@@ -106,6 +125,8 @@ export const DECISION_MODEL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${K}maintainCap`]: DECISION_MAINTAIN_CAP_SET as MutantSet<never>,
   [`${K}isPrivateAddress`]: DECISION_ADDRESS_SET as MutantSet<never>,
   [`${K}encodeDecisionRequest`]: DECISION_ENCODE_SET as MutantSet<never>,
+  [`${K}decisionRequestGroups`]: DECISION_GROUP_SET as MutantSet<never>,
+  [`${K}isLiteralHost`]: DECISION_LITERAL_SET as MutantSet<never>,
   [`${K}readDecisionAnswers`]: DECISION_READ_SET as MutantSet<never>,
   [`${K}bandOf`]: DECISION_BAND_SET as MutantSet<never>,
 };

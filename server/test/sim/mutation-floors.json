@@ -138,6 +138,8 @@
   "server/src/coord/decisionModel.ts#encodeDecisionRequest": 1,
   "server/src/coord/decisionModel.ts#readDecisionAnswers": 1,
   "server/src/coord/decisionModel.ts#bandOf": 1,
+  "server/src/coord/decisionModel.ts#decisionRequestGroups": 1,
+  "server/src/coord/decisionModel.ts#isLiteralHost": 1,
   "shared/private-names.mjs#hashEntry": 1,
   "shared/private-names.mjs#privateNameHits": 1
 }

@@ -14,10 +14,10 @@
 // orders, the lower of the two for `yes` and `unsure`, the higher for `no`; for a choice, the lower of the two orders'
 // probabilities for the option named.
 import {
-  DECISION_BAND_CUTS, DECISION_BANDS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_HOST_KINDS,
+  DECISION_BAND_CUTS, DECISION_BANDS, DECISION_FACT_MAX_CHARS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_HOST_KINDS,
   DECISION_MALFORMED_WHY, DECISION_NOT_ASKED_WHY, DECISION_OUTCOMES, DECISION_QUESTION_TYPES, DECISION_QUESTIONS,
   DECISION_REQUEST_MAX_BYTES, DECISION_RESERVE_PER_REQUEST, DECISION_SHORTLIST_MAX, DECISION_UNAVAILABLE_WHY,
-  type DecisionBand, type DecisionCheck, type DecisionHostKind, type DecisionRowId, type DecisionRowSide,
+  type DecisionBand, type DecisionCheck, type DecisionHostKind, type DecisionMalformedWhy, type DecisionRowId, type DecisionRowSide,
   type DecisionVerdict,
 } from '../../../shared/decisionModel.js';
 
@@ -32,6 +32,30 @@ export type DecisionUsage =
 /** What the hosted egress screen said, or `not-hosted` when the host is not `hosted` and no screen ran (question 9). */
 export const DECISION_EGRESS_WORDS = ['clear', 'hit', 'no-list', 'unreadable', 'not-hosted'] as const;
 export type DecisionEgressWord = (typeof DECISION_EGRESS_WORDS)[number];
+/** One request: rows of one `askedWith` group whose states are the same, and that one state (review 2324 F1). The egress
+ *  screen, the record key, the size and the request itself all read `state`, so no row is screened or keyed on one state
+ *  and sent with another: rows of a group whose states differ go in separate requests. */
+export interface DecisionRequestGroup {
+  readonly rows: readonly DecisionRowId[];
+  readonly state: DecisionFields;
+  readonly stateHash: string;
+}
+
+/** Split the rows into requests by their `askedWith` group and their state's hash, in first-seen order. */
+export function decisionRequestGroups(rows: readonly DecisionRowId[], stateOf: (row: DecisionRowId) => DecisionFields,
+  hashOf: (state: DecisionFields) => string): readonly DecisionRequestGroup[] {
+  const groups = new Map<string, { rows: DecisionRowId[]; state: DecisionFields; stateHash: string }>();
+  for (const r of rows) {
+    const state = stateOf(r);
+    const stateHash = hashOf(state);
+    const key = `${DECISION_QUESTIONS[r].askedWith[0]!} ${stateHash}`;
+    const g = groups.get(key);
+    if (g === undefined) groups.set(key, { rows: [r], state, stateHash });
+    else g.rows.push(r);
+  }
+  return [...groups.values()];
+}
+
 /** The egress word an answered check records (`egressWordOf`). */
 export const DECISION_RECORDED_EGRESS = ['clear', 'skipped-no-list', 'not-hosted'] as const;
 
@@ -67,9 +91,16 @@ export type RowPlan =
 
 const skip = (outcome: Extract<RowPlan, { do: 'skip' }>['outcome'], why: string | null = null): RowPlan => ({ do: 'skip', outcome, why });
 
+/** A required field is missing when it is absent, empty, or a list that is empty or holds an empty text (review 2324 F6). */
 const isEmpty = (v: string | readonly string[] | undefined): boolean =>
-  v === undefined || (typeof v === 'string' ? v.length === 0 : v.length === 0);
+  v === undefined || (typeof v === 'string' ? v.length === 0 : v.length === 0 || v.some((t) => t.length === 0));
 const texts = (v: string | readonly string[]): readonly string[] => (typeof v === 'string' ? [v] : v);
+/** A field over its cap: a `fact` is a short server-made value (`DECISION_FACT_MAX_CHARS`), anything else
+ *  `DECISION_FIELD_MAX_CHARS` (review 2324 F6). */
+const overFieldCap = (row: DecisionRowId, fields: DecisionFields): boolean => Object.entries(fields).some(([name, v]) => {
+  const cap = DECISION_QUESTIONS[row].fields.find((d) => d.name === name)?.kind === 'fact' ? DECISION_FACT_MAX_CHARS : DECISION_FIELD_MAX_CHARS;
+  return texts(v).some((t) => t.length > cap);
+});
 
 /** Serving may use whatever maintenance left: `C − maintain` (question 10). */
 export function serveCap(u: { ceiling: number; maintain: number }): number {
@@ -96,7 +127,7 @@ export function planDecision(input: PlanInput): RowPlan {
   // 6. A required field missing, an empty programme.pick shortlist included.
   if (q.fields.some((f) => f.required && isEmpty(input.fields[f.name]))) return skip('not-asked', 'missing-field');
   // 7.
-  const overField = Object.values(input.fields).some((v) => texts(v).some((t) => t.length > DECISION_FIELD_MAX_CHARS));
+  const overField = overFieldCap(input.row, input.fields);
   if (overField || input.requestBytes > DECISION_REQUEST_MAX_BYTES) return skip('over-size');
   // 8, 9. The hosted egress screen (question 9): a hit, or a list that exists and cannot be read.
   if (host.kind === 'hosted' && input.egress === 'hit') return skip('not-asked', 'egress-hit');
@@ -212,6 +243,12 @@ const ipv6 = (s: string): number[] | null => {
   return [...left, ...Array<number>(8 - known).fill(0), ...right, ...tail4];
 };
 
+/** A host a `local` endpoint may name: an IPv4 or IPv6 literal (no brackets), as the address parsers above read one, or
+ *  `localhost` (review 2324 F2, the coordinator's ruling: no name a resolver can move between the check and the connect). */
+export function isLiteralHost(hostname: string): boolean {
+  return hostname === 'localhost' || ipv4(hostname) !== null || ipv6(hostname) !== null;
+}
+
 /** Loopback: 127.0.0.0/8, ::1. Private: 10/8, 172.16/12, 192.168/16, fc00::/7, fe80::/10. With `loopbackOnly`, loopback
  *  alone. An IPv4-mapped IPv6 address is read as its IPv4 address. Anything unparseable, a name included, is false. */
 export function isPrivateAddress(address: string, loopbackOnly: boolean): boolean {
@@ -267,6 +304,7 @@ export function encodeDecisionRequest(rows: readonly DecisionRowId[], fields: Re
   modelId: string, opaque: readonly string[]): DecisionEncoded {
   const lead = rows[0];
   if (lead === undefined) throw new Error('encodeDecisionRequest: no rows');
+  if (new Set(opaque).size !== opaque.length) throw new Error('encodeDecisionRequest: duplicate opaque ids');
   const group = DECISION_QUESTIONS[lead].askedWith;
   if (rows.some((r) => !group.includes(r))) throw new Error('encodeDecisionRequest: rows of more than one askedWith group');
   let next = 0;
@@ -278,7 +316,7 @@ export function encodeDecisionRequest(rows: readonly DecisionRowId[], fields: Re
   for (const r of rows) {
     const f = fields.get(r) ?? {};
     if (DECISION_QUESTIONS[r].fields.some((d) => d.required && isEmpty(f[d.name]))) return { refused: 'missing-field', row: r };
-    if (Object.values(f).some((v) => texts(v).some((t) => t.length > DECISION_FIELD_MAX_CHARS))) return { refused: 'over-size', row: r };
+    if (overFieldCap(r, f)) return { refused: 'over-size', row: r };
   }
   const q0 = DECISION_QUESTIONS[lead];
   const f0 = fields.get(lead) ?? {};
@@ -347,7 +385,7 @@ export function encodeDecisionRequest(rows: readonly DecisionRowId[], fields: Re
 // ── the answer ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface DecisionAnswer { readonly verdict: DecisionVerdict; readonly p: number; readonly band: DecisionBand }
-export type DecisionRead = ReadonlyMap<DecisionRowId, DecisionAnswer> | { malformed: string };
+export type DecisionRead = ReadonlyMap<DecisionRowId, DecisionAnswer> | { malformed: Exclude<DecisionMalformedWhy, 'not-json' | 'too-large'> };
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isProbability = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;

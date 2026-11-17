@@ -11,11 +11,15 @@
 // `authorization`, and appears in no answer. An answer carries the status code and the outcome word, never a response
 // body's text, and this file writes no log line.
 //
-// THE ENDPOINT IS CHECKED AT EACH CALL (question 6, ruling F8). A `local` host must resolve to loopback or private addresses
-// only, and an `http:` endpoint to loopback only, so a name that later resolves elsewhere is refused before any request.
+// THE ENDPOINT IS CHECKED AT EACH CALL (question 6, ruling F8). A `local` host must name an address literal or `localhost`
+// (review 2324 F2, the coordinator's ruling: a name could resolve one way for the check and another for the connect), and
+// must resolve to loopback or private addresses only; an `http:` endpoint must resolve to loopback only.
+//
+// THE BODY IS CAPPED WHILE IT IS READ (review 2324 F6): reading stops at the first chunk past 64 KiB.
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
 import { DECISION_DEADLINE_MS, DECISION_RETRY_MIN_LEFT_MS, type DecisionHostKind } from '../../../shared/decisionModel.js';
 import type { TimePorts } from '../time/ports.js';
+import { isLiteralHost } from './decisionModel.js';
 import type { DecisionCall, DecisionFetch, DecisionModel, DecisionWireRequest } from './decisionModelPort.js';
 
 /** The largest answer body read as an answer (64 KiB); a larger one is `malformed`, `too-large`. */
@@ -33,6 +37,22 @@ export interface DecisionHttpDeps {
   isPrivateAddress: (address: string, loopbackOnly: boolean) => boolean;
 }
 
+/** The body's bytes, or `too-large` at the first chunk that takes it past the cap; leaving the loop cancels the stream. */
+async function readCapped(body: AsyncIterable<Uint8Array> | null): Promise<Uint8Array | 'too-large'> {
+  if (body === null) return new Uint8Array(0);
+  const parts: Uint8Array[] = [];
+  let size = 0;
+  for await (const chunk of body) {
+    size += chunk.byteLength;
+    if (size > DECISION_ANSWER_MAX_BYTES) return 'too-large';
+    parts.push(chunk);
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) { out.set(p, at); at += p.byteLength; }
+  return out;
+}
+
 const originOf = (endpoint: string): string | null => {
   try { return new URL(endpoint).origin; } catch { return null; }
 };
@@ -42,7 +62,7 @@ export function createHttpDecisionModel(host: { kind: DecisionHostKind; endpoint
   const origin = originOf(host.endpoint);
   return {
     kind: host.kind,
-    origin: origin ?? '',
+    origin,
     async ask(req: DecisionWireRequest): Promise<DecisionCall> {
       const { clock, scheduler } = deps.time;
       const start = clock.mono();
@@ -58,18 +78,21 @@ export function createHttpDecisionModel(host: { kind: DecisionHostKind; endpoint
       const unavailable = (why: Extract<DecisionCall, { outcome: 'unavailable' }>['why'], status: number | null = null): DecisionCall =>
         ({ ok: false, outcome: 'unavailable', why: timedOut ? 'timeout' : why, status, ms: ms(), attempts });
       try {
-        if (origin === null) return unavailable('unreachable');
+        if (origin === null) return unavailable('endpoint-unparseable');
         const url = new URL(host.endpoint);
         const isHttp = url.protocol === 'http:';
+        const hostname = url.hostname.replace(/^\[(.*)\]$/, '$1');
+        if (host.kind === 'local' && !isLiteralHost(hostname)) return unavailable('endpoint-not-literal');
         if (host.kind === 'local' || isHttp) {
           let addresses: readonly string[];
           try {
-            addresses = await Promise.race([deps.resolve(url.hostname.replace(/^\[(.*)\]$/, '$1')), aborted]);
+            addresses = await Promise.race([deps.resolve(hostname), aborted]);
           } catch { return unavailable('unreachable'); }
           if (addresses.length === 0) return unavailable('unreachable');
           if (addresses.some((a) => !deps.isPrivateAddress(a, isHttp))) return unavailable('endpoint-not-private');
         }
-        const k = key();
+        let k: DecisionKeyRead;
+        try { k = key(); } catch { return unavailable('no-key'); }
         if (k.kind !== 'value') return unavailable('no-key');
         const body = JSON.stringify(req);
         const retryable = (): boolean => attempts < 2 && DECISION_DEADLINE_MS - ms() > DECISION_RETRY_MIN_LEFT_MS;
@@ -93,13 +116,11 @@ export function createHttpDecisionModel(host: { kind: DecisionHostKind; endpoint
             return unavailable('server-error', status);
           }
           if (status < 200 || status > 299) return { ok: false, outcome: 'refused', status, ms: ms(), attempts };
-          let text: string;
-          try { text = await Promise.race([res.text(), aborted]); } catch { return unavailable('unreachable', status); }
-          if (new TextEncoder().encode(text).length > DECISION_ANSWER_MAX_BYTES) {
-            return { ok: false, outcome: 'malformed', why: 'too-large', ms: ms(), attempts };
-          }
+          let bytes: Uint8Array | 'too-large';
+          try { bytes = await Promise.race([readCapped(res.body), aborted]); } catch { return unavailable('unreachable', status); }
+          if (bytes === 'too-large') return { ok: false, outcome: 'malformed', why: 'too-large', ms: ms(), attempts };
           let answer: unknown;
-          try { answer = JSON.parse(text); } catch { return { ok: false, outcome: 'malformed', why: 'not-json', ms: ms(), attempts }; }
+          try { answer = JSON.parse(new TextDecoder().decode(bytes)); } catch { return { ok: false, outcome: 'malformed', why: 'not-json', ms: ms(), attempts }; }
           return { ok: true, answer, ms: ms(), attempts };
         }
       } finally {

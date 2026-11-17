@@ -22,14 +22,17 @@ export const DECISION_OUTCOMES = ['answered', 'unavailable', 'auth-failed', 'ref
 export type DecisionOutcome = (typeof DECISION_OUTCOMES)[number];
 /** Why a row answered `unavailable`. */
 export const DECISION_UNAVAILABLE_WHY = ['no-key', 'host-unset', 'host-changed', 'endpoint-not-private', 'timeout',
-  'unreachable', 'server-error'] as const;
+  'unreachable', 'server-error', 'endpoint-not-literal', 'endpoint-unparseable'] as const;
 export type DecisionUnavailableWhy = (typeof DECISION_UNAVAILABLE_WHY)[number];
 /** Why a row answered `not-asked`. */
 export const DECISION_NOT_ASKED_WHY = ['held', 'missing-field', 'private-state-hosted', 'egress-hit',
   'egress-unreadable'] as const;
 export type DecisionNotAskedWhy = (typeof DECISION_NOT_ASKED_WHY)[number];
-/** Why an answer read `malformed` before it was parsed: a body over the cap, or not JSON. */
-export const DECISION_MALFORMED_WHY = ['not-json', 'too-large'] as const;
+/** Why an answer read `malformed`, every reason in one list (review 2324 F6): the adapter's two (a body over the cap, or not
+ *  JSON) and `decisionModel.ts#readDecisionAnswers`'s six (the model pin, the answers object, a question's key, its type, its
+ *  probability, its option). */
+export const DECISION_MALFORMED_WHY = ['not-json', 'too-large', 'model', 'answers', 'missing', 'type', 'probability',
+  'option'] as const;
 export type DecisionMalformedWhy = (typeof DECISION_MALFORMED_WHY)[number];
 /** A row's question type: a yes-or-no question, or a choice among options. */
 export const DECISION_QUESTION_TYPES = ['yes-no', 'choice'] as const;
@@ -48,6 +51,8 @@ export type DecisionLabelSource = (typeof DECISION_LABEL_SOURCES)[number];
 
 /** The request caps: over either, `over-size`, not sent. There is no long-context mode (H6). */
 export const DECISION_FIELD_MAX_CHARS = 8000;
+/** The longest `fact`: a short server-made value (question 7), so a longer one is `over-size` (review 2324 F6). */
+export const DECISION_FACT_MAX_CHARS = 200;
 export const DECISION_REQUEST_MAX_BYTES = 32768;
 /** At most six candidates on `programme.pick`'s shortlist (ruling F5: code makes it, never this piece). */
 export const DECISION_SHORTLIST_MAX = 6;
