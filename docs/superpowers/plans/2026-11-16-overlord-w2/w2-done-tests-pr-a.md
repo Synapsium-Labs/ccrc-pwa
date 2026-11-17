@@ -30,6 +30,10 @@ departures and measurements the build added, by slug. No D-number is minted here
   one `UPDATE`), both within 40.
 - **CI round 1:** `mail-routes.test.ts`'s kebab census found the done-test words undeclared; they are admitted through
   `coord/doneTests.ts#isDoneTestKebab`, and dropping one word from its map reds the scan.
+- **CI round 2:** after decision model A (#2948) took 86, `decision-model-records.test.ts`'s migration case rolled back to
+  `COORD_SCHEMA_VERSION - 1`, so migration 87 re-added `closePr` and refused ("duplicate column name"). The case now finds
+  its own slot by its DDL and undoes every later entry first: renewal readings A's shared text (its claim, co-edit granted),
+  with `[...after].reverse()` for `toReversed`, which the tests' compile target lacks.
 - **Mutation:** `parseDoneTest` 10 of 10 mutants killed, `targetVerdict` 30 of 30, floors 1. The vocabulary's spelled
   list kills `review-passed` added to the measured map. The close's record kills a `closePr` written from the
   lineage's newest merged entry (the reuse case) and a dropped wire strip. The census kills a weakened read pattern and
