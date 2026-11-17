@@ -484,7 +484,7 @@ describe('D-8710 — a key whose rows are longer than what a drawer holds for on
           for (let i = 0; pre.length < filler; i++) pre += `line ${i} of ordinary output\n`;
           const out = await m.maskTextSliced(`${pre}${block}${'tail line\n'.repeat(50)}`, { rows: true });
           const marks = count(out, SECRET_MASK);
-          if (shows(out) || marks !== lines.length) bad.push(`${cols} columns, block at ${pre.length}: ${marks} marks`);
+          if (shows(out) || marks !== lines.length) bad.push(`${cols} columns, block at ${pre.length}: ${shows(out) ? 'key bytes shown' : 'no key bytes'}, ${marks} marks`);
         }
         expect(bad).toEqual([]);
       } finally {
@@ -841,6 +841,15 @@ describe('D-8710 — a key the drawer holds in part, or past its window, is neve
       for (let i = 0; i < key.length; i += 64) rows.push(`${pre}${key.slice(i, i + 64)}${post}`);
       const text = `$ show\r\n${rows.join('\r\n')}\r\n$ `;
       expect(text.length).toBe(277_514);
+      // In one push, with the output not yet ended: it goes out at once, masked, rather than being held.
+      vi.useFakeTimers();
+      const now: string[] = [];
+      const d = m.drawer((t) => now.push(t));
+      d.push(text.slice(0, text.length - 5));
+      expect(count(now.join(''), DRAWER_SECRET_MASK), 'marks sent in the push itself').toBeGreaterThanOrEqual(127);
+      expect(shows(now.join(''))).toBe(false);
+      d.dispose();
+      vi.useRealTimers();
       const bad: string[] = [];
       for (const size of [4_096, 65_536]) {
         for (let phase = 0; phase < size; phase += size / 8) {
