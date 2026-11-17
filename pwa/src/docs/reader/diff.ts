@@ -48,7 +48,10 @@ const ENDS_WITH_LINE_ENDING = /(?:\r\n?|\n)$/;
 /** The text's lines as the Markdown parser counts them. */
 function splitLines(s: string): string[] {
   if (s === '') return [];
-  const parts = s.split(LINE_ENDING);
+  // The split is cut at `READER_DIFF_MAX_LINES + 2` parts, so a text of millions of line endings never builds millions of
+  // lines before the `lines` bound refuses it. A cut result still reads over the bound exactly: a text with more lines than
+  // the bound gives that many parts, two more than the bound, and the pop below takes at most one, leaving more than the bound.
+  const parts = s.split(LINE_ENDING, READER_DIFF_MAX_LINES + 2);
   if (ENDS_WITH_LINE_ENDING.test(s)) parts.pop();
   return parts;
 }

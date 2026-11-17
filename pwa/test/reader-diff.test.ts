@@ -6,7 +6,7 @@
 // random small documents, the mapping to the real parser's `data-line`, and that `diff.ts` imports only its two L0 modules.
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { render } from '@synapsium-labs/docserver/render';
 import { DOCS_MAX_DOC_BYTES } from '../../shared/docs';
 import { utf8Bytes } from '../../shared/utf8';
@@ -160,6 +160,27 @@ describe('readerDiff: the lines bound', () => {
 
   it('a final line ending does not count as a line against the bound', () => {
     expect(avail(`${doc(n)}\n`, doc(n))).toEqual({ kind: 'available', ranges: [], removedAfter: [] });
+  });
+
+  it('a text of millions of line endings is refused without splitting it into millions of lines', () => {
+    const endings = '\n'.repeat(DOCS_MAX_DOC_BYTES);
+    expect(utf8Bytes(endings)).toBe(DOCS_MAX_DOC_BYTES);
+    const real = String.prototype.split;
+    const sizes: number[] = [];
+    const spy = vi.spyOn(String.prototype, 'split').mockImplementation(function (this: string, ...args: Parameters<typeof real>) {
+      const parts = real.apply(this, args);
+      sizes.push(parts.length);
+      return parts;
+    });
+    let answer: ReaderDiff;
+    try {
+      answer = readerDiff(endings, 'a');
+    } finally {
+      spy.mockRestore();
+    }
+    expect(answer).toEqual({ kind: 'unavailable', why: 'lines' });
+    expect(sizes.length).toBeGreaterThan(0);
+    for (const size of sizes) expect(size).toBeLessThanOrEqual(READER_DIFF_MAX_LINES + 2);
   });
 });
 
