@@ -151,6 +151,7 @@
   "server/src/coord/decisionModel.ts#isLiteralHost": 1,
   "server/src/coord/decisionModel.ts#applyDecision": 1,
   "server/src/coord/decisionModel.ts#gateOutcome": 1,
+  "server/src/coord/decisionModel.ts#decisionEgressOf": 1,
   "server/src/coord/decisionLines.ts#isDecisionGate": 1,
   "server/src/coord/decisionLines.ts#decisionRowDirection": 1,
   "server/src/coord/decisionLines.ts#lineCounts": 1,

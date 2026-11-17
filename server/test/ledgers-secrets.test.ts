@@ -1965,6 +1965,8 @@ describe('a name that differs from a stored one only by case is refused (review 
 // `decision-model-key` slot itself, and `readDecisionModelKey`. Fixture HOMEs only, fixture keys only.
 describe('the decision model\'s key slot (the .server slot API, decision model B)', () => {
   const KEY = 'fixture-key-0123456789abcdef-not-real-0';
+  /** The origin the decision key is bound to in these cases (review 2418 F1). */
+  const BOUND = 'http://127.0.0.1:9000';
   const masked = (): 'masked' => 'masked';
   const ccrcDir = (): string => {
     const dir = path.join(mkTmp('ccrc-decision-key-'), '.ccrc');
@@ -2048,46 +2050,98 @@ describe('the decision model\'s key slot (the .server slot API, decision model B
 
   it('readDecisionModelKey: absent with no store, no server directory and no file; the value once written', async () => {
     const dir = ccrcDir();
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'absent' });
     mkTop(dir);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'absent' });
     mkdirSync(serverDir(dir), { mode: 0o700 });
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'absent' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: KEY });
     // read at each call: a rewrite is seen at once, and a removal too
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, `${KEY}-2`, 2, masked, { tail: 'none' });
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: `${KEY}-2` });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, `${KEY}-2`, 2, masked, { tail: 'none', bound: BOUND });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: `${KEY}-2` });
     await removeServerSecret(dir, DECISION_MODEL_KEY_SLOT);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'absent' });
   });
 
-  it('readDecisionModelKey: unreadable (never absent, never the value) for a directory, a link, an open server directory or a store of another mode', async () => {
+  it('readDecisionModelKey: unreadable (never absent, never the value) for a directory or a link in place of the value file', async () => {
     const dir = ccrcDir();
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
     const file = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT);
     // the value file replaced by a directory
     rmSync(file);
     mkdirSync(file);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'unreadable' });
     rmSync(file, { recursive: true });
     // ... by a link to a file that holds a value
     const elsewhere = path.join(path.dirname(dir), 'planted');
     writeFileSync(elsewhere, KEY);
     symlinkSync(elsewhere, file);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
-    rmSync(file);
-    // a regular file again, in a server directory open to others
-    writeFileSync(file, KEY, { mode: 0o600 });
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'unreadable' });
+  });
+
+  it('readDecisionModelKey: unreadable (never absent, never the value) for an open server directory or a store of another mode', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
+    const file = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT);
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: KEY });
     chmodSync(serverDir(dir), 0o755);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'unreadable' });
     chmodSync(serverDir(dir), 0o700);
     // ... and a store open to others
     chmodSync(path.join(dir, OPERATOR_SECRETS_DIR), 0o755);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'unreadable' });
     chmodSync(path.join(dir, OPERATOR_SECRETS_DIR), 0o700);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: KEY });
+    // a regular file with its record gone is a value of no known origin
+    expect(existsSync(file)).toBe(true);
+  });
+
+  it('readDecisionModelKey: not-bound for another origin, for a value with no record, and for a record written without bound', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
+    expect(readDecisionModelKey(dir, 'http://127.0.0.1:9001')).toEqual({ kind: 'not-bound' });
+    const record = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT).replace(/\.secret$/, '.json');
+    rmSync(record);
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'not-bound' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 2, masked, { tail: 'none' });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'not-bound' });
+  });
+
+  it('a server slot written with bound records it; one written without has none; the record never carries the value', async () => {
+    const dir = ccrcDir();
+    const written = await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 3, masked, { tail: 'none', bound: BOUND });
+    expect(written).toEqual({ setAt: 3, tail: '', masked: true, bound: BOUND });
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ setAt: 3, tail: '', masked: true, bound: BOUND });
+    const record = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT).replace(/\.secret$/, '.json');
+    expect(readFileSync(record, 'utf8')).not.toContain(KEY);
+    // an unmasked write records it too
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 4, () => 'too-short', { tail: 'none', bound: BOUND });
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toMatchObject({ setAt: 4, masked: false, bound: BOUND });
+    // a rewrite without bound drops the old binding: no value is ever left beside another write's origin
+    const plain = await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 5, masked, { tail: 'none' });
+    expect(plain).toEqual({ setAt: 5, tail: '', masked: true });
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ setAt: 5, tail: '', masked: true });
+    expect('bound' in (readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT) as object)).toBe(false);
+  });
+
+  it('a rewrite with a new bound replaces the previous record: the old origin is no longer named', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
+    const record = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT).replace(/\.secret$/, '.json');
+    const real = readFileSync(record, 'utf8');
+    expect(real).toContain(BOUND);
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, `${KEY}-2`, 2, masked, { tail: 'none', bound: 'http://127.0.0.1:9001' });
+    expect(readFileSync(record, 'utf8')).toContain('http://127.0.0.1:9001');
+    expect(readFileSync(record, 'utf8')).not.toContain(BOUND);
+  });
+
+  it('a programme slot\'s record never carries a bound', async () => {
+    const dir = ccrcDir();
+    await writeOperatorSecret(dir, 'prog-a', 'api-key', 'V'.repeat(40), 6, masked);
+    const meta = readOperatorSecretMeta(dir, 'prog-a', 'api-key');
+    expect(meta).toEqual({ setAt: 6, tail: 'VVVV', masked: true });
+    expect('bound' in (meta as object)).toBe(false);
   });
 
   it('a write into a server directory open to others is refused, and nothing is written', async () => {
@@ -2095,23 +2149,23 @@ describe('the decision model\'s key slot (the .server slot API, decision model B
     mkTop(dir);
     mkdirSync(serverDir(dir), { mode: 0o700 });
     chmodSync(serverDir(dir), 0o755);
-    await expect(writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' })).rejects.toThrow(OperatorSecretStoreUnsafe);
+    await expect(writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND })).rejects.toThrow(OperatorSecretStoreUnsafe);
     expect(readdirSync(serverDir(dir))).toEqual([]);
   });
 
   it('a programme named .server is refused by the slug shape: no save, no read, no remove reaches the server directory', async () => {
     const dir = ccrcDir();
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
     await expect(writeOperatorSecret(dir, SERVER_SECRETS_DIR, 'api-key', 'V'.repeat(40), 2, masked)).rejects.toThrow(OperatorSecretBadSlot);
     await expect(removeOperatorSecret(dir, SERVER_SECRETS_DIR, DECISION_MODEL_KEY_SLOT)).rejects.toThrow(OperatorSecretBadSlot);
     expect(readOperatorSecretMeta(dir, SERVER_SECRETS_DIR, DECISION_MODEL_KEY_SLOT)).toBeNull();
     expect(readStoredSecrets(dir, SERVER_SECRETS_DIR)).toEqual({ state: 'invalid' });
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: KEY });
   });
 
   it('the masker\'s re-key yields a row for the decision key\'s lane, and the stored-secrets read of a programme lists nothing of it', async () => {
     const dir = ccrcDir();
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
     const rows = await operatorSecretRows(dir, (laneId, value) => ({ laneId, fingerprint: value === KEY ? 'k' : 'other' }) as never);
     expect(rows).toEqual({ rows: [{ laneId: 'operator-secret:.server:decision-model-key', fingerprint: 'k' }], unreadable: false });
     expect(readStoredSecrets(dir, 'prog-a')).toEqual({ state: 'ok', slots: [] });
@@ -2119,11 +2173,11 @@ describe('the decision model\'s key slot (the .server slot API, decision model B
 
   it('the start-up sweep removes a crash\'s temp beside the decision key and leaves the key', async () => {
     const dir = ccrcDir();
-    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none', bound: BOUND });
     const temp = path.join(serverDir(dir), `.${DECISION_MODEL_KEY_SLOT}.secret.tmp-0123456789abcdef`);
     writeFileSync(temp, 'leftover', { mode: 0o600 });
     sweepOperatorSecretTemps(dir);
     expect(existsSync(temp)).toBe(false);
-    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(dir, BOUND)).toEqual({ kind: 'value', value: KEY });
   });
 });

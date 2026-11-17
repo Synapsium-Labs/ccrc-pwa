@@ -32,6 +32,7 @@ import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -50,7 +51,7 @@ import { quizLanePortOf } from './continuity/quizStore.js';
 import { QUIZ_RECORD_READY } from './continuity/quiz.js';
 import { canonicalJson } from '../../shared/api.js';
 import { DECISION_QUESTIONS, type DecisionHostKind } from '../../shared/decisionModel.js';
-import { isPrivateAddress } from './coord/decisionModel.js';
+import { decisionEgressOf, isPrivateAddress } from './coord/decisionModel.js';
 import { createHttpDecisionModel, readDecisionModelKey } from './coord/decisionModelHttp.js';
 import { decisionArmingStore, decisionAskStore, releaseDecisionReservations } from './coord/decisionModelStore.js';
 import type { DecisionEgress, DecisionFetch, DecisionStateReads, LabelledCases } from './coord/decisionModelPort.js';
@@ -379,8 +380,10 @@ deps.plan = planStorePort(coord.db);
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 // The decision model's anchor-set lane and its ports (Overlord W2, plan `w2-decision-model.md` Task 9), over the same coord.db and
 // authority journal. Every row ships `off`, so the lane asks nothing until the operator switches one on.
-/** The hosted egress screen (question 9): answers `no-list` and runs no check, until private names B wires the real screen. */
-const noListYet: DecisionEgress['screen'] = () => 'no-list';
+/** The hosted egress screen (question 9; review 2418 F2): the private-name list through its one reader. */
+const egressScreen: DecisionEgress['screen'] = (texts) => decisionEgressOf(texts, readPrivateNameList(operatorModel.store, cfg.ccrcDir));
+/** Every address a host name resolves to, built once (review 2418 F9): the key door and the adapter use it. */
+const decisionResolve = async (name: string): Promise<readonly string[]> => (await lookup(name, { all: true })).map((a) => a.address);
 /** The labelled cases (question 8): none, until the label queue fills the port, so no line is admitted and every row stays in shadow. */
 const noLabelsYet: LabelledCases = { casesFor: () => [] };
 /** State reads over inline fields and `programme` refs (a slug is its own text) only: a `message`, `goals-version` or `mail` ref
@@ -399,21 +402,20 @@ const decisionHostNow = (): { kind: DecisionHostKind; endpoint: string; origin: 
   return h.kind === 'host' ? { kind: h.host.kind, endpoint: h.host.endpoint, origin: h.host.origin, modelId: h.host.modelId } : null;
 };
 deps.decisions = {
-  store: decisionArming, labels: noLabelsYet, states: inlineStateReads,
+  store: decisionArming, labels: noLabelsYet, states: inlineStateReads, resolve: decisionResolve,
   ask: {
     store: decisionAskStore(coordDb), time,
     arming: (row) => decisionArming.rowSide(row),
-    currentLine: (row) => {
-      const h = decisionHostNow();
-      const l = h === null ? null : decisionArming.currentLine(row, { hostKind: h.kind, origin: h.origin, modelId: h.modelId, revision: DECISION_QUESTIONS[row].revision });
+    currentLine: (row, h) => {
+      const l = decisionArming.currentLine(row, { hostKind: h.kind, origin: h.origin, modelId: h.modelId, revision: DECISION_QUESTIONS[row].revision });
       return l === null ? null : { id: l.id, line: l.line };
     },
     host: decisionHostNow,
-    keySet: () => readDecisionModelKey(cfg.ccrcDir).kind === 'value',
-    modelFor: (h) => createHttpDecisionModel(h, () => readDecisionModelKey(cfg.ccrcDir), {
-      fetch: decisionFetch, resolve: async (name) => (await lookup(name, { all: true })).map((a) => a.address), time, isPrivateAddress,
+    keySet: (origin) => readDecisionModelKey(cfg.ccrcDir, origin).kind === 'value',
+    modelFor: (h) => createHttpDecisionModel(h, (origin) => readDecisionModelKey(cfg.ccrcDir, origin), {
+      fetch: decisionFetch, resolve: decisionResolve, time, isPrivateAddress,
     }),
-    egress: noListYet,
+    egress: egressScreen,
     stateHash: (state) => createHash('sha256').update(canonicalJson(state) ?? JSON.stringify(state)).digest('hex'),
   },
 };

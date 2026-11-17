@@ -14,10 +14,11 @@ import type * as DecisionModel from '../src/coord/decisionModel.js';
 import type { DecisionEffect, DecisionFields, DecisionQuestionKey, PlanInput } from '../src/coord/decisionModel.js';
 import type * as DecisionLines from '../src/coord/decisionLines.js';
 import type { DecisionLineFacts, LabelledAnswer } from '../src/coord/decisionLines.js';
+import { CANARY, entriesOf, entryOf } from './private-names.mjs';
 
 export type DecisionModelModule = Pick<typeof DecisionModel, 'planDecision' | 'serveCap' | 'maintainCap' | 'bandOf'
   | 'isPrivateAddress' | 'isLiteralHost' | 'encodeDecisionRequest' | 'decisionRequestGroups' | 'readDecisionAnswers'
-  | 'applyDecision' | 'gateOutcome'>;
+  | 'applyDecision' | 'gateOutcome' | 'decisionEgressOf'>;
 
 export interface DecisionModelCase { name: string; run: (m: DecisionModelModule) => void }
 
@@ -477,9 +478,13 @@ export const answered = (row: DecisionRowId, o: Partial<Answered> = {}): Answere
 };
 const missed = (row: DecisionRowId, outcome: Exclude<DecisionCheck['outcome'], 'answered'>): DecisionCheck =>
   ({ row, outcome, why: null, ms: 10, attempts: 1 });
+/** The key a gate's armed line was admitted under, as `answered` is gathered under it (F3, review 2418). */
+const keyOf = (row: DecisionRowId, o: Partial<NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']>> = {}):
+  NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']> =>
+  ({ revision: DECISION_QUESTIONS[row].revision, hostKind: 'local', origin: LOCAL.origin, modelId: 'model-a', ...o });
 const nowFor = (row: DecisionRowId, side: DecisionRowSide, o: Partial<Parameters<DecisionModelModule['applyDecision']>[1]> = {}):
   Parameters<DecisionModelModule['applyDecision']>[1] =>
-  ({ row: DECISION_QUESTIONS[row], side, currentLine: { id: 3, line: 0.9 }, host: LOCAL, ...o });
+  ({ row: DECISION_QUESTIONS[row], side, currentLine: { id: 3, line: 0.9 }, host: LOCAL, armedLineKey: keyOf(row), ...o });
 const GATE = 'scope.widens' as const;
 const ADVICE_YN = 'relay.method' as const;
 const CHOICE = 'programme.pick' as const;
@@ -541,6 +546,23 @@ export const APPLY_CASES: DecisionModelCase[] = [
     const advice = { ...ARMED_ADVICE, armedLine: { id: 3, line: 0.9 } };
     expect(m.applyDecision(answered(ADVICE_YN, { lineGen: 7, p: 0.6 }), nowFor(ADVICE_YN, advice, newer))).toBe('clear-yes');
     expect(m.applyDecision(answered(ADVICE_YN, { lineGen: 3, p: 0.97 }), nowFor(ADVICE_YN, advice, newer))).toBe('skipped');
+  } },
+  { name: 'apply 6: a gate\'s armed line key must match the check in revision, host kind, origin and model (review 2418 F3)', run: (m) => {
+    // The line id matches (3) and everything else is today's: only the key differs.
+    const keyed = (armedLineKey: ReturnType<typeof keyOf> | null): DecisionEffect => m.applyDecision(answered(GATE), nowFor(GATE, ARMED_GATE, { armedLineKey }));
+    expect(keyed(keyOf(GATE))).toBe('clear-yes');
+    expect(keyed(null)).toBe('shut');
+    expect(keyed(keyOf(GATE, { revision: `${DECISION_QUESTIONS[GATE].revision}-other` }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { hostKind: 'hosted' }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { origin: 'http://127.0.0.1:9001' }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { modelId: 'model-b' }))).toBe('shut');
+    // A missed check is shut with or without a key, as before.
+    expect(m.applyDecision(missed(GATE, 'unavailable'), nowFor(GATE, ARMED_GATE, { armedLineKey: null }))).toBe('shut');
+    // Advice has no armed line: the key is not read, so a null or a foreign one still clears.
+    for (const armedLineKey of [null, keyOf(ADVICE_YN, { revision: 'other-revision', modelId: 'model-b' })]) {
+      expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, ARMED_ADVICE, { armedLineKey }))).toBe('clear-yes');
+      expect(m.applyDecision(answered(CHOICE, { verdict: { option: 'programme-a' } }), nowFor(CHOICE, ARMED_ADVICE, { armedLineKey }))).toEqual({ pick: 'programme-a' });
+    }
   } },
   { name: 'apply 7: an unsure answer is shut for a gate and unsure for advice', run: (m) => {
     expect(m.applyDecision(answered(GATE, { verdict: 'unsure', p: 0.99 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
@@ -634,9 +656,52 @@ export const GATE_OUTCOME_CASES: DecisionModelCase[] = [
   } },
 ];
 
+// ── decisionEgressOf (review 2418 F2) ────────────────────────────────────────────────────────────────────────────────
+
+/** A fixture list under a fixture key, the canary first, with one SYNTHETIC name; the key is no secret. */
+const EGRESS_KEY = 'fixture-egress-key-a-0001';
+const NAME = 'zz-alpha';
+const egressList = (key = EGRESS_KEY, builtUnder = key): { state: 'list'; list: { key: string; entries: ReturnType<typeof entriesOf> } } =>
+  ({ state: 'list', list: { key, entries: [entryOf(CANARY, 'part', builtUnder), ...entriesOf(NAME, 'part', builtUnder)] } });
+
+export const EGRESS_CASES: DecisionModelCase[] = [
+  { name: 'egress 1: a text that hits an entry is hit; one that does not is clear', run: (m) => {
+    const list = egressList();
+    expect(m.decisionEgressOf([`the ${NAME} programme`], list)).toBe('hit');
+    expect(m.decisionEgressOf(['the next programme'], list)).toBe('clear');
+    expect(m.decisionEgressOf([], list), 'no text at all is clear').toBe('clear');
+  } },
+  { name: 'egress 2: any one of several texts hitting is a hit; none is clear', run: (m) => {
+    const list = egressList();
+    expect(m.decisionEgressOf(['clean one', `has ${NAME}`, 'clean two'], list)).toBe('hit');
+    expect(m.decisionEgressOf([`has ${NAME}`, 'clean one', 'clean two'], list)).toBe('hit');
+    expect(m.decisionEgressOf(['clean one', 'clean two', `has ${NAME}`], list)).toBe('hit');
+    expect(m.decisionEgressOf(['clean one', 'clean two', 'clean three'], list)).toBe('clear');
+  } },
+  { name: 'egress 3: no list ever uploaded is no-list, and a list that cannot be read is unreadable, text or none', run: (m) => {
+    expect(m.decisionEgressOf([`has ${NAME}`], { state: 'none' })).toBe('no-list');
+    expect(m.decisionEgressOf([], { state: 'none' })).toBe('no-list');
+    expect(m.decisionEgressOf([`has ${NAME}`], { state: 'unreadable' })).toBe('unreadable');
+    expect(m.decisionEgressOf(['clean'], { state: 'unreadable' })).toBe('unreadable');
+    expect(m.decisionEgressOf([], { state: 'unreadable' })).toBe('unreadable');
+  } },
+  { name: 'egress 4: a list the matcher will not trust is unreadable, never clear, even for a text with the name', run: (m) => {
+    // Entries built under one key and scanned under another: the canary does not match.
+    const wrongKey = egressList(EGRESS_KEY, 'fixture-egress-key-b-0002');
+    expect(m.decisionEgressOf(['clean'], wrongKey)).toBe('unreadable');
+    expect(m.decisionEgressOf([`has ${NAME}`], wrongKey)).toBe('unreadable');
+    // A key under the matcher's floor.
+    expect(m.decisionEgressOf(['clean'], egressList('short'))).toBe('unreadable');
+    // No entries.
+    expect(m.decisionEgressOf(['clean'], { state: 'list', list: { key: EGRESS_KEY, entries: [] } })).toBe('unreadable');
+    // A hit text before the throw does not make it a hit.
+    expect(m.decisionEgressOf([`has ${NAME}`, 'clean'], wrongKey)).toBe('unreadable');
+  } },
+];
+
 export const ALL_DECISION_MODEL_CASES: DecisionModelCase[] = [
   ...PLAN_CASES, ...CAP_CASES, ...BAND_CASES, ...ADDRESS_CASES, ...ENCODE_CASES, ...GROUP_CASES, ...READ_CASES,
-  ...APPLY_CASES, ...GATE_OUTCOME_CASES,
+  ...APPLY_CASES, ...GATE_OUTCOME_CASES, ...EGRESS_CASES,
 ];
 
 // ═══ decisionLines.ts (Tasks 6 to 8) ═══════════════════════════════════════════════════════════════════════════════════
@@ -1082,7 +1147,7 @@ export const CEILING_CASES: DecisionLinesCase[] = [
   } },
 ];
 
-const KEY = 'key-secret-value-1';
+const KEY = 'key-secret-value-0001';
 type KeyInput = Parameters<DecisionLinesModule['decideKeyDoor']>[0];
 const keyBody = (o: Record<string, unknown> = {}): unknown => ({ kind: 'local', endpoint: 'http://127.0.0.1:9000/v1', modelId: 'model-a', key: KEY, ...o });
 const keyDoor = (o: Partial<KeyInput> = {}, body: unknown = keyBody()): KeyInput => ({ body, addresses: ['127.0.0.1'], stored: null, ...o });
@@ -1100,7 +1165,8 @@ export const KEY_DOOR_CASES: DecisionLinesCase[] = [
     const bad: unknown[] = [null, 'x', 7, [], [keyBody()], {}, { kind: 'local', endpoint: 'http://127.0.0.1', key: KEY }, { endpoint: 'http://127.0.0.1', modelId: 'm' },
       { kind: 'local', modelId: 'm' }, keyBody({ extra: 1 }), keyBody({ kind: 'cloud' }), keyBody({ kind: 7 }), keyBody({ kind: null }),
       keyBody({ endpoint: 7 }), keyBody({ endpoint: null }), keyBody({ modelId: '' }), keyBody({ modelId: 'x'.repeat(201) }), keyBody({ modelId: 7 }),
-      keyBody({ key: '' }), keyBody({ key: 'a\nb' }), keyBody({ key: 'a\rb' }), keyBody({ key: 'a\u2028b' }), keyBody({ key: 'a\u2029b' }), keyBody({ key: 'x'.repeat(4097) }), keyBody({ key: 7 }), keyBody({ key: null }),
+      keyBody({ key: '' }), keyBody({ key: 'a\nb' }), keyBody({ key: 'a\rb' }), keyBody({ key: 'a\u2028b' }), keyBody({ key: 'a\u2029b' }),
+      keyBody({ key: `${'k'.repeat(20)}\nk` }), keyBody({ key: `${'k'.repeat(20)}\rk` }), keyBody({ key: `${'k'.repeat(20)}\u2028k` }), keyBody({ key: `${'k'.repeat(20)}\u2029k` }), keyBody({ key: 'x'.repeat(4097) }), keyBody({ key: 7 }), keyBody({ key: null }),
       keyBody({ key: undefined })];
     for (const body of bad) {
       const got = kd(m, keyDoor({}, body));
@@ -1110,6 +1176,31 @@ export const KEY_DOOR_CASES: DecisionLinesCase[] = [
     expect(kd(m, keyDoor({}, keyBody({ modelId: 'x'.repeat(200) }))).ok).toBe(true);
     expect(kd(m, keyDoor({}, keyBody({ key: 'x'.repeat(4096) }))).ok).toBe(true);
     expect(kd(m, keyDoor({}, keyBody({ modelId: 'm' }))).ok).toBe(true);
+    expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' })).ok).toBe(true);
+  } },
+  { name: 'key door 1b: a model id on one line, a key a header can carry and the masker catches (review 2418 F9)', run: (m) => {
+    const K20 = 'k'.repeat(20);
+    const secretFree = (got: ReturnType<typeof m.decideKeyDoor>, why: string): void => {
+      expect(got, why).toEqual(refusal('bad-request'));
+      expect(JSON.stringify(got), why).not.toContain('kkkk');
+    };
+    // The model id is one line: a space is fine, a line break of any kind is not.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ modelId: 'm\nx', key: K20 }))), 'modelId LF');
+    for (const modelId of ['m\rx', 'm\u2028x', 'm\u2029x', 'm\u000bx', 'm\u000cx', 'm\u0085x']) expect(kd(m, keyDoor({}, keyBody({ modelId }))), JSON.stringify(modelId)).toEqual(refusal('bad-request'));
+    expect(kd(m, keyDoor({}, keyBody({ modelId: 'm x' }))).ok, 'a model id with a space is one line').toBe(true);
+    // A key with NUL, or with a character above U+00FF, cannot ride a header.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u0000` }))), 'NUL');
+    // The line breaks isOneLine knows beyond CR and LF (VT, FF, NEL) are above the 20-byte floor and inside the header range.
+    for (const brk of ['\u000b', '\u000c', '\u0085']) secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}${brk}k` }))), `break ${brk.charCodeAt(0)}`);
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u0100` }))), 'U+0100');
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u20ac` }))), 'U+20AC');
+    // U+00FF is the last character a header carries, and it is 2 UTF-8 bytes: 18 ASCII and it make 20.
+    expect(kd(m, keyDoor({}, keyBody({ key: `${'k'.repeat(18)}\u00ff` }))).ok, '18 ASCII and U+00FF is 20 bytes').toBe(true);
+    // The masker's floor is 20 UTF-8 bytes (SECRET_TAIL_MIN): 19 is refused, 20 passes, and a short key never shows in the refusal.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: 'k'.repeat(19) }))), '19 bytes');
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${'k'.repeat(17)}\u00ff` }))), '17 ASCII and U+00FF is 19 bytes');
+    expect(kd(m, keyDoor({}, keyBody({ key: K20 }))).ok, '20 bytes').toBe(true);
+    // A key-less call (the stored one) is not held to the floor.
     expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' })).ok).toBe(true);
   } },
   { name: 'key door 2: an endpoint that is no http or https URL, or carries userinfo, a query or a fragment, is bad-endpoint', run: (m) => {
@@ -1227,11 +1318,12 @@ export const KEY_DOOR_CASES: DecisionLinesCase[] = [
 export const STEP_UP_CASES: DecisionLinesCase[] = [
   { name: 'decisionStepUp: arm and key-put always ask, key-delete never, off and ceiling ask exactly when the move widens', run: (m) => {
     const sides = [side('off'), side('shadow'), side('shadow', { ceiling: 700 }), side('armed', { line: [3, 0.9] }), side('armed', { line: [3, 0.9], held: true }), side('armed')];
+    expect(m.decisionStepUp('arm')).toBe(true);
+    expect(m.decisionStepUp('key-put')).toBe(true);
+    expect(m.decisionStepUp('key-delete')).toBe(false);
     for (const gate of [true, false]) {
       for (const from of sides) for (const to of sides) {
-        expect(m.decisionStepUp('arm', gate, from, to)).toBe(true);
-        expect(m.decisionStepUp('key-put', gate, from, to)).toBe(true);
-        expect(m.decisionStepUp('key-delete', gate, from, to)).toBe(false);
+        // The three doors that need no row take no sides (review 2418 F9).
         const widens = m.decisionRowDirection(gate, from, to) === 'widens';
         expect(m.decisionStepUp('off', gate, from, to)).toBe(widens);
         expect(m.decisionStepUp('ceiling', gate, from, to)).toBe(widens);

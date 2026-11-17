@@ -10,6 +10,8 @@ import {
   type DecisionBand, type DecisionHeldCause, type DecisionHostKind, type DecisionModelView, type DecisionQuestionRow, type DecisionRowId,
   type DecisionRowSide, type DecisionRowState, type DecisionRowView,
 } from '../../../shared/decisionModel.js';
+import { SECRET_TAIL_MIN, isOneLine } from '../../../shared/ledgers.js';
+import { utf8Bytes } from '../../../shared/utf8.js';
 import { isLiteralHost, isPrivateAddress, type DecisionUsage } from './decisionModel.js';
 
 /** Whether a row is a gate (fail closed while armed) or advice (fail open). */
@@ -284,6 +286,9 @@ export function keyDoorHostname(body: unknown): string | null {
   }
 }
 
+/** A key's characters: what an HTTP header value carries (review 2418 F9), so no NUL and none above U+00FF. */
+const KEY_CHARS = /^[\u0001-\u00ff]+$/;
+
 /** The authority part of a URL text, between `//` and the first `/`, `?` or `#`: where userinfo would sit. */
 const authorityOf = (endpoint: string): string => /^[a-z][a-z0-9+.-]*:\/\/([^/?#]*)/i.exec(endpoint)?.[1] ?? '';
 
@@ -292,7 +297,7 @@ const authorityOf = (endpoint: string): string => /^[a-z][a-z0-9+.-]*:\/\/([^/?#
  *
  * | # | When | Answer |
  * |---|---|---|
- * | 1 | the body is not exactly `kind`, `endpoint`, `modelId` and an optional `key`; `kind` is no host kind; `modelId` is not 1 to 200 characters; `key` is not a non-empty one-line string of at most 4096 | `bad-request` |
+ * | 1 | the body is not exactly `kind`, `endpoint`, `modelId` and an optional `key`; `kind` is no host kind; `modelId` is not 1 to 200 characters on one line; `key` is not one line of at most 4096 characters with no NUL and none above U+00FF (a header value: review 2418 F9), or is under the masker's 20-byte floor (`SECRET_TAIL_MIN`), so the masker would not catch it | `bad-request` |
  * | 2 | `endpoint` does not parse, is not `https:` or `http:`, or carries userinfo, a query (an empty `?` too) or a fragment | `bad-endpoint` |
  * | 3 | `hosted` or `zero-retention`, and not `https:` | `bad-endpoint` |
  * | 4 | `local`, and the host is not an address literal or `localhost`, or no address resolved, or one is not loopback or private | `bad-endpoint` |
@@ -311,8 +316,11 @@ export function decideKeyDoor(i: { body: unknown; addresses: readonly string[]; 
   const { kind, endpoint, modelId } = body;
   const key = has(body, 'key') ? body['key'] : null;
   if (typeof kind !== 'string' || !(DECISION_HOST_KINDS as readonly string[]).includes(kind) || typeof endpoint !== 'string') return refuse('bad-request', 'kind is a host kind and endpoint a string');
-  if (typeof modelId !== 'string' || modelId.length < 1 || modelId.length > 200) return refuse('bad-request', 'modelId is 1 to 200 characters');
-  if (has(body, 'key') && (typeof key !== 'string' || key.length < 1 || key.length > 4096 || /[\r\n\u2028\u2029]/.test(key))) return refuse('bad-request', 'the key is a one-line string of at most 4096 characters');
+  if (typeof modelId !== 'string' || modelId.length < 1 || modelId.length > 200 || !isOneLine(modelId)) return refuse('bad-request', 'modelId is 1 to 200 characters on one line');
+  if (has(body, 'key') && (typeof key !== 'string' || key.length > 4096 || !KEY_CHARS.test(key) || !isOneLine(key))) {
+    return refuse('bad-request', 'the key is one line of at most 4096 characters, with no NUL and no character above U+00FF');
+  }
+  if (typeof key === 'string' && utf8Bytes(key) < SECRET_TAIL_MIN) return refuse('bad-request', `the key is at least ${SECRET_TAIL_MIN} bytes, so the egress masker catches it`);
   const hostKind = kind as DecisionHostKind;
   let url: URL;
   try { url = new URL(endpoint); } catch { return refuse('bad-endpoint', 'the endpoint is not a URL'); }
@@ -337,15 +345,18 @@ export function decideKeyDoor(i: { body: unknown; addresses: readonly string[]; 
 /**
  * Whether a door asks the step-up (the coordinator's ruling, spec 7.5: a widening asks, a narrowing never does). Arming and
  * putting a key always ask; removing a key never does; switching off and moving the ceiling ask exactly when the move widens.
+ * Every door asks it here, the one rule (review 2418 F9); the three that need no row ask before the body is read.
  */
-export function decisionStepUp(door: 'arm' | 'off' | 'ceiling' | 'key-put' | 'key-delete', gate: boolean, from: DecisionRowSide,
-  to: DecisionRowSide): boolean {
+export function decisionStepUp(door: 'arm' | 'key-put' | 'key-delete'): boolean;
+export function decisionStepUp(door: 'off' | 'ceiling', gate: boolean, from: DecisionRowSide, to: DecisionRowSide): boolean;
+export function decisionStepUp(door: 'arm' | 'off' | 'ceiling' | 'key-put' | 'key-delete', gate?: boolean, from?: DecisionRowSide,
+  to?: DecisionRowSide): boolean {
   switch (door) {
     case 'arm':
     case 'key-put': return true;
     case 'key-delete': return false;
     case 'off':
-    case 'ceiling': return decisionRowDirection(gate, from, to) === 'widens';
+    case 'ceiling': return decisionRowDirection(gate === true, from!, to!) === 'widens';
   }
 }
 

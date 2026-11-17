@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import dns from 'node:dns';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import fastifyWebsocket from '@fastify/websocket';
 import fastifyMultipart from '@fastify/multipart';
@@ -2685,7 +2684,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     store: () => deps.decisions?.store, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, notice,
     actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
     registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered',
-    resolve: (h) => dns.promises.lookup(h, { all: true }).then((a) => a.map((x) => x.address)),
+    resolve: (h) => deps.decisions?.resolve(h) ?? Promise.resolve([]),
   });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.

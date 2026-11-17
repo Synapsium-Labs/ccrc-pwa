@@ -41,6 +41,9 @@ export interface DecisionDeps {
   /** The arming store over coord.db and the authority journal (`decisionModelStore.ts#decisionArmingStore`), which the doors
    *  use too. */
   store: DecisionArmingStore;
+  /** Every address a host name resolves to, built once in `index.ts` (review 2418 F9): the key door checks a `local` or `http:`
+   *  endpoint with it, and the adapter uses the same one at each call. */
+  resolve: (hostname: string) => Promise<readonly string[]>;
 }
 export interface DecisionLaneDeps extends DecisionDeps {
   time: TimePorts;

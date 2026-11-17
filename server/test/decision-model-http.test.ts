@@ -1,16 +1,18 @@
 // Overlord W2, the decision-model port's one adapter (plan docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model.md,
 // Task 3), against a fake `fetch` and a fake resolver driven by `fakeTime`. No test reaches a network or a real model, and
 // every key and name is a fixture.
-import { readFileSync } from 'node:fs';
+import { readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { encodeDecisionRequest, isPrivateAddress, readDecisionAnswers } from '../src/coord/decisionModel.js';
-import { createHttpDecisionModel, type DecisionKeyRead } from '../src/coord/decisionModelHttp.js';
+import { createHttpDecisionModel, readDecisionModelKey, type DecisionKeyRead } from '../src/coord/decisionModelHttp.js';
+import { serverSecretPath, writeServerSecret, type RegisterSecret } from '../src/coord/ledgersSecrets.js';
 import type { DecisionCall, DecisionFetch, DecisionWireRequest } from '../src/coord/decisionModelPort.js';
 import type { DecisionFields } from '../src/coord/decisionModel.js';
-import type { DecisionRowId } from '../../shared/decisionModel.js';
+import { DECISION_MODEL_KEY_SLOT, type DecisionRowId } from '../../shared/decisionModel.js';
 import { fakeTime, type FakeTime } from './fakeTime.js';
+import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const KEY = 'fixture-key-0123456789abcdef-not-real';
 const LOCAL = 'http://127.0.0.1:9000/v1/ask';
@@ -30,11 +32,12 @@ async function* chunks(text: string): AsyncGenerator<Uint8Array> {
   for (let at = 0; at < bytes.length; at += 16384) yield bytes.subarray(at, at + 16384);
 }
 
-interface Harness { ft: FakeTime; calls: { url: string; init: Parameters<DecisionFetch>[1] }[]; resolved: string[] }
+interface Harness { ft: FakeTime; calls: { url: string; init: Parameters<DecisionFetch>[1] }[]; resolved: string[]; keyAsked: string[] }
 
-const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw'; key?: DecisionKeyRead | 'throw' } = {}) => {
+const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw'; key?: DecisionKeyRead | 'throw';
+  keyFor?: (origin: string) => DecisionKeyRead; onResolve?: () => void | Promise<void> } = {}) => {
   const ft = fakeTime();
-  const h: Harness = { ft, calls: [], resolved: [] };
+  const h: Harness = { ft, calls: [], resolved: [], keyAsked: [] };
   const fetch: DecisionFetch = async (url, init) => {
     h.calls.push({ url, init });
     const step = steps.shift();
@@ -49,12 +52,15 @@ const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw';
   };
   const resolve = async (name: string): Promise<readonly string[]> => {
     h.resolved.push(name);
+    await opts.onResolve?.();
     if (opts.addresses === 'throw') throw new Error('no such name');
     return opts.addresses ?? ['127.0.0.1'];
   };
   const make = (endpoint: string, kind: 'hosted' | 'local' | 'zero-retention' = 'local') => createHttpDecisionModel(
-    { kind, endpoint }, () => {
+    { kind, endpoint }, (origin) => {
+      h.keyAsked.push(origin);
       if (opts.key === 'throw') throw new Error('the key store broke');
+      if (opts.keyFor !== undefined) return opts.keyFor(origin);
       return opts.key ?? { kind: 'value', value: KEY };
     }, { fetch, resolve, time: ft.ports, isPrivateAddress });
   return { h, make };
@@ -62,6 +68,7 @@ const harness = (steps: Step[], opts: { addresses?: readonly string[] | 'throw';
 
 let consoleSpies: ReturnType<typeof vi.spyOn>[] = [];
 beforeEach(() => { consoleSpies = (['log', 'warn', 'error', 'info', 'debug'] as const).map((m) => vi.spyOn(console, m)); });
+afterEach(() => removeTmpFixtures());
 afterEach(() => {
   // The adapter logs nothing, on any path.
   for (const s of consoleSpies) expect(s).not.toHaveBeenCalled();
@@ -270,6 +277,69 @@ describe('createHttpDecisionModel: the request it sends (review 2262 F19)', () =
     const paths: Step[][] = [[{ status: 200, body: GOOD }], [{ status: 401, body: KEY }], [{ status: 500 }, { status: 500 }],
       [{ error: true }, { error: true }], [{ status: 200, body: KEY }], [{ status: 400, body: KEY }]];
     for (const steps of paths) noKey(await harness(steps).make(LOCAL).ask(REQ));
+  });
+});
+
+describe('the key is bound to its origin (review 2418 F1)', () => {
+  const KEY_B = 'fixture-key-fedcba9876543210-not-real';
+  const ORIGIN_A = 'http://127.0.0.1:9000';
+  const ORIGIN_B = 'http://127.0.0.1:9001';
+  const register: RegisterSecret = () => 'masked';
+  const slot = async (dir: string, value: string, bound?: string): Promise<void> => {
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, value, 1, register, { tail: 'none', ...(bound === undefined ? {} : { bound }) });
+  };
+
+  it('the adapter asks the key of its own origin', async () => {
+    const { h, make } = harness([{ status: 200, body: GOOD }]);
+    await make(LOCAL).ask(REQ);
+    expect(h.keyAsked).toEqual([ORIGIN_A]);
+  });
+
+  it('in flight: the slot is rewritten for another origin before the key is read: unavailable no-key, and fetch is never called', async () => {
+    const dir = mkTmp('ccrc-decision-key-');
+    await slot(dir, KEY, ORIGIN_A);
+    expect(readDecisionModelKey(dir, ORIGIN_A)).toEqual({ kind: 'value', value: KEY });
+    // The adapter awaits its resolver for a local host; the key door's PUT (host B, key B) lands in that window.
+    const { h, make } = harness([], { keyFor: (origin) => readDecisionModelKey(dir, origin), onResolve: () => slot(dir, KEY_B, ORIGIN_B) });
+    const c = await make(LOCAL).ask(REQ);
+    expect(c).toEqual({ ok: false, outcome: 'unavailable', why: 'no-key', status: null, ms: 0, attempts: 0 });
+    expect(h.calls).toHaveLength(0);
+    expect(JSON.stringify(c)).not.toContain(KEY_B);
+    expect(readDecisionModelKey(dir, ORIGIN_B)).toEqual({ kind: 'value', value: KEY_B });
+  });
+
+  it('the same key bound to the adapter\'s origin is sent as the bearer value', async () => {
+    const dir = mkTmp('ccrc-decision-key-');
+    await slot(dir, KEY, ORIGIN_A);
+    const { h, make } = harness([{ status: 200, body: GOOD }], { keyFor: (origin) => readDecisionModelKey(dir, origin) });
+    expect(await make(LOCAL).ask(REQ)).toMatchObject({ ok: true });
+    expect(JSON.stringify(h.calls[0]!.init.headers)).toContain(KEY);
+  });
+
+  describe('readDecisionModelKey', () => {
+    it('an absent slot reads absent', () => {
+      expect(readDecisionModelKey(mkTmp('ccrc-decision-key-'), ORIGIN_A)).toEqual({ kind: 'absent' });
+    });
+
+    it('a key bound to A reads as the value for A and not-bound for B', async () => {
+      const dir = mkTmp('ccrc-decision-key-');
+      await slot(dir, KEY, ORIGIN_A);
+      expect(readDecisionModelKey(dir, ORIGIN_A)).toEqual({ kind: 'value', value: KEY });
+      expect(readDecisionModelKey(dir, ORIGIN_B)).toEqual({ kind: 'not-bound' });
+    });
+
+    it('a value whose record is missing reads not-bound', async () => {
+      const dir = mkTmp('ccrc-decision-key-');
+      await slot(dir, KEY, ORIGIN_A);
+      rmSync(`${serverSecretPath(dir, DECISION_MODEL_KEY_SLOT).replace(/\.secret$/, '')}.json`);
+      expect(readDecisionModelKey(dir, ORIGIN_A)).toEqual({ kind: 'not-bound' });
+    });
+
+    it('a record with no bound (a value written before the binding) reads not-bound', async () => {
+      const dir = mkTmp('ccrc-decision-key-');
+      await slot(dir, KEY);
+      expect(readDecisionModelKey(dir, ORIGIN_A)).toEqual({ kind: 'not-bound' });
+    });
   });
 });
 

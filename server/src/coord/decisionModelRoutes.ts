@@ -23,6 +23,12 @@
 //
 // THE KEY NEVER LEAVES THE SERVER: it is written to its `.server` slot (`writeServerSecret`, no tail kept, registered with
 // the egress masker) on the slot's own chain, and no answer, refusal, feed row or log line carries any part of it.
+//
+// THE HOST AND ITS HOLDS FIRST, THE KEY SECOND (review 2418 F1 and F6, the coordinator's ruling). The key is written bound to
+// the origin it was entered for (`decisionModelHttp.ts#readDecisionModelKey`), after the host record and the holds have
+// committed; a key removal holds the armed gates before it removes the slot. A transaction that fails changes nothing
+// (`write-failed`); a key write or removal that fails after it leaves the host and holds written and answers
+// `stored-not-applied`, and a key that is not bound to the stored host's origin is never sent.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import { refuseRoute } from '../refuse.js';
@@ -34,7 +40,7 @@ import {
 } from '../../../shared/decisionModel.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
-  OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, readServerSecretMeta, removeServerSecret, slotChains, writeServerSecret,
+  SLOT_WAIT_MS, readServerSecretMeta, removeServerSecret, slotChains, writeServerSecret,
   type RegisterSecret,
 } from './ledgersSecrets.js';
 import { decisionDayOf } from './decisionModel.js';
@@ -103,7 +109,8 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
     const h = store.hostRead();
     return h.kind === 'host' ? h.host : null;
   };
-  const keySet = (): boolean => readDecisionModelKey(deps.ccrcDir).kind === 'value';
+  /** Whether a key is stored for this origin (bound to it, review 2418 F1). */
+  const keySetFor = (origin: string): boolean => readDecisionModelKey(deps.ccrcDir, origin).kind === 'value';
   /** One door move in its own transaction. */
   const moveOne = (req: FastifyRequest, store: DecisionArmingStore, d: Extract<DecisionDoorMove, { ok: true }>): DecisionRowMoved =>
     store.move({ row: d.row, expected: d.expected, to: d.to, heldCause: d.heldCause, actor: deps.actorOf(req),
@@ -140,14 +147,14 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
   // ── arm ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
   app.post('/api/decision-model/rows/:id/arm', async (req, reply) => {
     // Arming is always a widening of what is asked or let through (§11.2): the step-up, before the body is used.
-    if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
+    if (!deps.gate(req, reply, { cap: null, stepUp: decisionStepUp('arm') }).pass) return reply;
     const c = configured(reply);
     if (c === null) return reply;
     const host = hostOf(c);
     const rowId = (req.params as { id: string }).id;
     const key = host !== null && isDecisionRowId(rowId) ? lineKeyOf(rowId, host) : null;
     const current = key !== null && isDecisionRowId(rowId) ? c.currentLine(rowId, key) : null;
-    const d = decideRowArm({ rowId, body: req.body, host, keySet: keySet(), currentLine: current === null ? null : factsOf(current, key),
+    const d = decideRowArm({ rowId, body: req.body, host, keySet: host !== null && keySetFor(host.origin), currentLine: current === null ? null : factsOf(current, key),
       lineById: (id) => { const l = c.lineById(id); return l === null || l.row !== rowId ? null : factsOf(l, key); } });
     if (!d.ok) return refuseRoute(reply, d.refusal, { detail: d.detail });
     const m = moveOne(req, c, d);
@@ -211,12 +218,17 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
    *  removal, every armed gate (`no-key`). Narrowings, so each lands, `row-only` over an incoherent journal. */
   const holdRows = (req: FastifyRequest, t: DecisionArmingTx, which: (row: DecisionRowId, s: DecisionRowState) => boolean,
     cause: DecisionHeldCause): DecisionRowId[] => {
-    const held: DecisionRowId[] = [];
-    for (const row of DECISION_ROW_IDS) {
+    // Every row is read before the first hold is journalled, so an unreadable row throws before any record is appended: a
+    // record appended and then rolled back with the transaction would stand in the journal with no row.
+    const states = DECISION_ROW_IDS.map((row) => {
       const r = t.rowRead(row);
       if (r.kind === 'unreadable') throw new Error(`the row ${row} cannot be read`);
-      if (!which(row, r.state)) continue;
-      const side = sideOf(r.state);
+      return [row, r.state] as const;
+    });
+    const held: DecisionRowId[] = [];
+    for (const [row, state] of states) {
+      if (!which(row, state)) continue;
+      const side = sideOf(state);
       const m = t.move({ row, expected: side, to: { ...side, held: true }, heldCause: cause,
         actor: deps.actorOf(req), at: deps.time.clock.wall(), opKey: opKey() });
       if (!m.ok) throw new Error(`the hold of ${row} was refused (${m.error})`);
@@ -227,7 +239,7 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
 
   app.put('/api/decision-model/key', credentialBodyRoute(DECISION_KEY_BODY_MAX), async (req, reply) => {
     // Setting a key widens what may be asked (§11.2): the step-up, before the body is used.
-    if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
+    if (!deps.gate(req, reply, { cap: null, stepUp: decisionStepUp('key-put') }).pass) return reply;
     const c = configured(reply);
     if (c === null) return reply;
     const hostname = keyDoorHostname(req.body);
@@ -236,18 +248,11 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
     return underSlot(DECISION_MODEL_KEY_SLOT, async () => {
       const stored = hostOf(c);
       const d = decideKeyDoor({ body: req.body, addresses,
-        stored: stored === null ? null : { kind: stored.kind, origin: stored.origin, modelId: stored.modelId, keySet: keySet() } });
+        stored: stored === null ? null : { kind: stored.kind, origin: stored.origin, modelId: stored.modelId, keySet: keySetFor(stored.origin) } });
       if (!d.ok) return refuseRoute(reply, d.refusal, { detail: d.detail });
       const at = deps.time.clock.wall();
-      if (d.key !== null) {
-        try {
-          await writeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT, d.key, at, deps.registerSecret, { tail: 'none' });
-        } catch (e) {
-          // Stored but unrecorded: the value is in its slot and the masker knows it, so the host is still written.
-          if (!(e instanceof OperatorSecretStoredUnrecorded)) return refuseRoute(reply, 'write-failed', { detail: 'the key could not be stored; nothing was changed' });
-        }
-      }
       const next = { kind: d.kind, endpoint: d.endpoint, origin: d.origin, modelId: d.modelId };
+      // 1. The host record and its holds, in one transaction (review 2418 F1): nothing is changed when it fails.
       let held: DecisionRowId[];
       try {
         held = c.inTx((t) => {
@@ -260,8 +265,22 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
           }, 'line-key');
         });
       } catch {
-        return refuseRoute(reply, 'stored-not-applied', { detail: d.key !== null
-          ? 'the key was stored, but the host record was not written; send it again' : 'the host record was not written; send it again' });
+        return refuseRoute(reply, 'write-failed', { detail: 'the host record and its holds could not be written; nothing was changed' });
+      }
+      // 2. The key, bound to the origin it was entered for, only now.
+      if (d.key !== null) {
+        let failed = false;
+        try {
+          await writeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT, d.key, at, deps.registerSecret, { tail: 'none', bound: d.origin });
+        } catch {
+          // Any failure, `OperatorSecretStoredUnrecorded` included: a value with no record is bound to no origin, so it is never
+          // sent, and the operator sends the key again.
+          failed = true;
+        }
+        if (failed) {
+          feed(req, `decision model host: ${next.kind} ${next.origin} ${next.modelId}; the key was not stored${held.length > 0 ? `; held ${held.join(', ')}` : ''}`);
+          return refuseRoute(reply, 'stored-not-applied', { detail: 'the host record was written, but the key was not stored; send it again' });
+        }
       }
       feed(req, `decision model host: ${next.kind} ${next.origin} ${next.modelId}${d.keyChanged ? ', key set' : ''}${held.length > 0 ? `; held ${held.join(', ')}` : ''}`);
       const meta = readServerSecretMeta(deps.ccrcDir, DECISION_MODEL_KEY_SLOT);
@@ -272,15 +291,14 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
 
   app.delete('/api/decision-model/key', async (req, reply) => {
     // Removing the key narrows (every armed gate is held with it): no step-up.
-    if (!deps.gate(req, reply, { cap: null }).pass) return reply;
+    if (!deps.gate(req, reply, { cap: null, stepUp: decisionStepUp('key-delete') }).pass) return reply;
     const c = configured(reply);
     if (c === null) return reply;
     return underSlot(DECISION_MODEL_KEY_SLOT, async () => {
-      try { await removeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT); } catch {
-        return refuseRoute(reply, 'write-failed', { detail: 'the key could not be removed; nothing was changed' });
-      }
       const at = deps.time.clock.wall();
       const stored = hostOf(c);
+      // 1. The holds first (review 2418 F6): a removal that then fails leaves every armed gate held, never re-opened by a key set
+      //    again.
       let held: DecisionRowId[];
       try {
         held = c.inTx((t) => {
@@ -288,7 +306,12 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
           return holdRows(req, t, (row, s) => heldOnKeyRemoval(isDecisionGate(row), sideOf(s)), 'no-key');
         });
       } catch {
-        return refuseRoute(reply, 'stored-not-applied', { detail: 'the key was removed, but the host record and holds were not written; remove it again' });
+        return refuseRoute(reply, 'write-failed', { detail: 'the host record and the holds could not be written; nothing was changed' });
+      }
+      // 2. Then the key.
+      try { await removeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT); } catch {
+        feed(req, `decision model key not removed${held.length > 0 ? `; held ${held.join(', ')}` : ''}`);
+        return refuseRoute(reply, 'stored-not-applied', { detail: 'the armed gates were held, but the key could not be removed; remove it again' });
       }
       feed(req, `decision model key removed${held.length > 0 ? `; held ${held.join(', ')}` : ''}`);
       return reply.code(200).send({ ok: true, host: stored === null ? null : { kind: stored.kind, endpoint: stored.endpoint, origin: stored.origin,

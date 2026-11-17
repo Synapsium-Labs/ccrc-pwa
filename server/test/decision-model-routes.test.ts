@@ -9,7 +9,7 @@
 //
 // THE KEY NEVER LEAVES: every response body and every notice body of every case is searched for the key's text and its last
 // four characters.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
@@ -29,7 +29,8 @@ import {
 import { gatherDecisions } from '../src/coord/decisionModelAsk.js';
 import { planDecision } from '../src/coord/decisionModel.js';
 import { decisionRowDirection } from '../src/coord/decisionLines.js';
-import { readServerSecretValue, writeServerSecret, type RegisterSecret } from '../src/coord/ledgersSecrets.js';
+import { readServerSecretMeta, readServerSecretValue, writeServerSecret, type RegisterSecret } from '../src/coord/ledgersSecrets.js';
+import { readDecisionModelKey } from '../src/coord/decisionModelHttp.js';
 import type { DecisionModel } from '../src/coord/decisionModelPort.js';
 import type { NoticeRecord, NoticeSink } from '../src/notice.js';
 import {
@@ -67,7 +68,7 @@ interface Rig {
   /** One store move in its own `tx()` (the planting of a state, never a door). */
   move(row: DecisionRowId, expected: DecisionRowSide, to: DecisionRowSide, heldCause?: 'drift' | 'canary' | 'line-key' | 'no-key' | null): void;
   host(h?: { kind: DecisionHostKind; endpoint: string; origin: string; modelId: string }, keySetAt?: number | null): void;
-  key(value?: string): Promise<void>;
+  key(value?: string, bound?: string): Promise<void>;
   /** A line under `host` for `row`, with its canary asked and crossed. Answers its id. */
   line(row: DecisionRowId, o?: { asked?: number; crossed?: number; line?: number }): number;
   /** A gate armed on a held canary line under the local host, key set. Answers the line's id. */
@@ -125,7 +126,7 @@ async function rig(): Promise<Rig> {
       if (!m.ok) throw new Error(`plant refused: ${JSON.stringify(m)}`);
     },
     host: (h = LOCAL, keySetAt = T0) => { tx(db, () => setDecisionHostInTx(db, { ...h, keySetAt }, 'device-a', T0)); },
-    key: async (value = KEY) => { await writeServerSecret(ccrcDir, DECISION_MODEL_KEY_SLOT, value, T0, registerSecret, { tail: 'none' }); },
+    key: async (value = KEY, bound = LOCAL.origin) => { await writeServerSecret(ccrcDir, DECISION_MODEL_KEY_SLOT, value, T0, registerSecret, { tail: 'none', bound }); },
     line: (row, o = {}) => {
       const q = DECISION_QUESTIONS[row];
       const id = admitDecisionLine(db, { row, revision: q.revision, hostKind: LOCAL.kind, origin: LOCAL.origin, modelId: LOCAL.modelId,
@@ -169,6 +170,17 @@ const stateOf = (row: DecisionRowId) => {
   return s.state;
 };
 const LOCAL_BODY = { kind: 'local', endpoint: LOCAL.endpoint, modelId: LOCAL.modelId };
+const OTHER = { endpoint: 'http://127.0.0.1:9001/v1', origin: 'http://127.0.0.1:9001' };
+const OTHER_BODY = { kind: 'local', endpoint: OTHER.endpoint, modelId: LOCAL.modelId };
+/** The `.server` directory of the key's slot: a mode that is not private makes every write and removal of the slot refuse. */
+const serverDir = (): string => path.join(r.ccrcDir, 'operator-secrets', '.server');
+const hostOrigin = (): string | null => { const h = decisionHostRead(r.db); return h.kind === 'host' ? h.host.origin : null; };
+/** Plants a `decision_rows` row no reader accepts (an unknown held cause), so the door's transaction throws at its holds. It is the
+ *  FIRST row `holdRows` visits, so no hold has been journalled when it throws. */
+const plantUnreadableRow = (row: DecisionRowId = 'programme.pick'): void => {
+  r.db.prepare(`INSERT INTO decision_rows (row, mode, ceiling, armedLineId, armedLineValue, heldCause, heldAt, updatedAt, actor)
+    VALUES (?, 'shadow', 600, NULL, NULL, 'not-a-cause', NULL, ?, 'device-a')`).run(row, T0);
+};
 
 describe('sign-in dark: every write refuses auth-off, and writes nothing', () => {
   it('all five writes', async () => {
@@ -399,6 +411,7 @@ describe('the arm door', () => {
     const noHost = await arm(ADVICE, { mode: 'shadow', expected: OFF });
     expect([noHost.statusCode, r.json(noHost)['error']]).toEqual([409, 'key-unset']);
     r.host({ kind: 'hosted', endpoint: HOSTED_ENDPOINT, origin: 'https://api.example.test', modelId: 'model-a' });
+    await r.key(KEY, 'https://api.example.test'); // the key is bound to the origin it was entered for
     const hosted = await arm(GATE, { mode: 'shadow', expected: OFF });
     expect([hosted.statusCode, r.json(hosted)['error']]).toEqual([409, 'private-state-host']);
     // an advice row that is not private state is fine on a hosted host
@@ -537,6 +550,134 @@ describe('the key door', () => {
     const again = await delKey();
     expect(again.statusCode).toBe(200);
     expect(r.json(again)).toMatchObject({ held: [] });
+  });
+});
+
+describe('the key door: the host and holds first, the key second, the key bound to its origin (review 2418 F1, F6)', () => {
+  it('a PUT binds the key to the origin it was entered for; a key stored for another origin is no key for the host', async () => {
+    const res = await putKey({ ...OTHER_BODY, key: KEY2 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readServerSecretMeta(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toMatchObject({ bound: OTHER.origin });
+    expect(readDecisionModelKey(r.ccrcDir, OTHER.origin)).toEqual({ kind: 'value', value: KEY2 });
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'not-bound' });
+  });
+
+  it('a key bound to another origin than the stored host reads as no key: arm refuses key-unset', async () => {
+    r.host();
+    await r.key(KEY, OTHER.origin);
+    const res = await arm(ADVICE, { mode: 'shadow', expected: OFF });
+    expect([res.statusCode, r.json(res)['error']]).toEqual([409, 'key-unset']);
+  });
+
+  it('PUT: a key write that fails after the transaction answers stored-not-applied; the host reads B, the armed gate is held line-key, no key is bound to B', async () => {
+    const lineId = r.armedGate();
+    chmodSync(serverDir(), 0o755); // not private: the slot's write refuses before it changes anything
+    const res = await putKey({ ...OTHER_BODY, key: KEY2 });
+    chmodSync(serverDir(), 0o700);
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'stored-not-applied' });
+    expect(hostOrigin()).toBe(OTHER.origin);
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: true, heldCause: 'line-key', armedLine: { id: lineId, line: 0.9 } });
+    expect(readDecisionModelKey(r.ccrcDir, OTHER.origin).kind).not.toBe('value');
+    // the slot still holds the old key, bound to the old origin, which the new host never sends
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: KEY });
+    expect(r.notices[r.notices.length - 1]!.body).toContain('the key was not stored');
+  });
+
+  it('PUT: a failed transaction changes nothing (write-failed): the slot keeps the old key and its record, the host still reads A, the gate is not held', async () => {
+    const lineId = r.armedGate();
+    plantUnreadableRow();
+    const lines = r.lines().length;
+    const res = await putKey({ ...OTHER_BODY, key: KEY2 });
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'write-failed' });
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toEqual({ state: 'value', value: KEY });
+    expect(readServerSecretMeta(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toMatchObject({ bound: LOCAL.origin });
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: KEY });
+    expect(readDecisionModelKey(r.ccrcDir, OTHER.origin)).toEqual({ kind: 'not-bound' });
+    expect(hostOrigin()).toBe(LOCAL.origin);
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false, armedLine: { id: lineId, line: 0.9 } });
+    expect(r.lines()).toHaveLength(lines);
+    expect(r.registered).not.toContain(KEY2);
+    expect(r.notices).toEqual([]);
+  });
+
+  it('PUT: an unreadable row AFTER the armed gate fails the transaction before any hold is journalled (no record without its row)', async () => {
+    r.armedGate();
+    plantUnreadableRow('goals.conflict'); // read after scope.widens, the armed gate a host change would hold
+    const lines = r.lines().length;
+    const res = await putKey({ ...OTHER_BODY, key: KEY2 });
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'write-failed' });
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false });
+    expect(r.lines()).toHaveLength(lines);
+  });
+
+  it('DELETE holds first (F6): a removal that fails answers stored-not-applied with the armed gate held no-key and keySetAt null', async () => {
+    const lineId = r.armedGate();
+    chmodSync(serverDir(), 0o755);
+    const res = await delKey();
+    chmodSync(serverDir(), 0o700);
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'stored-not-applied' });
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: true, heldCause: 'no-key', armedLine: { id: lineId, line: 0.9 } });
+    expect(decisionHostRead(r.db)).toMatchObject({ host: { keySetAt: null } });
+    expect(r.notices[r.notices.length - 1]!.body).toContain('key not removed');
+  });
+
+  it('DELETE: a failed transaction changes nothing (write-failed): the key is still stored and no gate is held', async () => {
+    const lineId = r.armedGate();
+    plantUnreadableRow();
+    const res = await delKey();
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'write-failed' });
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: KEY });
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false, heldCause: null, armedLine: { id: lineId, line: 0.9 } });
+    expect(decisionHostRead(r.db)).toMatchObject({ host: { keySetAt: T0 } });
+    expect(r.notices).toEqual([]);
+  });
+});
+
+describe('the key door: what a key and a model id may be (review 2418 F9)', () => {
+  const refused = async (body: unknown, label: string): Promise<void> => {
+    const res = await putKey(body);
+    expect([res.statusCode, r.json(res)['error']], label).toEqual([400, 'bad-request']);
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin), label).toEqual({ kind: 'value', value: KEY });
+    expect(rowCount()).toBe(0);
+  };
+
+  it('bad-request for a model id with a line break, of every kind', async () => {
+    for (const ch of ['\n', '\r', '\u000b', '\u000c', '\u0085', ' ', ' ']) {
+      await refused({ ...LOCAL_BODY, modelId: `m${ch}x`, key: KEY2 }, `modelId ${JSON.stringify(ch)}`);
+    }
+  });
+
+  it('bad-request for a key with a NUL, a character above U+00FF, an emoji, or a line break', async () => {
+    await refused({ ...LOCAL_BODY, key: `${KEY2}\u0000` }, 'NUL');
+    await refused({ ...LOCAL_BODY, key: `${KEY2}Ā` }, 'U+0100');
+    await refused({ ...LOCAL_BODY, key: `${KEY2}\u{1F511}` }, 'emoji');
+    await refused({ ...LOCAL_BODY, key: `${KEY2}\u0085x` }, 'U+0085');
+  });
+
+  it('bad-request for a key of 19 ASCII bytes, and a key of exactly 20 bytes passes', async () => {
+    const short = 'k'.repeat(19);
+    const res = await putKey({ ...LOCAL_BODY, key: short });
+    expect([res.statusCode, r.json(res)['error']]).toEqual([400, 'bad-request']);
+    expect(res.body.includes(short)).toBe(false);
+    expect(r.notices).toEqual([]);
+    const exact = 'k'.repeat(20);
+    const ok = await putKey({ ...LOCAL_BODY, key: exact });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.body.includes(exact)).toBe(false);
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: exact });
+    r.notices.forEach((x) => expect(JSON.stringify(x).includes(exact)).toBe(false));
+  });
+
+  it('a key counts UTF-8 bytes, not characters: ten two-byte characters pass the floor', async () => {
+    const key = 'é'.repeat(10);
+    const res = await putKey({ ...LOCAL_BODY, key });
+    expect(res.statusCode, res.body).toBe(200);
+    const nine = await putKey({ ...LOCAL_BODY, key: 'é'.repeat(9) });
+    expect([nine.statusCode, r.json(nine)['error']]).toEqual([400, 'bad-request']);
   });
 });
 

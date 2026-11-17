@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
 import { tx } from '../src/coord/tx.js';
 import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
@@ -12,10 +12,10 @@ import { OverlordAuthorityJournal, overlordAuthorityFileAt } from '../src/coord/
 import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
 import {
   admitDecisionLine, currentDecisionLine, decisionHostRead, decisionLineById, decisionMeasures, decisionRowRead, decisionRowSideOf,
-  moveDecisionRowInTx, recordAnchorRun, recordCanary, recordDecision, setDecisionHostInTx, settleDecisionCalls,
+  moveDecisionRowInTx, recordAnchorRun, recordCanary, recordDecision, setDecisionHostInTx, settleDecisionCalls, UNREADABLE_GATE_SIDE,
   type DecisionLineWrite, type DecisionRowMove,
 } from '../src/coord/decisionModelStore.js';
-import { DECISION_ROW_DEFAULT, DECISION_ROW_IDS, type DecisionRowSide } from '../../shared/decisionModel.js';
+import { DECISION_CEILING_MAX, DECISION_CEILING_MIN, DECISION_QUESTIONS, DECISION_ROW_DEFAULT, DECISION_ROW_IDS, type DecisionRowSide } from '../../shared/decisionModel.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -230,13 +230,68 @@ describe('moveDecisionRowInTx: the journal record first, then the row, in one tr
       ['an armed line whose value is not a number', "INSERT INTO decision_rows (row, mode, ceiling, armedLineId, armedLineValue, updatedAt, actor) VALUES ('relay.method', 'armed', 600, 3, 'abc', 1, 'x')"],
       ['an armed line whose value is outside 0 to 1', "INSERT INTO decision_rows (row, mode, ceiling, armedLineId, armedLineValue, updatedAt, actor) VALUES ('relay.method', 'armed', 600, 3, 1.5, 1, 'x')"],
       ['a ceiling that is not an integer', "INSERT INTO decision_rows (row, mode, ceiling, updatedAt, actor) VALUES ('relay.method', 'shadow', 'many', 1, 'x')"],
-    ])('%s reads unreadable, the side is the default, and a move answers row-unreadable', (_why, sql) => {
+    ])('%s reads unreadable, an advice row reads off, and a move answers row-unreadable', (_why, sql) => {
       plant(sql);
-      expect(decisionRowRead(f.db, 'relay.method')).toEqual({ kind: 'unreadable' });
-      expect(decisionRowSideOf(f.db, 'relay.method')).toEqual(DECISION_ROW_DEFAULT);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(decisionRowRead(f.db, 'relay.method')).toEqual({ kind: 'unreadable' });
+        expect(decisionRowSideOf(f.db, 'relay.method')).toEqual(DECISION_ROW_DEFAULT);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]![0])).toMatch(/relay\.method.*cannot be read.*off/);
+      } finally { warn.mockRestore(); }
       expect(f.move({ row: 'relay.method', to: side({ mode: 'shadow' }) })).toEqual({ ok: false, error: 'row-unreadable' });
       expect(f.lines()).toEqual([]);
       expect(f.head()).toBeUndefined();
+    });
+    // Review 2418 F4 (the coordinator's ruling: fail closed): an unreadable GATE row reads armed and held, so it shuts and its
+    // outcome goes to the operator, never the code verdict a disarmed gate would let through.
+    it.each([
+      ['a heldCause out of the vocabulary', "INSERT INTO decision_rows (row, mode, ceiling, heldCause, heldAt, updatedAt, actor) VALUES ('scope.widens', 'shadow', 600, 'bogus', 1, 1, 'x')"],
+      ['half an armed line', "INSERT INTO decision_rows (row, mode, ceiling, armedLineId, updatedAt, actor) VALUES ('scope.widens', 'armed', 600, 3, 1, 'x')"],
+      ['a ceiling that is not an integer', "INSERT INTO decision_rows (row, mode, ceiling, updatedAt, actor) VALUES ('scope.widens', 'shadow', 'many', 1, 'x')"],
+      ['a ceiling outside the authority grammar', "INSERT INTO decision_rows (row, mode, ceiling, updatedAt, actor) VALUES ('scope.widens', 'armed', 9999, 1, 'x')"],
+    ])('a gate row with %s reads unreadable and the side is armed and held, with a warning', (_why, sql) => {
+      plant(sql);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        expect(decisionRowRead(f.db, 'scope.widens')).toEqual({ kind: 'unreadable' });
+        const got = decisionRowSideOf(f.db, 'scope.widens');
+        expect(got).toEqual(UNREADABLE_GATE_SIDE);
+        expect(got).toMatchObject({ mode: 'armed', held: true, armedLine: null, ceiling: DECISION_ROW_DEFAULT.ceiling });
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]![0])).toMatch(/scope\.widens.*cannot be read.*armed and held/);
+        // The warning names the row and never the stored text.
+        expect(String(warn.mock.calls[0]![0])).not.toMatch(/bogus|many|9999/);
+      } finally { warn.mockRestore(); }
+      expect(f.move({ row: 'scope.widens', to: side({ mode: 'shadow' }) })).toEqual({ ok: false, error: 'row-unreadable' });
+      expect(f.lines()).toEqual([]);
+    });
+    it('every gate reads shut when its row is unreadable, and every advice row reads off', () => {
+      f.db.exec('DROP TABLE decision_rows');
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        for (const row of DECISION_ROW_IDS) {
+          const gate = DECISION_QUESTIONS[row].direction === 'gate';
+          expect(decisionRowSideOf(f.db, row), row).toEqual(gate ? UNREADABLE_GATE_SIDE : DECISION_ROW_DEFAULT);
+        }
+        expect(warn).toHaveBeenCalledTimes(DECISION_ROW_IDS.length);
+      } finally { warn.mockRestore(); }
+    });
+    it('a ceiling of 49 or 5001 in the table reads unreadable; 50 and 5000 read as rows (review 2418 F5)', () => {
+      expect([DECISION_CEILING_MIN, DECISION_CEILING_MAX]).toEqual([50, 5000]);
+      const put = (row: string, ceiling: number): void => {
+        f.db.prepare("INSERT OR REPLACE INTO decision_rows (row, mode, ceiling, updatedAt, actor) VALUES (?, 'shadow', ?, 1, 'x')").run(row, ceiling);
+      };
+      for (const row of ['relay.method', 'scope.widens'] as const) {
+        for (const ceiling of [49, 5001, 0, -1]) {
+          put(row, ceiling);
+          expect(decisionRowRead(f.db, row), `${row} ${ceiling}`).toEqual({ kind: 'unreadable' });
+        }
+        for (const ceiling of [50, 5000, 600]) {
+          put(row, ceiling);
+          expect(decisionRowRead(f.db, row), `${row} ${ceiling}`).toMatchObject({ kind: 'row', state: { mode: 'shadow', ceiling } });
+        }
+      }
     });
     it('another row is not affected', () => {
       plant("INSERT INTO decision_rows (row, mode, ceiling, heldCause, updatedAt, actor) VALUES ('relay.method', 'shadow', 600, 'bogus', 1, 'x')");
@@ -245,7 +300,8 @@ describe('moveDecisionRowInTx: the journal record first, then the row, in one tr
     it('a failed read (the table gone) reads unreadable, never the default', () => {
       f.db.exec('DROP TABLE decision_rows');
       expect(decisionRowRead(f.db, 'relay.method')).toEqual({ kind: 'unreadable' });
-      expect(decisionRowSideOf(f.db, 'relay.method')).toEqual(DECISION_ROW_DEFAULT);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try { expect(decisionRowSideOf(f.db, 'relay.method')).toEqual(DECISION_ROW_DEFAULT); } finally { warn.mockRestore(); }
     });
   });
 });

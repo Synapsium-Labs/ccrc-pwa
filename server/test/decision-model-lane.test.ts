@@ -138,16 +138,16 @@ function rig(opts: { host?: Host } = {}): Rig {
   const ask: DecisionAskDeps = {
     store, time: ft.ports,
     arming: (row) => decisionRowSideOf(db, row),
-    currentLine: (row) => {
-      const h = decisionHostRead(db);
-      const l = h.kind !== 'host' ? null : currentDecisionLine(db, row, { hostKind: h.host.kind, origin: h.host.origin, modelId: h.host.modelId, revision: DECISION_QUESTIONS[row].revision });
+    // Under the call's own host snapshot (review 2418 F9), never the stored host read again.
+    currentLine: (row, host) => {
+      const l = currentDecisionLine(db, row, { hostKind: host.kind, origin: host.origin, modelId: host.modelId, revision: DECISION_QUESTIONS[row].revision });
       return l === null ? null : { id: l.id, line: l.line };
     },
     host: () => {
       const h = decisionHostRead(db);
       return h.kind === 'host' ? { kind: h.host.kind, endpoint: h.host.endpoint, origin: h.host.origin, modelId: h.host.modelId } : null;
     },
-    keySet: () => true,
+    keySet: (_origin) => true,
     modelFor: (h): DecisionModel => ({
       kind: h.kind, origin: new URL(h.endpoint).origin,
       ask: async (req): Promise<DecisionCall> => {
@@ -163,6 +163,7 @@ function rig(opts: { host?: Host } = {}): Rig {
   };
   r.deps = {
     store: decisionArmingStore(db, journal), ask, time: ft.ports, log: (line) => r.log.push(line),
+    resolve: async () => [],
     labels: {
       casesFor: (row) => (r.cases.row !== row ? [] : Array.from({ length: r.cases.count }, (_, i) => ({
         refs: {}, inline: row === 'scope.widens' ? { cited: `case ${i}`, goals: 'the new goals', ...(r.cases.gone.has(i) ? { gone: 'yes' } : {}) }
@@ -312,8 +313,16 @@ describe('the anchors: today\'s bands and drift', () => {
     // The check clears under the armed line while a newer current line exists (review 2262 F3).
     const check = await serveCheck(r, 'scope.widens', { cited: 'the operator words', goals: 'the new goals' });
     expect(check).toMatchObject({ outcome: 'answered', lineGen: id });
+    const armedLine = decisionLineById(r.db, id)!;
+    const armedKey = { revision: armedLine.revision, hostKind: armedLine.hostKind, origin: armedLine.origin, modelId: armedLine.modelId };
+    expect(armedKey.revision).toBe(DECISION_QUESTIONS['scope.widens'].revision);
     expect(applyDecision(check, { row: DECISION_QUESTIONS['scope.widens'], side: decisionRowSideOf(r.db, 'scope.widens'),
-      currentLine: { id: current.id, line: current.line }, host: hostNow(r) })).toBe('clear-yes');
+      currentLine: { id: current.id, line: current.line }, host: hostNow(r),
+      // The key the gate's armed line was admitted under (review 2418 F3), read from the stored line, never rebuilt from the check.
+      armedLineKey: armedKey })).toBe('clear-yes');
+    // Under another revision's key the same check shuts.
+    expect(applyDecision(check, { row: DECISION_QUESTIONS['scope.widens'], side: decisionRowSideOf(r.db, 'scope.widens'),
+      currentLine: { id: current.id, line: current.line }, host: hostNow(r), armedLineKey: { ...armedKey, revision: 'other-revision' } })).toBe('shut');
     // Day 2: one more anchor moves. Against the newer line's baseline (today's bands of day 1) only one moved; against the older
     // line's, four have. The gate is held by drift.
     r.ft.advance(DAY);

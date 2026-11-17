@@ -39,8 +39,10 @@ const META_EXT = '.json';
 export { OPERATOR_SECRET_LANE_PREFIX };
 export const operatorSecretLaneId = (program: string, slot: string): string => `${OPERATOR_SECRET_LANE_PREFIX}${program}:${slot}`;
 
-/** The slot's state as its metadata file holds it, and as an `ItemView.secretSet` carries it (`at` is `setAt`). */
-export interface OperatorSecretMeta { setAt: number; tail: string; masked: boolean; why?: SecretUnmasked }
+/** The slot's state as its metadata file holds it, and as an `ItemView.secretSet` carries it (`at` is `setAt`). `bound` is the
+ *  origin a server slot's value was written for (`writeServerSecret`'s `bound`; decision model B, review 2418 F1), absent on
+ *  every other slot. */
+export interface OperatorSecretMeta { setAt: number; tail: string; masked: boolean; why?: SecretUnmasked; bound?: string }
 /** A slot that HOLDS a value whose record is missing, unreadable or unparseable (review 1416 F4): stored, with nothing known of
  *  when or how. Never folded into `null`, which is a slot holding no value. */
 export interface OperatorSecretUnrecorded { setAt: null }
@@ -206,11 +208,15 @@ export async function writeOperatorSecret(
  *  masker asked, then the metadata, as `writeOperatorSecret` states it. `tail: 'none'` records no tail whatever the masker
  *  said (a server slot whose value is never shown, Overlord W2 `name-list-key-in-a-server-slot`). */
 async function writeSlot(
-  file: string, laneId: string, value: string, now: number, register: RegisterSecret, o: { item?: number; tail: 'shown' | 'none' },
+  file: string, laneId: string, value: string, now: number, register: RegisterSecret,
+  o: { item?: number; tail: 'shown' | 'none'; bound?: string },
 ): Promise<OperatorSecretMeta> {
   const { item } = o;
   let unsynced = false;
   let proven = true;
+  // A bound value's previous record goes first, so no reader ever finds the new value beside the old binding: between the two
+  // writes the slot reads as having no record, which a bound reader takes as no value (review 2418 F1).
+  if (o.bound !== undefined) await fsp.rm(metaPathOf(file), { force: true });
   try {
     await writeValueFileAtomic(file, value);
   } catch (e) {
@@ -221,9 +227,10 @@ async function writeSlot(
   }
   let said: 'masked' | SecretUnmasked;
   try { said = register(laneId, value, { beside: !proven }); } catch { said = 'unregistered'; }
+  const bound = o.bound === undefined ? {} : { bound: o.bound };
   const meta: OperatorSecretMeta = said === 'masked'
-    ? { setAt: now, tail: o.tail === 'none' ? '' : secretTailOf(value), masked: true }
-    : { setAt: now, tail: '', masked: false, why: said };
+    ? { setAt: now, tail: o.tail === 'none' ? '' : secretTailOf(value), masked: true, ...bound }
+    : { setAt: now, tail: '', masked: false, why: said, ...bound };
   try {
     await writeValueFileAtomic(metaPathOf(file), `${JSON.stringify({ v: 1, ...meta, ...(item === undefined ? {} : { item }) })}\n`);
   } catch {
@@ -296,11 +303,12 @@ function parseMeta(raw: string): { meta: OperatorSecretMeta; item: number | null
   try {
     const v = JSON.parse(raw) as Record<string, unknown> | null;
     if (v === null || typeof v !== 'object' || v['v'] !== 1) return null;
-    const { setAt, tail, masked, why, item } = v;
+    const { setAt, tail, masked, why, item, bound } = v;
     if (typeof setAt !== 'number' || !Number.isFinite(setAt) || typeof tail !== 'string' || typeof masked !== 'boolean') return null;
     const itemId = typeof item === 'number' && Number.isSafeInteger(item) && item > 0 ? item : null;
-    if (masked) return { meta: { setAt, tail, masked }, item: itemId };
-    return { meta: isSecretUnmasked(why) ? { setAt, tail, masked, why } : { setAt, tail, masked }, item: itemId };
+    const b = typeof bound === 'string' ? { bound } : {};
+    if (masked) return { meta: { setAt, tail, masked, ...b }, item: itemId };
+    return { meta: isSecretUnmasked(why) ? { setAt, tail, masked, why, ...b } : { setAt, tail, masked, ...b }, item: itemId };
   } catch {
     return null;
   }
@@ -453,15 +461,19 @@ export function serverSecretPath(ccrcDir: string, slot: string): string {
 
 /** Stores one server value in its slot, as `writeOperatorSecret` stores a programme's (the same directories' rules, temp
  *  sweep, atomic write, masker registration and record, and the same two kinds of failure). `tail: 'none'` records no tail:
- *  a key that is never shown keeps no character of itself even in its record. The caller serialises its slot's acts. */
+ *  a key that is never shown keeps no character of itself even in its record. `bound` records the origin the value is for
+ *  (the decision model's key, review 2418 F1): the previous record is removed before the value is written, and the new one
+ *  names `bound`, so a reader that checks the record before and after reading the value never pairs a value with another
+ *  origin. The caller serialises its slot's acts. */
 export async function writeServerSecret(
-  ccrcDir: string, slot: string, value: string, now: number, register: RegisterSecret, o: { tail?: 'none' } = {},
+  ccrcDir: string, slot: string, value: string, now: number, register: RegisterSecret, o: { tail?: 'none'; bound?: string } = {},
 ): Promise<OperatorSecretMeta> {
   const file = serverSecretPath(ccrcDir, slot);
   await privateDir(path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top');
   await privateDir(path.dirname(file), 'server');
   await sweepSlotTemps(path.dirname(file), slot);
-  return writeSlot(file, serverSecretLaneId(slot), value, now, register, { tail: o.tail === 'none' ? 'none' : 'shown' });
+  return writeSlot(file, serverSecretLaneId(slot), value, now, register,
+    { tail: o.tail === 'none' ? 'none' : 'shown', ...(o.bound === undefined ? {} : { bound: o.bound }) });
 }
 
 /** A server slot's value, measured: `absent` (the store, its server directory or the file is not there), `unreadable`

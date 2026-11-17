@@ -13,7 +13,8 @@
 // fact fields, and a private-state row's write with `inline` set is a programming error, which throws.
 import type { DatabaseSync } from 'node:sqlite';
 import {
-  DECISION_BANDS, DECISION_HOST_KINDS, DECISION_QUESTIONS, DECISION_RESERVE_PER_REQUEST, DECISION_ROW_DEFAULT, DECISION_ROW_IDS,
+  DECISION_BANDS, DECISION_CEILING_MAX, DECISION_CEILING_MIN, DECISION_HOST_KINDS, DECISION_QUESTIONS, DECISION_RESERVE_PER_REQUEST,
+  DECISION_ROW_DEFAULT, DECISION_ROW_IDS,
   isDecisionHeldCause, isDecisionRowMode,
   type DecisionBand, type DecisionHeldCause, type DecisionHostKind, type DecisionRowId, type DecisionRowSide, type DecisionRowState,
   type DecisionVerdict,
@@ -165,7 +166,9 @@ export function decisionRowRead(db: DatabaseSync, row: DecisionRowId): DecisionR
   }
   if (r === undefined) return { kind: 'row', state: DEFAULT_STATE };
   const { mode, ceiling, armedLineId, armedLineValue, heldCause } = r;
-  if (!isDecisionRowMode(mode) || typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling)) return { kind: 'unreadable' };
+  // The ceiling the authority grammar takes (review 2418 F5): one outside it could never be moved, so no hold would land.
+  if (!isDecisionRowMode(mode) || typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling)
+    || ceiling < DECISION_CEILING_MIN || ceiling > DECISION_CEILING_MAX) return { kind: 'unreadable' };
   if ((armedLineId === null) !== (armedLineValue === null)) return { kind: 'unreadable' };
   if (armedLineId !== null && (typeof armedLineId !== 'number' || !Number.isSafeInteger(armedLineId) || armedLineId < 1
     || typeof armedLineValue !== 'number' || !Number.isFinite(armedLineValue) || armedLineValue < 0 || armedLineValue > 1)) {
@@ -176,12 +179,20 @@ export function decisionRowRead(db: DatabaseSync, row: DecisionRowId): DecisionR
   return { kind: 'row', state: { mode, ceiling, armedLine, held: heldCause !== null, heldCause: heldCause as DecisionHeldCause | null } };
 }
 
-/** The side of a row as the arming reads it outside a door: an unreadable row reads as the default, `off`, whose checks answer
- *  `disarmed` and whose gate outcome is the code verdict, the row disarmed (ruling F16), so an unreadable row can never let
- *  more through than no row at all. */
+/** How an unreadable row reads outside a door (review 2418 F4, the coordinator's ruling: fail closed). An advice row reads
+ *  `off`, so it asks nothing and advises nothing. A gate reads armed and held, so it shuts: its outcome goes to the operator
+ *  (`applyDecision` row 2), never the code verdict a disarmed gate would let through. */
+export const UNREADABLE_GATE_SIDE: DecisionRowSide = Object.freeze({ ...DECISION_ROW_DEFAULT, mode: 'armed', held: true });
+
+/** The side of a row as the arming reads it outside a door. An unreadable row reads `off` for advice and armed and held (shut)
+ *  for a gate, with a warning, since only a downgrade or a hand edit can make one (`UNREADABLE_GATE_SIDE`). */
 export function decisionRowSideOf(db: DatabaseSync, row: DecisionRowId): DecisionRowSide {
   const r = decisionRowRead(db, row);
-  if (r.kind === 'unreadable') return DECISION_ROW_DEFAULT;
+  if (r.kind === 'unreadable') {
+    const gate = isDecisionGate(row);
+    console.warn(`ccrc-server: decision model: the row ${row} cannot be read; it reads ${gate ? 'armed and held (shut)' : 'off'}, and no door can move it until the row is repaired`);
+    return gate ? UNREADABLE_GATE_SIDE : DECISION_ROW_DEFAULT;
+  }
   const { mode, ceiling, armedLine, held } = r.state;
   return { mode, ceiling, armedLine, held };
 }

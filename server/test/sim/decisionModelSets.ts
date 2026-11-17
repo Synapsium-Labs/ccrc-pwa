@@ -150,6 +150,14 @@ export const DECISION_APPLY_SET = set([
   { id: 'DM-APPLY-21 another row\'s check is applied', old: "  if (check.row !== now.row.id) throw new Error(", new: "  if (false) throw new Error(" },
   { id: 'DM-APPLY-22 a gate is judged advice', old: "const gate = now.row.direction === 'gate';", new: 'const gate = false;' },
   { id: 'DM-APPLY-23 an unmatched choice is skipped', old: "  return gate ? 'shut' : 'unsure';\n}", new: "  return 'skipped';\n}" },
+  // F3 (review 2418): a gate is read against the key its armed line was admitted under.
+  { id: 'DM-APPLY-24 a gate with no armed line key is served', old: 'if (k === null || k.revision !== check.revision', new: 'if (k !== null && k.revision !== check.revision' },
+  { id: 'DM-APPLY-25 the armed line key\'s revision is not read', old: 'k === null || k.revision !== check.revision || ', new: 'k === null || ' },
+  { id: 'DM-APPLY-26 the armed line key\'s host kind is not read', old: ' || k.hostKind !== check.hostKind', new: '' },
+  { id: 'DM-APPLY-27 the armed line key\'s origin is not read', old: ' || k.origin !== check.origin', new: '' },
+  { id: 'DM-APPLY-28 the armed line key\'s model is not read', old: '\n      || k.modelId !== check.modelId) return out;', new: ') return out;' },
+  { id: 'DM-APPLY-29 advice reads the armed line key', old: '  if (gate) {\n    const k = now.armedLineKey;', new: '  if (true) {\n    const k = now.armedLineKey;' },
+  { id: 'DM-APPLY-30 no gate is checked against the key', old: '  if (gate) {\n    const k = now.armedLineKey;', new: '  if (false) {\n    const k = now.armedLineKey;' },
 ]);
 
 export const DECISION_GATE_OUTCOME_SET = set([
@@ -162,6 +170,20 @@ export const DECISION_GATE_OUTCOME_SET = set([
   { id: 'DM-GATE-7 a pick passes', old: " || effect === 'shadow' ? codeVerdict", new: " || effect === 'shadow' || typeof effect === 'object' ? codeVerdict" },
   { id: 'DM-GATE-8 none-picked passes', old: " || effect === 'shadow' ? codeVerdict", new: " || effect === 'shadow' || effect === 'none-picked' ? codeVerdict" },
   { id: 'DM-GATE-9 the operator never', old: ": 'to-operator';", new: ': codeVerdict;' },
+]);
+
+export const DECISION_EGRESS_SET = set([
+  // F2 (review 2418): the hosted egress screen over the one reader's answer.
+  { id: 'DM-EGR-1 no list reads clear', old: "if (list.state === 'none') return 'no-list';", new: "if (list.state === 'none') return 'clear';" },
+  { id: 'DM-EGR-2 no list is read as a list', old: "  if (list.state === 'none') return 'no-list';\n", new: '' },
+  { id: 'DM-EGR-3 an unreadable list reads clear', old: "if (list.state !== 'list') return 'unreadable';", new: "if (list.state !== 'list') return 'clear';" },
+  { id: 'DM-EGR-4 an unreadable list reads no-list', old: "if (list.state !== 'list') return 'unreadable';", new: "if (list.state !== 'list') return 'no-list';" },
+  { id: 'DM-EGR-5 a matcher that throws reads clear', old: "  } catch {\n    return 'unreadable';", new: "  } catch {\n    return 'clear';" },
+  { id: 'DM-EGR-6 a matcher that throws reads hit', old: "  } catch {\n    return 'unreadable';", new: "  } catch {\n    return 'hit';" },
+  { id: 'DM-EGR-7 every text must hit', old: 'texts.some((t)', new: 'texts.every((t)' },
+  { id: 'DM-EGR-8 hit and clear are swapped', old: "length > 0) ? 'hit' : 'clear';", new: "length > 0) ? 'clear' : 'hit';" },
+  { id: 'DM-EGR-9 every text is a hit', old: 'privateNameHits(t, list.list).length > 0', new: 'privateNameHits(t, list.list).length >= 0' },
+  { id: 'DM-EGR-10 only the first text is read', old: 'texts.some((t) => privateNameHits(t, list.list).length > 0)', new: 'texts.slice(0, 1).some((t) => privateNameHits(t, list.list).length > 0)' },
 ]);
 
 // ── decisionLines.ts (a module of its own) ───────────────────────────────────────────────────────────────────────────
@@ -322,7 +344,7 @@ export const DECISION_KEY_HOSTNAME_SET = linesSet([
   { id: 'DL-KH-1 brackets kept', old: "host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host", new: 'host' },
   { id: 'DL-KH-2 an empty host', old: "    if (host === '') return null;\n", new: '' },
   { id: 'DL-KH-3 a body that is not an object', old: "if (!isObj(body) || typeof body['endpoint'] !== 'string') return null;", new: "if (typeof body['endpoint'] !== 'string') return null;" },
-  { id: 'DL-KH-4 a parse error is a host', old: '  } catch {\n    return null;\n  }\n}\n\n/** The authority', new: "  } catch {\n    return 'unparsed';\n  }\n}\n\n/** The authority" },
+  { id: 'DL-KH-4 a parse error is a host', old: '  } catch {\n    return null;\n  }\n}\n\n/** A key\'s characters', new: "  } catch {\n    return 'unparsed';\n  }\n}\n\n/** A key's characters" },
 ]);
 
 export const DECISION_KEY_DOOR_SET = linesSet([
@@ -332,10 +354,16 @@ export const DECISION_KEY_DOOR_SET = linesSet([
   { id: 'DL-KEY-4 any endpoint type', old: " || typeof endpoint !== 'string') return refuse('bad-request'", new: ") return refuse('bad-request'" },
   { id: 'DL-KEY-5 an empty model id', old: 'modelId.length < 1 ||', new: '' },
   { id: 'DL-KEY-6 a long model id', old: 'modelId.length > 200', new: 'modelId.length > 201' },
-  { id: 'DL-KEY-7 an empty key', old: 'key.length < 1 ||', new: '' },
+  { id: 'DL-KEY-F9-1 the key floor is dropped', old: "typeof key === 'string' && utf8Bytes(key) < SECRET_TAIL_MIN", new: 'false' },
+  { id: 'DL-KEY-F9-2 the key floor is exclusive', old: 'utf8Bytes(key) < SECRET_TAIL_MIN', new: 'utf8Bytes(key) <= SECRET_TAIL_MIN' },
+  { id: 'DL-KEY-F9-3 the key floor is one byte low', old: 'utf8Bytes(key) < SECRET_TAIL_MIN', new: 'utf8Bytes(key) < SECRET_TAIL_MIN - 1' },
+  { id: 'DL-KEY-F9-4 the key floor counts characters', old: 'utf8Bytes(key) < SECRET_TAIL_MIN', new: 'key.length < SECRET_TAIL_MIN' },
+  { id: 'DL-KEY-F9-5 a NUL is a key character', old: '[\\u0001-\\u00ff]', new: '[\\u0000-\\u00ff]' },
+  { id: 'DL-KEY-F9-6 a character above U+00FF is a key character', old: '\\u00ff]+$', new: '\\uffff]+$' },
+  { id: 'DL-KEY-F9-7 the key characters are not read', old: ' || !KEY_CHARS.test(key)', new: '' },
+  { id: 'DL-KEY-F9-8 the key may span lines', old: ' || !isOneLine(key)', new: '' },
+  { id: 'DL-KEY-F9-9 the model id may span lines', old: ' || !isOneLine(modelId)', new: '' },
   { id: 'DL-KEY-8 a long key', old: 'key.length > 4096', new: 'key.length > 4097' },
-  { id: 'DL-KEY-9 a key over lines', old: '/[\\r\\n\\u2028\\u2029]/', new: '/[\\u2028\\u2029]/' },
-  { id: 'DL-KEY-10 a key over unicode line breaks', old: '/[\\r\\n\\u2028\\u2029]/', new: '/[\\r\\n]/' },
   { id: 'DL-KEY-11 a key that is no string', old: "typeof key !== 'string' ||", new: '' },
   { id: 'DL-KEY-12 any scheme', old: "  if (url.protocol !== 'https:' && url.protocol !== 'http:') return refuse('bad-endpoint', 'the endpoint is https or http');\n", new: '' },
   { id: 'DL-KEY-13 userinfo as an empty name', old: "authorityOf(endpoint).includes('@') || ", new: '' },
@@ -372,10 +400,10 @@ export const DECISION_STEP_UP_SET = linesSet([
   { id: 'DL-SU-1 arm does not ask', old: "    case 'arm':\n    case 'key-put': return true;", new: "    case 'arm': return false;\n    case 'key-put': return true;" },
   { id: 'DL-SU-2 key-put does not ask', old: "    case 'arm':\n    case 'key-put': return true;", new: "    case 'arm': return true;\n    case 'key-put': return false;" },
   { id: 'DL-SU-3 key-delete asks', old: "case 'key-delete': return false;", new: "case 'key-delete': return true;" },
-  { id: 'DL-SU-4 a narrowing asks', old: "decisionRowDirection(gate, from, to) === 'widens'", new: "decisionRowDirection(gate, from, to) !== 'widens'" },
-  { id: 'DL-SU-5 off and ceiling always ask', old: "return decisionRowDirection(gate, from, to) === 'widens';", new: 'return true;' },
-  { id: 'DL-SU-6 off and ceiling never ask', old: "return decisionRowDirection(gate, from, to) === 'widens';", new: 'return false;' },
-  { id: 'DL-SU-7 the gate flag is ignored', old: 'decisionRowDirection(gate, from, to) ===', new: 'decisionRowDirection(true, from, to) ===' },
+  { id: 'DL-SU-4 a narrowing asks', old: "decisionRowDirection(gate === true, from!, to!) === 'widens'", new: "decisionRowDirection(gate === true, from!, to!) !== 'widens'" },
+  { id: 'DL-SU-5 off and ceiling always ask', old: "return decisionRowDirection(gate === true, from!, to!) === 'widens';", new: 'return true;' },
+  { id: 'DL-SU-6 off and ceiling never ask', old: "return decisionRowDirection(gate === true, from!, to!) === 'widens';", new: 'return false;' },
+  { id: 'DL-SU-7 the gate flag is ignored', old: 'decisionRowDirection(gate === true, from!, to!) ===', new: 'decisionRowDirection(true, from!, to!) ===' },
 ]);
 
 export const DECISION_HELD_HOST_SET = linesSet([
@@ -456,6 +484,7 @@ export const DECISION_MODEL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [`${K}bandOf`]: DECISION_BAND_SET as MutantSet<never>,
   [`${K}applyDecision`]: DECISION_APPLY_SET as MutantSet<never>,
   [`${K}gateOutcome`]: DECISION_GATE_OUTCOME_SET as MutantSet<never>,
+  [`${K}decisionEgressOf`]: DECISION_EGRESS_SET as MutantSet<never>,
   [`${L}isDecisionGate`]: DECISION_GATE_SET as MutantSet<never>,
   [`${L}decisionRowDirection`]: DECISION_DIRECTION_SET as MutantSet<never>,
   [`${L}lineCounts`]: DECISION_LINE_COUNTS_SET as MutantSet<never>,

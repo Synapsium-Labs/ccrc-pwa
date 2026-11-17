@@ -41,10 +41,11 @@ export interface DecisionAskDeps {
   time: TimePorts;
   /** PR A: always DECISION_ROW_DEFAULT. */
   arming(row: DecisionRowId): DecisionRowSide;
-  /** PR A: always null. */
-  currentLine(row: DecisionRowId): { id: number; line: number } | null;
+  /** The row's current line under this call's host snapshot (review 2418 F9: never a host read again). */
+  currentLine(row: DecisionRowId, host: { kind: DecisionHostKind; origin: string; modelId: string }): { id: number; line: number } | null;
   host(): { kind: DecisionHostKind; endpoint: string; origin: string; modelId: string } | null;
-  keySet(): boolean;
+  /** Whether a key is stored for this origin: bound to it (review 2418 F1). */
+  keySet(origin: string): boolean;
   /** One adapter per call, bound to the host snapshot the call planned with (question 1, review 2262 F9). */
   modelFor(host: { kind: DecisionHostKind; endpoint: string }): DecisionModel;
   /** The hosted egress screen (question 9). PR B wires it. */
@@ -74,7 +75,7 @@ export async function gatherDecisions(deps: DecisionAskDeps, ask: DecisionAsk): 
   const all: DecisionRowId[] = [];
   for (const r of ask.rows) for (const g of DECISION_QUESTIONS[r].askedWith) if (!all.includes(g)) all.push(g);
   const host = deps.host();
-  const keySet = deps.keySet();
+  const keySet = host !== null && deps.keySet(host.origin);
   const day = decisionDayOf(deps.time.clock.wall());
   const stateOf = (r: DecisionRowId): DecisionFields =>
     ask.fields.get(r) ?? DECISION_QUESTIONS[r].askedWith.map((g) => ask.fields.get(g)).find((f) => f !== undefined) ?? {};
@@ -94,7 +95,7 @@ export async function gatherDecisions(deps: DecisionAskDeps, ask: DecisionAsk): 
     // 3. Each row's side, its line, its record key and its record.
     const facts = new Map(rows.map((r) => {
       const side = deps.arming(r);
-      const lineGen = decisionLineGen(r, side, deps.currentLine(r));
+      const lineGen = decisionLineGen(r, side, host === null ? null : deps.currentLine(r, host));
       const key = host === null ? null : { row: r, revision: DECISION_QUESTIONS[r].revision, modelId: host.modelId,
         hostKind: host.kind, origin: host.origin, stateHash, lineGen };
       const record: DecisionRecordRead = key === null || fresh ? { kind: 'none' } : deps.store.recordOf(key);
