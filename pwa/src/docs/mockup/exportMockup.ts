@@ -458,11 +458,13 @@ function keepDataStylesheet(link: Element): boolean {
   return true;
 }
 
-/** The elements the file never carries: template, scripts, frames, objects, embeds, base, `meta[http-equiv]`, SMIL that
- *  targets `href`, and every `link` but a `data:` stylesheet; noscript is unwrapped, its children kept. */
-/** The elements step 3 drops with everything inside them: one list, read by the strip and by the diagram count. */
+/** The elements step 3 drops with everything inside them by selector (`dropInertElements` drops a `template`, SMIL that
+ *  targets `href` and every `link` but a `data:` stylesheet by their own tests). */
 const DROPPED_ELEMENTS = 'script, iframe, frame, object, embed, base, meta[http-equiv]';
 
+/** The elements the file never carries: template, scripts, frames, objects, embeds, base, `meta[http-equiv]`, SMIL that
+ *  targets `href`, and every `link` but a `data:` stylesheet; noscript is unwrapped, its children kept. The one strip step
+ *  that removes elements, so the diagram count runs it too (`mockupDiagramCount`). */
 function dropInertElements(clone: Document): void {
   for (const t of [...clone.querySelectorAll('template')]) t.remove();
   for (const n of [...clone.querySelectorAll('noscript')]) n.replaceWith(...n.childNodes);
@@ -525,17 +527,18 @@ function addCspMeta(clone: Document): void {
   into.insertBefore(meta, into.firstChild);
 }
 
-/** The elements of the stripped clone whose class list holds `mermaid`: compared as a class token, case-sensitively, so
- *  neither a look-alike class nor the case-folding of a quirks-mode selector counts. */
 /** How many elements of `doc`'s snapshot have `mermaid` in their class list: the template shape's diagram blocks, which a
- *  mockup export shows as source (base 5.6.9's table: "<m> diagrams appear as source"). Read from `doc` itself, never changed,
- *  so the snapshot's interface stays the plan's `{html, links, omitted}`: an element the strip drops, or one inside it, is not
- *  counted (a `template`'s content is no child of the document, and no `link` survives as a diagram). */
+ *  mockup export shows as source (base 5.6.9's table: "<m> diagrams appear as source"). The class is compared as a token,
+ *  case-sensitively, so neither a look-alike class nor the case-folding of a quirks-mode selector counts. It runs the
+ *  snapshot's own element drop (`dropInertElements`) on a clone of its own, so it counts exactly the elements the file
+ *  keeps: an element the strip drops (a `template`, a SMIL element that sets `href`, a script) and one inside it are not
+ *  counted (review 2361 M5), nor is a kept `link`, which shows nothing. `doc` is never changed, so the snapshot's interface
+ *  stays the plan's `{html, links, omitted}`. */
 export function mockupDiagramCount(doc: Document): number {
+  const clone = doc.cloneNode(true) as Document;
+  dropInertElements(clone);
   let n = 0;
-  for (const el of doc.querySelectorAll('[class]')) {
-    if (el.classList.contains('mermaid') && el.localName !== 'link' && el.closest(DROPPED_ELEMENTS) === null) n += 1;
-  }
+  for (const el of clone.querySelectorAll('[class]')) if (el.localName !== 'link' && el.classList.contains('mermaid')) n += 1;
   return n;
 }
 

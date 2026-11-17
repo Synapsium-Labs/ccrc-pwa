@@ -527,6 +527,23 @@ describe('the diagram count (base 5.6.9\'s table: "<m> diagrams appear as source
     expect(countOf(page('<p class="intro">x</p>'))).toBe(0);
   });
 
+  it.each([
+    ['a template', '<template class="mermaid"><p>t</p></template>'],
+    ['a SMIL set that targets href', '<svg><a><set class="mermaid" attributeName="href" to="#x"/><text>s</text></a></svg>'],
+    ['a SMIL animate that targets xlink:href', '<svg><a><animate class="mermaid" attributeName="xlink:href" values="#x"/><text>s</text></a></svg>'],
+    ['a script', '<script class="mermaid">1</script>'],
+    ['a link the strip removes', '<link class="mermaid" rel="preload" href="https://x.example/p">'],
+    ['a kept data: stylesheet link', '<link class="mermaid" rel="stylesheet" href="data:text/css,p{}">'],
+  ])('counts no %s carrying the class itself: the strip drops it, or it shows nothing (review 2361 M5)', (_name, html) => {
+    expect(countOf(page(html))).toBe(0);
+  });
+
+  it('counts what the strip keeps: a noscript\'s children, unwrapped, and a SMIL element that sets another attribute', () => {
+    expect(countOf(page(
+      '<noscript><pre class="mermaid">n</pre></noscript><svg><rect><set class="mermaid" attributeName="fill" to="red"/></rect></svg>',
+    ))).toBe(2);
+  });
+
   it('the snapshot keeps the plan\'s interface: html, links and omitted, and nothing else', async () => {
     const { out } = await run(page('<pre class="mermaid">a</pre>'));
     expect(Object.keys(out).sort()).toEqual(['html', 'links', 'omitted']);
