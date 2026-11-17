@@ -20,7 +20,7 @@ import { detachUrls } from '../src/docs/docsLinks';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { pinFor, type DocsVisit, type FileSlot } from '../src/docs/useDocsVisit';
 import { exportStateFor } from '../src/docs/DocsHead';
-import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, MOCKUP_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
@@ -538,19 +538,128 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
   });
 
-  it.each(['/docs/demo/specs/m.html', '/docs/demo/specs/m.html?ref=main&frame=full'])(
-    'html (%s): the stand-in with its size, Source and Download, and no frame of any kind', async (url) => {
-      const html = '<p>mock</p><script>x()</script>';
-      const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
-      const { container } = open(url, f);
-      expect(await screen.findByText('HTML mockups open in a later release; Source shows the file and Download saves it.')).toBeInTheDocument();
-      expect(screen.getByText('Size: 1 KiB')).toBeInTheDocument();
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc]')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'Source' }));
-      expect(container.querySelector('pre.doc-plain')?.textContent).toBe(html);
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc], script')).toBeNull();
-      expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+  it('html: the mockup viewer (one sandboxed frame, Source and Download), and the stand-in sentence is gone', async () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(screen.queryByText(/HTML mockups open in a later release/)).toBeNull();
+    expect(container.querySelectorAll('iframe')).toHaveLength(1);
+    expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
+    expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }));
+    expect(container.querySelector('.docs-leaf .code-block')?.textContent).toContain('<p>mock</p>');
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+  });
+
+  it('html with ?frame=full: the full-frame view (Close and the frame), no toolbar', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', '<p>mock</p>', 'html') });
+    const { container } = open('/docs/demo/specs/m.html?ref=main&frame=full', f);
+    await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Full screen' })).toBeNull();
+  });
+
+  it('html: a re-list that moves the commit of a committed page but not its blob does not remount the viewer (its state and its one-relist cap stay)', async () => {
+    const html = '<img src="a.png"><script>x()</script>';
+    const entries = [entry('specs', 'm.html'), entry('specs', 'a.png')];
+    const page = fileAs('m.html', html, 'html');
+    const sameBlob: DocsFileAnswer = page.s === 'ok'
+      ? { s: 'ok', value: { ...page.value, show: { ...page.value.show, blob: BLOB_1 } } }
+      : page;
+    const f = byPath(treeOk({ entries }), { 'm.html': sameBlob });
+    f.tree.mockReset();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A, entries })));
+    f.tree.mockResolvedValue(okTree(treeOk({ commit: COMMIT_B, entries })));
+    // The first read of the image waits for sign-in; every later one answers that the commit is gone (a movement).
+    f.raster.mockReset();
+    f.raster.mockResolvedValueOnce({ s: 'auth' });
+    f.raster.mockResolvedValue(failedAnswer('unknown-commit'));
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    const root = container.querySelector('.docs-mockup')!;
+    fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    // Sign-in reads again; the answer is a movement, so the view asks its host to re-list ONCE.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(2));
+    // The new listing is a new commit with the same blob: the view starts over from it, and is the same view.
+    await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(container.querySelector('.docs-mockup')).toBe(root);
+    expect(root.isConnected).toBe(true);
+    expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    // The second movement was the view's own: no further re-list (the cap survived the re-list), and Retry is the user's.
+    await new Promise<void>((r) => { setTimeout(r, 50); });
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(3));
+  });
+
+  // The viewer's key is the document's identity, the page's view and its frame (D-8711; review M7c): each part below starts
+  // the viewer over, which a state it holds (Run scripts) shows. Each is measured red by dropping that part from the key.
+  describe('the mockup viewer\'s key holds its view, its frame and its draft fingerprint (review M7c)', () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const entries = [entry('specs', 'm.html')];
+
+    it('a view=committed change starts the viewer over (Run scripts is off again)', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      const root = container.querySelector('.docs-mockup')!;
+      act(() => navigate('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(here()).toBe('/docs/demo/specs/m.html?ref=main&view=committed'));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+      expect(container.querySelector('.docs-mockup')).not.toBe(root);
     });
+
+    it('a frame change (Full screen) starts the viewer over: the full frame is static again', async () => {
+      const f = byPath(treeOk({ entries }), { 'm.html': fileAs('m.html', html, 'html') });
+      const { container } = open('/docs/demo/specs/m.html', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+      fireEvent.click(screen.getByRole('button', { name: 'Full screen' }));
+      await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+
+    it('a new draft fingerprint starts the viewer over; a re-list that keeps the fingerprint does not', async () => {
+      const FP_2 = 'e'.repeat(64);
+      const draftTree = (fp: string): DocsTreeOk =>
+        treeOk({ entries: [entry('specs', 'm.html', { draft: draftOf('modified', { fp }) })], drafts: holder() });
+      const f = fakeLoaders({ tree: okTree(draftTree(FP_1)) });
+      // The answers carry the same blob, so only the draft arm of the key (its pin, fingerprint included) tells the two apart.
+      f.file.mockImplementation(async (_p: string, pin: DocPin) => {
+        const a = fileAs('m.html', html + (pin.kind === 'draft' && pin.fp === FP_2 ? '<!-- two -->' : ''), 'html');
+        return a.s === 'ok' ? { s: 'ok', value: { ...a.value, show: { ...a.value.show, blob: BLOB_1 } } } : a;
+      });
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_1))));
+      const { container } = open('/docs/demo/specs/m.html?ref=main', f);
+      await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+      expect(f.file.mock.calls[0]![1]).toMatchObject({ kind: 'draft', fp: FP_1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+      const root = container.querySelector('.docs-mockup')!;
+      // The same fingerprint again: the same view, its choice kept.
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.refresh).toHaveBeenCalledTimes(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(container.querySelector('.docs-mockup')).toBe(root);
+      expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+      // A new fingerprint: the document changed, so the view starts over.
+      f.refresh.mockResolvedValue(okRefresh(RAN, treeResponse(draftTree(FP_2))));
+      fireEvent.click(container.querySelector('button.docs-fresh') as HTMLElement);
+      await waitFor(() => expect(f.file.mock.calls.some((c) => c[1].kind === 'draft' && c[1].fp === FP_2)).toBe(true));
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument());
+      expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('');
+    });
+  });
 
   it('text with a registered grammar (x.ts) is highlighted through CodeBlock; x.txt is pre.doc-plain', async () => {
     const f = byPath(treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] }), {
@@ -1572,15 +1681,14 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
-  it('no Export for class other, nor for html in W5 (M4.SH8)', async () => {
+  it('no Export for class other; an html leaf offers it from W6 (M4.SH8; C2 Task 9, base 4.17)', async () => {
     const tree = treeOk({ entries: [entry('specs', 'o.pdf'), entry('specs', 'm.html')] });
     open('/docs/demo/specs/o.pdf', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     open('/docs/demo/specs/m.html', byPath(tree, { 'm.html': fileAs('m.html', '<p>a</p>', 'html') }));
-    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
-    expect(document.querySelector('.docs-export')).toBeNull();
+    await waitFor(() => expect(exportButton()).toBeEnabled());
   });
 
   it("a new draft: Export is enabled and Share's refusal carries Export's clause; a withheld new file: no Export, no clause (M4.SH3)", async () => {

@@ -53,7 +53,7 @@
 .docs-screen { display: grid; gap: var(--sp-3); padding: var(--sp-2); min-width: 0; }
 .docs-screen > * { min-width: 0; }
 .docs-index, .docs-project, .docs-listing, .docs-leaf, .docs-missing, .docs-invalid,
-.docs-svg, .docs-raster, .docs-standin, .docs-changing {
+.docs-svg, .docs-raster, .docs-standin, .docs-changing, .docs-mockup {
   display: grid; gap: var(--sp-2); min-width: 0;
 }
 
@@ -574,6 +574,39 @@
   position: absolute; inset-block-start: 0; inset-inline: 0; z-index: 1;
   padding: var(--sp-2); background: var(--bg-page);
 }
+
+/* — the mockup viewer (native Docs reader C2, Task 8; base spec 5.6.7). `MockupView` draws the badges and toolbar
+   (`.docs-badge`, `.docs-leaf-action`, which already carry their floor and ink), the frame, and two folds. The frame is 70dvh
+   and full width, on `--mockup-canvas`: a srcdoc is transparent and mockups are authored on white, so the canvas is white
+   in both themes. Its holder (`.docs-mockup-canvas`) carries `data-theme="light"`, the design system's own way to draw one
+   element in another palette, so `--bg-surface` there is the light palette's white surface whatever the page's theme, and
+   the canvas is that token (tokens only, base 4.14; `color-scheme: light` keeps the frame's own canvas light too). A fold's
+   summary is a control and carries the
+   floor. The census and the links list set no colour, ground or border colour of their own: their ink is the container's.
+   In `frame=full` the view covers the screen: a thin bar with Close above the frame, which takes the rest (`--z-sheet`,
+   above the header, below the toast). — */
+.docs-mockup-canvas { --mockup-canvas: var(--bg-surface); min-width: 0; }
+.docs-mockup-badges { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); }
+.docs-mockup-toolbar { min-width: 0; }
+.docs-mockup-frame {
+  display: block; inline-size: 100%; block-size: 70dvh; border: 0;
+  color-scheme: light; background: var(--mockup-canvas);
+}
+.docs-mockup-away { display: grid; gap: var(--sp-2); justify-items: start; }
+.docs-mockup-fold > summary { display: flex; align-items: center; min-height: var(--tap-min); cursor: pointer; }
+.docs-mockup-rows { display: grid; gap: var(--sp-2); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.docs-mockup-row {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); min-width: 0;
+  font: var(--weight-regular) var(--text-xs) / var(--leading-normal) var(--font-mono); overflow-wrap: anywhere;
+}
+.docs-mockup-sheet { display: grid; gap: var(--sp-3); min-width: 0; }
+.docs-mockup[data-frame='full'] {
+  position: fixed; inset: 0; z-index: var(--z-sheet);
+  grid-template-rows: auto minmax(0, 1fr); gap: 0; align-content: stretch;
+  background: var(--bg-page); overflow: auto;
+}
+.docs-mockup[data-frame='full'] .docs-mockup-canvas, .docs-mockup[data-frame='full'] .docs-mockup-frame { block-size: 100%; }
+.docs-mockup-bar { padding: var(--sp-1) var(--sp-2); }
 
 /* — reduced motion (D-5501, D-5502): the door, the back chevron, a row, the chip and the bordered controls each
    declare a transition, so each is named here, after every rule it governs (motion-reduced.test.ts reads both

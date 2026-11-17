@@ -448,6 +448,11 @@ const REGISTERED_LEAVES: Record<string, string> = {
     + 'offers Open externally (a new tab, `openExternal`) when its plan is '
     + '`external`, or Open in the viewer (an in-app `navigate`) when it is '
     + '`viewer`. The plan has one kind, so one is ever rendered.',
+  'button.docs-leaf-action[aria-pressed,onClick,type]':
+    'DIFFERENT FILES, ONE TOGGLE: `DocsLeaf`\'s `SourceButton` (the Source toggle of the svg leaf and of the html leaf with no Docs '
+    + 'screen around it) and `MockupView`\'s `Action` (the mockup viewer\'s toolbar button, which takes `pressed` for its own Source '
+    + 'toggle and none for the others). Both are the leaf\'s bordered `.docs-leaf-action`; `SourceButton` is private to DocsLeaf, '
+    + 'which imports the viewer, so the viewer cannot import it back.',
   'button.doc-plain-action[onClick,type]':
     'DIFFERENT ACTIONS, mutually exclusive by outcome: plain text that timed '
     + 'out under the normal budget offers Format anyway; a failed worker '

@@ -60,7 +60,7 @@ function readerSpy(): ReaderSpy {
     reader: {
       render: vi.fn<ReaderDeps['render']>(async () => RENDERED),
       mount: vi.fn<ReaderDeps['mount']>(async (_el, input) => { inputs.push(input); return handle as ReaderMount; }),
-      images: vi.fn<ReaderDeps['images']>(async () => ({ urls: {}, drafts: 0 })),
+      images: vi.fn<ReaderDeps['images']>(async () => ({ urls: {}, drafts: 0, auth: 0 })),
     },
   };
 }
