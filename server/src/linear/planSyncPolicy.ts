@@ -146,34 +146,74 @@ export function fitProjectName(name: string): string {
 /** A snapshot of a programme: `program` is there (an Upkeep epic's is null). */
 export type ProgrammeSnapshot = SyncSnapshot & { program: NonNullable<SyncSnapshot['program']> };
 
-export function initiativeDescription(s: ProgrammeSnapshot): string {
+/** Linear refuses an initiative's or a project's description over 255 characters (INVALID_INPUT, measured live
+ *  2026-11-17; D-8708). Counted in UTF-16 units (JavaScript string length), which is never fewer than code points, so the
+ *  bound holds if Linear counts either. Bytes were not measured: the cap's answer waits for the next capture (D-8708). */
+export const LINEAR_DESCRIPTION_MAX_CHARS = 255;
+
+/** D-8708: `body` (already through `linear-egress`, so the redactor never sees a cut text) with the ccrc provenance line,
+ *  fitted to {@link LINEAR_DESCRIPTION_MAX_CHARS}. Trailing whitespace is trimmed first, so a body that already ends with
+ *  the provenance line is measured as it is sent and the line is never doubled. The provenance line always survives
+ *  whole: a body too long for both is cut at its END (never inside a surrogate pair), its trailing whitespace trimmed,
+ *  and ended with `…`, so a builder puts what must survive (the status notes) first. A body that fits is returned as
+ *  `withCcrcProvenance` gives it, so a bound object's fingerprint does not move. This is the planned description's one
+ *  source: the fingerprint, the journal's fields and the update path all read its answer, so a binding that failed on an
+ *  over-long description retries by itself once its planned input changes. The public-text gate judges the unfitted body
+ *  as well as this answer (a name cut in two reaches the answer only as a prefix). The full text stays in ccrc's plan. */
+export function fitLinearDescription(body: string): string {
+  const text = body.trimEnd();
+  const whole = withCcrcProvenance(text);
+  if (whole.length <= LINEAR_DESCRIPTION_MAX_CHARS) return whole;
+  const room = LINEAR_DESCRIPTION_MAX_CHARS - withCcrcProvenance('…').length;
+  const high = text.charCodeAt(room - 1);
+  const cut = text.slice(0, high >= 0xd800 && high <= 0xdbff ? room - 1 : room);
+  return withCcrcProvenance(`${cut.trimEnd()}…`);
+}
+
+/** The initiative's description before the fit (through `linear-egress`): what the public-text gate judges besides the
+ *  fitted text. D-8708: the status notes come first (Abandoned, then Paused), then In short, then the done-when list, so
+ *  the fit's cut at the end never takes a note. */
+export function initiativeBody(s: ProgrammeSnapshot): string {
   const parts: string[] = [];
-  if (s.program.inShort !== null && s.program.inShort !== '') parts.push(s.program.inShort);
-  if (s.program.doneWhen.length > 0) parts.push(['Done when:', ...s.program.doneWhen.map((d) => `- [${d.proved ? 'x' : ' '}] ${d.text}`)].join('\n'));
   const end = s.program.end;
   if (end !== null && end.outcome === 'abandoned') parts.push(`Abandoned on ${dayOf(end.at)}: ${end.why ?? ''}`.trimEnd());
   if (s.program.paused === true) parts.push('Paused: this programme is paused in ccrc.');
-  return withCcrcProvenance(egress(parts.join('\n\n')));
+  if (s.program.inShort !== null && s.program.inShort !== '') parts.push(s.program.inShort);
+  if (s.program.doneWhen.length > 0) parts.push(['Done when:', ...s.program.doneWhen.map((d) => `- [${d.proved ? 'x' : ' '}] ${d.text}`)].join('\n'));
+  return egress(parts.join('\n\n'));
 }
 
-export function projectDescription(epic: EpicRow & { checkpoints: CheckpointRow[] }, programmeTitle: string, initiativesOff: boolean): string {
-  const parts = [epic.summary];
-  if (initiativesOff) parts.push(`Part of ${programmeTitle}.`);
+export function initiativeDescription(s: ProgrammeSnapshot): string { return fitLinearDescription(initiativeBody(s)); }
+
+/** The project's description before the fit. D-8708: the notes come first (Dropped, then "Part of"), then the summary,
+ *  then the checkpoint list. */
+export function projectBody(epic: EpicRow & { checkpoints: CheckpointRow[] }, programmeTitle: string, initiativesOff: boolean): string {
+  const parts: string[] = [];
   if (epic.state === 'dropped' && epic.droppedWhy !== null) parts.push(`Dropped: ${epic.droppedWhy}`);
+  if (initiativesOff) parts.push(`Part of ${programmeTitle}.`);
+  parts.push(epic.summary);
   if (epic.checkpoints.length > 0) {
     parts.push(epic.checkpoints.map((c) => `- [${c.state === 'met' ? 'x' : ' '}] ${c.title}${c.state === 'dropped' ? ' (dropped)' : ''}`).join('\n'));
   }
-  return withCcrcProvenance(egress(parts.join('\n\n')));
+  return egress(parts.join('\n\n'));
+}
+
+export function projectDescription(epic: EpicRow & { checkpoints: CheckpointRow[] }, programmeTitle: string, initiativesOff: boolean): string {
+  return fitLinearDescription(projectBody(epic, programmeTitle, initiativesOff));
 }
 
 const evidenceText = (e: CheckpointRow['evidence']): string => e === null ? '' : 'pr' in e ? `PR #${e.pr}` : 'itemId' in e ? `item #${e.itemId}` : e.path;
 
-export function milestoneDescription(cp: CheckpointRow): string {
+/** The milestone's description before the fit: Kind first, then the notes. D-8708 fits it too, as insurance: a dropped
+ *  checkpoint's reason may reach 500 characters, and no limit of Linear's on it is recorded. */
+export function milestoneBody(cp: CheckpointRow): string {
   const parts = [`Kind: ${cp.kind}`];
   if (cp.state === 'dropped') parts.push(`Dropped: ${cp.droppedWhy ?? ''}`.trimEnd());
   if (cp.state === 'met' && cp.metAt !== null) parts.push(`Met on ${dayOf(cp.metAt)}: ${evidenceText(cp.evidence)}`.trimEnd());
-  return withCcrcProvenance(egress(parts.join('\n\n')));
+  return egress(parts.join('\n\n'));
 }
+
+export function milestoneDescription(cp: CheckpointRow): string { return fitLinearDescription(milestoneBody(cp)); }
 
 export function issueText(ticket: TicketRow): string { return withCcrcProvenance(egress(ticket.body)); }
 
@@ -362,7 +402,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     }
     decide({
       phase: 0, kind: 'programme', id: prog.rowid, workspaceId: wsId, teamKey: null, op: { create: 'initiativeCreate', update: 'initiativeUpdate' },
-      b, ready: true, statusMissing: false, texts: [planned.name, planned.description], facts, planned, fp: plannedFingerprint(planned),
+      // D-8708: the gate judges the unfitted body too: a name the fit cuts in two reaches the fitted text only as a prefix.
+      b, ready: true, statusMissing: false, texts: [planned.name, planned.description, initiativeBody({ ...s, program: prog })], facts, planned, fp: plannedFingerprint(planned),
       isCurrent: (st) => st === plannedFingerprint(planned),
       create: () => ({ input: planned, fields: ['name', 'description', 'status'] }),
       update: (id) => ({ input: { id, ...planned }, fields: ['name', 'description', 'status'] }),
@@ -411,9 +452,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
         : pl.ws.teams.find((k) => k.key.toLowerCase() === tb.teamKey!.toLowerCase());
       return held === undefined ? planned : [...planned, held.id];
     })])].sort();
-    const planned = {
-      name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null), statusId: pStatus, teamIds, initiativeId,
-    };
+    const pBody = projectBody({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null);
+    const planned = { name: fitProjectName(e.title), description: fitLinearDescription(pBody), statusId: pStatus, teamIds, initiativeId };
     const plannedTeamKeys = planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; });
     // D-8183: the project's fingerprint is `<base>` or `<base>+<mark>` (`withLinkMark`): the base is the planned fields without the
     // initiative link, the mark is the link to the live initiative once made. An update keeps the stored mark (nothing unlinks); the
@@ -429,7 +469,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     const projectHasTeams = eb?.state === 'bound' && eb.linearId !== null && linkMarkOf(eb.fingerprint).base === fpBase;
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
-      b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned, teamKeys: plannedTeamKeys,
+      // D-8708: the gate judges the fitted name and description and their unfitted forms (the title and the body) both.
+      b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, egress(e.title), planned.description, pBody], facts: [pl.fact], planned, teamKeys: plannedTeamKeys,
       // A project not yet linked to a failed initiative is current unlinked: no link is made to it until it binds again.
       fp: withLinkMark(fpBase, keptMark), isCurrent: projectIsCurrent,
       create: () => ({ input: { name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
@@ -475,7 +516,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       const dateField = mp.targetDate === null ? [] : ['targetDate'];
       decide({
         phase: 2, kind: 'checkpoint', id: c.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectMilestoneCreate', update: 'projectMilestoneUpdate' },
-        b: cb, ready: true, statusMissing: false, texts: [mp.name, mp.description], facts: [pl.fact], planned: mp, fp: plannedFingerprint(mp),
+        b: cb, ready: true, statusMissing: false, texts: [mp.name, mp.description, milestoneBody(c)], facts: [pl.fact], planned: mp, fp: plannedFingerprint(mp),
         isCurrent: (st) => st === plannedFingerprint(mp),
         create: () => ({
           input: { projectId, name: mp.name, description: mp.description, sortOrder: mp.sortOrder, ...dated },

@@ -3471,6 +3471,21 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   `,
   // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
+  // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
+  // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
+  // default (question 2). ONE writer, its door's `continuityStore.ts#setBackstop`; `backstopRead` narrows it. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 88` takes rule 3 and never names it. Overlaps A (#2949)
+  // landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word,
+  // 2026-11-17); other open PRs hold 88 too, and whoever lands second renumbers on the coordinator's word. RE-MEASURE the
+  // slot before the PR and before merge (it must print 87 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE renewal_backstop_settings (id INTEGER PRIMARY KEY CHECK (id = 1), hour INTEGER NOT NULL, zone TEXT NOT NULL,
+    isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
+  INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
+  `,
+  // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
   // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark (the `updatedAt` it has read to)
   // and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
@@ -3486,9 +3501,10 @@ export const MIGRATIONS: readonly string[] = [
   // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 88` warns, reads as-is, names none of them and
-  // boots. The plan's number was 58; row revisions (#2965) took 87, so this is 88, and it is renumbered at landing if another
-  // lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print 87 before this entry is counted):
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 89` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; row revisions (#2965) took 87 and renewal readings A (#2962) 88, so this is 89, and it is
+  // renumbered at landing if another lands first (D-8673). RE-MEASURE the slot before the PR and before merge (it must print
+  // 88 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
