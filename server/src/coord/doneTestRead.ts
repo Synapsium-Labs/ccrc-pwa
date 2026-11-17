@@ -27,7 +27,7 @@ function gather(coord: TargetReadPort, target: DoneTarget): TargetFacts {
   if (!read.ok) return { kind: 'run', run: 'unreadable' };
   const r = read.run;
   if (r === null) return { kind: 'run', run: 'absent' };
-  const run = { state: r.state, kind: r.kind, openedAt: r.openedAt, closeDetail: r.closeDetail,
+  const run = { state: r.state, kind: r.kind, openedAt: r.openedAt, closeDetail: r.closeDetail ?? null,
     closePr: r.closePr, lineage: r.prLineage };
   if (target.predicate !== 'review-passed') return { kind: 'run', run };
   return { kind: 'run', run, reviews: coord.runsReviewing(target.runId).map((v) => ({ state: v.state })) };
