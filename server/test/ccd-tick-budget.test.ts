@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, rosterWithFacts, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import {
   FIXTURES, TICK_RUN_N, plantFixture, plantShims, countTicks, loopSleeps, commandWords, unshimmedExternals,
   supervisePrelude, fixtureScreenFile, type FixtureName, type ShimOpts, type TickCount,
@@ -143,6 +144,14 @@ import {
  *  bash 5.3): the narrow tick no longer returns at its top, it asks `_session_hard_blocked` first, which re-measures
  *  the pane (`_pane_measurable`, one `list-panes` and one `awk`) and reads the stale-press stamp, the cached `tscan`
  *  verdict and the transcript. Every other fixture is on a measurable pane and does not move. narrow 51/17 -> 57/19.
+ *
+ *  RAISED BY THE ACCOUNT ORGANIZATION TIE-BREAK (account organization plan, Task C1, slug `org-tie-break-only`; Linux
+ *  bash 5.3) FOR THE TWO LEAVING FIXTURES ONLY: `_swap_target`'s candidate loop reads every account's label with ONE
+ *  `$( )` over the roster (`_org_cur`; `_acct_org` is a shell function, so no exec), once per call, and only at the
+ *  first EQUAL score in a bracket (on a rescue, at the first scored candidate); each relation then comes from that
+ *  table with no fork. Both leaving fixtures rank `claude` and `claude-d` at 30, so they tie. No other fixture's steady
+ *  tick reaches a tie. leaving 113/43 -> 114/43 · fable-leaving 121/47 -> 122/47. The same `leaving` with every
+ *  candidate labelled costs the same 114/43 (its own case, below): the read does not grow with the labels.
  */
 const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'idle-home': { forks: 90, execs: 33 },
@@ -152,14 +161,18 @@ const TICK_BUDGET: Record<FixtureName, { forks: number; execs: number }> = {
   'hard-blocked': { forks: 127, execs: 37 },
   cooldown: { forks: 65, execs: 24 },
   fable: { forks: 92, execs: 34 },
-  leaving: { forks: 113, execs: 43 },
-  'fable-leaving': { forks: 121, execs: 47 },
+  leaving: { forks: 114, execs: 43 },
+  'fable-leaving': { forks: 122, execs: 47 },
 };
 
 /** The `fable` fixture's steady tick for a session whose `poolset` exists (see its case), measured: 101/34 against `fable`'s 92/34. The pool rule's own set reads cost 6 of the 9
  *  (the same fixture on the tree before the Overlord's arms measures 98/34); the arms cost 3, one `$( )` each for the side
  *  read, the continuity read and the billing read. No exec: the reads are shell functions. */
 const SET_SIDE_FABLE_BUDGET = { forks: 101, execs: 34 };
+
+/** The `leaving` fixture's steady tick with every candidate labelled (see its case): `leaving`'s own figure, because the
+ *  labels are read once per `_swap_target` call whatever they hold. */
+const LABELLED_LEAVING_BUDGET = TICK_BUDGET.leaving;
 
 /** `_plat_timeout`'s `-k` probe, per tick inside the loop. On `main` at
  *  `300aedf8` it was 1 on every tick: the cache it sets died with the `$( )`
@@ -286,6 +299,24 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
     const ticks = steady(m);
     expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
     expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(SET_SIDE_FABLE_BUDGET);
+  }, 120_000);
+
+  // THE ORGANIZATION TIE-BREAK COSTS THE SAME LABELLED AS UNLABELLED (account organization plan, Task C1, fix round
+  // `org-tie-read-costs-one-fork`): the `leaving` fixture with every candidate labelled, so its tie at 30 between `claude`
+  // (`other`) and `claude-d` (`same`) is broken by organization. `_swap_target` loads every label with one `$( )` at the
+  // first question and relates candidates from that table, so the figure is `leaving`'s own.
+  it('a labelled `leaving` session pays what the unlabelled one pays: one label read per `_swap_target` call', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-org-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'leaving');
+    const orgs: Record<string, string> = { claude: 'org-b', 'claude-a': 'org-b', 'claude-b': 'org-a', 'claude-d': 'org-a' };
+    seedAccountsSh(h.home, { ...DEFAULT_TEST_ROSTER,
+      accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => (orgs[a.id] ? { ...a, org: orgs[a.id] } : a)) });
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(LABELLED_LEAVING_BUDGET);
   }, 120_000);
 
   it('prints the table, for the PR\'s departure', () => {
