@@ -290,7 +290,7 @@ interface Unit {
 
 /** A load in flight (`startMockupLoad`): its end, and the load as it stands at any moment. */
 export interface MockupLoad {
-  /** The load's end, exactly as `loadMockupAssets` answers it. */
+  /** The load's end: the plan with its failures kept as rows (`loadMockupAssets` answers exactly this). */
   readonly result: Promise<MockupAssetResult>;
   /** The load as it stands now, leaving it running: every row whose read completed as the end would answer it (its bytes
    *  in `assets`), and every admitted row whose read has not completed `failed` with `failure`. Export reads it at its
@@ -299,21 +299,26 @@ export interface MockupLoad {
   now(failure: string): MockupAssetResult;
 }
 
+/** The load's end alone, `startMockupLoad(plan, reader, signal).result`, under `startMockupLoad`'s contract. Its callers
+ *  are tests now: the viewer starts the load itself, to hand Export `now` (review 2361 F2). It stays because C1's recorded
+ *  mutation rows and tests address the loader by this name (`mockup-load.test.ts`, `mockup-css.test.ts`,
+ *  `mockup-policy.test.ts`, the snapshot's tests and both mockup browser files), and their evidence stands as recorded
+ *  (review 2372 M-b). */
+export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReader, signal: AbortSignal): Promise<MockupAssetResult> {
+  return startMockupLoad(plan, reader, signal).result;
+}
+
 /** Reads each admitted unique pin of `plan` once, at most `DOCS_PWA_FETCH_CONCURRENCY` in flight, in row order, and
- *  returns the plan with its failures kept as rows. A completed stylesheet's references (the real `scanCssRefs`) are
+ *  answers the plan with its failures kept as rows. A completed stylesheet's references (the real `scanCssRefs`) are
  *  fed to `extendMockupAssetPlan` in DETERMINISTIC order: parents in row order, each parent's references in token
  *  order, a parent that completes early held until every earlier parent has been fed, never in reply-completion order.
  *  Newly admitted rows are read in turn. Reservations never shrink: a smaller reply, a failed read and a duplicate
  *  return nothing to the budget. A reply longer than its limit is `failed` `size-mismatch` and never in `assets`;
  *  `actualBytes` adds every completed unique reply, a refused overflow included. A duplicate pin (root and CSS, failed
- *  or not) is read once. On `signal` abort it starts no further read and rejects with the signal's reason. It never
- *  relists, retries or replans (D-8660): a moved or unknown-commit word is just that row's failure. */
-export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReader, signal: AbortSignal): Promise<MockupAssetResult> {
-  return startMockupLoad(plan, reader, signal).result;
-}
-
-/** `loadMockupAssets`, started: its end, and `now`, the load as it stands (`MockupLoad`). The same one loader: `now` only
- *  reads the state the load keeps anyway, and changes nothing in it. */
+ *  or not) is read once. On `signal` abort it starts no further read and its `result` rejects with the signal's reason.
+ *  It never relists, retries or replans (D-8660): a moved or unknown-commit word is just that row's failure. It answers
+ *  the load's end (`result`) and `now`, the load as it stands (`MockupLoad`): `now` only reads the state the load keeps
+ *  anyway, and changes nothing in it. */
 export function startMockupLoad(plan: MockupAssetPlan, reader: MockupAssetReader, signal: AbortSignal): MockupLoad {
   const project = plan.context.project;
   let current = plan;
