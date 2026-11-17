@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { RUN_KINDS, type ChildMark } from '../../../shared/api.js';
 import { FLEET_ROLE_NAMES } from '../../../shared/fleetRoles.js';
-import type { RoleFactInputs, RoleReading } from '../../src/roleOf.js';
+import type { DesignationFact, RoleFactInputs, RoleReading } from '../../src/roleOf.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 import { mulberry32 } from '../fakeTime.js';
 
@@ -20,14 +20,16 @@ export type RoleOfModule = typeof import('../../src/roleOf.js');
 const ROLE_ID = 'project-a-lane-a';
 const CHILD7: ChildMark = { kind: 'child', runId: 7 };
 
-/** Every combination of the inputs: three child marks, four run kinds, three open sets, three intents (108). */
+const NO_DESIGNATION: DesignationFact = { kind: 'none' };
+
+/** Every combination of the inputs: three child marks, four run kinds, three open sets, three intents (108), with no designation. */
 export function roleFactInputCases(): RoleFactInputs[] {
   const opens = [new Set([ROLE_ID, 'other']), new Set(['other']), 'unmeasured'] as const;
   const out: RoleFactInputs[] = [];
   for (const child of [{ kind: 'none' }, CHILD7, { kind: 'unreadable' }] as ChildMark[])
     for (const childRunKind of [...RUN_KINDS, 'unmeasured'] as const)
       for (const openCoordinators of opens)
-        for (const intentDeclared of [true, false, 'unmeasured'] as const) out.push({ child, childRunKind, openCoordinators, intentDeclared });
+        for (const intentDeclared of [true, false, 'unmeasured'] as const) out.push({ child, childRunKind, openCoordinators, intentDeclared, designation: NO_DESIGNATION });
   return out;
 }
 
@@ -65,12 +67,23 @@ export function roleFactsOfCases(m: RoleOfModule): Record<string, SuiteCase> {
       }
     },
     'membership and intent map to the three words, and an unmeasured fact never reads no': () => {
-      const base: RoleFactInputs = { child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators: 'unmeasured', intentDeclared: 'unmeasured' };
+      const base: RoleFactInputs = { child: { kind: 'none' }, childRunKind: 'unmeasured', openCoordinators: 'unmeasured', intentDeclared: 'unmeasured',
+        designation: NO_DESIGNATION };
       expect(m.roleFactsOf(ROLE_ID, base)).toMatchObject({ claimsOpenRun: 'unmeasured', declaredIntent: 'unmeasured' });
       expect(m.roleFactsOf(ROLE_ID, { ...base, openCoordinators: new Set([ROLE_ID]), intentDeclared: true }))
         .toMatchObject({ claimsOpenRun: 'yes', declaredIntent: 'yes' });
       expect(m.roleFactsOf(ROLE_ID, { ...base, openCoordinators: new Set(['other']), intentDeclared: false }))
         .toMatchObject({ claimsOpenRun: 'no', declaredIntent: 'no' });
+    },
+    'the designation input reads through designationFactOf: pending and live are the Overlord, whatever else holds': () => {
+      const base: RoleFactInputs = { child: CHILD7, childRunKind: 'work', openCoordinators: new Set([ROLE_ID]), intentDeclared: true, designation: NO_DESIGNATION };
+      const row = (live: string | null, pending: string | null): DesignationFact => ({ kind: 'row', live, pending, pendingKind: pending === null ? null : 'designate', term: 2 });
+      expect(m.roleFactsOf(ROLE_ID, base).designation).toBe('none');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row(null, ROLE_ID) }).designation).toBe('pending');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row(ROLE_ID, null) }).designation).toBe('live');
+      expect(m.roleFactsOf(ROLE_ID, { ...base, designation: row('other', null) }).designation).toBe('none');
+      expect(m.roleOf(m.roleFactsOf(ROLE_ID, { ...base, designation: row(null, ROLE_ID) }))).toEqual(roleIs('overlord'));
+      expect(m.roleOf(m.roleFactsOf(ROLE_ID, { ...base, designation: row('other', null) }))).toEqual(roleIs('worker'));
     },
   };
 }
@@ -83,6 +96,7 @@ const ROLE_FACTS_SET: MutantSet<RoleOfModule> = {
     { id: 'R3', old: "v ? 'yes' : 'no'", new: "v ? 'yes' : 'unmeasured'" },
     { id: 'R4', old: 'declaredIntent: word(i.intentDeclared),', new: "declaredIntent: 'unmeasured'," },
     { id: 'R5', old: 'word(i.openCoordinators.has(sessionId))', new: 'word(i.openCoordinators.size > 0)' },
+    { id: 'R6', old: 'designation: designationFactOf(sessionId, i.designation),', new: "designation: 'none'," },
   ],
   suite: roleFactsOfCases,
 };

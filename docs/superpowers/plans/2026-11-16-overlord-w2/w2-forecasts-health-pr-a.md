@@ -7,13 +7,14 @@ numbers. No D-number is defined here.
 ## In short
 
 - **Built:** `seededDraws` and `streamFor` (time kernel, L1); `forecastProgramme`, `forecastOutcome` and
-  `forecastCalibration` (C5, L1); the rebuilt-run rule moved to `shared/programmes.ts#isRebuiltRun`; migration 91,
+  `forecastCalibration` (C5, L1); the rebuilt-run rule moved to `shared/programmes.ts#isRebuiltRun`; migration 92,
   `programme_forecasts`, with its two writers; the forecast lane (`forecasts`, 60 s, monotonic clock) with its seal and
   score arms.
 - **Live at merge** (the index's question 20): the lane starts sealing and scoring rows that nothing serves yet.
-- **Migration slot:** 91. Account organization D (#2958) landed 90 while this was built, so the branch merged `main`
-  once under the coordinator's standing renumber license; the conflicts were the migration list and `coord-db.test.ts`'s
-  count comments only.
+- **Migration slot:** 92. Account organization D (#2958) landed 90 and the Overlord's designation (#2950) 91 while this
+  was built, so the branch merged `main` twice under the coordinator's standing renumber license; the conflicts were the
+  migration list, `coord-db.test.ts`' count comments, `run-close-switch.test.ts`' undo comment and `writers-map.test.ts`'
+  table list only. `decision-model-records.test.ts`' shared migration case is kept verbatim.
 
 ## 1. Departures from the plan, by slug
 

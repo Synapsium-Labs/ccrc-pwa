@@ -1077,6 +1077,7 @@ describe("stopDoneSweep.ts's row (stopDonePass → recordFeed): recorded always,
     const record = { id: ID, uuid: `uuid-${ID}` } as unknown as SessionRecord;
     const deps: StopDoneSweepDeps = {
       coord: {
+        designationRead: () => ({ kind: 'not-designated' as const, row: null }),
         lastRunBySession: (asked: readonly string[]) => ({ ok: true as const,
           last: asked.map((sessionId) => ({ sessionId, runId: RUN, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1,
             program: 'p', programTitle: null, claimedBy: 'project-a-coordinator' })),
