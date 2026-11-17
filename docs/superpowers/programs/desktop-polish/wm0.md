@@ -55,7 +55,7 @@ Measured: the amended text at `3909c9056`.
 | Vocabulary | `shared/plan.ts` (L0) | `PHASE_REF_KINDS`, `PHASE_REF_OPS`, `PLAN_BOUNDS.phases` (24) and `refsPerPhase` (200); `unknown-ref` and `bad-carry` in `PLAN_REFUSALS` (F20's doc comment corrected); the phase bodies, `PlanPutBody.phases?`, `PlanPhaseRefMoveBody`, `PhaseRefView`, `PhaseView`, `PlanView.phases?` | Measured: read on the tree |
 | Statuses | `shared/refusal.ts` | `unknown-ref` 404 (like the other absent objects), `bad-carry` 409 | Measured: read on the tree |
 | Capability | `shared/api.ts` | `plan-phases-v1` in `ServerCap` and `SERVER_CAP_MAP` (F5) | Measured: read on the tree |
-| Migration | `server/src/coord/schema.ts` | Entry 92 (88 at the branch's start, 89 after the first merge, 90 after fix round 1's, 91 and then 92 after fix round 2's two; §2.2): `plan_phases` and `plan_phase_refs`, new tables only, with UNIQUE (`program`, `key`), UNIQUE (`phaseId`, `kind`, `refId`) and CHECKs that a carry has its time and is a ticket's | Measured: read on the tree |
+| Migration | `server/src/coord/schema.ts` | Entry 93 (88 at the branch's start, 89 after the first merge, 90 after fix round 1's, then 91, 92 and 93 after fix round 2's three; §2.2): `plan_phases` and `plan_phase_refs`, new tables only, with UNIQUE (`program`, `key`), UNIQUE (`phaseId`, `kind`, `refId`) and CHECKs that a carry has its time and is a ticket's | Measured: read on the tree |
 | Deciders | `server/src/coord/planPolicy.ts` (L1) | `parsePlanPut` takes `phases`; `parsePlanPhaseRef`; `phaseNumbers` (the one derivation of a phase's number, F6); `diffPhases` (a put's phases, D18 and F12's reorder rule); `phaseRefVerdict` (add, remove and carry, D17 and F12's remove rule) | Measured: read on the tree |
 | Store | `server/src/coord/planStore.ts` (L3) | `phasesOf`; a put's phases applied inside `applyPlanChanges`' transaction; `writePhaseRef`, the one writer of `plan phase-ref`, a carry's two halves in one transaction | Measured: read on the tree |
 | Routes | `server/src/coord/planRoutes.ts` (L4) | `plan put` masks and text-checks phase text, then `diffPhases`; `plan show` answers `phases` only when the programme declares one; `POST /api/programmes/:slug/plan/phases/refs` behind the box token, the query identity, the owner check and `plan-closed` | Measured: read on the tree |
@@ -111,7 +111,19 @@ and `[91]`, WM0's SLOT pinned at 92), `run-close-switch.test.ts` (its comment na
 already drops `plan_phases` and main drops `overlord_designation`), and the route counts on both sides: 260 routes, 257
 over HTTP, 96 exempt and 160 gated (`auth-gate`), 257 in `gate.ts`'s header. The designation doors carry no box token
 (measured: their census block asserts no lane), so the lane counts, README and the client's rows are unchanged, and
-README needs no new consent. Re-measure before merge: it must print 91 before WM0's entry is counted.
+README needs no new consent. Re-measure before merge: it must print 91 before WM0's entry is counted. Superseded by the
+next paragraph.
+
+Re-measured after that push: done tests A (#2964) landed `runs.closePr` at 92 (`origin/main` `42f5cd856` printed 92,
+measured), after `e4322ca2e` was pushed and green. On the coordinator's word (delivery 23360) the branch merged
+`origin/main` once more (`77a6d8a7b`), conflicting in `schema.ts`, `coord-db.test.ts`, `run-close-switch.test.ts` and
+`sim/mutation-floors.test.ts` (measured). Its resolution (measured after it, by the suites in §4.3): `schema.ts` (92
+stays done tests A's, 93 is `plan_phases` and `plan_phase_refs`, its comment naming #2964), `coord-db.test.ts` (version
+and `MIGRATIONS.length` 93, the comment lists naming `MIGRATIONS[91]` and `[92]`, WM0's SLOT pinned at 93),
+`run-close-switch.test.ts` (its comment names 93 and 92 and counts forty; main already drops `closePr`), and the floors
+file keeping both sides' sets. Main's delta since `b0683770e` touches no route, census, gate, client, cap or README file
+(measured with `git diff --name-only b0683770e 42f5cd856`), so every other count stands as above. Re-measure before
+merge: it must print 92 before WM0's entry is counted.
 
 ### 2.3 The rows and what reds each
 
@@ -236,7 +248,7 @@ refusal.
 ### 2.6 The first CI run: red on two hidden migration pins
 
 Superseded in its numbers (review 2382 L3-F2): this section records the PR's first run, at migration 89. At the tip
-`run-close-switch.test.ts` names 92 and counts thirty-nine (§2.2). Measured: the CI run's two red shards and the
+`run-close-switch.test.ts` names 93 and counts forty (§2.2). Measured: the CI run's two red shards and the
 files below, at the time.
 
 The PR's first run at `b2e0ce6a3` was red in two server shards, each on a test that walks the coord schema back past
@@ -301,7 +313,7 @@ The coordinator's rulings on review 2382 (fix-round mail delivery 23073), each a
 
 | Finding | What changed | Basis |
 |---|---|---|
-| R2-F1 (a) | One merge of `origin/main` (`bd82b7f50`), migration 91, every count re-counted (§2.2); then, on the coordinator's word after main took 91, a second (`b0683770e`), migration 92, every count re-counted again | Measured: the slot printed 90, then 91; the suites in §4.1 and §4.2 |
+| R2-F1 (a) | One merge of `origin/main` (`bd82b7f50`), migration 91, every count re-counted (§2.2); then, on the coordinator's word after main took 91, a second (`b0683770e`), migration 92, every count re-counted again; then, after main took 92, a third (`42f5cd856`), migration 93 | Measured: the slot printed 90, then 91, then 92; the suites in §4.1, §4.2 and §4.3 |
 | Note move | This note moved from `plans/2026-11-16-programme-work-map/` to `programs/desktop-polish/`; the plan's D-8715 entry names the new path; the spec never named it | Measured: `git grep` finds no reference to the old path |
 | L3-F1 (ruled) | An ended plan shows no outstanding work, decided by `workMapOf`: spec Table 6 (row 4 limited to a plan not ended, row 5 covering a ticket marked done whose evidence does not verify, the caption saying row 5 is read before row 4 for an ended plan), Table 6a (its left-open row and the F9 caption), §5.1's ended state, §10's decider line; plan Review Focus, WM2's status and phase rules, a new WM2 decider test (`an ended plan's done-unverified ticket reads left-open …`), WM3's test made a wording test of the status WM2 sends | Measured: the amended text |
 | L1-F1, L2-F1 | Two decider rows (a dropped phase restated, and one dropped, holding references to objects dropped since; a phase dropped while naming a live new reference) and three mutants in `DIFF_PHASES_SET` (L1-F1, L1-F1b, L2-F1) | Measured: red-first (each survived on round 1's rows), killed with the new rows; floors at 1 |
@@ -351,10 +363,27 @@ as ruled, and passed:
 | `test/deviation-refs.test.ts` (after `git fetch origin`: main at `b0683770e`, its slot count 91) | 33 of 34 at load 15.6, one case timed out at 20 s; rerun alone: 34 passed (load 10.3) |
 | `test/dtbd.test.ts`, `test/topology-clean.test.ts` | 1 and 61 passed |
 
+### 4.3 The suites after the third merge
+
+The coordinator's short list for this merge (delivery 23360), the same commands as §4.1, one at a time, at `77a6d8a7b`'s
+tree (no suite reads this note), each measured, with the load recorded at its start (13.1 to 17.5). The rest of §4.2's
+list ran green at `e4322ca2e`, and this merge touches none of their files: main's delta since `b0683770e` is done tests
+A's own files plus `schema.ts`, `coord-db.test.ts`, `run-close-switch.test.ts` and the floors file (measured).
+
+| Suite (files) | Result |
+|---|---|
+| `test/coord-db.test.ts` | 149 passed (version and SLOT 93) |
+| `test/run-close-switch.test.ts` | 21 passed (the walk-back from 93) |
+| `test/decision-model-records.test.ts` | 13 passed |
+| `test/sim/mutation-floors.test.ts` (whole file) | 175 of 177: the same two `pwa/src/face/mood.ts` environment reds ("Cannot find package '@ccrc/ui'"); the three planPolicy floors and done tests A's pass side by side |
+| `test/auth-gate.test.ts`, `test/box-token-census.test.ts` | 344 and 60 passed |
+| `test/single-definition` (whole directory) | 1507 passed (38 files, done tests A's included) |
+| `test/deviation-refs.test.ts` (after `git fetch origin main`: main at `42f5cd856`, its slot count 92) | 34 passed |
+
 ## 5. Open
 
 - **The `#diffPhases` floor key names more than its function (review 2382 L2-F2).** F7-1 and F7-1b mutate
   `parsePlanPut`'s bound and ride `DIFF_PHASES_SET` under that key; the coordinator ruled to leave the key as it is,
   disclosed here and in `planPhasesSets.ts`' header.
-- **The slot is re-measured before merge.** WM0's entry is 92 only while `origin/main` prints 91; whichever of two
+- **The slot is re-measured before merge.** WM0's entry is 93 only while `origin/main` prints 92; whichever of two
   branches holding one slot merges second takes the next.

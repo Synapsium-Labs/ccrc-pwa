@@ -655,7 +655,7 @@ Task WM0 departs under its own number:
   the migration to slot 90 behind main's 88 and 89, recorded the coordinator's rulings on F9, F10 and F14 in the spec
   and this plan, changed `diffPhases` for F9 (it now refuses `unknown-ref` on a dropped phase and on one the same put
   drops), and corrected F2's rule (evidence stored on another ticket of the programme does not verify, except on the
-  run's own auto ticket). Fix round 2 (review 2382) moved the migration to slot 91 behind main's 90, and then to 92 behind main's 91, pinned a dropped or
+  run's own auto ticket). Fix round 2 (review 2382) moved the migration to slot 91 behind main's 90, and then to 92 and 93 behind main's 91 and 92, pinned a dropped or
   dropping phase's held and new references with two rows and three mutants, and recorded the coordinator's ruling on
   L3-F1 (an ended plan shows no outstanding work: Table 6 reads row 5 before row 4 there). The task note
   (`docs/superpowers/programs/desktop-polish/wm0.md`) lists each amendment and the finding it answers, the migration
