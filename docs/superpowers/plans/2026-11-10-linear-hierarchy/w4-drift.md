@@ -9,9 +9,9 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 91: row
-    revisions, #2965, took 87, renewal readings A, #2962, 88, remaining work A, #2951, 89 and account organization D, #2958,
-    90 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 92: row
+    revisions, #2965, took 87, renewal readings A, #2962, 88, remaining work A, #2951, 89, account organization D, #2958,
+    90 and designation A, #2950, 91 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
@@ -53,7 +53,9 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
   destination. Nothing changes under `allowAll`.
 - **D-8720, kept-plan-quiet** (review run 2386 F3). After *Keep the plan*, the same binding's persistent drift is not raised
   again for seven days; a restore Linear refuses still raises the item at once (§7.4). So does a difference no update can
-  put back, which §7.2 already raises at once (`shouldRaiseDriftItem` takes the reason).
+  put back, which §7.2 already raises at once (`shouldRaiseDriftItem` takes the reason). Only Keep quiets it (review run 2394
+  A-1, the coordinator's ruling): *Hand to the coordinator* ends the binding's hold on its item in the same transaction, so
+  persistent drift handed on is raised again as §7.4 says.
 - **D-8721, restore-comment-daily** (review run 2386 F6). A restore comments at most once a day on an object, whether or not
   its item is open; §7.4 bounds only the open case.
 - **D-8722, issue-adopt-by-id** (review run 2386 F5, Task 4.5 item 4). A ticket's issue is adopted by its idempotent id on
@@ -63,7 +65,9 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
   next capture (D-8699's list) closes it.
 - **D-8723, w4-schema-additions** (review run 2386 A6). Beyond D-8705's `title` and `body`, `linear_inbound` gains `reason`,
   `actedAt` and `itemId`; `linear_sync_streaks` (item 6) and `linear_probe_settled` (item 1) are tables the plan never
-  names; and `linear_drift_marks` keeps one watermark per changed* kind instead of one (A3).
+  names; and `linear_drift_marks` keeps one watermark per changed* kind instead of one (A3). A restore deferred on a target
+  keeps the watermark of every kind whose event rides on that target, so an initiative's link carried on a project's restore
+  is read again (review run 2394 N2).
 - **D-8681's ruling (no new number).** Links are compared one way: a planned link missing in Linear is drift, restored by
   linking with a fresh request id; a link the plan does not have (D-8681's kept link, or one a person added) is not drift,
   since nothing unlinks. A project's milestones compare the same way: a planned milestone missing is drift (recorded and
@@ -77,10 +81,10 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
 | Grace | An issue Linear reads `completed` with no merge recorded waits one pass (`driftSince`), then is restored; with the merge recorded it is left (`graceVerdict`). While the grace stands the issue is re-read by id at every pass (F1), and a restore of another of its fields goes without its state (A5). |
 | One comment a day | A restore comments at most once a day on an object, its item open or not (D-8721); persistence counts distinct restore times, not rows. |
 | Unrestorable | A planned milestone missing from its project, or a milestone moved to another project, is recorded and raises the item at once (no op makes or re-parents one). |
-| Kept plan | A binding whose item was kept is not raised again for persistence for seven days; a refused restore raises at once (D-8720). |
+| Kept plan | A binding whose item was kept is not raised again for persistence for seven days; a refused restore raises at once (D-8720). A handed-on item is no longer the binding's, so its persistence is raised again (A-1). |
 | Description compare | Descriptions and names are compared after one normaliser (`normalText`: CRLF, per-line trailing spaces, blank-line runs), so a whitespace re-flow Linear makes is never drift. |
 | Inbound pass word | The close of an inbound issue (its comment, then its cancel) runs under a new pass, `inbound`, in `LINEAR_CCRC_PASSES`. |
-| A refused close | A refusal that may clear (a rate limit, unreachable, a timeout, an unavailable policy or journal, out of grammar, a key not configured or refused) holds the workspace's closes on the plan sync's failure-hold schedule (D-8702's `deferralOf`, F8), and a key refusal mails the team's owner once; any other gives the close up: the row records it first (`actedAt`, and the reason with the refusal), so it is never sent again, across restarts, and then the owner is mailed once (Review Focus 5; A7, A8). The project's upkeep read lists those closes (`notClosed`). |
+| A refused close | A refusal that may clear (a rate limit, unreachable, a timeout, an unavailable policy or journal, out of grammar, a key refused) holds the workspace's closes on the plan sync's failure-hold schedule (D-8702's `deferralOf`, F8); the hold grows until the close is done whole (its cancel ok, N1), and an answer out of grammar is given up after the last step, as the plan sync fails a binding. A key refused (a 401) goes through the plan sync's one owner (`keyRefused`: the slot marked rejected, the workspace blocked for both lanes, A-3). A key not configured is retried at the next beat with no hold, as the plan sync does (A-2, ruled (b)). The two key words mail the team's owner once. Any other word gives the close up: the row records it first (`actedAt`, and the reason with the refusal), so it is never sent again, across restarts, and then the owner is mailed once (Review Focus 5; A7, A8). The project's upkeep read lists those closes (`notClosed`). |
 | Raised issue | A raised issue's row links to its operator item (`linear_inbound.itemId`, one of D-8723's columns); when the operator answers, the answer is mailed to the team's owner and the row is `mailed` again. |
 | `return` with no owner | A handed issue returned while the team has no usable owner goes back to `waiting`, so the *Name a Linear owner* item applies. |
 | Upkeep | The Upkeep epic lists no waves, never closes, and no run opens on its ticket (`ticket-unavailable`); its failures mail the project's Linear owner. |
@@ -144,7 +148,7 @@ A5 state hold and the inbound hold were also proved by mutating their lines. Mai
 | F5 issue adopted by id on any team | Ruled: D-8722 |
 | F6 a comment every pass while no item is open | Ruled: D-8721, once a day whatever the item's state |
 | F7 decisions in the L4 pass | Fixed: `graceVerdict`, `graceRereads`, `UNRESTORABLE`/`restorableFields`, `eventVerdict` in `driftPolicy.ts` |
-| F8 key refusals retried every beat | Fixed: the D-8702 failure-hold schedule (`not-configured` joins `deferralOf`), owner mailed once |
+| F8 key refusals retried every beat | Fixed: the D-8702 failure-hold schedule, owner mailed once (round 2's A-2 took `not-configured` back to a beat retry) |
 | A1 initiative links judged by the initiative's binding | Fixed: `missingLinksVerdict`, each by the project's own binding |
 | A2 `plannedOwned` advanced streaks and asked for fills | Fixed: a read-only snapshot |
 | A3 one watermark for four reads | Fixed: one per kind (`nextWatermark`; D-8723) |
@@ -153,6 +157,19 @@ A5 state hold and the inbound hold were also proved by mutating their lines. Mai
 | A6 schema additions not ledgered | Ruled: D-8723; the `itemId` sentence corrected |
 | A7, A8 a give-up lost with no owner, two calls per restart | Fixed: the give-up is written on the row before the mail; the upkeep read lists it |
 | A9 a plan line beginning "Restored on" dropped | Fixed: only ccrc's exact line, only in Linear's copy |
+
+## Fix round 2 (review run 2394)
+
+The review read 2a8ecf45a with the full panel; the coordinator ruled A-1, A-2 and A-3. Main was merged once and the
+migration is 92. Every fix has a test seen red against the code before it.
+
+| Finding | Outcome |
+|---|---|
+| N1 the inbound hold cleared before the cancel was sent | Fixed: only a close done whole clears the hold, so a cancel refused with a retry word grows it (30 s, 2 min, 10 min) and the calls stop; `malformed` is given up after the last step |
+| N2 a deferred link restore lost its initiative's watermark | Fixed: a deferred target keeps the watermark of every kind whose event rides on it; D-8723 gains that clause |
+| A-1 any close quieted persistence | Ruled: only Keep (D-8720's words stand); Hand ends the binding's hold on its item, and the test raises the item after a Hand |
+| A-2 one word, two rules (`not-configured`) | Ruled (b): the plan sync keeps its per-tick retry and wave 3's pin, and the inbound lane matches it. The word is answered locally, before any Linear call, so a retry each beat costs nothing and a key set in Settings is picked up on the next beat; a backoff spares Linear and the owner's mailbox, and neither is touched. The DEFERRALS row came out. A test drives the close through the real `runCcrcOp` with no key: three beats, three tries, no fetch, one mail |
+| A-3 the inbound lane's own holds beside the plan sync's | Ruled: a 401 goes through the plan sync's one owner (`keyRefused`, which marks the slot rejected and blocks the workspace), and the inbound lane honours `keyBlockedUntil`, so a 401 holds both lanes alike. The lane's holds for the other retry words stay its own state on the shared schedule, LEGITIMATELY DIFFERENT: an inbound close must never hold a programme's plan sync (the coordinator's round 2 brief, point 3), so the two lanes share the schedule, never the state |
 
 ## Follow-ups
 

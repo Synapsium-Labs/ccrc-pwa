@@ -254,7 +254,9 @@ number from `POST /api/ledger/deviations`.
   two tables the plan never names persist wave 3's carried findings, `linear_sync_streaks` (item 6, the D-8701 episode
   streaks) and `linear_probe_settled` (item 1, the settled-probe marks); and `linear_drift_marks` keeps one watermark per
   changed* kind (`initiatives`, `projects`, `milestones`, `issues`) in place of one `watermark`, so a change made between
-  two kinds' reads is never skipped (review run 2386 A3). Record: the wave 4 note (review run 2386 A6).
+  two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
+  whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
+  N2). Record: the wave 4 note (review run 2386 A6).
 
 ## Global Constraints
 
