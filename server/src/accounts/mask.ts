@@ -24,7 +24,8 @@
  *     computed on the box and stored in `secret_fingerprints` with the box-token generation it was keyed with. A
  *     candidate is a run between delimiters (two delimiter sets, a coarse and a fine one, on both views of the
  *     escapes), the same run with its leading and trailing ASCII punctuation trimmed, and in rows mode a run that
- *     ends its row joined with the next row's leading run. Only a candidate whose byte length some row holds counts,
+ *     ends its row joined with the next row's leading run and on with the leading run of every further row the run
+ *     before fills, as many rows as a key can span (D-8710). Only a candidate whose byte length some row holds counts,
  *     and the search for one is linear in the text: a fine run is searched only inside its coarse run (D-5995). THE CAP FAILS CLOSED: one budget of 32 × 256 candidate RUNS, each
  *     checked under every live key, covers a whole frame (a `maskDeep` walk, a drawer flush); once it is spent the
  *     rest of the string is replaced by `SECRET_MASK_TOO_LARGE`, and every later string of the frame is cut at its
@@ -50,7 +51,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import { isOperatorSecretLane, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
-  RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
+  ROW_BREAK, RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
   rowTextEnd, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
 } from './shapes.js';
 
@@ -189,8 +190,9 @@ function runStartBefore(t: string, e: number, fine: boolean, max: number): numbe
   }
   return i;
 }
-const LINE_BREAK = /\r\n|\r|\n/g;
+const LINE_BREAK = new RegExp(ROW_BREAK, 'g');
 const ROW_INDENT_OPT = /(?:[ \t\0]|│|┃|\|)*/y;
+const LEADING_BREAK = new RegExp(String.raw`^(?:${ROW_BREAK})?`);
 
 /** One key's HMAC with its padded key blocks hashed once (D-5995): the same digest as `fingerprintOf`. */
 class FpHasher {
@@ -723,28 +725,73 @@ export class SecretMasker {
         coarse.lastIndex = b;
       }
       if (!rows) continue;
-      // A run that ends its row, joined with the next row's leading run: a key the TUI wrapped. One read back gives
-      // the fine run's start and, read on from there, the coarse run's (D-5995: the same starts as two reads).
+      // A key wrapped onto rows (D-5995, D-8710): a run that ends its row, joined with the next row's leading run, and
+      // on with the leading run of each further row while the run before FILLS its row (its row's text ends with it and
+      // the row break follows), as many rows as a key can span: a key a program drew across three or more rows was
+      // shown whole when only the next row was joined (review 2326 F3). One read back gives the head's fine run start
+      // and, read on from there, its coarse one (D-5995: the same starts as two reads). The rows after the head are
+      // walked once: each break's leading run, whether it fills its row, and a prefix sum of their lengths, so a chain
+      // is searched for each held length by one binary search, never walked run by run (linear in the text).
       seen = 0;
+      const brk: number[] = []; const brkEnd: number[] = [];
       LINE_BREAK.lastIndex = 0;
-      for (let m = LINE_BREAK.exec(t); m !== null && seen < limit; m = LINE_BREAK.exec(t)) {
-        const e = rowTextEnd(t, m.index);
+      for (let m = LINE_BREAK.exec(t); m !== null; m = LINE_BREAK.exec(t)) { brk.push(m.index); brkEnd.push(m.index + m[0].length); }
+      const nb = brk.length;
+      if (nb === 0) continue;
+      /** Break i's next row: its leading run [ra, rb) (ra -1: none), and whether that run fills its row. */
+      const ra = new Int32Array(nb); const rb = new Int32Array(nb); const fills = new Uint8Array(nb);
+      for (let i = 0; i < nb; i++) {
+        ROW_INDENT_OPT.lastIndex = brkEnd[i]!;
+        const at = brkEnd[i]! + ROW_INDENT_OPT.exec(t)![0].length;
+        TOKEN_RUN.lastIndex = at;
+        const run = TOKEN_RUN.exec(t);
+        if (run === null) { ra[i] = -1; continue; }
+        ra[i] = at; rb[i] = at + run[0].length;
+        fills[i] = i + 1 < nb && rowTextEnd(t, brk[i + 1]!) === rb[i]! ? 1 : 0;
+      }
+      /** P[i]: the units of the leading runs of breaks 0..i-1 (a run is ASCII, so its units are its bytes). */
+      const P = new Float64Array(nb + 1);
+      for (let i = 0; i < nb; i++) P[i + 1] = P[i]! + (ra[i]! < 0 ? 0 : rb[i]! - ra[i]!);
+      /** last[i]: the last break whose leading run a chain from break i reaches. */
+      const last = new Int32Array(nb);
+      for (let i = nb - 1; i >= 0; i--) last[i] = fills[i] === 1 && i + 1 < nb && ra[i + 1]! >= 0 ? last[i + 1]! : i;
+      /** The trailing ASCII punctuation of break m's run a candidate may be trimmed of. */
+      const trailPunct = (m: number): number => {
+        let r = 0;
+        while (r < TRIM_MAX && rb[m]! - r > ra[m]! && isPunct(t.charCodeAt(rb[m]! - r - 1))) r++;
+        return r;
+      };
+      for (let i = 0; i < nb && seen < limit; i++) {
+        if (ra[i]! < 0) continue;
+        const e = rowTextEnd(t, brk[i]!);
         const aFine = runStartBefore(t, e, true, longest + 1);
         if (e - aFine > longest) continue;
         const aCoarse = runStartBefore(t, aFine, false, longest + 1 - (e - aFine));
         if (aCoarse === e) continue;
-        const after = m.index + m[0].length;
-        ROW_INDENT_OPT.lastIndex = after;
-        const at = after + ROW_INDENT_OPT.exec(t)![0].length;
-        TOKEN_RUN.lastIndex = at;
-        const run = TOKEN_RUN.exec(t);
-        if (run === null) continue;
-        const next: [number, number] = [at, at + run[0].length];
-        const tail = trims(t, next[0], next[1], false, true);
         for (const a of aCoarse === aFine ? [aFine] : [aCoarse, aFine]) {
-          if (a === e || e - a > longest || (e - a) + (next[1] - next[0]) - 2 * TRIM_MAX > maxLen) continue;
-          const head = trims(t, a, e, true, false).filter(([x, y]) => y - x <= maxLen);
-          for (const h of head) for (const tl of tail) consider(v, [h, tl]);
+          if (a === e || e - a > longest) continue;
+          for (const h of trims(t, a, e, true, false)) {
+            if (h[1] - h[0] > maxLen) continue;
+            const hl = ascii ? h[1] - h[0] : Buffer.byteLength(t.slice(h[0], h[1]), 'utf8');
+            for (const len of lens) {
+              const need = len - hl;   // what the rows after the head give, less the last run's trailing trim
+              if (need <= 0 || P[last[i]! + 1]! - P[i]! < need) continue;
+              // The first break m whose chain through its run gives `need` units or more.
+              let lo = i; let hi = last[i]!;
+              while (lo < hi) { const mid = (lo + hi) >> 1; if (P[mid + 1]! - P[i]! >= need) hi = mid; else lo = mid + 1; }
+              for (let m = lo; m <= last[i]! && P[m + 1]! - P[i]! - need <= TRIM_MAX; m++) {
+                const y = P[m + 1]! - P[i]! - need;
+                if (y >= rb[m]! - ra[m]!) continue;
+                // Every depth of the trim in an ASCII text; otherwise none or the whole punctuation run (`trims`).
+                const tp = y === 0 ? 0 : trailPunct(m);
+                if (y > tp || (!ascii && y !== 0 && y !== tp)) continue;
+                const pieces: [number, number][] = [h];
+                for (let k = i; k < m; k++) pieces.push([ra[k]!, rb[k]!]);
+                pieces.push([ra[m]!, rb[m]! - y]);
+                consider(v, pieces);
+              }
+            }
+          }
         }
       }
     }
@@ -816,7 +863,7 @@ export class SecretMasker {
     }
     if (rows && opts.leadingWrap === true) {
       const v = viewOf(text, '\0');
-      const lead = /^(?:\r\n|\r|\n)?/.exec(v.t)![0].length;
+      const lead = LEADING_BREAK.exec(v.t)![0].length;
       const first = leadingRun(v.t, lead);
       if (first !== null) spans.push(spanIn(v, first[0], first[1]));
     }
@@ -899,26 +946,78 @@ const UNFINISHED_ESC = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*|[PX^_][^\x1b]*|[ -/
 /** The shortest run before a row end the drawer holds while fingerprints are held (D-5995): fewer bytes never
  *  identify a key, and a quiet line end of a shorter last word is drawn at once. */
 const ROW_TAIL_MIN_BYTES = 8;
+/** The start of the row break that ends at `j` (`t[j - 1]` its last byte), read back the way `ROW_BREAK` reads it
+ *  forward, or null: no row break ends there. */
+function breakStartAt(t: string, j: number): number | null {
+  const c = t[j - 1];
+  if (c === '\n') return j >= 2 && t[j - 2] === '\r' ? j - 2 : j - 1;
+  if (c !== '\r') return null;
+  let k = j - 1;
+  while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
+  return k > 0 && t[k - 1] === '\n' ? k - 1 : j - 1;   // a LF, blanks, then this CR: one row down (D-8710)
+}
+const ROW_LEAD = ' \t\0│┃|';
+/** A run held at its row end, from where it is held (D-5995, D-8710): `at`, and `cut` when the rows it continues run on
+ *  before the text read (a chain longer than the window: the caller reads the chain again from the whole text). */
+interface RowTail { readonly at: number; readonly cut: boolean }
 /** Where a text that ends in a run, its row end and the next row's indent (nothing of that row's run yet) should be
  *  held from (D-5995), or null: a run that has begun a shape (from its `sk-` or `eyJ`), or, while fingerprints are
  *  held (`fpMax`), a run of a length that could be a key's first row. The TUI writes the wrapped next row after it,
- *  and a held run is masked together with that row's leading run; one sent at once would show its bytes. */
-function rowTailAt(t: string, fpMax: number | null): number | null {
+ *  and a held run is masked together with that row's leading run; one sent at once would show its bytes.
+ *
+ *  A key can span more than two rows (D-8710, review 2326 F3): while fingerprints are held, the run is held together
+ *  with the rows it continues, back through every row that holds nothing but its indent and one run, whose row before
+ *  ends in a run, until those rows hold the most a key and its trims can (`fpMax + 2 * TRIM_MAX` bytes). A key that
+ *  reaches the next rows starts within that much of the end, so every row it can touch is held, and the rows sent
+ *  before the hold are masked with the held rows read after them (`DrawerMask.out`'s lookahead). Holding only the last
+ *  row's run sent the rows before it alone, unjoined, and drew a key's first row in full even on two rows (measured,
+ *  through a real tmux). `ok(i)`: a hold may start at `i` (never inside text already sent). */
+function rowTailAt(t: string, fpMax: number | null, ok: (i: number) => boolean = () => true): RowTail | null {
   let j = t.length;
-  while (j > 0 && ' \t\0│┃|'.includes(t[j - 1]!)) j--;
+  while (j > 0 && ROW_LEAD.includes(t[j - 1]!)) j--;
   if (j === 0) return null;
-  if (t[j - 1] === '\n') { j--; if (j > 0 && t[j - 1] === '\r') j--; } else if (t[j - 1] === '\r') j--; else return null;
-  j = rowTextEnd(t, j);
+  const br = breakStartAt(t, j);
+  if (br === null) return null;
+  j = rowTextEnd(t, br);
   let i = j;
   while (i > 0 && j - i <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[i - 1]!)) i--;
   if (i === j) return null;
   const run = t.slice(i, j);
   const sh = SHAPE_STARTED.exec(run);
   // A run that already matches a shape is masked on its own, and its wrapped next row by the shape's carry.
-  if (sh !== null) return matchesShape(run) ? null : i + sh.index;
+  if (sh !== null) return matchesShape(run) ? null : { at: i + sh.index, cut: false };
   if (fpMax === null) return null;
   const n = Buffer.byteLength(run, 'utf8');
-  return n >= ROW_TAIL_MIN_BYTES && n <= fpMax + TRIM_MAX ? i : null;
+  if (n > fpMax + TRIM_MAX) return null;
+  const c = chainBack(t, i, n, fpMax, ok);
+  return c.bytes >= ROW_TAIL_MIN_BYTES ? c : null;
+}
+
+/** Where a hold of the run at `at` (`n` bytes) starts once the rows that run continues are held with it (D-8710): back
+ *  through every row that holds nothing but its indent and one run, whose row before ends in a run, until those rows
+ *  hold the most a key and its trims can (`fpMax + 2 * TRIM_MAX` bytes). A key that reaches past the end starts within
+ *  that much of it, so every row it touches is held; the rows sent before them are masked with the held rows read
+ *  after them (`DrawerMask.out`'s lookahead). A run with text before it on its row begins no row a key wrapped onto,
+ *  and stays where it is. `bytes`: the bytes held; `cut`: the rows run on before `t` (a chain longer than the window). */
+function chainBack(t: string, at: number, n: number, fpMax: number, ok: (i: number) => boolean): RowTail & { bytes: number } {
+  const bound = fpMax + 2 * TRIM_MAX;
+  let cut = false;
+  while (n < bound) {
+    let k = at;
+    while (k > 0 && ROW_LEAD.includes(t[k - 1]!)) k--;
+    if (k === 0) { cut = true; break; }
+    const pb = breakStartAt(t, k);
+    if (pb === null) break;   // text before the run on its row
+    const pe = rowTextEnd(t, pb);
+    let ps = pe;
+    while (ps > 0 && pe - ps <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[ps - 1]!)) ps--;
+    if (ps === pe) break;   // the row before ends in no run
+    if (!ok(ps)) break;   // already sent
+    n += Buffer.byteLength(t.slice(ps, pe), 'utf8');
+    at = ps;
+    if (ps === 0) { cut = true; break; }
+  }
+  return { at, cut, bytes: n };
 }
 
 /** `rowTail`: also hold a run that ends its row (`rowTailAt`); off when a settled row end is being drawn. */
@@ -936,16 +1035,34 @@ function openTailAt(s: string, fpMax: number | null, ctx = '', rowTail = true): 
   const run = v.t.slice(i);
   let hold: number | null = null;
   if (run !== '') {
-    if (fingerprints) hold = i;
-    else {
+    if (fingerprints) {
+      // The open run, with the rows it continues (D-8710): holding the run alone sent the rows before it unjoined.
+      const c = chainBack(v.t, i, Buffer.byteLength(run, 'utf8'), fpMax, (k) => origin(v, k) >= lead.length);
+      if (c.cut && base > 0 && c.at !== i) {
+        const whole = viewOf(s.slice(0, base + bodyEnd), '\0');
+        const all = chainBack(whole.t, whole.t.length - run.length, Buffer.byteLength(run, 'utf8'), fpMax, () => true);
+        return origin(whole, all.at);
+      }
+      hold = c.at;
+    } else {
       const sh = SHAPE_STARTED.exec(run);
       if (sh !== null) hold = i + sh.index;
     }
   }
   if (run === '' && rowTail) {
     // A run that ends its row, held only when it lies in this text: a row end alone never delays (an Enter's echo).
-    const rt = rowTailAt(v.t, fpMax);
-    if (rt !== null && origin(v, rt) >= lead.length) hold = rt;
+    const rt = rowTailAt(v.t, fpMax, (k) => origin(v, k) >= lead.length);
+    if (rt !== null && rt.cut && base > 0) {
+      // The rows it continues run on before the window (D-8710): read the chain from the whole text, so no row of a key
+      // that can still reach the next rows is sent before them.
+      const whole = viewOf(s.slice(0, base + bodyEnd), '\0');
+      const all = rowTailAt(whole.t, fpMax);
+      if (all !== null) {
+        const cx0 = codexValueOpenAt(v.t);
+        return Math.min(origin(whole, all.at), cx0 === null ? Infinity : base + origin(v, cx0));
+      }
+    }
+    if (rt !== null && origin(v, rt.at) >= lead.length) hold = rt.at;
   }
   const cx = codexValueOpenAt(v.t);
   if (cx !== null && (hold === null || cx < hold)) hold = cx;
@@ -1087,14 +1204,16 @@ export class DrawerMask {
     const v = viewOf(lead + h, '\0');
     const fpMax = this.masker.fingerprintMax();
     let p = failClosedStart(v.t, fpMax, this.heldTyped ? RUN_MIN_BYTES : 1);
+    // With the rows that run continues (D-8710).
+    if (p !== null && fpMax !== null) p = chainBack(v.t, p, Buffer.byteLength(v.t.slice(p), 'utf8'), fpMax, (k) => origin(v, k) >= lead.length).at;
     // A run held at its row end (D-5995): withheld, and settled after the row settle when no
     // wrapped next row follows.
-    const rowEnded = p === null && tail === '' ? rowTailAt(v.t, fpMax) : null;
+    const rowEnded = p === null && tail === '' ? rowTailAt(v.t, fpMax, (k) => origin(v, k) >= lead.length)?.at ?? null : null;
     if (rowEnded !== null && origin(v, rowEnded) >= lead.length) p = rowEnded;
     // A start inside the context: the run began before the held text, which is all of it.
     const cut = p === null ? null : Math.max(0, origin(v, p) - lead.length);
     if (cut === null) { this.out(h, false); this.held = tail; return; }
-    if (cut > 0) this.out(h.slice(0, cut), false);
+    if (cut > 0) this.out(h.slice(0, cut), false, h.slice(cut) + tail);
     this.pending = h.slice(cut) + tail;   // withheld, and nothing drawn in its place (D-8665)
     if (p === rowEnded) this.timer = setTimeout(() => { this.timer = null; this.settlePending(); }, ROW_SETTLE_HOLDS * this.holdMs);
   }
@@ -1129,7 +1248,7 @@ export class DrawerMask {
       this.out(s, true);
       return;
     }
-    if (cut > 0) this.out(s.slice(0, cut), false);
+    if (cut > 0) this.out(s.slice(0, cut), false, s.slice(cut));
     if (cut < s.length) {
       this.held = s.slice(cut);
       if (this.timer === null) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, this.holdMs);
@@ -1143,14 +1262,27 @@ export class DrawerMask {
     this.timer = null;
   }
 
-  private out(text: string, failClosedTail: boolean): void {
+  /** `lookahead`: the text held after this one (D-8710): read with it and never sent, so a key whose rows the hold splits
+   *  is matched whole and its rows before the hold are masked. */
+  private out(text: string, failClosedTail: boolean, lookahead = ''): void {
     const r = this.masker.maskWithCarry(text, {
-      rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint, mark: DRAWER_SECRET_MASK,
+      rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint, lookahead,
+      mark: DRAWER_SECRET_MASK,
     });
     this.carry = r.carry;
-    this.taint = failClosedTail && r.text.endsWith(DRAWER_SECRET_MASK);
+    const tv = viewOf(text, '').t;
+    // The tainted leading run is the run the last text's mark already stands for: no second mark for it, so a run that
+    // many chunks carry is one mark, as one chunk would have drawn it (D-8694's one mark per run on a row; D-8710).
+    const shown = this.taint && tv !== '' && !OPEN_DELIM.test(tv[0]!) && r.text.startsWith(DRAWER_SECRET_MASK)
+      ? r.text.slice(DRAWER_SECRET_MASK.length) : r.text;
+    // A mask that reaches the text's end inside a run taints the next text's leading run (D-5995), and so on for as long
+    // as the run goes on (D-8710, review 2326 O1): the next text's leading run continues it, whatever masked it (a shape,
+    // a key, a fail-closed tail or this taint). Only a fail-closed tail used to taint, and only for one text, so a shape
+    // key longer than a drawer holds was masked once and then drawn from the next chunk on, once the context no longer
+    // held its start.
+    this.taint = r.text.endsWith(DRAWER_SECRET_MASK) && tv !== '' && !OPEN_DELIM.test(tv[tv.length - 1]!);
     this.ctx = (this.ctx + text).slice(-DRAWER_CONTEXT);
-    this.emit(r.text);
+    if (shown !== '') this.emit(shown);
   }
 }
 
