@@ -172,3 +172,35 @@ in background, exit 0. No other heavy command ran until its completion was repor
 Task 6; F4's stronger account-gate mint distinction belongs there too. F10's fixed 400 is documented above. F11
 remains evidence wording: the old-writer object-binding failures are not themselves behavioural guard proof; the
 measured mutants provide that proof. The first full-run signal remains `suite: red`, `failure: shallow`.
+
+### Designation C landed during this round
+
+After the first authorized absorption, designation C (#2992) landed. The coordinator explicitly extended this round
+for a second absorption and F2(a)–(d), beyond the migration-only license, before the same single push. The second
+absorption keeps main's additions; no rebase or force push is used. Gates A is this pair's second lander:
+
+- The two Settings rows (`model`, `account-set`) are now in `OVERLORD_DOORS`, operator/admin, and in the landing census.
+- Both handlers call `deps.identity.operator(g.actor)`; actor refusal still maps through the shared writer mapping to
+  `internal`. The combined mapping preserves designation C's `not-found` arm.
+- Both setters take `RecordedActor`, refuse through the same provenance/kind/issuer/strength check before a transaction,
+  include `ActorRefused` in `SettingResult`, and write `SET_ACTOR` with all four values. `CoordStore` already derives its
+  input types from those functions, so it needs no gates-A edit.
+- The Settings rig supplies the identity dependency and uses minted fixture actors. The designation-route rig, store
+  fixtures and simulation fixtures keep their already-converted gates-A actors. The writers map retains both setters
+  and the migration's one-time backfill.
+
+Before integration, the actor file measured ten setter failures (old string binding rejects the actor objects, not
+behavioural guard proof), and the door census measured three failures for the two missing Settings rows. Afterward:
+actor 33/33, door census 13/13, Settings doors 60/60, designation store 36/36 and designate routes 51/51 passed.
+Six serialized mutants supply the behavioural proof: delete either setter's guard; remove the shared brand, kind,
+issuer or strength term. All six were killed by their matching refusal assertion, and the source was restored
+byte-for-byte from a saved copy before the final green actor run. The metadata tests also prove both setters replace
+stale live metadata without changing the pending actor.
+
+After the C integration, all 50 ring/single-definition files passed again, mutation floors passed 181/181, the
+scoped token census passed 61/61, and server-source typechecking completed with exit 0 and no diagnostics. The latter
+waited 852 seconds for a fleet test slot; that queue, not a diagnostic failure, caused its automatic background move.
+No second heavy command was started while it waited or ran.
+
+The ladder (#2994) crossing still belongs to whichever lands second. Designation B's `rebindPending` remains a
+landing-contract note only; neither piece's implementation was pulled into this round.

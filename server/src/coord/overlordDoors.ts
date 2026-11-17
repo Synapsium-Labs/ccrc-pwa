@@ -50,6 +50,8 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designate: operator('POST', '/api/overlord/designate', OVERLORD, 'admin'),
   retire: operator('DELETE', '/api/overlord/designate', OVERLORD, 'admin'),
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
+  model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
+  'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
   'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),

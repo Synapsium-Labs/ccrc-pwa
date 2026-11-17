@@ -110,9 +110,9 @@ describe('the table itself', () => {
       if (r.group === 'operator') expect(r.verbClass, k).not.toBe('operate');
     }
   });
-  it('the rows on landing are the plan\'s, with the goals ratify door already on main', () => {
+  it('the rows on landing include the ratify and designation C Settings doors already on main', () => {
     expect(rows.map(([k]) => k)).toEqual([
-      'designate', 'retire', 'designation', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
+      'designate', 'retire', 'designation', 'model', 'account-set', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
       'card', 'card-record', 'notes-write', 'notes-read', 'handover', 'probe-read', 'probe-answer',
     ]);
   });

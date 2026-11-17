@@ -307,6 +307,164 @@ export function retireVerdictCases(m: DesignationModule): Record<string, SuiteCa
   };
 }
 
+// ------------------------------------------------------------- the Settings doors (designation C, plan Tasks 8 and 9)
+
+const PENDING_AND_BOUND: DesignationRead = { kind: 'designated', sessionId: 'overlord-x', term: 2, row: view({
+  bound: { sessionId: 'overlord-x', generation: 'g1' },
+  pending: { sessionId: 'overlord-z', kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) };
+
+/** lane-a, lane-b and lane-c can serve `fable` set-side: billing included and a fresh share reading under the ceiling. */
+const FABLE_ROSTER: AFacts['roster'] = { ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, fableBilling: 'included' as const })) };
+const fableFacts = (): AFacts => afacts(HEALTHY, { roster: FABLE_ROSTER,
+  shares: Object.fromEntries(['lane-a', 'lane-b', 'lane-c'].map((id) => [id, { finishedAtS: NOW_S, estimatePct: 5 }])) });
+const atFable = (r: DesignationRead): DesignationRead =>
+  (r.kind === 'unmeasured' || r.row === null ? r : { ...r, row: { ...r.row, model: 'fable' } }) as DesignationRead;
+
+export function modelClassVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
+  return {
+    'fable asks the step-up and opus does not (C45, §11.2)': () => {
+      expect(m.modelStepUp('fable')).toBe(true);
+      expect(m.modelStepUp('opus')).toBe(false);
+    },
+    'a change of class that two accounts serve is set, naming the bound body': () => {
+      expect(m.modelClassVerdict(BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [] });
+      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts())).toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [] });
+    },
+    'the bound body and a pending one both take the class; a pending-only row its pending body': () => {
+      expect(m.modelClassVerdict(PENDING_AND_BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x', 'overlord-z'], warnings: [] });
+      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-y'], warnings: [] });
+    },
+    'C56 re-counted under the new class: fewer than two refuses while bound (model-door-recounts-c56)': () => {
+      expect(m.modelClassVerdict(BOUND, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
+    },
+    'C56 re-counted under the new class: fewer than two refuses while pending': () => {
+      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
+    },
+    'C56 re-counted under the new class: with no body the class is saved for the next Start, with the warning': () => {
+      expect(m.modelClassVerdict(ROW_NO_BODY, 'fable', afacts())).toEqual({ act: 'set', bodies: [],
+        warnings: [{ warning: 'overlord-single-account', count: 0 }] });
+    },
+    'a move to opus is a narrowing: fewer than two only warns, bound or pending, never refuses (review 2410 F2)': () => {
+      const warned = { warning: 'overlord-single-account', count: 0 };
+      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts(HEALTHY, { lanes: {} })))
+        .toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [warned] });
+      expect(m.modelClassVerdict(atFable(PENDING_ONLY), 'opus', afacts(HEALTHY, { lanes: {} })))
+        .toEqual({ act: 'set', bodies: ['overlord-y'], warnings: [warned] });
+    },
+    'an unchanged class is none, and is never counted': () => { expect(m.modelClassVerdict(BOUND, 'opus', afacts(HEALTHY, { lanes: {} }))).toEqual({ act: 'none' }); },
+    'no row is not-found; an unmeasured read is unmeasured': () => {
+      expect(m.modelClassVerdict(NONE, 'fable', fableFacts())).toEqual({ act: 'not-found' });
+      expect(m.modelClassVerdict(UNMEASURED, 'fable', fableFacts())).toMatchObject({ act: 'unmeasured' });
+    },
+  };
+}
+
+export function setWidensCases(m: DesignationModule): Record<string, SuiteCase> {
+  return {
+    'a pool added widens': () => { expect(m.setWidens(SET_A, SET_AB)).toBe(true); },
+    'untagged turned on widens': () => { expect(m.setWidens(SET_A, { pools: ['pool-a'], untagged: true })).toBe(true); },
+    'a narrowing does not widen': () => {
+      expect(m.setWidens(SET_AB, SET_A)).toBe(false);
+      expect(m.setWidens({ pools: ['pool-a'], untagged: true }, SET_A)).toBe(false);
+    },
+    'a pure reorder does not widen': () => { expect(m.setWidens(SET_AB, { pools: ['pool-a', 'pool-b'], untagged: false })).toBe(false); },
+  };
+}
+
+/** Org labels on the fixture roster: lane-a and lane-c `org-a`, lane-b `org-b`; lane-d none. */
+const withOrgs = (labels: Record<string, string>): AFacts['roster'] =>
+  ({ ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, org: labels[a.id] ?? null })) });
+const ORGS = { 'lane-a': 'org-a', 'lane-b': 'org-b', 'lane-c': 'org-a' };
+const REORDERED: PoolSet = { pools: ['pool-a', 'pool-b'], untagged: false };
+const ONLY_B: PoolSet = { pools: ['pool-b'], untagged: false };
+const EMPTY: PoolSet = { pools: [], untagged: false };
+type SetVerdict = ReturnType<DesignationModule['accountSetVerdict']>;
+const saved = (v: SetVerdict) => { if (v.act !== 'set' && v.act !== 'none') throw new Error(`expected a save, got ${v.act}`); return v; };
+
+export function accountSetVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
+  return {
+    'the step-up the door asks: a widening, an unreadable row; never a narrowing, a reorder or no row': () => {
+      expect(m.accountSetStepUp(BOUND, { pools: ['pool-b', 'pool-a', 'pool-c'], untagged: false })).toBe(true);
+      expect(m.accountSetStepUp(BOUND, SET_A)).toBe(false);
+      expect(m.accountSetStepUp(BOUND, REORDERED)).toBe(false);
+      expect(m.accountSetStepUp(UNMEASURED, SET_A)).toBe(true);
+      expect(m.accountSetStepUp(NONE, SET_AB)).toBe(false);
+    },
+    'no row is not-found, an unmeasured read unmeasured, an unspellable set refuse-input': () => {
+      expect(m.accountSetVerdict(NONE, SET_A, afacts(), true)).toEqual({ act: 'not-found' });
+      expect(m.accountSetVerdict(UNMEASURED, SET_A, afacts(), true)).toMatchObject({ act: 'unmeasured' });
+      expect(m.accountSetVerdict(BOUND, { pools: ['Bad Name'], untagged: false }, afacts(), true)).toEqual({ act: 'refuse-input', why: 'unspellable' });
+    },
+    'a widening the gate did not step up refuses step-up-required, re-read against the row it holds': () => {
+      expect(m.accountSetVerdict(view2(SET_A), SET_AB, afacts(), false)).toMatchObject({ act: 'refuse', word: 'step-up-required' });
+      expect(m.accountSetVerdict(view2(SET_A), SET_AB, afacts(), true).act).toBe('set');
+      expect(m.accountSetVerdict(BOUND, SET_A, afacts(), false).act).toBe('set');
+    },
+    'below two refuses while bound or pending, with the count and no organization word': () => {
+      for (const read of [BOUND, PENDING_ONLY]) {
+        const v = m.accountSetVerdict(read, ONLY_B, afacts(HEALTHY, { roster: withOrgs(ORGS) }), true);
+        expect(v).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 1 });
+        expect(v).not.toHaveProperty('orgSpread');
+      }
+    },
+    'an empty set refuses while bound, and is saved with a warning while unbound': () => {
+      expect(m.accountSetVerdict(BOUND, EMPTY, afacts(), true)).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
+      const v = saved(m.accountSetVerdict(ROW_NO_BODY, EMPTY, afacts(), true));
+      expect(v).toMatchObject({ act: 'set', bodies: [], poolset: '', acctorder: '' });
+      expect(v.warnings).toEqual([{ warning: 'overlord-single-account', count: 0 }]);
+    },
+    'below two with no body is saved for the next Start and warns': () => {
+      const v = saved(m.accountSetVerdict(ROW_NO_BODY, ONLY_B, afacts(), true));
+      expect(v.act).toBe('set');
+      expect(v.warnings).toEqual([{ warning: 'overlord-single-account', count: 1 }]);
+    },
+    'the same set re-sent is none, and its count only warns even while bound': () => {
+      const low = { ...BOUND, row: view({ bound: { sessionId: 'overlord-x', generation: 'g1' }, accountPools: ONLY_B }) } as DesignationRead;
+      const v = saved(m.accountSetVerdict(low, ONLY_B, afacts(), true));
+      expect(v.act).toBe('none');
+      expect(v.warnings).toEqual([{ warning: 'overlord-single-account', count: 1 }]);
+      expect(saved(m.accountSetVerdict(BOUND, SET_AB, afacts(), true)).act).toBe('none');
+    },
+    'a set carries the spelling, the list in the set\'s order, the bodies, and unknown names as warnings': () => {
+      const v = saved(m.accountSetVerdict(PENDING_AND_BOUND, { pools: ['pool-a', 'pool-z', 'pool-b'], untagged: false }, afacts(), true));
+      expect(v).toMatchObject({ act: 'set', bodies: ['overlord-x', 'overlord-z'], acctorder: 'lane-a,lane-c,lane-b' });
+      expect(v.poolset).not.toBe('');
+      expect(v.warnings).toEqual([{ warning: 'unknown-pool', pool: 'pool-z' }]);
+      expect(v.accounts.counted).toEqual(['lane-a', 'lane-c', 'lane-b']);
+    },
+    'the route\'s list is C56\'s whole list, a signed-out account included, never only the counted ones': () => {
+      const v = saved(m.accountSetVerdict(BOUND, REORDERED, afacts({ ...HEALTHY, 'lane-c': limit({ authDead: true }) }), true));
+      expect(v.accounts.counted).toEqual(['lane-a', 'lane-b']);
+      expect(v.acctorder).toBe('lane-a,lane-c,lane-b');
+    },
+    'a reorder is a set (the order lives in the row) and needs no step-up': () => {
+      const v = saved(m.accountSetVerdict(BOUND, REORDERED, afacts(), false));
+      expect(v).toMatchObject({ act: 'set', acctorder: 'lane-a,lane-c,lane-b' });
+    },
+    'K2a: a set across two organizations saves and warns many': () => {
+      const v = saved(m.accountSetVerdict(BOUND, REORDERED, afacts(HEALTHY, { roster: withOrgs(ORGS) }), true));
+      expect(v.act).toBe('set');
+      expect(v.orgSpread).toEqual({ kind: 'many', orgs: 2, unlabelled: 0 });
+    },
+    'K2a: one organization says one, some unlabelled say partly, none labelled say none': () => {
+      expect(saved(m.accountSetVerdict(BOUND, SET_A, afacts(HEALTHY, { roster: withOrgs(ORGS) }), true)).orgSpread.kind).toBe('one');
+      expect(saved(m.accountSetVerdict(BOUND, SET_A, afacts(HEALTHY, { roster: withOrgs({ 'lane-a': 'org-a' }) }), true)).orgSpread)
+        .toEqual({ kind: 'partly', orgs: 1, unlabelled: 1 });
+      expect(saved(m.accountSetVerdict(BOUND, SET_A, afacts(), true)).orgSpread.kind).toBe('none');
+    },
+    'K2a: an unmeasured count warns nothing': () => {
+      const f = afacts(HEALTHY, { roster: withOrgs(ORGS) });
+      const lanes = { ...f.lanes };
+      delete lanes['lane-b'];
+      const v = saved(m.accountSetVerdict(BOUND, REORDERED, { ...f, lanes }, true));
+      expect(v.orgSpread).toEqual({ kind: 'unmeasured', orgs: 0, unlabelled: 0 });
+    },
+  };
+}
+/** A bound row holding the given set. */
+const view2 = (accountPools: PoolSet): DesignationRead =>
+  ({ kind: 'designated', sessionId: 'overlord-x', term: 2, row: view({ bound: { sessionId: 'overlord-x', generation: 'g1' }, accountPools }) });
+
 // ----------------------------------------------------------------------------------------------------------- the sets
 
 const MODULE = path.join(ROOT, 'server/src/coord/overlordDesignation.ts');
@@ -346,6 +504,33 @@ const RETIRE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: 
     { id: 'R3 an unreadable row is none', old: "if (read.kind === 'unmeasured') return { act: 'unmeasured' };", new: "if (read.kind === 'unmeasured') return { act: 'none' };" },
     { id: 'R4 a pending attempt is none', old: "? { act: 'cancel-pending' } : { act: 'none' };", new: "? { act: 'none' } : { act: 'none' };" },
   ], suite: retireVerdictCases };
+
+const MODEL_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'M1 fable asks no step-up', old: "model === 'fable';", new: 'false;' },
+    { id: 'M2 an unchanged class is set', old: "if (read.row.model === model) return { act: 'none' };", new: '' },
+    { id: 'M5 the model door does not re-count C56', old: 'if (modelStepUp(model) && bodies.length > 0 && count <= 1) {', new: 'if (false) {' },
+    { id: 'M7 a move to opus refuses below two', old: 'if (modelStepUp(model) && bodies', new: 'if (bodies' },
+    { id: 'M8 below two never warns', old: "count <= 1 ? [{ warning: 'overlord-single-account', count }] : []", new: '[]' },
+    { id: 'M6 the re-count is under the old class', old: 'overlordAccounts(read.row.accountPools, model, f)', new: 'overlordAccounts(read.row.accountPools, read.row.model, f)' },
+    { id: 'M3 no row is set', old: "if (read.row === null) return { act: 'not-found' };", new: "if (read.row === null) return { act: 'set', bodies: [] };" },
+    { id: 'M4 a pending body is not written', old: '[v.bound?.sessionId, v.pending?.sessionId]', new: '[v.bound?.sessionId]' },
+  ], suite: modelClassVerdictCases };
+const WIDENS_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'W1 a reorder read as a widening', old: 'next.pools.some((p) => !old.pools.includes(p))', new: 'next.pools.some((p, n) => old.pools[n] !== p)' },
+    { id: 'W2 untagged on is no widening', old: '(next.untagged && !old.untagged) || ', new: '' },
+  ], suite: setWidensCases };
+const ACCOUNT_SET_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
+    { id: 'S1 the count skipped while bound', old: 'if (bodies.length > 0 && !same) {', new: 'if (false) {' },
+    { id: 'S2 the step-up not re-checked', old: 'if (!stepped && setWidens(row.accountPools, next)) {', new: 'if (false) {' },
+    { id: 'S3 an unreadable row asks no step-up', old: "if (read.kind === 'unmeasured') return true;", new: "if (read.kind === 'unmeasured') return false;" },
+    { id: 'S4 an unknown pool not warned', old: '!poolRostered(f.roster, p)', new: 'false' },
+    { id: 'S5 an unbound count not warned', old: "warnings.push({ warning: 'overlord-single-account', count });", new: '' },
+    { id: 'S6 the same set is set', old: "act: same ? 'none' : 'set'", new: "act: 'set'" },
+    { id: 'S7 a partial figure warns', old: "accounts.unmeasured.length > 0 ? 'unmeasured' : ", new: '' },
+    { id: 'K1 many refuses (K2a)', old: '  const org = new Map(', new: "  if (orgSpread(accounts.counted.map((id) => f.roster.accounts.find((a) => a.id === id)?.org ?? null)).kind === 'many') return { act: 'refuse', word: 'overlord-single-account', detail: 'many', count };\n  const org = new Map(" },
+    { id: 'S8 the list is the counted list', old: '[...accounts.list]', new: '[...accounts.counted]' },
+    { id: 'S9 no row reads a save', old: "if (row === null) return { act: 'not-found' };", new: "if (row === null) return { act: 'unmeasured', why: 'x' };" },
+  ], suite: accountSetVerdictCases };
 
 // ------------------------------------------------------------------------------- designationFactOf, identityOf (Task 3)
 
@@ -502,6 +687,9 @@ export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#overlordAccounts': ACCOUNTS_SET as MutantSet<never>,
   'server/src/coord/overlordDesignation.ts#retireVerdict': RETIRE_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#modelClassVerdict': MODEL_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#setWidens': WIDENS_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignation.ts#accountSetVerdict': ACCOUNT_SET_SET as MutantSet<never>,
   'server/src/roleOf.ts#designationFactOf': DESIGNATION_FACT_SET as MutantSet<never>,
   'server/src/roleOf.ts#identityOf': IDENTITY_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#retire': RETIRE_END_SET as MutantSet<never>,

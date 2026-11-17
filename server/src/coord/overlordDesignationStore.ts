@@ -1,7 +1,8 @@
 // The Overlord's designation row and its writers (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Task 1, questions 1 and 8, rulings X2, X3, X3b, X5, X7).
 // Ring L3, context C5. ONE table, `overlord_designation` (migration 83), its ONE row (`id = 1`), and the only functions that
-// write it: `designatePending`, `bindPendingGeneration`, `goLive`, `failPending`, `retire` and `stopDone`, plus the one reader,
+// write it: `designatePending`, `bindPendingGeneration`, `goLive`, `failPending`, `retire` and `stopDone`, the Settings doors'
+// `setModelClass` and `setAccountSet` (designation C), plus the one reader,
 // `designationRead`. Each writer is one `tx(db, …)`, synchronous, and never throws on a state it can name (it answers).
 //
 // THE AUTHORITY DUTIES (the journal's "THE CALLER'S DUTIES", `overlordAuthorityJournal.ts#OverlordAuthorityJournal`): a writer
@@ -130,11 +131,11 @@ function held(db: DatabaseSync): { row: DesignationView | null } | RowUnreadable
   return typeof row === 'string' ? { ok: false, reason: 'unmeasured', detail: row } : { row };
 }
 
-type Appended = { ok: true } | AuthorityRefused;
-/** One record, BEFORE the row; the journal's answer checked (`row-only` goes on, a refusal stops). */
+type Appended = { ok: true; journalled: boolean } | AuthorityRefused;
+/** One record, BEFORE the row; the journal's answer checked (`row-only` goes on, `journalled: false`, a refusal stops). */
 function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAuthorityMove): Appended {
   const a = journal.appendInTx(db, entry);
-  return a.ok ? { ok: true } : { ok: false, authority: a.error, detail: a.detail };
+  return a.ok ? { ok: true, journalled: a.kind === 'appended' } : { ok: false, authority: a.error, detail: a.detail };
 }
 
 /** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
@@ -309,5 +310,56 @@ export function stopDone(db: DatabaseSync, sessionId: string): StopDoneResult {
     if (h.row === null || !h.row.stopsOwed.includes(sessionId)) return { ok: true, changed: false };
     db.prepare('UPDATE overlord_designation SET stopsOwed = ? WHERE id = 1').run(JSON.stringify(h.row.stopsOwed.filter((x) => x !== sessionId)));
     return { ok: true, changed: true };
+  });
+}
+
+// ── the Settings doors' writers (designation C, plan Tasks 8 and 9) ─────────────────────────────────────────────────────
+
+export interface SettingInput { actor: RecordedActor; at: number; opKey: string }
+export type SettingResult =
+  | { ok: true; changed: false } | { ok: true; changed: true; journalled: boolean }
+  | { ok: false; reason: 'not-found' } | AuthorityRefused | RowUnreadable | ActorRefused;
+
+/** One Settings move, before its writer's own UPDATE (so the writers map sees each writer): the row read in this transaction,
+ *  `changed: false` when the value is the row's own (an exact compare, so a reorder of the set is a change), else the authority
+ *  record appended FIRST with the row's own value as its `from` (the duty, authority A review 2219 F2: a `from` stated wider than
+ *  the row would read a widening as a narrowing, the journal's documented residual, so it is always this row's). `row-only`
+ *  goes on with `journalled: false` (X3, X3b); a refusal answers and the writer writes nothing. */
+function settingFirst<T>(db: DatabaseSync, journal: AuthorityAppender, pick: (r: DesignationView) => T, same: (v: T) => boolean,
+  record: (from: T) => OverlordAuthorityMove): { done: SettingResult } | { journalled: boolean } {
+  const h = held(db);
+  if ('ok' in h) return { done: h };
+  if (h.row === null) return { done: { ok: false, reason: 'not-found' } };
+  const from = pick(h.row);
+  if (same(from)) return { done: { ok: true, changed: false } };
+  const a = append(db, journal, record(from));
+  return a.ok ? { journalled: a.journalled } : { done: a };
+}
+
+/** C45: the model class, journalled as `authority-model-class` (`fable` widens, `opus` narrows: the journal's direction). */
+export function setModelClass(db: DatabaseSync, journal: AuthorityAppender, i: SettingInput & { model: OverlordModelClass }): SettingResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
+  return tx(db, (): SettingResult => {
+    const first = settingFirst(db, journal, (r) => r.model, (m) => m === i.model,
+      (from) => ({ kind: 'authority-model-class', opKey: i.opKey, from, to: i.model }));
+    if ('done' in first) return first.done;
+    db.prepare(`UPDATE overlord_designation SET model = ?, ${SET_ACTOR}, updatedAt = ? WHERE id = 1`).run(i.model, ...actorCols(i.actor), i.at);
+    return { ok: true, changed: true, journalled: first.journalled };
+  });
+}
+
+/** C46: the account set, journalled as `authority-account-set`. The journal canonicalises both lists, so a pure reorder is no
+ *  change of membership there; the order lives in this row only. */
+export function setAccountSet(db: DatabaseSync, journal: AuthorityAppender, i: SettingInput & { accountPools: PoolSet }): SettingResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
+  const next = i.accountPools;
+  return tx(db, (): SettingResult => {
+    const first = settingFirst(db, journal, (r) => r.accountPools,
+      (p) => p.untagged === next.untagged && p.pools.length === next.pools.length && p.pools.every((x, n) => x === next.pools[n]),
+      (from) => ({ kind: 'authority-account-set', opKey: i.opKey, from, to: next }));
+    if ('done' in first) return first.done;
+    db.prepare(`UPDATE overlord_designation SET accountPools = ?, ${SET_ACTOR}, updatedAt = ? WHERE id = 1`)
+      .run(JSON.stringify({ pools: next.pools, untagged: next.untagged }), ...actorCols(i.actor), i.at);
+    return { ok: true, changed: true, journalled: first.journalled };
   });
 }

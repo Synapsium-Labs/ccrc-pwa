@@ -10,7 +10,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
-  designatePending, designationRead, failPending, goLive, retire, type AuthorityAppender,
+  designatePending, designationRead, failPending, goLive, retire, setModelClass, setAccountSet, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
 import { actorOf } from '../src/accounts/audit.js';
@@ -227,6 +227,38 @@ describe('a writer refuses an actor the port did not mint for the operator', () 
     expect(retire(db, journal, { actor: trusted({ strength: 'attributed' }), at: NOW, opKey: 'k' })).toEqual({ ok: false, reason: 'actor' });
     // CONTROL: the same object with both checks met passes, so each refusal above is its check's, never the brand's.
     expect(des(db, control)).toEqual({ ok: true, changed: true });
+  });
+});
+
+describe.each([
+  { name: 'setModelClass', write: (db: DatabaseSync, j: AuthorityAppender, actor: RecordedActor) =>
+    setModelClass(db, j, { model: 'fable', actor, at: NOW + 1, opKey: 'set-model' }) },
+  { name: 'setAccountSet', write: (db: DatabaseSync, j: AuthorityAppender, actor: RecordedActor) =>
+    setAccountSet(db, j, { accountPools: { pools: ['pool-b'], untagged: true }, actor, at: NOW + 1, opKey: 'set-pools' }) },
+])('$name through the second-lander actor contract', ({ write }) => {
+  it.each(['brand', 'kind', 'strength', 'issuer'] as const)('refuses the wrong %s before any journal or row write', (axis) => {
+    const consoleCaller = identity.console(true, 'device-a');
+    if (consoleCaller.kind !== 'signed-in') throw new Error('a measured console actor');
+    const copy = Object.freeze({ ...RETIRER, ...(axis === 'kind' ? { kind: 'session' as const } : {}),
+      ...(axis === 'strength' ? { strength: 'attributed' as const } : {}) }) as RecordedActor;
+    if (axis === 'kind' || axis === 'strength') TRUSTED.add(copy);
+    const actor = axis === 'issuer' ? consoleCaller.actor : copy;
+    const db = openDb();
+    expect(des(db).ok).toBe(true);
+    const before = db.prepare('SELECT * FROM overlord_designation').get();
+    let appends = 0;
+    const counting: AuthorityAppender = { appendInTx: () => { appends++; return APPENDED; } };
+    expect(write(db, counting, actor)).toEqual({ ok: false, reason: 'actor' });
+    expect(appends).toBe(0);
+    expect(db.prepare('SELECT * FROM overlord_designation').get()).toEqual(before);
+  });
+  it('writes all four live columns from the minted actor, not prior metadata', () => {
+    const db = openDb();
+    expect(des(db).ok).toBe(true);
+    db.exec("UPDATE overlord_designation SET actorKind = 'server', actorIssuer = 'server', actorStrength = 'attributed'");
+    expect(write(db, journal, RETIRER)).toMatchObject({ ok: true, changed: true });
+    expect(cols(db, LIVE_COLS)).toEqual(four(RETIRER));
+    expect(cols(db, PENDING_COLS)).toEqual(four(OPERATOR));
   });
 });
 

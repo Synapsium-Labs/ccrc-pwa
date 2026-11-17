@@ -96,6 +96,7 @@ class FakeBody implements OverlordBody {
   }
   async writeSet(id: string, set: { poolset: string; acctorder: string }) { this.log.push({ op: 'writeSet', id, extra: set }); return this.setAnswer; }
   async clearProfile(id: string) { this.log.push({ op: 'clearProfile', id }); return { ok: true } as const; }
+  async writeClass(id: string, cls: string) { this.log.push({ op: 'writeClass', id, extra: cls }); return { ok: true } as const; }
   async poolAnswer(id: string) { this.log.push({ op: 'poolAnswer', id }); return this.probe; }
   async keepAwake(id: string, state: 'on' | 'off') { this.log.push({ op: `keepAwake-${state}`, id }); return this.keepAwakeAnswer(state); }
   async stop(id: string) {
@@ -356,6 +357,14 @@ describe('a create', () => {
     const res = await post(r, { model: 'opus', accountPools: { pools: ['pool-a', 'pool-b', 'pool-zz'], untagged: false } });
     expect(res.statusCode).toBe(200);
     expect(res.json().warnings).toEqual([{ warning: 'unknown-pool', pool: 'pool-zz' }]);
+  });
+
+  it('a pool named twice is stored once, in first-seen order, and warned once (review 2410 F3)', async () => {
+    const r = await rig();
+    const res = await post(r, { model: 'opus', accountPools: { pools: ['pool-a', 'pool-zz', 'pool-a', 'pool-b', 'pool-zz'], untagged: false } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().warnings).toEqual([{ warning: 'unknown-pool', pool: 'pool-zz' }]);
+    expect(view(r)?.accountPools).toEqual({ pools: ['pool-a', 'pool-zz', 'pool-b'], untagged: false });
   });
 
   it('a first prompt that is not delivered answers prompted: false and keeps the attempt pending', async () => {

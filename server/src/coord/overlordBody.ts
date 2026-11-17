@@ -1,6 +1,6 @@
 // The Overlord's body over ccd (Overlord W1, designation A, plan Task 4; spec §3.1, §3.2 C4). Ring L3, context C5: the ADAPTER of
 // the `OverlordBody` port that `overlordRoutes.ts` declares. It is the one place that composes ccd for the Overlord: the
-// project add, the named create, the route writes, the pool probe, the keep-awake markers and the stop. It decides nothing about
+// project add, the named create, the route writes (the Settings door's `class` among them), the pool probe, the keep-awake markers and the stop. It decides nothing about
 // WHETHER to act (the decider and the doors do); it keeps every distinction ccd's answer gives it and says it in the port's words.
 //
 // FAILURE CONTRACT. No method throws: a runner that rejects, a reader that throws and a missing capability are each an answer.
@@ -12,7 +12,7 @@
 // shell would carry the variable down to every child, so `withoutClaudeCode` takes it out of the environment for the one
 // synchronous moment the child is started (an `execFile` reads the environment as it spawns), and puts it back.
 import { isRegistryId, type ChildReclaimGeneration, type RouteFields } from '../../../shared/api.js';
-import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
+import { OVERLORD_PROJECT, type OverlordModelClass } from '../../../shared/overlord-designation.js';
 import {
   CCD_ARGV, WS_TITLE_CAP, WS_WRAPPER_CAP, capSupported, ccdCan, type ActorFlags, type CcdArgv,
 } from '../ccdargv.js';
@@ -155,6 +155,9 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
   }
 
   const clearProfile = (id: string): Promise<BodyAnswer> => setRoute(id, { profiledigest: '' });
+  /** The model class Settings door's one route write (C45): `class` only, through the same composer; a box-token route write
+   *  is what D-6790 refuses `fable` on, and this is the operator's door, never that one. */
+  const writeClass = (id: string, cls: OverlordModelClass): Promise<BodyAnswer> => setRoute(id, { class: cls });
 
   async function poolAnswer(id: string): ReturnType<OverlordBody['poolAnswer']> {
     if (!ccdCan(state(), 'poolAnswer') || !isRegistryId(id)) return { kind: 'not-run' };
@@ -183,7 +186,7 @@ export function ccdOverlordBody(deps: OverlordBodyDeps): OverlordBody {
     try { return await deps.stop(id); } catch (e) { return { ok: false, detail: `the stop did not answer: ${messageOf(e)}` }; }
   }
 
-  return { ensureProject, create, writeSet, clearProfile, poolAnswer, keepAwake, stop };
+  return { ensureProject, create, writeSet, writeClass, clearProfile, poolAnswer, keepAwake, stop };
 }
 
 // ── stopCreated ───────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 // The Overlord's designation (Overlord spec §3.1, §3.2 C2, §3.4 C45, C46, C56; plan
-// `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Tasks 1, 2 and 5): L0, one concern (the index's
+// `docs/superpowers/plans/2026-11-14-overlord-w1/w1-designation.md` Tasks 1, 2, 5, 8 and 9): L0, one concern (the index's
 // large-file question 1, slug `wire-types-in-sibling-modules`). The view of the one row, the model class words, the
-// attempt outcomes, the capability words Start the Overlord requires, the set-side placement answer and the designate
-// door's body parser. The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
+// attempt outcomes, the capability words Start the Overlord requires, the set-side placement answer and the
+// doors' body parsers (designate, and the two Settings doors). The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
 // `node:*`, because the PWA bundles this file.
 import type { PoolSet } from './poolset.js';
 import type { ActorWire } from './overlord-identity.js';
@@ -78,7 +78,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /** One reader of an account set from JSON: `{pools: string[], untagged: boolean}`, nothing else. The names are not
  *  checked against the pool-name pattern here: `poolSetSpelling` answers `unspellable` for a bad one, which the decider
- *  refuses as input. */
+ *  refuses as input. A name given twice is kept once, at its first place, so every door stores one spelling (review 2410 F3). */
 export function parseAccountPools(v: unknown): PoolSet | null {
   if (!isRecord(v)) return null;
   const keys = Object.keys(v);
@@ -86,7 +86,7 @@ export function parseAccountPools(v: unknown): PoolSet | null {
   const pools = v['pools'];
   const untagged = v['untagged'];
   if (!Array.isArray(pools) || !pools.every((p) => typeof p === 'string') || typeof untagged !== 'boolean') return null;
-  return { pools: pools as string[], untagged };
+  return { pools: [...new Set(pools as string[])], untagged };
 }
 
 /** One reader of a model class word. */
@@ -102,4 +102,16 @@ export function parseDesignateBody(v: unknown): DesignateBody | null {
   const model = parseOverlordModel(v['model']);
   const accountPools = parseAccountPools(v['accountPools']);
   return model === null || accountPools === null ? null : { model, accountPools };
+}
+
+/** The model class Settings door's body (plan Task 8): `{model}` and no other key; anything else is `null` (400). */
+export function parseModelBody(v: unknown): OverlordModelClass | null {
+  if (!isRecord(v) || Object.keys(v).length !== 1) return null;
+  return parseOverlordModel(v['model']);
+}
+
+/** The account set Settings door's body (plan Task 9): `{accountPools}` and no other key; anything else is `null` (400). */
+export function parseAccountSetBody(v: unknown): PoolSet | null {
+  if (!isRecord(v) || Object.keys(v).length !== 1) return null;
+  return parseAccountPools(v['accountPools']);
 }
