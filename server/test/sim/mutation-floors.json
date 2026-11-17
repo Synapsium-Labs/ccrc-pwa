@@ -168,5 +168,8 @@
   "server/src/coord/overlordLadder.ts#rungMoveVerdict": 1,
   "server/src/coord/overlordLadder.ts#offStep": 1,
   "server/src/coord/overlordLadder.ts#rungStep": 1,
-  "server/src/coord/overlordLadder.ts#narrowingState": 1
+  "server/src/coord/overlordLadder.ts#narrowingState": 1,
+  "server/src/coord/overlordLadder.ts#degradedReading": 1,
+  "server/src/coord/overlordLadder.ts#latchKnown": 1,
+  "server/src/coord/overlordLadder.ts#rungAvailable": 1
 }

@@ -63,9 +63,12 @@ This is W1's ladder only: no holds, pending acts, queued mail or follow-up effec
 The brakes read only the rung. A lowering works while sign-in is dark; a raise and a latch clear require the step-up.
 The default is `chat` for ordinary reads and an absent side is `off` at Confirm.
 
-**Waiting:** the composed read, operator doors and final integrated verification are still being built. Task 2's table
-and writer review is complete after one fix round; its three findings are addressed under the coordinator's amended
-requirements.
+**Waiting:** the rung, Pause and latch-clear doors and final integrated verification are still being built. Task 2's
+table and writer review is complete after one fix round; its three findings are addressed under the coordinator's
+amended requirements. Task 3's composed read and GET passed review; its two minor coverage gaps were closed with
+separate helper mutation floors and a real designated-degraded GET case. Read six, route seven and policy 67 cases
+pass, as do all ten ladder mutation sets (including helper sets at 3/3 each). The test typecheck was repeatedly killed
+by the shared test-slice memory cap, including a run with a 3072 MiB Node heap; these attempts are not green evidence.
 
 **Later:** authority journal B supplies the off-volume witness and its two cause rows; W2 adds `off`'s mail, request
 and pending-act effects; W3 adds hold release. No substitute side effects are introduced here.

@@ -40,6 +40,7 @@ import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { designateVerdict, overlordAccounts, retireVerdict, type AccountFacts } from './overlordDesignation.js';
 import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
+import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,7 @@ export interface OverlordRouteDeps {
   /** The coordination serialiser: every write door's body runs inside it, so a designate and a retire never interleave. */
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
+  readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[] };
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
   readonly body: OverlordBody;
@@ -371,5 +373,13 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const drained = await drainOwedStops(deps, owedIds);
       return { ok: true, changed: true, term: r.term, stopped: drained.stopped, owed: drained.owed };
     });
+  });
+
+  app.get('/api/overlord/ladder', async (_req, reply) => {
+    const ladder = deps.ladder;
+    if (ladder === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+    const read = ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps);
+    if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+    return ladderWire(read, ladder.serverCaps);
   });
 }

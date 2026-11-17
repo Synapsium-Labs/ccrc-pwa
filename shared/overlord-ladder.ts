@@ -118,5 +118,17 @@ export type NarrowingState =
 const NARROWING_STATE_MAP = { done: true, 'taking-effect': true } as const satisfies Record<NarrowingState['state'], true>;
 export const NARROWING_STATES = Object.keys(NARROWING_STATE_MAP) as NarrowingState['state'][];
 
+/** The session-gated ladder read. */
+export interface LadderWire {
+  readonly ok: true;
+  readonly operatorRung: Rung; readonly operatorRungSource: 'set' | 'default'; readonly effectiveRung: Rung;
+  readonly binding: readonly Binding[];
+  readonly latches: readonly { cause: string; cap: Rung; raisedAt: number; detail: string; known: boolean; narrowing: NarrowingState }[];
+  readonly conditions: readonly { cause: string; reading: ConditionReading; effect: LadderEffect }[];
+  readonly readBy: readonly ReadByEntry[];
+  readonly lastChange: { at: number; actor: string; narrowing: NarrowingState | null } | null;
+  readonly rungs: readonly { rung: Rung; available: boolean; needs: string | null }[];
+}
+
 /** Plan question 23: the `needs` words no server build carries yet, each with its wave; shrink-only. */
 export const RUNG_WORDS_NOT_YET_SHIPPED = { 'overlord-route-v1': 'W2', 'overlord-answer-v1': 'W3' } as const;

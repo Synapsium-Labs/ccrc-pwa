@@ -9,7 +9,7 @@ import * as m from '../src/coord/overlordLadder.js';
 import * as L0 from '../../shared/overlord-ladder.js';
 import {
   effectiveRungCases, highestHeldRungCases, narrowingStateCases, offStepCases, rungMoveVerdictCases, rungStepCases,
-  rungWordReadingCases,
+  rungWordReadingCases, degradedReadingCases,
 } from './sim/ladderSets.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -118,6 +118,9 @@ describe('offStep', () => {
 });
 describe('rungStep', () => {
   for (const [name, fn] of Object.entries(rungStepCases(m))) it(name, fn);
+});
+describe('degradedReading', () => {
+  for (const [name, fn] of Object.entries(degradedReadingCases(m))) it(name, fn);
 });
 describe('narrowingState', () => {
   for (const [name, fn] of Object.entries(narrowingStateCases(m))) it(name, fn);

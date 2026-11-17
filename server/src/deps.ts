@@ -29,6 +29,7 @@ import type { PlanSync } from './linear/planSync.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
+import type { LadderConditionInputs, NarrowingWitness } from './coord/overlordLadderRead.js';
 import type { WatcherCoordPort } from './coord/ports.js';
 import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import type { CataloguePoller } from './update/catalogue.js';
@@ -218,6 +219,10 @@ export interface Deps {
    *  Absent (a test, a script): nothing appends an authority record, and a door that needs one refuses. */
   overlordAuthority?: OverlordAuthorityJournal;
   overlordAuthorityGuard?: OverlordAuthorityGuard;
+  /** Optional future authority witness and condition seams; absence uses the W1 defaults. */
+  ladderWitness?: NarrowingWitness;
+  ladderInputs?: LadderConditionInputs;
+  ladderServerCaps?: readonly string[];
   /** D-7672 (#1444, spec §8): the policy decision point on Linear writes; `index.ts` wires `allowAll`. Absent: as
    *  `linearJournal`. Never a grant by actor. */
   linearPolicy?: LinearWritePolicy;

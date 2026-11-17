@@ -697,7 +697,8 @@ describe('the scanner is looking at something', () => {
     // 259 since the Overlord's designation doors (Overlord W1 designation A, 2026-11-16), in `coord/overlordRoutes.ts`: `GET
     // /api/overlord/designation`, `POST` and `DELETE /api/overlord/designate`, session-gated and NOT EXEMPT, no box token: the HTTP
     // half 253 -> 256, the gated count 157 -> 160, the exempt-HTTP count stays 95.
-    expect(ROUTES.length).toBe(259);
+    // 260 with the session-gated ladder read: HTTP 256 -> 257, exempt stays 95.
+    expect(ROUTES.length).toBe(260);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -878,7 +879,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 259 scanned + the static wildcard when the bundle is built.
+    // 260 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1606,7 +1607,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 256 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 257 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1670,7 +1671,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 256 HTTP routes, not the 95 exempt.
+          //    is not itself flag-aware — the assertion that covers all 257 HTTP routes, not the 95 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

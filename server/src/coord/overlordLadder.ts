@@ -12,6 +12,19 @@ import {
 import type {
   Binding, ConditionReading, LadderActKind, LadderCauseRow, NarrowingState, ReadByEntry, Rung,
 } from '../../../shared/overlord-ladder.js';
+import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import type { GenerationState } from '../../../shared/continuity.js';
+
+const GENERATION_ABSENCE_MAP = { 'no-generation': true } as const;
+
+/** The designated generation's condition; an unreadable input never lifts a brake. */
+export function degradedReading(designation: DesignationRead, live: 'unmeasured' | keyof typeof GENERATION_ABSENCE_MAP | { readonly state: GenerationState }): ConditionReading {
+  if (designation.kind === 'unmeasured') return 'unmeasured';
+  if (designation.kind === 'not-designated') return 'lifted';
+  if (live === 'unmeasured') return 'unmeasured';
+  if (live === 'no-generation') return 'lifted';
+  return live.state === 'degraded' ? 'standing' : 'lifted';
+}
 
 export interface LadderFacts {
   readonly operatorRung: { readonly kind: 'set'; readonly rung: Rung } | { readonly kind: 'default' };
@@ -33,13 +46,20 @@ const rungOfRank = (rank: number): Rung => RUNGS.find((r) => rungRank(r) === ran
 const lowest = (a: Rung, b: Rung): Rung => (rungRank(b) < rungRank(a) ? b : a);
 const rowOf = (table: Readonly<Record<string, LadderCauseRow>>, cause: string): LadderCauseRow | undefined =>
   Object.prototype.hasOwnProperty.call(table, cause) ? table[cause] : undefined;
+/** Whether this build knows a standing latch's cause as a latch. */
+export const latchKnown = (table: Readonly<Record<string, LadderCauseRow>>, cause: string): boolean => rowOf(table, cause)?.kind === 'latch';
+
+/** Whether the server holds a rung's capability word. */
+export function rungAvailable(rung: Rung, serverCaps: readonly string[]): boolean {
+  const needs = rungNeeds(rung);
+  return needs === null || serverCaps.includes(needs);
+}
 
 /** The highest rung whose `needs` word is none or one the server holds. */
 export function highestHeldRung(serverCaps: readonly string[]): Rung {
   let best: Rung = 'off';
   for (const r of RUNGS) {
-    const need = rungNeeds(r);
-    if ((need === null || serverCaps.includes(need)) && rungRank(r) > rungRank(best)) best = r;
+    if (rungAvailable(r, serverCaps) && rungRank(r) > rungRank(best)) best = r;
   }
   return best;
 }
@@ -50,7 +70,7 @@ export function effectiveRung(f: LadderFacts): EffectiveRung {
   const caps: Binding[] = [];
   const readBy: ReadByEntry[] = [];
   for (const l of f.latches) {
-    caps.push({ cause: l.cause, kind: 'latch', cap: l.cap, reading: 'standing', known: rowOf(f.causeTable, l.cause)?.kind === 'latch' });
+    caps.push({ cause: l.cause, kind: 'latch', cap: l.cap, reading: 'standing', known: latchKnown(f.causeTable, l.cause) });
   }
   for (const c of f.conditions) {
     if (c.reading === 'lifted') continue;
@@ -88,7 +108,7 @@ const WITNESS_READING_MAP = { held: true, 'not-yet': true, unmeasured: true } as
 /** The ladder's local and shared vocabulary, for the coordination kebab census. */
 export const isLadderKebab = (word: string): boolean =>
   [LADDER_EFFECT_KINDS, NARROWING_STATES, NARROWING_WHYS, LADDER_CAUSES, LADDER_READERS, LADDER_ACT_KINDS,
-    Object.keys(RUNG_MOVE_WHY_MAP), Object.keys(DOOR_CLASS_MAP), Object.keys(WITNESS_READING_MAP)]
+    Object.keys(RUNG_MOVE_WHY_MAP), Object.keys(DOOR_CLASS_MAP), Object.keys(WITNESS_READING_MAP), Object.keys(GENERATION_ABSENCE_MAP)]
     .some((words) => (words as readonly string[]).includes(word));
 
 export type RungMove =
@@ -116,7 +136,7 @@ export function rungMoveVerdict(
   if (to === from) return { kind: 'same', rung: from };
   if (rungRank(to) < rungRank(from)) return { kind: 'lower', from, to };
   const needs = rungNeeds(to);
-  if (needs !== null && !serverCaps.includes(needs)) return { kind: 'refuse', word: 'capability-missing', needs };
+  if (needs !== null && !rungAvailable(to, serverCaps)) return { kind: 'refuse', word: 'capability-missing', needs };
   return { kind: 'raise', from, to };
 }
 

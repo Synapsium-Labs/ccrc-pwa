@@ -448,6 +448,18 @@ export function narrowingStateCases(m: LadderModule): Record<string, SuiteCase> 
   };
 }
 
+export function degradedReadingCases(m: LadderModule): Record<string, SuiteCase> {
+  const designated = { kind: 'designated', sessionId: 'lane-a', term: 1, row: null } as unknown as Parameters<LadderModule['degradedReading']>[0];
+  return {
+    'unmeasured designation stays unmeasured': () => expect(m.degradedReading({ kind: 'unmeasured', why: 'x' }, 'no-generation')).toBe('unmeasured'),
+    'no designation lifts even an unmeasured generation': () => expect(m.degradedReading({ kind: 'not-designated', row: null }, 'unmeasured')).toBe('lifted'),
+    'unmeasured generation remains unmeasured': () => expect(m.degradedReading(designated, 'unmeasured')).toBe('unmeasured'),
+    'no generation lifts': () => expect(m.degradedReading(designated, 'no-generation')).toBe('lifted'),
+    'degraded stands': () => expect(m.degradedReading(designated, { state: 'degraded' })).toBe('standing'),
+    'active lifts': () => expect(m.degradedReading(designated, { state: 'active' })).toBe('lifted'),
+  };
+}
+
 // -------------------------------------------------------------------------------------------------------- mutant sets
 
 const KEY = 'server/src/coord/overlordLadder.ts';
@@ -466,7 +478,6 @@ const EFFECTIVE_SET = set(effectiveRungCases, [
   { id: 'E8 one-under has no floor', old: 'rungOfRank(Math.max(rungRank(e.floor), rungRank(operator) - 1))', new: 'rungOfRank(rungRank(operator) - 1)' },
   { id: 'E9 one-under is its floor only', old: 'rungOfRank(Math.max(rungRank(e.floor), rungRank(operator) - 1))', new: 'rungOfRank(rungRank(e.floor))' },
   { id: 'E10 one-under is the operator rung', old: 'rungRank(operator) - 1))', new: 'rungRank(operator)))' },
-  { id: 'E11 any table row makes a latch known', old: "rowOf(f.causeTable, l.cause)?.kind === 'latch'", new: 'rowOf(f.causeTable, l.cause) !== undefined' },
   { id: 'E12 a latch caps by the table, not its stored cap', old: 'cap: l.cap, reading', new: "cap: (rowOf(f.causeTable, l.cause)?.effect as { cap?: Rung } | undefined)?.cap ?? l.cap, reading" },
   { id: 'E13 an unknown condition caps full', old: "kind: 'condition', cap: 'off', reading: c.reading, known: false", new: "kind: 'condition', cap: 'full', reading: c.reading, known: false" },
   { id: 'E14 a latch row is read as a condition', old: "if (row === undefined || row.kind !== 'condition') {", new: 'if (row === undefined) {' },
@@ -481,10 +492,7 @@ const EFFECTIVE_SET = set(effectiveRungCases, [
 
 const HIGHEST_SET = set(highestHeldRungCases, [
   { id: 'H1 the lowest held rung', old: 'rungRank(r) > rungRank(best)', new: 'rungRank(r) < rungRank(best)' },
-  { id: 'H2 a null word is not held', old: '(need === null || serverCaps.includes(need))', new: '(need !== null && serverCaps.includes(need))' },
-  { id: 'H3 every word is held', old: '(need === null || serverCaps.includes(need))', new: 'true' },
   { id: 'H4 the start is full', old: "let best: Rung = 'off';", new: "let best: Rung = 'full';" },
-  { id: 'H5 held means absent', old: '(need === null || serverCaps.includes(need))', new: '(need === null || !serverCaps.includes(need))' },
 ]);
 
 const WORD_READING_SET = set(rungWordReadingCases, [
@@ -492,7 +500,7 @@ const WORD_READING_SET = set(rungWordReadingCases, [
   { id: 'W2 the default reads full', old: "operatorRung.kind === 'rung' ? operatorRung.rung : LADDER_DEFAULT_RUNG;", new: "operatorRung.kind === 'rung' ? operatorRung.rung : 'full';" },
   { id: 'W3 equal rank stands', old: 'rungRank(rung) > rungRank(highestHeldRung(serverCaps))', new: 'rungRank(rung) >= rungRank(highestHeldRung(serverCaps))' },
   { id: 'W4 the operator rung\'s own word, not rank', old: "rungRank(rung) > rungRank(highestHeldRung(serverCaps)) ? 'standing' : 'lifted'", new: "rungNeeds(rung) !== null && !serverCaps.includes(rungNeeds(rung)!) ? 'standing' : 'lifted'" },
-  { id: 'W5 standing and lifted swapped', old: "? 'standing' : 'lifted'", new: "? 'lifted' : 'standing'" },
+  { id: 'W5 standing and lifted swapped', old: "rungRank(rung) > rungRank(highestHeldRung(serverCaps)) ? 'standing' : 'lifted'", new: "rungRank(rung) > rungRank(highestHeldRung(serverCaps)) ? 'lifted' : 'standing'" },
   { id: 'W6 the highest held rung is full', old: 'rungRank(highestHeldRung(serverCaps))', new: "rungRank('full')" },
   { id: 'W7 the operator rung read as the default always', old: "const rung = operatorRung.kind === 'rung' ? operatorRung.rung : LADDER_DEFAULT_RUNG;", new: 'const rung = LADDER_DEFAULT_RUNG;' },
 ]);
@@ -502,14 +510,14 @@ const MOVE_SET = set(rungMoveVerdictCases, [
   { id: 'V1 same is not answered', old: "  if (to === from) return { kind: 'same', rung: from };\n", new: '' },
   { id: 'V2 pause targets chat', old: "ask.kind === 'pause' ? lowest(from, 'chat') : ask.to", new: "ask.kind === 'pause' ? 'chat' : ask.to" },
   { id: 'V3 a raise is read as a lowering', old: 'if (rungRank(to) < rungRank(from)) return', new: 'if (rungRank(to) > rungRank(from)) return' },
-  { id: 'V4 the word check is inverted', old: 'needs !== null && !serverCaps.includes(needs)', new: 'needs !== null && serverCaps.includes(needs)' },
-  { id: 'V5 a null word is refused', old: 'needs !== null && !serverCaps.includes(needs)', new: '!serverCaps.includes(needs as string)' },
+  { id: 'V4 the word check is inverted', old: 'needs !== null && !rungAvailable(to, serverCaps)', new: 'needs !== null && rungAvailable(to, serverCaps)' },
+  { id: 'V5 a null word is refused', old: 'needs !== null && !rungAvailable(to, serverCaps)', new: 'needs === null || !rungAvailable(to, serverCaps)' },
   { id: 'V6 unreadable: off alone lowers', old: "ask.kind === 'pause' || ask.to === 'off'", new: "ask.kind !== 'pause' && ask.to === 'off'" },
   { id: 'V7 unreadable: pause alone lowers', old: "ask.kind === 'pause' || ask.to === 'off'", new: "ask.kind === 'pause'" },
   { id: 'V8 unreadable lowers from chat', old: "{ kind: 'lower', from: 'full', to: 'off' }", new: "{ kind: 'lower', from: 'chat', to: 'off' }" },
   { id: 'V9 the default reads off', old: "const from: Rung = current.kind === 'rung' ? current.rung : LADDER_DEFAULT_RUNG;", new: "const from: Rung = current.kind === 'rung' ? current.rung : 'off';" },
   { id: 'V10 a lowering swaps its ends', old: "return { kind: 'lower', from, to };", new: "return { kind: 'lower', from: to, to: from };" },
-  { id: 'V11 a raise is never refused', old: "if (needs !== null && !serverCaps.includes(needs)) return", new: "if (false) return" },
+  { id: 'V11 a raise is never refused', old: "if (needs !== null && !rungAvailable(to, serverCaps)) return", new: "if (false) return" },
   { id: 'V12 unreadable refuses every target', old: "return ask.kind === 'pause' || ask.to === 'off'\n      ? { kind: 'lower', from: 'full', to: 'off' }\n      : ", new: 'return ' },
 ]);
 
@@ -541,7 +549,29 @@ const NARROWING_SET = set(narrowingStateCases, [
   { id: 'N5 the not-journalled word', old: "why: 'not-journalled'", new: "why: 'no-witness-yet'" },
 ]);
 
+const LATCH_KNOWN_SET = set(effectiveRungCases, [
+  { id: 'K1 any table row makes a latch known', old: "rowOf(table, cause)?.kind === 'latch'", new: 'rowOf(table, cause) !== undefined' },
+  { id: 'K2 every latch is known', old: "rowOf(table, cause)?.kind === 'latch'", new: 'true' },
+  { id: 'K3 no latch is known', old: "rowOf(table, cause)?.kind === 'latch'", new: 'false' },
+]);
+const RUNG_AVAILABLE_SET = set(highestHeldRungCases, [
+  { id: 'A1 a null word is not held', old: 'needs === null || serverCaps.includes(needs)', new: 'needs !== null && serverCaps.includes(needs)' },
+  { id: 'A2 every word is held', old: 'needs === null || serverCaps.includes(needs)', new: 'true' },
+  { id: 'A3 held means absent', old: 'needs === null || serverCaps.includes(needs)', new: 'needs === null || !serverCaps.includes(needs)' },
+]);
+
+const DEGRADED_SET = set(degradedReadingCases, [
+  { id: 'D1 designation unreadable lifts', old: "if (designation.kind === 'unmeasured') return 'unmeasured';", new: "if (designation.kind === 'unmeasured') return 'lifted';" },
+  { id: 'D2 no designation stands', old: "if (designation.kind === 'not-designated') return 'lifted';", new: "if (designation.kind === 'not-designated') return 'standing';" },
+  { id: 'D3 live unreadable lifts', old: "if (live === 'unmeasured') return 'unmeasured';", new: "if (live === 'unmeasured') return 'lifted';" },
+  { id: 'D4 no generation stands', old: "if (live === 'no-generation') return 'lifted';", new: "if (live === 'no-generation') return 'standing';" },
+  { id: 'D5 degraded lifts', old: "live.state === 'degraded' ? 'standing' : 'lifted'", new: "live.state === 'degraded' ? 'lifted' : 'standing'" },
+]);
+
 export const LADDER_MUTANT_SETS: Record<string, MutantSet<never>> = {
+  [`${KEY}#degradedReading`]: DEGRADED_SET as MutantSet<never>,
+  [`${KEY}#latchKnown`]: LATCH_KNOWN_SET as MutantSet<never>,
+  [`${KEY}#rungAvailable`]: RUNG_AVAILABLE_SET as MutantSet<never>,
   [`${KEY}#effectiveRung`]: EFFECTIVE_SET as MutantSet<never>,
   [`${KEY}#highestHeldRung`]: HIGHEST_SET as MutantSet<never>,
   [`${KEY}#rungWordReading`]: WORD_READING_SET as MutantSet<never>,
