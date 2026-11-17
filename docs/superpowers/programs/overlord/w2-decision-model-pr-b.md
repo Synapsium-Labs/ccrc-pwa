@@ -1,6 +1,6 @@
 # Overlord W2 decision model, PR B: notes for the ledger
 
-The worker's notes for PR B (Tasks 6 to 9 of [`w2-decision-model.md`](../2026-11-16-overlord-w2/w2-decision-model.md)), run
+The worker's notes for PR B (Tasks 6 to 9 of [`w2-decision-model.md`](../../plans/2026-11-16-overlord-w2/w2-decision-model.md)), run
 2383. The coordinator folds them into the programme ledger on its own pull request. Each departure is named by slug; no
 deviation number is taken here.
 

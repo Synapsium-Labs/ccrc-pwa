@@ -1,7 +1,7 @@
 // The decision model's wire, held against the vendor's published reference (Overlord W2, decision model B; the coordinator's
 // ruling on review 2324 F7, `decision-wire-not-re-read`). PR A's codec and fixture spoke question 2's shape as the plan recorded
 // it, with no read of the reference at build time. B's builder read it (2026-11-17; the sources are named in
-// `docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model-pr-b.md`) and found every name PR A uses as published: a
+// `docs/superpowers/programs/overlord/w2-decision-model-pr-b.md`) and found every name PR A uses as published: a
 // request is `{ model, state, questions }`, each question `{ type, instructions, criteria }`, `type` `noul` (criteria `{ true,
 // false }`, optional) or `choice` (criteria, 1 to 255 option keys); an answer is `{ model, answers }` keyed by the request's
 // question names, a `noul` answer `{ type: 'noul', noul: <p(yes)> }` with no `confidence`, a `choice` answer
