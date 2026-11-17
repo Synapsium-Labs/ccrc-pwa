@@ -520,6 +520,12 @@ const CONTROLS: Record<string, string> = {
     + '`.docs-owner-link`, `.docs-hint-link`), and the one use with none is the failure view\'s "Did you mean …?" '
     + 'link inside its sentence (`.docs-fail-suggest a`), the inline exception docs.css states.',
   'docs/DocsLeaf.tsx <button> docs-leaf-action': "TOKEN. A leaf's Source and Download.",
+  'docs/MockupView.tsx <button> docs-leaf-action':
+    "TOKEN. The mockup viewer's one hand-drawn button (`Action`): Run and Stop scripts, Load external, Full screen, New tab, Source, "
+    + "Close, Reload mockup and Render mockup, each the leaf's bordered `.docs-leaf-action`, whose own rule carries the floor.",
+  'docs/MockupView.tsx <a> docs-hint-link':
+    "TOKEN. An external link in the mockup's links list (native Docs reader C2 Task 8), opened with `openExternal` on tap: a standalone "
+    + "line of the list wearing `.docs-hint-link`, whose own rule carries the floor.",
   'docs/DocMarkdown.tsx <button> doc-gate-btn': "TOKEN. The large-document gate's two choices.",
   'docs/DocMarkdown.tsx <button> doc-plain-action': "TOKEN. Plain text's Format anyway or Retry.",
   'docs/DocImage.tsx <button> doc-img-load': 'TOKEN. Load image, for an image the page budget held back.',
@@ -535,6 +541,9 @@ const CONTROLS: Record<string, string> = {
   'docs/export/exportMarkdown.tsx <a> (none)':
     'INLINE. The links inside an exported document, `EXPORT_COMPONENTS.a` (docs W5 Export): drawn into the saved file, '
     + 'never into the app, and in a sentence or block of text, as for `docs/DocLink.tsx <a> (none)`.',
+  'docs/export/buildExport.tsx <a> (none)':
+    'INLINE. The "Links in this page" list of a saved mockup export (native Docs reader C2, Task 9; base 5.6.9 step 5): drawn '
+    + 'into the saved file, never into the app, each link a line of text in the list, as for `docs/export/exportMarkdown.tsx <a> (none)`.',
 };
 
 /** OVERLAY entries name the pseudo-rule that reaches the floor. */

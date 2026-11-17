@@ -5,6 +5,11 @@
 import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
 import type { HttpsOrigin } from './ports';
 
+/** The most bytes of HTML the viewer renders on open, inclusive (base 5.6.2 step 3): half of `DOCS_MAX_DOC_BYTES`, so
+ *  1 MiB. A page over it waits for a tap ("Render mockup") before anything is parsed, and a page over
+ *  `DOCS_MAX_DOC_BYTES` is download-only. The viewer's gate and nothing else reads it. */
+export const MOCKUP_AUTO_RENDER_BYTES = DOCS_MAX_DOC_BYTES / 2;
+
 /** The deepest stack of open elements the pre-scan admits (base 5.6.2, lowered from 256 by D-8695). The merge queue's hosted
  *  runner read the text-heavy gate (`<b>`, the deepest stack, then text and comment runs to 2 MiB) at a 1 052 ms median
  *  at 256. Alone on the fleet box that shape read 240 ms at 128 and 132 ms at 64, with a floor near 130 ms from the
@@ -37,6 +42,17 @@ export const MOCKUP_MAX_OPEN_FORMATTING = 16;
  *  lowered to 32 with D-8695's depth and formatting limits: at 16 open elements each carrying 32 the reconstruction shape
  *  read a 108 ms median alone on the fleet box (local). 32 keeps 4.6x headroom over the docs' 7. */
 export const MOCKUP_MAX_ATTRIBUTES = 32;
+
+/** The characters of a reference the census and the links list show before their ellipsis (base 5.6.7): 120 code units,
+ *  so an author's text cannot run a row long. `censusRefText` (`census.ts`) is its one reader. */
+export const MOCKUP_CENSUS_REF_UNITS = 120;
+
+/** The most rows each capped list draws (base 5.6.7, D-8712): 500. That is each on-screen fold of the viewer, the census and
+ *  the links list alike, and the Export's list of the assets left out, on the sheet and in the saved file. A page may name
+ *  thousands of references; past this the list shows the first 500 and one closed line says how many more are not listed.
+ *  The fold summaries still count every reference, and the saved file's links list is not cut by it (the file's own byte
+ *  cap bounds it). `capRows` (`census.ts`) is its one reader. */
+export const MOCKUP_CENSUS_ROW_CAP = 500;
 
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
 export const MOCKUP_FORMATTING_ELEMENTS: ReadonlySet<string> = new Set([

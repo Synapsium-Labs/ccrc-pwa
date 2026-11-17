@@ -102,6 +102,14 @@ describe('a PWA L1 module loads no .tsx, no store and not lib/api.ts (ARCH-04 st
     expect(pwaRing('pwa/src/skins/index.ts')).toEqual({ ring: 'L4', why: 'declares L4 in its header' });
   });
 
+  // The mockup viewer's decisions (C2 Task 8, review I2) are L1 by their facts: pure functions over rows, a Document the caller
+  // hands in and a route builder, with no hook, no timer and no browser global. The view (L4) only calls them; a fetch, a timer
+  // or a hook added to the file moves it outward and turns this red, so the decisions stay testable without a render.
+  it('pwa/src/docs/mockup/census.ts is L1 by its facts, and so is its policy table', () => {
+    expect(pwaRing('pwa/src/docs/mockup/census.ts')).toEqual({ ring: 'L1', why: 'no outer-ring fact' });
+    expect(pwaRing('pwa/src/docs/mockup/policy.ts').ring).toBe('L1');
+  });
+
   it('CONTROL: a planted runtime import of a component, a store or the fetch adapter from an L1 module is red', () => {
     const file = 'pwa/src/session/plantedWords.ts';
     const planted = (src: string): string[] => [...l1Violations(file, parseSource(src, file)).keys()];
