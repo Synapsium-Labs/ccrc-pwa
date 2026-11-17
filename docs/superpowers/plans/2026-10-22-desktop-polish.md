@@ -4090,13 +4090,20 @@ holds each changed place, each row and what reds it, the mutants and the open-PR
 - [x] The open-PR measure: 8 of 20 open PRs add a file the arm refuses (read-only, listed in `c43.md`).
 
 **Files.** `.github/ci/ledger-guard.mjs`, `.github/workflows/ci.yml` (the job's comment), `server/test/ci-ledger-guard.test.ts`,
-`ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15), `server/test/coordinator-skill.test.ts` (its
+`ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15, and one unpinned sentence trimmed for the
+skill-size cap), `server/test/coordinator-skill.test.ts` (its
 pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `shared/private-names.mjs` and
 `server/test/private-names-characterization.test.ts` (the judge's row removed on the operator's ruling of 2026-11-17,
 and the digest re-pinned), this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
 
-**Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, single-definition,
-deviation-refs, dtbd and topology-clean pass; the guard passes on this branch against `origin/main`.
+- [x] Fix round 1 (review 2396): rows for a one-digit month or day, an uppercase or digit-first slug and text after
+  the extension; the layout rows assert the refusal line and the path; the README's warn-only sentence corrected; a
+  spec's images and mockup pages go under `docs/design/<spec file name less its extension>/` (the guard's message,
+  CLAUDE.md and CONTRIBUTING).
+
+**Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, skill-size-ratchet, the
+private-names suites, single-definition, deviation-refs, dtbd and topology-clean pass; the guard passes on this branch
+against `origin/main`.
 **Rollback.** A plain revert; the open PRs that add a note under `plans/<plan>/` pass the guard again.
 
 ## Acceptance (the matrix, per PR)

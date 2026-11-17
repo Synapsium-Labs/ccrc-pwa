@@ -152,12 +152,12 @@ against the programme's home project.
 **Task notes go in a new file, never in the ledger.** Do not edit or delete an existing file under
 `docs/superpowers/programs/` or `docs/superpowers/plans/` in your pull request: every in-flight pull
 request of a wave edits the same rows, and each absorption conflicts there. Write what the ledger
-should learn into a NEW note, `docs/superpowers/programs/<programme>/<task-or-pr>.md` (D-8719), and
-say so in your `wave-done` mail; the coordinator folds the notes into the ledger on its own
+should learn into a NEW note, `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and say so
+in your `wave-done` mail; the coordinator folds the notes into the ledger on its own
 `ledger/<programme>` pull request. A `ledger-guard` step fails a pull request that edits a ledger
 from any other branch, or adds a file under `plans/` or `specs/` that is not a dated plan or spec. If
-the edit is genuinely your change's own, a `Ledger-Edit: <D-TBD reason>` trailer on your head commit
-passes it (a trailer on an earlier commit does not count).
+the edit is your change's own, a `Ledger-Edit: <D-TBD reason>` trailer on your head commit passes the
+edit check (not one on an earlier commit); nothing passes the layout check.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,

@@ -459,8 +459,9 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
 - **Follow the review judge's standard** (the operator's rulings of 2026-11-17). Every PR here carries the `horkos`
   check: Horkos is this repo's review judge, and its name is not secret. We follow its standard: a new spec or plan
-  takes its dated layout, directly in `docs/superpowers/specs/` or `docs/superpowers/plans/`, and a task note goes
-  under `docs/superpowers/programs/<programme>/`. A blocking reason it posts is fixed in that PR where the PR can fix
+  takes its dated layout, directly in `docs/superpowers/specs/` or `docs/superpowers/plans/`, a task note goes under
+  `docs/superpowers/programs/<programme>/`, and a spec's images and mockup pages go under
+  `docs/design/<spec file name less its extension>/`, linked from the spec by relative path. A blocking reason it posts is fixed in that PR where the PR can fix
   it. It is not a required check, so landing still gates on the required checks. The ledger guard's layout arm
   (`.github/ci/ledger-guard.mjs`, D-8719) mirrors its layout rule in this repo, so CI catches a misplaced file first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
