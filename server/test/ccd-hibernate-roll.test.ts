@@ -629,6 +629,25 @@ describe('ccd hibernate --roll --fresh: the roll whose wake starts a fresh conve
     expect(news(), 'the wake spawned nothing: the dispatched swap spawns it').toEqual([]);
   });
 
+  // The Overlord W1 ccd arms, PR C2, Step 1 (characterization, green before the pick is wired): the real `_wake_ceiling_move`
+  // (D-8123), not R2's stub, CAN fire on a fresh start's wake. The account is at its ceiling, another has measured room, and
+  // the wake dispatches the move and spawns nothing, so no receipt is written and the verb answers 7 with the old uuid back.
+  it('C2 Step 1: the REAL _wake_ceiling_move fires on a fresh start\'s wake at the ceiling: a move dispatched, no spawn, exit 7', () => {
+    claimed();
+    const lim = (w: string, five: number): void => {
+      const t = Math.floor(Date.now() / 1000);
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven: five, ts: t, fiveResetAt: t + 10_000, sevenResetAt: t + 400_000 }));
+    };
+    lim('claude', 99); lim('claude-a', 10);
+    const detached = '_svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };';
+    const r = fresh('--roll --fresh', detached);
+    unproven(r, false);
+    expect(calls().some((l) => l.startsWith('detached ') && l.includes(`swap '${ID}' 'claude-a'`)), calls().join('\n')).toBe(true);
+    expect(news(), 'the wake spawned nothing: the dispatched swap spawns it').toEqual([]);
+    expect(fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8')).toMatch(new RegExp(`wake-rescue ${ID}: claude \\(ceiling five=99 seven=99\\) -> claude-a`));
+  });
+
   it('caps advertises hibernate-fresh', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('hibernate-fresh');
   });
@@ -822,5 +841,37 @@ describe('the Overlord W1 ccd arms: a proven fresh start ends a set-side crossin
     expect(fresh().rc).toBe(0);
     expect(has('crosspool')).toBe(false);
     expect(ended()).toEqual([]);
+  });
+});
+
+// The Overlord W1 ccd arms, PR C2 (plan `w1-ccd-arms.md` Task 7): the fresh start picks the account it wakes on from the
+// route record's ordered list (`acctorder`), last in the re-measure, and writes `wrapper` before `.fresh` and the uuid.
+// The REAL `cmd_ensure` and `_spawn_start`, the settle stubbed, as the W1a rows above run them; the roster is the fixture's
+// (`claude`, `claude-a`, `claude-b`, `gpt`, `claude-d`), and the session runs on `claude`.
+describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account the pick names', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const news = (): string[] => calls().filter((l) => /^tmux new-session/.test(l));
+  const lim = (w: string, five: number): void => {
+    const t = Math.floor(Date.now() / 1000);
+    fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+      JSON.stringify({ five, seven: five, ts: t, fiveResetAt: t + 10_000, sevenResetAt: t + 400_000 }));
+  };
+  const claimed = (list: string | null): void => {
+    idle(); h.sh(`_reg_claim ${ID}`);
+    if (list !== null) h.sh(`_reg_set ${ID} acctorder '${list}'`);
+  };
+  const fresh = (extra = ''): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, REAL);
+
+  const bin = (w: string): string => `/.local/bin/${w}'`;
+
+  it('Step 1 characterization: a row with an ordered list whose first account could take it wakes on its current account', () => {
+    claimed('claude-b'); lim('claude-b', 20);
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(news(), 'one spawn').toHaveLength(1);
+    expect(news()[0]).toContain(bin('claude'));
   });
 });
