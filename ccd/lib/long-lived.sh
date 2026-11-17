@@ -165,12 +165,12 @@ _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, a
   [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$__ff" || -L "$__ff" ]] || return 1; [[ -L "$__ff" || ! -f "$__ff" || ! -r "$__ff" ]] && return 2
   __fv=$( { _plat_timeout 2 head -c "$4" -- "$__ff" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${__fv%x}"
 }
-_fresh_pick_least() {   # var account load cur -> var = "<account> <load>", the least loaded so far. Always 0.
-  # A tie goes first to an account in the current account's organization (`_org_rel` same, account organization plan carry
-  # K1; one account is `same` to itself), then to the earlier listed, the one already held. `_org_rel` forks only on a tie.
-  local LC_ALL=C IFS=' ' b="${!1% *}" t="${!1#* }"
-  [[ -z "${!1}" ]] || (( 10#$3 < 10#$t )) || { (( 10#$3 == 10#$t )) && [[ "$(_org_rel "$4" "$2")" == same && "$(_org_rel "$4" "$b")" != same ]]; } \
-    && printf -v "$1" '%s' "$2 $3"; return 0
+_fresh_pick_least_to() {   # var account load -> var = "<account> <load>", the least loaded so far. Always 0.
+  # A tie goes first to another account in the current account's organization, then to the earlier listed, the one already
+  # held (account organization plan carry K1): `_swap_target`'s own rule, `_org_tie` in ccd/ccd, the one writer of it (review
+  # 2360 F5), over `_fresh_pick_to`'s `cur` and its label table. The current account is never `same` to itself (F1).
+  local LC_ALL=C IFS=' ' __lb="${!1% *}" __lt="${!1#* }"
+  [[ -z "${!1}" ]] || (( 10#$3 < 10#$__lt )) || { (( 10#$3 == 10#$__lt )) && _org_tie "$2" "$__lb"; } && printf -v "$1" '%s' "$2 $3"; return 0
 }
 # shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by `cmd_hibernate` in ccd/ccd
 _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|3|stay|none; rc 1, var empty, FRESH_PICK_WHY = the cause
@@ -189,11 +189,11 @@ _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_
   # `default` or none has no step 2 and no hold, and its gate still asks `_serviceable` with the id (main's signature,
   # serviceability A's seam), which answers servable unless a set side's account has no continuity record.
   # STEP 3 (PR C2): no step 1 or 2 account, so the least loaded account at any MEASURED load whose gate on the class is rc 0
-  # (unless the hold holds), else the least loaded on the fallback; a tie by `_fresh_pick_least`. STAY (review 2148 F5): no
+  # (unless the hold holds), else the least loaded on the fallback; a tie by `_fresh_pick_least_to`. STAY (review 2148 F5): no
   # step picks, and the current account passes the hard filter with a gate on the class or the fallback that is not rc 1
   # (an unmeasured rc 2 never moves the Overlord, C46); a gate that is rc 1 on both classes refuses, since C56 leaves
   # readiness at `stranded` only when no account can serve. With a list standing, an empty current account refuses.
-  local LC_ALL=C IFS=' ' list side cls fb='' hold='' a s p2='' b3='' b3f='' why='' rc
+  local LC_ALL=C IFS=' ' list side cls fb='' hold='' a s p2='' b3='' b3f='' why='' rc cur="$3" corg='' corgr=''; local -A corgs=()   # `_org_tie`'s
   printf -v "$1" ''; FRESH_PICK_STEP=none; FRESH_PICK_WHY=''
   _fresh_pick_field_to list "$2" acctorder $((ROUTE_LIST_MAX_BYTES + 1)); rc=$?
   (( rc == 1 )) && { printf -v "$1" '%s' "$3"; return 0; }
@@ -208,9 +208,9 @@ _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_
     _fresh_pick_ok "$a" "$side" || { why+="; $a $FRESH_PICK_FAIL"; continue; }
     s=$(_limit_score "$a"); [[ "$s" =~ ^[0-9]{1,3}$ ]] || { why+="; $a load"; continue; }
     if [[ -z "$hold" ]] && _class_gate "$a" "$cls" "$2"; then
-      (( 10#$s < FRESH_PICK_SOFT_PCT )) && { printf -v "$1" '%s' "$a"; FRESH_PICK_STEP=1; return 0; }; _fresh_pick_least b3 "$a" "$s" "$3"
+      (( 10#$s < FRESH_PICK_SOFT_PCT )) && { printf -v "$1" '%s' "$a"; FRESH_PICK_STEP=1; return 0; }; _fresh_pick_least_to b3 "$a" "$s"
     elif [[ -n "$fb" ]] && _class_gate "$a" "$fb" "$2"; then
-      (( 10#$s < FRESH_PICK_SOFT_PCT )) && [[ -z "$p2" ]] && p2=$a; _fresh_pick_least b3f "$a" "$s" "$3"
+      (( 10#$s < FRESH_PICK_SOFT_PCT )) && [[ -z "$p2" ]] && p2=$a; _fresh_pick_least_to b3f "$a" "$s"
     else why+="; $a class"; fi
   done
   [[ -n "$p2" ]] && { printf -v "$1" '%s' "$p2"; FRESH_PICK_STEP=2; return 0; }

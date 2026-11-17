@@ -904,7 +904,7 @@ describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account 
     expect(log()).toContain(`fresh-pick ${ID}: claude -> claude-b step=1\n`);
   });
 
-  it('a stay: the current account, today\'s log line, and no swap row', () => {
+  it('a stay: the current account, a log line that says stay (review 2360 F6), and no swap row', () => {
     claimed('claude-b');
     const r = fresh(WRITES);
     expect(r.rc, r.err).toBe(0);
@@ -912,7 +912,7 @@ describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account 
     expect(writes().some((l) => l.startsWith('wrapper ')), 'no wrapper write').toBe(false);
     expect(news()[0]).toContain(bin('claude'));
     expect(swaps()).toEqual([]);
-    expect(log()).toMatch(new RegExp(`hibernate ${ID}: fresh start, uuid ${UUID} -> [0-9a-f-]{36}\n`));
+    expect(log()).toMatch(new RegExp(`hibernate ${ID}: fresh start, uuid ${UUID} -> [0-9a-f-]{36}, stay on claude\n`));
     expect(log()).not.toContain('fresh-pick');
   });
 
@@ -966,23 +966,38 @@ describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account 
     expect(swaps()).toEqual([]);
   });
 
-  it('a wake that fails (exit 4) puts back the old wrapper and uuid, with no swap row', () => {
+  it('a wake that fails (exit 4) puts back the old wrapper, then the old uuid, with no swap row, and logs it', () => {
     moving();
-    const r = fresh('_spawn_start() { echo "ccd: spawn failed" >&2; return 5; };');
+    const r = fresh(`${WRITES} _spawn_start() { echo "ccd: spawn failed" >&2; return 5; };`);
     expect(r.rc, r.err).toBe(4);
     expect(r.err).toContain('roll-wake-failed');
     expect(h.reg(ID, 'wrapper')).toBe('claude');
     expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().slice(-2), 'the put-back: the account first, then the uuid it names (review 2360 F3)').toEqual(['wrapper claude', `uuid ${UUID}`]);
+    expect(log()).toMatch(new RegExp(`hibernate ${ID}: roll wake failed \\(rc \\d+\\), back to sleep, account back to claude\n`));
     expect(swaps()).toEqual([]);
     expect(log()).not.toContain('fresh-pick');
   });
 
   it('an unproven wake (exit 7, the wake moved it at the ceiling) puts back the old wrapper and uuid, with no swap row', () => {
     moving();
-    const r = fresh('_wake_ceiling_move() { WAKE_MOVE_TARGET=claude-d; return 0; };');
+    const r = fresh(`${WRITES} _wake_ceiling_move() { WAKE_MOVE_TARGET=claude-d; return 0; };`);
     expect(r.rc, r.err).toBe(7);
     expect(h.reg(ID, 'wrapper')).toBe('claude');
     expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().slice(-2), 'the put-back: the account first, then the uuid it names (review 2360 F3)').toEqual(['wrapper claude', `uuid ${UUID}`]);
+    expect(log()).toMatch(new RegExp(`fresh start unproven \\(marker read [^)]*\\), uuid back to ${UUID}, account back to claude\n`));
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 7 keeps a wrapper written since the pick (a move came first): only the uuid goes back (review 2360 F8)', () => {
+    moving();
+    const r = fresh(`_wake_ceiling_move() { _reg_set_real ${ID} wrapper claude-d; WAKE_MOVE_TARGET=claude-d; return 0; }; ${WRITES}`);
+    expect(r.rc, r.err).toBe(7);
+    expect(h.reg(ID, 'wrapper'), 'the move\'s account stands').toBe('claude-d');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(writes().filter((l) => l === 'wrapper claude'), 'no put-back of the account').toEqual([]);
+    expect(log()).toContain(`, uuid back to ${UUID}, account kept at claude-d\n`);
     expect(swaps()).toEqual([]);
   });
 

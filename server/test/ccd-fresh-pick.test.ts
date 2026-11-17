@@ -414,7 +414,7 @@ describe('step 3: the least loaded account at any measured load, when no account
   });
 });
 
-describe('account organization K1: a step 3 tie goes first to the current account\'s organization, then to the earlier listed', () => {
+describe('account organization K1: a step 3 tie goes first to another account in the current account\'s organization, then to the earlier listed', () => {
   /** The fixture roster with organization labels on top of the beforeEach's facts. */
   const orgs = (labels: Record<string, string>): void => {
     const facts = Object.fromEntries(LANES.map((w) => [w, { fableBilling: 'included' as const, continuity: 1_700_000_000 }]));
@@ -447,6 +447,25 @@ describe('account organization K1: a step 3 tie goes first to the current accoun
 
   it('two in the same organization: the earlier listed of them', () => {
     orgs({ 'claude-a': 'org-a', 'claude-b': 'org-a', 'claude-d': 'org-a' }); tie();
+    expect(pick('claude-a')).toMatchObject({ pick: 'claude-b', step: '3' });
+  });
+
+  // Review 2360 F1 (ruled): the current account on the list wins no tie by organization. It is never `same` to itself,
+  // so on a tie it sits at its list position like an account with no relation: `_swap_target`'s rule (`_org_tie`).
+  it('F1: the current account on the list, unlabelled, ties with an earlier one: the earlier listed, today\'s answer', () => {
+    route('fable', 'claude-b,claude-a'); limits('claude-a', 80); limits('claude-b', 80); sweep({ 'claude-a': 0.1, 'claude-b': 0.1 });
+    expect(pick('claude-a')).toMatchObject({ pick: 'claude-b', step: '3' });
+  });
+
+  it('F1: the current account listed first, labelled, ties with a later one in its organization: the other account wins', () => {
+    orgs({ 'claude-a': 'org-a', 'claude-b': 'org-a' });
+    route('fable', 'claude-a,claude-b'); limits('claude-a', 80); limits('claude-b', 80); sweep({ 'claude-a': 0.1, 'claude-b': 0.1 });
+    expect(pick('claude-a')).toMatchObject({ pick: 'claude-b', step: '3' });
+  });
+
+  it('F1: the current account listed later, labelled, ties with an earlier one in another organization: the earlier listed', () => {
+    orgs({ 'claude-a': 'org-a', 'claude-b': 'org-b' });
+    route('fable', 'claude-b,claude-a'); limits('claude-a', 80); limits('claude-b', 80); sweep({ 'claude-a': 0.1, 'claude-b': 0.1 });
     expect(pick('claude-a')).toMatchObject({ pick: 'claude-b', step: '3' });
   });
 });
