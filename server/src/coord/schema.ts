@@ -3538,8 +3538,8 @@ export const MIGRATIONS: readonly string[] = [
 
   // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
-  // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark (the `updatedAt` it has read to)
-  // and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
+  // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark for each changed* kind (the
+  // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped) and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
   // `linear_bindings.id`), whether ccrc put it back, and when it commented; `value` and `actor` hold LINEAR TEXT, read only
   // under `untrusted`, and `actor` is always the literal `not read` in this build (the changed* documents select no actor and
   // `ops.ts` is frozen; D-8703). `linear_migrations`: one row per team migration (`state` is a `MigrationState` word, `map` the
@@ -3559,7 +3559,8 @@ export const MIGRATIONS: readonly string[] = [
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
-  CREATE TABLE linear_drift_marks (workspaceId TEXT PRIMARY KEY, watermark TEXT NOT NULL, passAt INTEGER NOT NULL);
+  CREATE TABLE linear_drift_marks (workspaceId TEXT PRIMARY KEY, initiatives TEXT NOT NULL, projects TEXT NOT NULL,
+    milestones TEXT NOT NULL, issues TEXT NOT NULL, passAt INTEGER NOT NULL);
   CREATE TABLE linear_drift_events (id INTEGER PRIMARY KEY AUTOINCREMENT, bindingId INTEGER NOT NULL, at INTEGER NOT NULL,
     field TEXT NOT NULL, value TEXT NOT NULL, actor TEXT NOT NULL, restored INTEGER NOT NULL, commentedAt INTEGER);
   CREATE TABLE linear_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,

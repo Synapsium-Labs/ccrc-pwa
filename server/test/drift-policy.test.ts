@@ -2,9 +2,10 @@
 import { LINEAR_DESCRIPTION_MAX_CHARS, fitLinearDescription } from '../src/linear/planSyncPolicy.js';
 import { describe, it, expect } from 'vitest';
 import {
-  DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent, notDrift,
-  restoreComment, restoredDescription, restoredLine, restoredLines, withoutRestoredLines, type OwnedFields,
+  DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
+  restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
   DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
+  UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, nextWatermark, restorableFields,
 } from '../src/linear/driftPolicy.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
 
@@ -87,22 +88,64 @@ describe('whitespace Linear reflowed', () => {
   });
 });
 
-describe('notDrift (§7.3)', () => {
-  const ctx = { prMerged: false, gracePasses: 1 };
-  it('a field ccrc does not own is not drift', () => {
-    expect(notDrift('labelIds', [], ['x'], ctx)).toBe(true);
-    expect(notDrift('projectId', 'a', 'b', ctx)).toBe(false);
+describe('graceVerdict (§7.3; review 2386 F1, A5, F7)', () => {
+  const g = (drifted: string[], linearState: unknown, o: { prMerged?: boolean; driftSince?: number | null } = {}) =>
+    graceVerdict({ drifted, linearState, prMerged: o.prMerged ?? false, driftSince: o.driftSince ?? null });
+  it('a field ccrc does not own is not drift; an owned one is', () => {
+    expect(g(['labelIds', 'projectId'], 'started')).toEqual({ fields: ['projectId'], holdState: false, driftSince: 'keep' });
   });
-  it('In Progress → In Review is not drift', () => {
-    expect(notDrift('stateType', 'started', 'started', ctx)).toBe(true);
+  it('completed by the integration with the merge recorded is not drift, and clears a grace', () => {
+    expect(g(['stateType'], 'completed', { prMerged: true })).toEqual({ fields: [], holdState: false, driftSince: 'keep' });
+    expect(g(['stateType'], 'completed', { prMerged: true, driftSince: 5 })).toEqual({ fields: [], holdState: false, driftSince: 'clear' });
   });
-  it('completed by the integration with the merge recorded is not drift', () => {
-    expect(notDrift('stateType', 'started', 'completed', { prMerged: true, gracePasses: 5 })).toBe(true);
+  it('completed with no merge recorded waits one pass, then is drift until the state no longer differs', () => {
+    expect(g(['stateType'], 'completed')).toEqual({ fields: [], holdState: false, driftSince: 'set' });
+    expect(g(['stateType'], 'completed', { driftSince: 5 })).toEqual({ fields: ['stateType'], holdState: false, driftSince: 'keep' });
+    expect(g([], 'started', { driftSince: 5 })).toEqual({ fields: [], holdState: false, driftSince: 'clear' });
+    expect(g(['stateType'], 'canceled')).toEqual({ fields: ['stateType'], holdState: false, driftSince: 'keep' });
   });
-  it('completed with no merge recorded waits one pass', () => {
-    expect(notDrift('stateType', 'started', 'completed', { prMerged: false, gracePasses: 0 })).toBe(true);
-    expect(notDrift('stateType', 'started', 'completed', { prMerged: false, gracePasses: 1 })).toBe(false);
-    expect(notDrift('stateType', 'started', 'canceled', ctx)).toBe(false);
+  it('while the grace stands, another field is put back and the state is held out of the update (A5)', () => {
+    expect(g(['title', 'stateType'], 'completed')).toEqual({ fields: ['title'], holdState: true, driftSince: 'set' });
+    expect(g(['title', 'stateType'], 'completed', { driftSince: 5 })).toEqual({ fields: ['title', 'stateType'], holdState: false, driftSince: 'keep' });
+  });
+  it('an issue whose grace stands is re-read when the changed read did not return it (F1)', () => {
+    expect(graceRereads(['a', 'b', 'a'], new Set(['b']))).toEqual(['a']);
+    expect(graceRereads([], new Set(['b']))).toEqual([]);
+  });
+});
+
+describe('what an update can put back, and what is recorded (review 2386 F7, A1, A4, A3)', () => {
+  it('an initiative\'s links, a project\'s milestones and a milestone\'s project are not put back by an update', () => {
+    expect(UNRESTORABLE).toEqual({ initiative: ['projectIds'], project: ['milestoneIds'], milestone: ['projectId'], issue: [] });
+    expect(restorableFields('project', ['name', 'milestoneIds', 'initiativeIds'])).toEqual(['name', 'initiativeIds']);
+    expect(restorableFields('issue', ['title', 'stateType'])).toEqual(['title', 'stateType']);
+  });
+  it('a missing project link is judged by the project\'s own binding: not current is catch-up, current is drift (A1)', () => {
+    expect(missingLinksVerdict([{ id: 'p1', current: false }])).toEqual({ drift: [], catchUp: true, unrestorable: false });
+    expect(missingLinksVerdict([{ id: 'p1', current: true }, { id: 'p2', current: false }])).toEqual({ drift: ['p1'], catchUp: true, unrestorable: false });
+    expect(missingLinksVerdict([{ id: 'p3', current: null }])).toEqual({ drift: [], catchUp: false, unrestorable: true });
+  });
+  it('an event is restored when every restore it rides on is, refused when one is, and skipped when one is moot or deferred', () => {
+    const o = new Map([[1, { outcome: 'restored' as const }], [2, { outcome: 'refused' as const, word: 'linear-forbidden' }], [3, { outcome: 'deferred' as const }], [4, { outcome: 'moot' as const }]]);
+    expect(eventVerdict([], o)).toEqual({ kind: 'unrestorable' });
+    expect(eventVerdict([1], o)).toEqual({ kind: 'restored' });
+    expect(eventVerdict([1, 2], o)).toEqual({ kind: 'refused', word: 'linear-forbidden' });
+    expect(eventVerdict([1, 3], o)).toEqual({ kind: 'skip' });
+    expect(eventVerdict([4], o)).toEqual({ kind: 'skip' });
+    expect(eventVerdict([9], o)).toEqual({ kind: 'skip' });
+  });
+  it('an unrestorable difference already recorded with the same value is not recorded again (A4)', () => {
+    expect(isNewUnrestorable(null, 'a')).toBe(true);
+    expect(isNewUnrestorable({ value: 'a', restored: false }, 'a')).toBe(false);
+    expect(isNewUnrestorable({ value: 'a', restored: false }, 'b')).toBe(true);
+    expect(isNewUnrestorable({ value: 'a', restored: true }, 'a')).toBe(true);
+  });
+  it('each kind\'s watermark moves to its own newest read unless it is kept (A3)', () => {
+    const old = '2026-11-10T00:00:00.000Z';
+    expect(nextWatermark(old, '2026-11-11T00:00:00.000Z', false)).toBe('2026-11-11T00:00:00.000Z');
+    expect(nextWatermark(old, '2026-11-11T00:00:00.000Z', true)).toBe(old);
+    expect(nextWatermark(old, null, false)).toBe(old);
+    expect(nextWatermark(old, '2026-11-09T00:00:00.000Z', false)).toBe(old);
   });
 });
 
@@ -124,19 +167,30 @@ describe('restored lines', () => {
     expect(restoredLine('targetDate', at)).toBe("Restored on 2026-11-12: ccrc put back this milestone's target date.");
     expect(restoredLine('sortOrder', at)).toBe("Restored on 2026-11-12: ccrc put back this milestone's order.");
   });
-  it('withoutRestoredLines removes the lines and the blank lines they leave', () => {
+  it('withoutRestoredLines removes ccrc\'s lines and the blank lines they leave, and only lines in ccrc\'s exact shape', () => {
     const d = `Body\n\n${restoredLine('name', at)}\n${restoredLine('sortOrder', at)}\n`;
     expect(withoutRestoredLines(d)).toBe('Body');
     expect(withoutRestoredLines('Body\n\nmore')).toBe('Body\n\nmore');
+    expect(withoutRestoredLines('Body\n\nRestored on Monday, the old build.')).toBe('Body\n\nRestored on Monday, the old build.');
   });
-  it('restoredLines keeps three, newest first, before the body', () => {
+  it('restoredDescription keeps three, newest first, before the body', () => {
     let d = 'Body';
-    for (let n = 1; n <= 5; n += 1) d = restoredLines(d, `Restored on 2026-11-0${n}: ccrc put back this milestone's name.`);
+    for (let n = 1; n <= 5; n += 1) d = restoredDescription('Body', d, `Restored on 2026-11-0${n}: ccrc put back this milestone's name.`);
     const lines = d.split('\n').filter((l) => l.startsWith(RESTORED_LINE_PREFIX));
     expect(lines.map((l) => l.slice(12, 22))).toEqual(['2026-11-05', '2026-11-04', '2026-11-03']);
     expect(d.startsWith('Restored on 2026-11-05')).toBe(true);
-    expect(d.endsWith('\n\nBody')).toBe(true);
-    expect(withoutRestoredLines(d)).toBe('Body');
+    expect(d).toContain('\n\nBody');
+    expect(d.endsWith(LINEAR_CCRC_PROVENANCE_LINE)).toBe(true);           // the fit ends it with ccrc's provenance
+    expect(withoutRestoredLines(d).startsWith('Body')).toBe(true);
+  });
+  // A9: a plan line that merely begins "Restored on" is plan text: a restore keeps it, and losing it is drift.
+  it('a plan line beginning "Restored on" survives a restore, and its loss in Linear is drift', () => {
+    const planned = 'Restored on purpose: the old flow.\n\nBody';
+    const d = restoredDescription(planned, null, restoredLine('name', at));
+    expect(d).toContain('Restored on purpose: the old flow.');
+    const m: OwnedFields = { name: 'M', description: planned, targetDate: undefined, sortOrder: 1, projectId: 'p' };
+    expect(driftedFields({ ...m, description: d }, m, 'milestone')).toEqual([]);
+    expect(driftedFields({ ...m, description: 'Body' }, m, 'milestone')).toEqual(['description']);
   });
   // The coordinator's note from #2973's review: Linear caps a description at 255, and the fit cuts from the end, so the lines go
   // first (newest first) and survive; the plan's text is what the cut shortens.
@@ -162,6 +216,23 @@ describe('restored lines', () => {
     expect(driftedFields({ ...p, description: d }, p, 'milestone')).toEqual([]);
     // A person's edit is still drift, Restored lines or not.
     expect(driftedFields({ ...p, description: `${restoredLine('name', at)}\n\nKind: something else` }, p, 'milestone')).toEqual(['description']);
+  });
+  // Review 2386 F2's three probes: once a Restored line stands, a shortening that is not the fit's own is still a person's edit.
+  it('a description blanked down to its Restored line is drift', () => {
+    const planned = fitLinearDescription(LONG);
+    const p: OwnedFields = { name: 'M', description: planned, targetDate: undefined, sortOrder: 1, projectId: 'p' };
+    expect(driftedFields({ ...p, description: restoredLine('name', at) }, p, 'milestone')).toEqual(['description']);
+  });
+  it('a restored description cut to a prefix of the plan\'s text is drift', () => {
+    const planned = fitLinearDescription(LONG);
+    const p: OwnedFields = { name: 'M', description: planned, targetDate: undefined, sortOrder: 1, projectId: 'p' };
+    expect(driftedFields({ ...p, description: `${restoredLine('name', at)}\n\nKind: acc` }, p, 'milestone')).toEqual(['description']);
+  });
+  it('a short plan text truncated is drift, with a Restored line or without', () => {
+    const p: OwnedFields = { name: 'M', description: 'Kind: acceptance\n\nProves the flow.', targetDate: undefined, sortOrder: 1, projectId: 'p' };
+    expect(driftedFields({ ...p, description: 'Kind: acceptance' }, p, 'milestone')).toEqual(['description']);
+    expect(driftedFields({ ...p, description: `${restoredLine('name', at)}\n\nKind: acceptance` }, p, 'milestone')).toEqual(['description']);
+    expect(driftedFields({ ...p, description: restoredDescription('Kind: acceptance\n\nProves the flow.', null, restoredLine('name', at)) }, p, 'milestone')).toEqual([]);
   });
 });
 
@@ -199,19 +270,24 @@ describe('isInbound', () => {
 
 describe('the pass\'s small deciders (D-8183)', () => {
   const at = Date.UTC(2026, 10, 12, 8);
-  it('a comment is due unless the item is open and one was made within a day', () => {
+  it('a comment is due once a day, whether or not an item is open (D-8721)', () => {
     expect(DRIFT_COMMENT_MS).toBe(DAY);
-    expect(commentDue(false, at - 1, at)).toBe(true);                       // no open item: every restore comments
-    expect(commentDue(true, null, at)).toBe(true);
-    expect(commentDue(true, at - DAY + 1, at)).toBe(false);
-    expect(commentDue(true, at - DAY, at)).toBe(true);
+    expect(commentDue(null, at)).toBe(true);
+    expect(commentDue(at - 1, at)).toBe(false);                             // a closed item no longer lets every pass comment (F6)
+    expect(commentDue(at - DAY + 1, at)).toBe(false);
+    expect(commentDue(at - DAY, at)).toBe(true);
   });
-  it('an item is raised unless one is open or one was closed within seven days', () => {
-    expect(shouldRaiseDriftItem(null, at)).toBe(true);
-    expect(shouldRaiseDriftItem({ open: true, closedAt: null }, at)).toBe(false);
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 6 * DAY }, at)).toBe(false);   // a kept plan is not re-raised for a week
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 7 * DAY }, at)).toBe(true);
-    expect(shouldRaiseDriftItem({ open: false, closedAt: null }, at)).toBe(true);
+  it('persistence is raised unless an item is open or one was closed within seven days (D-8720)', () => {
+    expect(shouldRaiseDriftItem(null, at, 'restored')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: true, closedAt: null }, at, 'restored')).toBe(false);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 6 * DAY }, at, 'restored')).toBe(false);   // a kept plan is not re-raised for a week
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 7 * DAY }, at, 'restored')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: null }, at, 'restored')).toBe(true);
+  });
+  it('a refused restore, and a difference no update can put back, raise at once even a day after Keep (§7.4, F3)', () => {
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY }, at, 'refused')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY }, at, 'unrestorable')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: true, closedAt: null }, at, 'refused')).toBe(false);
   });
   it('a value is text: arrays joined, null empty, long text cut', () => {
     expect(driftValueText(['a', 'b'])).toBe('a, b');

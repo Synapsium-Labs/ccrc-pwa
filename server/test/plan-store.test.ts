@@ -17,7 +17,8 @@ import { hierarchySettingsOf, setHierarchySettings } from '../src/coord/planStor
 import {
   clearSettledProbes, driftEventsOf, driftMarkOf, driftRestoresOf, inboundByState, inboundOf, inboundWaiting, lastDriftCommentAt,
   managedTeams, markDriftCommented, recordDrift, setDriftItem, setDriftMark, setDriftSince, setInboundState, setStreak, settledProbes,
-  streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound, markFailed, issueBound,
+  streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound, markFailed, issueBound, graceBindingsOf,
+  lastDriftEventOf,
 } from '../src/coord/planStore.js';
 import {
   ADOPTED_FINGERPRINT, adoptIssueBindingInTx, bindingsOf, ensureUpkeepEpicInTx, inboundByIdentifier, inboundTicketInTx, moveTicketToProgrammeInTx,
@@ -440,11 +441,32 @@ describe('managedSince (D-8183)', () => {
 });
 
 describe('drift marks and events', () => {
-  it('a drift mark is upserted per workspace', () => {
+  it('a drift mark is upserted per workspace, one watermark per changed* kind (review 2386 A3)', () => {
     expect(driftMarkOf(db, 'ws-a')).toBeNull();
-    setDriftMark(db, 'ws-a', 'w1', 10);
-    setDriftMark(db, 'ws-a', 'w2', 20);
-    expect(driftMarkOf(db, 'ws-a')).toEqual({ watermark: 'w2', passAt: 20 });
+    setDriftMark(db, 'ws-a', { initiative: 'i1', project: 'p1', milestone: 'm1', issue: 's1' }, 10);
+    setDriftMark(db, 'ws-a', { initiative: 'i2', project: 'p1', milestone: 'm2', issue: 's2' }, 20);
+    expect(driftMarkOf(db, 'ws-a')).toEqual({ watermarks: { initiative: 'i2', project: 'p1', milestone: 'm2', issue: 's2' }, passAt: 20 });
+    expect(driftMarkOf(db, 'ws-b')).toBeNull();
+  });
+  it('lastDriftEventOf answers a binding\'s newest event of one field (review 2386 A4)', () => {
+    expect(lastDriftEventOf(db, 1, 'milestoneIds')).toBeNull();
+    recordDrift(db, { bindingId: 1, at: 10, field: 'milestoneIds', value: 'a', actor: 'not read', restored: false });
+    recordDrift(db, { bindingId: 1, at: 20, field: 'milestoneIds', value: 'b', actor: 'not read', restored: false });
+    recordDrift(db, { bindingId: 1, at: 30, field: 'name', value: 'c', actor: 'not read', restored: true });
+    recordDrift(db, { bindingId: 2, at: 40, field: 'milestoneIds', value: 'd', actor: 'not read', restored: true });
+    expect(lastDriftEventOf(db, 1, 'milestoneIds')).toEqual({ value: 'b', restored: false });
+    expect(lastDriftEventOf(db, 1, 'name')).toEqual({ value: 'c', restored: true });
+  });
+  it('graceBindingsOf answers a workspace\'s ticket bindings whose grace stands (review 2386 F1)', () => {
+    declare('prog-a');
+    const tk = (db.prepare("SELECT id FROM plan_tickets WHERE program = 'prog-a'").get() as { id: number }).id;
+    const b = ensurePending(db, 'ticket', tk, 'ws-a', 'AAA');
+    markBound(db, b.id, 'lin-7', 'AAA-7', 'fp', 5);
+    expect(graceBindingsOf(db, 'ws-a')).toEqual([]);
+    setDriftSince(db, b.id, 99);
+    expect(graceBindingsOf(db, 'ws-a').map((x) => x.id)).toEqual([b.id]);
+    expect(graceBindingsOf(db, 'ws-b')).toEqual([]);
+    expect(planStorePort(db).graceBindingsOf('ws-a').map((x) => x.id)).toEqual([b.id]);
   });
   it('recordDrift and driftRestoresOf', () => {
     const a = recordDrift(db, { bindingId: 1, at: 100, field: 'projectId', value: 'x', actor: 'not read', restored: true });
@@ -541,7 +563,7 @@ describe('streaks and settled probes', () => {
     const port = planStorePort(db);
     for (const f of ['managedTeams', 'driftMarkOf', 'setDriftMark', 'recordDrift', 'driftRestoresOf', 'lastDriftCommentAt', 'markDriftCommented',
       'driftEventsOf', 'setDriftSince', 'setDriftItem', 'upsertInbound', 'inboundOf', 'setInboundState', 'inboundByState', 'inboundWaiting',
-      'streaksOf', 'setStreak', 'settledProbes', 'addSettledProbe', 'clearSettledProbes']) {
+      'streaksOf', 'setStreak', 'settledProbes', 'addSettledProbe', 'clearSettledProbes', 'graceBindingsOf', 'lastDriftEventOf']) {
       expect(typeof (port as unknown as Record<string, unknown>)[f], f).toBe('function');
     }
   });

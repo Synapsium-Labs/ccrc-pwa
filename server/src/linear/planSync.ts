@@ -82,6 +82,9 @@ export interface RestoreTarget {
   link?: boolean;
   comment?: { body: string; requestId: string };
   restoredLine?: { line: string; linearDescription: string | null };
+  /** An issue's grace stands (§7.3, `graceVerdict`): its update goes without its state, as C12's `state-held` sends it, so a
+   *  restore of another field in the same pass never ends the grace (review 2386 A5). */
+  holdState?: boolean;
 }
 /** `restored`: the planned fields are back and the binding holds the plan's fingerprint. `moot`: a sync write landed first, or the
  *  binding is gone: nothing was sent. `refused`: Linear refused the write and the binding is failed (`word`). `deferred`: nothing
@@ -293,10 +296,11 @@ export class PlanSync {
 
   /** What the plan says each bound object's owned fields are (D-8183, §6.2), from the very deciders the sync sends by
    *  (`planSyncSteps`' `owned`): one computation, never a second copy of the rules. Read-only: it reads the stores, writes none,
-   *  calls nothing in Linear and joins no flight. Null when the key has no programme (or, for `upkeep:<project>`, no Upkeep epic yet). */
+   *  calls nothing in Linear and joins no flight; its snapshot neither advances the D-8701 episode streaks nor asks the refresher
+   *  for a fill (`readOnly`, review 2386 A2). Null when the key has no programme (or, for `upkeep:<project>`, no Upkeep epic yet). */
   async plannedOwned(key: string): Promise<{ bindings: BindingRow[]; owned: PlannedOwned[] } | null> {
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-    const built = this.snapshot(key, store);
+    const built = this.snapshot(key, store, true);
     return built === null ? null : { bindings: built.snap.bindings, owned: planSyncSteps(built.snap).owned };
   }
 
@@ -330,7 +334,7 @@ export class PlanSync {
         if (mine.length === 0) { out.push(outcome(t, 'deferred')); continue; }          // nothing to send (a skip): the sync's own pass says why
         let flow: Flow = 'next';
         for (const step of mine) {
-          flow = await this.execute(key, this.withRestoredLine(step, t), built, deadlineAt, pass);
+          flow = await this.execute(key, this.withRestoredLine(t.holdState === true && step.kind === 'update' && step.op === 'issueUpdate' ? withoutState(step) : step, t), built, deadlineAt, pass);
           if (flow !== 'next') break;
         }
         const b = this.bindingById(key, t.bindingId);
@@ -518,8 +522,9 @@ export class PlanSync {
 
   /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). A key
    *  `upkeep:<project>` reads that project's Upkeep epic instead (D-8183): `program` is null, there is no programme row, and a
-   *  project with no Upkeep epic has no snapshot. */
-  private snapshot(slug: string, store: LinearStoreRead): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
+   *  project with no Upkeep epic has no snapshot. `readOnly` (the drift pass's `plannedOwned`): no episode is observed and no fill
+   *  is asked for, so a read changes nothing. */
+  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
     const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
     const rowid = upkeep ? null : plan.programmeRowId(slug);
@@ -558,14 +563,17 @@ export class PlanSync {
       const statuses = this.deps.directory.projectStatusesRead(slot.ref, slot.digest);
       // D-8701: statuses never read wait for a refill as a missing directory does; they are never "no status of that type".
       if (directoryMissed(directory, statuses)) {
-        waiting.push(workspaceId); this.deps.directoryMiss(slot.ref, slot.digest);
+        waiting.push(workspaceId);
+        if (!readOnly) this.deps.directoryMiss(slot.ref, slot.digest);
         if (directory !== null) unread.push(workspaceId);
       }
       // The episodes' streaks see each fill once, whichever programme's pass reads it first.
       const filledAt = this.deps.directory.filledAt(slot.ref, slot.digest);
       const look = (unsettled: boolean): FillLook => ({ keyDigest: slot.digest, filledAt, reading: directory === null ? 'none' : unsettled ? 'unsettled' : 'settled' });
-      this.observe(`probe|${workspaceId}`, look(directory?.initiatives === 'unknown'));
-      this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
+      if (!readOnly) {
+        this.observe(`probe|${workspaceId}`, look(directory?.initiatives === 'unknown'));
+        this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
+      }
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
     const goals = prog === null ? null : coord.goalsFor(slug);

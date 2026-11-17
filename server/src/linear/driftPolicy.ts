@@ -41,45 +41,48 @@ const ONE_WAY_LINKS: ReadonlySet<string> = new Set(['initiativeIds', 'projectIds
 
 export const RESTORED_LINE_PREFIX = 'Restored on ';
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
-const isRestored = (l: string): boolean => l.startsWith(RESTORED_LINE_PREFIX);
+/** Exactly the line `restoredLine` writes. Only such a line is ccrc's record, and only in LINEAR's copy: a plan line that merely
+ *  begins "Restored on" is plan text, kept and compared like any other (review 2386 A9). */
+const RESTORED_LINE_RE = /^Restored on \d{4}-\d{2}-\d{2}: ccrc put back this milestone's [a-z ]+\.$/u;
+const isRestored = (l: string): boolean => RESTORED_LINE_RE.test(l);
+/** How many Restored lines a milestone's description keeps (§7.2). */
+const RESTORED_KEEP = 3;
 
-/** The description without its Restored lines, and without the blank lines they leave at either end. Text with none is
+/** The description without ccrc's Restored lines, and without the blank lines they leave at either end. Text with none is
  *  unchanged. */
 export function withoutRestoredLines(description: string): string {
   const lines = description.split('\n');
   if (!lines.some(isRestored)) return description;
   return lines.filter((l) => !isRestored(l)).join('\n').replace(/^\s+/u, '').replace(/\s+$/u, '');
 }
+/** ccrc's Restored lines a Linear description holds, in its order. */
+const restoredLinesOf = (description: string | null): string[] => normalText(description ?? '').split('\n').filter(isRestored);
 
-/** The description with `line` and the two newest Restored lines it already holds (three at most), FIRST and newest first,
- *  then one blank line and the rest. First, because Linear caps a description at 255 characters and the fit cuts from the
- *  end (`fitLinearDescription`, D-8708): the lines survive, and the oldest is the first a cut would take. A line's day is
- *  its sort key (`Restored on YYYY-MM-DD`), so lines an older build wrote at the end are ordered too. */
-export function restoredLines(description: string, line: string): string {
-  const kept = description.split('\n').filter(isRestored).sort().reverse().slice(0, 2);
-  const base = withoutRestoredLines(description);
-  const head = [line, ...kept].join('\n');
-  return base === '' ? head : `${head}\n\n${base}`;
-}
-
-/** The plan's text of a description, for the comparison and the restore: without its Restored lines, without ccrc's
- *  provenance line, and without the `…` a fit ends a cut body with. */
+/** The plan's text of a description, for the comparison and the restore: without ccrc's provenance line and without the `…` a
+ *  fit ends a cut body with. A line of the plan's own is kept, whatever it begins with (A9). */
 function descriptionCore(description: string): string {
-  let t = normalText(withoutRestoredLines(normalText(description)));
+  let t = normalText(description);
   if (t.endsWith(LINEAR_CCRC_PROVENANCE_LINE)) t = t.slice(0, -LINEAR_CCRC_PROVENANCE_LINE.length);
   t = t.replace(/\s+$/u, '');
   if (t.endsWith('…')) t = t.slice(0, -1);
   return t.replace(/\s+$/u, '');
 }
 
-/** A milestone's restored description (§7.2; a milestone takes no comment, D-8407): `line` and the two newest Restored lines
- *  Linear's copy holds, first, then the planned text, fitted to Linear's cap. The fit cuts the plan's text, never a line
- *  that fits, so the record survives; the comparison accepts the shortened text (`sameOwned`). */
-export function restoredDescription(planned: string, linearDescription: string | null, line: string): string {
-  const held = (linearDescription ?? '').split('\n').filter(isRestored);
+/** THE ONE COMPOSITION of a restored milestone's description: `lines` FIRST, as given, then one blank line and the plan's text,
+ *  fitted to Linear's 255 cap. First, because the fit cuts from the end (`fitLinearDescription`, D-8708): the lines survive and
+ *  the plan's text is what a cut shortens. The restore writes it and the comparison recomputes it (`sameOwned`), so the two can
+ *  never disagree on what a shortened text is. */
+function composeRestored(planned: string, lines: readonly string[]): string {
   const core = descriptionCore(planned);
-  const withHeld = held.length === 0 ? core : `${held.join('\n')}\n\n${core}`;
-  return fitLinearDescription(restoredLines(withHeld, line));
+  return fitLinearDescription(lines.length === 0 ? core : `${lines.join('\n')}\n\n${core}`);
+}
+
+/** A milestone's restored description (§7.2; a milestone takes no comment, D-8407): `line`, then the two newest Restored lines
+ *  Linear's copy holds (newest first; a line's day is its sort key, so lines an older build wrote at the end are ordered too;
+ *  the oldest is the one a third line drops), then the planned text, fitted to Linear's cap. */
+export function restoredDescription(planned: string, linearDescription: string | null, line: string): string {
+  const kept = restoredLinesOf(linearDescription).sort().reverse().slice(0, RESTORED_KEEP - 1);
+  return composeRestored(planned, [line, ...kept]);
 }
 
 // ── The comparison ──
@@ -90,7 +93,8 @@ export function restoredDescription(planned: string, linearDescription: string |
 export const normalText = (s: string): string => s.replace(/\r\n?/gu, '\n').replace(/[ \t]+$/gmu, '').replace(/\n{3,}/gu, '\n\n').replace(/\s+$/u, '');
 const asSet = (v: readonly string[], fold: boolean): Set<string> => new Set(v.map((x) => (fold ? x.toUpperCase() : x)));
 
-/** One owned field of Linear's copy against the plan's. Strings after `normalText` (a description also without its Restored lines); arrays as sets (team keys without case; links one way); ids exact; null equals null only. */
+/** One owned field of Linear's copy against the plan's. Strings after `normalText` (a description also as `composeRestored` would
+ *  write it); arrays as sets (team keys without case; links one way); ids exact; null equals null only. */
 function sameOwned(field: string, linear: OwnedFields[string], planned: OwnedFields[string]): boolean {
   const l = linear === undefined ? null : linear;
   const p = planned === undefined ? null : planned;
@@ -104,11 +108,12 @@ function sameOwned(field: string, linear: OwnedFields[string], planned: OwnedFie
   }
   if (typeof l === 'string' && typeof p === 'string') {
     if (field !== 'description') return normalText(l) === normalText(p);
-    const lc = descriptionCore(l);
-    const pc = descriptionCore(p);
-    // A restored milestone's description carries its Restored lines first, so the 255 cap's fit shortened the plan's text after
-    // them (`restoredDescription`): what Linear holds then is the plan's text cut at its end, a prefix of it.
-    return lc === pc || (normalText(l).split('\n').some(isRestored) && pc.startsWith(lc));
+    // Linear's copy, without ccrc's Restored lines (wherever they stand), is the plan's text; or it is EXACTLY what a restore
+    // writes for the plan's text and the lines it holds (`composeRestored`, whose fit may have shortened the plan's text). Any
+    // other shortening is a person's edit, and drift (review 2386 F2: never "any prefix" of the plan's text).
+    if (descriptionCore(withoutRestoredLines(normalText(l))) === descriptionCore(p)) return true;
+    const held = restoredLinesOf(l);
+    return held.length > 0 && normalText(l) === normalText(composeRestored(p, held));
   }
   return l === p;
 }
@@ -127,15 +132,74 @@ export function driftVerdict(
   return sync.current ? 'drift' : 'catch-up';
 }
 
-/** §7.3: a difference that is not drift. A field ccrc does not own; a state of the same TYPE (In Progress to In Review is
- *  `started`); and Linear reading `completed` while the plan says another type, when ccrc recorded the PR merged (the
- *  integration closed it) or while the merge may not be recorded yet (the pass waits one more pass). */
-export function notDrift(field: string, planned: unknown, linear: unknown, ctx: { prMerged: boolean; gracePasses: number }): boolean {
-  if (!ALL_OWNED.has(field)) return true;
-  if (field !== 'stateType') return false;
-  if (planned === linear) return true;
-  if (linear === 'completed') return ctx.prMerged || ctx.gracePasses < 1;
-  return false;
+/** What §7.3 makes of an object's differing owned fields (`drifted`, from `driftedFields`), with an issue's one grace. A field
+ *  ccrc does not own is never drift (a state of the same TYPE is no difference: `driftedFields` compares types). Linear reading
+ *  `completed` while the plan says another type is not drift when ccrc recorded the PR merged (the integration closed it); with
+ *  no merge recorded it waits ONE pass (`driftSince` set, `set`) and is drift on the next (`keep`, until the state no longer
+ *  differs, which `clear`s it). While the grace stands the state is held out of the restore even when another field is put
+ *  back in the same pass (`holdState`, review 2386 A5: the update goes without its state). `fields` are those to act on now. */
+export interface GraceVerdict { fields: string[]; holdState: boolean; driftSince: 'set' | 'clear' | 'keep' }
+export function graceVerdict(o: { drifted: readonly string[]; linearState: unknown; prMerged: boolean; driftSince: number | null }): GraceVerdict {
+  const owned = o.drifted.filter((f) => ALL_OWNED.has(f));
+  const stateDiffers = owned.includes('stateType') && o.linearState === 'completed';
+  const unclear: 'clear' | 'keep' = o.driftSince === null ? 'keep' : 'clear';
+  if (!stateDiffers) return { fields: owned, holdState: false, driftSince: unclear };
+  const others = owned.filter((f) => f !== 'stateType');
+  if (o.prMerged) return { fields: others, holdState: false, driftSince: unclear };
+  if (o.driftSince === null) return { fields: others, holdState: others.length > 0, driftSince: 'set' };
+  return { fields: owned, holdState: false, driftSince: 'keep' };
+}
+
+/** The issues whose grace stands (`driftSince` set) that this pass's changed read did not return: each is re-read by id, whatever
+ *  the watermark says, since an unchanged issue is never in a changed read again and its grace would never end (review 2386 F1). */
+export function graceRereads(graced: readonly string[], read: ReadonlySet<string>): string[] {
+  return [...new Set(graced)].filter((id) => !read.has(id));
+}
+
+// ── What an update can put back ──
+
+/** What no update can put back: no op deletes or re-parents a milestone, so an initiative's project links are put back through
+ *  each project's own link step and a project's milestones and a milestone's project not at all (§7.2). */
+export const UNRESTORABLE: Readonly<Record<DriftKind, readonly string[]>> = { initiative: ['projectIds'], project: ['milestoneIds'], milestone: ['projectId'], issue: [] };
+/** The drifted fields of `kind` an update of the object itself puts back. */
+export function restorableFields(kind: DriftKind, fields: readonly string[]): string[] { return fields.filter((f) => !UNRESTORABLE[kind].includes(f)); }
+
+/** An initiative's planned project links Linear lacks, each judged by the PROJECT's own binding, never the initiative's (review
+ *  2386 A1, D-8704): a project whose binding is not current has a link the sync has yet to send (`catchUp`), never drift; one whose
+ *  binding is current lacks a link the sync sent (`drift`, put back through that project's link step); one with no planned project
+ *  binding (`current` null) cannot be put back (`unrestorable`). */
+export function missingLinksVerdict(missing: readonly { id: string; current: boolean | null }[]): { drift: string[]; catchUp: boolean; unrestorable: boolean } {
+  return {
+    drift: missing.filter((m) => m.current === true).map((m) => m.id),
+    catchUp: missing.some((m) => m.current === false),
+    unrestorable: missing.some((m) => m.current === null),
+  };
+}
+
+/** One difference's outcome from the restores it rides on (`via`, binding ids): every one restored, one refused (its word), one
+ *  moot or deferred (`skip`: nothing is recorded now, the next pass reads it again), or none to ride on (`unrestorable`). */
+export type EventVerdict = { kind: 'restored' } | { kind: 'refused'; word: string } | { kind: 'unrestorable' } | { kind: 'skip' };
+export function eventVerdict(via: readonly number[], outcomes: ReadonlyMap<number, { outcome: 'restored' | 'moot' | 'refused' | 'deferred'; word?: string }>): EventVerdict {
+  if (via.length === 0) return { kind: 'unrestorable' };
+  const out = via.map((v) => outcomes.get(v));
+  const refused = out.find((o) => o?.outcome === 'refused');
+  if (refused !== undefined) return { kind: 'refused', word: refused.word ?? 'refused' };
+  if (out.every((o) => o?.outcome === 'restored')) return { kind: 'restored' };
+  return { kind: 'skip' };
+}
+
+/** Whether a difference no update can put back is a new record: not when the binding's newest event for that field already
+ *  holds the same value, not put back (one change is recorded once; a re-read after a deferral is not a second change, review
+ *  2386 A4). */
+export function isNewUnrestorable(last: { value: string; restored: boolean } | null, value: string): boolean {
+  return last === null || last.restored || last.value !== value;
+}
+
+/** A changed* kind's next watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped):
+ *  the newest `updatedAt` that kind's read returned, or the old one when nothing newer was read or the kind must be read again
+ *  (`keep`: its page cap was reached, or a restore of one of its objects was deferred). ISO times compare as strings. */
+export function nextWatermark(old: string, newest: string | null, keep: boolean): string {
+  return keep || newest === null || newest <= old ? old : newest;
 }
 
 // ── Persistence and period ──
@@ -147,19 +211,25 @@ export function isPersistent(restores: readonly number[], now: number): boolean 
 }
 /** The drift pass's period per workspace. */
 export const DRIFT_PASS_MS = 30 * 60_000;
-/** One comment a day on an object while its item is open (§7.4). */
+/** One comment a day on an object (§7.4; D-8721). */
 export const DRIFT_COMMENT_MS = 86_400_000;
 
-/** Whether a restore comments: always while no item is open for the binding, and once a day while one is. */
-export function commentDue(itemOpen: boolean, lastCommentAt: number | null, now: number): boolean {
-  return !(itemOpen && lastCommentAt !== null && now - lastCommentAt < DRIFT_COMMENT_MS);
+/** Whether a restore comments: at most once a day on an object, whether or not its item is open (D-8721, restore-comment-daily:
+ *  §7.4 bounds only the open case, and a closed item must not let every pass comment). */
+export function commentDue(lastCommentAt: number | null, now: number): boolean {
+  return lastCommentAt === null || now - lastCommentAt >= DRIFT_COMMENT_MS;
 }
 
-/** Whether a persistent drift raises its item: not while the binding's last item is open, and not within seven days of that
- *  item's close (a plan the operator kept, or drift handed on, is not asked about again that week). */
-export function shouldRaiseDriftItem(last: { open: boolean; closedAt: number | null } | null, now: number): boolean {
+/** Why the pass raises a binding's item: persistence (`restored`, the third restore in a week), a restore Linear refused, or a
+ *  difference no update can put back. */
+export type DriftRaiseWhy = 'restored' | 'refused' | 'unrestorable';
+/** Whether the pass raises a binding's item: never while its last item is open. A refused restore and a difference no update can
+ *  put back raise it at once, always (§7.4). Persistence alone is not raised again within seven days of that item's close (D-8720,
+ *  kept-plan-quiet: a plan the operator kept, or drift handed on, is not asked about again that week). */
+export function shouldRaiseDriftItem(last: { open: boolean; closedAt: number | null } | null, now: number, why: DriftRaiseWhy): boolean {
   if (last === null) return true;
   if (last.open) return false;
+  if (why !== 'restored') return true;
   return last.closedAt === null || now - last.closedAt >= DRIFT_PERSIST.windowMs;
 }
 

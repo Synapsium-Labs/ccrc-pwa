@@ -2,13 +2,16 @@
  * THE DRIFT PASS (D-8183; Linear hierarchy design 2026-11-10 §6.2, §7.2 to §7.4): it reads what changed in a managed team's
  * Linear since its last look, compares each changed object ccrc holds a binding for against what the plan says it should be
  * (the owned fields, `driftPolicy.ts`), and puts the plan's value back. L4 DELIVERY around `driftPolicy.ts`'s pure deciders: it
- * decides nothing about WHAT counts as drift (`driftedFields`, `driftVerdict`, `notDrift`, `isPersistent`,
- * `shouldRaiseDriftItem`, `commentDue` do), it only reads, asks, restores and records.
+ * decides nothing (`driftedFields`, `driftVerdict`, `graceVerdict`, `graceRereads`, `restorableFields`, `missingLinksVerdict`,
+ * `eventVerdict`, `isNewUnrestorable`, `nextWatermark`, `isPersistent`, `shouldRaiseDriftItem` and `commentDue` do, review
+ * 2386 F7), it only reads, asks, restores and records.
  *
  * INERT UNTIL A TEAM IS MANAGED. A team is managed once a `linear_migrations` row for it reads `applied` (wave 7): with none,
  * a tick makes no call at all. One workspace is taken per tick, the one whose `passAt` is oldest and at least
- * `DRIFT_PASS_MS` old; its mark (`linear_drift_marks`) holds the watermark (the newest `updatedAt` read) and when it last ran.
- * A read that fails keeps the old watermark and tries again after the period; so does a page cap or a deferred restore.
+ * `DRIFT_PASS_MS` old; its mark (`linear_drift_marks`) holds one watermark per changed* kind (the newest `updatedAt` that
+ * kind's read returned) and when it last ran. A read that fails keeps the old watermarks and tries again after the period; a
+ * kind whose page cap was reached, or one of whose restores was deferred, keeps its own. An issue whose one grace stands
+ * (§7.3) is re-read by id at every pass until it ends, since an issue that does not change again is never in a changed read.
  *
  * EVERY LINEAR VALUE IT READS IS DATA. Nodes are the shaped answers of `hierarchyOps.ts` (closed grammar); a value is stored
  * as text (`driftValueText`), and it reaches an operator item or a mail only inside `untrustedBlock` under
@@ -23,7 +26,7 @@
  * raises the operator's item at once; so does a refused restore and the third restore of one binding within a week.
  */
 import type { CoordStore } from '../coord/store.js';
-import type { BindingRow, PlanStorePort } from '../coord/planStore.js';
+import type { BindingRow, DriftWatermarks, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
@@ -35,8 +38,9 @@ import type { LinearWritePolicy } from './policy.js';
 import type { LinearRateService } from './rate.js';
 import type { FleetSession } from '../../../shared/api.js';
 import {
-  DRIFT_PASS_MS, DRIFT_PERSIST, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, isPersistent, notDrift,
-  restoreCommentOf, restoredLine, shouldRaiseDriftItem, type DriftKind, type OwnedFields,
+  DRIFT_PASS_MS, DRIFT_PERSIST, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
+  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, nextWatermark, restorableFields, restoreCommentOf, restoredLine,
+  shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
@@ -77,11 +81,9 @@ const KIND_OF: Readonly<Record<BindingKind, DriftKind>> = { programme: 'initiati
 const WORD: Readonly<Record<DriftKind, string>> = { initiative: 'programme', project: 'epic', milestone: 'checkpoint', issue: 'ticket' };
 /** Fields whose values are ids: a comment names no value for them. */
 const ID_FIELDS: ReadonlySet<string> = new Set(['projectId', 'milestoneId', 'parentId', 'initiativeIds', 'projectIds', 'milestoneIds']);
-/** What no update can put back: no op deletes or re-parents a milestone (§7.2). */
-const UNRESTORABLE: Readonly<Record<DriftKind, readonly string[]>> = { initiative: ['projectIds'], project: ['milestoneIds'], milestone: ['projectId'], issue: [] };
 
 /** One binding to put back. */
-interface TargetSpec { binding: BindingRow; kind: DriftKind; local: PlannedOwned['local']; fields: string[]; linear: OwnedFields; planned: OwnedFields; link: boolean; node: Node }
+interface TargetSpec { binding: BindingRow; kind: DriftKind; local: PlannedOwned['local']; fields: string[]; linear: OwnedFields; planned: OwnedFields; link: boolean; node: Node; holdState: boolean }
 /** One difference found: restored when every target in `via` is, never restored when `via` is empty. */
 interface EventSpec { binding: BindingRow; kind: DriftKind; local: PlannedOwned['local']; field: string; value: string; via: number[] }
 interface Work { targets: Map<number, TargetSpec>; events: EventSpec[] }
@@ -137,15 +139,17 @@ export class DriftPass {
   private async passOf(ws: string, slot: SlotInfo, teams: string[], now: number): Promise<void> {
     const { plan } = this.deps;
     const mark = plan.driftMarkOf(ws);
-    const old = mark?.watermark ?? new Date(plan.managedSince(ws) ?? now).toISOString();
+    const first = new Date(plan.managedSince(ws) ?? now).toISOString();
+    const old: DriftWatermarks = mark?.watermarks ?? { initiative: first, project: first, milestone: first, issue: first };
     const read = await this.readAll(ws, slot, teams, old);
     if (!read.ok) {
       plan.setDriftMark(ws, old, now);
       console.warn(`ccrc-server: linear drift pass read failed: ${read.word}`);
       return;
     }
-    if (read.capped) console.warn('ccrc-server: linear drift pass page cap reached');
-    let keepOld = read.capped;
+    if (READS.some(({ kind }) => read.capped[kind])) console.warn('ccrc-server: linear drift pass page cap reached');
+    const keep: Record<DriftKind, boolean> = { ...read.capped };
+    await this.rereadGraced(ws, slot, read.nodes.issue);
     const managed = new Set(teams.map((t) => t.toUpperCase()));
     const planned = new Map<string, Promise<Planned | null>>();
     const plannedOf = (key: string): Promise<Planned | null> => {
@@ -177,25 +181,27 @@ export class DriftPass {
     this.inbound.detect(ws, read.nodes.issue, managed, now);
 
     // One restore per programme key, then each outcome recorded.
-    const raise: { binding: BindingRow; kind: DriftKind; key: string; why: 'restored' | 'refused' | 'unrestorable'; word: string | null }[] = [];
+    const raise: { binding: BindingRow; kind: DriftKind; key: string; why: DriftRaiseWhy; word: string | null }[] = [];
     const restoredNow = new Map<number, { binding: BindingRow; kind: DriftKind; key: string }>();
     for (const [key, w] of work) {
       const specs = [...w.targets.values()];
       const outcomes = specs.length === 0 ? [] : await this.deps.planSync.restore(key, specs.map((s) => this.targetOf(ws, s, now)), 'drift-restore');
       const byId = new Map<number, RestoreOutcome>(outcomes.map((o) => [o.bindingId, o]));
-      if (outcomes.some((o) => o.outcome === 'deferred')) keepOld = true;
+      for (const o of outcomes) if (o.outcome === 'deferred') { const t = w.targets.get(o.bindingId); if (t !== undefined) keep[t.kind] = true; }
       const commentedOnce = new Set<number>();
       for (const ev of w.events) {
-        const verdict = this.verdictOf(ev, byId);
+        const verdict = eventVerdict(ev.via, byId);
         if (verdict.kind === 'skip') continue;
         const restored = verdict.kind === 'restored';
+        // One change is recorded once: a difference no update can put back, read again after a deferral, is not a second (A4).
+        if (verdict.kind === 'unrestorable' && !isNewUnrestorable(plan.lastDriftEventOf(ev.binding.id, ev.field), ev.value)) continue;
         const eventId = plan.recordDrift({ bindingId: ev.binding.id, at: now, field: ev.field, value: ev.value, actor: NOT_READ, restored });
         if (restored) {
           const commented = byId.get(ev.binding.id)?.commented === true;
           if (commented && !commentedOnce.has(ev.binding.id)) { plan.markDriftCommented(eventId, now); commentedOnce.add(ev.binding.id); }
           restoredNow.set(ev.binding.id, { binding: ev.binding, kind: ev.kind, key });
         } else {
-          raise.push({ binding: ev.binding, kind: ev.kind, key, why: verdict.kind === 'refused' ? 'refused' : 'unrestorable', word: verdict.word });
+          raise.push({ binding: ev.binding, kind: ev.kind, key, why: verdict.kind === 'refused' ? 'refused' : 'unrestorable', word: verdict.kind === 'refused' ? verdict.word : null });
         }
       }
     }
@@ -204,33 +210,53 @@ export class DriftPass {
       const restores = [...new Set(plan.driftRestoresOf(bindingId, now - DRIFT_PERSIST.windowMs))];
       if (isPersistent(restores, now)) this.raiseItem(r.binding, r.kind, r.key, 'restored', null, now);
     }
-    const newest = [...READS].flatMap(({ kind }) => read.nodes[kind].map((n) => (typeof n['updatedAt'] === 'string' ? n['updatedAt'] : ''))).sort().at(-1) ?? '';
-    plan.setDriftMark(ws, keepOld || newest <= old ? old : newest, now);
+    const next = { ...old };
+    for (const { kind } of READS) next[kind] = nextWatermark(old[kind], newestOf(read.changed[kind]), keep[kind]);
+    plan.setDriftMark(ws, next, now);
   }
 
-  /** Reads the four changed* documents on lane `sync`, each followed through its pages up to `DRIFT_MAX_PAGES`. */
-  private async readAll(ws: string, slot: SlotInfo, teams: string[], since: string):
-  Promise<{ ok: true; nodes: Record<DriftKind, Node[]>; capped: boolean } | { ok: false; word: string }> {
-    const nodes: Record<DriftKind, Node[]> = { initiative: [], project: [], milestone: [], issue: [] };
-    let capped = false;
+  /** §7.3's grace, its second look (review 2386 F1): every ticket binding of the workspace whose grace stands and whose issue the
+   *  changed read did not return is read by id (`issueOwned`) and compared with the rest. A read that fails leaves the grace
+   *  standing, to be read at the next pass. */
+  private async rereadGraced(ws: string, slot: SlotInfo, issues: Node[]): Promise<void> {
+    const graced = this.deps.plan.graceBindingsOf(ws);
+    const read = new Set(issues.flatMap((n) => (typeof n['id'] === 'string' ? [n['id']] : [])));
+    for (const id of graceRereads(graced.flatMap((b) => (b.linearId === null ? [] : [b.linearId])), read)) {
+      const b = graced.find((x) => x.linearId === id)!;
+      const out = await this.deps.call({
+        op: 'issueOwned', pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: ws, teamKey: b.teamKey, target: null, fields: [], input: { id },
+      });
+      const issue = out.ok ? out.value['issue'] : undefined;
+      if (issue !== null && typeof issue === 'object' && !Array.isArray(issue)) issues.push(issue as Node);
+    }
+  }
+
+  /** Reads the four changed* documents on lane `sync`, each from its own kind's watermark and followed through its pages up to
+   *  `DRIFT_MAX_PAGES`. `nodes` is what the pass compares (the issue list gains the graced re-reads); `changed` is what the
+   *  changed reads alone returned, which alone moves a watermark. */
+  private async readAll(ws: string, slot: SlotInfo, teams: string[], since: DriftWatermarks):
+  Promise<{ ok: true; nodes: Record<DriftKind, Node[]>; changed: Record<DriftKind, Node[]>; capped: Record<DriftKind, boolean> } | { ok: false; word: string }> {
+    const changed: Record<DriftKind, Node[]> = { initiative: [], project: [], milestone: [], issue: [] };
+    const capped: Record<DriftKind, boolean> = { initiative: false, project: false, milestone: false, issue: false };
     for (const { op, kind } of READS) {
       let after: string | null = null;
       for (let pages = 1; ; pages += 1) {
         const out = await this.deps.call({
           op, pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: ws, teamKey: null, target: null, fields: [],
-          input: op === 'changedIssues' ? { since, teams, after } : { since, after },
+          input: op === 'changedIssues' ? { since: since[kind], teams, after } : { since: since[kind], after },
         });
         if (!out.ok) return { ok: false, word: out.word };
         const page = out.value['nodes'];
         if (!Array.isArray(page)) return { ok: false, word: 'malformed' };
-        nodes[kind].push(...(page as Node[]));
+        changed[kind].push(...(page as Node[]));
         const next = out.value['next'];
         if (typeof next !== 'string' || next === '') break;
-        if (pages >= DRIFT_MAX_PAGES) { capped = true; break; }
+        if (pages >= DRIFT_MAX_PAGES) { capped[kind] = true; break; }
         after = next;
       }
     }
-    return { ok: true, nodes, capped };
+    const nodes = { initiative: [...changed.initiative], project: [...changed.project], milestone: [...changed.milestone], issue: [...changed.issue] };
+    return { ok: true, nodes, changed, capped };
   }
 
   /** §7.2's scope: only managed objects are compared. */
@@ -254,71 +280,72 @@ export class DriftPass {
   ): void {
     const { plan } = this.deps;
     const linear = linearOwnedOf(kind, node);
-    const all = driftedFields(linear, po.owned, kind);
     const runId = kind === 'issue' ? (plan.ticketById(po.local.id)?.runId ?? null) : null;
-    const ctx = { prMerged: runId !== null && (this.deps.prMergedOf?.(runId) ?? false), gracePasses: binding.driftSince === null ? 0 : 1 };
-    const fields = all.filter((f) => !notDrift(f, po.owned[f], linear[f], ctx));
-    if (fields.length === 0) {
-      // The one grace: an issue Linear reads `completed` that the plan does not, with no merge recorded yet, waits one pass.
-      if (all.includes('stateType') && linear['stateType'] === 'completed' && !ctx.prMerged && binding.driftSince === null) plan.setDriftSince(binding.id, now);
-      else if (binding.driftSince !== null) plan.setDriftSince(binding.id, null);
-      return;
+    const prMerged = runId !== null && (this.deps.prMergedOf?.(runId) ?? false);
+    const grace = graceVerdict({ drifted: driftedFields(linear, po.owned, kind), linearState: linear['stateType'], prMerged, driftSince: binding.driftSince });
+    if (grace.driftSince === 'set') plan.setDriftSince(binding.id, now);
+    else if (grace.driftSince === 'clear') plan.setDriftSince(binding.id, null);
+    let fields = grace.fields;
+    // An initiative's missing project links, each judged by the project's own binding (A1): a link the sync has yet to send is a
+    // catch-up, never drift; one with no planned project binding cannot be put back.
+    let links: ReturnType<typeof missingLinksVerdict> | null = null;
+    if (kind === 'initiative' && fields.includes('projectIds')) {
+      const have = new Set(Array.isArray(linear['projectIds']) ? (linear['projectIds'] as string[]) : []);
+      const missing = (Array.isArray(po.owned['projectIds']) ? (po.owned['projectIds'] as string[]) : []).filter((id) => !have.has(id));
+      links = missingLinksVerdict(missing.map((id) => ({ id, current: this.projectOf(ws, key, p, id)?.owned.current ?? null })));
+      if (links.catchUp) plan.markSyncDue(key, now);
+      if (links.drift.length === 0 && !links.unrestorable) fields = fields.filter((f) => f !== 'projectIds');
     }
+    if (fields.length === 0) return;
     if (driftVerdict(linear, po.owned, kind, { current: po.current }) !== 'drift') {
       plan.markSyncDue(key, now);                   // catch-up (D-8704): the sync has not written the plan yet, and will
       return;
     }
     const events: EventSpec[] = fields.map((field) => ({ binding, kind, local: po.local, field, value: driftValueText(linear[field]), via: [] }));
-    const restorable = fields.filter((f) => !UNRESTORABLE[kind].includes(f));
+    const restorable = restorableFields(kind, fields);
     if (restorable.length > 0) {
       const t = w.targets.get(binding.id);
       const link = restorable.includes('initiativeIds');
-      w.targets.set(binding.id, { binding, kind, local: po.local, fields: restorable, linear, planned: po.owned, link: link || (t?.link ?? false), node });
+      w.targets.set(binding.id, {
+        binding, kind, local: po.local, fields: restorable, linear, planned: po.owned, link: link || (t?.link ?? false), node, holdState: grace.holdState,
+      });
       for (const e of events) if (restorable.includes(e.field)) e.via = [binding.id];
     }
-    // An initiative missing a planned project forces that project's restore (its link step), once, with the project's own.
-    if (kind === 'initiative' && fields.includes('projectIds')) {
-      const have = new Set(Array.isArray(linear['projectIds']) ? (linear['projectIds'] as string[]) : []);
-      const missing = (Array.isArray(po.owned['projectIds']) ? (po.owned['projectIds'] as string[]) : []).filter((id) => !have.has(id));
+    // An initiative missing a planned project whose binding is current forces that project's restore (its link step), once.
+    if (links !== null && !links.unrestorable && links.drift.length > 0) {
       const ev = events.find((e) => e.field === 'projectIds')!;
-      for (const projectId of missing) {
-        const pb = plan.bindingByLinearId(ws, projectId);
-        const pk = pb === null ? null : plan.dueKeyOfBinding(pb.id);
-        const pp = pk === null || pk !== key ? null : p;
-        const owned = pb === null || pp === null ? undefined : pp.owned.find((o) => o.bindingId === pb.id && o.kind === 'project');
-        if (pb === null || owned === undefined) { ev.via = []; break; }
-        const t = w.targets.get(pb.id);
-        w.targets.set(pb.id, t !== undefined ? { ...t, link: true } : { binding: pb, kind: 'project', local: owned.local, fields: [], linear: {}, planned: owned.owned, link: true, node: {} });
-        ev.via.push(pb.id);
+      for (const projectId of links.drift) {
+        const pr = this.projectOf(ws, key, p, projectId)!;
+        const t = w.targets.get(pr.binding.id);
+        w.targets.set(pr.binding.id, t !== undefined ? { ...t, link: true }
+          : { binding: pr.binding, kind: 'project', local: pr.owned.local, fields: [], linear: {}, planned: pr.owned.owned, link: true, node: {}, holdState: false });
+        ev.via.push(pr.binding.id);
       }
     }
     w.events.push(...events);
   }
 
-  /** What an event's outcome is: every target it rides on restored, one refused, one moot or deferred (nothing recorded now),
-   *  or none to ride on (an unrestorable field). */
-  private verdictOf(ev: EventSpec, byId: ReadonlyMap<number, RestoreOutcome>):
-  { kind: 'restored' } | { kind: 'refused'; word: string } | { kind: 'unrestorable'; word: null } | { kind: 'skip' } {
-    if (ev.via.length === 0) return { kind: 'unrestorable', word: null };
-    const out = ev.via.map((v) => byId.get(v));
-    const refused = out.find((o) => o?.outcome === 'refused');
-    if (refused !== undefined) return { kind: 'refused', word: refused.word ?? 'refused' };
-    if (out.every((o) => o?.outcome === 'restored')) return { kind: 'restored' };
-    return { kind: 'skip' };
+  /** A project of this programme by its Linear id: its binding and what the plan says of it, or null when it is none of this key's. */
+  private projectOf(ws: string, key: string, p: Planned, projectId: string): { binding: BindingRow; owned: PlannedOwned } | null {
+    const { plan } = this.deps;
+    const pb = plan.bindingByLinearId(ws, projectId);
+    if (pb === null || plan.dueKeyOfBinding(pb.id) !== key) return null;
+    const owned = p.owned.find((o) => o.bindingId === pb.id && o.kind === 'project');
+    return owned === undefined ? null : { binding: pb, owned };
   }
 
-  /** The restore's target for one binding, with the comment §7.4 allows (one a day while its item is open) or a milestone's line. */
+  /** The restore's target for one binding, with the comment D-8721 allows (one a day) or a milestone's line. */
   private targetOf(ws: string, s: TargetSpec, now: number): RestoreTarget {
-    const { plan, coord } = this.deps;
-    const target: RestoreTarget = { bindingId: s.binding.id, seen: s.binding.fingerprint, tag: String(now), ...(s.link ? { link: true } : {}) };
+    const { plan } = this.deps;
+    const target: RestoreTarget = {
+      bindingId: s.binding.id, seen: s.binding.fingerprint, tag: String(now), ...(s.link ? { link: true } : {}), ...(s.holdState ? { holdState: true } : {}),
+    };
     if (s.fields.length === 0) return target;
     if (s.kind === 'milestone') {
       const d = s.node['description'];
       return { ...target, restoredLine: { line: restoredLine(s.fields[0]!, now), linearDescription: typeof d === 'string' ? d : null } };
     }
-    const held = s.binding.heldItemId === null ? null : coord.itemById(s.binding.heldItemId);
-    const itemOpen = held !== null && OPEN_ITEM_STATES.includes(held.state);
-    if (!commentDue(itemOpen, plan.lastDriftCommentAt(s.binding.id), now)) return target;
+    if (!commentDue(plan.lastDriftCommentAt(s.binding.id), now)) return target;      // once a day, item open or not (D-8721)
     const named = (f: string, v: unknown): string | null => (ID_FIELDS.has(f) || v === null || v === undefined ? null : driftValueText(v));
     const body = restoreCommentOf(s.kind, s.fields.map((f) => ({ field: f, planned: named(f, s.planned[f]), was: named(f, s.linear[f]) })), now);
     return { ...target, comment: { body, requestId: requestIdOf(LOCAL_OF[s.kind], s.local.id, ws, `restore-${now}`) } };
@@ -326,12 +353,13 @@ export class DriftPass {
 
   // ── The persistent-drift item ──
 
-  /** Raises the operator's item for a binding (§7.4) unless one is open for it or one it had was closed inside the window. */
-  private raiseItem(binding: BindingRow, kind: DriftKind, key: string, why: 'restored' | 'refused' | 'unrestorable', word: string | null, now: number): void {
+  /** Raises the operator's item for a binding (§7.4) unless one is open for it, or, for persistence alone, one it had was closed
+   *  inside the window (D-8720; `shouldRaiseDriftItem`). */
+  private raiseItem(binding: BindingRow, kind: DriftKind, key: string, why: DriftRaiseWhy, word: string | null, now: number): void {
     const { plan, coord } = this.deps;
     const fresh = plan.bindingsOf(key).find((b) => b.id === binding.id) ?? binding;
     const held = fresh.heldItemId === null ? null : coord.itemById(fresh.heldItemId);
-    if (!shouldRaiseDriftItem(held === null ? null : { open: OPEN_ITEM_STATES.includes(held.state), closedAt: held.closedAt }, now)) return;
+    if (!shouldRaiseDriftItem(held === null ? null : { open: OPEN_ITEM_STATES.includes(held.state), closedAt: held.closedAt }, now, why)) return;
     const planKey = this.planKeyOf(key, fresh);
     const restores = new Set(plan.driftRestoresOf(fresh.id, now - DRIFT_PERSIST.windowMs)).size;
     const said = why === 'refused'
@@ -401,6 +429,11 @@ export class DriftPass {
       () => insertSystemMailTx(coord, { program: key }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }));
     return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
   }
+}
+
+/** The newest `updatedAt` of a read's nodes, or null when it returned none. */
+function newestOf(nodes: readonly Node[]): string | null {
+  return nodes.map((n) => (typeof n['updatedAt'] === 'string' ? n['updatedAt'] : '')).filter((t) => t !== '').sort().at(-1) ?? null;
 }
 
 /** A changed node as the owned fields of its kind (the shaped answers name them; a project lists its milestones as records). */

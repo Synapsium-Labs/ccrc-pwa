@@ -625,13 +625,25 @@ export function issueBound(db: DatabaseSync, workspaceId: string, issue: { id: s
     .get(workspaceId, issue.id ?? '', issue.identifier ?? '') !== undefined;
 }
 
-export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermark: string; passAt: number } | null {
-  const r = db.prepare('SELECT watermark, passAt FROM linear_drift_marks WHERE workspaceId = ?').get(workspaceId) as Raw | undefined;
-  return r === undefined ? null : { watermark: r.watermark as string, passAt: r.passAt as number };
+/** The drift pass's watermark for each changed* kind (review 2386 A3): the `updatedAt` that kind's read reached. */
+export interface DriftWatermarks { initiative: string; project: string; milestone: string; issue: string }
+export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermarks: DriftWatermarks; passAt: number } | null {
+  const r = db.prepare('SELECT * FROM linear_drift_marks WHERE workspaceId = ?').get(workspaceId) as Raw | undefined;
+  return r === undefined ? null : {
+    watermarks: { initiative: r.initiatives as string, project: r.projects as string, milestone: r.milestones as string, issue: r.issues as string },
+    passAt: r.passAt as number,
+  };
 }
-export function setDriftMark(db: DatabaseSync, workspaceId: string, watermark: string, passAt: number): void {
-  db.prepare('INSERT INTO linear_drift_marks (workspaceId, watermark, passAt) VALUES (?, ?, ?) '
-    + 'ON CONFLICT(workspaceId) DO UPDATE SET watermark = excluded.watermark, passAt = excluded.passAt').run(workspaceId, watermark, passAt);
+export function setDriftMark(db: DatabaseSync, workspaceId: string, w: DriftWatermarks, passAt: number): void {
+  db.prepare('INSERT INTO linear_drift_marks (workspaceId, initiatives, projects, milestones, issues, passAt) VALUES (?, ?, ?, ?, ?, ?) '
+    + 'ON CONFLICT(workspaceId) DO UPDATE SET initiatives = excluded.initiatives, projects = excluded.projects, '
+    + 'milestones = excluded.milestones, issues = excluded.issues, passAt = excluded.passAt')
+    .run(workspaceId, w.initiative, w.project, w.milestone, w.issue, passAt);
+}
+/** The ticket bindings of a workspace whose grace stands (`driftSince` set): the drift pass re-reads each by id (review 2386 F1). */
+export function graceBindingsOf(db: DatabaseSync, workspaceId: string): BindingRow[] {
+  return db.prepare("SELECT * FROM linear_bindings WHERE workspaceId = ? AND localKind = 'ticket' AND driftSince IS NOT NULL AND linearId IS NOT NULL ORDER BY id")
+    .all(workspaceId) as unknown as BindingRow[];
 }
 
 export interface DriftEventRow {
@@ -646,6 +658,12 @@ export function recordDrift(db: DatabaseSync, ev: { bindingId: number; at: numbe
 export function driftRestoresOf(db: DatabaseSync, bindingId: number, since: number): number[] {
   return (db.prepare('SELECT at FROM linear_drift_events WHERE bindingId = ? AND restored = 1 AND at >= ? ORDER BY at, id').all(bindingId, since) as Raw[])
     .map((r) => r.at as number);
+}
+/** A binding's newest drift event for one field, or null (review 2386 A4: one change is recorded once). */
+export function lastDriftEventOf(db: DatabaseSync, bindingId: number, field: string): { value: string; restored: boolean } | null {
+  const r = db.prepare('SELECT value, restored FROM linear_drift_events WHERE bindingId = ? AND field = ? ORDER BY at DESC, id DESC LIMIT 1')
+    .get(bindingId, field) as Raw | undefined;
+  return r === undefined ? null : { value: r.value as string, restored: r.restored === 1 };
 }
 export function lastDriftCommentAt(db: DatabaseSync, bindingId: number): number | null {
   const r = db.prepare('SELECT MAX(commentedAt) AS at FROM linear_drift_events WHERE bindingId = ?').get(bindingId) as Raw | undefined;
@@ -907,7 +925,7 @@ const PORT_FUNCTIONS = {
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
-  managedTeams, issueBound, driftMarkOf, setDriftMark, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
+  managedTeams, issueBound, driftMarkOf, setDriftMark, graceBindingsOf, lastDriftEventOf, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
   setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
   settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, dueKeyOfBinding, managedSince,
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier,
