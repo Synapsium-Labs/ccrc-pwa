@@ -174,9 +174,14 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   In `pwa/src/docs`: no `postMessage` call, no `MessageChannel` identifier, no `onmessage` member, no JSX `iframe`
 //   element or string holding `<iframe`, no `srcdoc` (any case) identifier, property name, JSX attribute or string, no
 //   `default-src 'none'` string (any case); except Export's two allowances, by exact path (A2b, M8.10): the `iframe`
-//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, and the
+//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, the mockup
+//   frame's `iframe` and `srcDoc` forms in `docs/MockupFrame.tsx` (C2 Task 8, M5.13), by exact path too, and the
 //   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
-//   path, never the directory. The allowance holds whether or not those files exist yet.
+//   path, never the directory. The allowance holds whether or not those files exist yet. One more, for the mockup
+//   export's snapshot (C2 Task 9, spec 5.6.9 step 3): the STRING `srcdoc` (its strip list names the attribute it drops)
+//   in `docs/mockup/exportMockup.ts`, by exact path; an identifier, property name, JSX attribute or `<iframe` string
+//   there stays red, and the same string in any other file, `docs/mockup/load.ts` and a sibling `exportMockup2.ts`
+//   included, is red.
 //   Across `pwa/src`: `addEventListener('message', …)` as a member call or a bare call, and an assignment to
 //   `window.onmessage`, `self.onmessage`, `globalThis.onmessage` or a bare `onmessage`, outside the parse workers'
 //   own entries.
@@ -231,9 +236,18 @@ const MESSAGE_ASSIGN_HOMES: readonly string[] = ['src/lib/markdownWorker.ts', 's
 /** The only file with a value import of the render job: the worker entry (M8.21). */
 const renderJobValueHome = (file: string): boolean => file === 'src/lib/markdownWorker.ts';
 
-/** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string. */
+/** The mockup viewer's one frame file (C2 Task 8, M5.13): the only file besides Export's builder that may draw the JSX `iframe`
+ *  or name `srcdoc`, by exact path, never the directory or a prefix (`MockupFrame2.tsx` and `MockupView.tsx` are not it). */
+const MOCKUP_FRAME_HOME = 'src/docs/MockupFrame.tsx';
+
+/** The one file that may spell the string `srcdoc` without drawing a frame: the mockup export's snapshot, whose strip list
+ *  names the attribute it removes (C2 Task 9). By exact path, and for the string form only. */
+const SRCDOC_STRING_HOME = 'src/docs/mockup/exportMockup.ts';
+
+/** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string;
+ *  and the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`). */
 function exportAllows(kind: 'iframe' | 'policy', file: string): boolean {
-  return file === (kind === 'iframe' ? 'src/docs/export/buildExport.tsx' : 'src/docs/export/policy.ts');
+  return kind === 'iframe' ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME : file === 'src/docs/export/policy.ts';
 }
 
 /** A module specifier an import, export or `import()` names; `value` is false for the type-only forms. */
@@ -321,7 +335,7 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
       const text = stringText(n);
       if (text !== undefined) {
         if (/<iframe/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:iframe');
-        if (/srcdoc/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
+        if (/srcdoc/i.test(text) && !exportAllows('iframe', file) && file !== SRCDOC_STRING_HOME) hit(n, 'docs:srcDoc');
         if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file) && file !== 'src/docs/mockup/policy.ts') hit(n, 'docs:default-src-none');
       }
     }
@@ -460,6 +474,47 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(readerScan(dir).hits).toEqual([]);
     plant(dir, 'src/docs/mockup/origins.ts', "export const PLANTED_ORIGIN_POLICY = \"default-src 'none'\";\n");
     expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/mockup/origins.ts docs:default-src-none']);
+  });
+
+  it("M5.13: the mockup frame's iframe and srcDoc are allowed at src/docs/MockupFrame.tsx only; the same in MockupView.tsx and in a sibling path are red", () => {
+    const dir = treeCopy();
+    plant(dir, 'src/docs/MockupFrame.tsx', "\nexport const PlantedMockupFrame = () => <iframe srcDoc=\"x\" />;\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    plant(dir, 'src/docs/MockupView.tsx', "\nexport const PlantedMockupView = () => <iframe srcDoc=\"x\" />;\n");
+    expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/MockupView.tsx docs:iframe', 'src/docs/MockupView.tsx docs:srcDoc']);
+    const sibling = treeCopy();
+    plant(sibling, 'src/docs/MockupFrame2.tsx', "export const PlantedSibling = () => <iframe srcDoc=\"x\" />;\n");
+    expect(names(readerScan(sibling).hits, 'docs:')).toEqual(['src/docs/MockupFrame2.tsx docs:iframe', 'src/docs/MockupFrame2.tsx docs:srcDoc']);
+  });
+
+  it("Task 9: the snapshot's srcdoc STRING is allowed at src/docs/mockup/exportMockup.ts only; every other form there, and the string in load.ts or a sibling, is red", () => {
+    const home = 'src/docs/mockup/exportMockup.ts';
+    const dir = treeCopy();
+    plant(dir, home, "\nexport const PLANTED_STRIP = new Set(['srcdoc', 'action']);\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    // The allowance is the string form only: an identifier, a property name, a JSX attribute and an iframe string stay red.
+    expect(names(readerScan(dir).hits, 'docs:')).toEqual([]);
+    const forms: Array<[string, string, string[]]> = [
+      ['an identifier', '\nexport const srcdoc = 1;\n', [`${home} docs:srcDoc`]],
+      ['a property name', '\nexport const planted = { srcDoc: 1 };\n', [`${home} docs:srcDoc`]],
+      ['a member write', '\nexport const planted = (el: { x: string }, v: string) => { (el as never as { srcdoc: string }).srcdoc = v; };\n',
+        [`${home} docs:srcDoc`, `${home} docs:srcDoc`]],
+      ['an iframe string', "\nexport const PLANTED_TAG = '<iframe>';\n", [`${home} docs:iframe`]],
+    ];
+    for (const [, text, want] of forms) {
+      const d = treeCopy();
+      plant(d, home, text);
+      expect(names(readerScan(d).hits, 'docs:'), text).toEqual(want);
+    }
+    // A JSX frame planted in the file is red (the file is a `.ts`, so the scanner reads it as one: the attribute is a name).
+    const jsx = treeCopy();
+    plant(jsx, home, '\nexport const PlantedFrame = () => <iframe srcDoc="x" />;\n');
+    expect(names(readerScan(jsx).hits, 'docs:')).toContain(`${home} docs:srcDoc`);
+    for (const rel of ['src/docs/mockup/load.ts', 'src/docs/mockup/exportMockup2.ts']) {
+      const other = treeCopy();
+      plant(other, rel, "\nexport const PLANTED_STRIP = new Set(['srcdoc']);\n");
+      expect(names(readerScan(other).hits, 'docs:'), rel).toEqual([`${rel} docs:srcDoc`]);
+    }
   });
 
   it('M8.21: a value import of readerRenderJob sits only in the worker entry', () => {
@@ -1011,7 +1066,8 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 // ---------------------------------------------------------------------------------------------------------------
 // Clause W5 Export (spec 2026-10-01 4.17; M4.EX2's scan, M4.EX11, M4.EX16, M4.EX17, M4.T7's Export clause), read with
 // TypeScript's parser:
-//   - M4.EX2: in `docs/export/**`, `docs/ExportSheet.tsx`, `docs/share.ts` and `docs/ShareSheet.tsx`: no
+//   - M4.EX2: in `docs/export/**`, `docs/ExportSheet.tsx`, `docs/share.ts`, `docs/ShareSheet.tsx` and, from C2 Task 9,
+//     `docs/mockup/exportMockup.ts` (the snapshot, by exact path, not its directory): no
 //     `dangerouslySetInnerHTML` (any spelling clause W5h-a's `namesSink` reads), no assignment to `innerHTML` or
 //     `outerHTML`, no `insertAdjacentHTML` call, no `document.write` or `document.writeln` call, and no string or
 //     template piece that begins with `<` and a letter, `/` or `!`, except `EXPORT_PREFIX`'s own initialiser in
@@ -1024,10 +1080,12 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 //     `docs/ExportSheet.tsx`, through a dynamic `import()`; `ExportSheet.tsx` calls `downloadExport`, reads no member
 //     named `bytes`, and holds no `srcDoc`, `innerHTML`, `document.write` or `window.open`; under `pwa/src/docs` and
 //     `lib/markdown*`, `new Blob(`, `new File(` and `URL.createObjectURL(` only in `docs/objectUrls.ts`; and in W5 no JSX
-//     `iframe` element and no `srcDoc` attribute anywhere in `pwa/src` (refinement (v));
+//     `iframe` element and no `srcDoc` attribute anywhere in `pwa/src` (refinement (v)); W6 (C2 Task 8) adds exactly one
+//     home, `docs/MockupFrame.tsx`, for both, and C2 Task 9 a second, `docs/export/buildExport.tsx` (the mockup export's
+//     wrapper frame, M5.16): both names appear there and nowhere else beside the first;
 //   - M4.EX17: the run-time import closure of `docs/export/buildExport.tsx`, static and dynamic, through every relative
 //     specifier, holds neither `lib/markdownHighlightWorker.ts` nor `lib/highlightGrammars.ts`, and no `highlight.js`
-//     specifier;
+//     specifier (from C2 Task 9 the closure runs through `docs/mockup/exportMockup.ts` too);
 //   - M4.T7: clause 1's badge scan reads the export files and finds no draft state.
 // NOT EXHAUSTIVE. Known evasions: a specifier, a name or a tag built at run time; a sink, `write`, `open` or `bytes`
 // reached through an alias (`const w = document.write`, `const { bytes } = result`); `Reflect.set` or
@@ -1040,7 +1098,7 @@ const parse = (source: string, file: string): ts.SourceFile =>
 
 /** The files M4.EX2's token rule reads. */
 const exportInertScope = (file: string): boolean => file.startsWith('src/docs/export/')
-  || ['src/docs/ExportSheet.tsx', 'src/docs/share.ts', 'src/docs/ShareSheet.tsx'].includes(file);
+  || ['src/docs/ExportSheet.tsx', 'src/docs/share.ts', 'src/docs/ShareSheet.tsx', 'src/docs/mockup/exportMockup.ts'].includes(file);
 
 /** Whether `n` sits in the initialiser of `EXPORT_PREFIX` in `docs/export/policy.ts`. */
 function inExportPrefix(n: ts.Node, file: string): boolean {
@@ -1196,7 +1254,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     const files = sourceFiles(path.join(SRC_DIR, 'docs')).map((f) => path.relative(PWA, f).split(path.sep).join('/')).filter(exportInertScope);
     expect(files).toEqual(expect.arrayContaining([
       'src/docs/ExportSheet.tsx', 'src/docs/ShareSheet.tsx', 'src/docs/export/buildExport.tsx', 'src/docs/export/exportMarkdown.tsx',
-      'src/docs/export/policy.ts', 'src/docs/share.ts',
+      'src/docs/export/policy.ts', 'src/docs/share.ts', 'src/docs/mockup/exportMockup.ts',
     ]));
     expect(scanSrc(PWA, exportInertHits, exportInertScope)).toEqual([]);
   });
@@ -1212,6 +1270,26 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     expect(scanSrc(dir, exportInertHits, exportInertScope)).toContain(`src/docs/export/exportMarkdown.tsx ${rule}`);
   });
 
+  it.each([
+    ['a markup string', "export const planted = '<b>x</b>';", 'markup-string'],
+    ['a markup template', 'export const planted = (x: string) => `</p>${x}`;', 'markup-string'],
+    ['an innerHTML write', 'export const planted = (e: Element) => { e.innerHTML = "x"; };', 'innerHTML'],
+    ['an outerHTML write', 'export const planted = (e: Element) => { e.outerHTML = "x"; };', 'outerHTML'],
+    ['an insertAdjacentHTML call', "export const planted = (e: Element) => e.insertAdjacentHTML('beforeend', 'x');", 'insertAdjacentHTML'],
+    ['a document.write call', "export const planted = () => document.write('x');", 'document.write'],
+  ])('M4.EX2 planted (Task 9): %s in the snapshot, exportMockup.ts, is red', (_name, text, rule) => {
+    const dir = planted('src/docs/mockup/exportMockup.ts', `\n${text}\n`);
+    expect(scanSrc(dir, exportInertHits, exportInertScope)).toContain(`src/docs/mockup/exportMockup.ts ${rule}`);
+  });
+
+  it('M4.EX2 (Task 9): the scope is the snapshot file, not its directory: the same markup string in mockup/load.ts is not this rule\'s', () => {
+    const dir = planted('src/docs/mockup/load.ts', "\nexport const plantedMarkup = '<b>x</b>';\n");
+    expect(scanSrc(dir, exportInertHits, exportInertScope)).toEqual([]);
+    expect(exportInertScope('src/docs/mockup/load.ts')).toBe(false);
+    expect(exportInertScope('src/docs/mockup/exportMockup.ts')).toBe(true);
+    expect(exportInertScope('src/docs/mockup/exportMockup2.ts')).toBe(false);
+  });
+
   it('M4.EX2: EXPORT_PREFIX is allowed by name, and only in policy.ts', () => {
     expect(exportInertHits("export const EXPORT_PREFIX = '<!doctype html>';", 'src/docs/export/policy.ts')).toEqual([]);
     expect(exportInertHits("export const EXPORT_PREFIX = '<!doctype html>';", 'src/docs/export/filename.ts'))
@@ -1223,9 +1301,13 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/DocImage.tsx imagePinFor',
       'src/docs/ExportSheet.tsx buildExport:dynamic',
       'src/docs/ExportSheet.tsx downloadExport',
+      'src/docs/MockupFrame.tsx iframe',
+      'src/docs/MockupFrame.tsx srcDoc',
       'src/docs/docsLinks.ts imagePinFor',
+      'src/docs/export/buildExport.tsx iframe',
       'src/docs/export/buildExport.tsx react-dom/server',
       'src/docs/export/buildExport.tsx renderToStaticMarkup',
+      'src/docs/export/buildExport.tsx srcDoc',
       'src/docs/mockup/plan.ts imagePinFor',
       'src/docs/objectUrls.ts createObjectURL',
       'src/docs/objectUrls.ts new Blob',
@@ -1252,7 +1334,9 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
 
   it('M4.EX17: the builder reaches lib/markdown.tsx and neither highlight worker module nor highlight.js', () => {
     const { files, bare } = closureFrom(PWA, 'src/docs/export/buildExport');
-    expect(files).toEqual(expect.arrayContaining(['src/docs/export/buildExport.tsx', 'src/lib/markdown.tsx', 'src/docs/DocImage.tsx']));
+    expect(files).toEqual(expect.arrayContaining([
+      'src/docs/export/buildExport.tsx', 'src/lib/markdown.tsx', 'src/docs/DocImage.tsx', 'src/docs/mockup/exportMockup.ts',
+    ]));
     expect(highlightModulesIn(files)).toEqual([]);
     expect(bare.filter((s) => namesHighlightJs('src/docs/export/buildExport.tsx', s))).toEqual([]);
   });
@@ -1262,6 +1346,21 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     expect(core.bare.filter((s) => namesHighlightJs('src/docs/export/colouring.ts', s))).not.toEqual([]);
     const grammars = closureFrom(planted('src/docs/export/exportMarkdown.tsx', "\nimport { HLJS as plantedG } from '../../lib/highlightGrammars';\nexport const plantedH = plantedG;\n"), 'src/docs/export/buildExport');
     expect(highlightModulesIn(grammars.files)).toContain('src/lib/highlightGrammars.ts');
+  });
+
+  it('M4.EX17 planted (Task 9): highlight.js, or the grammars module, in the snapshot the builder now reaches is red', () => {
+    const core = closureFrom(planted('src/docs/mockup/exportMockup.ts', "\nimport plantedCore from 'highlight.js/lib/core';\nexport const plantedC = plantedCore;\n"), 'src/docs/export/buildExport');
+    expect(core.bare.filter((s) => namesHighlightJs('src/docs/mockup/exportMockup.ts', s))).not.toEqual([]);
+    const grammars = closureFrom(planted('src/docs/mockup/exportMockup.ts', "\nimport { HLJS as plantedG } from '../../lib/highlightGrammars';\nexport const plantedH = plantedG;\n"), 'src/docs/export/buildExport');
+    expect(highlightModulesIn(grammars.files)).toContain('src/lib/highlightGrammars.ts');
+  });
+
+  it('M4.EX16 planted (Task 9): an iframe and a srcDoc in the viewer, a file other than the frame, are red', () => {
+    // A `.ts` file cannot hold JSX, so the snapshot's own case is clause W8a's (its name arm reds a `srcDoc` identifier there).
+    expect(exportUses('export const PlantedFrame = () => <iframe srcDoc="x" />;', 'src/docs/mockup/exportMockup.tsx'))
+      .toEqual(['src/docs/mockup/exportMockup.tsx iframe', 'src/docs/mockup/exportMockup.tsx srcDoc']);
+    expect(scanSrc(planted('src/docs/MockupView.tsx', '\nexport const PlantedFrame = () => <iframe srcDoc="x" />;\n'), exportUses))
+      .toEqual(expect.arrayContaining(['src/docs/MockupView.tsx iframe', 'src/docs/MockupView.tsx srcDoc']));
   });
 
   it('M4.EX2 planted (pure source): the sink arm, outerHTML and document.writeln each report their rule', () => {
@@ -1576,7 +1675,7 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
 // `parseMockupOrigin` (https, the LDH host grammar, no IP literal, no `localhost`, not the console's own host). The
 // promise is a brand, so a cast anywhere else would put an unchecked origin into the CSP. Across every `.ts` and `.tsx`
 // file under `pwa/src`, TypeScript's parser finds each type assertion whose type names `HttpsOrigin` anywhere inside it
-// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2259 F2) the
+// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2281 F2) the
 // array, readonly array, `Array<>`, `ReadonlyArray<>` and union forms, `xs as readonly HttpsOrigin[]`,
 // `x as HttpsOrigin | null`: the only sinks take arrays), and the only one allowed is a single assertion inside the function
 // `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
@@ -1644,6 +1743,7 @@ describe('clause C1 origins: an HttpsOrigin is made only in parseMockupOrigin (M
     ['an array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
     ['an Array<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as Array<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
     ['an as-unknown array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as unknown as readonly HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
+    ['a ReadonlyArray<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as ReadonlyArray<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
   ])('planted: %s is red', (_name, rel, text, hit) => {
     expect(originCensus(planted(rel, `\n${text}\n`))).toEqual({ hits: [hit], allowed: 1 });
   });

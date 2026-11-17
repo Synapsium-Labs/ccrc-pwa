@@ -3513,7 +3513,30 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX programme_edges_one_open ON programme_edges (program, kind, target) WHERE state = 'open';
   CREATE INDEX programme_edges_by_program ON programme_edges (program, state);
   `,
+
   // ── 90: user_version 89 -> 90 ─────────────────────────────────────────────
+  // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
+  // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
+  // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
+  // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
+  // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
+  // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 90` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // ROLLBACK EXPOSURE (review 2335 F1): `resumed-other-org` is the first trigger word added after the vocabulary shipped.
+  // An older build's `genRowOf` refuses a row whose `dueWhy` or `blind` carries a word it does not know, and
+  // `liveGenerations` is all-or-failure, so one such row fails that build's whole generations read (fail-closed by design,
+  // review 2003 F13). It takes a rollback below this PR onto a database that already holds such a row.
+  // Overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+  // (#2962) 88 and remaining work A (#2951) 89, so this is 90 (the coordinator's word, 2026-11-17). RE-MEASURE the slot
+  // before the PR and before merge (it must print 89 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
+  `,
+
+  // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
   // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
   // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark (the `updatedAt` it has read to)
   // and when it last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
@@ -3529,10 +3552,10 @@ export const MIGRATIONS: readonly string[] = [
   // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 90` warns, reads as-is, names none of them and
-  // boots. The plan's number was 58; row revisions (#2965) took 87, renewal readings A (#2962) 88 and remaining work A (#2951)
-  // 89, so this is 90, and it is renumbered at landing if another lands first (D-8673). RE-MEASURE the slot before the PR and
-  // before merge (it must print 89 before this entry is counted):
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 91` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; row revisions (#2965) took 87, renewal readings A (#2962) 88, remaining work A (#2951)
+  // 89 and account organization D (#2958) 90, so this is 91, and it is renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 90 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

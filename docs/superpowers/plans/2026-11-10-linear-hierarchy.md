@@ -227,16 +227,17 @@ number from `POST /api/ledger/deviations`.
   write puts the project in, so the policy is asked about each. Record: the wave 4 note.
 - **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
   255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`, counted in UTF-16 units), keeping the
-  provenance line whole and cutting the body at its end with `…`; a description that fits is sent unchanged. Measured
+  provenance line whole and cutting the body at its end with `…`. A description that fits is sent unchanged, except that trailing whitespace
+  is trimmed first, so a fitting body that ended in whitespace also takes one update on deploy. Measured
   live on 2026-11-17: Linear refused every description over 255 characters (INVALID_INPUT), so most epics and every
-  long initiative failed `linear-invalid`. The full text stays in ccrc's plan. The status notes come first so the cut
-  never takes one: the initiative reads Abandoned, Paused, In short, done-when; the project reads Dropped, "Part of",
+  long initiative failed `linear-invalid`. The full text stays in ccrc's plan. The status notes come first, so the cut
+  never takes the first note (a first note long enough to fill the room can cut off a second): the initiative reads Abandoned, Paused, In short, done-when; the project reads Dropped, "Part of",
   summary, checkpoints; a note longer than the room is itself cut. That order moves the fingerprint of a bound
   description that carries a note, so each such object takes one update on deploy. The public-text gate judges the
   unfitted body and title as well as the fitted text. A milestone's description is fitted the same way (Kind first),
   as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
   body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
-  not a departure. Record: the ledger, review run 2364.
+  not a departure. Record: the ledger, review runs 2364 and 2368.
 
 ## Global Constraints
 

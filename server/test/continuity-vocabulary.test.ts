@@ -19,9 +19,9 @@ describe('the lists, each derived from one map, in order', () => {
   it('TRIGGER_CLASSES: Table 3.3.11b', () => { expect(TRIGGER_CLASSES).toEqual(['hard', 'soft']); });
   it('RENEWAL_TRIGGERS: Table 3.3.11b, and the operator\'s Renew now', () => {
     expect(RENEWAL_TRIGGERS).toEqual(['hard-cap', 'soft-ceiling', 'turns', 'two-compactions', 'idle', 'daily-backstop',
-      'new-install', 'probe-failed', 'model-drift', 'resumed-other-class', 'entry-retired', 'term-raised',
-      'account-outside-set', 'class-unservable', 'account-load', 'compaction-refused', 'class-changed', 'evaluation-due',
-      'not-local', 'resumed-long', 'wave-boundary', 'operator']);
+      'new-install', 'probe-failed', 'model-drift', 'resumed-other-class', 'resumed-other-org', 'entry-retired',
+      'term-raised', 'account-outside-set', 'class-unservable', 'account-load', 'compaction-refused', 'class-changed',
+      'evaluation-due', 'not-local', 'resumed-long', 'wave-boundary', 'operator']);
   });
 });
 
