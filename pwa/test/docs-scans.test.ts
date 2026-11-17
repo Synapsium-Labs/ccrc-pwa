@@ -1576,7 +1576,7 @@ describe('clause C1: the HTML parser has one home, one constructor and one parse
 // `parseMockupOrigin` (https, the LDH host grammar, no IP literal, no `localhost`, not the console's own host). The
 // promise is a brand, so a cast anywhere else would put an unchecked origin into the CSP. Across every `.ts` and `.tsx`
 // file under `pwa/src`, TypeScript's parser finds each type assertion whose type names `HttpsOrigin` anywhere inside it
-// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2259 F2) the
+// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2281 F2) the
 // array, readonly array, `Array<>`, `ReadonlyArray<>` and union forms, `xs as readonly HttpsOrigin[]`,
 // `x as HttpsOrigin | null`: the only sinks take arrays), and the only one allowed is a single assertion inside the function
 // `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
@@ -1644,6 +1644,7 @@ describe('clause C1 origins: an HttpsOrigin is made only in parseMockupOrigin (M
     ['an array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
     ['an Array<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as Array<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
     ['an as-unknown array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as unknown as readonly HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
+    ['a ReadonlyArray<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as ReadonlyArray<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
   ])('planted: %s is red', (_name, rel, text, hit) => {
     expect(originCensus(planted(rel, `\n${text}\n`))).toEqual({ hits: [hit], allowed: 1 });
   });

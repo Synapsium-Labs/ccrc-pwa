@@ -95,8 +95,8 @@ const formattingShape = (open: number, tags: number): string => {
 };
 /** (b): the deepest stack the pre-scan admits, `depth` open names: `depth - 1` nested divs, then `<span></span>` pairs (or
  *  `<p></p>` pairs, whose start tag walks the whole stack for a `p` in scope) inside the deepest while the tag count stays
- *  within `tags`. The brief's "256 divs, then spans inside the deepest" would put the first span at depth 257, which the
- *  pre-scan refuses, so the divs are one fewer and the pairs sit at depth 256. */
+ *  within `tags`. The brief's "256 divs, then spans inside the deepest", written when `depth` was 256, would have put the
+ *  first span one past it, which the pre-scan refuses, so the divs are one fewer and the pairs sit at `depth` itself. */
 const deepShape = (depth: number, tags: number, fill: 'span' | 'p' = 'span'): string =>
   '<div>'.repeat(depth - 1) + `<${fill}></${fill}>`.repeat(Math.floor((tags - (depth - 1)) / 2));
 /** (f): nested tables, where the parser's depth exceeds the pre-scan's (the implied `tbody`): `<table><tr><td>` while the
