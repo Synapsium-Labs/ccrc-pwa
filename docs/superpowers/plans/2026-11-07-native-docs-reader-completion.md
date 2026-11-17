@@ -142,7 +142,7 @@ function parseMockup(text: string):
 - [ ] Run `mockup-prescan`, `mockup-parse`, `docs-scans`; record real assertion failures before adding the exports.
 - [ ] Implement one linear conservative scan. Keep the sole `new DOMParser(` in parse.ts and call prescan first. No browser DOMParser constructor exists in prescan.ts; it has no DOM/I/O import.
 - [ ] Run bounded synthetic formatting-reconstruction measurement first, fix `MOCKUP_MAX_OPEN_FORMATTING`, then measure/fix `MOCKUP_MAX_TAGS`; depth remains 256 (as written; D-8695 later lowered depth to 64 and formatting to 16, and D-8671's attributes to 32). Each admitted deep/formatting worst case ≤1000 ms in the browser, maximum input 2 MiB, no more than 12 generated fixtures, no repository copies. Record exact engine/build/limits and test both boundary sides.
-- [ ] GREEN plus mutations: bypass prescan; ignore formatting count; allow depth 257; add a second parser at each allowed/evasion site. Each must produce its own red. Commit the parser, measured constants, tests and scan entry.
+- [ ] GREEN plus mutations: bypass prescan; ignore formatting count; allow depth `MOCKUP_MAX_DEPTH` + 1 (257 when written; 65 since D-8695, superseded by row NDR-C1-FR2-D8695-DEPTH); add a second parser at each allowed/evasion site. Each must produce its own red. Commit the parser, measured constants, tests and scan entry.
 
 ### Task 6: C1 — one asset plan with explicit pin/failure distinctions
 
@@ -501,8 +501,8 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 
 - **Measurement history (local):**
   - At 20 000 tags, v1 admitted misnested `<b><div></b>` at 430 ms, so `MOCKUP_MAX_TAGS` is 15 000.
-  - Reconstruction at 20 000 tags took 37-78 ms with 16 open elements and 119-234 ms with 32, so `MOCKUP_MAX_OPEN_FORMATTING` is 32.
-  - Attributes measured at 0, 16, 32, 64, 96 and 128 per element gave 75, 173, 227, 358, 491 and 667 ms, so `MOCKUP_MAX_ATTRIBUTES` is 64.
+  - Reconstruction at 20 000 tags took 37-78 ms with 16 open elements and 119-234 ms with 32, so `MOCKUP_MAX_OPEN_FORMATTING` was fixed at 32 (historical: 16 since D-8695).
+  - Attributes measured at 0, 16, 32, 64, 96 and 128 per element gave 75, 173, 227, 358, 491 and 667 ms, so `MOCKUP_MAX_ATTRIBUTES` was fixed at 64 (historical: 32 since D-8695's lowering, under D-8671).
 - **K1 (M5.EX4)**, every committed `docs/**/*.html` of at most 2 MiB, admitted:
 
 | File | Depth | Tags | Formatting | Most attributes on an element |
@@ -644,6 +644,12 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 {"id": "NDR-C1-FR1-A6-ZEROPARSE", "pkg": "pwa", "file": "src/docs/mockup/parse.ts", "old": "  if (!prescan.ok) return { ok: false, prescan };", "new": "  if (!prescan.ok && prescan.why !== 'too-many-attributes') return { ok: false, prescan };", "tests": ["test/mockup-parse.test.ts"], "t": "too-many-attributes", "status": "red", "red": "Tests  1 failed | 29 skipped (30): too-many-attributes (one start tag past MOCKUP_MAX_ATTRIBUTES; fix round 1, A6)", "sha256": "fca207b39c5cce7a9da6f26b3628bafc42a812ab31e50483f662a546b991ad7e", "restored": true}
 {"id": "NDR-C1-FR1-A1-K1", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_ATTRIBUTES = 64;", "new": "export const MOCKUP_MAX_ATTRIBUTES = 6;", "tests": ["test/mockup-prescan.test.ts"], "t": "K1 \\(fix round 1", "status": "red", "red": "Tests  1 failed | 395 skipped (396): each committed mockup's most attributes on one element is within MOCKUP_MAX_ATTRIBUTES, and desk-nav stands at depth 12", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
 {"id": "NDR-C1-FR1-A4-CAST", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export function mockupCsp(extra: readonly HttpsOrigin[]): string {", "new": "export const castOrigin = (s: string): HttpsOrigin => s as HttpsOrigin;\nexport function mockupCsp(extra: readonly HttpsOrigin[]): string {", "tests": ["test/docs-scans.test.ts"], "t": "clause C1 origins", "status": "red", "red": "Tests  7 failed | 1 passed | 157 skipped (165): the real tree has exactly the one assertion, inside parseMockupOrigin", "sha256": "b93e729491f76836be5a2c651c651c5a697bb3d61e22a02288fecb063f4c7bf5", "restored": true}
+```
+
+- Superseded (C2's first item, review run 2318 minor 4): rows NDR-C1-FR1-A6-ATTR, A6-DEPTH and A6-FORMATTING quote the limits D-8695 lowered (`= 64`, `= 256` and `= 32`), so their `old` strings no longer occur at the tip; fix round 2's rows NDR-C1-FR2-D8695-ATTR, -DEPTH and -FORMATTING re-record them on the same test (`pinned in absolute numbers`). A6-TAGS's `old` still occurs, and NDR-C1-FR2-D8695-TAGS re-records it under that test's new title. NDR-C1-FR1-A1-K1 quotes `MOCKUP_MAX_ATTRIBUTES = 64`, and D-8695 has no K1 row, so it is replayed at the tip's 32, in the tree, restored from a saved copy and its hash checked. It is red with the same counts:
+
+```json
+{"id": "NDR-C2-FI4-A1-K1", "pkg": "pwa", "file": "src/docs/mockup/policy.ts", "old": "export const MOCKUP_MAX_ATTRIBUTES = 32;", "new": "export const MOCKUP_MAX_ATTRIBUTES = 6;", "tests": ["test/mockup-prescan.test.ts"], "t": "K1 \\(fix round 1", "status": "red", "red": "Tests  1 failed | 395 skipped (396): each committed mockup's most attributes on one element is within MOCKUP_MAX_ATTRIBUTES, and desk-nav stands at depth 12", "sha256": "405e7352721623d9f434f3526ffa91bcb65cc797ba5b7a556011d548b37b7845", "restored": true}
 ```
 
 **Fix round 2 (review run 2281 at `71e515bf4`, 2026-11-16).** The review confirmed F1's linear planning and its one pin rule, and found two important findings and seven minors. The coordinator's rulings:
