@@ -8,7 +8,7 @@ import { COORD_SCHEMA_VERSION, openCoordDb, tx } from '../src/coord/db.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  NO_PLAN_CHANGES, applyPlanChanges, attachTicketInTx, closePlan, dueSyncs, insertTicket, markCheckpointMet, markSyncDue,
+  NO_PLAN_CHANGES, applyPlanChanges, attachTicketInTx, clearSyncDue, closePlan, deferSync, dueSyncs, heldSyncUntil, insertTicket, markCheckpointMet, markSyncDue,
   markSyncDueInTx, onRunAdvancedInTx, planEndOf, planOf, planOwnerOf, planStorePort, settleEpicInTx, ticketById, updateTicket,
   type NewTicket, type PlanChanges,
 } from '../src/coord/planStore.js';
@@ -275,6 +275,26 @@ describe('the queue and the plan end', () => {
     expect(db.prepare("SELECT dueAt FROM plan_sync_due WHERE program = 'prog-a'").get()).toEqual({ dueAt: 50 });
   });
 
+  it('A7/A12: a row deferred for a failure keeps its dueAt against markSyncDue; an ordinary wait does not', () => {
+    const dueOf = (): unknown => db.prepare("SELECT dueAt FROM plan_sync_due WHERE program = 'prog-a'").get();
+    markSyncDue(db, 'prog-a', 100);
+    deferSync(db, 'prog-a', 30_100, 'failure');
+    markSyncDue(db, 'prog-a', 200);                       // a plan write, a run transition, an attach
+    tx(db, () => markSyncDueInTx(db, 'prog-a', 300));
+    expect(dueOf()).toEqual({ dueAt: 30_100 });
+    expect(heldSyncUntil(db, 'prog-a', 300)).toBe(30_100);
+    expect(heldSyncUntil(db, 'prog-a', 30_100)).toBeNull();       // the backoff has passed: nothing holds it
+    deferSync(db, 'prog-a', 40_000, 'wait');               // a directory wait: an ordinary deferral
+    markSyncDue(db, 'prog-a', 400);
+    expect(dueOf()).toEqual({ dueAt: 400 });
+    expect(heldSyncUntil(db, 'prog-a', 300)).toBeNull();
+    deferSync(db, 'prog-a', 50_000, 'failure');
+    clearSyncDue(db, 'prog-a');                            // settled: the next mark is an ordinary one
+    markSyncDue(db, 'prog-a', 500);
+    expect(dueOf()).toEqual({ dueAt: 500 });
+    expect(heldSyncUntil(db, 'prog-b', 0)).toBeNull();
+  });
+
   it('the reserved programme is never queued', () => {
     markSyncDue(db, LINEAR_SYNC_PROGRAMME, 1);
     expect(dueSyncs(db, 10)).toEqual([]);
@@ -323,5 +343,37 @@ describe('the hierarchy settings', () => {
     expect(linkingOf(db, 'project-a')).toMatchObject({ initiatives: 'off', linearOwner: 'coord-a', ownsTeam: false, teamKey: 'KEY' });
     expect(linkingOf(db, 'project-b').ownsTeam).toBe(true);
     expect(linkingOf(db, 'project-c').ownsTeam).toBe(true);   // another key is left alone
+  });
+});
+
+describe('programmeRowId (C6)', () => {
+  it('answers the programs row rowid through the port, and null for an unknown slug', () => {
+    declare('prog-a');
+    const port = planStorePort(db);
+    const rid = (db.prepare("SELECT rowid AS r FROM programs WHERE slug = 'prog-a'").get() as { r: number }).r;
+    expect(port.programmeRowId('prog-a')).toBe(rid);
+    expect(port.programmeRowId('nope')).toBeNull();
+  });
+});
+
+describe('requeueFailed (C17)', () => {
+  it('to bound keeps the linear id and the stored fingerprint; to pending only a binding no object backs', () => {
+    declare('prog-a');
+    const port = planStorePort(db);
+    const epicId = port.planOf('prog-a').epics[0]!.id;
+    const made = port.ensurePending('epic', epicId, 'ws-a', 'AAA');
+    port.markBound(made.id, 'lin-1', null, 'fp-1', 10);
+    port.markFailed(made.id, 'linear-forbidden', 'in-1', 20);
+    expect(port.requeueFailed({ bindingId: made.id, to: 'pending' })).toBe(0);          // an object is known: never pending
+    expect(port.requeueFailed({ bindingId: made.id, to: 'bound' })).toBe(1);
+    expect(port.bindingOf('epic', epicId, 'ws-a')).toMatchObject({
+      state: 'bound', linearId: 'lin-1', fingerprint: 'fp-1', failedAt: null, failedWord: null, failedInputs: null,
+    });
+    const cpId = port.planOf('prog-a').epics[0]!.checkpoints[0]!.id;
+    const never = port.ensurePending('checkpoint', cpId, 'ws-a', 'AAA');
+    port.markFailed(never.id, 'status-missing', 'in-2', 30);
+    expect(port.requeueFailed({ bindingId: never.id, to: 'bound' })).toBe(0);             // nothing to be bound to
+    expect(port.requeueFailed({ bindingId: never.id, to: 'pending' })).toBe(1);
+    expect(port.bindingOf('checkpoint', cpId, 'ws-a')).toMatchObject({ state: 'pending', linearId: null, failedAt: null });
   });
 });
