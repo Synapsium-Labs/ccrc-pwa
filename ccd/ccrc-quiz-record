@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+set +x
+# ccrc-quiz-record — the operator's record of a replay quiz run (Overlord W1a; plan
+# 2026-11-17-overlord-quiz-record.md §5 and Task 10). Run by hand on the fleet box, outside any session and any pane:
+#
+#   ccrc quiz-record --report <file> --sha <64 hex>
+#
+# It posts one report (a regular file of at most 64 KiB) as a JSON body and prints what the server answered. The run it
+# records is PENDING: only the operator's confirmation on the Shadow lanes card makes it count.
+#
+# IT POSTS THROUGH THE CLIENT (coordinator ruling, plan slug `quiz-record-posts-through-the-client`; CLAUDE.md's
+# consolidate rule: no fifth hand copy of the URL-and-credential read). This file does its own validation and packaging
+# only: the refusals, the size bound, the body and the trace. The address, the credential and the transport are the
+# installed client's (`ccrc-api quiz record --json -`, a row of its closed table), which prints the response body on
+# stdout and `http <code>` on stderr, exits 0 whenever a response arrived and 3 when none did. This file therefore
+# reads no credential and no address, and opens no connection itself.
+#
+# It refuses inside a session (`CLAUDECODE`) and inside a pane (`TMUX_PANE`) before it reads anything. Those are speed
+# bumps, not walls: a session that holds the box credential could post a pending run through the client anyway, and
+# nothing here makes a run count. The operator's confirmation on the card does.
+#
+# Portability: the file is measured with `wc -c`; no `stat -c`, no `sha256sum`, no bare `timeout` (the client's own
+# deadline bounds the call).
+set -uo pipefail
+umask 077
+export LC_ALL=C
+
+SELF=quiz-record
+CLIENT="$HOME/.local/bin/ccrc-api"
+MAX_BYTES=65536
+
+die() { printf '%s: %s\n' "$SELF" "$1" >&2; exit "${2:-1}"; }
+usage() { printf 'usage: ccrc quiz-record --report <file> --sha <64 hex>\n' >&2; exit 2; }
+
+# The refusals come FIRST, before any argument or file is read.
+[ -z "${CLAUDECODE:-}" ] || die "refused: in-session (a session never records a quiz run; run it by hand)" 2
+[ -z "${TMUX_PANE:-}" ] || die "refused: in-pane (run it from the operator's own shell, outside tmux)" 2
+
+report="" sha="" have_report=0 have_sha=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --report)   [ $# -ge 2 ] || usage; report="$2"; have_report=1; shift 2 ;;
+    --report=*) report="${1#--report=}"; have_report=1; shift ;;
+    --sha)      [ $# -ge 2 ] || usage; sha="$2"; have_sha=1; shift 2 ;;
+    --sha=*)    sha="${1#--sha=}"; have_sha=1; shift ;;
+    *) usage ;;
+  esac
+done
+[ "$have_report" -eq 1 ] && [ -n "$report" ] || usage
+[ "$have_sha" -eq 1 ] && [ -n "$sha" ] || usage
+[[ "$sha" =~ ^[0-9a-f]{64}$ ]] || die "--sha must be 64 lower-case hexadecimal characters, as the report command printed it" 2
+
+command -v jq >/dev/null 2>&1 || die "jq is not on PATH; nothing was posted"
+[ -x "$CLIENT" ] || die "no ccrc-api at ~/.local/bin/ccrc-api; nothing was posted"
+
+# The report: a regular file (never a FIFO or a directory, which `-f` refuses without opening), at most 64 KiB.
+[ -e "$report" ] || die "no such file: $report"
+[ -f "$report" ] || die "not a regular file: $report"
+[ -r "$report" ] || die "cannot read $report"
+size=$(wc -c < "$report" | tr -d '[:space:]')
+[[ "$size" =~ ^[0-9]+$ ]] || die "could not measure $report"
+[ "$size" -le "$MAX_BYTES" ] || die "the report is $size bytes, over $MAX_BYTES bytes: nothing was posted"
+
+# The trace: who, in which role, when. The role is `ccrc.env`'s CCRC_ROLE, or `unknown`.
+user=$(id -un 2>/dev/null | tr -cd 'A-Za-z0-9._-')
+role=""
+[ -r "$HOME/.ccrc/ccrc.env" ] && role=$(grep -E '^[[:space:]]*CCRC_ROLE=' "$HOME/.ccrc/ccrc.env" | tail -n1 | cut -d= -f2- | tr -cd '[:lower:]')
+trace="quiz-record ${user:-unknown} ${role:-unknown} $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# The report travels as UTF-8 JSON text: `jq --rawfile` reads the file, never a shell variable.
+body=$(jq -n --rawfile report "$report" --arg sha "$sha" --arg by "$trace" \
+  '{report: $report, sha256: $sha, recordedBy: $by}') || die "could not build the request body"
+
+# The client's stderr (`http <code>`) is left to reach the terminal as it is.
+answer=$(printf '%s' "$body" | "$CLIENT" quiz record --json -)
+rc=$?
+if [ "$rc" -ne 0 ]; then
+  die "no answer from the server (ccrc-api exited $rc); nothing is known to be recorded"
+fi
+if ! printf '%s' "$answer" | jq -e 'type == "object"' >/dev/null 2>&1; then
+  die "the server's answer was not JSON; nothing is known to be recorded"
+fi
+ok=$(printf '%s' "$answer" | jq -r '.ok // false')
+if [ "$ok" = true ]; then
+  id=$(printf '%s' "$answer" | jq -r '.id // "?"')
+  fresh=$(printf '%s' "$answer" | jq -r '.fresh // false')
+  state=$(printf '%s' "$answer" | jq -r '.state // "unknown"')
+  if [ "$fresh" = true ]; then
+    printf 'recorded run %s, pending: confirm it on the Shadow lanes card\n' "$id"
+  else
+    printf 'already recorded as run %s (%s)\n' "$id" "$state"
+  fi
+  exit 0
+fi
+word=$(printf '%s' "$answer" | jq -r '.error // "refused"')
+detail=$(printf '%s' "$answer" | jq -r '.detail // "no detail"')
+printf '%s: %s\n' "$word" "$detail" >&2
+exit 1
