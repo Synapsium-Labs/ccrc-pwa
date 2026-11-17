@@ -1,5 +1,6 @@
 // The plan verbs' routes (Linear hierarchy design 2026-11-10 §4.3, D-8181): `plan put`, `plan show`, `plan met`,
-// `plan ticket-add`, `plan ticket-move`, `plan epic-drop` and `plan close`. L4: they own the reply and decide nothing;
+// `plan ticket-add`, `plan ticket-move`, `plan epic-drop` and `plan close`, and `plan phase-ref` (programme work map WM0,
+// D-8715), with the phases `plan put` stores and `plan show` answers. L4: they own the reply and decide nothing;
 // `planPolicy.ts` parses the bodies and judges the diff, the caller and the programme's end, and `planStore.ts` (through the
 // `PlanStorePort`, never `coord.db`) is the table. The box token comes first, then the identity pair from the QUERY, then the
 // registry's attribution, then the caller check. Every plan WRITE runs its checks and its store write inside `serial`, the
@@ -14,7 +15,7 @@ import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
 import type { OtherLane, OtherLaneReads } from './otherLanes.js';
 import {
   LINEAR_SYNC_PROGRAMME, isPlanKey,
-  type CheckpointView, type EpicView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
+  type CheckpointView, type EpicView, type PhaseView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
 } from '../../../shared/plan.js';
 import { programmeNameFromSlug } from '../../../shared/api.js';
 import { publicTextVerdict } from '../linking/policy.js';
@@ -22,10 +23,10 @@ import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.
 import type { AttributionRead } from './openRun.js';
 import type { CoordStore } from './store.js';
 import type { CoordRoutesHandle } from './routes.js';
-import type { BindingRow, PlanStorePort, StoredPlan } from './planStore.js';
+import type { BindingRow, PhaseRow, PlanStorePort, StoredPlan } from './planStore.js';
 import {
-  diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPut, parsePlanTicketAdd, parsePlanTicketMove,
-  dropEpicInto, planCallerVerdict, ticketIsHeld,
+  diffPhases, diffPlan, parsePlanClose, parsePlanEpicDrop, parsePlanMet, parsePlanPhaseRef, parsePlanPut, parsePlanTicketAdd,
+  parsePlanTicketMove, dropEpicInto, phaseNumbers, phaseRefVerdict, planCallerVerdict, ticketIsHeld,
 } from './planPolicy.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
 
@@ -67,6 +68,11 @@ const mask = linearEgressText;
 const maskPut = (p: PlanPutBody): PlanPutBody => ({
   ...p,
   ...(p.title === undefined ? {} : { title: mask(p.title) }),
+  ...(p.phases === undefined ? {} : {
+    phases: p.phases.map((ph) => ({
+      ...ph, title: mask(ph.title), summary: mask(ph.summary), ...(ph.droppedWhy === undefined ? {} : { droppedWhy: mask(ph.droppedWhy) }),
+    })),
+  }),
   epics: p.epics.map((e) => ({
     ...e, title: mask(e.title), summary: mask(e.summary),
     ...(e.droppedWhy === undefined ? {} : { droppedWhy: mask(e.droppedWhy) }),
@@ -88,9 +94,29 @@ const syncOf = (rows: readonly BindingRow[] | undefined): Sync => {
   return { sync: 'bound', syncWord: null };
 };
 
-/** One programme's plan as the wire says it (`PlanView`): the stored plan, each object's sync word from its bindings. */
+/** The phases as the wire says them, in order: each reference by its object's key, a carry by its target phase's key, and the
+ *  number `phaseNumbers` derives. A reference whose object is not in the plan any more is left out. */
+function phaseViewsOf(stored: StoredPlan, phases: readonly PhaseRow[]): PhaseView[] {
+  const numbers = phaseNumbers(phases.map((p) => ({ key: p.key, dropped: p.droppedWhy !== null })));
+  const epicKey = new Map(stored.epics.map((e) => [e.id, e.key]));
+  const ticketKey = new Map(stored.epics.flatMap((e) => e.tickets.map((t) => [t.id, t.key] as const)));
+  const phaseKey = new Map(phases.map((p) => [p.id, p.key]));
+  return phases.map((p) => ({
+    key: p.key, number: numbers.get(p.key) ?? null, title: p.title, summary: p.summary, dropped: p.droppedWhy !== null,
+    refs: p.refs.flatMap((r) => {
+      const key = (r.kind === 'epic' ? epicKey : ticketKey).get(r.refId);
+      return key === undefined ? [] : [{
+        kind: r.kind, key, carriedTo: r.carriedTo === null ? null : (phaseKey.get(r.carriedTo) ?? null), carriedAt: r.carriedAt,
+      }];
+    }),
+  }));
+}
+
+/** One programme's plan as the wire says it (`PlanView`): the stored plan, each object's sync word from its bindings, and its
+ *  phases when it declares any (absent otherwise, so a plan with no phases reads exactly as before WM0). */
 export function planViewOf(
   stored: StoredPlan, doneWhen: readonly string[], bindings: readonly BindingRow[], teamKeyOf?: (project: string) => string | null,
+  phases: readonly PhaseRow[] = [],
 ): PlanView {
   /** A record whose project has no team key reads `unsynced`: the sync sends nothing for it, its bindings stay untouched. */
   const syncFor = (project: string, rows: readonly BindingRow[] | undefined): Sync =>
@@ -119,6 +145,7 @@ export function planViewOf(
       const proving = live.flatMap((e) => e.checkpoints).filter((c) => c.state !== 'dropped' && c.proves.includes(i));
       return { text, proved: proving.length > 0 && proving.every((c) => c.state === 'met') };
     }),
+    ...(phases.length === 0 ? {} : { phases: phaseViewsOf(stored, phases) }),
   };
 }
 
@@ -167,7 +194,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   };
 
   const viewOf = (plan: PlanStorePort, coord: CoordStore, slug: string): PlanView =>
-    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug), (p) => coord.linkingOf(p).teamKey);
+    planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug), (p) => coord.linkingOf(p).teamKey,
+      plan.phasesOf(slug));
 
   const refuse = (reply: FastifyReply, word: PlanRefusal, detail: string): FastifyReply => refuseRoute(reply, word, { detail });
 
@@ -250,6 +278,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const home = storedHome ?? parsed.put.home;
     if (home === undefined) return { refuse: 'plan-bad-body', detail: 'the programme has no home project' };
     const texts: [string, string | undefined][] = [[home, parsed.put.title]];
+    for (const ph of parsed.put.phases ?? []) texts.push([home, ph.title], [home, ph.summary], [home, ph.droppedWhy]);
     for (const e of parsed.put.epics) {
       const ep = e.project ?? home;
       texts.push([ep, e.title], [ep, e.summary], [ep, e.droppedWhy]);
@@ -266,8 +295,10 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const put = maskPut(parsed.put);
     const d = diffPlan(stored, put, { home, doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, workspaceOfProject: (p) => ws.get(p) ?? null });
     if (!d.ok) return { refuse: d.word, detail: d.detail };
+    const ph = diffPhases(stored, plan.phasesOf(slug), put);
+    if (!ph.ok) return { refuse: ph.word, detail: ph.detail };
     const newRow = exists ? null : { home, title: put.title ?? programmeNameFromSlug(slug) };
-    plan.applyPlanChanges(slug, d.changes, caller, opts.now(), newRow);
+    plan.applyPlanChanges(slug, ph.changes === undefined ? d.changes : { ...d.changes, phases: ph.changes }, caller, opts.now(), newRow);
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
@@ -385,6 +416,22 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       if (held !== null) return { refuse: held.word, detail: held.detail };
       plan.applyPlanChanges(slug, changes, caller, opts.now(), null);
     }
+    return { ok: true, plan: viewOf(plan, coord, slug) };
+  }));
+
+  // `plan phase-ref` (programme work map WM0, D17): add or remove one reference of a phase, or carry a ticket to a later one.
+  app.post('/api/programmes/:slug/plan/phases/refs', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/phases/refs')),
+  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+    const parsed = parsePlanPhaseRef(body);
+    if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
+    const verdict = ownerVerdict(caller, owner);
+    if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator changes its phases' };
+    if (plan.planEndOf(slug) !== null) return { refuse: 'plan-closed', detail: 'the plan was closed' };
+    const v = phaseRefVerdict(parsed.move, stored, plan.phasesOf(slug));
+    if (!v.ok) return { refuse: v.word, detail: v.detail };
+    if (v.write.kind !== 'none') plan.writePhaseRef(v.write, opts.now());
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 

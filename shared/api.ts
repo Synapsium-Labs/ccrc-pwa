@@ -12341,7 +12341,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12408,6 +12408,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
    *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
   'push-outbox-v1': true,
+  /** Programme work map WM0 (D-8715): `plan put` takes and stores `phases`, `plan show` answers them (`PlanView.phases`), and
+   *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
+   *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
+   *  Added by the change that builds the route and the client row, cut after them. */
+  'plan-phases-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

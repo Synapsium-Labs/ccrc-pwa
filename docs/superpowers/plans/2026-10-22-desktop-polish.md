@@ -3830,7 +3830,7 @@ and no-plan mockups in the folder beside it. The build plan is `docs/superpowers
   changes only the card. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
   `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
   runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
-  you moves to the top of the right column. The card replaces the Linear hierarchy plan's Task 5.2.
+  you moves to the top of the right column.
 - **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
   with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
   ticket done except its own run. In a plan that declares phases, `runs open` now refuses `ticket-required` while the
