@@ -153,11 +153,15 @@ against the programme's home project.
 `docs/superpowers/programs/` or an existing file under `docs/superpowers/plans/` in your pull
 request: every in-flight pull request of a wave edits the same rows, and each absorption conflicts
 there. Write what the ledger should learn (a deviation you found, a status, a measurement) into a
-NEW note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and say so in your `wave-done` mail; the
-coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
+NEW note, `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and say so in your `wave-done` mail;
+the coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
 `ledger-guard` step fails a pull request that edits a ledger from any other branch. If the edit is
 genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on your pull request's head
-commit (a trailer on an earlier commit does not count); the guard passes it and reports it.
+commit (a trailer on an earlier commit does not count); the guard passes it and reports it. Never add
+a note under `docs/superpowers/plans/`: a new file there, or under `docs/superpowers/specs/`, must be a
+dated plan (`YYYY-MM-DD-<slug>.md`) or a dated spec (`YYYY-MM-DD-<slug>-design.md`) directly in that
+directory, and the guard's layout arm refuses anything else on every branch, with no trailer escape
+(D-8719). Notes already under `plans/<plan>/` stay where they are.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,
