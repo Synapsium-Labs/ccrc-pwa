@@ -1137,6 +1137,53 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     expect(ended.result.mockup?.inlined).toEqual([]);
   });
 
+  // Review 2372 M-d: three states of a load read at the deadline, as it stands.
+  const DEADLINE: ExportLimits = { maxBytes: 1e9, imageWaitMs: 50 };
+
+  it('at the deadline, a stylesheet that finished while an earlier one still loads is inlined; its own reference is not a row yet, so it is neutralised and listed (review 2372 M-d)', async () => {
+    const html = mockupPage('<p id="p">x</p>', '<link rel="stylesheet" href="s1.css"><link rel="stylesheet" href="s2.css">');
+    const { result, inner, srcdoc } = await builtMockup(html, { 's1.css': STALL, 's2.css': 'p{background:url(bg.png)}', 'bg.png': BIG(100) }, {}, DEADLINE);
+    // s2 completed, but its references are fed only after s1's (row order), so bg.png was never planned, read or held.
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('s2.css')]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('s1.css'), specsRepo('bg.png')]);
+    const kept = [...inner.querySelectorAll('link')];
+    expect(kept, 'the stylesheet still loading has no data: URL, so its link goes').toHaveLength(1);
+    const css = atob((kept[0]?.getAttribute('href') ?? '').replace(/^data:text\/css;base64,/, ''));
+    expect(css).toBe('p{background:url("data:,")}');
+    expect(srcdoc).not.toContain('bg.png');
+  });
+
+  it('at the deadline, a draft asset that loaded beside one still loading is inlined as a draft, and the sheet\'s first Save tap still asks (review 2372 M-d)', async () => {
+    const html = mockupPage('<img id="d" src="d.png" alt="d"><img id="s" src="s.png" alt="s">');
+    const files: MockupFiles = { 'd.png': BIG(100), 's.png': STALL };
+    const o: MockupOpts = { draftPage: true, draftAssets: ['d.png'] };
+    const { result, inner } = await builtMockup(html, files, o, DEADLINE);
+    expect(result.mockup).toEqual({ inlined: [{ path: specsRepo('d.png'), size: 100, draft: true }], omitted: [specsRepo('s.png')] });
+    expect(inner.getElementById('s')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    const request = await mockupRequest(html, files, o);
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const load = async (): Promise<{ buildExport: typeof buildExport }> => ({ buildExport: (i) => buildExport(i, DEADLINE) });
+    render(<ExportSheet request={request} onClose={() => {}} load={load} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Save / }, { timeout: 10_000 }));
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByText('This file includes 1 uncommitted file from main checkout.')).toBeInTheDocument();
+  });
+
+  it('at the deadline, the size cut applies to the load as it stands: the loaded files that fit are kept in document order, the next one is cut, and the one still loading keeps its own word (review 2372 M-d)', async () => {
+    const html = mockupPage('<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">');
+    const files: MockupFiles = { 'a.png': BIG(200_000), 'b.png': STALL, 'c.png': BIG(200_000) };
+    const whole = await builtMockup(html, files, {}, DEADLINE);
+    expect(whole.result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png'), specsRepo('c.png')]);
+    const maxBytes = whole.result.size - 1000;
+    const { result, inner } = await builtMockup(html, files, {}, { maxBytes, imageWaitMs: DEADLINE.imageWaitMs });
+    expect(result.size).toBeLessThanOrEqual(maxBytes);
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('a.png')]);
+    expect(inner.getElementById('a')?.getAttribute('src')?.startsWith('data:image/png;base64,')).toBe(true);
+    expect(inner.getElementById('b')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['timed-out']);
+    expect(inner.getElementById('c')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+    expect(result.mockup?.omitted).toEqual([specsRepo('b.png'), specsRepo('c.png')]);
+  }, 60_000);
+
   it.each([MOCKUP_CENSUS_ROW_CAP, MOCKUP_CENSUS_ROW_CAP + 1])(
     'the saved file lists at most MOCKUP_CENSUS_ROW_CAP assets left out, then one closed line for the rest, and the result keeps every one (D-8712): %i',
     async (n) => {

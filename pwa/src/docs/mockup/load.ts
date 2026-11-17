@@ -296,9 +296,12 @@ export interface MockupLoad {
   /** The load's end: the plan with its failures kept as rows (`loadMockupAssets` answers exactly this). */
   readonly result: Promise<MockupAssetResult>;
   /** The load as it stands now, leaving it running: every row whose read completed as the end would answer it (its bytes
-   *  in `assets`), and every admitted row whose read has not completed `failed` with `failure`. Export reads it at its
-   *  deadline (base decision 3 and section 4.17: wait up to `DOCS_EXPORT_IMAGE_WAIT_MS`, then placeholders for what is
-   *  still loading; review 2361 F2). `assets` is a copy, so a read that completes later never reaches an answer given. */
+   *  in `assets`), and every admitted row whose read has not completed `failed` with `failure`. A stylesheet that
+   *  completed while an earlier one is still loading is `inline`, but its own references are not rows yet (they are fed
+   *  in row order, after every earlier stylesheet's), so the answer holds none of them: the snapshot neutralises each and
+   *  lists it as left out (review 2372 M-d). Export reads it at its deadline (base decision 3 and section 4.17: wait up to
+   *  `DOCS_EXPORT_IMAGE_WAIT_MS`, then placeholders for what is still loading; review 2361 F2). `assets` is a copy, so a
+   *  read that completes later never reaches an answer given. */
   now(failure: string): MockupAssetResult;
 }
 
