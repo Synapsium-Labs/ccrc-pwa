@@ -5686,7 +5686,12 @@ reach is not rolled for it again (in this server process). It is rolled when it 
 `$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). `ccd keep-awake` is
 the one writer of both markers in the tree, on the Overlord's body: it writes the stamp `keep-awake v1`, and `off` removes
 only a marker holding exactly that stamp. The renewal's fresh start (`ccd hibernate --roll --fresh`) passes a `.no-roll`
-holding exactly that stamp, and nothing else; a plain `--roll` refuses every `.no-roll`, a dangling link included. A
+holding exactly that stamp, and nothing else; a plain `--roll` refuses every `.no-roll`, a dangling link included. When
+its route record carries an ordered account list (`acctorder`, written only for the Overlord), that fresh start also
+picks the account it wakes on, last in its re-measure (`_fresh_pick_to`, `ccd/lib/long-lived.sh`): the first listed
+account under 70% load that serves its class, then for a Fable class the same on Opus, then the least loaded, else its
+current account; when none can take it, it refuses at exit 3 with `unplaced` and stops nothing, and a proven move writes
+one `swap` journal row (reason `fresh-pick`) and never `home`. A
 `touch` keeps the stamp, so an operator opts the Overlord's body out by writing other bytes into the marker. Under the
 `Coordinators only` setting a session that is not a coordinator (an unreadable `.child` counts as a child) is never
 rolled, and picks the release up when it next starts for another reason. The act is a row of the
