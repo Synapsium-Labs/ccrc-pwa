@@ -2,7 +2,7 @@
 // /api/overlord/designate`, `coord/overlordRoutes.ts`) over a real `CoordStore` on a migrated in-memory-sized coord db, a FAKE
 // gate, a FAKE body (the port the later adapter implements), a FAKE host, a fake journal and the fake clock and entropy. The
 // swap route's side of the same task is in `swap-route-pool.test.ts` and `pools.test.ts`.
-import { describe, it, expect, afterEach, afterAll, beforeAll } from 'vitest';
+import { describe, it, expect, afterEach, afterAll, beforeAll, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import path from 'node:path';
@@ -390,19 +390,46 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
     expect(r.host.delivered).toEqual([]);
   });
 
-  it('create failing with created: no owes nothing; yes and unknown owe the stop and run it', async () => {
+  it('create failing with created: no owes nothing; yes owes the stop and runs it', async () => {
     const no = await rig();
     no.body.createAnswer = () => ({ ok: false, detail: 'ccd refused', created: 'no' });
     await failed(no);
     expect(no.body.count('stop')).toBe(0);
-    for (const created of ['yes', 'unknown'] as const) {
-      const r = await rig();
-      r.body.createAnswer = () => ({ ok: false, detail: `lost: ${created}`, created });
-      const { id, detail } = await failed(r);
-      expect(detail).toBe(`lost: ${created}`);
-      expect(r.body.log.filter((c) => c.op === 'stop').map((c) => c.id)).toEqual([id]);
-      expect(r.body.alive.size).toBe(0);
-    }
+    const r = await rig();
+    r.body.createAnswer = () => ({ ok: false, detail: 'lost: yes', created: 'yes' });
+    const { id, detail } = await failed(r);
+    expect(detail).toBe('lost: yes');
+    expect(r.body.log.filter((c) => c.op === 'stop').map((c) => c.id)).toEqual([id]);
+    expect(r.body.alive.size).toBe(0);
+  });
+
+  it('created: unknown, with a stop that would answer absent, is recorded owed and not drained in the same call (review 2366 N2)', async () => {
+    const r = await rig();
+    r.body.createAnswer = () => ({ ok: false, detail: 'lost: unknown', created: 'unknown' });
+    r.body.stopAnswer = () => ({ ok: true, absent: true });
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    const id = res.json().sessionId as string;
+    expect(view(r)!.lastAttempt).toMatchObject({ outcome: 'create-failed', sessionId: id });
+    // ccd may still be making it: an `absent` now would clear a debt that is still real, so no drain of this id runs.
+    expect(r.body.ops().filter((op) => op === 'stop' || op === 'keepAwake-off')).toEqual([]);
+    expect(view(r)!.stopsOwed).toEqual([id]);
+    // A later drain (here a DELETE) finds it absent and clears it.
+    expect((await del(r)).json()).toEqual({ ok: true, changed: false, stopped: [id], owed: [] });
+    expect(view(r)!.stopsOwed).toEqual([]);
+  });
+
+  it('created: unknown with a failPending that throws retries the record once and still drains nothing of it (review 2366 N2)', async () => {
+    const r = await rig();
+    r.body.createAnswer = () => ({ ok: false, detail: 'lost: unknown', created: 'unknown' });
+    const real = r.coord.failPending.bind(r.coord);
+    let calls = 0;
+    r.coord.failPending = (...a) => { if (++calls === 1) throw new Error('database is busy'); return real(...a); };
+    const res = await post(r);
+    expect(res.statusCode).toBe(502);
+    expect(calls).toBe(2);
+    expect(r.body.count('stop')).toBe(0);
+    expect(view(r)!.stopsOwed).toEqual([res.json().sessionId]);
   });
 
   it('a failed generation read (a made session with no incarnation) is created: yes', async () => {
@@ -443,7 +470,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
     expect(view(r)!.stopsOwed).toEqual([]);
   });
 
-  it('a keep-awake off that fails leaves the id owed, the set in place and no stop (review 2349 F6)', async () => {
+  it('a keep-awake off that fails leaves the id owed and the set in place, and still stops the body (review 2349 F6, 2366 N1)', async () => {
     const r = await rig();
     r.body.setAnswer = { ok: false, detail: 'route write refused' };
     r.body.keepAwakeAnswer = (s) => (s === 'off' ? { ok: false, detail: 'marker unreadable' } : { ok: true, foreign: [] });
@@ -451,12 +478,48 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
     expect(res.statusCode).toBe(502);
     const id = res.json().sessionId as string;
     expect(view(r)!.stopsOwed).toEqual([id]);
-    expect(r.body.count('stop')).toBe(0);
+    expect(r.body.count('stop')).toBe(1);
+    expect(r.body.alive.size).toBe(0);
     // Only the create's own set write ran: the drain wrote no clearing set and no cleared profile.
     expect(r.body.count('writeSet')).toBe(1);
     expect(r.body.count('clearProfile')).toBe(0);
     r.body.keepAwakeAnswer = () => ({ ok: true, foreign: [] });
     expect((await del(r)).json()).toEqual({ ok: true, changed: false, stopped: [id], owed: [] });
+  });
+
+  it('drainOwedStops: an off that fails after a stop that succeeds leaves the id owed, unstopped in the answer (review 2366 N1)', async () => {
+    const r = await rig();
+    const id = (await post(r)).json().sessionId as string;
+    r.coord.retire(r.journal, { actor: 'x', at: 1, opKey: 'k' });
+    expect(view(r)!.stopsOwed).toEqual([id]);
+    const before = r.body.log.length;
+    r.body.keepAwakeAnswer = (s) => (s === 'off' ? { ok: false, detail: 'marker unreadable' } : { ok: true, foreign: [] });
+    expect(await drainOwedStops({ body: r.body, coord: r.coord }, [id])).toEqual({ stopped: [], owed: [id] });
+    expect(r.body.ops().slice(before)).toEqual(['keepAwake-off', 'stop']);
+    expect(r.body.alive.size).toBe(0);
+    expect(view(r)!.stopsOwed).toEqual([id]);
+    // The next drain retries off, clears the set and the profile, and clears the debt.
+    r.body.keepAwakeAnswer = () => ({ ok: true, foreign: [] });
+    r.body.stopAnswer = () => ({ ok: true, absent: true });
+    expect(await drainOwedStops({ body: r.body, coord: r.coord }, [id])).toEqual({ stopped: [id], owed: [] });
+    expect(view(r)!.stopsOwed).toEqual([]);
+  });
+
+  it('a failPending that answers unmeasured is not logged as owed: the pending row still names the id (review 2366 N4)', async () => {
+    const r = await rig();
+    r.body.setAnswer = { ok: false, detail: 'route write refused' };
+    r.body.stopAnswer = () => ({ ok: false, detail: 'tmux is busy' });
+    r.coord.failPending = () => ({ ok: false, reason: 'unmeasured', detail: 'the row is damaged' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await post(r);
+      expect(res.statusCode).toBe(502);
+      const id = res.json().sessionId as string;
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(id));
+      expect(lines.some((l) => l.includes('stays owed'))).toBe(false);
+      expect(lines.some((l) => l.includes('the next retire stops it'))).toBe(true);
+      expect(view(r)!.pending?.sessionId).toBe(id);
+    } finally { warn.mockRestore(); }
   });
 
   it('a failPending that throws still drains the id, and a stop that fails retries the write so it is owed (review 2349 F7)', async () => {

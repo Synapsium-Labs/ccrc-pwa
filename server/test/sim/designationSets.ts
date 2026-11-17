@@ -2,6 +2,7 @@
 // here, as suite cases over a module: `overlord-designation-verdicts.test.ts` runs them against the real module, and
 // `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
 import path from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { DESIGNATE_CCD_WORDS, type DesignationRead, type DesignationView } from '../../../shared/overlord-designation.js';
@@ -427,14 +428,68 @@ export function retireEndsGenerationCases(m: DesignationStoreModule): Record<str
           actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
         expect(m.goLive(db, j, id, '11111111-2222-3333-4444-555555555555', now + 1)).toMatchObject({ ok: true, changed: true });
         expect(m.retire(db, j, { actor: 'operator-a', at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
-        expect(db.prepare("SELECT COUNT(*) AS n FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").get()).toEqual({ n: 0 });
+        expect(liveOverlordGenerations(db)).toBe(0);
+      } finally { db.close(); }
+    },
+    'a pending-only retire ends the cancelled body\'s generation (review 2366 N3)': () => pendingCase((db, id, now) => {
+      expect(m.retire(db, PENDING_J, { actor: 'operator-a', at: now + 1, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true, owed: [id] });
+    }, m),
+    'a live retire with a pending attempt ends the pending body\'s generation (review 2366 N3)': () => {
+      const db = openCoordDb(path.join(mkTmp('ccrc-designation-sim-'), 'coord.db'));
+      try {
+        const bound = 'overlord-brisk-heron'; const id = 'overlord-quiet-otter'; const now = 1_800_000_000_000;
+        expect(m.designatePending(db, PENDING_J, { sessionId: bound, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+          actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+        expect(m.goLive(db, PENDING_J, bound, '66666666-7777-8888-9999-000000000000', now + 1)).toMatchObject({ ok: true, changed: true });
+        mintOverlord(db, id, now);
+        db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o'").run(id);
+        expect(m.retire(db, PENDING_J, { actor: 'operator-a', at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+        expect(liveOverlordGenerations(db)).toBe(0);
       } finally { db.close(); }
     },
   };
 }
+const PENDING_J = { appendInTx: () => APPENDED };
+const liveOverlordGenerations = (db: DatabaseSync): number =>
+  (db.prepare("SELECT COUNT(*) AS n FROM continuity_generations WHERE identity = 'overlord' AND state <> 'ended'").get() as { n: number }).n;
+/** One live `overlord` generation for the pending body `id` (identity `overlord`, as `identityOf` names it), minted from a recorded start. */
+function mintOverlord(db: DatabaseSync, id: string, now: number): void {
+  const start = insertStart(db, { sessionId: id, reportId: `r-${id}`, uuid: '11111111-2222-3333-4444-555555555555', source: 'startup',
+    model: 'claude-opus-5-5', rowIncarnation: null, reportedAt: now, receivedAt: now });
+  if (!start.ok) throw new Error('start not recorded');
+  expect(mintGeneration(db, { identity: 'overlord', sessionId: id, role: 'overlord', term: 1, rowIncarnation: null, startId: start.id,
+    startReportedAt: now, resumed: false, model: 'claude-opus-5-5', lane: null, host: null, outcome: 'crashed', mono: 1, proc: 'p',
+    now }, null, true).ok).toBe(true);
+}
+/** A pending designation whose body started (a live `overlord` generation), then `act`: no live `overlord` generation may remain. */
+function pendingCase(act: (db: DatabaseSync, id: string, now: number) => void, m: DesignationStoreModule): void {
+  const db = openCoordDb(path.join(mkTmp('ccrc-designation-sim-'), 'coord.db'));
+  try {
+    const id = 'overlord-quiet-otter'; const now = 1_800_000_000_000;
+    mintOverlord(db, id, now);
+    expect(m.designatePending(db, PENDING_J, { sessionId: id, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+      actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+    act(db, id, now);
+    expect(liveOverlordGenerations(db)).toBe(0);
+  } finally { db.close(); }
+}
 const RETIRE_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
     { id: 'E1 retire leaves the generation live', old: 'endOverlordGeneration(db, bound);', new: '' },
+    { id: 'E2 a pending-only retire leaves the pending body\'s generation live', old: 'endOverlordGeneration(db, id);', new: '' },
+    { id: 'E3 a live retire leaves the pending body\'s generation live', old: 'if (p !== null) endOverlordGeneration(db, p.sessionId);', new: '' },
   ], suite: retireEndsGenerationCases };
+
+/** A failed pending attempt whose body started: `failPending` ends its generation (review 2366 N3). */
+export function failPendingEndsGenerationCases(m: DesignationStoreModule): Record<string, SuiteCase> {
+  return {
+    'failPending ends the failed attempt\'s generation': () => pendingCase((db, id, now) => {
+      expect(m.failPending(db, id, 'create-failed', now + 1, true)).toEqual({ ok: true, changed: true });
+    }, m),
+  };
+}
+const FAIL_END_SET: MutantSet<DesignationStoreModule> = { modulePath: STORE_MODULE, mutants: [
+    { id: 'E4 failPending leaves the generation live', old: 'endOverlordGeneration(db, sessionId);', new: '' },
+  ], suite: failPendingEndsGenerationCases };
 
 export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/overlordDesignation.ts#designateVerdict': DESIGNATE_SET as MutantSet<never>,
@@ -443,4 +498,5 @@ export const DESIGNATION_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/roleOf.ts#designationFactOf': DESIGNATION_FACT_SET as MutantSet<never>,
   'server/src/roleOf.ts#identityOf': IDENTITY_SET as MutantSet<never>,
   'server/src/coord/overlordDesignationStore.ts#retire': RETIRE_END_SET as MutantSet<never>,
+  'server/src/coord/overlordDesignationStore.ts#failPending': FAIL_END_SET as MutantSet<never>,
 };

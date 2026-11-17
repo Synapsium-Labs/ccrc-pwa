@@ -29,10 +29,10 @@ const GENERATION_OUTCOME_MAP = {
   'woken-elsewhere': 'a wake on another host replaced it',
   unmeasured: 'a start replaced it, and what that start was cannot be told from what the lane read',
   cleared: 'a /clear on the same row and account replaced it: asked for, but not by a renewal (review 2006)',
-  // The operator ended the Overlord's binding to this body; no later start of this body replaced it. An older build's row
-  // reader refuses an unknown outcome word and fails the whole generations read (fail-closed by design, the same exposure
-  // review 2335 found for `resumed-other-org`).
-  retired: "the operator ended the Overlord's binding to this body; no later start of this body replaced it",
+  // The operator ended the Overlord's binding to this body, or the attempt that started it was cancelled or failed; no later
+  // start of this body replaced it. An older build's readers skip an ended row, and only `checkpointBefore` reads its outcome
+  // (review 2366 N5), so an older build meets the word only there.
+  retired: "the operator ended the Overlord's binding to this body, or the attempt that started it ended; no later start replaced it",
 } as const;
 export type GenerationOutcome = keyof typeof GENERATION_OUTCOME_MAP;
 export const GENERATION_OUTCOMES = Object.keys(GENERATION_OUTCOME_MAP) as GenerationOutcome[];

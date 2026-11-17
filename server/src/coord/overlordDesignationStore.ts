@@ -202,7 +202,8 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
 export type FailResult = { ok: true; changed: boolean } | { ok: false; reason: 'bad-outcome' } | RowUnreadable;
 
 /** The pending attempt ended without going live: clear the slot, write its outcome, and owe its stop when asked. Only for the
- *  pending id. It never touches the term or a live binding, and appends nothing. */
+ *  pending id. It never touches the term or a live binding, and appends nothing. A generation the pending body minted (it is
+ *  `overlord` by `identityOf` from its start) ends `retired` in the same transaction (review 2366 N3). */
 export function failPending(db: DatabaseSync, sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): FailResult {
   if (!Object.hasOwn(ATTEMPT_OUTCOME_MAP, outcome)) return { ok: false, reason: 'bad-outcome' };
   return tx(db, (): FailResult => {
@@ -213,6 +214,7 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
     const owed = owesStop ? withId(h.row.stopsOwed, sessionId) : h.row.stopsOwed;
     db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, attemptId = ?, attemptOutcome = ?, attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
       .run(sessionId, outcome, at, JSON.stringify(owed), at);
+    endOverlordGeneration(db, sessionId); // the failed attempt's body never went live: its generation ends here (N3)
     return { ok: true, changed: true };
   });
 }
@@ -224,8 +226,8 @@ const CLEAR_PENDING = 'pendingId = NULL, pendingGeneration = NULL, pendingKind =
 export interface RetireInput { actor: string; at: number; opKey: string }
 export type RetireResult = { ok: true; changed: false } | { ok: true; changed: true; term: number; owed: string[] } | AuthorityRefused | RowUnreadable;
 
-/** Question 8's three cases. Nothing live or pending: nothing written. A pending-only row: outcome `retired`, its id owed, no
- *  term raised, no append. A live row: appends `authority-retire` (raised term, `previousSessionId` the bound id) first, then
+/** Question 8's three cases. Nothing live or pending: nothing written. A pending-only row: outcome `retired`, its id owed, its
+ *  generation ended, no term raised, no append. A live row: appends `authority-retire` (raised term, `previousSessionId` the bound id) first, then
  *  unbinds, puts the bound id on `pastIds`, raises the term, cancels a pending attempt (`retired`) and owes both ids. A retire
  *  is a narrowing, so the journal answers `row-only` where it cannot append and the row is still written; any refusal
  *  (`not-in-transaction`) writes nothing. `owed` is the ids this call put on `stopsOwed`. The retiring actor is the row's. */
@@ -240,6 +242,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
       const id = p!.sessionId;
       db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, actor = ?, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
         .run(i.actor, id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
+      endOverlordGeneration(db, id); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
       return { ok: true, changed: true, term: row.term, owed: [id] };
     }
     const bound = row.bound.sessionId;
@@ -247,6 +250,7 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     const a = append(db, journal, { kind: 'authority-retire', opKey: i.opKey, term, previousSessionId: bound });
     if (!a.ok) return a;
     endOverlordGeneration(db, bound); // in this transaction: the retired body's live generation ends `retired` (review 2349 F4)
+    if (p !== null) endOverlordGeneration(db, p.sessionId); // and the pending body's it cancels (review 2366 N3)
     const owed = p === null ? [bound] : withId([bound], p.sessionId);
     const stops = owed.reduce<readonly string[]>(withId, row.stopsOwed);
     const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at: i.at };

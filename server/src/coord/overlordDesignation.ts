@@ -16,7 +16,7 @@ import type { LaneFacts } from '../../../shared/serviceability.js';
 import type { AccountLimits } from '../limits.js';
 import { parsePoolAnswer, resolvedAccountPool } from '../poolrule.js';
 
-/** The ccd words the create itself needs, past `DESIGNATE_CCD_WORDS`' first five, are in that list already (the seven). */
+/** The ccd words the create itself needs, past `DESIGNATE_CCD_WORDS`' first five, are in that list already (the eight). */
 export interface AccountFacts {
   readonly roster: Roster; readonly limits: Readonly<Record<string, AccountLimits>>;
   readonly edges: ReadonlyMap<string, readonly string[]>;

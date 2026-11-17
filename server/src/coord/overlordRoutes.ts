@@ -10,8 +10,8 @@
 // `body.writeSet({poolset, acctorder})`, `body.keepAwake(id, 'on')`, then the first prompt. `acctorder` is written in the same
 // act as keep-awake on, and a retire clears both (`drainOwedStops`). Any failure from `designatePending` on, a failed keep-awake
 // included (slug `keep-awake-failure-fails-the-create`), records `create-failed`, owes the stop of whatever may exist, drains it
-// and answers 502. A keep-awake that reports a FOREIGN marker (`kept-foreign`, rc 0) succeeds and raises one operator item that
-// names it. A failed first prompt does not fail the door: the answer says `prompted: false` and the attempt stays pending.
+// (an `unknown` create answer is recorded owed and left undrained, review 2366 N2) and answers 502. A keep-awake that reports
+// a FOREIGN marker (`kept-foreign`, rc 0) succeeds and raises one operator item that names it. A failed first prompt does not fail the door: the answer says `prompted: false` and the attempt stays pending.
 //
 // THE PORT. `OverlordBody` is declared here by its consumer; its adapter over ccd is a later task (`overlordBody.ts`), so a test
 // hands a fake. No method throws: every failure is an answer.
@@ -153,28 +153,32 @@ type Failure = AuthorityRefused | RowUnreadable | { readonly ok: false; readonly
 /** What a drain did: the ids stopped (an absent one included) and the ids that stay owed. */
 export interface DrainResult { readonly stopped: readonly string[]; readonly owed: readonly string[] }
 
-/** The one drain (review F5, F6 of review 2349): for each id, put the markers off FIRST; only when that succeeds clear the set and
- *  the profile digest, then stop. An `ok` stop, or `absent`, ends with `stopDone(id)`. A failed `off` leaves the id owed with its
- *  set in place and no stop, since a stopped body that kept its markers could be woken; a failed stop leaves the id owed too. The
- *  route clears are best effort: a stopped body's route record is inert, and an owed id is stopped again by the next drain. */
+/** The one drain (review 2349 F5, F6; review 2366 N1): for each id, put the markers off FIRST, clear the set and the profile
+ *  digest only when that succeeded, then ALWAYS stop. An `ok` stop, or `absent`, after an `off` that succeeded ends with
+ *  `stopDone(id)`. A failed `off` leaves the id owed with its `poolset` and `acctorder` in place, so a later drain retries `off`,
+ *  but the body is still stopped; a failed stop leaves the id owed too. `stopped` is the ids this call stopped and cleared. The
+ *  route clears are best effort: a stopped body's route record is inert, and an owed id is stopped again by the next drain.
+ *  `unrecorded` (review 2366 N4) names ids no row owes: a failure on one is logged as the residual it is, never as owed. */
 export async function drainOwedStops(
-  deps: Pick<OverlordRouteDeps, 'body' | 'coord'>, ids: readonly string[],
+  deps: Pick<OverlordRouteDeps, 'body' | 'coord'>, ids: readonly string[], unrecorded: ReadonlySet<string> = new Set(),
 ): Promise<DrainResult> {
   const stopped: string[] = [];
   const owed: string[] = [];
   for (const id of [...new Set(ids)]) {
     const off = await deps.body.keepAwake(id, 'off');
-    if (!off.ok) {
-      owed.push(id);
-      console.warn(`ccrc-server: the Overlord's body ${id} kept its keep-awake markers and stays owed: ${off.detail}`);
+    if (off.ok) {
+      await deps.body.writeSet(id, { poolset: '', acctorder: '' });
+      await deps.body.clearProfile(id);
+    }
+    const s = await deps.body.stop(id);
+    if (s.ok && off.ok) { deps.coord.stopDone(id); stopped.push(id); continue; }
+    const why = off.ok ? `could not be stopped: ${s.ok ? '' : s.detail}` : `kept its keep-awake markers${s.ok ? ' (stopped)' : ''}: ${off.detail}`;
+    if (unrecorded.has(id)) {
+      console.warn(`ccrc-server: the Overlord's body ${id} ${why}; no row owes it, the pending row still names it and the next retire stops it`);
       continue;
     }
-    await deps.body.writeSet(id, { poolset: '', acctorder: '' });
-    await deps.body.clearProfile(id);
-    const s = await deps.body.stop(id);
-    if (s.ok) { deps.coord.stopDone(id); stopped.push(id); continue; }
     owed.push(id);
-    console.warn(`ccrc-server: the Overlord's body ${id} could not be stopped and stays owed: ${s.detail}`);
+    console.warn(`ccrc-server: the Overlord's body ${id} ${why}; it stays owed`);
   }
   return { stopped, owed };
 }
@@ -280,32 +284,44 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (!pending.ok) return writerRefusal(reply, pending);
 
     /** Any failure after the row is written ends the attempt: record it, owe the stop of what may exist, drain, answer 502. The
-     *  id is stopped even when the row no longer names it (a retire that ran between the steps), so nothing runs with no row. */
-    const fail = async (detail: string, owesStop: boolean): Promise<FastifyReply> => {
+     *  id is stopped even when the row no longer names it (a retire that ran between the steps), so nothing runs with no row.
+     *  `owes` is whether ccd may have made the body: `yes`, `no`, or `unknown` (a lost `ws-add` answer re-measured absent). */
+    const fail = async (detail: string, owes: 'yes' | 'no' | 'unknown'): Promise<FastifyReply> => {
       // A `failPending` that throws (a busy database) must not skip the drain: the pending row then stands and the id is drained
       // from here, and a stop that fails retries the write once so the id lands on `stopsOwed` (review 2349 F7).
+      // An `unknown` id is recorded owed and NEVER drained in this call (review 2366 N2, the Global Constraint): ccd may still be
+      // making it, so a stop answering `absent` now would clear a debt that is still real. A later drain (a DELETE, the next
+      // designate, or designation B's deadline sweep, which re-drains `stopsOwed`) finds it absent or stops it.
+      // A `failPending` that answers `unmeasured` recorded nothing (review 2366 N4, a residual): the pending row still names the
+      // id and the next retire stops it, so a failure here is not logged as owed.
       let written = true;
-      try { coord.failPending(id, 'create-failed', deps.clock.wall(), owesStop); } catch (err) { written = false; warnFail(id, err); }
+      let recorded = true;
+      try { recorded = coord.failPending(id, 'create-failed', deps.clock.wall(), owes !== 'no').ok; } catch (err) { written = false; warnFail(id, err); }
+      if (owes === 'unknown' && !written) {
+        try { coord.failPending(id, 'create-failed', deps.clock.wall(), true); } catch (err) { warnFail(id, err); }
+      }
       const standing = coord.designationRead();
       const owed = standing.kind === 'unmeasured' || standing.row === null ? [] : standing.row.stopsOwed;
-      const drained = await drainOwedStops(deps, [...(owesStop || !written ? [id] : []), ...owed]);
-      if (!written && drained.owed.includes(id)) {
+      const mine = owes === 'yes' || (owes === 'no' && !written) ? [id] : [];
+      const ids = [...mine, ...owed].filter((x) => owes !== 'unknown' || x !== id);
+      const drained = await drainOwedStops(deps, ids, recorded ? new Set() : new Set([id]));
+      if (!written && owes !== 'unknown' && drained.owed.includes(id)) {
         try { coord.failPending(id, 'create-failed', deps.clock.wall(), true); } catch (err) { warnFail(id, err); }
       }
       return refuseRoute(reply, 'fleetFailed', { detail, sessionId: id });
     };
 
     const project = await body.ensureProject();
-    if (!project.ok) return fail(project.detail, false);
+    if (!project.ok) return fail(project.detail, 'no');
     const route: RouteFields = { class: parsed.model, profile: 'overlord', profiledigest: launchDigestOf('overlord') };
     const made = await body.create(slug, id, verdict.wrapper, route, dec);
-    if (!made.ok) return fail(made.detail, made.created !== 'no');
+    if (!made.ok) return fail(made.detail, made.created);
     const bound = coord.bindPendingGeneration(id, made.generation, deps.clock.wall());
-    if (!bound.ok) return fail(bound.reason === 'unmeasured' ? bound.detail : `the attempt is no longer pending (${bound.reason})`, true);
+    if (!bound.ok) return fail(bound.reason === 'unmeasured' ? bound.detail : `the attempt is no longer pending (${bound.reason})`, 'yes');
     const set = await body.writeSet(id, { poolset: verdict.poolset, acctorder: verdict.acctorder });
-    if (!set.ok) return fail(set.detail, true);
+    if (!set.ok) return fail(set.detail, 'yes');
     const awake = await body.keepAwake(id, 'on');
-    if (!awake.ok) return fail(awake.detail, true);
+    if (!awake.ok) return fail(awake.detail, 'yes');
     if (awake.foreign.length > 0) raiseForeignMarker(id, awake.foreign);
     const sent = await deps.host.deliver(id, 'overlord-first-prompt');
 

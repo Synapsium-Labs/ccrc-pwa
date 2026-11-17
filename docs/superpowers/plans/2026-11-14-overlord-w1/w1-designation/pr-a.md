@@ -76,18 +76,33 @@ Departures from `w1-designation.md` found while building PR A (Tasks 1 to 5), by
   This replaces the plan's `awake: false`, so a 200 always says `awake: true`. A foreign marker (`kept-foreign`, rc 0)
   succeeds and raises one operator item naming each foreign marker (`no-hibernate`, `no-roll` or both; review 2349 F8), on
   the `overlord` programme's ledger, as the renewal act raises its items (`raisedBy` `ccrc`).
-- **`drain-markers-off-first`**: the drain turns the markers off first, then clears `poolset` and `acctorder`, then stops
-  (review 2349 F6, ruled). While `off` fails the id stays owed and its `acctorder` stays, so the capability floor's fact
-  stands as long as the markers do (arms notes A §3). This replaces the plan's clear-first order; the coordinator folds it.
+- **`drain-markers-off-first`**: the drain turns the markers off first, clears `poolset` and `acctorder` only when that
+  succeeded, then always stops (review 2349 F6, ruled; review 2366 N1, ruled). While `off` fails the id stays owed with its
+  `poolset` and `acctorder` in place, so the capability floor's fact stands as long as the markers do (arms notes A §3) and a
+  later drain retries `off`; the body is stopped all the same, and `stopDone` runs only after an `off` that succeeded. This
+  replaces the plan's clear-first order; the coordinator folds it.
 - **`fail-drains-when-failPending-throws`**: a failed step's `failPending` that throws still drains the id, and a stop
-  that then fails retries the write once so the id lands on `stopsOwed` (review 2349 F7).
+  that then fails retries the write once so the id lands on `stopsOwed` (review 2349 F7). A `failPending` that ANSWERS
+  `unmeasured` recorded nothing: that is a residual (review 2366 N4, ruled). The pending row still names the id and the next
+  retire stops it through its pending arm, so a stop that fails there is logged as that residual, never as owed. An
+  `unknown` create answer is never drained here (`unknown-create-stays-owed`).
+- **`unknown-create-stays-owed`**: when the create answers `created: 'unknown'` (a lost `ws-add` answer re-measured absent),
+  the fail path records the id on `stopsOwed` and runs no drain of that id in the same request, and a `failPending` that
+  throws is retried once (review 2366 N2, ruled under the Global Constraint): ccd may still be making the session, so a stop
+  answering `absent` now would clear a debt that is still real. The id stays owed until a later drain, from a DELETE, the
+  next designate or designation B's deadline sweep, finds it absent and clears it. Designation B's deadline sweep re-drains
+  `stopsOwed` itself, not only pending rows (carried into PR B by the coordinator).
+- **`pending-retire-ends-the-generation`**: a pending body that started has a live `overlord` generation (`identityOf` gives
+  the pending id `overlord`), so both of retire's pending arms (pending-only, and the pending id in a live-plus-pending
+  retire) and `failPending` end it with outcome `retired` in the same transaction (review 2366 N3, ruled). The mutant sets
+  `overlordDesignationStore.ts#retire` (E1 to E3) and `#failPending` (E4) pin each call.
 - **`designate-refuses-an-incoherent-journal`**: designate refuses `authority-rolled-back` (or `journal-unreadable` for an
   unmeasured guard) before any row write or ccd call while the authority journal is not coherent (review 2349 F9, ruled).
 - **`retire-ends-the-generation-retired`**: retire of a live designation ends the retired body's live `overlord`
   generation in its own transaction, with a new outcome word `retired` in `GENERATION_OUTCOME_MAP`, and the `ended`
   state reads "a later generation replaced it, or the operator ended the binding" (review 2349 F4, ruled; PR B's rebind
-  uses the same word for the old body). An older build's row reader refuses an unknown outcome word and fails the whole
-  generations read: fail-closed by design, the same exposure review 2335 found for `resumed-other-org`.
+  uses the same word for the old body). An older build's readers skip an ended row, and only `checkpointBefore` reads its
+  outcome (review 2366 N5), so an older build meets the word only there.
 - **`retire-none-still-drains-owed-stops`**: a retire on a row that binds nothing writes nothing, but drains any stop an
   earlier attempt still owes, so a failed stop is not stranded until the next live or pending retire.
 - **`create-failed-answers-fleetFailed-502`**: a failed create step answers the existing `fleetFailed` 502 with `detail`

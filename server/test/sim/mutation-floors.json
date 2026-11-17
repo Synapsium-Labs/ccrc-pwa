@@ -137,6 +137,7 @@
   "server/src/coord/overlordDesignation.ts#overlordAccounts": 1,
   "server/src/coord/overlordDesignation.ts#retireVerdict": 1,
   "server/src/coord/overlordDesignationStore.ts#retire": 1,
+  "server/src/coord/overlordDesignationStore.ts#failPending": 1,
   "server/src/coord/decisionModel.ts#planDecision": 1,
   "server/src/coord/decisionModel.ts#serveCap": 1,
   "server/src/coord/decisionModel.ts#maintainCap": 1,
