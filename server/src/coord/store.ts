@@ -5460,6 +5460,9 @@ export class CoordStore {
   stampContinuityRead(sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } { return probes.stampContinuityRead(this.db, sessionId, door, at); }
   lastContinuityRead(sessionId: string): ReturnType<typeof probes.lastContinuityRead> { return probes.lastContinuityRead(this.db, sessionId); }
   snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
+  closedSpotProbes(modelClass: string): ReturnType<typeof probes.closedSpotProbes> { return probes.closedSpotProbes(this.db, modelClass); }
+  backstopRead(): ReturnType<typeof probes.backstopRead> { return probes.backstopRead(this.db); }
+  setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
   insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }

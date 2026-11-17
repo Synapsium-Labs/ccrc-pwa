@@ -38,6 +38,8 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/answerMarks.ts',
   'server/src/coord/answerMarks.ts',
   'server/src/coord/answerMarkStore.ts',
+  // Overlord W1, the renewal readings: the backstop's vocabulary reads no clock; its instant takes `now` as an argument.
+  'shared/renewal-readings.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

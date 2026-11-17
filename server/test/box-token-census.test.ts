@@ -304,7 +304,9 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
  *  lands. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's registrations and
  *  compares in both directions, and none consults the box token or sits in EXEMPT. Because `lanesIn` slices the file from
  *  each registration to the next, no helper that calls `checkMailToken(` may sit below the file's last registration. */
-const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel'];
+// The renewal backstop's two doors (Overlord W1 renewal readings A): one path, listed once per registration (GET and POST).
+const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel',
+  '/api/continuity/renewal-backstop', '/api/continuity/renewal-backstop'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,

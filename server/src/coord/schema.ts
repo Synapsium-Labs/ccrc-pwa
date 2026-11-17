@@ -3417,6 +3417,21 @@ export const MIGRATIONS: readonly string[] = [
     updatedAt INTEGER NOT NULL);
   INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
   `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
+  // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
+  // default (question 2). ONE writer, its door's `continuityStore.ts#setBackstop`; `backstopRead` narrows it. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 85` takes rule 3 and never names it. Responses B (#2914)
+  // landed 84, so this is 85; other open PRs hold 85 too, and whoever lands second renumbers on the coordinator's word.
+  // RE-MEASURE the slot before the PR and before merge (it must print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE renewal_backstop_settings (id INTEGER PRIMARY KEY CHECK (id = 1), hour INTEGER NOT NULL, zone TEXT NOT NULL,
+    isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
+  INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
