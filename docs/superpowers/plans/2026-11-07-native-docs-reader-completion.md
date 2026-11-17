@@ -743,8 +743,9 @@ headroom table rounds 3.76 to 3.8x; D-8695's attribution to the operator's answe
   browser leg runs in CI (`CI=true` or `GITHUB_ACTIONS=true`, which GitHub Actions sets on every step), through one function,
   `browser/measure.ts`'s `printsGateMedians`; the 1 000 ms gate is unchanged. So every CI run of the browser leg, the
   coordinator's full run on this wave's tip included, carries the hosted medians in the browser shards' job logs; until that
-  run is read, the 2x hosted margin stays unmeasured. A local run with `CI=true` printed the engine line and all nine gates and
-  passed 71/71 (Chromium 156.0.8078.4, `chromium-1248`, headless Linux, load 7.6; **local** medians, ms: reconstruction 107.1,
+  run is read, the 2x hosted margin stays unmeasured. A local run with `CI=true` printed the engine line, the eight gates and
+  the E13 control's line (`58bbbbccf`'s message says "all nine gates": the file has eight `gate()` calls, and the ninth line is the
+  control's report; corrected here, review run 2361's M6) and passed 71/71 (Chromium 156.0.8078.4, `chromium-1248`, headless Linux, load 7.6; **local** medians, ms: reconstruction 107.1,
   text-heavy 140.5, formatting 31.6, worst property 31.2, adoption 22.4, tables 5.4, deep 2.9 and 2.9; the E13 control 12 774).
 
 ```json
