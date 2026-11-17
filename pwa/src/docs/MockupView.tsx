@@ -196,7 +196,7 @@ function MockupLive(p: MockupViewProps & {
   // never relists (D-8660); the view decides, here:
   //   - a historical page: the word is that row's failure and nothing else (the commit is the URL's, no re-list changes it);
   //   - the first movement in this view: the attempt is aborted at once (that disposes of its buffered discoveries, pending
-  //     reads, assets and reservations), what is shown is dropped, and the host's re-list is asked ONCE; the next context
+  //     reads, assets and reservations), what is shown is dropped, the changing note and Retry show at once, and the host's re-list is asked ONCE; the next context
   //     starts a fresh attempt from scratch (a new plan from the new context, never an extension of this one's);
   //   - any later movement in this view: no re-list; the attempt finishes with that row failed, and the changing note and
   //     Retry show.
@@ -233,6 +233,9 @@ function MockupLive(p: MockupViewProps & {
       ctl.abort();
       end({ s: 'ended' });
       setLoaded(null);
+      // The note and Retry show at once: if the re-list brings no new context (its GET failed) the view would otherwise
+      // read Loading for good. The next attempt clears the note (review M4).
+      setChanging(true);
       host.current.relist();
     };
     const observing: MockupAssetReader = {

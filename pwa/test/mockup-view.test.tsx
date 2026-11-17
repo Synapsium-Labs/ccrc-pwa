@@ -934,6 +934,26 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     expect(m.onDraft).not.toHaveBeenCalled();
   });
 
+  it('the first movement shows the changing note with Retry at once: when the re-list brings no new context it is not an endless Loading, and the next attempt clears it (review M4)', async () => {
+    const reads = scripted((pin, nth) => (pin.path === 'moved.png' && nth === 1 ? MOVED : OK()));
+    const relist = vi.fn<() => void>();
+    const html = '<img src="moved.png">';
+    const m = mount({ html, context: ctxOf([entry('specs', 'moved.png')]), reader: reads.reader, relist });
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument();
+    expect(button(MOCKUP_TEXT.retry)).toBeInTheDocument();
+    // The re-list's GET failed: no new context arrives, and the note and Retry stay.
+    await flush();
+    expect(m.frame()).toBeNull();
+    expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument();
+    expect(button(MOCKUP_TEXT.retry)).toBeInTheDocument();
+    // A context that does arrive starts the next attempt, which clears the note.
+    m.again({ html, context: ctxQ(), reader: reads.reader, relist });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull();
+    expect(screen.queryByRole('button', { name: MOCKUP_TEXT.retry })).toBeNull();
+  });
+
   it('a movement report of an attempt that is no longer current is ignored (the generation check on the report)', async () => {
     const heldMove = deferred();
     const reads = scripted((pin, nth) => (pin.path === 'moved.png' && nth === 1 ? heldMove : OK()));
@@ -959,8 +979,10 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     const entries = [entry('specs', 'moved.png'), entry('specs', 'x.png')];
     const m = mount({ html, context: ctxOf(entries), reader: reads.reader, relist });
     await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
-    expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull();
+    // The first movement already shows the note (review M4); the next attempt clears it, and the second movement brings it back.
+    expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument();
     m.again({ html, context: ctxQ(), reader: reads.reader, relist });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
     await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
     // The attempt finished: its page shows, the moved row reads failed, and nothing re-listed or started again.
     await waitFor(() => expect(m.frame()).not.toBeNull());
