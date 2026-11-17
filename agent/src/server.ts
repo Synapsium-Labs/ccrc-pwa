@@ -53,6 +53,9 @@ import { measureTestbox, syncTestboxTools, type TestboxOpSeams } from './testbox
 import { createHistoryOp, realHistoryOpSeams, type HistoryOp, type HistoryOpSeams } from './historyOp.js';
 import { readOverlordHistoryRequest, type OverlordHistoryRequestRefusal } from '../../shared/overlordHistory.js';
 import { OVERLORD_HISTORY_OP, type OverlordHistoryReq } from '../../shared/agent-protocol.js';
+import {
+  MODELS_OP, buildModelsArgv, type ModelsArgvRefusal, type ModelsOpAnswer, type ModelsReq,
+} from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import { boundedSpawn } from '../../shared/spawn.mjs';
@@ -81,6 +84,8 @@ import {
 import {
   buildTestboxAdminArgv, makeTestboxAdminSpawn, testboxAdminSpawnArgv, testboxAdminSpawnBounds, type TestboxAdminSpawn,
 } from './testboxAdminOp.js';
+import { makeModelsSpawn, modelsEnv, runModelsOp, type ModelsOpSpawn } from './modelsop.js';
+import type { ModelClass } from '../../shared/models.js';
 import type { TestboxAdminArgvRefusal } from '../../shared/testbox-admin.js';
 import type { AccountArgvRefusal } from '../../shared/account-argv.js';
 import { canonicalize, checkCcrcSwitchStat, checkPath, checkReadTarget, checkSteerOnStat, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -104,6 +109,7 @@ export interface AgentOpts {
   spawnTokenSync?: TokenSyncSpawn; // default makeTokenSyncSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `token-sync` op's ONLY spawn
   spawnAccount?: AccountOpSpawn; // default makeAccountOpSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `account` op's ONLY spawn
   spawnTestboxAdmin?: TestboxAdminSpawn; // default makeTestboxAdminSpawn(tokenSyncEnv(home)) — tests inject a recorder; the `testbox-admin` op's ONLY spawn
+  spawnModels?: ModelsOpSpawn; // default makeModelsSpawn(modelsEnv(home)) — tests inject a recorder; the `models` op's ONLY spawn
   diskSeams?: Partial<DiskSeams>; // default realDiskSeams() — tests inject the statfs/stat/mountinfo reads; the `disk` op's ONLY disk reads
   pressureSeams?: Partial<PressureSeams>; // default: the two /proc/pressure files — tests inject the text (#1170)
   backupSeams?: Partial<BackupSeams>; // default: this process's environment — tests inject CCRC_BACKUP_STATE_DIR (D-7858)
@@ -459,6 +465,10 @@ interface UpdateGate { spawning: boolean }
  *  second verb beside the first. Separate from UpdateGate: the driver itself holds while an update is in flight. */
 interface TokenSyncGate { spawning: boolean }
 
+/** ONE per agent PROCESS as well, for the `models` op (auto-advance W4, D-8692), for TokenSyncGate's reason: a second
+ *  op, on this connection or another, answers `busy` while one verb runs. */
+interface ModelsGate { spawning: boolean }
+
 interface PtyEntry {
   proc: PtyProcess;
   dataSub: { dispose(): void };
@@ -478,6 +488,8 @@ interface ConnCtx {
   tokenSyncGate: TokenSyncGate;
   spawnAccount: AccountOpSpawn;
   spawnTestboxAdmin: TestboxAdminSpawn;
+  spawnModels: ModelsOpSpawn;
+  modelsGate: ModelsGate;
   diskSeams: Partial<DiskSeams>;
   pressureSeams: Partial<PressureSeams>;
   backupSeams: Partial<BackupSeams>;
@@ -823,6 +835,30 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, outcome));
       return;
     }
+    case 'models': {
+      // Auto-advance spec 2026-10-13 §2.7, D14 (plan W4 Task 17, D-8692). The SIXTH wire-triggered spawn outside the
+      // exec whitelist (agent/CLAUDE.md). `validateReq` has already built the argv once; `runModelsOp` builds it AGAIN
+      // from the typed frame, so a caller bug that lets a bad one through answers the builder's refusal, never a spawn.
+      // The launcher is absolute, there is NO stdin, and the port hands the child an explicit {HOME, PATH, LANG}.
+      // Nothing here consults the exec whitelist, and nothing may. The log line names the op, the action, the lane and
+      // the class only.
+      //
+      // No `await` before the busy decision: the gate is checked and taken in one synchronous stretch.
+      if (ctx.modelsGate.spawning) {
+        send(ws, ok(req.id, { kind: 'busy', fleetIdentity: readFleetIdentity(ctx.cfg.home) } satisfies ModelsOpAnswer));
+        return;
+      }
+      ctx.modelsGate.spawning = true;
+      let outcome: Awaited<ReturnType<typeof runModelsOp>>;
+      try {
+        outcome = await runModelsOp(ctx.spawnModels, ctx.cfg.home, req.lane, req.action, 'class' in req ? req.class : undefined);
+      } finally {
+        ctx.modelsGate.spawning = false;
+      }
+      console.warn(`ccrc-agent: models ${req.action} ${req.lane}${'class' in req ? ` ${req.class}` : ''} -> ${outcome.kind}`);
+      send(ws, ok(req.id, { ...outcome, fleetIdentity: readFleetIdentity(ctx.cfg.home) } satisfies ModelsOpAnswer));
+      return;
+    }
     case 'overlord-history': {
       // Overlord W1 (w1-board-history.md Task 3): history's read verbs over every project, in a worker thread with one
       // slot (historyOp.ts). It reads ~/.ccrc/history/ only, read-only, outside the read whitelist; it spawns no process.
@@ -876,6 +912,9 @@ export interface AccountReqRefusal { accountRefused: AccountArgvRefusal; id: num
 /** `validateReq`'s answer for a `testbox-admin` frame the builder refused (connect spec §2.1): answered `ok: true` with
  *  `kind: 'refused'` and the node's `fleetIdentity`; `bad-request` keeps meaning "this agent predates the op". */
 export interface TestboxAdminReqRefusal { testboxAdminRefused: TestboxAdminArgvRefusal; id: number }
+/** A `models` frame the builder refused (auto-advance W4, D-8692): answered `ok: true` with `kind: 'refused'` and the
+ *  node's `fleetIdentity`; `bad-request` keeps meaning "this agent predates the op". Nothing was spawned. */
+export interface ModelsReqRefusal { modelsRefused: ModelsArgvRefusal; id: number }
 /** An `overlord-history` frame its reader refused (Overlord W1): answered `ok: true` as `request-refused` with the word, so
  *  `bad-request` keeps meaning "this agent predates the op" (the `account` and `testbox-admin` pattern). */
 export interface HistoryReqRefusal { historyRefused: OverlordHistoryRequestRefusal; id: number }
@@ -902,7 +941,7 @@ function accountRefusal(home: string, why: AccountArgvRefusal): AccountOpAnswer 
  * the actual gate: every op's required fields are checked here, by type,
  * before the frame is ever allowed to reach a handler.
  */
-function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | HistoryReqRefusal | null {
+function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | AccountReqRefusal | TestboxAdminReqRefusal | ModelsReqRefusal | HistoryReqRefusal | null {
   if (typeof msg.id !== 'number') return null;
   const id = msg.id;
   switch (msg.op) {
@@ -1041,6 +1080,19 @@ function validateReq(msg: Record<string, unknown>): AgentReq | ReqRefusal | Acco
       return {
         t: 'req', id, op: 'testbox-admin', sub: msg.sub as TestboxAdminReq['sub'], fields: msg.fields as TestboxAdminReq['fields'],
       } satisfies TestboxAdminReq;
+    }
+    case 'models': {
+      // The ONE builder (`buildModelsArgv`, never a regex here). Every failure is a `ModelsReqRefusal` carrying the
+      // builder's word; a frame with a key beyond `t`, `id`, `op`, `lane`, `action`, `class` is malformed
+      // (`bad-request`); a frame that passes is retyped, so nothing past this point sees an unvalidated value.
+      if (Object.keys(msg).some((k) => !['t', 'id', 'op', 'lane', 'action', 'class'].includes(k))) return null;
+      const built = buildModelsArgv(msg.lane, msg.action, msg.class);
+      if (!built.ok) return { modelsRefused: built.why, id };
+      const lane = msg.lane as string;
+      if (msg.action === 'show') return { t: 'req', id, op: 'models', lane, action: 'show' } satisfies ModelsReq;
+      return {
+        t: 'req', id, op: 'models', lane, action: msg.action as Exclude<ModelsReq['action'], 'show'>, class: msg.class as ModelClass,
+      } satisfies ModelsReq;
     }
     case 'overlord-history': {
       // The ONE reader (shared/overlordHistory.ts), handed the request's body: the frame less its envelope keys, so its
@@ -1337,7 +1389,7 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
 
 function handleConnection(
   ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache,
-  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate, historyOp: HistoryOp,
+  updateGate: UpdateGate, tokenSyncGate: TokenSyncGate, modelsGate: ModelsGate, historyOp: HistoryOp,
 ): void {
   let authed = false;
   const ctx: ConnCtx = {
@@ -1353,6 +1405,8 @@ function handleConnection(
     tokenSyncGate,
     spawnAccount: opts.spawnAccount,
     spawnTestboxAdmin: opts.spawnTestboxAdmin,
+    spawnModels: opts.spawnModels,
+    modelsGate,
     diskSeams: opts.diskSeams,
     pressureSeams: opts.pressureSeams,
     backupSeams: opts.backupSeams,
@@ -1404,10 +1458,10 @@ function handleConnection(
       // remote arm sends a secret only to an agent that names it here) and `disk`
       // (fleet disk retention spec §2.5, D-6614: it takes no field), `pressure`
       // (#1170), `testbox`/`testbox-tools-sync` (test box plan TB9, D-7411,
-      // D-7555: no field either) and `backup` (D-7858, no field). It is required in `ReadyFrame`, so it cannot
-      // be dropped silently.
+      // D-7555: no field either), `backup` (D-7858, no field) and `models` (auto-advance W4, D-8688: the server uses it
+      // only when it is listed here). It is required in `ReadyFrame`, so it cannot be dropped silently.
       const frame: ReadyFrame = {
-        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP],
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home), ops: [UPDATE_OP, TOKEN_SYNC_OP, ACCOUNT_OP, DISK_OP, PRESSURE_OP, TESTBOX_OP, TESTBOX_TOOLS_SYNC_OP, TESTBOX_ADMIN_OP, BACKUP_OP, READDIR_MTIMES_OP, MODELS_OP],
       };
       // `overlord-history` (Overlord W1, Task 4) goes last, and only where this agent can serve the history store
       // (historyOp.ts#servable: the worker's entry found, not macOS), so a server never counts an agent that cannot.
@@ -1449,6 +1503,12 @@ function handleConnection(
       if ('testboxAdminRefused' in req) {
         console.warn(`ccrc-agent: testbox-admin refused -> ${req.testboxAdminRefused}`);
         send(ws, ok(req.id, testboxAdminRefusal(opts.home, req.testboxAdminRefused)));
+        return;
+      }
+      // A `models` frame the builder refused (auto-advance W4, D-8692): answered with the identity, nothing spawned.
+      if ('modelsRefused' in req) {
+        console.warn(`ccrc-agent: models refused -> ${req.modelsRefused}`);
+        send(ws, ok(req.id, { kind: 'refused', why: req.modelsRefused, fleetIdentity: readFleetIdentity(opts.home) } satisfies ModelsOpAnswer));
         return;
       }
       // An `overlord-history` frame its reader refused (Overlord W1): the word on ResOk, nothing started.
@@ -1521,6 +1581,8 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     spawnAccount: rawOpts.spawnAccount ?? makeAccountOpSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
     // The `testbox-admin` op's port, the same explicit environment from the same configured home (connect spec §2.1).
     spawnTestboxAdmin: rawOpts.spawnTestboxAdmin ?? makeTestboxAdminSpawn(tokenSyncEnv(rawOpts.home ?? os.homedir())),
+    // The `models` op's port: the child's environment comes from the CONFIGURED home, its PATH led by this node (D-5227).
+    spawnModels: rawOpts.spawnModels ?? makeModelsSpawn(modelsEnv(rawOpts.home ?? os.homedir())),
     diskSeams: rawOpts.diskSeams ?? {},
     pressureSeams: rawOpts.pressureSeams ?? {},
     backupSeams: rawOpts.backupSeams ?? {},
@@ -1545,9 +1607,11 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
   const updateGate: UpdateGate = { spawning: false };
   // ONE token-sync gate per agent process, shared by every connection (spec 4.4).
   const tokenSyncGate: TokenSyncGate = { spawning: false };
+  // ONE models gate per agent process, shared by every connection (D-8692).
+  const modelsGate: ModelsGate = { spawning: false };
   // ONE overlord-history op per agent process, its one slot shared by every connection (Overlord W1).
   const historyOp = createHistoryOp({ ...realHistoryOpSeams(), ...opts.historySeams });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate, historyOp));
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, updateGate, tokenSyncGate, modelsGate, historyOp));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

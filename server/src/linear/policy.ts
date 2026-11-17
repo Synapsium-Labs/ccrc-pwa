@@ -30,6 +30,9 @@ export interface LinearWriteAsk {
     workspaceId: string;
     /** The resolved current team (spec §4.5), never the reference's prefix; null for an initiative (no team). */
     teamKey: string | null;
+    /** C15: the team an issue update MOVES the issue into, when it is not the current one; absent or null: not a move. A
+     *  policy that may not permit writes into that team reads it here, since the write lands there. */
+    destinationTeamKey?: string | null;
     /** The resolved current identifier; null on a create. */
     issue: string | null;
     /** The resolved parent's team when `parent` is set, else null. */

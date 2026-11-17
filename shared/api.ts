@@ -9293,6 +9293,12 @@ export interface LifecycleMeas {
    *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
    *  tree. Null: no stale lock passed, an older ccd, or another act. */
   readonly staleLock: string | null;
+  /** A `swap` row's landing relation to the account it left (account organization PR C, #2909): `_org_rel`'s word,
+   *  `same`, `other` or `unknown`. Null: an older ccd, or another act. */
+  readonly org: string | null;
+  /** A rescue's organization near miss (#2909): the lowest score of a `same` candidate that lost to a lower-scored
+   *  `other` landing, as digits. Null: none, a move that was not a rescue, an older ccd, or another act. */
+  readonly orgnear: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9320,6 +9326,8 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   witness: true,
   heldBy: true,
   staleLock: true,
+  org: true,
+  orgnear: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -13833,7 +13841,8 @@ export function credentialMaskSource(id: CredentialMaskId): string {
   return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
 }
 
-/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513), except the drawer
+ *  (`DRAWER_SECRET_MASK`, D-8694). */
 export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */

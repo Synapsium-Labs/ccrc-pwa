@@ -54,8 +54,15 @@ describe('the Linear operation table has one home (D-7669)', () => {
 
   it('the ccrc operation table and its journal-op list are declared once, in linear/hierarchyOps.ts', () => {
     for (const c of ['LINEAR_CCRC_OPS', 'LINEAR_CCRC_JOURNAL_OPS', 'LinearCcrcJournalOp', 'CcrcOpName', 'CcrcOpRow', 'CcrcOpInput',
-      'CcrcShaped', 'withCcrcProvenance', 'readInitiativesProbe']) {
+      'CcrcShaped', 'withCcrcProvenance', 'readInitiativesProbe', 'LINEAR_INITIATIVE_STATUSES']) {
       expect(holders(decl(c)), c).toEqual(['server/src/linear/hierarchyOps.ts']);
+    }
+  });
+
+  // D-8182 (R4): the sync's own constants and helpers live in linear/planSyncPolicy.ts.
+  it("the plan sync's deciders and its name bound are declared once, in linear/planSyncPolicy.ts", () => {
+    for (const c of ['LINEAR_PROJECT_NAME_MAX_CHARS', 'planSyncSteps', 'requestIdOf', 'fitProjectName']) {
+      expect(holders(decl(c)), c).toEqual(['server/src/linear/planSyncPolicy.ts']);
     }
   });
 

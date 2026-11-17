@@ -16,12 +16,13 @@ file is what the coordinator folds into the plan's ledger; the plan itself is no
   `renewalInputsOf`; `usageReading` is exported for the wiring's window.
 - `continuityStore.ts`: `closedSpotProbes` (graded `pass`/`fail` only, F6), `backstopRead`, `setBackstop` (the row's one
   writer); three `CoordStore` delegates and two `WatcherCoordPort` members.
-- Migration 86, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Built as 85 on `92e5f1344`; overlaps A
-  (#2949) then landed 85, and on the coordinator's word this branch merged `main` once and renumbered to 86 (the slot count
-  on that `main` printed 85). Other open pull requests hold 86 as well; the second to land renumbers on the coordinator's
-  word.
+- Migration 87, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Built as 85 on `92e5f1344`; overlaps A
+  (#2949) then landed 85, and on the coordinator's word this branch merged `main` once and renumbered to 86; decision model A
+  (#2948) then landed 86, and on the coordinator's word (and its standing license) this branch merged `main` once more and
+  renumbered to 87 (the slot count on that `main` printed 86). Other open pull requests hold 87 as well; the second to land
+  renumbers on the coordinator's word.
 - `GET` and `POST /api/continuity/renewal-backstop`, session-gated, never EXEMPT, no box token, with their census rows:
-  `auth/gate.ts`, `auth-gate.test.ts` (252 routes, 249 HTTP, gated 154), `box-token-census.test.ts`, `CLAUDE.md`,
+  `auth/gate.ts`, `auth-gate.test.ts` (253 routes, 250 HTTP, gated 155, after the hierarchy item route of #2941), `box-token-census.test.ts`, `CLAUDE.md`,
   `secret-mask.test.ts`, `rings/fastify-l4.data.ts`, `coord-db.test.ts`, `run-close-switch.test.ts`,
   `writers-map.test.ts`, `time-ports.test.ts` (`shared/renewal-readings.ts` joins `TIME_PORT_FILES`).
 

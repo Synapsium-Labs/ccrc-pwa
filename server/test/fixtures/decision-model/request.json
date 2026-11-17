@@ -1,0 +1,84 @@
+{
+  "_comment": "Overlord W2 decision model A (plan w2-decision-model.md, question 2): one request of the routing pair in the wire shape read from the published reference, neutral content. decision-model-http.test.ts encodes rows and fields with these opaque ids and compares byte for byte.",
+  "rows": [
+    "programme.pick",
+    "programme.any"
+  ],
+  "fields": {
+    "programme.pick": {
+      "request": "Add a read door for the anchor lane.",
+      "candidates": [
+        "programme-a",
+        "programme-b"
+      ],
+      "goals": [
+        "Ship the routing table.",
+        "Ship the anchor lane and its doors."
+      ]
+    },
+    "programme.any": {
+      "request": "Add a read door for the anchor lane.",
+      "candidates": [
+        "programme-a",
+        "programme-b"
+      ],
+      "goals": [
+        "Ship the routing table.",
+        "Ship the anchor lane and its doors."
+      ]
+    }
+  },
+  "opaque": [
+    "o7c1",
+    "o2e9",
+    "o5a4",
+    "q81d",
+    "q3b0",
+    "q6f2"
+  ],
+  "modelId": "model-a-2026-11",
+  "body": {
+    "model": "model-a-2026-11",
+    "state": {
+      "request": {
+        "quoted": "Add a read door for the anchor lane."
+      },
+      "candidates": {
+        "o7c1": {
+          "quoted": "Ship the routing table."
+        },
+        "o2e9": {
+          "quoted": "Ship the anchor lane and its doors."
+        }
+      }
+    },
+    "questions": {
+      "q81d": {
+        "type": "choice",
+        "instructions": "Which one of the listed programmes is the place for this request? Choose none when no listed programme fits it.",
+        "criteria": {
+          "o7c1": "The programme under o7c1.",
+          "o2e9": "The programme under o2e9.",
+          "o5a4": "None of the listed programmes."
+        }
+      },
+      "q3b0": {
+        "type": "choice",
+        "instructions": "Which one of the listed programmes is the place for this request? Choose none when no listed programme fits it.",
+        "criteria": {
+          "o2e9": "The programme under o2e9.",
+          "o7c1": "The programme under o7c1.",
+          "o5a4": "None of the listed programmes."
+        }
+      },
+      "q6f2": {
+        "type": "noul",
+        "instructions": "Is any one of the listed programmes the place for this request?",
+        "criteria": {
+          "true": "At least one listed programme is the place for this request.",
+          "false": "No listed programme is the place for this request."
+        }
+      }
+    }
+  }
+}
