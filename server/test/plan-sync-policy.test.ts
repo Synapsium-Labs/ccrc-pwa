@@ -496,7 +496,6 @@ describe('M5: what a deferral is (L1, D-8182)', () => {
     ['store-unreadable', { why: 'failure', wait: 'backoff' }],
     ['created-without-id', { why: 'failure', wait: 'backoff' }],
     ['workspace-blocked', { why: 'failure', wait: 'until' }],
-    ['not-configured', { why: 'failure', wait: 'backoff' }],
     ['directory-missing', { why: 'wait', wait: 'directory' }],
     ['viewer-unknown', { why: 'wait', wait: 'directory' }],
     ['initiatives-unknown', { why: 'wait', wait: 'backoff' }],
@@ -643,10 +642,16 @@ describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
   it('a key word holds the workspace on the failure-hold steps, the last repeating, and mails the owner', () => {
     const a = inboundActVerdict('linear-unauthorised', undefined, { now: 1000, backoffSteps: steps });
     expect(a).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: true, hold: { until: 31_000, step: 1 } });
-    const b = inboundActVerdict('not-configured', a.kind === 'retry' ? a.hold : undefined, { now: 40_000, backoffSteps: steps });
-    expect(b).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: false, hold: { until: 160_000, step: 2 } });
-    const z = inboundActVerdict('not-configured', { until: 0, step: 9 }, { now: 0, backoffSteps: steps });
+    const b = inboundActVerdict('linear-unauthorised', a.kind === 'retry' ? a.hold ?? undefined : undefined, { now: 40_000, backoffSteps: steps });
+    expect(b).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: true, hold: { until: 160_000, step: 2 } });
+    const z = inboundActVerdict('linear-unauthorised', { until: 0, step: 9 }, { now: 0, backoffSteps: steps });
     expect(z).toMatchObject({ hold: { until: 1_800_000 } });
+  });
+  // A-2, the coordinator's ruling (b): not-configured is answered locally, so both lanes retry it at the next beat, with no hold.
+  it('not-configured is retried at the next beat with no hold, and mails the owner', () => {
+    expect(inboundActVerdict('not-configured', { until: 0, step: 3 }, { now: 0, backoffSteps: steps })).toEqual({ kind: 'retry', hold: null, mailsOwner: true, keyRefused: false });
+    // @ts-expect-error not-configured is no DeferCause: the DEFERRALS row came out (A-2)
+    expect(deferralOf('not-configured')).toBeUndefined();
   });
   it('another retry word holds without mailing; any other word gives up', () => {
     expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', mailsOwner: false });

@@ -190,8 +190,8 @@ export class InboundLane {
     const now = this.deps.now();
     const v = inboundActVerdict(word, this.holds.get(row.workspaceId), { now, backoffSteps: PLAN_SYNC_BACKOFF_MS });
     if (v.kind === 'retry') {
-      this.holds.set(row.workspaceId, v.hold);
-      if (v.keyRefused) this.deps.planSync.keyRefused(row.workspaceId, slot, v.hold.until);   // a 401 holds both lanes (A-3)
+      if (v.hold !== null) this.holds.set(row.workspaceId, v.hold);
+      if (v.keyRefused && v.hold !== null) this.deps.planSync.keyRefused(row.workspaceId, slot, v.hold.until);   // a 401 holds both lanes (A-3)
       if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row));
       return;
     }

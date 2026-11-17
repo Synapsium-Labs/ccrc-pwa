@@ -615,7 +615,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
 /** Why a pass defers (M5): an outcome word that defers it, or a condition it waits on. */
 export type DeferCause =
   | 'rate-limited' | 'unreachable' | 'timeout' | 'policy-unavailable' | 'journal-unavailable' | 'malformed' | 'linear-unauthorised'
-  | 'store-unreadable' | 'created-without-id' | 'workspace-blocked' | 'not-configured'
+  | 'store-unreadable' | 'created-without-id' | 'workspace-blocked'
   | 'directory-missing' | 'statuses-unread' | 'viewer-unknown' | 'initiatives-unknown';
 /** What a deferral is: a `failure` holds its backoff against every later mark (A7/A12), a `wait` is ordinary; and how long it
  *  waits: the escalating `backoff` step, the short `directory` wait for a fill, or `until` a time the cause carries. */
@@ -631,7 +631,6 @@ const DEFERRALS: Readonly<Record<DeferCause, Deferral>> = {
   'store-unreadable': { why: 'failure', wait: 'backoff' },      // C18
   'created-without-id': { why: 'failure', wait: 'backoff' },    // an ok with no id may have been sent
   'workspace-blocked': { why: 'failure', wait: 'until' },       // another programme's refused key blocks the workspace
-  'not-configured': { why: 'failure', wait: 'backoff' },        // no key in Settings: only a person fixes it, so it backs off like a refused key, never every beat (the inbound close's)
   'directory-missing': { why: 'wait', wait: 'directory' },
   'viewer-unknown': { why: 'wait', wait: 'directory' },
   'initiatives-unknown': { why: 'wait', wait: 'backoff' },

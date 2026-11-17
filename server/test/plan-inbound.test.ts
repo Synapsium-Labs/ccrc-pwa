@@ -12,7 +12,8 @@ import { registerPlanRoutes } from '../src/coord/planRoutes.js';
 import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
 import { linearOwnerOfProject } from '../src/coord/planPolicy.js';
 import { answerMasked, MASKED_GET_ROUTES } from '../src/server.js';
-import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
+import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccrcCall.js';
+import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass } from '../src/linear/driftPass.js';
 import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
 import { givenUpWord } from '../src/linear/inboundPolicy.js';
@@ -22,7 +23,7 @@ import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { coordinatorPresenceIn, type CoordinatorPresence } from '../../shared/ledgers.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
-import { memCoordDb } from './linearServicesFake.js';
+import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -631,6 +632,31 @@ describe('plan triage (D-8183)', () => {
     const calls = writes(r).length;
     await passAt(r, r.t.now + 1_800_000);
     expect(writes(r)).toHaveLength(calls);
+  });
+
+  // A-2, the coordinator's ruling (b): with no key configured the close is refused LOCALLY (the call goes through the real
+  // `runCcrcOp`, whose key read answers before any fetch), it is retried at every beat with no hold, as the plan sync does, and
+  // the team's owner is mailed once for the episode, not once per beat.
+  it('a close with no key configured sends no Linear call, retries each beat and mails the owner once (A-2)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    const keyless = path.join(mkTmp('ccrc-inbound-nokey-'), '.ccrc');      // no slot key: runCcrcOp answers not-configured
+    const fx = linearServicesFake({ clock: () => r.t.now });
+    const fetched: string[] = [];
+    const fetch: FetchLike = (url) => { fetched.push(String(url)); return Promise.reject(new Error('no Linear call may go out')); };
+    const tried: string[] = [];
+    const lane = new DriftPass({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), now: () => r.t.now,
+      call: async (a) => { tried.push(a.op); return runCcrcOp({ ccrcDir: keyless, rate: fx.rate, journal: fx.journal, policy: fx.policy, fetch, now: () => r.t.now }, a); },
+      directory: { get: () => r.lin.directory, filledAt: () => T - 1000, projectStatusesRead: () => 'read' as const }, presenceOf: (id) => r.presenceFn.current(id),
+      viaFleet: () => new Set<string>(),
+    });
+    for (let i = 0; i < 3; i += 1) { r.t.now += 60_000; await lane.tick(r.t.now); }
+    expect(tried.filter((op) => op === 'issueComment')).toHaveLength(3);   // one try a beat: no hold
+    expect(fetched).toEqual([]);                                            // and not one of them reached Linear
+    expect(mails(r, 'Linear inbound: AAA-12 waits for the Linear key%')).toHaveLength(1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
   });
 
   // A-3: a 401 on an inbound close goes through the plan sync's one owner of the key's refusal, so it holds both lanes alike.

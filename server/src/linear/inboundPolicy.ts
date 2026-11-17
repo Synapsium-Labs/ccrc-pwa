@@ -109,20 +109,26 @@ export function noCancelMail(row: InboundText): { subject: string; body: string 
  *  `linear-invalid`, `not-found`, a policy deny) will be refused again, so the close is given up and never sent again (Review
  *  Focus 5: no retry loop spends the lane). Each is a `DeferCause`, so the one table says how it waits. */
 const RETRY_WORDS: ReadonlySet<string> = new Set<DeferCause>([
-  'rate-limited', 'unreachable', 'timeout', 'policy-unavailable', 'journal-unavailable', 'malformed', 'not-configured', 'linear-unauthorised',
+  'rate-limited', 'unreachable', 'timeout', 'policy-unavailable', 'journal-unavailable', 'malformed', 'linear-unauthorised',
 ]);
-/** The retry words that only a person's act in Settings can clear (the key): the team's owner is told once. */
-const KEY_WORDS: ReadonlySet<string> = new Set<DeferCause>(['not-configured', 'linear-unauthorised']);
+/** No key configured for the workspace: answered locally, before any Linear call, so it is retried at every beat with no hold,
+ *  as the plan sync retries it each tick (review 2394 A-2, the coordinator's ruling (b): one word, one rule in both lanes; a key
+ *  set in Settings is then picked up on the next beat). */
+const BEAT_WORDS: ReadonlySet<string> = new Set(['not-configured']);
+/** The refusals that only a person's act in Settings can clear (the key): the team's owner is told once. */
+const KEY_WORDS: ReadonlySet<string> = new Set(['not-configured', 'linear-unauthorised']);
 
 /** A workspace's hold on its inbound close writes: not before `until`, at backoff step `step` (the next refusal's). */
 export interface InboundHold { until: number; step: number }
-export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold; mailsOwner: boolean; keyRefused: boolean };
-/** What a refused close write means. A retry word holds the workspace: its wait is the deferral table's, the step of
+export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold | null; mailsOwner: boolean; keyRefused: boolean };
+/** What a refused close write means. `not-configured` is retried at the next beat with no hold (`hold` null, A-2). A retry
+ *  word holds the workspace: its wait is the deferral table's, the step of
  *  `backoffSteps` (the last repeats) the prior hold reached, and the step moves only when the deferral waits on the backoff.
  *  `mailsOwner` is true for the words only the key's owner can clear; `keyRefused` for the key's refusal (a 401), which the plan
  *  sync's one owner records for both lanes (review 2394 A-3). `malformed` (an answer outside the grammar) is given up once the
  *  hold has passed the last backoff step, as the plan sync fails a binding (review 2394 N1). Any other word gives the close up. */
 export function inboundActVerdict(word: string, prior: InboundHold | undefined, o: { now: number; backoffSteps: readonly number[] }): InboundActVerdict {
+  if (BEAT_WORDS.has(word)) return { kind: 'retry', hold: null, mailsOwner: KEY_WORDS.has(word), keyRefused: false };
   if (!RETRY_WORDS.has(word)) return { kind: 'give-up' };
   const step = prior?.step ?? 0;
   if (word === 'malformed' && step >= o.backoffSteps.length) return { kind: 'give-up' };
