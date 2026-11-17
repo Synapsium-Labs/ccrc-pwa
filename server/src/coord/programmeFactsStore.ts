@@ -23,7 +23,7 @@ import {
   type SealedForecast,
 } from '../../../shared/programmeFacts.js';
 import { redactCommand } from './redact.js';
-import { waveRepresentative } from '../../../shared/programmes.js';
+import { NEVER_STARTED_DETAIL, waveRepresentative } from '../../../shared/programmes.js';
 import {
   leadHistoryFrom, type ForecastHistory, type LeadRun, type OutcomeFacts, type UnsealedClose,
 } from './forecast.js';
@@ -215,30 +215,35 @@ export function forecastsOf(db: DatabaseSync, q: { program: string } | { dueBy: 
 }
 
 /** The seal arm's read: every work run closed in the last `SEAL_LOOKBACK_DAYS` with no seal, oldest close first, each
- *  paired with the newest statement naming it, else the newest of its programme standing `SEAL_WAIT_MINUTES` after the
- *  close. `missed` counts the work runs closed before the window, after the first sealed close, that have no seal: a gap
- *  the lane was down for, which is never sealed. `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
+ *  paired with the newest statement naming it made by `SEAL_WAIT_MINUTES` after the close, else the newest of its
+ *  programme standing then: both bounded by the same instant, so a pass after a lane outage pairs what an on-time pass
+ *  would have (F19). A close `abandon:never-started` is no wave at all, so it is never sealed and never missed. `missed`
+ *  counts the work runs closed before the window, after the first sealed close, that have no seal: a gap the lane was
+ *  down for, which is never sealed. `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
 export function unsealedClosesOf(db: DatabaseSync, now: number, terminal: string): { closes: UnsealedClose[]; missed: number } {
   const from = now - SEAL_LOOKBACK_MS;
   const rows = db.prepare(
     "SELECT r.id AS runId, r.program AS program, r.closedAt AS closedAt FROM runs r WHERE r.kind = 'work' " +
     `AND r.state IN ${terminal} AND r.closedAt IS NOT NULL AND r.closedAt >= ? AND r.program IS NOT NULL ` +
+    'AND r.closeDetail IS NOT ? ' +
     'AND NOT EXISTS (SELECT 1 FROM programme_forecasts f WHERE f.closingRunId = r.id) ORDER BY r.closedAt, r.id',
-  ).all(from) as unknown as { runId: number; program: string; closedAt: number }[];
-  const named = db.prepare('SELECT id, at, lo, hi FROM programme_remaining WHERE runId = ? AND program = ? ORDER BY id DESC LIMIT 1');
+  ).all(from, NEVER_STARTED_DETAIL) as unknown as { runId: number; program: string; closedAt: number }[];
+  const named = db.prepare('SELECT id, at, lo, hi FROM programme_remaining WHERE runId = ? AND program = ? AND at <= ? ORDER BY id DESC LIMIT 1');
   const standing = db.prepare('SELECT id, at, lo, hi FROM programme_remaining WHERE program = ? AND at <= ? ORDER BY id DESC LIMIT 1');
   type S = { id: number; at: number; lo: number; hi: number };
   const closes = rows.map((r): UnsealedClose => {
-    const n = named.get(r.runId, r.program) as S | undefined;
+    const by = r.closedAt + SEAL_WAIT_MINUTES * MINUTE_MS;
+    const n = named.get(r.runId, r.program, by) as S | undefined;
     if (n !== undefined) return { ...r, statement: n, named: true };
-    const st = standing.get(r.program, r.closedAt + SEAL_WAIT_MINUTES * MINUTE_MS) as S | undefined;
+    const st = standing.get(r.program, by) as S | undefined;
     return { ...r, statement: st ?? null, named: false };
   });
   const missed = (db.prepare(
     `SELECT COUNT(*) AS n FROM runs r WHERE r.kind = 'work' AND r.state IN ${terminal} AND r.closedAt < ? ` +
+    'AND r.closeDetail IS NOT ? ' +
     'AND r.closedAt > (SELECT MIN(c.closedAt) FROM programme_forecasts f JOIN runs c ON c.id = f.closingRunId) ' +
     'AND NOT EXISTS (SELECT 1 FROM programme_forecasts f WHERE f.closingRunId = r.id)',
-  ).get(from) as { n: number }).n;
+  ).get(from, NEVER_STARTED_DETAIL) as { n: number }).n;
   return { closes, missed };
 }
 
@@ -254,18 +259,27 @@ export function leadHistoryOf(db: DatabaseSync, program: string, asOf: number): 
 
 /** What `forecastOutcome` reads for one seal, from `runs` alone, never a statement: the close of each work wave whose
  *  representative (the wave rule) closed `done` after the seal's `asOf`, and every run of the programme still open or
- *  closed after `asOf`. Null for a seal id with no row. */
+ *  closed after `asOf`. Null for a seal id with no row. The waves are read as they stood at `p85At`, so a score never
+ *  depends on when the pass ran: only work runs opened by `p85At` count, and a run closed after it is still open (F4).
+ *  A wave whose representative had already closed `done` by `asOf` (the seal's own boundary wave, say) is not one of the
+ *  remaining waves, so a later re-run of it never counts toward `hi`. */
 export function outcomeFactsOf(db: DatabaseSync, sealId: number): OutcomeFacts | null {
-  const seal = db.prepare('SELECT program, asOf FROM programme_forecasts WHERE id = ?').get(sealId) as { program: string; asOf: number } | undefined;
+  const seal = db.prepare('SELECT program, asOf, p85At FROM programme_forecasts WHERE id = ?').get(sealId) as
+    { program: string; asOf: number; p85At: number | null } | undefined;
   if (seal === undefined) return null;
+  const until = seal.p85At ?? Number.MAX_SAFE_INTEGER;
   const work = db.prepare(
-    "SELECT id, wave, state, closedAt FROM runs WHERE program = ? AND kind = 'work' ORDER BY id",
-  ).all(seal.program) as unknown as { id: number; wave: number; state: string; closedAt: number | null }[];
+    "SELECT id, wave, state, openedAt, closedAt FROM runs WHERE program = ? AND kind = 'work' AND openedAt <= ? ORDER BY id",
+  ).all(seal.program, until) as unknown as { id: number; wave: number; state: string; openedAt: number; closedAt: number | null }[];
   const byWave = new Map<number, typeof work>();
   for (const r of work) { const l = byWave.get(r.wave) ?? []; l.push(r); byWave.set(r.wave, l); }
+  const repAt = (list: typeof work, t: number) =>
+    waveRepresentative(list.filter((r) => r.openedAt <= t).map((r) => ({ id: r.id, open: r.closedAt === null || r.closedAt > t, r })))?.r;
   const doneWaveCloses: number[] = [];
   for (const list of byWave.values()) {
-    const rep = waveRepresentative(list.map((r) => ({ id: r.id, open: r.closedAt === null, r })))!.r;
+    const then = repAt(list, seal.asOf);
+    if (then !== undefined && then.state === 'done' && then.closedAt !== null && then.closedAt <= seal.asOf) continue;
+    const rep = repAt(list, until)!;
     if (rep.state === 'done' && rep.closedAt !== null && rep.closedAt > seal.asOf) doneWaveCloses.push(rep.closedAt);
   }
   const runs = db.prepare(

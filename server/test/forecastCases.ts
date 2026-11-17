@@ -302,6 +302,9 @@ export const CALIBRATION_CASES: Case<ForecastModule>[] = [
     expect(edge.cuts[0]!.n).toBe(8);
     expect(edge.cuts[3]!.n).toBe(18);
     expect(m.forecastCalibration(batch(NOW, 8, 8), NOW).cuts[0]!.n).toBe(8);
+    // The window is CALIBRATION_WINDOW_DAYS long to the millisecond: a seal at its start is out, one 1 ms later in (F8).
+    const start = m.forecastCalibration([...batch(NOW - 28 * DAY, 3, 3), ...batch(NOW - 28 * DAY + 1, 8, 8)], NOW);
+    expect(start.cuts[0]!.n).toBe(8);
   } },
   { name: 'calibration: three cuts outside and one inside is calibrated', run: (m) => {
     // 10 seals at -21 days (5 met) are read by every cut; 10 more at now (10 met) only by cut 0: 15 of 20 is inside.
@@ -375,30 +378,75 @@ const lr = (o: Partial<LeadRun>): LeadRun => ({
 const own = (m: ForecastModule, runs: LeadRun[], asOf = AS_OF) => m.leadHistoryFrom(runs, 'prog-a', asOf).own;
 
 export const LEAD_HISTORY_CASES: Case<ForecastModule>[] = [
-  { name: 'leadHistoryFrom: close to close, the first wave from its earliest openedAt, a later-opened wave from its open', run: (m) => {
+  { name: 'leadHistoryFrom: close to close, the first wave from its earliest openedAt, a later-opened wave from the close before it (the gap is in its lead)', run: (m) => {
+    // Wave 2 opened before wave 1 closed, wave 3 a day after wave 2 closed: both are timed from the close before them (F1).
     expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 15 * DAY }), lr({ wave: 2, openedAt: AS_OF - 16 * DAY, closedAt: AS_OF - 12 * DAY }),
       lr({ wave: 3, openedAt: AS_OF - 11 * DAY, closedAt: AS_OF - 10 * DAY })]))
-      .toEqual({ done: [5 * DAY, 3 * DAY, DAY], abandoned: [], rework: [], waves: 3, abandons: 0, reworks: 0, leadsUnmeasured: 0 });
+      .toEqual({ done: [5 * DAY, 3 * DAY, 2 * DAY], abandoned: [], rework: [], waves: 3, abandons: 0, reworks: 0, leadsUnmeasured: 0 });
+  } },
+  { name: 'leadHistoryFrom: waves opened two days after the close before them forecast the close-to-close lead, not the open-to-close one', run: (m) => {
+    // 20 one-day waves, each opened 2 days after the previous close: every lead after the first is 3 days, so 2 waves
+    // are 6 days away (a trial draws the first wave's one day about one time in ten, below both percentiles).
+    const runs = Array.from({ length: 20 }, (_, i) => lr({ wave: i + 1, openedAt: AS_OF - (60 - 3 * i) * DAY + 2 * DAY, closedAt: AS_OF - (60 - 3 * i) * DAY + 3 * DAY }));
+    const h = m.leadHistoryFrom(runs, 'prog-a', AS_OF);
+    expect(h.own.done).toEqual([DAY, ...days(19, 3 * DAY)]);
+    const f = dated(m.forecastProgramme(h, { lo: 2, hi: 2 }, 11, AS_OF));
+    expect([f.medianAt, f.p85At]).toEqual([AS_OF + 6 * DAY, AS_OF + 6 * DAY]);
   } },
   { name: 'leadHistoryFrom: close order, not wave order, sets each wave\'s start', run: (m) => {
     // Wave 2 closes before wave 1: it is timed from its open; wave 1 from wave 2's close.
     expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 10 * DAY }), lr({ wave: 2, openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 15 * DAY })]).done)
       .toEqual([3 * DAY, 5 * DAY]);
   } },
-  { name: 'leadHistoryFrom: a reworked wave gives its first run\'s lead and a rework lead per later run', run: (m) => {
+  { name: 'leadHistoryFrom: a reworked wave gives its first run\'s lead and one rework sample, its later runs\' close-to-close leads summed', run: (m) => {
+    // Each later run opened a day after the run before it closed: its lead still starts at that close (F1, F2).
     expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, state: 'failed', closedAt: AS_OF - 18 * DAY, closeDetail: 'review-requested-changes' }),
-      // The second run opened before the first closed: its rework lead starts at the first's close.
-      lr({ wave: 1, openedAt: AS_OF - 19 * DAY, closedAt: AS_OF - 16 * DAY }), lr({ wave: 1, openedAt: AS_OF - 16 * DAY, closedAt: AS_OF - 13 * DAY })]))
-      .toMatchObject({ done: [2 * DAY], rework: [2 * DAY, 3 * DAY], waves: 1, reworks: 1 });
+      lr({ wave: 1, openedAt: AS_OF - 17 * DAY, state: 'failed', closedAt: AS_OF - 16 * DAY, closeDetail: 'review-requested-changes' }),
+      lr({ wave: 1, openedAt: AS_OF - 15 * DAY, closedAt: AS_OF - 13 * DAY })]))
+      .toMatchObject({ done: [2 * DAY], rework: [5 * DAY], waves: 1, reworks: 1 });
   } },
-  { name: 'leadHistoryFrom: abandons and the dispatch abandon are abandoned leads; never-started is no wave; another failure no sample', run: (m) => {
+  { name: 'leadHistoryFrom: twenty waves of three one-day runs forecast their measured three days a wave (F2)', run: (m) => {
+    const runs: LeadRun[] = [];
+    for (let w = 0; w < 20; w++) {
+      for (let k = 0; k < 3; k++) {
+        const at = AS_OF - 61 * DAY + (3 * w + k) * DAY;
+        runs.push(lr({ wave: w + 1, openedAt: at, closedAt: at + DAY, state: k < 2 ? 'failed' : 'done', closeDetail: k < 2 ? 'review-requested-changes' : null }));
+      }
+    }
+    const h = m.leadHistoryFrom(runs, 'prog-a', AS_OF);
+    expect(h.own).toMatchObject({ done: days(20), rework: days(20, 2 * DAY), waves: 20, reworks: 20 });
+    const f = dated(m.forecastProgramme(h, { lo: 5, hi: 5 }, 23, AS_OF));
+    expect([f.medianAt, f.p85At]).toEqual([AS_OF + 15 * DAY, AS_OF + 15 * DAY]);
+  } },
+  { name: 'leadHistoryFrom: abandons and the dispatch abandon are abandoned leads; never-started is no wave; another failure no sample and no boundary', run: (m) => {
+    // Wave 5 failed on a merge conflict: no sample, and wave 6's lead runs from wave 4's close across it (F3).
     expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, state: 'failed', closedAt: AS_OF - 19 * DAY, closeDetail: 'abandon:operator' }),
       lr({ wave: 2, openedAt: AS_OF - 19 * DAY, state: 'failed', closedAt: AS_OF - 17 * DAY, closeDetail: DISPATCH_ABANDON_CLOSE_DETAIL }),
       lr({ wave: 3, openedAt: AS_OF - 17 * DAY, state: 'failed', closedAt: AS_OF - 16 * DAY, closeDetail: 'abandon:never-started' }),
       lr({ wave: 4, openedAt: AS_OF - 17 * DAY, closedAt: AS_OF - 14 * DAY }),
       lr({ wave: 5, openedAt: AS_OF - 14 * DAY, state: 'failed', closedAt: AS_OF - 13 * DAY, closeDetail: 'merge-conflict' }),
       lr({ wave: 6, openedAt: AS_OF - 14 * DAY, closedAt: AS_OF - 12 * DAY })]))
-      .toEqual({ done: [3 * DAY, DAY], abandoned: [DAY, 2 * DAY], rework: [], waves: 4, abandons: 2, reworks: 0, leadsUnmeasured: 0 });
+      .toEqual({ done: [3 * DAY, 2 * DAY], abandoned: [DAY, 2 * DAY], rework: [], waves: 4, abandons: 2, reworks: 0, leadsUnmeasured: 0 });
+  } },
+  { name: 'leadHistoryFrom: a failed first wave is spanned by the next lead, from its own earliest openedAt (F3)', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, state: 'failed', closedAt: AS_OF - 18 * DAY, closeDetail: 'merge-conflict' }),
+      lr({ wave: 2, openedAt: AS_OF - 17 * DAY, closedAt: AS_OF - 16 * DAY })]))
+      .toEqual({ done: [4 * DAY], abandoned: [], rework: [], waves: 1, abandons: 0, reworks: 0, leadsUnmeasured: 0 });
+    // A never-started first wave is no wave at all, so it is not spanned: the next wave runs from its own open.
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 25 * DAY, state: 'failed', closedAt: AS_OF - 24 * DAY, closeDetail: 'abandon:never-started' }),
+      lr({ wave: 2, openedAt: AS_OF - 17 * DAY, closedAt: AS_OF - 16 * DAY })]).done).toEqual([DAY]);
+  } },
+  { name: 'leadHistoryFrom: alternating two-day failed and one-day done waves forecast the measured three days a wave (F3)', run: (m) => {
+    const runs: LeadRun[] = [];
+    for (let i = 0; i < 20; i++) {
+      const at = AS_OF - 61 * DAY + 3 * i * DAY;
+      runs.push(lr({ wave: 2 * i + 1, openedAt: at, closedAt: at + 2 * DAY, state: 'failed', closeDetail: 'merge-conflict' }),
+        lr({ wave: 2 * i + 2, openedAt: at + 2 * DAY, closedAt: at + 3 * DAY }));
+    }
+    const h = m.leadHistoryFrom(runs, 'prog-a', AS_OF);
+    expect(h.own).toMatchObject({ done: days(20, 3 * DAY), waves: 20 });
+    const f = dated(m.forecastProgramme(h, { lo: 1, hi: 1 }, 29, AS_OF));
+    expect([f.medianAt, f.p85At]).toEqual([AS_OF + 3 * DAY, AS_OF + 3 * DAY]);
   } },
   { name: 'leadHistoryFrom: a review run and an unknown kind are no wave; a rebuilt wave and a lead not above zero are unmeasured', run: (m) => {
     expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 18 * DAY }), lr({ wave: 1, kind: 'review', openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 17 * DAY }),

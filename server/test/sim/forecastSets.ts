@@ -81,6 +81,7 @@ export const FORECAST_CALIBRATION_SET = forecastSet([
   { id: 'FC-6', old: 's.scoredAt > from && s.scoredAt <= at', new: 's.scoredAt >= from && s.scoredAt <= at' },
   { id: 'FC-7', old: 's.scoredAt > from && s.scoredAt <= at', new: 's.scoredAt > from' },
   { id: 'FC-8', old: "if (cuts.some((c) => c.share === null)) return { state: 'unmeasured', cuts };", new: "if (cuts.every((c) => c.share === null)) return { state: 'unmeasured', cuts };" },
+  { id: 'FC-9', old: 'const from = at - CALIBRATION_WINDOW_DAYS * DAY_MS;', new: 'const from = at - (CALIBRATION_WINDOW_DAYS - 1) * DAY_MS;' },
 ]);
 
 export const SEAL_BOUNDARY_SET = forecastSet([
@@ -93,9 +94,11 @@ export const SEAL_BOUNDARY_SET = forecastSet([
 ]);
 
 export const LEAD_HISTORY_SET = forecastSet([
-  // Task 3's lead rules: the wave rule's representative, close order, the rework split, the abandon words, the rebuilt rule.
-  { id: 'LH-1', old: 'const start = Math.max(prevClose ?? -Infinity, Math.min(...w.runs.map((r) => r.openedAt)));', new: 'const start = Math.min(...w.runs.map((r) => r.openedAt));' },
-  { id: 'LH-2', old: 'const start = Math.max(prevClose ?? -Infinity, Math.min(...w.runs.map((r) => r.openedAt)));', new: 'const start = prevClose ?? Math.min(...w.runs.map((r) => r.openedAt));' },
+  // Task 3's lead rules: the wave rule's representative, close order, the rework sum, the abandon words, the rebuilt rule,
+  // and fix round 1's: the gap between waves and between runs kept (F1), a failed wave spanned (F3), one rework sample (F2).
+  { id: 'LH-1', old: 'const start = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start = opened;' },
+  // F1: the gap between waves dropped (a wave opened after the close before it timed from its open).
+  { id: 'LH-2', old: 'const start = prevClose ?? Math.min(firstFrom ?? opened, opened);', new: 'const start = Math.max(prevClose ?? -Infinity, opened);' },
   { id: 'LH-3', old: 'waves.sort((a, b) => a.closedAt - b.closedAt || a.rep.id - b.rep.id);', new: 'waves.sort((a, b) => a.rep.wave - b.rep.wave);' },
   { id: 'LH-4', old: 'const main = (w.runs.length === 1 ? w.closedAt : closes[0] ?? NaN) - start;', new: 'const main = w.closedAt - start;' },
   { id: 'LH-5', old: "d !== null && d !== NEVER_STARTED_DETAIL && (d.startsWith('abandon:') || d === DISPATCH_ABANDON_CLOSE_DETAIL)", new: "d !== null && d !== NEVER_STARTED_DETAIL && d.startsWith('abandon:')" },
@@ -103,12 +106,17 @@ export const LEAD_HISTORY_SET = forecastSet([
   { id: 'LH-7', old: 'if (w.runs.some(isRebuiltRun)) { out.leadsUnmeasured += 1; continue; }', new: '' },
   { id: 'LH-8', old: 'if (!isRunKind(r.kind) || !countsAsWave(r.kind) || r.openedAt > asOf) continue;', new: 'if (!isRunKind(r.kind) || !countsAsWave(r.kind)) continue;' },
   { id: 'LH-9', old: 'const closedBy = (r: LeadRun): number | null => (r.closedAt !== null && r.closedAt <= asOf ? r.closedAt : null);', new: 'const closedBy = (r: LeadRun): number | null => r.closedAt;' },
-  { id: 'LH-10', old: 'if (w.rep.state !== \'done\' && !abandoned) continue;', new: '' },
+  { id: 'LH-10', old: 'if (w.rep.state !== \'done\' && !abandoned) { if (prevClose === null) firstFrom = start; continue; }', new: '' },
   { id: 'LH-11', old: 'if (!isLead(main) || !reworks.every(isLead)) { out.leadsUnmeasured += 1; continue; }', new: '' },
-  { id: 'LH-12', old: 'if (reworks.length > 0) { out.rework.push(...reworks); out.reworks += 1; }', new: 'if (reworks.length > 0) { out.done.push(...reworks); out.reworks += 1; }' },
+  { id: 'LH-12', old: 'out.rework.push(reworks.reduce((a, b) => a + b, 0));', new: 'out.done.push(reworks.reduce((a, b) => a + b, 0));' },
   { id: 'LH-13', old: 'if (slug === program) own = h;', new: '' },
   { id: 'LH-14', old: 'fleet.done.push(...h.done); fleet.abandoned.push(...h.abandoned);', new: 'fleet.done.push(...h.done);' },
-  { id: 'LH-15', old: 'Math.max(closes[i - 1] ?? NaN, w.runs[i]!.openedAt)', new: 'w.runs[i]!.openedAt' },
+  { id: 'LH-15', old: 'reworks.push((closes[i] ?? NaN) - (closes[i - 1] ?? NaN));', new: 'reworks.push((closes[i] ?? NaN) - Math.max(closes[i - 1] ?? NaN, w.runs[i]!.openedAt));' },
+  // F3: a failed wave's close made a boundary (its time dropped), and a failed first wave's time dropped.
+  { id: 'LH-16', old: 'if (w.rep.state !== \'done\' && !abandoned) { if (prevClose === null) firstFrom = start; continue; }\n    prevClose = w.closedAt;', new: 'prevClose = w.closedAt;\n    if (w.rep.state !== \'done\' && !abandoned) continue;' },
+  { id: 'LH-17', old: '{ if (prevClose === null) firstFrom = start; continue; }', new: 'continue;' },
+  // F2: each later run's lead a rework sample of its own (a trial then draws one of them for the whole wave).
+  { id: 'LH-18', old: 'out.rework.push(reworks.reduce((a, b) => a + b, 0));', new: 'out.rework.push(...reworks);' },
 ]);
 
 export const FORECAST_MUTANT_SETS: Record<string, MutantSet<never>> = {

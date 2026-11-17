@@ -6235,6 +6235,7 @@ export class FleetWatcher {
     await this.runLane('forecasts', () => {
       const pass = runForecastLane(port, this.deps.time.clock.wall(), this.deps.time.entropy);
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
+      if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });
   }
 

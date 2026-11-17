@@ -140,13 +140,18 @@ interface LeadWave { closedAt: number; runs: LeadRun[]; rep: LeadRun }
 
 /** One programme's history as of `asOf` (questions 2 and 3, the wave rule of `shared/programmes.ts`). Only runs opened by
  *  `asOf` exist, and a run closed after `asOf` is still open. A wave stands as its `waveRepresentative`; it is closed when
- *  that run is, at its `closedAt`. Its lead starts at the later of the previous wave's close (close order) and its
- *  earliest `openedAt`. A wave whose representative closed `done` gives a done lead; one closed `failed` by an abandon
- *  (never `abandon:never-started`, which is no wave at all) an abandoned lead. A reworked wave (two or more work runs:
- *  `RUN_TRANSITIONS` gives a closed run no exit, so this is also the only reopening) gives its first run's lead as its
- *  done or abandoned lead and each later run's lead, from the run before it, as a rework lead, so the samples of a wave
- *  sum to its close-to-close lead. A wave with a run `isRebuiltRun` marks, or a lead that is not a finite number above
- *  zero, is counted in `leadsUnmeasured`, never added. */
+ *  that run is, at its `closedAt`. Its lead is close to close (question 2): it starts at the previous counted wave's
+ *  close (close order), so the gap between waves is in it whether the wave opened before that close or after; a
+ *  programme's first wave starts at its earliest `openedAt`. A wave whose representative closed `done` gives a done
+ *  lead; one closed `failed` by an abandon (never `abandon:never-started`, which is no wave at all) an abandoned lead.
+ *  A wave closed `failed` for any other reason gives no sample and is not counted, and its close is no boundary: the
+ *  next counted wave's lead spans it (from its earliest `openedAt` when it came first), so its time is never dropped.
+ *  A reworked wave (two or more work runs: `RUN_TRANSITIONS` gives a closed run no exit, so this is also the only
+ *  reopening) gives its first run's lead as its done or abandoned lead and ONE rework sample, the sum of its later
+ *  runs' leads, each close to close from the run before it. A trial adds at most one rework sample per wave at the
+ *  rework share's chance, so it reproduces a wave of any number of runs, and a wave's samples sum to its
+ *  close-to-close lead. A wave with a run `isRebuiltRun` marks, or a lead that is not a finite number above zero, is
+ *  counted in `leadsUnmeasured`, never added. */
 function programmeLeads(runs: readonly LeadRun[], asOf: number): LeadHistory {
   const byWave = new Map<number, LeadRun[]>();
   for (const r of runs) {
@@ -167,20 +172,22 @@ function programmeLeads(runs: readonly LeadRun[], asOf: number): LeadHistory {
   waves.sort((a, b) => a.closedAt - b.closedAt || a.rep.id - b.rep.id);
   const out = { done: [] as number[], abandoned: [] as number[], rework: [] as number[], waves: 0, abandons: 0, reworks: 0, leadsUnmeasured: 0 };
   let prevClose: number | null = null;
+  let firstFrom: number | null = null;
   for (const w of waves) {
-    const start = Math.max(prevClose ?? -Infinity, Math.min(...w.runs.map((r) => r.openedAt)));
-    prevClose = w.closedAt;
+    const opened = Math.min(...w.runs.map((r) => r.openedAt));
+    const start = prevClose ?? Math.min(firstFrom ?? opened, opened);
     const abandoned = w.rep.state === 'failed' && isAbandonDetail(w.rep.closeDetail);
-    if (w.rep.state !== 'done' && !abandoned) continue;
+    if (w.rep.state !== 'done' && !abandoned) { if (prevClose === null) firstFrom = start; continue; }
+    prevClose = w.closedAt;
     if (w.runs.some(isRebuiltRun)) { out.leadsUnmeasured += 1; continue; }
     const closes = w.runs.map(closedBy);
     const main = (w.runs.length === 1 ? w.closedAt : closes[0] ?? NaN) - start;
     const reworks: number[] = [];
-    for (let i = 1; i < w.runs.length; i++) reworks.push((closes[i] ?? NaN) - Math.max(closes[i - 1] ?? NaN, w.runs[i]!.openedAt));
+    for (let i = 1; i < w.runs.length; i++) reworks.push((closes[i] ?? NaN) - (closes[i - 1] ?? NaN));
     if (!isLead(main) || !reworks.every(isLead)) { out.leadsUnmeasured += 1; continue; }
     out.waves += 1;
     if (abandoned) { out.abandoned.push(main); out.abandons += 1; } else out.done.push(main);
-    if (reworks.length > 0) { out.rework.push(...reworks); out.reworks += 1; }
+    if (reworks.length > 0) { out.rework.push(reworks.reduce((a, b) => a + b, 0)); out.reworks += 1; }
   }
   return out;
 }

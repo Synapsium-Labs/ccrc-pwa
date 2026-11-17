@@ -64,6 +64,23 @@ describe('the seal arm', () => {
     expect(seals(coord).find((x) => x.closingRunId === r)).toMatchObject({ statementId: st, lo: 1, hi: 4, asOf: T0 + 10 * MIN });
   });
 
+  it('with the lane down past the wait, a statement naming the close made after the wait does not move the seal (F7, F19)', () => {
+    history(coord, 'prog-a');
+    const r = run(coord, 'prog-a', 23, T0 - 2 * DAY, T0);
+    const standing = state(coord, 'prog-a', null, 1, 4, T0 + 10 * MIN);
+    state(coord, 'prog-a', r, 6, 8, T0 + 45 * MIN);
+    expect(runForecastLane(coord, T0 + HOUR, entropy())).toMatchObject({ sealed: 1 });
+    expect(seals(coord).find((x) => x.closingRunId === r)).toMatchObject({ statementId: standing, lo: 1, hi: 4, asOf: T0 + 10 * MIN });
+  });
+
+  it('a close in a gap the lane was down for is never sealed, and the pass counts it missed (F5)', () => {
+    run(coord, 'prog-a', 1, T0 - 21 * DAY, T0 - 20 * DAY);
+    expect(runForecastLane(coord, T0 - 20 * DAY + 30 * MIN, entropy())).toMatchObject({ sealed: 1, missed: 0 });
+    const gap = run(coord, 'prog-a', 2, T0 - 16 * DAY, T0 - 15 * DAY);
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ sealed: 0, missed: 1, failed: [] });
+    expect(seals(coord).map((x) => x.closingRunId)).not.toContain(gap);
+  });
+
   it('a close with no statement at all seals unforecastable, no-remaining, after the wait', () => {
     const r = run(coord, 'prog-a', 1, T0 - DAY, T0);
     runForecastLane(coord, T0 + 30 * MIN, entropy());

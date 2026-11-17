@@ -118,6 +118,22 @@ describe('unsealedClosesOf, the seal arm\'s read', () => {
     expect(inWait).toBeGreaterThan(before);
   });
 
+  it('a statement naming the close made after the wait is not paired: the one standing at the wait is (F7, F19)', () => {
+    // The lane was down past the wait; an on-time pass would have sealed at the wait with the standing statement.
+    const r = run({ closedAt: NOW - 5 * HOUR });
+    const standing = statement('prog-a', null, 1, 2, NOW - 5 * HOUR + 10 * MIN);
+    statement('prog-a', r, 7, 9, NOW - 5 * HOUR + 45 * MIN);
+    expect(coord.unsealedClosesOf(NOW).closes[0]).toMatchObject({ runId: r, named: false, statement: { id: standing, lo: 1, hi: 2 } });
+  });
+
+  it('a close abandon:never-started is no wave: never listed and never missed (F6)', () => {
+    seal(run({ wave: 1, closedAt: NOW - 20 * DAY }));
+    run({ wave: 2, state: 'failed', closedAt: NOW - 10 * DAY, closeDetail: 'abandon:never-started' });
+    run({ wave: 3, state: 'failed', closedAt: NOW - HOUR, closeDetail: 'abandon:never-started' });
+    const later = run({ wave: 4, state: 'failed', closedAt: NOW - HOUR, closeDetail: 'abandon:operator' });
+    expect(coord.unsealedClosesOf(NOW)).toEqual({ closes: [expect.objectContaining({ runId: later })], missed: 0 });
+  });
+
   it('with no statement at all, answers statement null', () => {
     run({ closedAt: NOW - HOUR });
     expect(coord.unsealedClosesOf(NOW).closes[0]).toMatchObject({ named: false, statement: null });
@@ -136,17 +152,17 @@ describe('leadHistoryOf, the lead samples as of a boundary', () => {
   it('measures close to close through the wave representative, the first wave from its earliest openedAt', () => {
     run({ wave: 1, openedAt: NOW - 20 * DAY, closedAt: NOW - 15 * DAY });
     run({ wave: 2, openedAt: NOW - 16 * DAY, closedAt: NOW - 12 * DAY });
-    run({ wave: 3, openedAt: NOW - 11 * DAY, closedAt: NOW - 10 * DAY });  // opened after wave 2 closed: from its open
+    run({ wave: 3, openedAt: NOW - 11 * DAY, closedAt: NOW - 10 * DAY });  // opened a day after wave 2 closed: from that close
     const h = coord.leadHistoryOf('prog-a', NOW);
-    expect(h.own.done).toEqual([5 * DAY, 3 * DAY, DAY]);
+    expect(h.own.done).toEqual([5 * DAY, 3 * DAY, 2 * DAY]);
     expect(h.own).toMatchObject({ waves: 3, abandons: 0, reworks: 0, leadsUnmeasured: 0 });
   });
 
-  it('a second work run of one wave is a rework lead; the first run\'s lead is the wave\'s', () => {
+  it('a second work run of one wave is a rework lead, close to close; the first run\'s lead is the wave\'s', () => {
     run({ wave: 1, openedAt: NOW - 20 * DAY, state: 'failed', closedAt: NOW - 18 * DAY, closeDetail: 'review-requested-changes' });
     run({ wave: 1, openedAt: NOW - 17 * DAY, closedAt: NOW - 16 * DAY });
     const h = coord.leadHistoryOf('prog-a', NOW).own;
-    expect(h).toMatchObject({ done: [2 * DAY], rework: [DAY], waves: 1, reworks: 1 });
+    expect(h).toMatchObject({ done: [2 * DAY], rework: [2 * DAY], waves: 1, reworks: 1 });
   });
 
   it('an abandon: close is an abandoned lead, so is the dispatch abandon; abandon:never-started is left out', () => {
@@ -198,5 +214,25 @@ describe('outcomeFactsOf, what forecastOutcome reads', () => {
     expect(f.doneWaveCloses).toEqual([NOW + DAY]);
     expect(f.runs.map((r) => r.openedAt)).toEqual([NOW - 30 * MIN, NOW, NOW + 2 * DAY, NOW + DAY]);
     expect(coord.outcomeFactsOf(9999)).toBeNull();
+  });
+
+  it('a re-run of the seal\'s own boundary wave, done after asOf, is not one of the remaining waves (F4)', () => {
+    const closing = run({ wave: 1, closedAt: NOW - HOUR });
+    seal(closing);
+    const [s] = coord.forecastsOf({ program: 'prog-a' });
+    run({ wave: 1, openedAt: NOW + HOUR, closedAt: NOW + 2 * DAY });   // wave 1 again, after the seal
+    run({ wave: 2, openedAt: NOW, closedAt: NOW + 3 * DAY });
+    run({ wave: 3, openedAt: NOW + 4 * DAY, state: 'working', closedAt: null });
+    expect(coord.outcomeFactsOf(s!.id)!.doneWaveCloses).toEqual([NOW + 3 * DAY]);
+  });
+
+  it('a rework opened after p85At never changes the wave as it stood at p85At, so the score does not depend on when the pass ran (F4)', () => {
+    seal(run({ wave: 1, closedAt: NOW - HOUR }));
+    const [s] = coord.forecastsOf({ program: 'prog-a' });
+    run({ wave: 2, openedAt: NOW, closedAt: NOW + 3 * DAY });
+    const before = coord.outcomeFactsOf(s!.id)!.doneWaveCloses;
+    run({ wave: 2, openedAt: NOW + 10 * DAY, closedAt: NOW + 11 * DAY });   // p85At is NOW + 9 days
+    expect(before).toEqual([NOW + 3 * DAY]);
+    expect(coord.outcomeFactsOf(s!.id)!.doneWaveCloses).toEqual([NOW + 3 * DAY]);
   });
 });
