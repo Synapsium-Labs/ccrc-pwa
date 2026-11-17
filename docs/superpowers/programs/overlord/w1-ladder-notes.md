@@ -43,6 +43,13 @@ This is W1's ladder only: no holds, pending acts, queued mail or follow-up effec
 - **`rung-step-cell-test-seam`.** `rungStep` accepts an optional cell-table argument, defaulting to `RUNG_CELLS`, so
   tests can exercise refusal cells before W2 adds acts that use them. Production still reads one table.
 
+## Main absorption
+
+Under the coordinator's standing migration/census license, this branch absorbed main after done tests A (#2964)
+landed migration 92. The ladder moves positionally to migration 93. The only conflicts were additive: the migration,
+its database and run-close pins, and mutation-set imports/spreads. Both sides were retained; the shared
+`decision-model-records.test.ts` case is unchanged from main. No unrelated source conflict was resolved.
+
 ## Verification so far
 
 | Piece | Evidence |

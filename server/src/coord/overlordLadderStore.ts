@@ -1,6 +1,6 @@
 // The Overlord's ladder rows and their writers (Overlord spec §7.5, §7.6, H25, H27; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-ladder.md` Task 2, questions 3, 4, 11, 13, 16, 20, 21 and 22).
-// Ring L3, context C5. TWO tables (migration 92): `overlord_ladder`, the operator's rung (one row, `id = 1`, none seeded: an
+// Ring L3, context C5. TWO tables (migration 93): `overlord_ladder`, the operator's rung (one row, `id = 1`, none seeded: an
 // absent row reads `chat`), and `overlord_latches`, one row per latch with its cause and stored cap (a cleared row stays as
 // history). The only functions that write them: `setRungInTx`, `raiseLatchInTx`, `clearLatchInTx`, `journalPendingInTx` and
 // `applyRestoreInTx`; the readers are `ladderRows` (the composed read's rows, fail-closed) and `ladderRungRead` (the brakes' read,

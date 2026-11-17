@@ -3560,13 +3560,28 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // The Overlord's ladder (spec §7.5, H25; W1, plan `w1-ladder.md` Task 2): `overlord_ladder`, the operator's rung (one row, none
   // seeded: an absent row reads `chat`), and `overlord_latches`, one row per latch with its cause and cap (a cleared row stays as
   // history; one cause has at most one standing row). The rung words carry no CHECK: `shared/overlord-ladder.ts#RUNGS` is their one
   // home. One writer each, named in `overlordLadderStore.ts`. NEW TABLES ONLY, nothing on an existing table: an older build opening
-  // a file at `user_version 92` takes rule 3, never names them. The slot is POSITIONAL, so it is renumbered at landing on the
+  // a file at `user_version 93` takes rule 3, never names them. The slot is POSITIONAL, so it is renumbered at landing on the
   // coordinator's word, as sibling W1 pieces add migrations too. RE-MEASURE the slot before the PR and before merge (it must print
-  // 91 before this entry is counted):
+  // 92 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

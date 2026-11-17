@@ -53,6 +53,7 @@ import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
@@ -276,6 +277,11 @@ export interface RunRow extends RunSummary {
    *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
    *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
   unattributed: boolean;
+  /** `schema.ts`'s `runs.closePr` entry (Overlord W2 done tests A, DT7; its slot moves at landing, so it is not named
+   *  here): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none, and NULL when the verified claim named no
+   *  PR or another one (review 2377 F1).
+   *  Parsed only by the done-test reader, which answers a malformed value `unmeasurable`; stripped by `toRunSummary`. */
+  closePr: string | null;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -314,7 +320,7 @@ export type { CoordPlacementStamp };
  *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, closePr: _closePr, ...summary } = row;
   return summary;
 };
 
@@ -1073,6 +1079,7 @@ interface RunRowDb {
   runTitle: string | null;
   closedBy: string | null;
   closeDetail: string | null;
+  closePr: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1093,7 +1100,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -3267,6 +3274,9 @@ export class CoordStore {
     /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
      *  `abandon:<reason>`; every other caller passes nothing. */
     detail?: string;
+    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line, claim.prNumber)`. ONE writer of
+     *  `runs.closePr`, in this transaction; absent or null writes nothing, so the column stays NULL. */
+    closePr?: ClosePrFacts | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3299,6 +3309,7 @@ export class CoordStore {
       // `null` is left standing rather than writing a claim this database has
       // never measured or even shape-checked.
       if (input.handoffCommit !== null) this.setHandoffCommit(input.runId, input.handoffCommit);
+      if (input.closePr != null) this.db.prepare('UPDATE runs SET closePr = ? WHERE id = ?').run(JSON.stringify(input.closePr), input.runId);
       // Review findings 8/14: cancel this run's own outstanding mail rather
       // than leave it to replay into whatever session (this run's own, next
       // wave, or — once a purged workspace slug is re-minted — an unrelated
@@ -5750,6 +5761,7 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      closePr: row.closePr,
       // Migration 23's journal (D-5298), read through on the same idiom; 1 is
       // "accepted unattributed", every other value (0, the column default every
       // older row carries) is not. D-5531 reads it in the ask lane.
