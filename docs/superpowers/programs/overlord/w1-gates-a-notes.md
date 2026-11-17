@@ -49,4 +49,6 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
 - **Designation C's setters**: designation C (run 2397) adds `setModelClass` and `setAccountSet`, which take the gate's actor
   as a string. Whichever of us lands second switches them to `RecordedActor`, `isRecordedActor`, the four live columns and
   `reason: 'actor'` (agreed by mail).
-- **Migration slot**: this PR's migration is positional at 92 today; the second lander renumbers.
+- **Migration slot**: this PR's migration is positional at 93 after absorbing #2964 (which took 92); the second lander renumbers.
+
+- **Additive absorption**: kept both migration and census additions under the standing license; the shared decision-model record case was kept verbatim.
