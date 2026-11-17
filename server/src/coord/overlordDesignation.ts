@@ -1,11 +1,13 @@
 // The Overlord's designation deciders (Overlord W1, designation A, plan Task 2; spec §3.1, §3.4 C46 and C56). Ring L1,
 // context C5: pure decisions over facts the door gathers. It imports L0 and `poolrule.ts` (L1) only, makes no I/O and
-// reads no clock (`nowS` rides in the facts). Three deciders: `designateVerdict` (Start the Overlord's refusals, in
-// order, and the one create it allows), `overlordAccounts` (C56's ordered account list and the count that gates it) and
-// `retireVerdict` (what a retire does to the row it reads).
+// reads no clock (`nowS` rides in the facts). `designateVerdict` (Start the Overlord's refusals, in order, and the one
+// create it allows), `overlordAccounts` (C56's ordered account list and the count that gates it), `retireVerdict` (what a
+// retire does to the row it reads), and the Settings doors' (designation C): `modelClassVerdict`, `setWidens` and
+// `accountSetVerdict`, with the step-up each door asks.
 import type { BuildAgreement } from '../../../shared/api.js';
 import { DESIGNATE_CCD_WORDS, DESIGNATE_SERVER_WORDS } from '../../../shared/overlord-designation.js';
-import type { DesignationRead, OverlordModelClass } from '../../../shared/overlord-designation.js';
+import type { DesignationRead, DesignationView, OverlordModelClass } from '../../../shared/overlord-designation.js';
+import { orgSpread, type OrgSpread } from '../../../shared/accountOrg.js';
 import type { ProjectedHome } from '../../../shared/api.js';
 import { poolSetSpelling } from '../../../shared/poolset.js';
 import type { PoolSet } from '../../../shared/poolset.js';
@@ -14,7 +16,7 @@ import { poolRule } from '../../../shared/poolrule.js';
 import { serviceability } from '../../../shared/serviceability.js';
 import type { LaneFacts } from '../../../shared/serviceability.js';
 import type { AccountLimits } from '../limits.js';
-import { parsePoolAnswer, resolvedAccountPool } from '../poolrule.js';
+import { parsePoolAnswer, poolRostered, resolvedAccountPool } from '../poolrule.js';
 
 /** The ccd words the create itself needs, past `DESIGNATE_CCD_WORDS`' first five, are in that list already (the eight). */
 export interface AccountFacts {
@@ -44,7 +46,9 @@ export interface DesignateFacts {
 export const DESIGNATION_KEBABS = ['refuse-input', 'retire-live', 'cancel-pending', 'not-designated', 'not-pending',
   'generation-set', 'bad-outcome', 'not-run', 'set-side', 'pool-set', 'unknown-pool', 'create-failed', 'overlord-first-prompt',
   // the body adapter's ccd verbs and the `ws-add` refusal words it reads (`overlordBody.ts`, `workspaceCreate.ts#classifyAddFailure`)
-  'project-add', 'ws-add', 'keep-awake', 'account-refused', 'slug-taken', 'bad-slug'] as const;
+  'project-add', 'ws-add', 'keep-awake', 'account-refused', 'slug-taken', 'bad-slug',
+  // the Settings doors (designation C): the gate's own refusal word the set decider re-asks, and the set door's op-key stem
+  'step-up-required', 'account-set'] as const;
 export const isDesignationKebab = (w: string): boolean => (DESIGNATION_KEBABS as readonly string[]).includes(w);
 
 export type DesignateVerdict =
@@ -157,4 +161,81 @@ export function retireVerdict(read: DesignationRead):
   if (read.kind === 'unmeasured') return { act: 'unmeasured' };
   if (read.kind === 'designated') return { act: 'retire-live' };
   return read.row !== null && read.row.pending !== null ? { act: 'cancel-pending' } : { act: 'none' };
+}
+
+// ── the Settings doors (designation C, plan Tasks 8 and 9; spec §3.4 C45, C46, C56, §11.2) ──────────────────────────────
+
+/** The bodies the row names: the live one, then a pending one. A Settings change writes the route record of each. */
+const bodiesOf = (v: DesignationView): string[] =>
+  [v.bound?.sessionId, v.pending?.sessionId].filter((x): x is string => x !== undefined);
+
+/** C45, §11.2: the model door asks a step-up when the body selects `fable`, never for `opus`. */
+export const modelStepUp = (model: OverlordModelClass): boolean => model === 'fable';
+
+export type ModelClassVerdict =
+  | { readonly act: 'unmeasured'; readonly why: string } | { readonly act: 'not-found' } | { readonly act: 'none' }
+  | { readonly act: 'set'; readonly bodies: readonly string[] };
+
+/** Task 8: `none` when the class is unchanged, `set` otherwise, naming the bodies whose route record takes the class. */
+export function modelClassVerdict(read: DesignationRead, model: OverlordModelClass): ModelClassVerdict {
+  if (read.kind === 'unmeasured') return { act: 'unmeasured', why: read.why };
+  if (read.row === null) return { act: 'not-found' };
+  return read.row.model === model ? { act: 'none' } : { act: 'set', bodies: bodiesOf(read.row) };
+}
+
+/** C46: `next` adds a pool or turns `untagged` on. A narrowing and a pure reorder are not widenings. */
+export function setWidens(old: PoolSet, next: PoolSet): boolean {
+  return (next.untagged && !old.untagged) || next.pools.some((p) => !old.pools.includes(p));
+}
+
+/** The step-up the account set door asks, from the row read before the gate: a widening asks one, and a row that cannot be
+ *  read asks one too (the door refuses it after the gate); with no row there is nothing to widen. */
+export function accountSetStepUp(read: DesignationRead, next: PoolSet): boolean {
+  if (read.kind === 'unmeasured') return true;
+  return read.row !== null && setWidens(read.row.accountPools, next);
+}
+
+/** A warning the set door answers beside its save: never a refusal. */
+export type AccountSetWarning =
+  | { readonly warning: 'unknown-pool'; readonly pool: string }
+  | { readonly warning: 'overlord-single-account'; readonly count: number };
+
+export type AccountSetVerdict =
+  | { readonly act: 'unmeasured'; readonly why: string } | { readonly act: 'not-found' }
+  | { readonly act: 'refuse-input'; readonly why: 'unspellable' }
+  | { readonly act: 'refuse'; readonly word: 'overlord-single-account' | 'step-up-required'; readonly detail: string; readonly count?: number }
+  | { readonly act: 'none' | 'set'; readonly bodies: readonly string[]; readonly poolset: string; readonly acctorder: string;
+      readonly accounts: ReturnType<typeof overlordAccounts>; readonly warnings: readonly AccountSetWarning[];
+      readonly orgSpread: OrgSpread };
+
+/** Task 9, in order: no row; an unspellable set; a widening the gate was not asked to step up (re-read on the serialiser, so a
+ *  set that changed after the door asked the gate cannot widen without one); fewer than two counted accounts while a body is
+ *  bound or pending (with no body the set is saved for the next Start, and the count only warns, as it does for the same set
+ *  re-sent); then `none` for the same set in the same order, or `set` with the spelling, the list in the set's order, the warnings and the organization spread of the
+ *  counted accounts (K2a; `unmeasured` when any listed account's servability is, so a partial figure says nothing). */
+export function accountSetVerdict(read: DesignationRead, next: PoolSet, f: AccountFacts, stepped: boolean): AccountSetVerdict {
+  if (read.kind === 'unmeasured') return { act: 'unmeasured', why: read.why };
+  const row = read.row;
+  if (row === null) return { act: 'not-found' };
+  const spelling = poolSetSpelling(next);
+  if (spelling.kind === 'unspellable') return { act: 'refuse-input', why: 'unspellable' };
+  if (!stepped && setWidens(row.accountPools, next)) {
+    return { act: 'refuse', word: 'step-up-required', detail: 'the account set widens, and a widening needs a step-up' };
+  }
+  const accounts = overlordAccounts(next, row.model, f);
+  const count = accounts.counted.length;
+  const bodies = bodiesOf(row);
+  const warnings: AccountSetWarning[] = next.pools.filter((p) => !poolRostered(f.roster, p)).map((pool) => ({ warning: 'unknown-pool', pool }));
+  const same = row.accountPools.untagged === next.untagged && row.accountPools.pools.join('\n') === next.pools.join('\n');
+  if (count <= 1) {
+    if (bodies.length > 0 && !same) {
+      return { act: 'refuse', word: 'overlord-single-account', count,
+        detail: `${count} counted account(s) and ${accounts.unmeasured.length} unmeasured; the Overlord needs at least two` };
+    }
+    warnings.push({ warning: 'overlord-single-account', count });
+  }
+  const org = new Map(f.roster.accounts.map((a) => [a.id, a.org]));
+  const orgs = orgSpread(accounts.unmeasured.length > 0 ? 'unmeasured' : accounts.counted.map((id) => org.get(id) ?? null));
+  return { act: same ? 'none' : 'set', bodies, poolset: spelling.kind === 'spelled' ? spelling.spelling : '',
+    acctorder: [...accounts.list].join(','), accounts, warnings, orgSpread: orgs };
 }

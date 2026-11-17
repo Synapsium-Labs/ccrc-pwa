@@ -91,6 +91,7 @@ class FakeBody implements OverlordBody {
   }
   async writeSet(id: string, set: { poolset: string; acctorder: string }) { this.log.push({ op: 'writeSet', id, extra: set }); return this.setAnswer; }
   async clearProfile(id: string) { this.log.push({ op: 'clearProfile', id }); return { ok: true } as const; }
+  async writeClass(id: string, cls: string) { this.log.push({ op: 'writeClass', id, extra: cls }); return { ok: true } as const; }
   async poolAnswer(id: string) { this.log.push({ op: 'poolAnswer', id }); return this.probe; }
   async keepAwake(id: string, state: 'on' | 'off') { this.log.push({ op: `keepAwake-${state}`, id }); return this.keepAwakeAnswer(state); }
   async stop(id: string) {
