@@ -186,14 +186,20 @@ interface HookConfig {
    *  runs in the srcdoc at readyState `interactive`, after the bootstrap's scripts (20 of 20 runs), and the srcdoc's
    *  own load fired before the hook navigated in 2 of 27; with a child that commits more than 700 ms after that load,
    *  the hello goes to the srcdoc. And a child slower than about 1.3 s pushed the delayed handler past the 2 s
-   *  watchdog, so no hello was posted at all. */
+   *  watchdog, so no hello was posted at all.
+   *  The child's word that it holds the port is also the evidence: the parent records it (`__childPorts`) and answers it,
+   *  and the child speaks on the port (`onHello`) only after that answer. An op the child sends can make the reader
+   *  remove the frame at once (the forged ready does: the reader falls back with `nonce`), and anything the child sent
+   *  around then can be lost with the frame: its console line (Playwright drops a console call whose context is
+   *  already gone; hosted runs 44160844545 and 44168803467: "the child received the port (hellos: [])"), or its window
+   *  message (measured: 1 run of 30 recorded no word from a child whose hello line was captured). */
   readonly holdLoadForChild?: boolean;
   /** Parent realm: messages posted on the frame's end of the port just before it is handed to the frame, so they are
    *  on the wire ahead of anything the frame says (the Playwright init script reaches a srcdoc frame before its
    *  scripts in some loads and after them in others, so a frame-realm hook cannot be relied on to speak first). */
   readonly earlyOps?: readonly unknown[];
-  /** Frame realm: messages posted on the port the moment it is captured (a navigated child's, which has no scripts
-   *  of the library's to be ahead of). */
+  /** Frame realm: messages posted on the port once it is captured (a navigated child's, which has no scripts of the
+   *  library's to be ahead of); with `holdLoadForChild`, once the parent has recorded the child's word. */
   readonly onHello?: readonly unknown[];
   /** Frame realm: the srcdoc document navigates here at once. */
   readonly navigateTo?: string;
@@ -203,7 +209,7 @@ function hookScript(cfg: HookConfig): string {
   return `(() => {
   const CFG = ${JSON.stringify(cfg)};
   if (window.top === window) {
-    window.__posts = []; window.__postPorts = []; window.__frames = []; window.__readyAts = [];
+    window.__posts = []; window.__postPorts = []; window.__frames = []; window.__readyAts = []; window.__childPorts = [];
     if (CFG.skipCspAttr) {
       const orig = Element.prototype.setAttribute;
       Element.prototype.setAttribute = function (n, v) {
@@ -226,7 +232,13 @@ function hookScript(cfg: HookConfig): string {
         const d = e.data;
         if (!d || d.ccrcHookChild === undefined || d.href !== CFG.navigateTo) return;
         if (d.ccrcHookChild === 'up') state.up = true;
-        if (d.ccrcHookChild === 'port') state.port = true;
+        if (d.ccrcHookChild === 'port') {
+          // Recorded, then answered, before any held call can remove the frame: the child speaks on the port only after
+          // this answer.
+          state.port = true;
+          window.__childPorts.push(d.href);
+          if (e.source) e.source.postMessage({ ccrcHookAck: 'port', href: d.href }, '*');
+        }
         pump();
       });
       const add = EventTarget.prototype.addEventListener;
@@ -286,8 +298,18 @@ function hookScript(cfg: HookConfig): string {
       const p = e.ports[0];
       window.__ccrcPort = p;
       console.log('ccrc-hook hello ' + (location.href === 'about:srcdoc' ? 'srcdoc' : location.href));
-      for (const m of (CFG.onHello || [])) p.postMessage(m);
-      if (heldFor) top.postMessage({ ccrcHookChild: 'port', href: location.href }, '*');
+      let spoke = false;
+      const speak = () => {
+        if (spoke) return;
+        spoke = true;
+        for (const m of (CFG.onHello || [])) p.postMessage(m);
+      };
+      if (!heldFor) { speak(); return; }
+      // The word first, the ops only once the parent has recorded it (see holdLoadForChild).
+      window.addEventListener('message', (a) => {
+        if (a.data && a.data.ccrcHookAck === 'port' && a.data.href === location.href) speak();
+      });
+      top.postMessage({ ccrcHookChild: 'port', href: location.href }, '*');
     }, true);
     // The child is the frame's current document once its own script runs, its hello listener above already in place:
     // the parent hook may now run the first load listener call it held.
@@ -970,8 +992,13 @@ describe('W8a reader frame in Chrome', () => {
     await sleep(500);
     const childHits = origins.hits.slice(from).filter((h) => h.origin === 'b' && h.path === '/child');
     expect(childHits.length, 'without the shell meta the frame navigated, and the child loaded').toBeGreaterThan(0);
+    // The child received the port: its own word, which the parent records before the child speaks on the port (see
+    // holdLoadForChild), read with a bounded wait that names its own failure; the console's hello lines are only shown.
     const hellos = s.logs.filter((l) => l.includes('ccrc-hook hello'));
-    expect(hellos.filter((l) => l.includes('/child')).length, `the child received the port (hellos: ${JSON.stringify(hellos)})`).toBeGreaterThan(0);
+    const said = await s.page.waitForFunction(
+      (href) => (window as unknown as { __childPorts: string[] }).__childPorts.includes(href), child, { timeout: 10_000 },
+    ).then(() => true, () => false);
+    expect(said, `the child never said, within 10 s, that it holds the port (hello lines captured: ${JSON.stringify(hellos)})`).toBe(true);
     expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
     expect(await readerKeys(s.page), 'no store write').toEqual([]);
     expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
