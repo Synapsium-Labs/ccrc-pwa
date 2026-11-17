@@ -17,9 +17,11 @@
 // built on a clone) is the INNER document, which this file puts in the wrapper's one frame, `<iframe sandbox=""
 // srcDoc={inner}>`, the only `iframe` and `srcDoc` of the file (M4.EX16, M5.16), beside the same shell, banner and
 // provenance as any export, the inlined-files list, the omitted list and the links list (all React, so escaped). It waits
-// at most `limits.imageWaitMs` for the attempt's assets (past it, or when the attempt ended, no asset is inlined and every
-// admitted one is listed as still loading, or failed) and counts the FINAL file's bytes, the inner document escaped into
-// the attribute plus the wrapper: the snapshot with every loaded asset, else with none (over: `too-large`), else the
+// at most `limits.imageWaitMs` for the attempt's assets. Past it, the attempt's load is read as it stands (its `now`,
+// `startMockupLoad`'s, with the timed-out word): every asset already loaded is inlined, and every admitted one still loading
+// is listed as still loading (base decision 3, 4.17's html row; review 2361 F2). An attempt that ended without a result
+// inlines nothing and lists every admitted asset as failed. It counts the FINAL file's bytes, the inner document escaped
+// into the attribute plus the wrapper: the snapshot with every loaded asset, else with none (over: `too-large`), else the
 // largest prefix of the files, in the order of their first use (`heldInUseOrder`), that fits (`fits` is the one measure).
 //
 // Ring L4 delivery.

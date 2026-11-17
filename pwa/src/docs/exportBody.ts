@@ -9,9 +9,9 @@
 //   - `text`: a text leaf's text and the grammar its extension matched, or `null` (`TextBody`);
 //   - `reader`: the reader frame shows the leaf (refinement (a));
 //   - `mockup`: the mockup viewer's attempt, from the moment it has a plan: the page text it parsed, its inert Document
-//     (Export CLONES it and never parses again) and the attempt's plan with a promise of what its load came to
-//     (completion plan Task 9). The viewer publishes `plain` for a page the pre-scan refuses and `gate` for the render
-//     gate, and nothing while it parses or plans.
+//     (Export CLONES it and never parses again) and the attempt's plan with a promise of what its load came to and `now`,
+//     its load as it stands (completion plan Task 9; review 2361 F2). The viewer publishes `plain` for a page the pre-scan
+//     refuses and `gate` for the render gate, and nothing while it parses or plans.
 // "Formatting…" publishes nothing. A leaf mounts one body at a time, and React runs the leaving body's cleanup before the
 // next body's effect, so one holder (`DocsScreen`'s) always ends on the body on screen. The page's highlight store
 // travels apart, through W5h-a's `HighlighterContext` `publish` slot; `DocsScreen` holds both and `DocsHead#exportStateFor`

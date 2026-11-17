@@ -13,8 +13,9 @@
 //      is byte-identical keeps the element), and the toolbar, the badges, the census and the links list.
 // Export reads what the view publishes (`usePublishExportBody`; completion plan Task 9): the render gate publishes
 // `GATE_BODY`, a page the pre-scan refuses publishes its source as a `plain` body with the refused-export note, and an
-// attempt publishes a `mockup` body (its parsed Document, its plan and the promise of its load's end) from the moment it
-// has a plan; parsing and planning publish nothing. A superseded attempt's promise ends `{ s: 'ended' }`.
+// attempt publishes a `mockup` body from the moment it has a plan: its parsed Document, its plan, the promise of its load's
+// end and `now`, its load as it stands (`startMockupLoad`'s, so Export keeps what has loaded when its wait runs out; review
+// 2361 F2). Parsing and planning publish nothing. A superseded attempt's promise ends `{ s: 'ended' }`.
 // The choices (Run scripts, Load external) live in this view's state only: no storage, no URL key. The view is keyed by
 // the caller (`DocsLeaf`) by the document's identity and the mode, so a new document or mode starts them over.
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -173,7 +174,7 @@ function MockupLive(p: MockupViewProps & {
   const [source, setSource] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
-  // The current attempt's plan and the end of its load, for Export; `null` between attempts.
+  // The current attempt's plan, the end of its load and its load as it stands (`now`), for Export; `null` between attempts.
   const [exported, setExported] = useState<MockupExportAssets | null>(null);
   const [fatal, setFatal] = useState<{ readonly error: unknown } | null>(null);
   // The attempt number: a new value starts a new attempt over the same context (a sign-in).

@@ -10,7 +10,10 @@
 //
 //   extractMockupRefs   the parsed Document's references in DOM order (the table), plus what it cannot carry
 //   mockupAssetReader   one pin through `loaders.raster` or `loaders.file`, a failure word kept whole
-//   loadMockupAssets    the admitted pins read once each, two at a time, nested CSS fed to the planner in a fixed order
+//   startMockupLoad     the admitted pins read once each, two at a time, nested CSS fed to the planner in a fixed order:
+//                       `result`, the load's end, and `now`, the load as it stands, which Export reads when its wait runs
+//                       out (`MockupLoad`; the viewer's entry, review 2361 F2)
+//   loadMockupAssets    the same load's end alone, `startMockupLoad(...).result`
 //   buildMockupSrcdoc   the page's bytes for the frame: CSP meta, click guard, doctype, the rewritten clone
 import {
   DOCS_CLASS_CAP, contentClass, docsApi, resolveDocRef, type DocPin, type DocSectionSlug,
