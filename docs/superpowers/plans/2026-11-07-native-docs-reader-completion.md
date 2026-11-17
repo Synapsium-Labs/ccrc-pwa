@@ -892,6 +892,14 @@ headroom table rounds 3.76 to 3.8x; D-8695's attribution to the operator's answe
 {"id": "NDR-C2-T8FR-C10-LINKS-FOLD", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "{linksDrawn.shown.map((l, i)", "new": "{links.map((l, i)", "tests": ["test/mockup-view.test.tsx"], "status": "red", "red": "Tests  1 failed | 81 passed (82): 501 links: 500 rows in order, then one line that says 1, and the summary still says 501", "sha256": "98c6187076a4627ffaac7387b2cb87ee720c78510ee6cac4008a4ed5c0f47f82", "restored": true}
 ```
 
+- Retired at fix round 2 (review run 2372's M-g): `NDR-C2-T8FR-M7D-SETBAR`. Fix round 1 re-pointed it onto the key's removal
+  (`<ReaderBody key={signedIn} {...p}` to `<ReaderBody {...p}`), which is exactly `NDR-C2-FR1-F1-BODY-KEY`'s mutation, so two rows
+  measured one mutation, and its red came from "no second run", not from the bar standing. Since F1 keyed the body, the bar has
+  no code site of its own in `ReaderFrame.tsx` (each body's state, the bar included, starts over by construction), so no
+  mutation of its own is left to re-point it to. The row stays above as the record of what it measured and is not replayed;
+  its test (sign-in withdraws the old mount's bar until the new mount is ready) stays, and `NDR-C2-FR1-F1-BODY-KEY` measures the
+  key.
+
 **Task 9 — the static mockup Export.** Commits `9fa6330bd` (code and unit tests), `a92ae9fe8` (the real-browser rows) and the
 review fix round below.
 - `mockup/exportMockup.ts`'s `buildMockupSnapshot` clones the viewer's parsed inert Document (no second parser) and runs base
@@ -902,9 +910,11 @@ review fix round below.
   which predates C1: a known duplicate for a later wave.
 - Process: the wiring's tests were written after its code (the snapshot's and the timed-out mapping's were written first), a
   process note and no deviation (review run 2361's M3). Each test is shown discriminating by its measured mutation row, which is
-  the evidence, not a red-first record: `NDR-C2-T9-FRAME-SANDBOX-OMITTED`, `-SIZE-BEFORE-ESCAPING`, `-WAIT-NOT-TIMED-OUT`,
-  `-DRAFT-CONFIRM-SKIPPED`, `-GATE-WORD` and `-VIEW-PUBLISH-DROPPED`, and `NDR-C2-T9FR-DRAFT-COUNT`, `-WITHDRAW-ON-MOVE` and
-  `-CLEANUP-WITHDRAW`, each red in the fences and replayed red by review run 2361 at `b63b130df`.
+  the evidence, not a red-first record: `NDR-C2-T9-FRAME-SANDBOX-OMITTED`, `-SIZE-BEFORE-ESCAPING`, `-DRAFT-CONFIRM-SKIPPED`,
+  `-GATE-WORD` and `-VIEW-PUBLISH-DROPPED`, and `NDR-C2-T9FR-DRAFT-COUNT`, `-WITHDRAW-ON-MOVE` and `-CLEANUP-WITHDRAW`, each red
+  in the fences and replayed red by review run 2361 at `b63b130df`; and `NDR-C2-T9-WAIT-NOT-TIMED-OUT`, which fix round 1
+  re-recorded on its new line (`now(TIMED_OUT)` to `now('ended')`), a mutation review run 2361 did not replay: review run 2372
+  replayed it red at `a8d28d054` (corrected at fix round 2, review run 2372's M-g). Fix round 2 replays all nine at its own tip.
 - Scans: M4.EX2's scope gains `exportMockup.ts`; M4.EX16's homes gain `buildExport.tsx`'s `iframe` and `srcDoc`; clause W8a allows
   the `srcdoc` STRING at `exportMockup.ts` exactly (its strip list names the attribute to drop it), each with planted controls.
 - M5.B10's reading (the browser rows): "in each, a click on a former link fires no second load" is asserted on the two builds whose
