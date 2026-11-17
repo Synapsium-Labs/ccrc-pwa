@@ -8,7 +8,7 @@ import type { DesignationRead } from '../../shared/overlord-designation.js';
 import type { CONTINUITY_LANE } from '../../shared/lane-arm.js';
 import type { GenRow, GenerationsRead } from '../src/continuity/continuityStore.js';
 import type { LaneArmRead } from '../src/coord/laneArm.js';
-import { designationReadOf, liveGenerationOf } from '../src/continuity/routes.js';
+import { designationReadOf, liveGenerationOf } from '../src/continuity/liveGeneration.js';
 
 const row = (over: Partial<GenRow>): GenRow => ({
   id: 7, identity: 'lane-a-demo', sessionId: 'lane-a-demo', role: 'session', term: 0, rowIncarnation: null, n: 1,

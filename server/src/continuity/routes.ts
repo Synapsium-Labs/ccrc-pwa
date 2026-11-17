@@ -29,7 +29,8 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { effectiveGeneration, type TimerRow } from './continuityStore.js';
+import { type TimerRow } from './continuityStore.js';
+import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
 import { noteKeyReader } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
@@ -39,7 +40,7 @@ import {
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
-import { designationFactFrom, identityOf as generationIdentityOf, type DesignationFact } from '../roleOf.js';
+import { identityOf as generationIdentityOf } from '../roleOf.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -160,25 +161,6 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
   } catch {
     return 'unmeasured';
   }
-}
-
-/** The designation as this call reads it, or `unmeasured` (a read that throws included). */
-export function designationReadOf(coord: Pick<CoordStore, 'designationRead'>): DesignationFact | 'unmeasured' {
-  try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
-}
-
-/** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
-export function liveGenerationOf(
-  coord: Pick<CoordStore, 'liveGenerations' | 'designationRead' | 'laneArmSetting'>, id: string,
-  continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null,
-) {
-  const gens = coord.liveGenerations();
-  const fact = designationReadOf(coord);
-  if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
-  const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
-  if (row === undefined) return 'no-generation' as const;
-  const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
-  return { row, state: effectiveGeneration(row, live).state };
 }
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
