@@ -1011,7 +1011,11 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     // A second miss while it is queued queues nothing new.
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
-    expect(b.sent.map((s) => s.query)).toEqual(LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]));
+    // The four collections, then the hierarchy's two reads (D-8182): the project statuses, then the initiatives probe.
+    expect(b.sent.map((s) => s.query)).toEqual([
+      ...LINEAR_DIRECTORY_COLLECTIONS.map((c) => LINEAR_DIRECTORY_DOCUMENTS[c]),
+      LINEAR_HIERARCHY_DOCUMENTS.projectStatuses, LINEAR_HIERARCHY_DOCUMENTS.initiativesProbe,
+    ]);
     // The retry after the refresh resolves the name, cleaned, from the directory the refresher filled.
     const filled = b.fx.refresher.directory.get(SLOT, D1);
     expect(filled).toEqual({
@@ -1033,15 +1037,15 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(LINEAR_DIRECTORY_REFRESH_MS).toBe(10 * MIN);
     b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(4);
+    expect(b.sent).toHaveLength(6);
     b.clock.now = T + 10 * MIN - 1;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(4);
+    expect(b.sent).toHaveLength(6);
     b.clock.now = T + 10 * MIN;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(8);
+    expect(b.sent).toHaveLength(12);
   });
 
   it('the window is the fill\'s, for the key the request read: a replaced key inside it answers refreshing, and the next pages carry the new key', async () => {
@@ -1056,14 +1060,14 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(b.fx.refresher.directory.get(SLOT, d2)).toBeNull();
     expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('refreshing');
     await b.fx.refresher.idle();
-    expect(b.sent.slice(4).map((s) => s.auth)).toEqual([KEY_2, KEY_2, KEY_2, KEY_2]);
+    expect(b.sent.slice(6).map((s) => s.auth)).toEqual([KEY_2, KEY_2, KEY_2, KEY_2, KEY_2, KEY_2]);
     expect(b.fx.refresher.directory.get(SLOT, d2)).not.toBeNull();
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
     // Filled for the new key now, so the window holds for it.
     b.clock.now = T + 2 * MIN;
     expect(b.fx.refresher.nameMiss(SLOT, d2)).toBe('unknown');
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(8);
+    expect(b.sent).toHaveLength(12);
   });
 
   it('a refresh that failed fills nothing and still counts: inside its ten minutes a miss answers unknown and queues nothing, after them it queues again', async () => {
@@ -1086,7 +1090,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     b.clock.now = T + 10 * MIN;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(8);
+    expect(b.sent).toHaveLength(10);
     expect(b.fx.refresher.directory.get(SLOT, D1)).not.toBeNull();
   });
 
@@ -1139,22 +1143,22 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     await put(b, KEY_1);
     b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(4);
+    expect(b.sent).toHaveLength(6);
     b.clock.now = T + MIN;
     b.fx.refresher.queueDirectory(SLOT);
     b.fx.refresher.queueDirectory(SLOT);
     // While it is queued a miss says so, whatever the window.
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
-    expect(b.sent).toHaveLength(4);
+    expect(b.sent).toHaveLength(6);
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(8);
+    expect(b.sent).toHaveLength(12);
     // Its window is counted from this fill, not the first one.
     b.clock.now = T + MIN + 10 * MIN - 1;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     b.clock.now = T + MIN + 10 * MIN;
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('refreshing');
     await b.fx.refresher.idle();
-    expect(b.sent).toHaveLength(12);
+    expect(b.sent).toHaveLength(18);
   });
 
   it('a replace while a refresh runs queues another: the running one stops and records nothing, the next fills for the new key', async () => {
@@ -1171,7 +1175,7 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     };
     b.fx.refresher.nameMiss(SLOT, D1);
     await b.fx.refresher.idle();
-    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_1, KEY_2, KEY_2, KEY_2, KEY_2]);
+    expect(b.sent.map((s) => s.auth)).toEqual([KEY_1, KEY_1, KEY_2, KEY_2, KEY_2, KEY_2, KEY_2, KEY_2]);
     expect(b.fx.refresher.directory.get(SLOT, D1)).toBeNull();
     expect(b.fx.refresher.directory.get(SLOT, valueDigestHex(KEY_2))).not.toBeNull();
   });
@@ -1241,13 +1245,17 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
     expect(b.fx.refresher.miss(listed)).toBe('refreshing');
     expect(b.fx.refresher.nameMiss(SLOT, D1)).toBe('unknown');
     await b.fx.refresher.idle();
-    expect(b.sent.slice(4).map((s) => s.query.split(' ')[1])).toEqual(['KeyCheck($after:']);
+    expect(b.sent.slice(6).map((s) => s.query.split(' ')[1])).toEqual(['KeyCheck($after:']);
   });
 
   it('keyed by slot and key digest: another key\'s lookup finds nothing', () => {
     const d = new LinearDirectory();
-    d.put(SLOT, D1, DIR, T);
+    d.put(SLOT, D1, DIR, T, 'read');
     expect(d.get(SLOT, D1)).toEqual(DIR);
+    expect(d.projectStatusesRead(SLOT, D1)).toBe('read');
+    expect(d.projectStatusesRead(SLOT, valueDigestHex(KEY_2))).toBeNull();
+    d.put(SLOT, D1, DIR, T, 'unread');
+    expect(d.projectStatusesRead(SLOT, D1)).toBe('unread');
     expect(d.get(SLOT, valueDigestHex(KEY_2))).toBeNull();
     expect(d.get({ source: 'legacy' }, D1)).toBeNull();
     expect(d.filledAt(SLOT, D1)).toBe(T);

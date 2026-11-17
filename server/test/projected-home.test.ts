@@ -18,7 +18,7 @@ import { readSharesMeasured, type SharesRead } from '../src/shares.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, LEAST_LOADED_ORGS, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
 import { CCD, ghContainedEnv, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
@@ -140,13 +140,18 @@ const seedAuthDeadMalformed = (byWrapper: Record<string, string>): void => {
  *  placement. */
 const shellScore = (wrapper: string): number => Number(sh(`_limit_score ${wrapper}`) || '0');
 
-/** DEFAULT_TEST_ROSTER with the case's pool tags applied. Built HERE and not in
- *  the fixture file: the fixture is the cross-language contract and imports
- *  nothing, exactly as it expresses `now` as a parameter for the same reason. */
+/** DEFAULT_TEST_ROSTER with the case's pool tags and the fixture's organization
+ *  labels (`LEAST_LOADED_ORGS`, which placement ignores on both sides) applied.
+ *  Built HERE and not in the fixture file: the fixture is the cross-language
+ *  contract and imports nothing, exactly as it expresses `now` as a parameter
+ *  for the same reason. */
 const rosterWithPools = (pools: Record<string, string> | undefined): unknown => ({
   ...DEFAULT_TEST_ROSTER,
-  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) =>
-    pools?.[a.id] !== undefined ? { ...a, pool: pools[a.id] } : a),
+  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => ({
+    ...a,
+    ...(LEAST_LOADED_ORGS[a.id] !== undefined ? { org: LEAST_LOADED_ORGS[a.id] } : {}),
+    ...(pools?.[a.id] !== undefined ? { pool: pools[a.id] } : {}),
+  })),
 });
 
 /** The case's project tag, on disk where BOTH readers look. */

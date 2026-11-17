@@ -313,7 +313,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs',
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days',
   'programme_remaining', 'programme_edges'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
@@ -421,6 +421,10 @@ describe(TABLES_PIN, () => {
       // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
       claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
       programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
+      // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
+      // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
+      decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
+      decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
       // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],

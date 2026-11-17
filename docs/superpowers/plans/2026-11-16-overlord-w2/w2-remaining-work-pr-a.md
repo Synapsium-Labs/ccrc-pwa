@@ -11,9 +11,9 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   site of a new lane source; `ccrc-api programme remaining`; the wave-boundary reference paragraph.
 - **Live at merge.** The door needs the box token, attribution and ownership. Nothing reads the two tables yet but the
   tests. `EDGE_CLEARING_SHIPPED` is `false`.
-- **Migration slot.** It is entry 86 by position on this branch after a third merge of `main` (the coordinator's word,
-  2026-11-17): portfolio B (#2904) landed 83, responses B (#2914) 84 and overlaps A (#2949) 85. Other open PRs hold 86 too;
-  whoever lands second renumbers at landing, on the coordinator's word.
+- **Migration slot.** It is entry 87 by position on this branch after a fourth merge of `main` (the coordinator's
+  standing license, 2026-11-17): portfolio B (#2904) landed 83, responses B (#2914) 84, overlaps A (#2949) 85 and decision
+  model A (#2948) 86. Other open PRs hold 87 too; whoever lands second renumbers at landing, on the coordinator's word.
 
 ## Departures, by slug
 
@@ -74,8 +74,8 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 - **The landing-order holder's consent is narrow.** It covers exactly two hunks of `server/src/coord/routes.ts` (the
   import and the registration beside the call record's) and, in `README.md`, `eighty-five` to `eighty-six` at
   `b99bc6390`. A recount at landing (another lane landing first) needs that holder's fresh consent for the new words.
-- **Counts re-derived after the third merge of `main`** (route 251 behind responses B's 250; HTTP 248, gated 152, exempt
-  95, unchanged by overlaps A, which adds no route; `user_version` 86; `run-close-switch.test.ts` replays thirty-three;
+- **Counts re-derived after the fourth merge of `main`** (route 252 behind the Linear hierarchy item route's 251; HTTP
+  249, gated 153, exempt 95; `user_version` 87; `run-close-switch.test.ts` replays thirty-four;
   `shared/programmeFacts.ts` holds overlaps A's block and this PR's, each under its own head; `token-shared.test.ts`'s seven-day holders stay
   seventeen, with `EDGE_UNMEASURABLE_AFTER_MS` in its own row; the lane words and the `ccrc-api` rows unchanged,
   since responses B's doors are session-gated and add no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
