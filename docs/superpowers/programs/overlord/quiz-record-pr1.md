@@ -90,7 +90,8 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
   two-arm stub walk of `arms --section quiz`, which needs signed W2 records.
 - **step0b-result-own-kind:** step 0b's result is written under the module's own kind at `quiz/step0b/<mode>.json`, and a
   resumed `arms` reads it rather than probing again: passed on the build this node runs, the arms go on (on another
-  build it probes again: fix round 1, F4); failed, the week needs a fresh `--out`.
+  build it probes again, fix round 1's F4, unless every question is already settled, fix round 2's F4-b); failed, the
+  week needs a fresh `--out`.
 - **one-week-one-release-pin:** `arms` pins the release at `quiz/arms-release.json`, so a resumed `arms` on another release
   refuses `release-moved`; the plan named only `report`'s check.
 - **module-local-words:** `in-session` and `release-moved` are the module's own words (`QUIZ_SINGLE_REASONS`), not
@@ -113,13 +114,14 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
   three readers refuse both files.
 - **F3:** `--budget` is one week's total. The judge's cap is `--budget` less the spend the week's ledger records outside
   the judge's rows (`judgeCapOf`), so a resumed judge neither counts its own rows twice nor starts on a fresh budget. A
-  cap at or under nothing refuses `budget-exhausted` before any spawn. The driver's judge runs each batch at its own
-  concurrency (2) under one gate pass, so it stops per batch. The header and the runbook say this, that the 70% limits
-  stop still bounds each account, and that the source phase's writer spend lands in `<OUT>`.
+  cap at or under nothing refuses `budget-exhausted` before any spawn. The gate runs before every spawn, so the ledger
+  can end at most two whole runs (the batch's concurrency) past a stop, and the arms' and the judge's overshoots do not
+  stack: the judge refuses once the arms' spend has reached `--budget`. The header and the runbook say this, that the
+  70% limits stop still bounds each account, and that the source phase's writer spend lands in `<OUT>`.
 - **F4:** a resumed `arms` reuses a passed step 0b result only when every build it probed is the fresh expected node's.
-  On any other build it probes again, before the next arm, and refuses `pilot-failed` on a failed probe. A re-probe's
-  round `k` runs under `quiz/step0b/<mode>.r<k>/`, because the driver's `runBatch` reuses a finished run of the same
-  name rather than spawning it again, and the result records its `round`.
+  On any other build it probes again, before the next arm, and refuses `pilot-failed` on a failed probe. Each round
+  runs under its own names, because the driver's `runBatch` reuses a finished run of the same name rather than
+  spawning it again, and the result records its `round` (the names carry the build too since fix round 2, F4-a).
 - **F5:** `report` recomputes the summary's `counts` and `answers` from the answer records (`summaryTallyOf`, which
   `singleSummaryOf` now uses too) and refuses `input-invalid arms-summary-mismatch` before it scores.
 - **F6:** `arms` refuses `out-refused` on a `--out` holding this setup's `setup.json`.
@@ -133,6 +135,37 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
   recompute dropped (F5).
 - Departures, by slug: **judge-cap-is-the-weeks-remainder** (the driver's own judge takes the whole budget again),
   **step0b-reprobe-rounds** (the `<mode>.r<k>` run names).
+
+## Fix round 2 (review 2422, the coordinator's rulings)
+
+- **F4-a:** every step 0b round, round 0 included, runs under `quiz/step0b/<mode>.<build>.r<k>/<run>`
+  (`step0bRoundName`). The build is the review's `v<version>`, folded to the run-name alphabet by `buildTokenOf`, since a
+  `--version` line such as `2.1.293 (Claude Code)` carries spaces and brackets: lower case, any other run of characters
+  one `-`, at most 24 characters, then 8 hex of the whole line's sha256, so two lines that fold alike still name apart
+  (`v2.1.293-claude-code-<8 hex>`). A probe stopped part-way on one build and resumed on another so runs fresh probes,
+  and never stamps the first build's finished runs as the second's. The case stops a re-probe after its turn-bound run
+  on one build (the limits row raised from the recheck stand-in), resumes on a third, and checks a fresh turn-bound run
+  and that every run the result names carries the third build's token; it is red on `c14d4d970`.
+- **F4-b:** `arms` measures the questions' states before step 0b. With every question settled, a passed result is
+  reused whatever build it probed: nothing runs on the new build, and the summary's step 0b sha stays true. A failed
+  result still refuses `pilot-failed`.
+- **F3-a:** the header, `judgeCapOf`'s doc, the runbook and the F3 bullet above say the gate runs before every spawn,
+  so the ledger can end at most two whole runs (the batch's concurrency) past a stop, and that the arms' and the judge's
+  overshoots do not stack.
+- **F1-a:** `openOut` first refuses `out-refused` on a `--out` with an ancestor holding the driver's marker, up to the
+  filesystem root, as spelled and through `realpath` (`refuseDriverAncestor`), before `prepareOut` makes anything. A
+  `<WEEK>` therefore never nests in a W2 run's `--out`, nor in the setup's `<OUT>`. Cases: a week nested in a W2 out, and
+  one reached through a symlink into a W2 out's subdirectory, each refused for `arms`, `judge` and `report`, with the W2
+  out's bytes unchanged.
+- **The review's note:** the runbook says a directory left holding only the driver's marker, by a stop between
+  `prepareOut` and the module's marker, is refused for good and is removed by hand.
+- The driver's bytes are unchanged by the round: the waiver's strip-and-`cmp` above prints `31`, then `identical`.
+- Measured red: the round's five new cases fail against `c14d4d970`'s module (F4-a on `expected 2 to be 3`, build C's
+  turn-bound run reused from build B). Mutants, each applied to a copy of the module and restored from it with `cmp`, all
+  4 killed: the ancestor walk dropped (F1-a, both cases), the realpath chain dropped (the symlink case), `reprobe`
+  always true (F4-b), and the round names without the build (F4-a, both naming cases).
+- Departures, by slug: **step0b-names-carry-the-build** (`buildTokenOf`'s fold and hash, where the review wrote
+  `v<version>`); **step0b-reprobe-rounds** now covers round 0 too (no round runs under the driver's `step0bRunName`).
 
 ## An incident to report
 

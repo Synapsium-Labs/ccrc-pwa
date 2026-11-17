@@ -47,6 +47,8 @@
 // --out holding this setup's setup.json. Its spawns use a transient directory under the system temp and run with the
 // account's real HOME and CLAUDE_CONFIG_DIR. --budget is one week's total, the arms and the judge together (OQ3's weekly
 // cap, 5M token-equivalents): the arms stop at it on the week's ledger, and the judge's cap is what the arms left of it.
+// The gate runs before every spawn, so the ledger can end at most two whole runs (the batch's concurrency) past a stop;
+// the arms' and the judge's overshoots do not stack, since the judge refuses once the arms' spend has reached --budget.
 // The 70% limits threshold still bounds each account's pool at every spawn, whichever stop comes first. The source
 // phase's writer spend lands in the setup's --out, not a week's. An
 // arm's admitted `ccrc history` read appends one arm-tagged counter line to the live spool, as W2's arms do (W2-D46).
@@ -72,13 +74,13 @@ import { DriverRefusal, LIMITS_DEFAULTS, OUT_JSON_CAP, QUIZ_META_FILE, SETTINGS_
   STEP0B_SYNTHETIC_TRANSCRIPT, STOP_SIGNALS, TREATMENT_ARM, admissionCheckOf, admitAccount, armAttemptsOf, armBatchCount, armBatchPreflight,
   armJob, batchGate, armPayloads, armToolsOf, claimOut, codeShas, denialCheckOf, driverWordClass, drawSeedHex, ensurePlainDir, familiesOf,
   finishedOutcome, frozenEntryOf, frozenListText, initChecksOf, judgeItemsOf, judgeJobsOf, judgeMapOf, judgeSpentOf, judgeMapText, loadFrozen, loadInput,
-  lstatOrNull, measureClaudeVersion, mergeSourced, onStopSignal, openJudge, openReplayStore, openWriter, paneRefusal, parseArgs,
+  OUT_MARKER as DRIVER_OUT_MARKER, lstatOrNull, measureClaudeVersion, mergeSourced, onStopSignal, openJudge, openReplayStore, openWriter, paneRefusal, parseArgs,
   persistenceCheckOf, persistenceMeasured, pinOutBytes, prepareOut, preflightSpawn, probeFindingOf, qidOf, questionCountsOf,
   questionStateOf, quizMetaReport, readAnswerRecords, readArmAnswers, readArmManifests, readPlain, readReleaseStamp, readRoster,
   recheckBatch, refuse, refuseColonInRealOut, refuseIfStopping, refuseOpusModel, refuseOutOfRangeValues, refuseRecallOff,
   refuseSpawnAdmission, refuseSyntheticPresent, refuseUnusableInputs, refuseWriterModel, requireListed, rosterConfigDirs, runBatch,
   settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spendLinesOf, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
-  step0bRunName, step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
+  step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
   warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
 
 const PREFIX = 'ccrc history-quiz-single';
@@ -345,8 +347,10 @@ function loadOwn(flags, name, kind, setupSha256) {
  *  directory prepareOut has just made; an existing directory must already hold it, exactly OUT_KIND. So any other
  *  directory, a W2 run's --out (the driver's marker alone) above all, refuses out-refused before anything is written:
  *  this file never writes answers, batches or spend rows into a W2 run (skip condition 2). The reverse, the driver's
- *  checkOut accepting a single-arm --out, is in a gate code file and stays a residual (the task note). */
+ *  checkOut accepting a single-arm --out, is in a gate code file and stays a residual (the task note). Nor is any --out
+ *  inside a directory the driver made (refuseDriverAncestor), so a week never nests in a W2 run's --out either. */
 function openOut(outArg) {
+  refuseDriverAncestor(outArg);
   let fresh = false;
   try { lstatSync(path.resolve(outArg)); } catch (e) { fresh = e?.code === 'ENOENT'; }
   const out = prepareOut(outArg);
@@ -356,6 +360,31 @@ function openOut(outArg) {
   else if (read.state === 'absent') refuse('out-refused', `${OUT_MARKER} absent: this --out was not made by this file, and is never adopted`);
   else if (read.state !== 'bytes' || read.bytes.toString('utf8') !== `${OUT_KIND}\n`) refuse('out-refused', `${OUT_MARKER} is not this file's marker`);
   return out;
+}
+/** Every ancestor of --out, up to the filesystem root, as spelled and through realpath (a symlink into a W2 run's --out),
+ *  must not hold the driver's marker: a week inside a W2 run's --out would put its runs within reach of W2's own claim
+ *  walk and its spend onto W2's ledger (review 2422's F1-a). Checked before prepareOut makes anything. A marker that
+ *  cannot be measured refuses too, never read as absent.  @param {string} outArg */
+function refuseDriverAncestor(outArg) {
+  const lexical = path.resolve(outArg);
+  const chainOf = (from) => {
+    const dirs = [];
+    for (let d = from; ; d = path.dirname(d)) { dirs.push(d); if (path.dirname(d) === d) return dirs; }
+  };
+  let real = null;
+  for (const d of chainOf(path.dirname(lexical))) {
+    try { real = realpathSync(d); break; } catch (e) {
+      if (e?.code !== 'ENOENT' && e?.code !== 'ENOTDIR') refuse('out-refused', `${d} unreadable ${e?.code ?? 'error'}`);
+    }
+  }
+  for (const d of new Set([...chainOf(path.dirname(lexical)), ...(real === null ? [] : chainOf(real))])) {
+    const at = path.join(d, DRIVER_OUT_MARKER);
+    try { lstatSync(at); } catch (e) {
+      if (e?.code === 'ENOENT' || e?.code === 'ENOTDIR') continue;
+      refuse('out-refused', `${at} unreadable ${e?.code ?? 'error'}`);
+    }
+    refuse('out-refused', `--out is inside ${d}, which holds the driver's marker ${DRIVER_OUT_MARKER}: a week never runs inside a W2 run's --out, or the setup's`);
+  }
 }
 /** The account from the roster (W2-D52) and the no-spawn admission (the roster, the account, the wrapper, the limits row
  *  and the files' preflight against what is measured now), before --out exists. */
@@ -552,7 +581,10 @@ function pinArmsRelease(out, setupSha256, release) {
  *  written whatever it shows; a failure refuses `pilot-failed` before any arm spawns. A result already here for this
  *  setup is read: failed, the week needs a fresh --out; passed, it is reused only when every build it probed is the
  *  fresh expected node's, and on any other build step 0b runs again, over it, before the next arm (the coordinator's
- *  ruling on review 2409's F4: no arm runs on a build step 0b never probed). */
+ *  ruling on review 2409's F4: no arm runs on a build step 0b never probed). With no arm left to run (c.reprobe false,
+ *  every question settled) a passed result is reused whatever build it probed: nothing runs on the new build, and the
+ *  summary's step 0b sha stays true (review 2422's F4-b). Every round's runs are named by the build and the round
+ *  (step0bRoundName), so a resumed probe only ever reuses finished runs of its own build (review 2422's F4-a). */
 async function step0bOf(c) {
   const rel = step0bRel(c.settingsMode);
   const have = readPlain(path.join(c.out, rel), OUT_JSON_CAP);
@@ -566,13 +598,17 @@ async function step0bOf(c) {
     if (r.passed !== true) refuse('pilot-failed', `${rel} records a failed step 0b: run the week again on a fresh --out`);
     const versions = r.batches.map((b) => b?.claude_code_version);
     if (versions.length > 0 && versions.every((v) => v === c.expected.claude_code_version)) return { rel, sha256: shaOfPlain(c.out, rel), versions };
+    if (!c.reprobe) {
+      process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: every question is settled, so nothing runs and step 0b is not probed again\n`);
+      return { rel, sha256: shaOfPlain(c.out, rel), versions };
+    }
     process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: probing again\n`);
     round = (Number.isSafeInteger(r.round) && r.round >= 0 ? r.round : 0) + 1;
   } else if (have.state !== 'absent') refuse('out-refused', `${rel} is unreadable`);
   const { launch, out, model, settingsMode, lang, gate, claim, q, home } = c;
-  // Round 0's runs carry the driver's step 0b names; a re-probe's round k runs under `<mode>.r<k>`, since the driver's
-  // runBatch reuses a finished run of the same name rather than spawning it again.
-  const nameOf = (run) => (round === 0 ? step0bRunName(SECTION, settingsMode, run) : `${SECTION}/step0b/${settingsMode}.r${round}/${run}`);
+  // The driver's runBatch reuses a finished run of the same name rather than spawning it again, and a run's record names
+  // no build: so every round, round 0 included, runs under its build and its round.
+  const nameOf = (run) => step0bRoundName(settingsMode, c.expected.claude_code_version, round, run);
   const spawnPre = () => preflightSpawn({ launch, home, out, lang, gate, expected: c.expected });
   const batches = [];
   const pre0 = await spawnPre();
@@ -614,6 +650,23 @@ async function step0bOf(c) {
   writePlain(out, rel, `${canonicalJson(output)}\n`);
   if (!verdict.passed) refuse('pilot-failed', step0bFailureDetail(settingsMode, checks, verdict));
   return { rel, sha256: shaOfPlain(out, rel), versions: batches.map((b) => b.claude_code_version) };
+}
+
+/** A build's token in step 0b's run names: its `--version` line folded to the run-name alphabet (lower case, any other
+ *  run of characters one `-`, at most 24 characters), then 8 hex of the whole line's sha256, so two lines that fold
+ *  alike still name apart. Pure.  @param {string} version  @returns {string} */
+export function buildTokenOf(version) {
+  if (typeof version !== 'string' || version === '') throw new TypeError(`buildTokenOf: ${JSON.stringify(version)} is not a version line`);
+  const slug = version.toLowerCase().replace(/[^a-z0-9.]+/g, '-').slice(0, 24).replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, '');
+  return `v${slug}-${sha256Hex(version).slice(0, 8)}`;
+}
+/** One step 0b run's name in round `round` on build `version`: `quiz/step0b/<mode>.<build token>.r<round>/<run>`, four
+ *  levels as RUN_NAME_RE allows (the review's `<mode>.v<version>.r<k>`, the version folded by buildTokenOf). Pure.
+ *  @param {string} settingsMode  @param {string} version  @param {number} round  @param {string} run  @returns {string} */
+export function step0bRoundName(settingsMode, version, round, run) {
+  if (!SETTINGS_MODES.includes(settingsMode)) throw new TypeError(`step0bRoundName: settings mode ${JSON.stringify(settingsMode)}`);
+  if (!Number.isSafeInteger(round) || round < 0) throw new TypeError(`step0bRoundName: round ${String(round)}`);
+  return `${SECTION}/step0b/${settingsMode}.${buildTokenOf(version)}.r${round}/${run}`;
 }
 
 /** The summary from the one arm's states as they stand, rewritten whole. Each answered question's answer field and
@@ -673,13 +726,17 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
       pinArmsRelease(out, setup.sha256, expected.release_stamp);
       const armed = armedWordsOf(home, ids);
-      const step0b = await step0bOf({ setupSha256: setup.sha256, storeId, out, home, launch, gate, claim, expected, model: s.arm_model,
-        settingsMode: s.settings_mode, lang: env.LANG, limits: s.limits, q: questions[0], cardCtx, transcript, timeoutMs: deps.timeoutMs });
       const ctx = {
         section: SECTION, home, out, rs, storeId, launch, gate, expected, allowCodeChange: false, deps, configDirs, model: s.arm_model,
         settingsMode: s.settings_mode, lang: env.LANG, timeoutMs: deps.timeoutMs, recordSha256: setup.sha256, shaMinPrefix: s.labeller.sha_min_prefix,
         budget: { in_force: s.budget }, stamps: new Set(), moves: [], runVersions: new Map(),
       };
+      // An arm left to run, measured before step 0b: with none, a passed step 0b result is never probed again (F4-b).
+      const open = singleStatesOf(ctx, questions);
+      settleAnswers(ctx, open);
+      const step0b = await step0bOf({ setupSha256: setup.sha256, storeId, out, home, launch, gate, claim, expected, model: s.arm_model,
+        settingsMode: s.settings_mode, lang: env.LANG, limits: s.limits, q: questions[0], cardCtx, transcript, timeoutMs: deps.timeoutMs,
+        reprobe: open.some((st) => st.next.length > 0) });
       const run = { setupSha256: setup.sha256, frozenSha256: fz.sha256, budget: s.budget, startedMs, armed, step0b };
       let states;
       try {
@@ -755,8 +812,9 @@ export function judgeJobsAgreed({ items, map, idx, freshIdx }) {
 }
 
 /** The judge's cap: the setup's --budget less the spend this week's ledger records outside the judge's own rows. --budget
- *  is the week's total (the operator's weekly cap), so the arms and the judge together never pass it, where the driver's
- *  judge would take the whole budget again. The driver's judge gate counts only judge rows against its cap, so a resumed
+ *  is the week's total (the operator's weekly cap), where the driver's judge would take the whole budget again. The gate
+ *  runs before every spawn, so the ledger can end at most two whole runs (the batch's concurrency) past it; the arms' and
+ *  the judge's overshoots do not stack, since the judge refuses here once the arms' spend has reached --budget. The driver's judge gate counts only judge rows against its cap, so a resumed
  *  judge neither counts its own rows twice nor starts on a fresh budget: it stops where the first one would have. A cap
  *  at or under nothing refuses `budget-exhausted` before any spawn.  @param {string} out  @param {number} budget */
 function judgeCapOf(out, budget) {

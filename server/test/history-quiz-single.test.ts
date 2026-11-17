@@ -8,7 +8,7 @@
 // runs a writing form of `ccrc history`, and no fixture names a real account, host or path.
 import { describe, expect, it, vi } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import * as qsMod from '../../deploy/history-quiz-single.mjs';
@@ -662,6 +662,39 @@ describe('fix round 1: a --out the module did not make is never adopted (F1), an
     expect(existsSync(join(w2, '.ccrc-history-quiz-single'))).toBe(false);
   });
 
+  it('a --out nested in a W2 run\'s --out, as spelled or through a symlink into it, is refused for arms, judge and report, before anything is made (F1-a)', async () => {
+    const f = await reportFixture();
+    const w2 = D.prepareOut(freshOut('w2')) as string;
+    mkdirSync(join(w2, 'deep'), { mode: 0o700 });
+    writeFileSync(join(w2, 'spend.jsonl'), '', { mode: 0o600 });
+    const link = join(mkTmp('ccrc-qs-link-'), 'into-w2');
+    symlinkSync(join(w2, 'deep'), link);
+    const before = tree(w2);
+    const spawned = runs(f.home).length;
+    for (const [where, out] of [['nested', join(w2, 'week')], ['nested deeper', join(w2, 'deep', 'week')], ['through a symlink', join(link, 'week')]] as const) {
+      const forms: Array<[string, string[]]> = [
+        ['arms', ['arms', '--out', out, ...inp('setup', f.s), ...inp('frozen', f.fz)]],
+        ['judge', ['judge', '--out', out, ...inp('setup', f.s), ...inp('frozen', f.fz), ...inp('arms-summary', f.sum)]],
+        ['report', ['report', '--out', out, ...inp('setup', f.s), ...inp('frozen', f.fz), ...inp('arms-summary', f.sum), ...inp('judged', f.judged)]],
+      ];
+      for (const [name, argv] of forms) {
+        const r = await run(f.home, argv, FAKE);
+        expect(r.refusal, `${name}, ${where}`).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^--out is inside .*, which holds the driver's marker \.ccrc-history-replay: /) });
+        expect(tree(w2), `${name}, ${where}: nothing made in the W2 --out`).toEqual(before);
+      }
+    }
+    expect(runs(f.home).length, 'nothing was spawned').toBe(spawned);
+  });
+
+  it('a week nested in the setup\'s --out is refused the same way (F1-a)', async () => {
+    const w = await week();
+    const before = tree(w.s.out);
+    const r = await run(w.home, ['arms', '--out', join(w.s.out, 'week'), ...inp('setup', w.s), ...inp('frozen', w.fz)], FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^--out is inside /) });
+    expect(tree(w.s.out)).toEqual(before);
+    expect(runs(w.home)).toEqual([]);
+  });
+
   it('arms refuses a --out holding this setup\'s setup.json, before its claim and any spawn', async () => {
     const w = await week();
     const before = tree(w.s.out);
@@ -675,8 +708,9 @@ describe('fix round 1: a --out the module did not make is never adopted (F1), an
 describe('fix round 1: --budget is the week\'s, the arms and the judge together (F3)', () => {
   it('the judge\'s cap is what the arms left of --budget, and a resumed judge stops at the same point', async () => {
     const w = await week();
-    // Each judge run spends 65 and labels nothing, so every job owes a second attempt: the driver's judge runs a batch of
-    // its two jobs at its own concurrency (2) under one gate pass, then the gate stops the second attempts' batch.
+    // Each judge run spends 65 and labels nothing, so every job owes a second attempt. The gate runs before every spawn,
+    // and the batch's two jobs start at the judge's concurrency (2) before either has spent: both pass a cap of 1, and the
+    // gate stops the first spawn of the second attempts' batch. That is the bound: two whole runs past the stop.
     writeFileSync(join(w.home, STUB_DIR, 'default.jsonl'), stream({ text: 'LABEL: fixture' }));
     const scratch = freshOut('measure');
     expect((await run(w.home, ['arms', '--out', scratch, ...inp('setup', w.s), ...inp('frozen', w.fz)], FAKE)).refusal).toBeNull();
@@ -719,30 +753,107 @@ describe('fix round 1: --budget is the week\'s, the arms and the judge together 
   });
 });
 
-describe('fix round 1: a resumed arms probes step 0b again on a build it never probed (F4)', () => {
+describe('fix rounds 1 and 2: a resumed arms probes step 0b again on a build it never probed, under that build\'s names (F4)', () => {
   const step0bRuns = (home: string): number => runs(home).length - questionRuns(home).length;
+  const turnRuns = (home: string): number => runs(home).filter((r) => r.stdin === D.TURN_PROBE_PROMPT).length;
+  const resultOf = (w: { out: string; mode: string }): R => json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+  /** The account's limits row at `pct` (the gate stops at 70). */
+  const limitsAt = (home: string, pct: number): void => {
+    const nowS = Math.floor(Date.now() / 1000);
+    writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: pct, seven: pct, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+  };
+  /** FAKE, with the limits row raised past the threshold from the recheck stand-in once `when` holds: the next spawn's gate
+   *  stops the run there (limits-threshold), a real stop at a chosen point. Every step 0b card asks recheck of the one
+   *  question it reads, and the arms' preflight of its whole pending batch, each before its spawns. */
+  const tripWhen = (home: string, when: (es: R[]) => boolean): R => ({ ...FAKE,
+    recheck: async (rs: unknown, es: R[]): Promise<Map<string, R>> => { if (when(es)) limitsAt(home, 90); return (FAKE.recheck as (a: unknown, b: R[]) => Promise<Map<string, R>>)(rs, es); } });
+  const armsPreflight = (es: R[]): boolean => es.length > 1;
+  /** A week whose first arms passes step 0b on 2.9.1, then stops before any question runs. */
+  async function stoppedAfterStep0b() {
+    const w = await week();
+    const r = await run(w.home, w.argv(), tripWhen(w.home, armsPreflight));
+    expect(r.refusal?.word, 'fixture: stopped after step 0b').toBe('limits-threshold');
+    expect(questionRuns(w.home), 'fixture: no question ran').toEqual([]);
+    expect(resultOf(w).passed).toBe(true);
+    limitsAt(w.home, 10);
+    return w;
+  }
+  const token = (v: string): string => QS.buildTokenOf(v) as string;
 
-  it('the same build reuses the passed result; another build probes again before the next arm, and its result replaces the old', async () => {
+  it('every round\'s runs carry the build and the round: round 0 under the first build\'s token', async () => {
     const w = await week();
     expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const names = (resultOf(w).runs as R[]).map((x) => x.name as string);
+    expect(names.length).toBeGreaterThan(1);
+    for (const n of names) expect(n.startsWith(`quiz/step0b/${w.mode}.${token('2.9.1 (Claude Code)')}.r0/`), n).toBe(true);
+    expect(token('2.9.1 (Claude Code)')).toMatch(/^v2\.9\.1-claude-code-[0-9a-f]{8}$/);
+    expect(token('2.9.1 (Claude Code)'), 'two lines that fold alike still name apart').not.toBe(token('2.9.1 [claude code]'));
+  });
+
+  it('the same build reuses the passed result; another build, with questions still to run, probes again before the next arm', async () => {
+    const w = await stoppedAfterStep0b();
     const n = step0bRuns(w.home);
     expect(n, 'fixture: step 0b ran').toBeGreaterThan(0);
-    const same = await run(w.home, w.argv(), FAKE);
-    expect(same.refusal).toBeNull();
+    const same = await run(w.home, w.argv(), tripWhen(w.home, armsPreflight));
+    expect(same.refusal?.word, 'stopped again at the arms\' preflight, past step 0b').toBe('limits-threshold');
+    expect(same.stderr).not.toMatch(/probing again/);
     expect(step0bRuns(w.home), 'the build it probed: reused').toBe(n);
+    limitsAt(w.home, 10);
     writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
     const moved = await run(w.home, w.argv(), FAKE);
     expect(moved.refusal).toBeNull();
     expect(moved.stderr).toMatch(/step 0b probed 2\.9\.1 \(Claude Code\), this node runs 2\.9\.2 \(Claude Code\): probing again/);
     expect(step0bRuns(w.home), 'another build: probed again').toBe(2 * n);
-    const res = json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    const res = resultOf(w);
+    expect(res.round).toBe(1);
     expect(new Set((res.batches as R[]).map((b) => b.claude_code_version))).toEqual(new Set(['2.9.2 (Claude Code)']));
+    expect(questionRuns(w.home).length, 'then the arms ran').toBeGreaterThan(0);
     expect(json(join(w.out, 'quiz', 'arms-summary.json')).step0b.sha256).toBe(shaOfFile(join(w.out, 'quiz', 'step0b', `${w.mode}.json`)));
   });
 
-  it('a re-probe that fails refuses pilot-failed, records the failure, and leaves the summary as it was', async () => {
+  it('a probe stopped part-way on one build and resumed on another runs fresh probes, never the first build\'s runs (F4-a)', async () => {
+    const w = await stoppedAfterStep0b();
+    const a = resultOf(w);
+    const aSha = shaOfFile(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    expect(turnRuns(w.home)).toBe(1);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const atB = turnRuns(w.home);
+    const b = await run(w.home, w.argv(), tripWhen(w.home, () => turnRuns(w.home) > atB));
+    expect(b.refusal?.word, 'build B: stopped after its round\'s turn-bound run').toBe('limits-threshold');
+    expect(turnRuns(w.home), 'B\'s turn-bound run finished').toBe(2);
+    expect(shaOfFile(join(w.out, 'quiz', 'step0b', `${w.mode}.json`)), 'no result was written for B').toBe(aSha);
+    limitsAt(w.home, 10);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.3 (Claude Code)\n');
+    const c = await run(w.home, w.argv(), FAKE);
+    expect(c.refusal).toBeNull();
+    expect(turnRuns(w.home), 'build C ran its own turn-bound run, B\'s was not reused').toBe(3);
+    const res = resultOf(w);
+    expect(res.round).toBe((a.round as number) + 1);
+    const names = [...(res.runs as R[]).map((x) => x.name as string), ...(res.batches as R[]).flatMap((x) => x.runs as string[])];
+    for (const n of names) expect(n.startsWith(`quiz/step0b/${w.mode}.${token('2.9.3 (Claude Code)')}.r1/`), n).toBe(true);
+    expect(names.some((n) => n.includes(token('2.9.2 (Claude Code)'))), 'no run of B is recorded').toBe(false);
+    expect(new Set((res.batches as R[]).map((x) => x.claude_code_version))).toEqual(new Set(['2.9.3 (Claude Code)']));
+  });
+
+  it('a resumed arms with every question settled does not probe again on a moved build: nothing runs, and the summary\'s step 0b sha stays true (F4-b)', async () => {
     const w = await week();
     expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const step0bPath = join(w.out, 'quiz', 'step0b', `${w.mode}.json`);
+    const sha = shaOfFile(step0bPath);
+    const all = runs(w.home).length;
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const noSkill = stream({ skills: [], session: 'fixture-qs-noskill', calls: [{ command: 'x' }] });
+    plantStep0b(w.home, w.mode, Object.fromEntries((D.STEP0B_PROBES as string[]).map((p) => [p, noSkill])));   // a probe now would fail
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toBeNull();
+    expect(r.stderr).toMatch(/every question is settled, so nothing runs and step 0b is not probed again/);
+    expect(runs(w.home).length, 'nothing ran on the new build').toBe(all);
+    expect(shaOfFile(step0bPath), 'the passed result stands').toBe(sha);
+    expect(json(join(w.out, 'quiz', 'arms-summary.json')).step0b.sha256).toBe(sha);
+  });
+
+  it('a re-probe that fails refuses pilot-failed, records the failure, and leaves the summary as it was', async () => {
+    const w = await stoppedAfterStep0b();
     const sumPath = join(w.out, 'quiz', 'arms-summary.json');
     const sum = shaOfFile(sumPath);
     writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
@@ -750,8 +861,9 @@ describe('fix round 1: a resumed arms probes step 0b again on a build it never p
     plantStep0b(w.home, w.mode, Object.fromEntries((D.STEP0B_PROBES as string[]).map((p) => [p, noSkill])));
     const r = await run(w.home, w.argv(), FAKE);
     expect(r.refusal?.word).toBe('pilot-failed');
-    expect(json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`))).toMatchObject({ passed: false });
+    expect(resultOf(w)).toMatchObject({ passed: false });
     expect(shaOfFile(sumPath), 'no summary after a failed probe').toBe(sum);
+    expect(questionRuns(w.home), 'no question ran').toEqual([]);
     expect((await run(w.home, w.argv(), FAKE)).refusal?.word, 'and the week stays failed').toBe('pilot-failed');
   });
 });
