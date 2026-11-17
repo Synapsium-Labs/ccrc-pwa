@@ -5,6 +5,7 @@ import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
   requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
+import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
 const U = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -495,6 +496,7 @@ describe('M5: what a deferral is (L1, D-8182)', () => {
     ['store-unreadable', { why: 'failure', wait: 'backoff' }],
     ['created-without-id', { why: 'failure', wait: 'backoff' }],
     ['workspace-blocked', { why: 'failure', wait: 'until' }],
+    ['not-configured', { why: 'failure', wait: 'backoff' }],
     ['directory-missing', { why: 'wait', wait: 'directory' }],
     ['viewer-unknown', { why: 'wait', wait: 'directory' }],
     ['initiatives-unknown', { why: 'wait', wait: 'backoff' }],
@@ -633,5 +635,33 @@ describe('uuidOf (D-8183)', () => {
     expect(requestIdOf('epic', 2, 'ws-a')).toBe(uuidOf('epic:2:ws-a'));
     expect(uuidOf('inbound:L1')).not.toBe(uuidOf('inbound:L2'));
     expect(uuidOf('inbound:L1')).toBe(uuidOf('inbound:L1'));
+  });
+});
+
+describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
+  const steps = [30_000, 120_000, 600_000, 1_800_000];
+  it('a key word holds the workspace on the failure-hold steps, the last repeating, and mails the owner', () => {
+    const a = inboundActVerdict('linear-unauthorised', undefined, { now: 1000, backoffSteps: steps });
+    expect(a).toEqual({ kind: 'retry', mailsOwner: true, hold: { until: 31_000, step: 1 } });
+    const b = inboundActVerdict('not-configured', a.kind === 'retry' ? a.hold : undefined, { now: 40_000, backoffSteps: steps });
+    expect(b).toEqual({ kind: 'retry', mailsOwner: true, hold: { until: 160_000, step: 2 } });
+    const z = inboundActVerdict('not-configured', { until: 0, step: 9 }, { now: 0, backoffSteps: steps });
+    expect(z).toMatchObject({ hold: { until: 1_800_000 } });
+  });
+  it('another retry word holds without mailing; any other word gives up', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', mailsOwner: false });
+    for (const w of ['linear-forbidden', 'not-found', 'linear-invalid', 'workspace-blocked']) expect(inboundActVerdict(w, undefined, { now: 0, backoffSteps: steps })).toEqual({ kind: 'give-up' });
+  });
+  it('inboundHeld is true strictly before until', () => {
+    expect(inboundHeld(undefined, 5)).toBe(false);
+    expect(inboundHeld({ until: 10, step: 1 }, 9)).toBe(true);
+    expect(inboundHeld({ until: 10, step: 1 }, 10)).toBe(false);
+  });
+  it('givenUpReason marks the reason and givenUpWord reads it back', () => {
+    expect(givenUpReason('noise', 'linear-forbidden')).toBe('noise [not closed in Linear: linear-forbidden]');
+    expect(givenUpReason(null, 'not-found')).toBe('[not closed in Linear: not-found]');
+    expect(givenUpWord('noise [not closed in Linear: linear-forbidden]')).toBe('linear-forbidden');
+    expect(givenUpWord('noise')).toBeNull();
+    expect(givenUpWord(null)).toBeNull();
   });
 });

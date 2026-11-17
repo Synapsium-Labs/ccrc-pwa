@@ -21,10 +21,10 @@ import { tx } from '../coord/tx.js';
 import { linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
-import { answeredMail, closeCommentBody, closeRefusedMail, inboundActVerdict, inboundMail, noCancelMail, ownerItemInput } from './inboundPolicy.js';
+import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundMail, keyWaitMail, noCancelMail, ownerItemInput, type InboundHold } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
-import { slotsOf } from './planSync.js';
+import { PLAN_SYNC_BACKOFF_MS, slotsOf } from './planSync.js';
 import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
 
@@ -39,8 +39,9 @@ function factsOf(n: Node): { linearId: string; identifier: string; teamKey: stri
 }
 
 export class InboundLane {
-  /** The closes Linear refused for good in this process (`refused`): never sent again. */
-  private readonly givenUp = new Set<string>();
+  /** The workspaces whose key Linear or the proxy refused, or that have none, held in this process: their closes wait (`refused`).
+   *  A restart forgets it, which costs one call, and the next refusal holds again. A successful close write clears it. */
+  private readonly holds = new Map<string, InboundHold>();
 
   constructor(private readonly deps: Deps) {}
 
@@ -157,7 +158,7 @@ export class InboundLane {
       const slot = slots.get(row.workspaceId);
       const entries = slot === undefined ? null : directory.get(slot.ref, slot.digest);
       if (slot === undefined || entries === null) continue;
-      if (this.gaveUp(row)) continue;                       // Linear refused this close once: never sent again
+      if (inboundHeld(this.holds.get(row.workspaceId), this.deps.now())) continue;   // the workspace's key waits: nothing is sent
       const canceled = statusOfType(entries, 'issue', 'canceled', row.teamKey);
       if (canceled === null) { this.mailNoCancel(row); continue; }
       await planSync.withFlight(`inbound:${row.linearId}`, async () => {
@@ -169,6 +170,7 @@ export class InboundLane {
           input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
         });
         if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment.word); return; }
+        this.holds.delete(row.workspaceId);                 // a write landed: the key works
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
         if (update.ok) plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
         else this.refused(fresh, update.word);
@@ -176,17 +178,20 @@ export class InboundLane {
     }
   }
 
-  /** A refused close write: a word that may clear waits for the next beat; any other gives the close up with the owner's one
-   *  mail (`inboundActVerdict`), and is never sent again (`gaveUp`). */
+  /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold
+   *  schedule (and, for a key word, mails the owner once). Any other word gives the close up: the row is written FIRST (`actedAt`
+   *  set, so `act` skips it for good, across restarts; the reason carries the refusal), and only then is the owner mailed once. */
   private refused(row: InboundRow, word: string): void {
-    if (inboundActVerdict(word) === 'retry') return;
-    this.givenUp.add(row.linearId);
+    const now = this.deps.now();
+    const v = inboundActVerdict(word, this.holds.get(row.workspaceId), { now, backoffSteps: PLAN_SYNC_BACKOFF_MS });
+    if (v.kind === 'retry') {
+      this.holds.set(row.workspaceId, v.hold);
+      if (v.mailsOwner) this.mailOwnerOnce(row, keyWaitMail(row));
+      return;
+    }
+    this.deps.plan.setInboundState(row.linearId, { actedAt: now, reason: givenUpReason(row.reason, word) });
     this.mailOwnerOnce(row, closeRefusedMail(row, word));
   }
-
-  /** Whether this close was given up in this process. The owner's mail is the durable record (sent once per owner); a restart
-   *  forgets the set, so a refused close costs at most one more call per restart, never one per beat. */
-  private gaveUp(row: InboundRow): boolean { return this.givenUp.has(row.linearId); }
 
   private mailNoCancel(row: InboundRow): void { this.mailOwnerOnce(row, noCancelMail(row)); }
 

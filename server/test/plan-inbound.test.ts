@@ -15,6 +15,7 @@ import { answerMasked, MASKED_GET_ROUTES } from '../src/server.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import { DriftPass } from '../src/linear/driftPass.js';
 import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
+import { givenUpWord } from '../src/linear/inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from '../src/linear/journal.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
@@ -48,7 +49,7 @@ interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
   asks: CcrcOpAsk[]; presence: Record<string, CoordinatorPresence>; presenceFn: { current: (id: string) => CoordinatorPresence };
   viaCalls: string[][]; fleet: { ids: Set<string> };
-  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' };
+  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
 }
 let counter = 3000;
@@ -96,7 +97,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as 'linear-forbidden' | 'unreachable' },
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' },
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
@@ -490,8 +491,10 @@ describe('plan triage (D-8183)', () => {
     await passAt(r, r.t.now + 1);
     expect(r.asks.filter((a) => a.op === 'issueUpdate')).toEqual([]);
     expect(rowOf(r, 12)!.actedAt).toBeNull();
-    r.lin.fail.clear();
     await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(1);       // held on the failure-hold step (30 s), not retried every beat
+    r.lin.fail.clear();
+    await passAt(r, r.t.now + 30_000);
     expect(rowOf(r, 12)!.actedAt).not.toBeNull();
   });
 
@@ -503,14 +506,84 @@ describe('plan triage (D-8183)', () => {
       r.lin.failWord = 'linear-forbidden';
       r.lin.fail.add(op);
       await passAt(r, r.t.now + 1);
+      const gaveUpAt = r.t.now;
       const sentOnce = r.asks.filter((a) => a.op === op).length;
       expect(sentOnce).toBe(1);
       await passAt(r, r.t.now + 1);
       await passAt(r, r.t.now + 1);
       expect(r.asks.filter((a) => a.op === op)).toHaveLength(1);              // never sent again: no retry spends the lane
-      expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+      expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: gaveUpAt });          // the give-up is the row's: actedAt is when ccrc gave up
+      expect(givenUpWord(rowOf(r, 12)!.reason)).toBe('linear-forbidden');
+      expect(rowOf(r, 12)!.reason).toMatch(/^noise \[not closed in Linear: linear-forbidden\]$/);
       expect(mails(r, 'Linear inbound: AAA-12 could not be closed%').map((m) => m.toId)).toEqual([OWNER]);
     }
+  });
+
+  // A7: with no owner the give-up used to leave no durable record at all (the owner's mail was the only one).
+  it('a close Linear refuses in a team with no owner is recorded on the row, and no mail is sent (A7)', async () => {
+    const r = await rig({ named: null, progs: false });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'noise' });
+    r.lin.failWord = 'linear-forbidden';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: r.t.now });
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBe('linear-forbidden');
+    expect(mails(r)).toEqual([]);
+    // With no owner to mail, the project's upkeep read shows the close that was given up (the coordinator's ruling on A7).
+    const upkeep = (await r.app.inject({ method: 'GET', url: '/api/projects/project-a/upkeep' })).json() as { notClosed: unknown[] };
+    expect(upkeep.notClosed).toEqual([{ identifier: 'AAA-12', teamKey: 'AAA', word: 'linear-forbidden', at: r.t.now }]);
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(1);
+  });
+
+  // A8: the give-up lived in process memory, so a restart sent the comment and the cancel again.
+  it('a refused cancel stays given up across a restart: a new lane makes no Linear call (A8)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'linear-forbidden';
+    r.lin.fail.add('issueUpdate');
+    await passAt(r, r.t.now + 1);
+    expect(writes(r).map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    r.asks.length = 0;
+    const restarted = new DriftPass({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), call: async (a) => { r.asks.push(a); return ok(); },
+      now: () => r.t.now, directory: { get: () => r.lin.directory, filledAt: () => T - 1000, projectStatusesRead: () => 'read' as const }, presenceOf: (id) => r.presenceFn.current(id),
+      viaFleet: () => new Set<string>(),
+    });
+    r.t.now += DRIFT_PASS_MS + 1;
+    await restarted.tick(r.t.now);
+    expect(writes(r)).toEqual([]);
+  });
+
+  // F8: a key refusal is workspace-wide and only a person clears it: it backs off on the plan sync's failure-hold schedule.
+  it('a refused Linear key backs off on the failure-hold steps and mails the owner once (F8)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'linear-unauthorised';
+    r.lin.fail.add('issueComment');
+    const comments = (): number => r.asks.filter((a) => a.op === 'issueComment').length;
+    await passAt(r, r.t.now + 1);
+    const first = r.t.now;
+    expect(comments()).toBe(1);
+    await passAt(r, first + 29_000);
+    expect(comments()).toBe(1);                                   // inside the first step (30 s)
+    await passAt(r, first + 30_000);
+    expect(comments()).toBe(2);                                   // after it: one call
+    const second = r.t.now;
+    await passAt(r, second + 60_000);
+    expect(comments()).toBe(2);                                   // the next step is 2 min, not a beat
+    await passAt(r, second + 120_000);
+    expect(comments()).toBe(3);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    expect(mails(r, 'Linear inbound: AAA-12 waits for the Linear key%').map((m) => [m.toId, m.kind])).toEqual([[OWNER, 'status']]);
+    // the key is fixed: the next try after the wait lands, and the hold clears
+    r.lin.fail.clear();
+    await passAt(r, r.t.now + 600_000);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBeNull();
   });
 
   it('raise makes a decide item for the operator, and its answer comes back to the owner', async () => {
@@ -761,7 +834,7 @@ describe('the Upkeep epic syncs (D-8183)', () => {
 describe('GET /api/projects/:project/upkeep (D-8183)', () => {
   it('answers null before first use, then the epic with its tickets', async () => {
     const r = await rig();
-    expect((await r.app.inject({ method: 'GET', url: '/api/projects/project-a/upkeep' })).json()).toEqual({ ok: true, epic: null });
+    expect((await r.app.inject({ method: 'GET', url: '/api/projects/project-a/upkeep' })).json()).toEqual({ ok: true, epic: null, notClosed: [] });
     await detect(r, [node(12)]);
     await triage(r, { issue: 'AAA-12', decision: 'upkeep' });
     const res = await r.app.inject({ method: 'GET', url: '/api/projects/project-a/upkeep' });

@@ -13,7 +13,7 @@ import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
-import { egress } from './planSyncPolicy.js';
+import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
 export interface InboundText { identifier: string; teamKey: string; title: string; body: string | null }
@@ -104,13 +104,42 @@ export function noCancelMail(row: InboundText): { subject: string; body: string 
 }
 
 /** The refusals of a close's Linear write that may clear by themselves (a rate limit, Linear or the policy unreachable, an answer
- *  out of grammar, the key not configured or refused): the row stays and the next beat tries again. Any other word (Linear refused
- *  the write itself, `linear-forbidden`, `linear-invalid`, `not-found`, a policy deny) will be refused again, so the close is given
- *  up with one mail to the owner and never sent again (Review Focus 5: no retry loop spends the lane). */
-const RETRY_WORDS: ReadonlySet<string> = new Set([
+ *  out of grammar, the key not configured or refused): the close waits and is tried again, on the plan sync's failure-hold
+ *  schedule (`deferralOf`, D-8702), never every beat. Any other word (Linear refused the write itself, `linear-forbidden`,
+ *  `linear-invalid`, `not-found`, a policy deny) will be refused again, so the close is given up and never sent again (Review
+ *  Focus 5: no retry loop spends the lane). Each is a `DeferCause`, so the one table says how it waits. */
+const RETRY_WORDS: ReadonlySet<string> = new Set<DeferCause>([
   'rate-limited', 'unreachable', 'timeout', 'policy-unavailable', 'journal-unavailable', 'malformed', 'not-configured', 'linear-unauthorised',
 ]);
-export function inboundActVerdict(word: string): 'retry' | 'give-up' { return RETRY_WORDS.has(word) ? 'retry' : 'give-up'; }
+/** The retry words that only a person's act in Settings can clear (the key): the team's owner is told once. */
+const KEY_WORDS: ReadonlySet<string> = new Set<DeferCause>(['not-configured', 'linear-unauthorised']);
+
+/** A workspace's hold on its inbound close writes: not before `until`, at backoff step `step` (the next refusal's). */
+export interface InboundHold { until: number; step: number }
+export type InboundActVerdict = { kind: 'give-up' } | { kind: 'retry'; hold: InboundHold; mailsOwner: boolean };
+/** What a refused close write means. A retry word holds the workspace: its wait is the deferral table's, the step of
+ *  `backoffSteps` (the last repeats) the prior hold reached, and the step moves only when the deferral waits on the backoff.
+ *  `mailsOwner` is true for the words only the key's owner can clear. Any other word gives the close up. */
+export function inboundActVerdict(word: string, prior: InboundHold | undefined, o: { now: number; backoffSteps: readonly number[] }): InboundActVerdict {
+  if (!RETRY_WORDS.has(word)) return { kind: 'give-up' };
+  const d = deferralOf(word as DeferCause);
+  const step = prior?.step ?? 0;
+  const backoffMs = o.backoffSteps[Math.min(step, o.backoffSteps.length - 1)]!;
+  return {
+    kind: 'retry', mailsOwner: KEY_WORDS.has(word),
+    hold: { until: deferralUntil(d, { now: o.now, backoffMs, directoryWaitMs: 0 }), step: deferralUsesBackoff(d) ? step + 1 : step },
+  };
+}
+/** Whether a workspace's hold still stands at `now`. */
+export const inboundHeld = (hold: InboundHold | undefined, now: number): boolean => hold !== undefined && now < hold.until;
+
+/** The owner's one mail when the close waits for the Linear key (not configured, or refused). Durable once per issue, by subject. */
+export function keyWaitMail(row: InboundText): { subject: string; body: string } {
+  return {
+    subject: `Linear inbound: ${row.identifier} waits for the Linear key`,
+    body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but ccrc's Linear key for that workspace is not configured or was refused, so the close waits. Fix the key in Settings; ccrc tries again on a growing interval.`,
+  };
+}
 
 /** The owner's one mail for a close Linear refused. Its subject is the durable mark that the close was given up. */
 export function closeRefusedMail(row: InboundText, word: string): { subject: string; body: string } {
@@ -119,6 +148,13 @@ export function closeRefusedMail(row: InboundText, word: string): { subject: str
     body: `You closed the issue ${row.identifier} of team ${row.teamKey}, but Linear refused ccrc's close (${word}). ccrc does not try again: close it in Linear by hand.`,
   };
 }
+
+const GIVEN_UP_MARK = /\[not closed in Linear: ([a-z0-9-]+)\]$/;
+/** The reason a closed row carries once its close was given up: the original reason, then a marker naming the refusal. The row
+ *  is the durable record of the give-up (with `actedAt`, which for a given-up close is when ccrc gave it up, not when a write landed). */
+export const givenUpReason = (reason: string | null, word: string): string => `${reason ?? ''} [not closed in Linear: ${word}]`.trim();
+/** The refusal word a row's reason records, or null for a close that was not given up. */
+export function givenUpWord(reason: string | null): string | null { return reason === null ? null : (GIVEN_UP_MARK.exec(reason)?.[1] ?? null); }
 
 /** The comment a close leaves on the issue before it is canceled: the reason, egress-redacted, with the ccrc provenance line. */
 export const closeCommentBody = (reason: string): string => withCcrcProvenance(egress(`Closed: ${reason}`));

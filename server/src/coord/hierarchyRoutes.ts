@@ -12,6 +12,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { HierarchyProjectFacts, HierarchySettingsBody, PlanStorePort } from './planStore.js';
 import { linearOwnerOfProject } from './planPolicy.js';
 import { planViewOf } from './planRoutes.js';
+import { givenUpWord } from '../linear/inboundPolicy.js';
 
 export interface HierarchyRouteOpts {
   /** The plan tables through their port; undefined (a test, a script): `unavailable`. */
@@ -156,8 +157,10 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     return refuseRoute(reply, 'unavailable', { detail: 'act' });
   });
 
-  /** `GET /api/projects/:project/upkeep`: the project's Upkeep epic with its tickets (D-8183), or null before its first use.
-   *  Session-gated, in `MASKED_GET_ROUTES`: a ticket's title is the reporter's text. */
+  /** `GET /api/projects/:project/upkeep`: the project's Upkeep epic with its tickets (D-8183), or null before its first use, and
+   *  `notClosed`, the inbound closes of the project's team that ccrc gave up because Linear refused them (`givenUpWord`): the
+   *  durable record a team with no owner to mail still shows (review 2386 A7). Session-gated, in `MASKED_GET_ROUTES`: a
+   *  ticket's title is the reporter's text. */
   app.get('/api/projects/:project/upkeep', async (req, reply) => {
     const { project } = req.params as { project: string };
     if (!PROJECT_RE.test(project)) return refuseRoute(reply, 'bad-request', { detail: 'project' });
@@ -165,8 +168,14 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
     if (plan === undefined) return refuseRoute(reply, 'unavailable');
     try {
       const rows = plan.hierarchyProjectsOf();
-      const view = planViewOf(plan.upkeepPlanOf(project), [], plan.bindingsOf(`${UPKEEP_DUE_PREFIX}${project}`), (p) => rows.find((r) => r.project === p)?.teamKey ?? null);
-      return { ok: true, epic: view.epics[0] ?? null };
+      const teamOf = (p: string): string | null => rows.find((r) => r.project === p)?.teamKey ?? null;
+      const view = planViewOf(plan.upkeepPlanOf(project), [], plan.bindingsOf(`${UPKEEP_DUE_PREFIX}${project}`), teamOf);
+      const team = teamOf(project)?.toUpperCase() ?? null;
+      const notClosed = team === null ? [] : plan.inboundByState(null, ['closed']).flatMap((r) => {
+        const word = givenUpWord(r.reason);
+        return word === null || r.teamKey.toUpperCase() !== team ? [] : [{ identifier: r.identifier, teamKey: r.teamKey, word, at: r.actedAt }];
+      });
+      return { ok: true, epic: view.epics[0] ?? null, notClosed };
     } catch (err) {
       return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
     }
