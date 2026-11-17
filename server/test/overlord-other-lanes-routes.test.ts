@@ -246,7 +246,7 @@ async function buildWorld(o: { watcher?: boolean } = {}): Promise<World> {
 }
 
 const epic = (key: string, waves: number[]) => ({ key, title: `Epic ${key}`, summary: 's', waves, checkpoints: [{ key: `${key}-c1`, title: 'c', kind: 'acceptance' }] });
-const PLAN = { home: 'demo', epics: [epic('e1', [1]), epic('e2', [2])] };
+const PLAN = { home: 'demo', epics: [epic('e1', [1]), epic('e2', [2])], phases: [{ key: 'p1', title: 'Phase p1', summary: 's', refs: [] }] };
 const TICKET = { epic: 'e1', key: 't1', kind: 'task', title: 'First', checkpoint: 'e1-c1' };
 const PLAN_DOORS: ReadonlyArray<readonly [name: string, suffix: string, body: (n: number) => Record<string, unknown>]> = [
   ['declare', '', () => PLAN],
@@ -254,6 +254,7 @@ const PLAN_DOORS: ReadonlyArray<readonly [name: string, suffix: string, body: (n
   ['tickets', '/tickets', (n) => ({ epic: 'e1', key: `t${n}`, kind: 'task', title: 'Do it', checkpoint: 'e1-c1' })],
   ['tickets/move', '/tickets/move', () => ({ ticket: 't1', epic: 'e2' })],
   ['epics/drop', '/epics/drop', () => ({ epic: 'e2', why: 'out of scope' })],
+  ['phases/refs', '/phases/refs', () => ({ op: 'add', phase: 'p1', ref: { kind: 'epic', key: 'e1' } })],
   ['close', '/close', () => ({ outcome: 'abandoned', why: 'superseded' })],
 ];
 const planSend = (w: { app: World['app'] }, slug: string, suffix: string, body: unknown, who_: { byId: string; byUuid: string }) =>
@@ -414,7 +415,7 @@ describe('a refused body is a real registry row, and the refusal is the lane\'s 
 });
 
 describe('the plan doors: the bound body on a programme with no owner', () => {
-  it('each of the six is refused, and a plain session on a programme with no owner is admitted', async () => {
+  it('each of the seven is refused, and a plain session on a programme with no owner is admitted', async () => {
     const rig = await coreRig('live');
     const w = rig.w;
     const reads0 = storeReads.n;

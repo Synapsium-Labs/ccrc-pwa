@@ -64,6 +64,12 @@ decider calls it. No inline copy was added by this pull request.
   `POST /api/teams/:team/plan/triage`). Census assertion 5 holds the plan rows to exactly the file's write doors, so
   whichever of the two lands second adds their rows to `OTHER_LANES` (and, for the triage door, a decision on whether
   a team-scoped door is a plan lane at all).
+- **`plan-phase-refs-is-a-plan-lane`.** The programme work map's WM0 (#2974) landed on `main` while this pull request
+  was being built, with a seventh plan write door, `POST /api/programmes/:slug/plan/phases/refs`. The merge of `main`
+  made the census red (the door had no class) and `planRoutes.ts` fail to compile (its `door` now takes a lane), as
+  designed. This pull request adds the row `planPhaseRefs` (`overlord-uses-its-doors`, via `plan-door`) and passes it
+  at that registration. The routes suite refuses it with the other six and admits a plain session on a phased plan. The
+  Task 1 pin is unedited and still pins the six doors it was written against.
 
 ## Process note
 

@@ -174,9 +174,9 @@ describe('the table', () => {
     expect(REFUSAL_STATUS.unmeasured).toBe(502);
   });
 
-  it('the six plan-door rows refuse the bound body with overlord-uses-its-doors', () => {
+  it('the seven plan-door rows refuse the bound body with overlord-uses-its-doors', () => {
     const planRows = OTHER_LANE_KEYS.filter((l) => OTHER_LANES[l].via === 'plan-door');
-    expect(planRows).toEqual(['planDeclare', 'planMet', 'planTickets', 'planTicketsMove', 'planEpicsDrop', 'planClose']);
+    expect(planRows).toEqual(['planDeclare', 'planMet', 'planTickets', 'planTicketsMove', 'planEpicsDrop', 'planPhaseRefs', 'planClose']);
     for (const lane of planRows) {
       expect(verdict(lane, BODY, designated(BODY))).toMatchObject({ kind: 'refuse', word: 'overlord-uses-its-doors' });
     }
