@@ -38,8 +38,8 @@ They decide every question the plan leaves open.
 | 1 | the proxy additions | D-8180 | #2612 | **merged** 2026-11-11 as `a9cfd134f` (no run) |
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
-| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17; review round 2 (run 2332) found 1 important (plan text only) and 9 advisories: **accepted**, enqueued at `a1fb568bf`; dequeued 2026-11-17 on a conflict with main in `laneSchedule.ts` and `lane-schedule.test.ts`, sent back as an ejection (base `f4905e009`) for one merge of main; merged at `77d1b427d`, review round 3 (run 2346, the held-out panel) clean, re-enqueued at `77d1b427d` |
-| 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | not started |
+| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **merged** 2026-11-17 as `806246f55` (head `77d1b427d`, by the merge queue; run 2243 closed done): run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17; review round 2 (run 2332) found 1 important (plan text only) and 9 advisories: **accepted**, enqueued at `a1fb568bf`; dequeued 2026-11-17 on a conflict with main in `laneSchedule.ts` and `lane-schedule.test.ts`, sent back as an ejection (base `f4905e009`) for one merge of main; merged at `77d1b427d`, review round 3 (run 2346, the held-out panel) clean, re-enqueued at `77d1b427d` |
+| 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | **dispatched** 2026-11-17: run 2337 (ticket `w4-drift`), a fresh child from `main`; Tasks 4.1–4.4 plus Task 4.5, wave 3's carried findings |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
 | 7 | the per-team migration: start, map propose and check, approve, apply, report, follow-up maps, put back; then the pilot team | D-8186 | — | not started |
@@ -146,6 +146,17 @@ They decide every question the plan leaves open.
     once (A8); neither wait is bounded in time while refills fail, so "both waits are bounded" becomes "both are
     bounded in calls and mail" (A2); M3 holds for as long as the failing workspace keeps failing, not 30 minutes (A9).
 
+- **2026-11-17 — wave 3 landed and wave 4 dispatched (the coordinator).** #2941 merged by the queue at `806246f55`
+  (head `77d1b427d`) and run 2243 closed `done`. On this ledger PR D-8702 (failure-hold) is defined in the plan's
+  "Deviations found" and the interface lines for `markSyncDue`, `deferSync` and `ensureTicketBound` are amended to
+  it; D-8699's wording, the wave 3 note's "bounded" sentence (A2) and its M3 line (A9) are corrected; wave 3's
+  checkboxes are ticked. The wave 3 note stays where it is, because the plan's D-8675..D-8702 cite it as their record.
+  Wave 4 (run 2337) carries wave 3's findings as a Task 4.5 of its own: five correctness fixes first (persist the
+  probe's settled mark or mark every programme due at boot; hold per workspace; the project's team before the issue's
+  create; adopt and move an object stranded by a team-key change; extra `teamIds` to the write policy), then six that the
+  worker may ask to defer. Desktop-polish's WM6 has not started, so wave 4 changes `planPolicy.ts` first; whichever
+  lands second merges the other once. Its coordinator was told at dispatch.
+
 ## Carried constraints
 
 Reviewers of every wave get these.
@@ -185,9 +196,10 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-Wave 4 (D-8183), drift, inbound and public text: plan Tasks 4.1 onward, on a fresh child, building on `main` once wave 3
-(#2941) has merged. Its migration takes the next free slot (D-8673's rule). Before editing `server/src/coord/planPolicy.ts`,
-mail desktop-polish's coordinator: its Task WM6 also edits it, and whichever lands second merges onto the other.
-Carried in from wave 3: D-8681 (unlink when a project is set off), issueOwned's creator and extra teamIds (with
-D-8699, at the next capture, on the operator's go only), and the follow-ups listed under review round 2 above. New
-departures take numbers from this programme's second block (D-8703 to D-8708), issued by the coordinator.
+Wave 5 (D-8184), the console: plan Tasks 5.1, 5.3 and 5.4 (not Task 5.2's `PlanSection.tsx`, which the Work card
+replaces; see the ruling of 2026-11-16 above, re-checked at dispatch with desktop-polish's coordinator), on a fresh
+child once wave 4 has merged, because Task 5.3's Upkeep page reads wave 4's `GET /api/projects/:project/upkeep` and
+Task 5.4's controls act on wave 4's drift and Linear owner items. Every operator action is a console control, never a
+chat answer. The wave is judged at 390, 1280 and 1920 (plus the plan's 360 and 1470), with screenshots at each in the
+wave-done. `pwa/src/lib/api.ts` grows at most 40 net code lines. Before dispatch, list the open PRs touching the
+programme page and the Work card. New departures take what is left of D-8703 to D-8708, then a fresh block.
