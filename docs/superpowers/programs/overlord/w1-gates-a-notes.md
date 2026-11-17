@@ -202,5 +202,10 @@ scoped token census passed 61/61, and server-source typechecking completed with 
 waited 852 seconds for a fleet test slot; that queue, not a diagnostic failure, caused its automatic background move.
 No second heavy command was started while it waited or ran.
 
+The armed growth gate passed 96/96 against the committed integrated head; no waiver was added. Deviation references
+passed 34/34, anchors 9/9 and citations 4/4. The final complete changed-file privacy scan found no private identifiers.
+These are scoped local measurements, not a claim that the full local suite ran; exact-tip CI and CodeQL remain the
+handoff gate after this round's one push.
+
 The ladder (#2994) crossing still belongs to whichever lands second. Designation B's `rebindPending` remains a
 landing-contract note only; neither piece's implementation was pulled into this round.
