@@ -67,6 +67,25 @@ export type AuthorityAppend =
 /** `bad-entry` is a caller's error, as `not-in-transaction` is: the entry the grammar refuses, never a journal state. */
 export type AuthorityAppendError = 'not-in-transaction' | 'bad-entry' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append';
 
+/** Ladder fallback when the authority journal is unavailable. Narrowings land as unjournalled rows; widenings fail closed.
+ *  The designation fallback remains separate: its doors require the designation store and journal together. */
+export const NO_LADDER_AUTHORITY = {
+  appendInTx(db: DatabaseSync, entry: OverlordAuthorityMove): AuthorityAppend {
+    let inTx: boolean;
+    try { inTx = db.isTransaction; } catch { inTx = false; }
+    if (!inTx) return { ok: false, error: 'not-in-transaction', detail: 'an authority record requires a transaction' };
+    let move: OverlordAuthorityMove;
+    try {
+      const parsed = authorityEntry(canonicalAuthorityMove(entry));
+      if (parsed.kind === 'authority-restore-confirmed') throw new Error('confirm is not a move');
+      move = parsed;
+    } catch (err) { return { ok: false, error: 'bad-entry', detail: err instanceof Error ? err.message : String(err) }; }
+    return authorityDirection(move) === 'narrows'
+      ? { ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'journal' } }
+      : { ok: false, error: 'authority-unmeasured', detail: 'the authority journal is unavailable' };
+  },
+};
+
 /** The whole file, verified, for boot coherence and Confirm. */
 export type AuthorityFileRead = AuthorityFileSeen<OverlordAuthorityEntry>;
 

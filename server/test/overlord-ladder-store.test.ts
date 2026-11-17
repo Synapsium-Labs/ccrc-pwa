@@ -401,6 +401,21 @@ describe('the catch-up (question 20)', () => {
     expect(latchRows(db)).toMatchObject([{ raiseSequence: null }]);
   });
 
+  it('skips an oversized latch but catches up a valid pending latch before the brake', () => {
+    const db = openDb();
+    const f = fake(db);
+    putLatch(db, 'latch-a', 'chat', null);
+    putLatch(db, 'latch-b', 'chat', null);
+    db.exec("UPDATE overlord_latches SET raisedAt = 9007199254740992 WHERE cause = 'latch-a'");
+    expect(ladderRows(db).kind).toBe('unmeasured');
+    expect(setRung(db, f, 'off')).toMatchObject({ ok: true, changed: true });
+    expect(f.seen.map((s) => s.entry.kind)).toEqual(['authority-latch-raise', 'authority-rung']);
+    expect(f.seen[0]!.entry).toMatchObject({ cause: 'latch-b' });
+    expect(db.prepare('SELECT cause, raiseSequence FROM overlord_latches ORDER BY cause').all()).toEqual([
+      { cause: 'latch-a', raiseSequence: null }, { cause: 'latch-b', raiseSequence: 101 },
+    ]);
+  });
+
   it('an unreadable rung or latch row is skipped, never thrown on', () => {
     const db = openDb();
     const f = fake(db);

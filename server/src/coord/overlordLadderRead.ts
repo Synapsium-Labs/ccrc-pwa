@@ -5,6 +5,30 @@ import { liveGenerationOf } from '../continuity/liveGeneration.js';
 import { degradedReading, effectiveRung, latchKnown, narrowingState, rungAvailable, rungWordReading, type EffectiveRung } from './overlordLadder.js';
 import type { LadderRowsRead } from './overlordLadderStore.js';
 import type { CoordStore } from './store.js';
+import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/overlord-ladder.js';
+import type { AuthorityAppender, LadderWrite } from './overlordLadderStore.js';
+import type { Clock, Entropy } from '../time/ports.js';
+
+type LatchTable = Readonly<Record<string, LadderCauseRow & { readonly kind: 'latch'; readonly effect: { readonly kind: 'cap'; readonly cap: Rung } }>>;
+/** The only delivery-facing latch raise: cap and notice belong to the cause row, not the caller. */
+export function raiseLatch<T extends LatchTable>(
+  deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable: T },
+  cause: keyof T & string, detail: string, raisedBy: string,
+): LadderWrite & { notice: LadderCauseRow['notice'] };
+export function raiseLatch(
+  deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable?: LatchTable },
+  cause: LadderLatchCause, detail: string, raisedBy: string,
+): LadderWrite & { notice: LadderCauseRow['notice'] };
+export function raiseLatch(
+  deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable?: LatchTable },
+  cause: string, detail: string, raisedBy: string,
+): LadderWrite & { notice: LadderCauseRow['notice'] } {
+  const table: Readonly<Record<string, LadderCauseRow>> = deps.causeTable ?? LADDER_CAUSE_MAP;
+  const row = table[cause];
+  if (row === undefined || row.kind !== 'latch' || row.effect.kind !== 'cap') throw new Error('latch cause has no stored cap');
+  const result = deps.coord.raiseLatch(deps.journal, { cause, cap: row.effect.cap, detail, raisedBy, at: deps.clock.wall(), opKey: `latch-raise-${deps.entropy.hex(16)}` });
+  return { ...result, notice: row.notice };
+}
 
 export type LadderConditionInputsFor<T extends Readonly<Record<string, { readonly kind: string }>>> = {
   readonly [K in keyof T as T[K]['kind'] extends 'condition' ? K : never]: () => ConditionReading
@@ -12,8 +36,8 @@ export type LadderConditionInputsFor<T extends Readonly<Record<string, { readonl
 export type LadderConditionInputs = LadderConditionInputsFor<typeof LADDER_CAUSE_MAP>;
 type InputStore = Pick<CoordStore, 'designationRead' | 'liveGenerations' | 'laneArmSetting' | 'ladderRungRead'>;
 type RowStore = Pick<CoordStore, 'ladderRows'>;
-export interface NarrowingWitness { heldFor(recordSequence: number): 'held' | 'not-yet' | 'unmeasured' }
-export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
+export interface NarrowingWitness { recordHeld(recordSequence: number): 'held' | 'not-yet' | 'unmeasured' }
+export const NO_WITNESS_YET: NarrowingWitness = { recordHeld: () => 'not-yet' };
 
 export function ladderConditionInputs(deps: { coord: InputStore; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null }): LadderConditionInputs {
   return {
@@ -51,7 +75,7 @@ export function ladderRead(coord: RowStore, inputs: LadderConditionInputs, witne
     const effective = effectiveRung({ operatorRung: rows.rung === null ? { kind: 'default' } : { kind: 'set', rung: rows.rung.operatorRung }, latches: rows.standing, conditions, causeTable: LADDER_CAUSE_MAP, serverCaps });
     const narrowing = (seq: number | null): NarrowingState => {
       if (seq === null) return narrowingState(null, 'not-yet');
-      try { return narrowingState(seq, witness.heldFor(seq)); } catch { return narrowingState(seq, 'unmeasured'); }
+      try { return narrowingState(seq, witness.recordHeld(seq)); } catch { return narrowingState(seq, 'unmeasured'); }
     };
     return { kind: 'measured', rows, effective, conditions,
       lastChange: rows.rung === null ? null : { narrowing: rows.rung.narrowedAt === null ? null : narrowing(rows.rung.recordSequence) },

@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseFile, ts } from './scan/parse.js';
 import * as m from '../src/coord/overlordLadder.js';
 import * as L0 from '../../shared/overlord-ladder.js';
 import {
@@ -39,15 +40,18 @@ describe('every exported union has its runtime list', () => {
     expect(L0.NARROWING_STATES).toEqual(['done', 'taking-effect']);
   });
   it('the L1 file exports no type or interface the wire carries (it declares no wire type of its own)', () => {
-    const src = readFileSync(path.join(ROOT, 'server/src/coord/overlordLadder.ts'), 'utf8');
-    const exported = [...src.matchAll(/^export (?:interface|type) (\w+)/gm)].map((x) => x[1]);
-    // Local decider contracts only: facts in, verdicts out. Each is named here, so a new export is a decision.
+    const parsed = parseFile(path.join(ROOT, 'server/src/coord/overlordLadder.ts'));
+    const source = ts.createSourceFile(parsed.path, parsed.text, ts.ScriptTarget.Latest, true);
+    const exported = source.statements.filter((s) => (ts.isInterfaceDeclaration(s) || ts.isTypeAliasDeclaration(s))
+      && s.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)).map((s) => (s as ts.InterfaceDeclaration | ts.TypeAliasDeclaration).name.text);
     expect(exported.sort()).toEqual(['CurrentRung', 'DoorClass', 'EffectiveRung', 'LadderFacts', 'RungMove']);
-    expect(src).not.toMatch(/\bLadderWire\b/);
+    const wireRefs: string[] = [];
+    const visit = (node: ts.Node): void => { if (ts.isIdentifier(node) && node.text === 'LadderWire') wireRefs.push(node.text); node.forEachChild(visit); };
+    visit(source);
+    expect(wireRefs).toEqual([]);
   });
   it('the L1 file imports only from shared/', () => {
-    const src = readFileSync(path.join(ROOT, 'server/src/coord/overlordLadder.ts'), 'utf8');
-    const specs = [...src.matchAll(/from '([^']+)'/g)].map((x) => x[1]!);
+    const specs = parseFile(path.join(ROOT, 'server/src/coord/overlordLadder.ts')).imports.map((edge) => edge.specifier);
     expect(specs.length).toBeGreaterThan(0);
     for (const s of specs) expect(s).toMatch(/^\.\.\/\.\.\/\.\.\/shared\/[\w-]+\.js$/);
   });

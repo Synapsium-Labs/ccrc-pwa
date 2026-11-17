@@ -66,6 +66,14 @@ type Raw = Record<string, unknown>;
 const isSafeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
 const isNullOrInt = (v: unknown): v is number | null => v === null || isSafeInt(v);
 
+// SQLite integers can exceed JavaScript's safe range. Preserve those as bigint so narrowing rejects them,
+// rather than letting the driver's default decoder throw before a brake can skip an invalid row.
+function safeIntegers(row: Raw): Raw {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [key,
+    typeof value === 'bigint' && value >= BigInt(Number.MIN_SAFE_INTEGER) && value <= BigInt(Number.MAX_SAFE_INTEGER)
+      ? Number(value) : value]));
+}
+
 const RUNG_SQL = 'SELECT operatorRung, actor, updatedAt, recordSequence, recordFrom, narrowedAt FROM overlord_ladder WHERE id = 1';
 const STANDING_SQL = `SELECT id, cause, cap, detail, raisedAt, raisedBy, raiseSequence, clearedAt, clearedBy, clearSequence
   FROM overlord_latches WHERE clearedAt IS NULL ORDER BY id`;
@@ -139,11 +147,14 @@ export function ladderRungRead(db: DatabaseSync): LadderRungRead {
 }
 
 /** The rung row as a writer builds on it, inside its transaction: the raw columns, unnarrowed. */
-interface HeldRung { operatorRung: unknown; recordSequence: number | null; recordFrom: unknown }
+interface HeldRung { operatorRung: unknown; recordSequence: unknown; recordFrom: unknown }
 function heldRung(db: DatabaseSync): HeldRung | null {
-  const r = db.prepare('SELECT operatorRung, recordSequence, recordFrom FROM overlord_ladder WHERE id = 1').get() as
-    { operatorRung: unknown; recordSequence: number | null; recordFrom: unknown } | undefined;
-  return r ?? null;
+  const statement = db.prepare('SELECT operatorRung, recordSequence, recordFrom FROM overlord_ladder WHERE id = 1');
+  statement.setReadBigInts(true);
+  const r = statement.get() as Raw | undefined;
+  if (r === undefined) return null;
+  const row = safeIntegers(r);
+  return { operatorRung: row['operatorRung'], recordSequence: row['recordSequence'], recordFrom: row['recordFrom'] };
 }
 
 const narrows = (entry: OverlordAuthorityMove): boolean => authorityDirection(entry) === 'narrows';
@@ -165,8 +176,10 @@ export function journalPendingInTx(db: DatabaseSync, journal: AuthorityAppender,
         .run(a.record.sequence);
     }
   }
-  for (const raw of db.prepare(STANDING_SQL).all() as Raw[]) {
-    const l = narrowLatch(raw);
+  const standing = db.prepare(STANDING_SQL);
+  standing.setReadBigInts(true);
+  for (const raw of standing.all() as Raw[]) {
+    const l = narrowLatch(safeIntegers(raw));
     if (typeof l === 'string' || l.raiseSequence !== null) continue;
     const a = journal.appendInTx(db, { kind: 'authority-latch-raise', opKey, cause: l.cause, cap: l.cap });
     if (a.ok && a.kind === 'appended') {

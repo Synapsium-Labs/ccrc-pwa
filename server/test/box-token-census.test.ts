@@ -323,7 +323,7 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
  *  one path (`POST` and `DELETE /api/overlord/designate`). The operator's, behind the account gate and a step-up on the two writes, no
  *  box token, none in EXEMPT. Hand-kept for the NAMES only, like `LEDGER_OPERATOR_DOORS`: the describe below derives the file's
  *  registrations and compares in both directions. */
-const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate', '/api/overlord/ladder'];
+const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate', '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear'];
 
 /** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
  *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
@@ -567,7 +567,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the Overlord doors file registers four routes').toBe(4);
+    expect(regs.length, 'the Overlord doors file registers seven routes').toBe(7);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {

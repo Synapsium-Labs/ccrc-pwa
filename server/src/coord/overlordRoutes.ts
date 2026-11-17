@@ -41,6 +41,9 @@ import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { designateVerdict, overlordAccounts, retireVerdict, type AccountFacts } from './overlordDesignation.js';
 import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
+import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
+import { rungMoveVerdict, narrowingState } from './overlordLadder.js';
+import type { LadderWrite } from './overlordLadderStore.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -89,7 +92,8 @@ export interface OverlordRouteDeps {
   /** The coordination serialiser: every write door's body runs inside it, so a designate and a retire never interleave. */
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
-  readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[] };
+  readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
+  readonly loweringActor?: (req: FastifyRequest) => string;
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
   readonly body: OverlordBody;
@@ -145,6 +149,14 @@ const AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled
   'journal-append': 'journal-unreadable',
 };
 
+const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled-back' | 'journal-unreadable'>> = {
+  'authority-rolled-back': 'authority-rolled-back', 'authority-unmeasured': 'authority-rolled-back',
+  'bad-entry': 'journal-unreadable', 'not-in-transaction': 'journal-unreadable', 'journal-append': 'journal-unreadable',
+};
+const RUNG_REFUSAL_DETAIL = {
+  'capability-missing': (v: Extract<ReturnType<typeof rungMoveVerdict>, { kind: 'refuse' }>) => ({ detail: `the rung needs ${'needs' in v ? v.needs : ''}`, ...('needs' in v ? { needs: v.needs } : {}) }),
+  unavailable: () => ({ detail: "the operator's rung could not be read: only off lands" }),
+};
 const UNREADABLE = 'the designation row could not be read';
 
 /** What a row writer refuses with: the journal's refusal, a row it cannot narrow, or a row that already holds an attempt. */
@@ -381,5 +393,63 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const read = ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps);
     if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
     return ladderWire(read, ladder.serverCaps);
+  });
+
+  // The ladder's operator doors share the serialiser and the store used by its read.
+  const ladderUnavailable = (reply: FastifyReply): FastifyReply => refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+  const ladderRefusal = (reply: FastifyReply, result: Extract<LadderWrite, { ok: false }>): FastifyReply => {
+    const state = facts.authority?.();
+    const detail = state?.kind === 'rolled-back' ? state.cause : state?.kind === 'unmeasured' ? state.why : result.error;
+    return refuseRoute(reply, LADDER_AUTHORITY_REFUSAL[result.error], { detail });
+  };
+  const measuredLadder = (ladder: NonNullable<OverlordRouteDeps['ladder']>): boolean =>
+    ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps).kind === 'measured';
+  const moveRung = (req: FastifyRequest, reply: FastifyReply, ask: { kind: 'set'; to: Rung } | { kind: 'pause' }) => deps.serial(async () => {
+    const ladder = deps.ladder;
+    if (ladder === undefined) return ladderUnavailable(reply);
+    const current = ladder.coord.ladderRungRead();
+    if (current.kind === 'unmeasured') return ladderUnavailable(reply);
+    const verdict = rungMoveVerdict(current.current, ask, ladder.serverCaps);
+    if (verdict.kind === 'same') return { ok: true, changed: false, rung: verdict.rung };
+    if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, RUNG_REFUSAL_DETAIL[verdict.word](verdict));
+    let actor: string;
+    if (verdict.kind === 'raise') {
+      const g = deps.gate(req, reply, { cap: null, stepUp: true });
+      if (!g.pass) return reply;
+      actor = String(g.actor);
+      if (!measuredLadder(ladder)) return ladderUnavailable(reply);
+    } else {
+      if (deps.loweringActor === undefined) return ladderUnavailable(reply);
+      actor = deps.loweringActor(req);
+    }
+    // W1 Pause and off change only the rung. W2 cancels undelivered mail/kickoffs and nudges,
+    // moves requests to needs-you and settles pending acts; W3 releases holds with one push.
+    const result = ladder.coord.setRung(ladder.journal ?? deps.journal, { to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
+    if (!result.ok) return ladderRefusal(reply, result);
+    if (!result.changed) return { ok: true, changed: false, rung: verdict.to };
+    let held: 'held' | 'not-yet' | 'unmeasured' = 'not-yet';
+    if (verdict.kind === 'lower' && result.recordSequence !== null) {
+      try { held = (ladder.witness ?? NO_WITNESS_YET).recordHeld(result.recordSequence); } catch { held = 'unmeasured'; }
+    }
+    return { ...result, rung: verdict.to, narrowing: verdict.kind === 'lower' ? narrowingState(result.recordSequence, held) : null };
+  });
+  app.post('/api/overlord/rung', async (req, reply) => {
+    const body = req.body as { rung?: unknown } | null;
+    if (body === null || typeof body !== 'object' || !isRung(body.rung)) return refuseRoute(reply, 'bad-request', { detail: 'rung' });
+    return moveRung(req, reply, { kind: 'set', to: body.rung });
+  });
+  app.post('/api/overlord/pause', async (req, reply) => moveRung(req, reply, { kind: 'pause' }));
+  app.post('/api/overlord/latches/:cause/clear', async (req, reply) => {
+    const { cause } = req.params as { cause: string };
+    if (!isLadderCauseKey(cause)) return refuseRoute(reply, 'bad-request', { detail: 'cause' });
+    const g = deps.gate(req, reply, { cap: null, stepUp: true });
+    if (!g.pass) return reply;
+    return deps.serial(async () => {
+      const ladder = deps.ladder;
+      if (ladder === undefined || !measuredLadder(ladder)) return ladderUnavailable(reply);
+      const result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: String(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
+      if (!result.ok) return ladderRefusal(reply, result);
+      return result;
+    });
   });
 }
