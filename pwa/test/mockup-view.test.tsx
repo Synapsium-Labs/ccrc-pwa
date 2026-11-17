@@ -556,6 +556,19 @@ describe('draft and omitted assets tell the truth (M5.14)', () => {
     expect(screen.queryByRole('button', { name: /^Render mockup/ })).toBeNull();
     expect(m.container.querySelector('details')).toBeNull();
   });
+
+  it('a draft page whose build is too large reports no drafted embeds: the count waits for a page that renders (review M3)', async () => {
+    const real = await vi.importActual<typeof import('../src/docs/mockup/load')>('../src/docs/mockup/load');
+    vi.mocked(buildMockupSrcdoc).mockImplementationOnce((d, assets, extra, scripted) => {
+      const built = real.buildMockupSrcdoc(d, assets, extra, scripted);
+      return { ok: false, why: 'too-large', chars: 9, cap: 8, plan: built.plan };
+    });
+    const m = mount({ html: '<img src="a.png">', context: draftCtx([draftAsset('a.png')]), page: DRAFT_PAGE });
+    expect(await screen.findByText(MOCKUP_TEXT.tooLarge)).toBeInTheDocument();
+    await flush();
+    expect(m.onDraft).not.toHaveBeenCalled();
+    expect(screen.queryByText(/uncommitted asset/)).toBeNull();
+  });
 });
 
 describe('Load external (M5.21; base 5.6.4)', () => {

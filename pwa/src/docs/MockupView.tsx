@@ -310,7 +310,8 @@ function MockupLive(p: MockupViewProps & {
     [doc, loaded, extra, scripted],
   );
 
-  const draftPins = useMemo(() => (build === null ? 0 : draftPinsOf(build.plan.rows, context.project)), [build, context.project]);
+  // Counted only for a page that renders: a build over the size cap keeps its inline draft rows, but shows no embed (review M3).
+  const draftPins = useMemo(() => (build === null || !build.ok ? 0 : draftPinsOf(build.plan.rows, context.project)), [build, context.project]);
   useEffect(() => {
     if (draftPins === 0 || onDraftAsset === undefined) return undefined;
     onDraftAsset(draftPins);
