@@ -544,7 +544,8 @@ function navHtml(v: Vector, row: string): string {
   const target = v === 'api' ? `/api/x?row=${row}` : `${B()}/nav/${v}?row=${row}`;
   const body = {
     // The script navigates only once the TEST has seen the fixture alive and set `__go`: no timer races the test's first read.
-    script: `<script>setInterval(function(){if(window.__go===1){window.__go=2;location.href=${JSON.stringify(target)}}},20)</script>`,
+    // Its target travels as data, an attribute the script reads, so no value is spliced into script source.
+    script: `<i id="target" data-href="${target}" hidden></i><script>setInterval(function(){if(window.__go===1){window.__go=2;location.href=document.getElementById('target').getAttribute('data-href')}},20)</script>`,
     // The refresh cannot be gated, and nothing reads this frame: its positives are the parent's violation report (production)
     // and B's hit (control), both independent of the frame's document.
     refresh: `<meta http-equiv="refresh" content="0;url=${target}"><p>refresh</p>`,
@@ -1135,9 +1136,10 @@ const runScripts = (page: Page): Promise<void> => page.getByRole('button', { nam
 
 describe('the real viewer', () => {
   it('second-load teardown: a scripted frame that navigates itself (script, or meta refresh) is removed with its notice and Reload mockup; no new frame appears within the window a remount takes', async () => {
+    // The script's target travels as data, an attribute the script reads, so no value is spliced into script source.
     const away = (via: 'script' | 'refresh', row: string): string => `<!doctype html><html><head><meta charset="utf-8"><title>away ${via}</title>${
       via === 'refresh' ? `<meta http-equiv="refresh" content="1;url=${B()}/away?row=${row}">` : ''}</head><body><p>away</p>${
-      via === 'script' ? `<script>addEventListener('load', function () { setTimeout(function () { location.href = ${JSON.stringify(`${B()}/away?row=${row}`)}; }, 50); });</script>` : ''}</body></html>`;
+      via === 'script' ? `<i id="target" data-href="${B()}/away?row=${row}" hidden></i><script>addEventListener('load', function () { setTimeout(function () { location.href = document.getElementById('target').getAttribute('data-href'); }, 50); });</script>` : ''}</body></html>`;
     for (const via of ['script', 'refresh'] as const) {
       const row = newRow(`away${via}`);
       DOCS.set(`away-${via}.html`, away(via, row));
