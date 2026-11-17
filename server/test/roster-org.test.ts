@@ -78,6 +78,27 @@ describe('the organization label in the roster: both parsers decide alike', () =
     }
   });
 
+  // PR A's review F6: a hand-edited roster may hold the organization's real id, so a refusal names the key and the
+  // reason and never echoes the value, in either parser's message or remedy.
+  it.each(REFUSED.filter(([, v]) => typeof v === 'string' && v.length >= 4 && v !== ORG_CLEAR_WORD))('%s is refused by both without echoing it', (_why, v) => {
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      let caught: unknown;
+      try { parse(rosterWith({ org: v })); } catch (e) { caught = e; }
+      const e = caught as { message?: string; remedy?: string };
+      expect(`${e.message} ${e.remedy}`, parse.name).not.toContain(String(v));
+      expect(e.message, parse.name).toContain('"org"');
+    }
+  });
+
+  it('each parser gives the reason: an id shape is named as one', () => {
+    for (const parse of [parseRoster, rosterFromJson] as const) {
+      const said = (v: unknown): string => { try { parse(rosterWith({ org: v })); return ''; } catch (e) { return String((e as Error).message); } };
+      expect(said('abcdef0123456789abcdef0123456789'), parse.name).toMatch(/looks like an organization's id \(org-looks-like-an-id\)/);
+      expect(said('Org-A'), parse.name).toMatch(/is not a name matching/);
+      expect(said(7), parse.name).toMatch(/is not a string/);
+    }
+  });
+
   it('parseRoster names an id-shaped value as one, with the word org-looks-like-an-id', () => {
     let caught: unknown;
     try { parseRoster(rosterWith({ org: '0123456789abcdef0123456789abcdef' })); } catch (e) { caught = e; }

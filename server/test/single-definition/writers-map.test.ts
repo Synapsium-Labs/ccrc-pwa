@@ -313,8 +313,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'programme_remaining',
-  'programme_edges'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs',
+  'programme_remaining', 'programme_edges'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
  *  and the private store's for its own describe (Overlord W1 private store A). */
@@ -416,6 +416,11 @@ describe(TABLES_PIN, () => {
       response_boots: ['deleteResponsesThroughInTx', 'recordResponseBoot'].map((f) => `server/src/coord/responsesStore.ts#${f}`),
       // The retention setting (responses B): its seed row, and the retention door's one writer.
       response_settings: ['server/src/coord/responsesStore.ts#setResponseRetention', 'server/src/coord/schema.ts#(module)'],
+      // Overlaps and goal conflicts (Overlord W2, plan w2-overlaps.md Task 3): a refused claim's record, prune included, written
+      // only after the claim's own transaction committed; the pairs' rows by the arm's apply, and their goals stamps by the one
+      // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
+      claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
+      programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
       // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
