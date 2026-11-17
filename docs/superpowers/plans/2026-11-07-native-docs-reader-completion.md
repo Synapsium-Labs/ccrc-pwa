@@ -1035,6 +1035,24 @@ review fix round below.
   from the browser shards of a CI run that includes the browser leg (a full run or the merge queue; the fast pull-request
   run skips that leg).
 - Deviations: D-8711 and D-8712 are defined; 8713 of the reserve is unspent.
+- The wave-done round (the coordinator, mail 22598, at `85e77e0ea`): two code-scanning alerts were open on the pull request's
+  merge ref, 299 and 300, `js/bad-code-sanitization`, both in `docs-mockup.browser.test.ts`.
+  - `f6e4f227e`: M5.B2's script vector and the real viewer's second-load page spliced their target URL into inline script source
+    through `JSON.stringify`. Each now writes the URL into a hidden element's `data-href` attribute and the script reads it there,
+    so the script text is a fixed literal. Test-only; nothing in `pwa/src` changes. Both rows stay green with their positives.
+  - `961165e2f`: the coordinator's condition (every test using those pages stays green) covers M5.B2's click and api rows, which
+    render the same `navHtml` pages, and their controls were flaky before the alert fix too: 2 of 6 runs failed at `85e77e0ea` and
+    4 of 7 with the alert fix, interleaved under the same load. A copy that logged the frame after the click showed, in every
+    failing run, the frame still on `about:srcdoc`, loaded and with its link, and nothing navigating: the click was lost. Most
+    likely it arrived before Chrome routed input to the srcdoc frame's new process; that cause is not measured. The click is now
+    repeated, at most five times, until the frame leaves `about:srcdoc`; five clicks with no navigation throw. Measured: the M5.B2
+    rows green 5 of 5 at load 7 to 9 and the whole file 22 of 22; in 5 more runs that logged the attempts every first click
+    navigated, so the loss did not recur there; a copy whose first attempt sends no click needed two attempts in the control and
+    the production half, both green. The positives are unchanged. Its own commit, so the coordinator can strike it.
+  - Lab 10 is open, routed to D (Task 13) by the coordinator (the row map below).
+  - Run for this round: the whole `docs-mockup` browser file 22 of 22, the M5.B2 rows as above, pwa `tsc --noEmit` rc 0, and
+    `browser-leg`, `browser-dist`, `docs-scans` and `reader-lab-scans`, 246 passed. The open alert count at the new head is the
+    coordinator's condition and is reported in the fresh wave-done.
 
 **The row map** (Task 10). Measured means a committed test in this tree reproduces it; Kept means existing evidence at this tip
 that C2 does not change; Open names what blocks it.
@@ -1086,7 +1104,7 @@ that C2 does not change; Open names what blocks it.
 | lab 4 | Measured (C2) | browser "lab 4: blob: and data: URLs" |
 | lab 6 | Kept (existing evidence) | `docs-headers.browser` M5.B6: a JSON docs response as a `<script src>`, with and without `nosniff` |
 | lab 7 | Kept (existing evidence) | the design's per-flag measurement; no sandbox token but `allow-scripts` (rule 3, the M5.13 rows) |
-| lab 10 | Open: no harness arm | the browser app harness blocks service workers (`browser/app.ts`); C2 changes no worker code |
+| lab 10 | Open: routed to D by the coordinator | the browser app harness blocks service workers (`browser/app.ts`); C2 changes no worker code; D, Task 13 (mail 22598) |
 
 
 ## Where things stand
