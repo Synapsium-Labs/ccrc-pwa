@@ -777,8 +777,10 @@ const OPS = {
   // Accounts plan Task A16 (D-7735).
   'set-placement': { keys: ['file', 'id', 'placement'], repeat: [] },
   'set-done': { keys: ['file', 'id'], repeat: [] },
-  // The two serviceability facts (plan 2026-11-14 Task 3, F11): `opSetFacts` below states it.
+  // The two serviceability facts (plan 2026-11-14 Task 3, F11) and the organization label: `opSetFacts` below states it.
   'set-facts': { keys: ['file', 'id', 'fable-billing', 'continuity', 'recorded-at', 'org'], repeat: [] },
+  // The label's gate alone, read-only and silent on success (account organization B1): `orgRefused` below states it.
+  'org-check': { keys: ['org'], repeat: [] },
   // Accounts plan Task A20 (D-7750): the method switch's roster write, the sign-in-in-flight measure `auth-start`
   // shares with `pre-remove`, and the answers of the sign-in verbs.
   'set-method': { keys: ['file', 'id', 'method'], repeat: [] },
@@ -2206,6 +2208,18 @@ function opSetPlacement(a) {
   return writeRoster(a['file'], next, 'the roster was unchanged') ? 0 : 1;
 }
 
+/** The organization label's gate, `set-facts`' and `org-check`'s: 0 for a label the roster admits or `none`, else the
+ *  refusal and 2. `org-check` is the verb's read-only ask before its first write (PR A's review, F2), so both refusals
+ *  say nothing was written, which holds for either caller. */
+function orgRefused(org) {
+  const word = org === undefined || org === 'none' ? 'ok' : orgLabelVerdict(org);
+  if (word === 'ok') return 0;
+  refuse(word === 'looks-like-an-id' ? 'org-looks-like-an-id' : 'bad-argv', word === 'looks-like-an-id'
+    ? "--org is a name you choose, never the organization's id. Nothing was written."
+    : '--org is a name matching ^[a-z][a-z0-9-]{0,31}$, or none. Nothing was written.');
+  return 2;
+}
+
 /** `set-facts` (F11): `--fable-billing included|credits` writes the billing fact; `--continuity on` writes
  *  `{recordedAt}` (`--recorded-at now|<epoch seconds>`) only when no record stands, so a second `on` changes no byte,
  *  and `off` removes the key, never a null. `--org <label>` writes the organization label and `--org none` removes it
@@ -2223,12 +2237,7 @@ function opSetFacts(a) {
     return 2;
   }
   const org = a['org'];
-  const orgWord = org === undefined || org === 'none' ? 'ok' : orgLabelVerdict(org);
-  if (orgWord !== 'ok') {
-    refuse(orgWord === 'looks-like-an-id' ? 'org-looks-like-an-id' : 'bad-argv', orgWord === 'looks-like-an-id'
-      ? "--org is a name you choose, never the organization's id" : '--org is a name matching ^[a-z][a-z0-9-]{0,31}$, or none');
-    return 2;
-  }
+  if (orgRefused(org) !== 0) return 2;
   const json = readRoster(a['file']);
   if (json === null) return 1;
   const next = { ...acct };
@@ -2368,6 +2377,7 @@ function main(argv) {
   if (op === 'pre-remove') return opPreRemove(a);
   if (op === 'set-placement') return opSetPlacement(a);
   if (op === 'set-facts') return opSetFacts(a);
+  if (op === 'org-check') return orgRefused(a['org']);
   if (op === 'or-key') return opOrKey(a);
   if (op === 'set-method') return opSetMethod(a);
   if (op === 'auth-live') {
