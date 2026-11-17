@@ -463,9 +463,12 @@ describe('`stay`: no step picks, and the current account can still serve', () =>
     expect(r).toEqual({ pick: '', step: 'none', rc: 1, why: 'no account on the ordered list can take it: claude-a class; claude-b class' });
   });
 
-  it('the current account unmeasured (rc 2 on fable) with no step picking: stays, an unmeasured answer never moves it', () => {
+  it.each([
+    ['rc 2 on fable, rc 1 on opus', 'fable'],
+    ['rc 1 on fable, rc 2 on opus', 'opus'],
+  ])('the current account unmeasured (%s) with no step picking: stays, an unmeasured answer never moves it', (_n, unmeasured) => {
     route('fable', 'claude-b'); limits('claude-b', 20);
-    const r = pick('claude-a', '_class_gate() { [[ "$1" == claude-a ]] && return 2; return 1; };');
+    const r = pick('claude-a', `_class_gate() { [[ "$1 $2" == "claude-a ${unmeasured}" ]] && return 2; return 1; };`);
     expect(r).toEqual({ pick: 'claude-a', step: 'stay', rc: 0, why: '' });
   });
 
