@@ -3560,15 +3560,30 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3; spec §5.6 H38, Table 11.1a row "Sealed
   // forecasts (85% dates)"): `programme_forecasts`, one row per closed work run (its wave boundary, `closingRunId` UNIQUE),
   // computed as of `asOf` from the statement it names (`statementId`, NULL when none stood) and replayable from `seed`;
   // `outcome` is `open` until the forecast lane scores it at `p85At`. Writers: `programmeFactsStore.ts#sealForecast` (the
   // INSERT, `ON CONFLICT DO NOTHING`) and `#scoreForecast` (`outcome` and `scoredAt` only, on an `open` row), each called
   // only by its arm of the forecast lane. NEW TABLE only: an older build at this `user_version` takes rule 3 and never
-  // names it. Account organization D (#2958) landed 90 and the Overlord's designation (#2950) 91, so this is 92 by position
-  // (the coordinator's standing renumber license, 2026-11-17); whoever lands second renumbers. RE-MEASURE the slot (it must
-  // print 91 before this entry is counted):
+  // names it. Account organization D (#2958) landed 90, the Overlord's designation (#2950) 91 and done tests A (#2964) 92, so this
+  // is 93 by position (the coordinator's standing renumber license, 2026-11-17); whoever lands second renumbers. RE-MEASURE
+  // the slot (it must print 92 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

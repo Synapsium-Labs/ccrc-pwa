@@ -58,6 +58,10 @@ const TIME_PORT_FILES: readonly string[] = [
   // Overlord W2, remaining work: the vocabulary, the body's rules and the store take `now` as an argument.
   'server/src/coord/programmeRemaining.ts',
   'server/src/coord/programmeFactsStore.ts',
+  // Overlord W2, done tests A: the vocabulary, the pure deciders and the one reader read no clock.
+  'shared/doneTests.ts',
+  'server/src/coord/doneTests.ts',
+  'server/src/coord/doneTestRead.ts',
   // Overlord W2, forecasts A: the deciders take `asOf`, `now` and the seed as arguments, and the lane reads them through
   // `now` and the `Entropy` port, never the ambient clock or `Math.random`.
   'server/src/coord/forecast.ts',
