@@ -317,6 +317,17 @@ describe('readerDiff: the output cap', () => {
     expect(avail(...gaps(many(512, 'ins')))).toMatchObject({ kind: 'available' });
   });
 
+  it('a text over the work budget whose marks are also over the output cap answers work: output is counted after a search that fits', () => {
+    const [gapsBefore, gapsAfter] = gaps(many(513, 'ins'));
+    expect(readerDiff(gapsBefore, gapsAfter)).toEqual({ kind: 'unavailable', why: 'output' });
+    // the same gaps, then a disjoint block that alone exhausts the budget (see the work budget cases)
+    const block = (prefix: string): string => rows(550, prefix).join('\n');
+    const before = `${gapsBefore}\n${block('old')}`;
+    const after = `${gapsAfter}\n${block('new')}`;
+    expect(readerDiff(block('old'), block('new'))).toEqual({ kind: 'unavailable', why: 'work' });
+    expect(readerDiff(before, after)).toEqual({ kind: 'unavailable', why: 'work' });
+  });
+
   it('256 isolated insertions and 256 isolated deletions are 512 marks and available', () => {
     const [a, b] = gaps([...many(256, 'ins'), ...many(256, 'del')]);
     const d = avail(a, b);

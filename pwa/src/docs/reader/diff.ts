@@ -18,8 +18,8 @@
 // matrix. One counter pays for every unit: each line comparison (the trims and every compare in a snake, the failing one
 // included), each frontier advance (one per (d, k) visited) and each trace cell copied. The moment it passes the cap the
 // search returns `work`; there is no second algorithm behind it. When one side of the middle is empty the answer is the
-// whole other side and nothing is searched. The same input always gives the same answer: a tie in a frontier takes the
-// standard down move.
+// whole other side and nothing is searched. The same input always gives the same answer: on a tie in a frontier
+// (`v[k - 1] === v[k + 1]`) the search moves right, a deletion, as standard Myers does.
 import { DOCS_MAX_DOC_BYTES } from '../../../../shared/docs';
 import { utf8Bytes } from '../../../../shared/utf8';
 
