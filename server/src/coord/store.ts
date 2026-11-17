@@ -42,14 +42,17 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import * as designation from './overlordDesignationStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
+import type { AttemptOutcome, DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
@@ -273,6 +276,11 @@ export interface RunRow extends RunSummary {
    *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
    *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
   unattributed: boolean;
+  /** `schema.ts`'s `runs.closePr` entry (Overlord W2 done tests A, DT7; its slot moves at landing, so it is not named
+   *  here): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none, and NULL when the verified claim named no
+   *  PR or another one (review 2377 F1).
+   *  Parsed only by the done-test reader, which answers a malformed value `unmeasurable`; stripped by `toRunSummary`. */
+  closePr: string | null;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -311,7 +319,7 @@ export type { CoordPlacementStamp };
  *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, closePr: _closePr, ...summary } = row;
   return summary;
 };
 
@@ -1070,6 +1078,7 @@ interface RunRowDb {
   runTitle: string | null;
   closedBy: string | null;
   closeDetail: string | null;
+  closePr: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1090,7 +1099,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -3264,6 +3273,9 @@ export class CoordStore {
     /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
      *  `abandon:<reason>`; every other caller passes nothing. */
     detail?: string;
+    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line, claim.prNumber)`. ONE writer of
+     *  `runs.closePr`, in this transaction; absent or null writes nothing, so the column stays NULL. */
+    closePr?: ClosePrFacts | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3296,6 +3308,7 @@ export class CoordStore {
       // `null` is left standing rather than writing a claim this database has
       // never measured or even shape-checked.
       if (input.handoffCommit !== null) this.setHandoffCommit(input.runId, input.handoffCommit);
+      if (input.closePr != null) this.db.prepare('UPDATE runs SET closePr = ? WHERE id = ?').run(JSON.stringify(input.closePr), input.runId);
       // Review findings 8/14: cancel this run's own outstanding mail rather
       // than leave it to replay into whatever session (this run's own, next
       // wave, or — once a purged workspace slug is re-minted — an unrelated
@@ -5414,6 +5427,17 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.1 C2, H27 (`overlordDesignationStore.ts`): the designation row's one read and its writers; the ones that
+   *  move authority (the Settings doors' two among them) take the journal, which appends in the row's own transaction. */
+  designationRead(): DesignationRead { return designation.designationRead(this.db); }
+  designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
+  bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
+  retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
+  stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
+  setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
+  setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
@@ -5730,6 +5754,7 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      closePr: row.closePr,
       // Migration 23's journal (D-5298), read through on the same idiom; 1 is
       // "accepted unattributed", every other value (0, the column default every
       // older row carries) is not. D-5531 reads it in the ask lane.

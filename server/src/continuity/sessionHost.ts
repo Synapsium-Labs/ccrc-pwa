@@ -23,7 +23,7 @@ import type { Reading } from './renewalDue.js';
 
 /** The rows of `INJECTED_PROMPTS` the lane types through `deliver`: the port types list rows, never free text (spec §3.8
  *  H7; slug port-delivers-list-rows). */
-export type RenewalPrompt = Extract<InjectedPromptKey, 'renewal-first-prompt'>;
+export type RenewalPrompt = Extract<InjectedPromptKey, 'renewal-first-prompt' | 'overlord-first-prompt'>;
 
 /** The renewal lane's view of a session's host (§3.6 H2). Declared by its consumer; adapter one is ccd. */
 export interface SessionHost {

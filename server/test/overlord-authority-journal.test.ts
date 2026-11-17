@@ -34,6 +34,9 @@ const HEAD_MIGRATION = (() => {
   return m[0]!;
 })();
 
+/** The designation table's migration (X2: boot coherence reads it beside the head row), found by its table. */
+const DESIGNATION_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_designation'))!;
+
 type Fault = 'none' | 'open' | 'write' | 'fsync';
 interface Fx {
   dir: string; leaf: string; db: DatabaseSync; guard: OverlordAuthorityGuard; failures: AuthorityWriterFailure[];
@@ -50,6 +53,7 @@ function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
   if (opts.content !== undefined) writeFileSync(leaf, opts.content);
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
+  db.exec(DESIGNATION_MIGRATION); // `OVERLORD_AUTHORITY_TABLES` lists its table, so boot coherence reads it beside the head row
   const fault = { now: 'none' as Fault };
   let wrote = false;
   const eio = (): never => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); };

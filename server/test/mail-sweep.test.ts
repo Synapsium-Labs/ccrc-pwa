@@ -33,6 +33,7 @@ import { MAIL_GATE_BUSY_MARKER, MAIL_GATE_BUSY_SHADOW_MARKER, MAIL_GATE_STRICT_M
 import type { StallSettingsPatch } from '../src/coord/stallsettings.js';
 import { queueProgramKickoff } from '../src/coord/kickoff.js';
 import { buildServer } from '../src/server.js';
+import type { DesignationRead } from '../../shared/overlord-designation.js';
 
 // Stall watch settings (design 2026-10-05 §9, M20): a resolver that really throws, switched on by one row at a time.
 // Every other row runs the real `resolveStallWatch`; the mock passes straight through while `fault.resolve` is null.
@@ -2629,6 +2630,68 @@ describe('sweepMail: the coordinator quiet window', () => {
     await w.sweepMail();
     expect(literalSends(h.calls)).toEqual([NUDGE]);
     expect(deliveryRow(coord, d.id).lastGate).toBe('cooldown');
+  });
+
+  // The designation (Overlord W1 designation A, Task 3): a pending or bound Overlord body reads `overlord`, whose row is the
+  // coordinator's pair; an unreadable designation refuses the whole sweep, logs once and raises one operator push an episode.
+  describe('the designation at the mail pace', () => {
+    const pendingBody = (id: string): DesignationRead => ({ kind: 'not-designated', row: {
+      bound: null, pending: { sessionId: id, kind: 'designate', deadlineAt: 9, since: 1, actor: 'op', generation: null }, term: 1, designatedTerm: 1,
+      model: 'opus', accountPools: { pools: ['pool-a'], untagged: false }, pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [] } });
+
+    it('a PENDING Overlord body, claiming no run, is back on the lane after the coordinator cooldown, not the worker one', async () => {
+      const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+      const coord = store(h.home);
+      coord.designationRead = () => pendingBody(ID);
+      const { w } = await primedWatcher(h, coord);
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE]);
+      advance(COORD_COOLDOWN_MS + 1_000);
+      seedLiveState(h.home, { statusUpdatedAt: Date.now() - MAIL_QUIET_MS - 1_000 });
+      queueTestDelivery(coord, ID, ENVELOPE);
+      await w.sweepMail();
+      expect(literalSends(h.calls)).toEqual([NUDGE, NUDGE]);
+    });
+
+    it('an UNMEASURED designation refuses delivery for the pass, warns once, pushes once an episode, and delivers when a read succeeds', async () => {
+      const h = harness({ panes: [...HAPPY_PANES, ...HAPPY_PANES] });
+      const coord = store(h.home);
+      let read: DesignationRead = { kind: 'unmeasured', why: 'the row is unreadable' };
+      coord.designationRead = () => read;
+      const { sent, push } = pushSpy();
+      const { w } = await primedWatcher(h, coord, { push: push as never });
+      seedRegistry(h.home, ID);
+      seedHookState(h.home, ID);
+      seedLiveState(h.home, { statusUpdatedAt: NOW - MAIL_QUIET_MS - 1_000 });
+      const d = queueTestDelivery(coord, ID, ENVELOPE);
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await w.sweepMail();
+        advance(PAST_SWEEP_MS);
+        await w.sweepMail();
+        expect(literalSends(h.calls)).toEqual([]);
+        expect(deliveryRow(coord, d.id)).toMatchObject({ state: 'queued', attempts: 0 });
+        const lines = warn.mock.calls.flat().map(String).filter((l) => l.includes('Overlord designation could not be read'));
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^ccrc-server: /);
+        const pushes = (): PushPayload[] => sent.filter((p) => p.tag === 'designation-unmeasured');
+        expect(pushes()).toHaveLength(1);
+        // A read that succeeds ends the episode: the mail goes, and the next failure raises again.
+        read = { kind: 'not-designated', row: null };
+        advance(PAST_SWEEP_MS);
+        await w.sweepMail();
+        expect(literalSends(h.calls)).toEqual([NUDGE]);
+        read = { kind: 'unmeasured', why: 'the row is unreadable again' };
+        advance(MAIL_COOLDOWN_MS + MAIL_SWEEP_MS);
+        queueTestDelivery(coord, ID, ENVELOPE);
+        await w.sweepMail();
+        expect(pushes()).toHaveLength(2);
+      } finally { warn.mockRestore(); }
+    });
   });
 
   // Today's pace at each edge, through the lane, for all three subjects the

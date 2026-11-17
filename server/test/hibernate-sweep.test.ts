@@ -54,11 +54,12 @@ const mark = (ageMs: number, o: Partial<HibernateMark> = {}): HibernateMark =>
 const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-hib-'), '.ccrc', 'coord.db')));
 /** The store port the sweep declares, over a real store, with any read overridden. */
 /** The readers the store port answers through: `bindingsOf` is the store's own view over the port's `openRunsForSession`. */
-type HibReaders = Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor'>;
+type HibReaders = Pick<CoordStore, 'openRunsForSession' | 'activeClaims' | 'outstandingMailFor' | 'designationRead'>;
 const port = (s: CoordStore, o: Partial<HibReaders> = {}): NonNullable<HibernateSweepDeps['coord']> & HibReaders => withBindingsOf({
   openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => s.openRunsForSession(...a),
   activeClaims: () => s.activeClaims(),
   outstandingMailFor: (id: string, n?: number) => s.outstandingMailFor(id, n),
+  designationRead: () => s.designationRead(),
   ...o,
 });
 

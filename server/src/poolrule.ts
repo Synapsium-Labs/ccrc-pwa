@@ -1,6 +1,6 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
-import type { AccountPoolWire, ProjectPoolVerdict } from '../../shared/poolrule.js';
-import type { ProjectPlacement, ProjectPoolWire, RouteField } from '../../shared/api.js';
+import type { AccountPoolWire, PoolVerdict, ProjectPoolVerdict, SessionPoolSide } from '../../shared/poolrule.js';
+import type { ProjectPlacement, ProjectPoolWire, RouteField, RouteFields, RouteReadField } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
 import { POOL_ANSWER_CROSSINGS, POOL_ANSWER_KEYS, POOL_ANSWER_POOL_SIDES, POOL_ANSWER_VERDICTS, parsePoolSet } from '../../shared/poolset.js';
@@ -110,7 +110,16 @@ export function resolvedAccountPool(
 export function poolVerdict(
   roster: Roster, wrapper: string, pool: ProjectPoolWire,
   edges: ReadonlyMap<string, readonly string[]>,
-): RosterVerdict {
+): RosterVerdict;
+/** A session's side (C46): the same precedence, over `PoolVerdict`'s set arms too. A project side takes the first overload. */
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
+): PoolVerdict | { ok: true; why: 'account-not-in-roster' };
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
+): PoolVerdict | { ok: true; why: 'account-not-in-roster' } {
   // PRECEDENCE, in the one place that can enforce it: projected beats
   // declared beats untagged (design §5.6). A central edge is authoritative —
   // it came from `pool_edges`, which is the only writer — so it is consulted
@@ -124,6 +133,19 @@ export function poolVerdict(
   if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
   const v = poolRule(declaredAccountPool(null), pool);
   return v.ok ? { ok: true, why: 'account-not-in-roster' } : v;
+}
+
+/** The side of the pool rule a SESSION answers on (C46; pool set A3's review F13): its route record's set when one stands,
+ *  `set-unreadable` when the record names `poolset` unreadable, `set-malformed` when the spelling does not parse, and the
+ *  project's side when no set stands (an empty value is a cleared set). A set never falls back to the project. */
+export function sessionPoolSideOf(
+  route: { readonly fields: RouteFields; readonly unreadable: readonly RouteReadField[] } | null, projectPool: ProjectPoolWire,
+): SessionPoolSide {
+  if (route !== null && route.unreadable.includes('poolset')) return { state: 'set-unreadable' };
+  const spelling = route?.fields.poolset;
+  if (spelling === undefined || spelling === '') return projectPool;
+  const parsed = parsePoolSet(spelling);
+  return parsed.ok ? { state: 'set', set: parsed.set } : { state: 'set-malformed' };
 }
 
 /**
@@ -161,7 +183,7 @@ export function poolVerdict(
  * not because either side reads the other's.
  */
 export function poolEligible(
-  roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
+  roster: Roster, pool: SessionPoolSide, edges: ReadonlyMap<string, readonly string[]>,
 ): AccountDef[] {
   return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a.id, a, edges), pool).ok);
 }
@@ -176,8 +198,12 @@ export function poolEligible(
  * `state === 'unreadable' || state === 'malformed'` here would be the second
  * copy that drifts the day a fifth state is added.
  */
-export function poolUndecidable(pool: ProjectPoolWire): boolean {
-  return !poolRule(declaredAccountPool(null), pool).ok;
+export function poolUndecidable(pool: SessionPoolSide): boolean {
+  // The verdict's REASON decides, not `!ok` (Overlord W1 designation A, review F8). For a project side the two are one
+  // fact: an untagged account never mismatches, so its only refusal is `pool-undecidable`. For a set without
+  // `+untagged` the same untagged account DOES mismatch, and that is a decided "no", never an undecidable one.
+  const v = poolRule(declaredAccountPool(null), pool);
+  return !v.ok && v.reason === 'pool-undecidable';
 }
 
 /**

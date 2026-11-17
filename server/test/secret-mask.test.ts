@@ -1286,6 +1286,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     // The linking standard's session read (D-8147): the caller's own project's row, a box-token machine lane. The project name
     // is the registry's, the team key is the operator's (its shape is closed), the override and mode are two-word sets, and the
     // reading is a repository slug from gh, a visibility and template word, a time and a failure word held to `^[a-z-]{1,24}$`.
+    '/api/overlord/designation': "the designation row's view (server-minted session ids and generations, the operator's model class and pool names, the actor label, closed outcome words and times), the ordered account ids and warnings naming the operator's pools: no session-written text (Overlord W1 designation A)",
     '/api/linking': "the caller's project name, the operator's team key and override, and the measured visibility: closed words, a repository slug, a time; no session text (D-8147)",
   };
 
@@ -1388,11 +1389,11 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     const slices = events.filter((e): e is number => e !== 'pause');
     expect(slices.length).toBeGreaterThan(30);
     expect(Math.max(...slices)).toBeLessThanOrEqual(64 * 1024);
-    // The overlap a slice carries (its context and its lookahead) is a few KiB: one held run plus slack. This bound pins
+    // The overlap a slice carries (its context and its lookahead) is the chain hold, 18 KiB (two held runs). This bound pins
     // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
     // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
     expect(overlaps.length).toBe(slices.length * 2);
-    expect(Math.max(...overlaps)).toBeLessThanOrEqual(16 * 1024);
+    expect(Math.max(...overlaps)).toBeLessThanOrEqual(18 * 1024);
     // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
     expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
     expect(leaksNone(sliced, CMP)).toBe(true);
