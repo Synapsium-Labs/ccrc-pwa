@@ -58,9 +58,9 @@ export class LinearDirectory implements LinearDirectoryRead {
   }
 
   /** The refresher's write: the whole directory of one slot, for the key it was read with, and whether its project statuses
-   *  were read (D-8701; the refresher always says; absent is `read`, the reading every directory had before the mark).
-   *  Replaces what was held. */
-  put(slot: LinearSlotRef, keyDigest: string, entries: LinearDirectoryEntries, at: number, statuses: LinearStatusesRead = 'read'): void {
+   *  were read (D-8701: always said, never assumed, so no writer records `read` for a page it did not read). Replaces what
+   *  was held. */
+  put(slot: LinearSlotRef, keyDigest: string, entries: LinearDirectoryEntries, at: number, statuses: LinearStatusesRead): void {
     this.bySlot.set(slotKeyOf(slot), {
       keyDigest,
       at,

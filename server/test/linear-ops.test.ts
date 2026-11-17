@@ -1250,8 +1250,12 @@ describe('the directory and the refresher\'s directory pass (spec §4.4, R5)', (
 
   it('keyed by slot and key digest: another key\'s lookup finds nothing', () => {
     const d = new LinearDirectory();
-    d.put(SLOT, D1, DIR, T);
+    d.put(SLOT, D1, DIR, T, 'read');
     expect(d.get(SLOT, D1)).toEqual(DIR);
+    expect(d.projectStatusesRead(SLOT, D1)).toBe('read');
+    expect(d.projectStatusesRead(SLOT, valueDigestHex(KEY_2))).toBeNull();
+    d.put(SLOT, D1, DIR, T, 'unread');
+    expect(d.projectStatusesRead(SLOT, D1)).toBe('unread');
     expect(d.get(SLOT, valueDigestHex(KEY_2))).toBeNull();
     expect(d.get({ source: 'legacy' }, D1)).toBeNull();
     expect(d.filledAt(SLOT, D1)).toBe(T);
