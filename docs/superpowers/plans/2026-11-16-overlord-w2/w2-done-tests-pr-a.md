@@ -6,12 +6,12 @@ departures and measurements the build added, by slug. No D-number is minted here
 
 ## In short
 
-- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 86: overlaps A (#2949) landed 85 first, renumbered on the coordinator's word),
+- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 87: overlaps A (#2949) landed 85 and decision model A (#2948) 86 first, renumbered on the coordinator's word),
   `closePrFactsOf`, `parseDoneTest`, `targetVerdict`, `readTarget`, the reader's census, the writers-map pin of
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
   the close was touched, and stays green after, with the one additive column set aside.
-- **Five departures,** each below. None changes a rule the plan states; each makes a rule measurable on this tree.
+- **Six departures,** each below. None changes a rule the plan states; each makes a rule measurable on this tree.
 
 ## Departures
 
@@ -22,11 +22,14 @@ departures and measurements the build added, by slug. No D-number is minted here
 | `census-allows-the-decider-and-the-close-argument` | Task A4 Step 2: no file outside `store.ts` and `doneTestRead.ts` reads `closePr` | The census counts a read as a member access, an index by name or a destructuring. `doneTests.ts` reads the gathered fact `closePr` (the decider, which the plan's §9 names the only one) and is allowed beside the gatherer; `close.ts` passes `closePr:` as a key of the writer's input, which is not a read |
 | `target-facts-reuse-read-failure` | §11 Task A3's interface spells `run: … \| 'absent' \| 'unreadable'` | The pair is declared once, as `shared/agent-protocol.ts#ReadFailure`, and `single-definition/vocabularies` refuses a second spelling, so `TargetFacts` names `ReadFailure`. Same two words |
 | `close-pr-merged-is-the-phase-readers-predicate` | DT7: `{ pr, merged, head }` | `merged` is `prstate.ts#isMergedRow`, the predicate every phase reader uses, so a pull request a merge train landed (closed with the train label, proven by the train record) records `merged: true`. `mergedFactsOf`, the landing line's reader, leaves such a row to its PR-keyed reader; the done test reads the run's PR as merged either way |
+| `census-admits-the-plan-sync-pr-link` | Task A4 Step 2: no file outside `store.ts` and `doneTestRead.ts` reads `prLineage` | The Linear plan sync (#2941, merged after this plan) reads a run's newest lineage entry in `linear/planSync.ts#prOfRunFrom` for the PR number to link, never whether it merged. The census admits that file by name, so any other reader is still red. |
 
 ## Measured
 
 - **Growth:** `schema.ts` +13 (one migration and its comment), `store.ts` +10 (the column, its read, its strip and its
   one `UPDATE`), both within 40.
+- **CI round 1:** `mail-routes.test.ts`'s kebab census found the done-test words undeclared; they are admitted through
+  `coord/doneTests.ts#isDoneTestKebab`, and dropping one word from its map reds the scan.
 - **Mutation:** `parseDoneTest` 10 of 10 mutants killed, `targetVerdict` 30 of 30, floors 1. The vocabulary's spelled
   list kills `review-passed` added to the measured map. The close's record kills a `closePr` written from the
   lineage's newest merged entry (the reuse case) and a dropped wire strip. The census kills a weakened read pattern and

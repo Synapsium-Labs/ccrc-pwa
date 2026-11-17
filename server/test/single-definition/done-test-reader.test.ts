@@ -8,6 +8,8 @@
 //     and hydrates it, `doneTestRead.ts`, which gathers it, and `doneTests.ts`, which decides on the gathered fact; and a
 //     run's `prLineage` only in `store.ts` and `doneTestRead.ts`. Naming the column as a key of the writer's input (the
 //     close's `closePr: closePrFactsOf(line)`) is not a read (slug `census-allows-the-decider-and-the-close-argument`).
+//     The Linear plan sync (`linear/planSync.ts#prOfRunFrom`, #2941) reads `prLineage` too, for a run's PR NUMBER to link,
+//     never whether it merged, so it is admitted by name (slug `census-admits-the-plan-sync-pr-link`).
 // Comment lines are not code. KNOWN WIDTH: a read through a computed key or an alias of the row object is not seen.
 import { describe, it, expect } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -86,7 +88,7 @@ describe('the done-test reader: one gatherer, one decider, and no other reader o
     expect(readersOf(SRC, 'closePr')).toEqual([`${C}doneTestRead.ts`, `${C}doneTests.ts`, `${C}store.ts`]);
   });
 
-  it('a run\'s prLineage is read only by the store and the gatherer', () => {
-    expect(readersOf(SRC, 'prLineage')).toEqual([`${C}doneTestRead.ts`, `${C}store.ts`]);
+  it('a run\'s prLineage is read only by the store, the gatherer and the plan sync\'s PR link', () => {
+    expect(readersOf(SRC, 'prLineage')).toEqual([`${C}doneTestRead.ts`, `${C}store.ts`, 'server/src/linear/planSync.ts']);
   });
 });
