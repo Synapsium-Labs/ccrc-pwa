@@ -107,6 +107,29 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Open it', hidden: true }));
       await settle();
       expect(pageHidden(), 'a reopen during the exit left the page announced behind an open modal').toBe(true);
+      // Review 2323 F6 (Task C40): the reopened sheet closes again, and the page is announced again as it does.
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(document.querySelector('[role="dialog"]'), 'CONTROL: the panel is still mounted, closing again').not.toBeNull();
+      expect(pageHidden(), 'the page is still aria-hidden while the reopened sheet closes').toBe(false);
+    } finally { release(); }
+  });
+
+  // Review 2323 F7 (Task C40): Radix's focus guards, which its own hiding marks, stay hidden while the sheet closes.
+  it('the focus guards stay hidden while the sheet closes', async () => {
+    const release = holdClosingContent();
+    try {
+      render(<Page />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      const guards = [...document.querySelectorAll('[data-radix-focus-guard]')];
+      expect(guards.length, 'CONTROL: the open sheet placed its focus guards').toBeGreaterThan(0);
+      expect(guards.every((g) => g.getAttribute('aria-hidden') === 'true'), 'CONTROL: the guards are hidden while it is open').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      await settle();
+      expect(pageHidden(), 'CONTROL: the page is announced while the sheet closes').toBe(false);
+      expect(guards.filter((g) => g.isConnected).map((g) => g.getAttribute('aria-hidden')), 'a focus guard was announced as the sheet closed')
+        .not.toContain(null);
     } finally { release(); }
   });
 
@@ -314,6 +337,49 @@ describe('1. the page is not aria-hidden while the sheet closes', () => {
       await settle();
       expect(own.getAttribute('aria-hidden'), 'the closing sheet lifted an element the page hid itself').toBe('true');
       expect(pageHidden(), 'the page is still aria-hidden while the second sheet closes').toBe(false);
+      for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: both sheets have unmounted').toBe(0);
+      expect(own.getAttribute('aria-hidden'), 'an element the page hid itself was left announced for good').toBe('true');
+      expect(pageHidden(), 'the page stayed hidden after both sheets left').toBe(false);
+    } finally { own.remove(); release(); }
+  });
+
+  // Review 2323 F1 (Task C40, D-8698): the same hand-off with the sheet that opens EARLIER in the tree than the one that
+  // closes, as the session screen's follow-up sheets are rendered before its menu sheet. The opening sheet's own read must
+  // come after the closing one has lifted its marks, so the page is announced as the follow-up closes, as on main.
+  it('a sheet opened earlier in the tree than the one closing still announces the page as it closes, and lifts nothing the page hid', async () => {
+    function Reversed(): ReactNode {
+      const [first, setFirst] = useState(false);
+      const [second, setSecond] = useState(false);
+      return (
+        <main>
+          <button type="button" onClick={() => setFirst(true)}>Open it</button>
+          <Sheet open={second} onClose={() => setSecond(false)} title="Next sheet">
+            <button type="button" onClick={() => setSecond(false)}>Done</button>
+          </Sheet>
+          <Sheet open={first} onClose={() => setFirst(false)} title="Menu">
+            <button type="button" onClick={() => { setFirst(false); setSecond(true); }}>Next</button>
+          </Sheet>
+        </main>
+      );
+    }
+    const release = holdClosingContent();
+    const own = document.createElement('div');
+    own.setAttribute('aria-hidden', 'true');
+    own.textContent = 'decoration';
+    document.body.appendChild(own);
+    try {
+      render(<Reversed />);
+      fireEvent.click(screen.getByRole('button', { name: 'Open it' }));
+      await settle();
+      fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+      await settle();
+      expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: the menu is closing as the next sheet opens').toBe(2);
+      expect(pageHidden(), 'CONTROL: the next sheet hides the page').toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await settle();
+      expect(pageHidden(), 'the page is still aria-hidden while the sheet opened earlier in the tree closes').toBe(false);
+      expect(own.getAttribute('aria-hidden'), 'the closing sheet lifted an element the page hid itself').toBe('true');
       for (const dialog of [...document.querySelectorAll('[role="dialog"]')]) await finishExit(dialog);
       expect(document.querySelectorAll('[role="dialog"]').length, 'CONTROL: both sheets have unmounted').toBe(0);
       expect(own.getAttribute('aria-hidden'), 'an element the page hid itself was left announced for good').toBe('true');
