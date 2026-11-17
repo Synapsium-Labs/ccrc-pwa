@@ -743,9 +743,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, the row revisions, Overlord W2),
     // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A)
-    // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2).
-    expect(COORD_SCHEMA_VERSION).toBe(89);
-    expect(MIGRATIONS.length).toBe(89);
+    // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2),
+    // and MIGRATIONS[89] (prevLane on continuity_generations, the previous generation's account, account organization D).
+    expect(COORD_SCHEMA_VERSION).toBe(90);
+    expect(MIGRATIONS.length).toBe(90);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -859,8 +860,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
     // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
-    // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(89);
+    // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
+    // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(90);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
