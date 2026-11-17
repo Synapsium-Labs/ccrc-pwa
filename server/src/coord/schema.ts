@@ -3419,11 +3419,34 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // Overlaps and goal conflicts (Overlord spec §5.5 H23, §5.6 H38, Table 11.1a; W2, plan `w2-overlaps.md` Task 3, questions
+  // 4 and 8). `claim_collisions`: one row per conflicting path and holder of a REFUSED claim, written only by
+  // `claimCollisions.ts#recordCollisions` after the claim's own transaction committed, in a transaction of its own, and pruned
+  // there after 48 hours. `programme_pairs`: one row per EPISODE of a pair key (`<kind>:<a>:<b>`), at most one standing
+  // (closedAt NULL), written by `programmePairsStore.ts`. Every column PR B writes (mailedAt, ruled, ruledAt, ruledBy) is here.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 85` takes rule 3, never names
+  // them. The next slot on the main this branch merged (84 there, responses B's); other open PRs hold 85 too, so the second
+  // to land renumbers at landing, on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must
+  // print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claim_collisions (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL,
+    claimedPath TEXT NOT NULL, requesterId TEXT NOT NULL, requesterRun INTEGER, holderClaimId INTEGER NOT NULL);
+  CREATE INDEX claim_collisions_at ON claim_collisions (at);
+  CREATE TABLE programme_pairs (id INTEGER PRIMARY KEY, pairKey TEXT NOT NULL, kind TEXT NOT NULL, progA TEXT NOT NULL,
+    progB TEXT NOT NULL, episode INTEGER NOT NULL, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL,
+    evidence TEXT NOT NULL, goalsA TEXT, goalsB TEXT, closedAt INTEGER, closedWhy TEXT, mailedAt INTEGER, ruled TEXT,
+    ruledAt INTEGER, ruledBy TEXT, UNIQUE (pairKey, episode));
+  CREATE UNIQUE INDEX programme_pairs_standing ON programme_pairs (pairKey) WHERE closedAt IS NULL;
+  `,
+
+  // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
   // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
   // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
-  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 85`
-  // takes rule 3, never names it. Responses B (#2914) landed 84, so this is 85; sibling W1 pieces add migrations too, so
-  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 84 before this entry is counted):
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 86`
+  // takes rule 3, never names it. Overlaps A (#2949) landed 85, so this is 86; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 85 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

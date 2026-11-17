@@ -1983,7 +1983,7 @@ ccrc account seed --id <id>                # the first-run seed on its own: onbo
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
-ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off]   # a token lane's stated account; placement; its billing and continuity facts
+ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off] [--org <label>|none]   # a token lane's stated account; placement; its billing and continuity facts; its organization label
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
     [--keep-codex-auth | --delete-codex-auth]
 ```
@@ -4972,7 +4972,9 @@ functions, inherited shell options) stripped, and the body refuses them
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
-`ws-audit --session <id> --collect` are decided the same way.
+`ws-audit --session <id> --collect` are decided the same way. `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`,
+`roll` and `claude` start under `bash -p` too, so an inherited `nocasematch` cannot fold a case variant into one of them;
+the body does not refuse them when it was started another way.
 
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
 directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
@@ -8893,7 +8895,9 @@ arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by ha
 The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
 after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
 (the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
-only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+only recording, paused, or not read) with every count (but for the would-keep figure after a pass that could not read
+everything it needs, where it says the card cannot say how many until the next pass), whether the fleet box's keep switch
+and its change check are available,
 missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
 each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.

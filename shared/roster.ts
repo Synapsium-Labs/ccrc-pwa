@@ -1134,9 +1134,12 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
   // The organization label, gated as `pool` is (a written `null` refused), with the id shapes refused by name.
   const orgRaw = raw['org'];
   const orgWord = typeof orgRaw === 'string' ? orgLabelVerdict(orgRaw) : 'off-shape';
+  // The key and the reason, never the value: a hand-edited roster may hold the organization's real id (PR A's review F6).
   if (orgRaw !== undefined && orgWord !== 'ok') {
+    const why = typeof orgRaw !== 'string' ? 'is not a string' : orgWord === 'looks-like-an-id'
+      ? "looks like an organization's id (org-looks-like-an-id)" : `is not a name matching ^[a-z][a-z0-9-]{0,31}$ other than "${ORG_CLEAR_WORD}"`;
     throw new RosterError(
-      `account "${id}" has an invalid org ${JSON.stringify(orgRaw)}${orgWord === 'looks-like-an-id' ? ' (org-looks-like-an-id)' : ''}.`,
+      `account "${id}" has an invalid "org": it ${why}.`,
       `Set "org" for account "${id}" in ${ROSTER_PATH} to a name you choose matching ^[a-z][a-z0-9-]{0,31}$, other than ` +
         `"${ORG_CLEAR_WORD}" and never the organization's id, or remove the key to leave it unset.`,
     );

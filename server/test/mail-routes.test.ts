@@ -59,6 +59,7 @@ import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
+import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
@@ -1155,13 +1156,18 @@ describe('the rejection table is total, in both directions', () => {
         // THE RESPONSE RECORD'S RECEIPTS DOOR (Overlord W1): `coord/responsesStore.ts` names a drop word as a literal
         // (`'no-row'`). It rides the door's answer as a `dropped` key, never a `refused` or `reject.code`. Admitted through
         // L0's guard, derived from `RECEIPT_DROPS`, never NOT_CODES.
+        // THE OVERLAPS ARM (Overlord W2 overlaps A): `coord/overlaps.ts` names a pair's kind, source and close, the relay's
+        // refusal word and its reasons as literals. A word rides a `programme_pairs` row or the relay's verdict, never a mail
+        // rejection or a run refusal. Admitted through the exported guard, derived from L0's pair tables and
+        // `RELAY_CONFLICT_WHY_MAP`, never NOT_CODES.
+        || isOverlapsKebab(tok)
         || isReceiptDrop(tok)
         // THE DESIGNATION (Overlord W1 designation A): `coord/overlordDesignation.ts` names its refusals by their wire words,
         // declared once in L0's `OVERLORD_REFUSALS` and answered by the designate door. Admitted through L0's guard, never NOT_CODES.
         || isOverlordRefusal(tok)
         // ...and its acts, its store's answers and the read words it takes, through that decider's own exported guard.
         || isDesignationKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, receipt drop word, Overlord refusal or designation word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, Overlord refusal or designation word`).toBe(true);
     }
   });
 });

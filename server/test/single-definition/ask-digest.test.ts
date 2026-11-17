@@ -1,8 +1,10 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
+import { FORBIDDEN_CCD_VERBS } from '../../src/coord/approvalguard.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
@@ -1799,5 +1801,59 @@ describe('the question doors: one reader, one core per principal, the old doors 
     // Nothing decides after the core: what follows the call only sends its answer (no branch, no further await).
     expect(code.slice(core), `${route} decides after the core`).not.toMatch(/\bif\s*\(|\bawait\b|\?\s*[^:]*:/);
     if (reader !== null) expect(code.indexOf(reader), `${route} reads its body before the core`).toBeLessThan(core);
+  });
+});
+
+
+// D-8666 (the delegation broker's Rider; review 2313 F1). APPENDED, for the reason the first block states. Every verb no
+// session may run (`FORBIDDEN_CCD_VERBS`, `server/src/coord/approvalguard.ts`) starts protected at the installed direct
+// entry: `ccd/ccd-entry.py#is_protected` folds its case and starts it under `bash -p`, so a case variant reached through an
+// inherited `nocasematch` folds into no verb. The entry's tuples are hand-kept beside that list, so this census asks the
+// entry's REAL classifier (both tuples, loaded from the file as a module) about each head, never a third list: a verb added
+// to `FORBIDDEN_CCD_VERBS`, or deleted from either tuple, reds it. The head is the first word, so `ws-gc --prune` is
+// `ws-gc`. KNOWN WIDTH: it asks each head exactly, upper-cased, and with one tail word; the folds beyond ASCII are the
+// reach tests' (`ccd-forbidden-verbs-entry.test.ts`, `ccd-ws-lease-mark-reach.test.ts`).
+describe('every forbidden ccd verb starts protected at the installed direct entry (D-8666; review 2313 F1)', () => {
+  const ENTRY = path.join(ccrcRoot, 'ccd', 'ccd-entry.py');
+  const HEADS = [...new Set(FORBIDDEN_CCD_VERBS.map((v) => v.split(' ')[0]!))];
+  /** The heads `source`'s own `is_protected` does NOT protect, `source` loaded as a module: each asked bare, upper-cased and
+   *  with a tail word, and listed when any of the three starts ordinary. */
+  const unprotected = (source: string, heads: readonly string[]): string[] => {
+    const py = [
+      'import json, sys, types',
+      'm = types.ModuleType("ccd_entry")',
+      'exec(compile(sys.stdin.read(), "ccd-entry.py", "exec"), m.__dict__)',
+      'heads = json.loads(sys.argv[1])',
+      'print(json.dumps([v for v in heads if not all(m.is_protected(a) for a in ([v], [v.upper()], [v, "--x"]))]))',
+    ].join('\n');
+    const r = spawnSync('python3', ['-I', '-S', '-c', py, JSON.stringify(heads)], { input: source, encoding: 'utf8' });
+    expect(r.status, `the classifier could not be asked: ${r.stderr}`).toBe(0);
+    return JSON.parse(r.stdout) as string[];
+  };
+  const source = (): string => readFileSync(ENTRY, 'utf8');
+
+  it('the census reads the list: every head, ws-gc from ws-gc --prune among them', () => {
+    expect(HEADS).toContain('ws-gc');
+    expect(HEADS).toContain('ws-rm');
+    expect(HEADS.length, 'one head per verb').toBe(FORBIDDEN_CCD_VERBS.length);
+  });
+
+  it('every head of FORBIDDEN_CCD_VERBS is protected by the entry\'s own is_protected', () => {
+    expect(unprotected(source(), HEADS)).toEqual([]);
+  });
+
+  it('CONTROL: a verb added to FORBIDDEN_CCD_VERBS that the entry does not protect is reported', () => {
+    expect(unprotected(source(), [...HEADS, 'ws-new-verb'])).toEqual(['ws-new-verb']);
+  });
+
+  it('CONTROL: each head deleted from whichever tuple names it is reported', () => {
+    const src = source();
+    for (const v of HEADS) {
+      const quoted = `'${v}'`;
+      expect(src.split(quoted).length - 1, `${v} is named once in the entry`).toBe(1);
+      const mutant = src.includes(`${quoted}, `) ? src.replace(`${quoted}, `, '') : src.replace(`, ${quoted}`, '');
+      expect(mutant, `${v}: the mutation applied`).not.toContain(quoted);
+      expect(unprotected(mutant, HEADS), `${v} deleted from its tuple`).toEqual([v]);
+    }
   });
 });
