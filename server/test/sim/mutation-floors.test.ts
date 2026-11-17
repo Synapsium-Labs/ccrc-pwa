@@ -37,6 +37,7 @@ import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
 import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
+import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { simulate } from './run.js';
 import {
@@ -194,6 +195,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...DECISION_MODEL_MUTANT_SETS,
   ...OVERLAPS_MUTANT_SETS,
   ...PRIVATE_NAMES_MUTANT_SETS,
+  ...RENEWAL_READING_MUTANT_SETS,
   ...PLAN_PHASES_MUTANT_SETS,
 };
 

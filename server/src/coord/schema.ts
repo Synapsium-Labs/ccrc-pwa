@@ -3472,14 +3472,29 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
+  // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
+  // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
+  // default (question 2). ONE writer, its door's `continuityStore.ts#setBackstop`; `backstopRead` narrows it. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 88` takes rule 3 and never names it. Overlaps A (#2949)
+  // landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, so this is 88 (the coordinator's word,
+  // 2026-11-17); other open PRs hold 88 too, and whoever lands second renumbers on the coordinator's word. RE-MEASURE the
+  // slot before the PR and before merge (it must print 87 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE renewal_backstop_settings (id INTEGER PRIMARY KEY CHECK (id = 1), hour INTEGER NOT NULL, zone TEXT NOT NULL,
+    isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
+  INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
+  `,
+  // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
   // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
   // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
   // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
   // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
-  // nothing on an existing table: an older build opening a file at `user_version 88` takes rule 3, never names them. The
-  // next slot on origin/main as measured at this branch's start (87, the row revisions); the Linear hierarchy's wave 4
-  // holds a migration too, and whichever lands second takes the next slot (the coordinator's terms). RE-MEASURE the slot
-  // before the PR and before merge (it must print 87 before this entry is counted):
+  // nothing on an existing table: an older build opening a file at `user_version 89` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed the backstop setting at 88 first, so WM0 took the next slot
+  // (the coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 88 before
+  // this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
