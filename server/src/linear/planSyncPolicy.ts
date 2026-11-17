@@ -339,16 +339,17 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
       continue;
     }
     // §5.2: the epic's team plus every team, in the same workspace, a ticket of the epic that is not dropped files into (C14).
-    // F3 (Review Focus 3): a ticket bound here whose project key was cleared or moved to another workspace is not moved, so
-    // its issue stays in its team, and that team stays on the project, whatever the ticket's project key does now.
+    // F3 (Review Focus 3): a ticket bound here keeps the team its issue sits in on the project, whatever its project key does
+    // now: cleared or moved to another workspace (the issue is not moved), and (M2) re-keyed inside this workspace until the
+    // move binds, so the project gains the new team first and drops the old one only after the issue left it.
     const teamIds = [...new Set([pl.teamId, ...e.tickets.flatMap((t) => {
       if (effTicket(eff, t).state === 'dropped') return [];
       const tp = placeOf(t.project);
-      if (tp.ok && tp.workspaceId === wsId) return [tp.teamId];
+      const planned = tp.ok && tp.workspaceId === wsId ? [tp.teamId] : [];
       const tb = bindingOf('ticket', t.id, wsId);
-      const kept = tb === undefined || tb.linearId === null || tb.teamKey === null ? undefined
+      const held = tb === undefined || tb.linearId === null || tb.teamKey === null ? undefined
         : pl.ws.teams.find((k) => k.key.toLowerCase() === tb.teamKey!.toLowerCase());
-      return kept === undefined ? [] : [kept.id];
+      return held === undefined ? planned : [...planned, held.id];
     })])].sort();
     const planned = {
       name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, s.program.title, off), statusId: pStatus, teamIds, initiativeId,

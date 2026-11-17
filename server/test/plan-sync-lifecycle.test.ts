@@ -356,6 +356,30 @@ describe('the team-key rule (Review Focus 3)', () => {
     expect(ops(planSyncSteps(s).steps)).toEqual(['skip:ticket-workspace-mismatch']);
   });
 
+  it("M2: a bound ticket's project re-keyed inside the workspace: the project gains the new team first and drops the old one only after the move binds", () => {
+    const BBB = { id: U(2), key: 'BBB' };
+    const CCC = { id: U(4), key: 'CCC' };
+    const s = snap({ tickets: [tk({ project: 'proj-b' })] });
+    s.workspaces[0]!.teams = [AAA, BBB, CCC];
+    s.workspaces[0]!.directory = { ...directory, states: ['AAA', 'BBB', 'CCC'].flatMap((teamKey, i) => [
+      { id: U(41 + i * 10), name: 'Todo', type: 'unstarted', teamKey }, { id: U(42 + i * 10), name: 'Doing', type: 'started', teamKey },
+      { id: U(43 + i * 10), name: 'Done', type: 'completed', teamKey }, { id: U(44 + i * 10), name: 'Nope', type: 'canceled', teamKey }]) };
+    s.projects[1] = { ...s.projects[1]!, teamKey: 'BBB' };
+    settle(s);
+    expect(bindingOf(s, 'ticket').teamKey).toBe('BBB');
+    s.projects[1] = { ...s.projects[1]!, teamKey: 'CCC' };
+    const first = planSyncSteps(s).steps;
+    expect(ops(first)).toEqual(['update:projectUpdate', 'update:issueUpdate']);
+    expect(stepOf(first, 'projectUpdate').input['teamIds']).toEqual([AAA.id, BBB.id, CCC.id].sort());   // BBB kept until the move binds
+    const move = stepOf(first, 'issueUpdate');
+    expect(move).toMatchObject({ teamKey: 'CCC', input: { teamId: CCC.id } });
+    bindingOf(s, 'epic').fingerprint = stepOf(first, 'projectUpdate').fingerprint;
+    Object.assign(bindingOf(s, 'ticket'), { fingerprint: move.fingerprint, teamKey: 'CCC' });   // the move bound
+    const after = planSyncSteps(s).steps;
+    expect(ops(after)).toEqual(['update:projectUpdate']);
+    expect(stepOf(after, 'projectUpdate').input['teamIds']).toEqual([AAA.id, CCC.id].sort());
+  });
+
   it("F2: the epic's project key moved to another workspace creates nothing there; the old workspace's initiative is still updated and closed", () => {
     const s = settle(snap({ cps: [cp()], tickets: [tk()] }));
     s.workspaces.push({ workspaceId: 'ws-b', initiatives: 'on', directory, teams: [{ id: U(2), key: 'BBB' }] });
@@ -668,6 +692,22 @@ describe('the pass: moves and closes', () => {
     const from = r.asks.length;
     due(r); await tick(r);
     expect(r.asks.slice(from)).toEqual([]);
+  });
+
+  it("M2: a second team's ticket re-keyed inside the workspace: no projectUpdate drops its team before the move binds", async () => {
+    const { r, t2 } = await secondTeam();
+    r.db.prepare("UPDATE project_linking SET teamKey = 'AAA' WHERE project = 'project-b'").run();
+    r.respond.current = (ask) => (ask.op === 'issueOwned' ? ok({ issue: { id: ask.input['id'], identifier: 'CCC-1', stateType: 'unstarted', teamKey: 'CCC' } })
+      : ask.op === 'issueUpdate' ? ok({ id: ask.target, identifier: 'AAA-77' }) : defaultRespond(ask));
+    const from = r.asks.length;
+    due(r); await tick(r);
+    const sent = r.asks.slice(from);
+    const moved = sent.findIndex((a) => a.op === 'issueUpdate');
+    expect(moved).toBeGreaterThanOrEqual(0);
+    for (const a of sent.slice(0, moved).filter((x) => x.op === 'projectUpdate')) expect(a.input['teamIds']).toContain(CCC_TEAM.id);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'bound', teamKey: 'AAA' });
+    const drop = sent.slice(moved).find((a) => a.op === 'projectUpdate');                       // CCC goes only after the move
+    expect(drop?.input['teamIds']).toEqual([WS.a.teams[0].id]);
   });
 
   it("F3: a second team's ticket whose project key moved to another workspace sends no projectUpdate, and its binding fails once", async () => {
