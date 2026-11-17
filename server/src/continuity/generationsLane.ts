@@ -67,6 +67,7 @@ import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
 import { RENEWAL_LANE_PERIOD_MS, RENEWAL_MODE_DEFAULT, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
 import { familyClassOf } from '../../../shared/models.js';
+import { orgRelation } from '../../../shared/accountOrg.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
 import type { CoordStore } from '../coord/store.js';
 import type { TurnMarkRead } from '../coord/stall.js';
@@ -202,7 +203,13 @@ export interface GenerationsInput {
   /** The soft renewal Setting (R19); renew when the operator is away unless set on schedule. Absent: the stored Setting
    *  (`renewal_mode_settings`, the hand-offs piece), whose lost row or unreadable word is `when-away`. */
   readonly softMode?: SoftInputs['mode'];
+  /** The roster's organization label of an account (`AccountDef.org`), as the server holds it. Absent: no account is
+   *  labelled, so every resume onto another account reads its organization as unknown (account organization §4). */
+  readonly orgOf?: OrgOf;
 }
+
+/** An account's organization label, or null when it has none or is not rostered: unknown, never "same". */
+export type OrgOf = (account: string) => string | null;
 
 /** The generation an act is for, as the pass read it. */
 export interface ActTarget {
@@ -522,7 +529,8 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
     const renewNow = renewNowStands(requested.has(g.sessionId), g.dueWhy, live);
-    const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass'), renewNow));
+    const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass'),
+      input.orgOf, renewNow));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
@@ -757,7 +765,7 @@ const W1 = later('W1');
 /** The gather's readings, as `renewalDue`'s inputs. Every reading that is not a fresh measurement reaches the decider as
  *  unmeasured with its reason: a stale sidecar is unmeasured, never a reading below the cap. */
 export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Reading<boolean>, nowMs: number,
-  probeFailedUnfixed: Reading<boolean>, renewNow = false): RenewalInputs {
+  probeFailedUnfixed: Reading<boolean>, orgOf: OrgOf = () => null, renewNow = false): RenewalInputs {
   const unread = later('unread this pass');
   const usage = (pick: 'ctxTokens' | 'ctxWindow'): Reading<number> => usageReading(r, pick);
   const compactions = ((): Reading<number> => {
@@ -778,10 +786,19 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
     if (g.model === null || g.prevModel === null) return later('model unknown');
     return { kind: 'measured', value: { resumed: true, otherClass: familyClassOf(g.model) !== familyClassOf(g.prevModel) } };
   })();
+  // Table 3 of the account organization plan: the relation of this generation's account to the previous one's. An unknown
+  // relation is unmeasured, never "same" (slug unknown-org-is-no-preference), and blinds `resumed-other-org` alone.
+  const startOtherOrg = ((): Reading<boolean> => {
+    if (!g.resumed) return { kind: 'measured', value: false };
+    if (g.prevLane === null) return later('previous account unknown');
+    if (g.lane === null) return later('account unknown');
+    const rel = orgRelation({ id: g.lane, org: orgOf(g.lane) }, { id: g.prevLane, org: orgOf(g.prevLane) });
+    return rel === 'unknown' ? later('organization unknown') : { kind: 'measured', value: rel === 'other' };
+  })();
   return {
     role: g.role, contextTokens: usage('ctxTokens'), windowTokens: usage('ctxWindow'), fittedCeilingTokens: W1, turns: W1,
     compactions, idleMs, backstopDue: W1, installBehind: r === undefined ? unread : r.behind,
-    probeFailedUnfixed, modelDrift: W1, startResumed, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
+    probeFailedUnfixed, modelDrift: W1, startResumed, startOtherOrg, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
     classUnservable: W1, accountLoadMove: W1, compactionRefused: later('compaction'), classChanged: W1, evaluationDue: W1,
     notLocal: W1, waveBoundary: wave, renewNow,
     ...definedOf(r?.w1),

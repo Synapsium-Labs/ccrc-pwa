@@ -70,7 +70,7 @@ describe('depth: the stack of open names (limit inclusive)', () => {
   });
 
   it('only A-Z are lowered: the Kelvin sign (U+212A) is not a K, so </\u212A> matches no <k>', () => {
-    // toLowerCase would turn it into 'k' and let the close pop one <k>: 256 would be admitted instead of 257 refused.
+    // toLowerCase would turn it into 'k' and let the close pop one <k>: depth D would be admitted instead of D + 1 refused.
     expect(prescanMockup(`${rep('<k>', D - 1)}</\u212A><k><k>`)).toMatchObject({ ok: false, why: 'too-deep', depth: D + 1 });
   });
 });
@@ -413,7 +413,7 @@ describe('v6 (D-8663): ordinary markup stays admitted (RE-BASELINED: an omitted 
     expect(prescanMockup(rep(unit, 8)).ok).toBe(true);
   });
 
-  it('the cost, pinned: an end tag the markup omits leaves its element on the stack, and a page that omits MOCKUP_MAX_DEPTH of them is refused', () => {
+  it('the cost, pinned: an end tag the markup omits leaves its element on the stack; a page that leaves MOCKUP_MAX_DEPTH open is admitted, and one that leaves more is refused', () => {
     // At depth 64 (D-8695): 32 paragraphs left open in closed divs, or 21 lists whose items are left open.
     expect(prescanMockup(rep('<div><p>text</div>', D / 2))).toMatchObject({ ok: true, depth: D });
     expect(prescanMockup(rep('<div><p>text</div>', D / 2 + 1))).toMatchObject({ ok: false, why: 'too-deep' });

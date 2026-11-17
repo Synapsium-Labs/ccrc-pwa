@@ -1421,7 +1421,9 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       // The renewal act: the walk's deciders (L1). The acts are planned here and taken by `renewalActs.ts`, never imported.
       './softRenewal.js', './renewalOrder.js', './renewalFeed.js',
       // The renewal hand-offs: Renew now's and the mark's readers and the PreCompact field's decider (L1); none of them sends.
-      './renewNow.js', './operatorMark.js', './precompact.js'];
+      './renewNow.js', './operatorMark.js', './precompact.js',
+      // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
+      '../../../shared/accountOrg.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>
       e.kind !== 'type-query' && !e.typeOnly && !(e.names.length > 0 && e.names.every((n) => (e.typeNames ?? []).includes(n))));
     expect(edges.map((e) => e.specifier).sort()).toEqual([...allowed].sort());

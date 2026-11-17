@@ -3517,6 +3517,28 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 90: user_version 89 -> 90 ─────────────────────────────────────────────
+  // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
+  // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
+  // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
+  // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
+  // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
+  // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 90` takes rule 3 (it warns,
+  // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
+  // ROLLBACK EXPOSURE (review 2335 F1): `resumed-other-org` is the first trigger word added after the vocabulary shipped.
+  // An older build's `genRowOf` refuses a row whose `dueWhy` or `blind` carries a word it does not know, and
+  // `liveGenerations` is all-or-failure, so one such row fails that build's whole generations read (fail-closed by design,
+  // review 2003 F13). It takes a rollback below this PR onto a database that already holds such a row.
+  // Overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+  // (#2962) 88 and remaining work A (#2951) 89, so this is 90 (the coordinator's word, 2026-11-17). RE-MEASURE the slot
+  // before the PR and before merge (it must print 89 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
+  `,
+
+  // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
   // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
@@ -3527,9 +3549,9 @@ export const MIGRATIONS: readonly string[] = [
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
   // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
   // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
-  // opening a file at `user_version 90` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
-  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88 and remaining work A (#2951) 89, so this is 90 (the coordinator's word, 2026-11-17, mail 22872); others may hold 90 too, and the second to land renumbers on the coordinator's word.
-  // RE-MEASURE the slot before merge (it must print 89 before this entry is counted):
+  // opening a file at `user_version 91` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89 and org D (#2958) 90, so this is 91 (the coordinator's word, 2026-11-17, mail 22987); others may hold 91 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 90 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

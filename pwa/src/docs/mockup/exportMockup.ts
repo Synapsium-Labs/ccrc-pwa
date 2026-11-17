@@ -1,0 +1,570 @@
+// The mockup export's snapshot (native Docs reader, completion plan Task 9, C2; base spec 2026-10-01 5.6.9 Steps 2-6 and
+// "What is guaranteed", rows M5.EX1 and M5.EX2, M5.B10). Ring L3: an adapter over a DOM, like `load.ts`'s extractor. It
+// decides nothing about admission (the plan did, from its context) and nothing about layout (the builder does): it takes
+// the viewer's ALREADY PARSED inert Document and the loaded assets, works on a CLONE, and answers the inner document of
+// the saved file as text, the links it removed and the assets it could not inline. `parse.ts` stays the only parser
+// (M5.16): this file never constructs one and never builds a node from markup text, and being inside Export's inert
+// scope (M4.EX2) it holds no HTML sink and no markup string: the doctype is `EXPORT_PREFIX`, and the CSP meta is made
+// with DOM calls.
+//
+// The steps, in order, on the clone:
+//   2. INLINE   each reference whose row is `inline` and whose bytes the result holds becomes `data:<the ROW's MIME>;base64,`
+//               (the extension table's, never a response's); a stylesheet is inlined with its own references rewritten
+//               first, within `MOCKUP_MAX_CSS_DEPTH` of use, and one it cannot inline is neutralised as in step 4. The
+//               inlined data: URLs are bounded by `DOCS_EXPORT_MAX_BYTES` (a file over it could never be saved, and an
+//               unbounded repeat of one large sheet would exhaust memory before the builder could measure anything).
+//   3. STRIP    template, noscript (unwrapped), script, frames, objects, embed, base, `meta[http-equiv]`, every `link` but a
+//               `data:` stylesheet; every `on*` attribute and `srcdoc`, `action`, `formaction`, `ping`, `attributionsrc`;
+//               `srcset` and `imagesrcset` unless every candidate is `data:`; every URL attribute of the allowlist unless it
+//               is `data:` (a same-document `#` fragment stays on an SVG element other than `a` and `image`); SMIL
+//               animations that target `href`.
+//   4. CSS      `css.ts`'s two patterns over every style, `style` attribute, attribute holding `url(` and decoded `data:`
+//               stylesheet: a `url()` off `data:` becomes `url("data:,")`, such an `@import` is dropped. The forms the scanner
+//               misses (`image-set()`, CSS escapes inside `url`) rest on the CSP (M5.B10).
+//   5. LINKS    `href` and `xlink:href` off every `a` and `area`, the text kept, the target in `title` and in `links`. The
+//               targets are taken before step 3 (which would drop the `href`) and written into `title` after step 4, so an
+//               author's `title` is neutralised as step 4 says and the target keeps its real text.
+//   6. INNER    the CSP meta first in `<head>`, then the serialised clone.
+//
+// This inliner is LEGITIMATELY DIFFERENT from `buildMockupSrcdoc`'s (`load.ts`), not a second copy of it (CLAUDE.md,
+// "Consolidate, don't duplicate"): (1) another cap: the srcdoc build bounds the CHARACTERS of the viewer's frame string
+// (`MOCKUP_MAX_SRCDOC_CHARS`, one string it measures as it grows), while the saved file's cap is the FINAL file's bytes,
+// the inner document escaped into the `srcdoc` attribute plus the wrapper, which only the builder (`buildExport.tsx`) can
+// measure, so this file takes the assets the builder hands in and bounds only the runaway case (`DOCS_EXPORT_MAX_BYTES`
+// of data: URLs); (2) another strip: the srcdoc build leaves every non-inlined reference as written because its CSP is
+// the wall, while the saved file neutralises them (`url("data:,")`, a dropped `@import`, a removed attribute) so that no
+// URL survives for a reader to follow after the page is saved; (3) another output: the srcdoc build answers a string,
+// while this answers the stripped DOM clone, serialised once at the end, which is what lets the strip work on parsed
+// attributes and not on markup text. What the two share they share: `extractMockupRefs`, `parseSrcset`, `base64Of` and
+// `css.ts`'s scanner are imported from `load.ts` and `css.ts`, never reimplemented, and a file is keyed by its pin as
+// the result's `assets` map is.
+// A missing asset keeps its element without its URL; an `img` or `input[type=image]` takes the closed missing sentence as
+// its `alt`, and every asset none of whose uses was written is listed once, in DOM order.
+import { docRepoPath, docsApi, resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
+import { EXPORT_MISSING_SENTENCE } from '../docsText';
+import { DOCS_EXPORT_CSP, DOCS_EXPORT_MAX_BYTES, EXPORT_PREFIX, type ExportMissing } from '../export/policy';
+import { rewriteCssBytes, scanCssBytes, scanCssBytesRefs, type CssToken } from './css';
+import { base64Of, extractMockupRefs, parseSrcset, type MockupExtract } from './load';
+import { MOCKUP_MAX_CSS_DEPTH } from './policy';
+import type { MockupAssetPlan, MockupAssetResult, MockupAssetRow, MockupRef, MockupRefVerdict } from './ports';
+
+/** What the snapshot answers: `html` is the inner document (`EXPORT_PREFIX` and the stripped clone's markup, the CSP meta
+ *  first in `<head>`); `links` the removed link targets in DOM order; `omitted` every asset NONE of whose uses was written
+ *  into `html` (nested files of a stylesheet included), each once in DOM order, as a resolved repo path or, where the
+ *  reference does not resolve to one, as written. A file with one use written and another cut is not omitted: the builder
+ *  derives what the file inlined, and how many drafts, from the files it handed in minus `omitted`. */
+export interface MockupSnapshot {
+  readonly html: string;
+  readonly links: readonly string[];
+  readonly omitted: readonly string[];
+}
+
+type InlineVerdict = Extract<MockupRefVerdict, { readonly v: 'inline' }>;
+
+/** The failure word the builder writes on an admitted row it stopped waiting for (`buildExport`'s mockup arm). */
+export const TIMED_OUT = 'timed-out';
+
+const encoder = new TextEncoder();
+const decoder = new TextDecoder('utf-8');
+
+// ---------------------------------------------------------------------------------------------------------------
+// URL text, as a browser reads an attribute URL
+// ---------------------------------------------------------------------------------------------------------------
+/** `value` as a URL parser first sees it: ASCII tab and newlines removed, C0 controls and space trimmed from both ends. */
+function urlText(value: string): string {
+  const s = value.replace(/[\t\n\r]/g, '');
+  let lo = 0;
+  let hi = s.length;
+  while (lo < hi && s.charCodeAt(lo) <= 0x20) lo += 1;
+  while (hi > lo && s.charCodeAt(hi - 1) <= 0x20) hi -= 1;
+  return s.slice(lo, hi);
+}
+
+const isDataUrl = (value: string): boolean => /^data:/i.test(urlText(value));
+const isFragment = (value: string): boolean => urlText(value).startsWith('#');
+
+const isSpace = (c: number): boolean => c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d || c === 0x0c;
+const isQuote = (c: number): boolean => c === 0x22 || c === 0x27;
+
+/** One character per byte (the byte's own value), for the scans that need a string's positions to be byte offsets. */
+function byteString(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 0x2000) out += String.fromCharCode(...bytes.subarray(i, i + 0x2000));
+  return out;
+}
+
+/** A `data:` URL's header (everything before its comma) and its payload as bytes, or null when it cannot be decoded: a
+ *  bad base64 payload, or a percent-encoding that is not UTF-8. The caller fails closed on null. */
+function decodeDataUrl(url: string): { readonly head: string; readonly bytes: Uint8Array<ArrayBuffer> } | null {
+  const v = urlText(url);
+  const comma = v.indexOf(',');
+  if (comma < 0) return null;
+  const head = v.slice(0, comma);
+  const hash = v.indexOf('#', comma);
+  const payload = v.slice(comma + 1, hash < 0 ? v.length : hash);
+  try {
+    if (/;\s*base64$/i.test(head)) {
+      const binary = atob(payload);
+      return { head, bytes: Uint8Array.from(binary, (ch) => ch.charCodeAt(0)) };
+    }
+    return { head, bytes: encoder.encode(decodeURIComponent(payload)) };
+  } catch {
+    return null;
+  }
+}
+
+/** The `data:` URL of `bytes` under `head`, always base64. */
+function encodeDataUrl(head: string, bytes: Uint8Array): string {
+  return `${/;\s*base64$/i.test(head) ? head : `${head};base64`},${base64Of(bytes)}`;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Step 4: the CSS strip, over bytes (one implementation for a style's text too)
+// ---------------------------------------------------------------------------------------------------------------
+interface Edit { readonly start: number; readonly end: number; readonly text: string }
+
+/** The end of the string whose opening quote is at `at`: past its closing quote, at a bare newline or at the end. */
+function skipString(s: string, at: number): number {
+  const q = s.charCodeAt(at);
+  let i = at + 1;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (c === q) return i + 1;
+    if (c === 0x0a || c === 0x0d || c === 0x0c) return i;
+    i += c === 0x5c ? 2 : 1;
+  }
+  return s.length;
+}
+
+/** The whole `@import` rule an `@import` token (`css` kind) sits in: from the at-keyword to its `;` (kept inside the span),
+ *  or to the end of the block or text. Null when the text before the token is not the `@import url(` or `@import "` shape
+ *  the scanner matched, in which case the caller neutralises the argument instead. */
+function importRule(s: string, t: CssToken): { readonly start: number; readonly end: number } | null {
+  let a = t.start;
+  if (isQuote(s.charCodeAt(a - 1))) a -= 1;
+  while (a > 0 && isSpace(s.charCodeAt(a - 1))) a -= 1;
+  if (s.charCodeAt(a - 1) === 0x28) {
+    a -= 1;
+    if (s.slice(a - 3, a).toLowerCase() !== 'url') return null;
+    a -= 3;
+    while (a > 0 && isSpace(s.charCodeAt(a - 1))) a -= 1;
+  }
+  if (s.slice(a - 7, a).toLowerCase() !== '@import') return null;
+  let i = isQuote(s.charCodeAt(t.end)) ? t.end + 1 : t.end;
+  let depth = 0;
+  while (i < s.length) {
+    const c = s.charCodeAt(i);
+    if (isQuote(c)) {
+      i = skipString(s, i);
+      continue;
+    }
+    if (c === 0x2f && s.charCodeAt(i + 1) === 0x2a) {
+      const e = s.indexOf('*/', i + 2);
+      i = e < 0 ? s.length : e + 2;
+      continue;
+    }
+    if (c === 0x28) depth += 1;
+    else if (c === 0x29) depth = Math.max(0, depth - 1);
+    else if (c === 0x3b && depth === 0) return { start: a - 7, end: i + 1 };
+    else if (c === 0x7b || c === 0x7d) return { start: a - 7, end: i };
+    i += 1;
+  }
+  return { start: a - 7, end: s.length };
+}
+
+/** `bytes` with the edits applied in one pass. An edit that starts inside the one before it (a reference inside a dropped
+ *  rule) is skipped. With no edit it returns `bytes` itself. */
+function applyEdits(bytes: Uint8Array<ArrayBuffer>, edits: readonly Edit[]): Uint8Array<ArrayBuffer> {
+  const kept: Edit[] = [];
+  let at = 0;
+  for (const e of edits) {
+    if (e.start < at) continue;
+    kept.push(e);
+    at = e.end;
+  }
+  const spans: CssToken[] = kept.map((e) => ({ start: e.start, end: e.end, raw: '', kind: 'image' }));
+  return rewriteCssBytes(bytes, spans, (i) => kept[i]!.text);
+}
+
+/** What one `data:` @import argument becomes: kept as it is, replaced by a stripped stylesheet's URL, or dropped (one past
+ *  the depth limit, or one that cannot be decoded). */
+type NestedSheet = { readonly kind: 'keep' } | { readonly kind: 'edit'; readonly url: string } | { readonly kind: 'drop' };
+
+function nestedSheet(raw: string, depth: number): NestedSheet {
+  if (depth > MOCKUP_MAX_CSS_DEPTH) return { kind: 'drop' };
+  const decoded = decodeDataUrl(raw);
+  if (decoded === null) return { kind: 'drop' };
+  const stripped = stripCssBytes(decoded.bytes, depth);
+  return stripped === decoded.bytes ? { kind: 'keep' } : { kind: 'edit', url: encodeDataUrl(decoded.head, stripped) };
+}
+
+/** The edits for a stylesheet's tokens: a token `inlined` names is replaced by that URL; a same-document fragment and a
+ *  `data:` image or font stay; a `data:` @import is stripped inside; every other reference is neutralised (a `url()`
+ *  becomes `url("data:,")`, an @import rule is dropped). `depth` is this sheet's own depth of use. */
+function sheetEdits(bytes: Uint8Array<ArrayBuffer>, tokens: readonly CssToken[], inlined: (index: number) => string | null, depth: number): Edit[] {
+  const edits: Edit[] = [];
+  let text: string | null = null;
+  const dropRule = (t: CssToken): Edit => {
+    text ??= byteString(bytes);
+    const rule = importRule(text, t);
+    if (rule !== null) return { start: rule.start, end: rule.end, text: '' };
+    return { start: t.start, end: t.end, text: isQuote(text.charCodeAt(t.start - 1)) ? 'data:,' : '"data:,"' };
+  };
+  tokens.forEach((t, i) => {
+    const url = inlined(i);
+    if (url !== null) {
+      edits.push({ start: t.start, end: t.end, text: url });
+    } else if (isFragment(t.raw)) {
+      return;
+    } else if (isDataUrl(t.raw)) {
+      if (t.kind !== 'css') return;
+      const nested = nestedSheet(t.raw, depth + 1);
+      if (nested.kind === 'edit') edits.push({ start: t.start, end: t.end, text: nested.url });
+      else if (nested.kind === 'drop') edits.push(dropRule(t));
+    } else if (t.kind === 'css') {
+      edits.push(dropRule(t));
+    } else {
+      text ??= byteString(bytes);
+      edits.push({ start: t.start, end: t.end, text: isQuote(text.charCodeAt(t.start - 1)) ? 'data:,' : '"data:,"' });
+    }
+  });
+  return edits;
+}
+
+/** A stylesheet's bytes with every reference off `data:` neutralised; `bytes` itself when nothing changed. */
+function stripCssBytes(bytes: Uint8Array<ArrayBuffer>, depth: number): Uint8Array<ArrayBuffer> {
+  return applyEdits(bytes, sheetEdits(bytes, scanCssBytes(bytes), () => null, depth));
+}
+
+/** CSS text (a style element's, a `style` attribute's, an attribute holding `url(`) stripped the same way. */
+function stripCssText(text: string): string {
+  if (!/url\(|@import/i.test(text)) return text;
+  const bytes = encoder.encode(text);
+  const out = stripCssBytes(bytes, 0);
+  return out === bytes ? text : decoder.decode(out);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Step 2: inline
+// ---------------------------------------------------------------------------------------------------------------
+/** How the sheet and the provenance name an asset: its repo path, or the reference as written where it does not resolve. */
+function labelOf(ref: MockupRef): string {
+  const slash = ref.basePath.indexOf('/');
+  const r = resolveDocRef({ section: ref.basePath.slice(0, slash) as DocSectionSlug, path: ref.basePath.slice(slash + 1) }, ref.raw);
+  if (r.kind === 'doc') return docRepoPath(r.section, r.path);
+  return r.kind === 'repo' ? r.repoPath : ref.raw;
+}
+
+/** Why an asset is not in the file, as the closed class `EXPORT_MISSING_SENTENCE` words: a failed read (the failure word
+ *  `timed-out`, which the builder gives a row it stopped waiting for, is "still loading"), another site, or the file's
+ *  own budget (an admitted file the result does not hold, or the cap kept out); every other verdict is the page not
+ *  showing it. */
+function missingWhy(verdict: MockupRefVerdict | undefined): ExportMissing {
+  switch (verdict?.v) {
+    case 'failed': return verdict.failure === TIMED_OUT ? 'timed-out' : 'failed';
+    case 'external': return 'external';
+    case 'inline':
+    case 'skipped': return 'over-size';
+    default: return 'refused';
+  }
+}
+
+/** The row that defines each admitted file, keyed by the pin's API URL, as the result's `assets` map is: an admitted row
+ *  already carries its pin, and within one attempt's context a path has exactly one pin, so no reference is resolved a
+ *  second time here. The first admitted row of a file defines it (its reference is the base of the stylesheet's own). */
+function canonicalFiles(plan: MockupAssetPlan): ReadonlyMap<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }> {
+  const first = new Map<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }>();
+  for (const row of plan.rows) {
+    if (row.verdict.v !== 'inline' || row.size === null) continue;
+    const key = docsApi.file(plan.context.project, row.verdict.pin);
+    if (!first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
+  }
+  return first;
+}
+
+/** The admitted files the result holds, one entry each, ordered by the file's FIRST USE depth-first in document order: a
+ *  stylesheet's nested files right after that stylesheet's use (while their depth of use stays within
+ *  `MOCKUP_MAX_CSS_DEPTH`), as `buildMockupSrcdoc` decides uses. The builder's size cut keeps a prefix of this order, so it
+ *  keeps the earliest uses, the page's own order and not the plan's (every page use, then every nested file). A file the
+ *  result does not hold is not listed and nothing under it is reached: nothing is built from it. */
+export function heldInUseOrder(result: MockupAssetResult): ReadonlyArray<{ readonly key: string; readonly verdict: InlineVerdict }> {
+  const { plan } = result;
+  const first = canonicalFiles(plan);
+  const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
+  const out: Array<{ readonly key: string; readonly verdict: InlineVerdict }> = [];
+  const listed = new Set<string>();
+  const expanded = new Set<string>(); // (file, depth): a stylesheet is read once at each depth of use
+  const visit = (row: MockupAssetRow, depth: number): void => {
+    if (row.verdict.v !== 'inline') return;
+    const key = docsApi.file(plan.context.project, row.verdict.pin);
+    const canon = first.get(key);
+    const asset = result.assets.get(key);
+    if (canon === undefined || asset === undefined) return;
+    if (!listed.has(key)) {
+      listed.add(key);
+      out.push({ key, verdict: canon.verdict });
+    }
+    const at = `${key}@${depth}`;
+    if (canon.verdict.kind !== 'css' || depth + 1 > MOCKUP_MAX_CSS_DEPTH || expanded.has(at)) return;
+    expanded.add(at);
+    for (const r of scanCssBytesRefs(asset.bytes, canon.ref).refs) {
+      const child = rowByKey.get(r.key);
+      if (child !== undefined) visit(child, depth + 1);
+    }
+  };
+  for (const row of plan.rows) if (row.ref.depth === 0) visit(row, 0);
+  return out;
+}
+
+/** One built use of a file: its `data:` URL, and the repo path of every file whose bytes that URL holds (the file itself,
+ *  and for a stylesheet the files nested inside it that it inlined). */
+interface BuiltUse { readonly url: string; readonly files: readonly string[] }
+
+/** Inlines every reference the result holds into `extract`'s Document, and answers what it could not: `omitted`, each
+ *  asset NONE of whose uses was written into the Document (repo path, or the reference as written where it does not
+ *  resolve), once, in DOM order; a file with one use written and another cut is inlined, not omitted. And `why`, the
+ *  reason by the reference as written on the page, for the `alt` of an image. */
+function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { readonly omitted: readonly string[]; readonly why: ReadonlyMap<string, ExportMissing> } {
+  const { plan } = assets;
+  const project = plan.context.project;
+  const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
+  const first = canonicalFiles(plan);
+  const seen = new Set<string>(); // every asset a use of which was cut or could not be built, first seen first
+  const written = new Set<string>(); // every asset a use of which was written into the Document
+  const why = new Map<string, ExportMissing>();
+  const omit = (ref: MockupRef, row: MockupAssetRow | undefined): void => {
+    if (ref.kind === 'script' || ref.kind === 'module') return;
+    if (row?.verdict.v === 'kept' || ref.raw.trim() === '') return;
+    seen.add(labelOf(ref));
+    if (ref.depth === 0 && !why.has(ref.raw)) why.set(ref.raw, missingWhy(row?.verdict));
+  };
+
+  const built = new Map<string, BuiltUse>();
+  /** One use of a file at nesting depth `depth`: its `data:` URL (the row's MIME) and the files that URL holds, or null when
+   *  it is not inlined. */
+  const build = (row: MockupAssetRow, depth: number): BuiltUse | null => {
+    if (row.verdict.v !== 'inline') return null;
+    const key = docsApi.file(project, row.verdict.pin);
+    const canon = first.get(key);
+    if (canon === undefined) return null;
+    const asset = assets.assets.get(key);
+    if (asset === undefined) return null;
+    const mime = canon.verdict.mime;
+    const path = docRepoPath(canon.verdict.pin.section, canon.verdict.pin.path);
+    if (canon.verdict.kind !== 'css') {
+      const known = built.get(key);
+      if (known !== undefined) return known;
+      const use = { url: `data:${mime};base64,${base64Of(asset.bytes)}`, files: [path] };
+      built.set(key, use);
+      return use;
+    }
+    const at = `${key}@${depth}`;
+    const known = built.get(at);
+    if (known !== undefined) return known;
+    const { tokens, refs } = scanCssBytesRefs(asset.bytes, canon.ref);
+    const deep = depth + 1 <= MOCKUP_MAX_CSS_DEPTH;
+    const files = new Set<string>([path]);
+    const nested = refs.map((r) => {
+      const child = rowByKey.get(r.key);
+      const use = deep && child !== undefined ? build(child, depth + 1) : null;
+      if (use === null) omit(r, child);
+      else for (const f of use.files) files.add(f);
+      return use?.url ?? null;
+    });
+    const use = {
+      url: `data:${mime};base64,${base64Of(applyEdits(asset.bytes, sheetEdits(asset.bytes, tokens, (i) => nested[i] ?? null, depth)))}`,
+      files: [...files],
+    };
+    built.set(at, use);
+    return use;
+  };
+
+  const replacements = new Map<string, string>();
+  let spent = 0;
+  let cut = false; // the first use that does not fit sets this: from then on nothing is inlined
+  for (const ref of extract.refs) {
+    if (ref.kind === 'script' || ref.kind === 'module') continue;
+    const row = rowByKey.get(ref.key);
+    let use = cut || row === undefined ? null : build(row, 0);
+    if (use !== null && spent + use.url.length > DOCS_EXPORT_MAX_BYTES) {
+      cut = true;
+      // Nothing of a cut use is written: a stylesheet's nested files go out with it, unless another use wrote them.
+      for (const f of use.files) seen.add(f);
+      use = null;
+    }
+    if (use === null) {
+      omit(ref, row);
+    } else {
+      spent += use.url.length;
+      replacements.set(ref.key, use.url);
+      for (const f of use.files) written.add(f);
+    }
+  }
+  extract.apply(replacements);
+  // An admitted file no use of which was reached (a nested file of a stylesheet that was cut before it was built, or whose
+  // bytes the result does not hold) is not written either.
+  for (const { verdict } of plan.rows) if (verdict.v === 'inline') seen.add(docRepoPath(verdict.pin.section, verdict.pin.path));
+  return { omitted: [...seen].filter((label) => !written.has(label)), why };
+}
+
+/** An `img` or `input[type=image]` whose `src` is still not `data:` was not inlined: it takes the closed missing sentence
+ *  as its `alt` (a placeholder, base 5.6.8). */
+function markMissingImages(clone: Document, why: ReadonlyMap<string, ExportMissing>): void {
+  for (const el of clone.querySelectorAll('img, input')) {
+    if (!(el instanceof HTMLElement)) continue;
+    if (el.localName === 'input' && (el.getAttribute('type') ?? '').trim().toLowerCase() !== 'image') continue;
+    const src = el.getAttribute('src');
+    if (src === null || src.trim() === '' || isDataUrl(src)) continue;
+    el.setAttribute('alt', EXPORT_MISSING_SENTENCE[why.get(src) ?? 'refused']);
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Step 3: strip
+// ---------------------------------------------------------------------------------------------------------------
+/** The HTML URL attributes of the allowlist, and `xlink:href`, which is read on an SVG element and dropped on any. */
+const URL_ATTRIBUTES: ReadonlySet<string> = new Set([
+  'archive', 'background', 'cite', 'classid', 'codebase', 'data', 'href', 'icon', 'itemid', 'longdesc', 'manifest',
+  'poster', 'profile', 'src', 'usemap', 'xlink:href',
+]);
+/** Attributes that act when the page is opened or submitted, or that ask the browser to report to a URL: always dropped. */
+const ACTIVE_ATTRIBUTES: ReadonlySet<string> = new Set(['srcdoc', 'action', 'formaction', 'ping', 'attributionsrc']);
+/** The attributes that hold a list of image candidates: `srcset`, and the `link`'s own `imagesrcset`. One rule for both. */
+const CANDIDATE_LISTS: ReadonlySet<string> = new Set(['srcset', 'imagesrcset']);
+/** The SMIL elements that can set an attribute over time. */
+const SMIL_ELEMENTS: ReadonlySet<string> = new Set(['animate', 'set', 'animateMotion', 'animateTransform']);
+const HREF_NAMES: ReadonlySet<string> = new Set(['href', 'xlink:href']);
+
+/** Whether every candidate of a `srcset` value is a `data:` URL, read with the extractor's own srcset grammar
+ *  (`parseSrcset`, `load.ts`): at least one candidate, every candidate's URL `data:`, and no candidate the grammar
+ *  dropped (a dropped candidate's URL is unknown, so the attribute goes). An empty value has no candidate and goes too. */
+function srcsetIsAllData(value: string): boolean {
+  const { candidates, dropped } = parseSrcset(value);
+  return dropped.length === 0 && candidates.length > 0 && candidates.every((c) => isDataUrl(c.url));
+}
+
+/** Whether a `link` survives: a stylesheet whose `href` is a decodable `data:` URL, stripped inside (its own references
+ *  and any `data:` @import). Every other link is the caller's to drop. */
+function keepDataStylesheet(link: Element): boolean {
+  const rel = (link.getAttribute('rel') ?? '').toLowerCase().split(/[\t\n\f\r ]+/);
+  const href = link.getAttribute('href');
+  if (!rel.includes('stylesheet') || href === null || !isDataUrl(href)) return false;
+  const decoded = decodeDataUrl(href);
+  if (decoded === null) return false;
+  const stripped = stripCssBytes(decoded.bytes, 0);
+  if (stripped !== decoded.bytes) link.setAttribute('href', encodeDataUrl(decoded.head, stripped));
+  return true;
+}
+
+/** The elements step 3 drops with everything inside them by selector (`dropInertElements` drops a `template`, SMIL that
+ *  targets `href` and every `link` but a `data:` stylesheet by their own tests). */
+const DROPPED_ELEMENTS = 'script, iframe, frame, object, embed, base, meta[http-equiv]';
+
+/** The elements the file never carries: template, scripts, frames, objects, embeds, base, `meta[http-equiv]`, SMIL that
+ *  targets `href`, and every `link` but a `data:` stylesheet; noscript is unwrapped, its children kept. The one strip step
+ *  that removes elements, so the diagram count runs it too (`mockupDiagramCount`). */
+function dropInertElements(clone: Document): void {
+  for (const t of [...clone.querySelectorAll('template')]) t.remove();
+  for (const n of [...clone.querySelectorAll('noscript')]) n.replaceWith(...n.childNodes);
+  for (const el of [...clone.querySelectorAll(DROPPED_ELEMENTS)]) el.remove();
+  for (const link of [...clone.querySelectorAll('link')]) if (!keepDataStylesheet(link)) link.remove();
+  for (const el of [...clone.querySelectorAll('*')]) {
+    if (SMIL_ELEMENTS.has(el.localName) && HREF_NAMES.has((el.getAttribute('attributeName') ?? '').trim())) el.remove();
+  }
+}
+
+/** A link step 5 took off its element, with the element it was on. */
+interface TakenLink {
+  readonly el: Element;
+  readonly target: string;
+}
+
+/** Step 5, first half: `href` and `xlink:href` off every `a` and `area` (HTML and SVG), each non-empty target kept, in DOM
+ *  order. It runs before the strip, which drops every `href` that is not `data:` and so would leave step 5 nothing to read. */
+function takeLinks(clone: Document): TakenLink[] {
+  const taken: TakenLink[] = [];
+  for (const el of clone.querySelectorAll('a, area')) {
+    const target = el.getAttribute('href') ?? el.getAttribute('xlink:href');
+    el.removeAttribute('href');
+    el.removeAttribute('xlink:href');
+    if (target !== null && target.trim() !== '') taken.push({ el, target });
+  }
+  return taken;
+}
+
+/** Step 5, second half: each target into its element's `title` and into the answer. It runs after step 4, as base 5.6.9
+ *  orders them (review 2372 F2): an author's `title` was stripped as every other attribute holding `url(` is, and the target
+ *  written after it keeps its real text, the one non-`data:` URL M5.EX1 allows ("the link text moved into `title`"). */
+function writeLinkTitles(taken: readonly TakenLink[]): string[] {
+  for (const { el, target } of taken) {
+    const title = el.getAttribute('title') ?? '';
+    el.setAttribute('title', title === '' ? target : `${title} (${target})`);
+  }
+  return taken.map((t) => t.target);
+}
+
+/** Steps 3 and 4 over every attribute: handlers and active attributes out, `srcset` and the URL allowlist checked, CSS in
+ *  a `style` attribute, or in any other attribute holding `url(` (an SVG paint attribute's, and an author's `title` and
+ *  `alt`, as base 5.6.9 step 4 says), neutralised. */
+function stripAttributes(clone: Document): void {
+  for (const el of clone.querySelectorAll('*')) {
+    const svg = el instanceof SVGElement;
+    for (const attr of [...el.attributes]) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on') || ACTIVE_ATTRIBUTES.has(name)) {
+        el.removeAttributeNode(attr);
+      } else if (CANDIDATE_LISTS.has(name)) {
+        if (!srcsetIsAllData(attr.value)) el.removeAttributeNode(attr);
+      } else if (URL_ATTRIBUTES.has(name)) {
+        const local = svg && HREF_NAMES.has(name) && isFragment(attr.value) && el.localName !== 'a' && el.localName !== 'image';
+        if (!isDataUrl(attr.value) && !local) el.removeAttributeNode(attr);
+      } else if (name === 'style' || /url\(/i.test(attr.value)) {
+        attr.value = stripCssText(attr.value);
+      }
+    }
+  }
+  for (const style of clone.querySelectorAll('style')) {
+    const text = style.textContent ?? '';
+    const css = stripCssText(text);
+    if (css !== text) style.textContent = css;
+  }
+}
+
+/** Step 6: the CSP meta as the first child of `<head>`, made with DOM calls. */
+function addCspMeta(clone: Document): void {
+  const meta = clone.createElement('meta');
+  meta.setAttribute('http-equiv', 'Content-Security-Policy');
+  meta.setAttribute('content', DOCS_EXPORT_CSP);
+  const head = clone.head as HTMLHeadElement | null;
+  const into = head ?? clone.documentElement.insertBefore(clone.createElement('head'), clone.documentElement.firstChild);
+  into.insertBefore(meta, into.firstChild);
+}
+
+/** How many elements of `doc`'s snapshot have `mermaid` in their class list: the template shape's diagram blocks, which a
+ *  mockup export shows as source (base 5.6.9's table: "<m> diagrams appear as source"). The class is compared as a token,
+ *  case-sensitively, so neither a look-alike class nor the case-folding of a quirks-mode selector counts. It runs the
+ *  snapshot's own element drop (`dropInertElements`) on a clone of its own, so it counts exactly the elements the file
+ *  keeps: an element the strip drops (a `template`, a SMIL element that sets `href`, a script) and one inside it are not
+ *  counted (review 2361 M5), nor is a kept `link`, which shows nothing. `doc` is never changed, so the snapshot's interface
+ *  stays the plan's `{html, links, omitted}`. */
+export function mockupDiagramCount(doc: Document): number {
+  const clone = doc.cloneNode(true) as Document;
+  dropInertElements(clone);
+  let n = 0;
+  for (const el of clone.querySelectorAll('[class]')) if (el.localName !== 'link' && el.classList.contains('mermaid')) n += 1;
+  return n;
+}
+
+/** The mockup export's snapshot of `doc` (the viewer's parsed inert Document, never changed) with the loaded `assets`. */
+export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): MockupSnapshot {
+  const clone = doc.cloneNode(true) as Document;
+  const { section, path } = assets.plan.context.pin;
+  const { omitted, why } = inlineAssets(extractMockupRefs(clone, `${section}/${path}`), assets);
+  markMissingImages(clone, why);
+  dropInertElements(clone);
+  const taken = takeLinks(clone);
+  stripAttributes(clone);
+  const links = writeLinkTitles(taken);
+  addCspMeta(clone);
+  return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted };
+}
