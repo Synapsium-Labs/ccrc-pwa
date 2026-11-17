@@ -10,15 +10,18 @@
 // The directories are made 0700 and an existing one is never chmodded; a directory on the path that is a symlink, or that
 // group or others may enter, refuses the write (`OperatorSecretStoreUnsafe`), so a planted link never receives a value.
 //
-// Nothing in ccrc reads a stored value yet (spec §5): a later feature that needs a secret reads its own slot through a
-// reader added here, on this box. The only reads of a VALUE in this file are the masker's re-key (`operatorSecretRows`),
-// which fingerprints each value under the current box token and keeps nothing, and a failed write's read-back (`slotHolds`),
-// which compares and drops. A stored slot outlives its item (the operator's ruling on programme item 9); the operator's
+// No programme slot's value is read for use (spec §5). THE SERVER-LEVEL SLOTS (Overlord W2, `name-list-key-in-a-server-slot`)
+// live in `<ccrcDir>/operator-secrets/.server/<slot>.secret`, a directory no programme can name (`.server` fails the slug
+// shape): the server's own keys, written by `writeServerSecret`, read by `readServerSecretValue`, removed by
+// `removeServerSecret`. The ONLY caller of `readServerSecretValue` is the private-name list's reader
+// (`operatorModel/nameListRead.ts`, slot `private-names-key`). The other reads of a VALUE in this file are the masker's re-key
+// (`operatorSecretRows`, every slot of both kinds), which fingerprints each value under the current box token and keeps
+// nothing, and a failed write's read-back (`slotHolds`), which compares and drops. A stored slot outlives its item (the operator's ruling on programme item 9); the operator's
 // Remove door is the one way a slot leaves (`removeOperatorSecret`), and the stored-secrets read (`readStoredSecrets`) answers
 // names and records only.
 //
 // NEVER LOG, RETURN OR THROW THE VALUE: every error raised here names a slot at most, and the caller answers fixed words.
-import { constants as FS, lstatSync, readFileSync, readdirSync, rmSync, promises as fsp } from 'node:fs';
+import { constants as FS, closeSync, fstatSync, lstatSync, openSync, readFileSync, readdirSync, rmSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { shapeProgramSlug } from '../../../shared/api.js';
 import {
@@ -127,7 +130,7 @@ export function sweepOperatorSecretTemps(ccrcDir: string): void {
   const list = (p: string): string[] => { try { return readdirSync(p); } catch { return []; } };
   if (!privateAt(top)) return;
   for (const program of list(top)) {
-    if (!isProgramSlug(program)) continue;
+    if (!isProgramSlug(program) && program !== SERVER_SECRETS_DIR) continue;
     const dir = path.join(top, program);
     if (!privateAt(dir)) continue;
     for (const n of list(dir)) {
@@ -195,6 +198,16 @@ export async function writeOperatorSecret(
   await privateDir(path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top');
   await privateDir(path.dirname(file), 'programme');
   await sweepSlotTemps(path.dirname(file), slot);
+  return writeSlot(file, operatorSecretLaneId(program, slot), value, now, register, { item, tail: 'shown' });
+}
+
+/** The second half of a save, shared by a programme's slot and a server-level slot: the value written atomically at 0600, the
+ *  masker asked, then the metadata, as `writeOperatorSecret` states it. `tail: 'none'` records no tail whatever the masker
+ *  said (a server slot whose value is never shown, Overlord W2 `name-list-key-in-a-server-slot`). */
+async function writeSlot(
+  file: string, laneId: string, value: string, now: number, register: RegisterSecret, o: { item?: number; tail: 'shown' | 'none' },
+): Promise<OperatorSecretMeta> {
+  const { item } = o;
   let unsynced = false;
   let proven = true;
   try {
@@ -206,9 +219,9 @@ export async function writeOperatorSecret(
     proven = holds === 'yes';
   }
   let said: 'masked' | SecretUnmasked;
-  try { said = register(operatorSecretLaneId(program, slot), value, { beside: !proven }); } catch { said = 'unregistered'; }
+  try { said = register(laneId, value, { beside: !proven }); } catch { said = 'unregistered'; }
   const meta: OperatorSecretMeta = said === 'masked'
-    ? { setAt: now, tail: secretTailOf(value), masked: true }
+    ? { setAt: now, tail: o.tail === 'none' ? '' : secretTailOf(value), masked: true }
     : { setAt: now, tail: '', masked: false, why: said };
   try {
     await writeValueFileAtomic(metaPathOf(file), `${JSON.stringify({ v: 1, ...meta, ...(item === undefined ? {} : { item }) })}\n`);
@@ -424,6 +437,82 @@ export async function removeOperatorSecret(ccrcDir: string, program: string, slo
   return had ? 'removed' : 'none';
 }
 
+// ── The server-level slots (Overlord W2: private names B and decision model B share this API) ──────────────────────────
+
+/** The directory of the server's own slots under the store. It fails the programme-slug shape, so no programme's slot, read
+ *  or Remove can ever name it, and `readStoredSecrets` never lists it. */
+export const SERVER_SECRETS_DIR = '.server';
+/** The masker lane of a server slot: under `OPERATOR_SECRET_LANE_PREFIX`, so a box's roster answer never speaks for it. */
+export const serverSecretLaneId = (slot: string): string => `${OPERATOR_SECRET_LANE_PREFIX}${SERVER_SECRETS_DIR}:${slot}`;
+/** A server slot's value file. The slot is checked first; a bad one throws before any path exists. */
+export function serverSecretPath(ccrcDir: string, slot: string): string {
+  if (typeof slot !== 'string' || !isSlotSlug(slot)) throw new OperatorSecretBadSlot();
+  return path.join(ccrcDir, OPERATOR_SECRETS_DIR, SERVER_SECRETS_DIR, `${slot}${SECRET_EXT}`);
+}
+
+/** Stores one server value in its slot, as `writeOperatorSecret` stores a programme's (the same directories' rules, temp
+ *  sweep, atomic write, masker registration and record, and the same two kinds of failure). `tail: 'none'` records no tail:
+ *  a key that is never shown keeps no character of itself even in its record. The caller serialises its slot's acts. */
+export async function writeServerSecret(
+  ccrcDir: string, slot: string, value: string, now: number, register: RegisterSecret, o: { tail?: 'none' } = {},
+): Promise<OperatorSecretMeta> {
+  const file = serverSecretPath(ccrcDir, slot);
+  await privateDir(path.join(ccrcDir, OPERATOR_SECRETS_DIR), 'top');
+  await privateDir(path.dirname(file), 'server');
+  await sweepSlotTemps(path.dirname(file), slot);
+  return writeSlot(file, serverSecretLaneId(slot), value, now, register, { tail: o.tail === 'none' ? 'none' : 'shown' });
+}
+
+/** A server slot's value, measured: `absent` (the store, its server directory or the file is not there), `unreadable`
+ *  (a directory that is not a private directory of ours, a file that is a link or not a regular file, or any read failure),
+ *  or the value. The three are never folded. NEVER LOG, RETURN TO A CLIENT OR THROW THE VALUE. */
+export type ServerSecretRead = { readonly state: 'absent' } | { readonly state: 'unreadable' } | { readonly state: 'value'; readonly value: string };
+export function readServerSecretValue(ccrcDir: string, slot: string): ServerSecretRead {
+  const file = serverSecretPath(ccrcDir, slot);
+  const absentOr = (e: unknown): ServerSecretRead =>
+    ((e as NodeJS.ErrnoException)?.code === 'ENOENT' ? { state: 'absent' } : { state: 'unreadable' });
+  for (const dir of [path.join(ccrcDir, OPERATOR_SECRETS_DIR), path.dirname(file)]) {
+    try {
+      if (!isPrivateDir(lstatSync(dir))) return { state: 'unreadable' };
+    } catch (e) { return absentOr(e); }
+  }
+  let fd: number;
+  try { fd = openSync(file, FS.O_RDONLY | FS.O_NOFOLLOW); } catch (e) { return absentOr(e); }
+  try {
+    if (!fstatSync(fd).isFile()) return { state: 'unreadable' };
+    return { state: 'value', value: readFileSync(fd, 'utf8') };
+  } catch {
+    return { state: 'unreadable' };
+  } finally {
+    try { closeSync(fd); } catch { /* the read is answered */ }
+  }
+}
+
+/** Removes one server slot: its value file, its record and its leftover temps, as `removeOperatorSecret` removes a
+ *  programme's. Answers `removed`, or `none` when no value file is there. Never reads the value. The name list's key slot is
+ *  passed to it by nothing (`single-definition/name-list-key.test.ts`): that slot witnesses that a list was uploaded. */
+export async function removeServerSecret(ccrcDir: string, slot: string): Promise<'removed' | 'none'> {
+  const dir = path.dirname(serverSecretPath(ccrcDir, slot));
+  let st: Awaited<ReturnType<typeof fsp.lstat>>;
+  try { st = await fsp.lstat(dir); } catch (e) {
+    if ((e as NodeJS.ErrnoException)?.code === 'ENOENT') return 'none';
+    throw e;
+  }
+  if (!isPrivateDir(st)) throw new OperatorSecretStoreUnsafe('server');
+  const names = await fsp.readdir(dir);
+  const valueEntry = names.find((e) => e === `${slot}${SECRET_EXT}`);
+  const metaEntry = names.find((e) => e === `${slot}${META_EXT}`);
+  let had = false;
+  if (valueEntry !== undefined) {
+    try { await fsp.unlink(path.join(dir, valueEntry)); had = true; } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== 'ENOENT') throw e;
+    }
+  }
+  if (metaEntry !== undefined) await fsp.rm(path.join(dir, metaEntry), { force: true }).catch(() => {});
+  await sweepSlotTemps(dir, slot);
+  return had ? 'removed' : 'none';
+}
+
 /** What a listing of the store found: every slot whose two names pass their shapes, and whether any directory of the store
  *  could not be listed (review 1389 F1: an unreadable store is never "no slots"; an absent one is empty, and readable). */
 interface StoredSlots { slots: { program: string; slot: string; file: string }[]; unreadable: boolean }
@@ -441,7 +530,7 @@ function storedSlots(ccrcDir: string): StoredSlots {
     return out;
   }
   for (const program of programs.sort()) {
-    if (!isProgramSlug(program)) continue;
+    if (!isProgramSlug(program) && program !== SERVER_SECRETS_DIR) continue;
     let names: string[];
     try { names = readdirSync(path.join(top, program)); } catch { out.unreadable = true; continue; }
     for (const n of names.sort()) {
@@ -451,6 +540,43 @@ function storedSlots(ccrcDir: string): StoredSlots {
     }
   }
   return out;
+}
+
+/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
+ *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
+export const SLOT_WAIT_MS = 30_000;
+
+/**
+ * ONE ACT OF A SLOT AT A TIME (review 1389 F2, review 1391 A-3): the serialiser every door of this store runs its acts on. The
+ * answer runs `act` once the previous act on the same `key` has finished, or answers `busy` when that takes longer than
+ * `waitMs`. A waiter that gives up releases its own place at once, so the one after it waits only for the act still running,
+ * and the map entry stays until that act is done: the deadline never lets two acts of one key run together. Each door builds
+ * its own (`ledgersRoutes.ts` keys on `programmeChainKey`; the name list's door on its `.server` slot). The deadline's timer is
+ * a local of one call, never kept.
+ */
+export function slotChains(waitMs: number): <T>(key: string, act: () => Promise<T>, busy: () => T) => Promise<T> {
+  const chains = new Map<string, Promise<void>>();
+  return async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
+    const before = chains.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const mine = new Promise<void>((resolve) => { release = resolve; });
+    const chain = before.then(() => mine);
+    chains.set(key, chain);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), waitMs); });
+    const first = await Promise.race([before.then(() => 'ready' as const), late]);
+    clearTimeout(timer);
+    if (first === 'late') {
+      release();
+      return busy();
+    }
+    try {
+      return await act();
+    } finally {
+      release();
+      if (chains.get(key) === chain) chains.delete(key);
+    }
+  };
 }
 
 /** Each stored value's fingerprint row, made by `rowOf` (the composition root passes the masker's `fingerprintRow` under the

@@ -108,6 +108,10 @@ const PLAN_SRC = read('server/src/coord/planRoutes.ts');
  *  piece), and the probe door's two, `GET` and `POST /api/sessions/:id/probe` (the probes piece), each gated in its own
  *  onRequest as the linking read is. Its session-gated doors are `CONTINUITY_SESSION_DOORS`. */
 const CONTINUITY_SRC = read('server/src/continuity/routes.ts');
+/** The private-name list's doors (Overlord W2, private names B): a routes file of its own with NO box-token lane. Its two doors,
+ *  the upload `PUT` and the status read `GET /api/overlord/private-names`, are the operator's and session-gated:
+ *  `NAME_LIST_DOORS`. */
+const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -311,9 +315,14 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
  *  each registration to the next, no helper that calls `checkMailToken(` may sit below the file's last registration. */
 const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel'];
 
+/** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
+ *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
+ *  EXEMPT. */
+const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-names'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...NAME_LIST_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -541,6 +550,14 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const door of CONTINUITY_SESSION_DOORS) {
       expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
     }
+  });
+
+  it('NAME_LIST_DOORS is exactly what the name list file registers, in both directions; none is a lane or EXEMPT (private names B)', () => {
+    const keys = registrationsIn(NAME_LIST_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'nameListRoutes.ts and NAME_LIST_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...NAME_LIST_DOORS].sort());
+    expect(lanesIn(NAME_LIST_SRC), 'a name list door consults the box token — both are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {
