@@ -88,6 +88,9 @@ export const PHASE_CASES: PhaseCase[] = [
   { name: 'bad-carry: the ticket is not the from phase\'s work', run: (m) => {
     expect(word(verdict(m, carry('p1', 'p2', 't4'), phases([T1])))).toBe('bad-carry');
   } },
+  { name: 'bad-carry: a whole-epic reference holds only that epic\'s tickets (review 2375 F8)', run: (m) => {
+    expect(said(verdict(m, carry('p1', 'p2', 't4'), phases([{ kind: 'epic', refId: 1 }])))).toBe('bad-carry: ticket t4 is not phase p1\'s own work');
+  } },
   { name: 'bad-carry: a ticket already carried out of the phase is not its work', run: (m) => {
     expect(word(verdict(m, carry('p1', 'p3'), phases([{ ...T1, carriedTo: 102 }], [T1])))).toBe('bad-carry');
   } },
@@ -135,6 +138,16 @@ export const PHASE_CASES: PhaseCase[] = [
     expect(word(verdict(m, remove('p3', 'ticket', 't1'), phases([{ ...T1, carriedTo: 102 }], [T1], [T1])))).toBe('ok');
   } },
 
+  { name: 'F12: a carry from a dropped source stands, so its target end still cannot be removed (review 2375 F10)', run: (m) => {
+    const ph3 = [phase(101, 'p1', 0, [{ ...T1, carriedTo: 102 }], true), phase(102, 'p2', 1, [T1]), phase(103, 'p3', 2)];
+    expect(said(verdict(m, remove('p2', 'ticket', 't1'), ph3)))
+      .toBe('bad-carry: ticket t1 was carried into phase p2: removing it would leave the carry pointing nowhere');
+  } },
+  { name: 'a stored reference to an object dropped since may be removed (review 2375 F14)', run: (m) => {
+    expect(verdict(m, remove('p1', 'ticket', 't3'), phases([{ kind: 'ticket', refId: 13 }]))).toEqual({ ok: true, write: { kind: 'delete', refRowId: 10100 } });
+    expect(verdict(m, remove('p1', 'epic', 'e3'), phases([{ kind: 'epic', refId: 3 }]))).toEqual({ ok: true, write: { kind: 'delete', refRowId: 10100 } });
+  } },
+
   // ── diffPhases: a put's phases ──
   { name: 'a put with no phases key changes no phase', run: (m) => {
     expect(m.diffPhases(STORED, phases([T1]), put(undefined))).toEqual({ ok: true, changes: undefined });
@@ -155,6 +168,20 @@ export const PHASE_CASES: PhaseCase[] = [
     expect(d.ok && d.changes!.phases.update).toEqual([]);
     expect(word(m.diffPhases(STORED, [], put([ph('n', [], 'cut')])))).toBe('plan-bad-body');
   } },
+  { name: 'a put naming a dropped phase with a new title and a new reference changes nothing (review 2375 F5)', run: (m) => {
+    const renamed = { ...ph('pd', [{ kind: 'ticket', key: 't4' }]), title: 'Renamed' };
+    expect(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2'), ph('p3'), renamed])))
+      .toEqual({ ok: true, changes: { phases: { insert: [], update: [], drop: [] }, refs: [] } });
+  } },
+  { name: 'unknown-ref: a new reference to an unknown or dropped object on a dropped phase (review 2375 F9)', run: (m) => {
+    expect(said(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2'), ph('p3'), ph('pd', [{ kind: 'ticket', key: 'zz' }])]))))
+      .toBe('unknown-ref: phase pd: no ticket zz that is not dropped');
+    expect(word(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2'), ph('p3'), ph('pd', [{ kind: 'ticket', key: 't3' }], 'cut')])))).toBe('unknown-ref');
+  } },
+  { name: 'unknown-ref: a new reference to an unknown or dropped object on a phase the same put drops (review 2375 F9)', run: (m) => {
+    expect(said(m.diffPhases(STORED, phases(), put([ph('p1'), ph('p2', [{ kind: 'epic', key: 'e3' }], 'cut'), ph('p3'), ph('pd')]))))
+      .toBe('unknown-ref: phase p2: no epic e3 that is not dropped');
+  } },
   { name: 'unknown-ref: a put\'s new reference to a dropped or unknown object', run: (m) => {
     expect(word(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'ticket', key: 't3' }])])))).toBe('unknown-ref');
     expect(word(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'epic', key: 'e3' }])])))).toBe('unknown-ref');
@@ -167,6 +194,12 @@ export const PHASE_CASES: PhaseCase[] = [
     expect(word(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'ticket', key: 't4' }])], {
       epics: [{ key: 'e1', title: 'e1', summary: 's', waves: [1], checkpoints: [] }, { key: 'e2', title: 'e2', summary: 's', waves: [2], checkpoints: [], droppedWhy: 'cut' }],
     })))).toBe('unknown-ref');
+  } },
+  { name: 'unknown-ref, not a store failure: a ticket the put adds to an epic the same put drops (review 2375 F6)', run: (m) => {
+    expect(said(m.diffPhases(STORED, [], put([ph('a', [{ kind: 'ticket', key: 'tn' }])], {
+      epics: [{ key: 'e1', title: 'e1', summary: 's', waves: [1], checkpoints: [] },
+        { key: 'e2', title: 'e2', summary: 's', waves: [2], checkpoints: [], droppedWhy: 'cut', tickets: [{ key: 'tn', kind: 'work', title: 'new' }] }],
+    })))).toBe('unknown-ref: phase a: no ticket tn that is not dropped');
   } },
   { name: 'a put may reference a ticket it adds, and a done ticket of a dropped epic', run: (m) => {
     const withNew = put([ph('a', [{ kind: 'ticket', key: 'tn' }, { kind: 'ticket', key: 't5' }])]);
@@ -183,5 +216,15 @@ export const PHASE_CASES: PhaseCase[] = [
     expect(word(m.diffPhases(STORED, ph3, put(LIVE3)))).toBe('ok');
     // dropping the carry's target (with its reason) voids the carry, so its order no longer binds
     expect(word(m.diffPhases(STORED, ph3, put([ph('p2', [], 'cut'), ph('p1'), ph('p3')])))).toBe('ok');
+  } },
+
+  // ── the put's bound on a phase's references (D-8715's refsPerPhase, review 2375 F7) ──
+  { name: 'a phase of a put takes 200 references, and 201 is plan-too-large', run: (m) => {
+    const body = (n: number) => ({
+      epics: [{ key: 'e1', title: 'e1', summary: 's', waves: [1], checkpoints: [] }],
+      phases: [{ key: 'a', title: 'A', summary: 's', refs: Array.from({ length: n }, (_, i) => ({ kind: 'ticket', key: `t${i}` })) }],
+    });
+    expect(word(m.parsePlanPut(body(200)))).toBe('ok');
+    expect(said(m.parsePlanPut(body(201)))).toBe('plan-too-large: phase a: more than 200 references');
   } },
 ];

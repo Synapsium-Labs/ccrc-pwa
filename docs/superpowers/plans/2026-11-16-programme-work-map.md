@@ -49,8 +49,8 @@ review 2268's amendments into both (D-8715).
   here depends on its waves 3 to 7, which the operator set up separately and this plan does not plan. The card's *Open
   in Linear* links appear only once its sync (wave 3) binds the plan objects; until then the card draws none.
 - **Its work model is unchanged** (spec §8). The additions are a new axis (phases, references, carries) and new facts
-  (a ticket's done time and evidence). `plan ticket-done` builds its §4.1 transition "the coordinator closes it";
-  `ticket-required` applies only to a plan that declares phases. Its "the coordinator closes it with a reason" is kept,
+  (a ticket's done time and evidence). `plan ticket-done` is a new transition beside the hierarchy's, held to verified
+  evidence (review 2375 F3); `ticket-required` applies only to a plan that declares phases. Its "the coordinator closes it with a reason" is kept,
   not narrowed: such a ticket reads "closed", counted apart (the coordinator's ruling on review 2268's F10). The one
   change to its model, epics without wave ranges, is the operator's yes to Q5 (R133), built in WM6.
 - **Supersedes its Task 5.2** (the Plan section): WM2 to WM4 build that section's design as the Work card (spec Table 7).
@@ -124,8 +124,8 @@ touches any.*
 - A carry read from two phases naming one ticket, rather than from a recorded carry.
 - "Done" without evidence that verifies on the read, or "not read" verdicts folded into "not stuck".
 - A plan with no phases, or an epic that lists waves, losing or gaining a refusal (outside WM6).
-- Tables 6 and 6a's order: dropped, then carried, then done, in a phase; an open item beats a stuck verdict, and stuck
-  beats working.
+- Tables 6 and 6a's order, every terminal outcome named: dropped, then closed, then carried, then done, then left open,
+  then outstanding, in a phase (review 2375 F13); an open item beats a stuck verdict, and stuck beats working.
 - The four plan states of spec §5.1 kept apart: "no plan" never prints "N of M"; "declared empty" never draws the runs
   fallback; an ended plan shows no outstanding work; an unreadable read carries its word, and an absent `work` means
   only an older server.
@@ -152,8 +152,8 @@ touches any.*
 | `ccd/coordinator-skill/references/plan.md` | WM5 | docs | Declare and keep the plan |
 
 *Table 2. Files by task. New test files are named in each task. No task edits `pwa/src/lib/refusalWords.ts`: only the
-coordinator's client sends the plan verbs, and the only plan word with a console sentence today is `linear-text-public`
-(F20 of review 2268).*
+coordinator's client sends the plan verbs, and the only plan words with a console sentence today are `linear-text-public`
+and `item-act-mismatch` (F20 of review 2268, re-measured for review 2375 F11).*
 
 ## Tasks
 
@@ -202,21 +202,24 @@ export function phaseNumbers(phases: readonly { key: string; dropped: boolean }[
 - `plan put` with no `phases` key leaves the stored phases alone. With it, phases diff by key as epics do: a phase that
   disappears needs `droppedWhy`, its references stay stored, and no ticket changes. A put's `refs` are added to the
   stored references and never remove one. A new reference to an unknown or dropped epic or ticket is refused
-  `unknown-ref`; one stored before that object dropped is kept. At most 24 phases. A put whose phase order would put a
+  `unknown-ref` wherever it stands, on a dropped phase and on a phase the same put drops included; other content on a
+  dropped phase is ignored (review 2375 F9). One stored before that object dropped is kept. At most 24 phases. A put whose phase order would put a
   recorded carry's target at or before its source is refused `bad-carry` (F12).
 - `POST /api/programmes/:slug/plan/phases/refs` (`ccrc-api plan phase-ref <slug> --json <f>`), under the plan verbs'
   owner check and shared door: `add` and `remove` change one reference; `carry` writes, in `from`, a ticket reference
   marked `carriedTo` the `to` phase with the time (inserting it when `from` holds the ticket through a whole-epic
   reference), and in `to` a ticket reference, in one transaction. `carry` is refused `bad-carry` when the ticket is not
   `from`'s own work, `to` is not later than `from`, either phase is dropped, or the ticket is done. `add` and `remove`
-  refuse an unknown or dropped phase, a reference to an unknown or dropped object, and a `remove` of a reference the
-  phase does not hold, with `unknown-ref`. **F12's remove rule:** a `remove` of either end of a recorded carry (the
+  refuse an unknown or dropped phase, an unknown object, an `add` of a reference to a dropped object, and a `remove` of
+  a reference the phase does not hold, with `unknown-ref`; a `remove` of a stored reference to an object dropped since
+  is allowed (review 2375 F14). **F12's remove rule:** a `remove` of either end of a recorded carry (the
   `from` phase's ticket reference marked `carriedTo` a phase that is not dropped, or the `to` phase's ticket reference
-  such a carry names) is refused `bad-carry`; every other remove is allowed. The verb refuses `plan-closed` once the
-  plan has ended. Its census rows go with it.
+  such a carry names) is refused `bad-carry`; every other remove is allowed. A carry from a source dropped since stands,
+  so its target end is still refused (review 2375 F10). The verb refuses `plan-closed` once the plan has ended. Its census rows go with it.
 - The server advertises `plan-phases-v1`; the new `ccd/ccrc-api` row is refused locally when a current cap file omits it.
 - `unknown-ref` and `bad-carry` join `PLAN_REFUSALS`, each with its status in `REFUSAL_STATUS`. `PLAN_REFUSALS`' doc
-  comment stops saying every word has a console sentence: only `linear-text-public` has one (F20).
+  comment stops saying every word has a console sentence: only `linear-text-public` and `item-act-mismatch` have one
+  (F20; review 2375 F11).
 - `census-w3/claimant.test.ts`'s count of cap-reader calls in `ccrc-api` rises by the one new gate (F5).
 
 - [x] **Step 1: Write the failing tests** — `plan-phases.test.ts`: `plan put stores phases in order with their
@@ -271,10 +274,12 @@ Spec §4.1 and §7, D10 and D11.
   a run holds with `plan-runs-open` and a ticket not `open` with `plan-bad-body`, the words `plan ticket-move` uses for
   the same conditions (F21 of review 2268); a body without exactly one evidence key with `plan-bad-body`; and evidence
   that does not verify with `evidence-unverified`. `{ runId }` verifies when that run is a `work` run of this programme
-  in state `done` whose own ticket is an auto ticket or none. `{ pr }` verifies when `landing_entries` holds that pull
+  in state `done` whose own ticket is this ticket itself, an auto ticket or none (review 2375 F2: the run that finished
+  a ticket is its evidence). `{ pr }` verifies when `landing_entries` holds that pull
   request for the ticket's own project in state `landed` (F19: one rule, the ticket's project); with no landing entry,
   it is refused and the detail says to name the run. Evidence already stored on another ticket of the programme does
-  not verify, so one run or pull request closes at most one ticket (F2). On success it sets the ticket `done` with
+  not verify, so one run or pull request closes at most one ticket (F2), except on the run's own auto ticket, which
+  folds into the declared ticket (so the fold and the back-fill are reachable, review 2375 F2). On success it sets the ticket `done` with
   `doneAt` and `doneEvidence`, settles its epic (`settleEpicInTx`) and marks the plan's sync due, in one transaction.
 - `evidence-unverified` joins `PLAN_REFUSALS` with its status; no `ticket-not-open` is added (F21).
 - The server advertises `plan-ticket-done-v1`; `ccrc-api plan ticket-done <slug> --json <f>` is refused locally without it.
@@ -285,8 +290,9 @@ Spec §4.1 and §7, D10 and D11.
   admits it`, `a review run is never refused`. `plan-ticket-done.test.ts`: `a run closing done stores doneAt and its
   runId`, `the migration back-fills a done ticket's evidence and time from its run`, `ticket-done marks an open
   declared ticket done with a done run`, `with a landed pull request of the ticket's project`, `refuses a run that is
-  not done or not this programme's`, `refuses a run whose own ticket is a declared one`, `refuses evidence already
-  stored on another ticket`, `refuses a pull request with no landing entry`, `refuses a ticket a run holds with
+  not done or not this programme's`, `refuses a run whose own ticket is another declared one`, `accepts the run whose own
+  ticket is this one, or whose auto ticket holds its evidence`, `refuses evidence already stored on another declared
+  ticket`, `refuses a pull request with no landing entry`, `refuses a ticket a run holds with
   plan-runs-open`, `refuses a ticket not open with plan-bad-body`, `settles the epic`, `refuses a caller that is not the
   coordinator`, `refuses two evidence keys`, `refuses a body naming byId`; the census rows for the new route; and in `ccrc-api.test.ts`, `the
   ticket-done row is refused locally without plan-ticket-done-v1`.
@@ -325,9 +331,10 @@ export interface WorkItemView {
   reason: string | null;                           // done-unverified: why the evidence does not hold; closed: its reason
   epic: { key: string; title: string } | null;     // the work axis
   // the sequence axis, in order; every number from planPolicy's phaseNumbers (F6). carriedFrom lists each phase whose
-  // recorded carry names this one, in phase order: a ticket may be carried into one phase from two (F14)
+  // recorded carry names this one, in phase order: a ticket may be carried into one phase from two (F14). A carry from a
+  // source dropped since stands, so its entry's number is null, as PhaseView.number is for a dropped phase (review 2375 F10)
   phases: { key: string; number: number; carriedTo: { key: string; number: number } | null;
-    carriedFrom: { key: string; number: number }[] }[];
+    carriedFrom: { key: string; number: number | null }[] }[];
   runId: number | null; lastMoveAt: number | null; wave: number | null;
   doneAt: number | null;
   itemIds: number[];               // open operator items that make it waiting-on-you
@@ -396,9 +403,10 @@ The builder may rename fields; the shape is the spec's.
 - A done ticket's time and evidence come from WM1's columns (its migration back-filled the tickets done before it). A
   done ticket with no stored evidence reads `done-unverified` with the reason "no evidence stored" (F1). A run's own
   ticket (`run-<id>`) whose run is the evidence of a declared ticket is folded into that one ticket (a piece of evidence
-  closes at most one, F2) and counted once.
-- `verdicts: 'not-read'` (the reader is empty) skips rows 5 and 6 and is carried on the view; a verdict map drives
-  rows 5 and 6 and `lastMoveAt`. The run state `unknown` reads `state-unknown`.
+  closes at most one, F2; the auto ticket's own `{ runId }` never refuses the declared ticket's, review 2375 F2) and
+  counted once.
+- `verdicts: 'not-read'` (the reader is empty) skips rows 7 and 8 and is carried on the view; a verdict map drives
+  rows 7 and 8 and `lastMoveAt`. The run state `unknown` reads `state-unknown`.
 - On a planned programme, its work runs with no ticket are counted in `beforePlan`. A programme with no plan fills
   `runs`: its work runs, newest first; a run title that is null or equal to the programme's title reads as null, and
   the card draws "Wave N".
@@ -481,7 +489,9 @@ Modify `pwa/src/ledgers/ledgers.css`.
 
 - [ ] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the outstanding line names
   waiting on you and held apart`, `the no-plan card has no M and says what remains is not known`, `a declared empty plan
-  says so and draws no runs`, `an ended plan says how it ended and shows no outstanding work`, `an unreadable answer
+  says so and draws no runs`, `an ended plan says how it ended and shows no outstanding work`, `an ended plan with a
+  done-unverified ticket reads it left open, not outstanding` (review 2375 F13: Table 6 row 4 would hold it first; WM3
+  builds the reading), `an unreadable answer
   says so`, `verdicts not read are named on the source line`, `a plan with no phases says it is grouped by epic`, `a
   finished phase is one line with its date`, `a finish with no date says date unknown`, `done tickets fold into one
   counted line`, `each ticket shows its epic`, `a chip filters to its epic, shows its checkpoints, and a second tap
@@ -556,7 +566,8 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   desktop-polish coordinator also mails every live programme's coordinator (from `ccrc-api runs list`, each open
   programme's claimant) once this task merges: declare the plan at your next wave boundary with `plan put` (epics and
   tickets, phases with their references), then record each ticket already finished with `plan ticket-done` and the run
-  that did it, as `references/plan.md` now says. Each coordinator's declaration and back-fill is its own act, not a
+  that did it, as `references/plan.md` now says. The run that did it verifies when its own ticket is that ticket, an
+  auto ticket or none (spec §4.1, review 2375 F2). Each coordinator's declaration and back-fill is its own act, not a
   PR, recorded in its own ledger note; a ticket whose evidence does not verify stays open (spec §4.1).
 - [ ] **Step 3:** Run
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
@@ -597,7 +608,8 @@ waves.
 
 - **The Linear hierarchy plan** (`docs/superpowers/plans/2026-11-10-linear-hierarchy.md`): its Task 5.2 is superseded by
   WM2 to WM4 (spec D8 and Table 7), and needs a pointer to this plan under its heading; its §4.2 gains the phase tables
-  and the done columns, and its §4.1 transition "the coordinator closes it" is built by WM1; the overlaps above (its wave
+  and the done columns, and its §4.1 transition "the coordinator closes it with a reason" is built by its own Task 4.3
+  (`take … close: { why }`), beside which WM1 adds `plan ticket-done` (review 2375 F3); the overlaps above (its wave
   3 in flight, Tasks 4.1, 4.3 and 6.1, §10.1). Phases in Linear are its sync waves' work (R131), from the phase number
   and title WM0 carries; epics without wave ranges follow Q5 (answered yes, R133); its "the coordinator closes it with a
   reason" is kept and reads "closed" on the card (the F10 ruling). That programme's coordinator records these in its own
@@ -628,11 +640,12 @@ Task WM0 departs under its own number:
   `plan-phases-v1` lives in `shared/api.ts` (F5); a phase's number is derived once, in `planPolicy.ts` (F6); the
   `remove` of either end of a recorded carry, and a put that reorders a carry's target before its source, are refused
   `bad-carry` (F12); `plan ticket-done` reuses `plan-runs-open` and `plan-bad-body`, so `ticket-not-open` is never added
-  (F21); `{ pr }` evidence is judged by the ticket's own project (F19). The build departs from the plan's text in four
+  (F21); `{ pr }` evidence is judged by the ticket's own project (F19). The build departs from the plan's text in three
   small ways: `plan show` answers `phases` only for a programme that declares one, so a plan with no phases reads exactly
-  as before WM0 (the acceptance); `PhaseView.number` is null for a dropped phase; the client refuses `capability-missing`,
-  the timers' word, rather than a new one; and a phase holds at most 200 references (`PLAN_BOUNDS.refsPerPhase`, the
-  tickets' bound). The task note (`2026-11-16-programme-work-map/wm0.md`) lists each amendment and the finding it
+  as before WM0 (the acceptance); the client refuses `capability-missing`, the timers' word, rather than a new one; and a
+  phase holds at most 200 references (`PLAN_BOUNDS.refsPerPhase`, the tickets' bound). Fix round 1 (review 2375) moved
+  the migration to slot 90 behind main's 88 and 89, and recorded the coordinator's rulings on F9, F10 and F14 in the
+  spec and this plan. The task note (`2026-11-16-programme-work-map/wm0.md`) lists each amendment and the finding it
   answers, the migration slot, the rows and the mutants.
 
 ## Where things stand
@@ -645,6 +658,7 @@ Task WM0 departs under its own number:
   boundary after the build lands), R133 (item 359, Q5: an epic may list no wave range, built in WM6). The operator
   approved the spec (item 363, "start the build at WM0").
 - **Ruled by the coordinator on review 2268:** the hierarchy's close with a reason is kept, as its own outcome
-  "closed" (F10); F1 to F25 are carried into WM0's first commit as amendments (D-8715).
+  "closed" (F10); F1 to F9 and F12 to F25 are carried into WM0's first commit as amendments, F11 as one sentence, F26
+  is moot and F27 one dropped sentence (D-8715).
 - **Waiting on you:** nothing.
 - **Later:** the hierarchy's waves 3 to 7, set up separately; a frame for plan edits.

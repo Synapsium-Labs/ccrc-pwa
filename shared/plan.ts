@@ -60,9 +60,9 @@ export const isPlanKey = (v: unknown): v is string => {
 };
 
 /** Every refusal word of the plan verbs and the hierarchy routes. Each has its status in `REFUSAL_STATUS`
- *  (`shared/refusal.ts`). Only the coordinator's client sends the plan verbs, so only `linear-text-public` has a fixed
- *  sentence in the console (`pwa/src/lib/refusalWords.ts`; programme work map review 2268, F20). `unknown-ref` and
- *  `bad-carry` are the phase words (programme work map WM0, D-8715). */
+ *  (`shared/refusal.ts`). Only the coordinator's client sends the plan verbs, so only `linear-text-public` and
+ *  `item-act-mismatch` have a fixed sentence in the console (`pwa/src/lib/refusalWords.ts`; programme work map reviews
+ *  2268 F20 and 2375 F11). `unknown-ref` and `bad-carry` are the phase words (programme work map WM0, D-8715). */
 export const PLAN_REFUSALS = [
   'not-plan-owner', 'not-linear-owner', 'plan-too-large', 'plan-bad-body', 'waves-not-contiguous', 'wave-overlap',
   'dropped-needs-reason', 'unknown-epic', 'unknown-checkpoint', 'unknown-ticket', 'ticket-workspace-mismatch',

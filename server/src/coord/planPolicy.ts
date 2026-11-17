@@ -4,8 +4,8 @@ import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, isPlanKey,
-  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseRefBody,
-  type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody, type TicketState,
+  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseBody,
+  type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody, type TicketState,
 } from '../../../shared/plan.js';
 import type {
   Changes, CheckpointPatch, EpicPatch, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket, PhaseChanges, PhasePatch,
@@ -422,7 +422,9 @@ const findTicket = (stored: StoredPlan, key: string) => {
 /** The put's phases against the stored ones (D18): diffed by key like epics; a stored phase that is not dropped and is
  *  absent from the put needs `droppedWhy` (`dropped-needs-reason`); a dropped phase is never revived. References are only
  *  ADDED: one the phase already holds is left as it is (even to an object dropped since), and a new one must name an epic or
- *  ticket that is not dropped once the put applies (`unknown-ref`). A put whose order puts a recorded carry's target at or
+ *  ticket that is not dropped once the put applies (`unknown-ref`), wherever it stands in the put: on a dropped phase and on a
+ *  phase the same put drops too (review 2375 F9). Other content on a dropped phase (title, summary, position, valid new
+ *  references) is ignored, as `diffPlan` ignores it on a dropped epic. A put whose order puts a recorded carry's target at or
  *  before its source is refused `bad-carry` (review 2268 F12). An absent `phases` changes nothing. */
 export function diffPhases(stored: StoredPlan, phases: readonly PhaseRow[], put: PlanPutBody):
   { ok: true; changes: PhaseChanges | undefined } | Refused {
@@ -448,15 +450,33 @@ export function diffPhases(stored: StoredPlan, phases: readonly PhaseRow[], put:
   const idOf = (kind: 'epic' | 'ticket', key: string): number | undefined =>
     kind === 'epic' ? storedEpic.get(key)?.id : findTicket(stored, key)?.ticket.id;
 
+  // The references a phase of the put adds: those it does not already hold, each to an object live once the put applies.
+  const newRefs = (p: PlanPhaseBody, was: PhaseRow | undefined): { ok: true; refs: PlanPhaseRefBody[] } | Refused => {
+    const refs: PlanPhaseRefBody[] = [];
+    for (const r of p.refs) {
+      const id = idOf(r.kind, r.key);
+      if (was !== undefined && id !== undefined && was.refs.some((x) => x.kind === r.kind && x.refId === id)) continue;
+      if (!(r.kind === 'epic' ? epicLive(r.key) : ticketLive(r.key))) {
+        return refuse('unknown-ref', `phase ${p.key}: no ${r.kind} ${r.key} that is not dropped`);
+      }
+      refs.push(r);
+    }
+    return { ok: true, refs };
+  };
+
   const changes: PhaseChanges = { phases: { insert: [], update: [], drop: [] }, refs: [] };
   const liveOrdinal = new Map<number, number>();
   for (const [ordinal, p] of put.phases.entries()) {
     const was = byKey.get(p.key);
     if (p.droppedWhy !== undefined) {
       if (was === undefined) return refuse('plan-bad-body', `phase ${p.key} is new and cannot carry droppedWhy`);
+      const adds = newRefs(p, was);
+      if (!adds.ok) return adds;
       if (was.droppedWhy === null) changes.phases.drop.push({ id: was.id, why: p.droppedWhy });
       continue;
     }
+    const adds = newRefs(p, was);
+    if (!adds.ok) return adds;
     if (was !== undefined && was.droppedWhy !== null) continue;
     if (was === undefined) {
       changes.phases.insert.push({ key: p.key, ordinal, title: p.title, summary: p.summary } satisfies NewPhase);
@@ -468,14 +488,7 @@ export function diffPhases(stored: StoredPlan, phases: readonly PhaseRow[], put:
       if (was.summary !== p.summary) patch.summary = p.summary;
       if (Object.keys(patch).length > 0) changes.phases.update.push({ id: was.id, ...patch });
     }
-    for (const r of p.refs) {
-      const id = idOf(r.kind, r.key);
-      if (was !== undefined && id !== undefined && was.refs.some((x) => x.kind === r.kind && x.refId === id)) continue;
-      if (!(r.kind === 'epic' ? epicLive(r.key) : ticketLive(r.key))) {
-        return refuse('unknown-ref', `phase ${p.key}: no ${r.kind} ${r.key} that is not dropped`);
-      }
-      changes.refs.push({ phaseKey: p.key, kind: r.kind, key: r.key } satisfies NewPhaseRef);
-    }
+    for (const r of adds.refs) changes.refs.push({ phaseKey: p.key, kind: r.kind, key: r.key } satisfies NewPhaseRef);
   }
   for (const p of phases) {
     for (const r of p.refs) {

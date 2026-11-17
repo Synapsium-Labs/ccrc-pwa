@@ -221,7 +221,9 @@ re-records evidence in this build, so such a ticket stays held until its evidenc
 - **A ticket carried twice** (phase 1 to 2, then 2 to 3) reads "carried to phase 2" in phase 1, "from phase 1 · carried
   to phase 3" in phase 2, and "from phase 2" in phase 3. A ticket may be carried into one phase from two (each its
   own work there through a whole-epic reference), so "from" names every phase whose recorded carry names this one, in
-  phase order. A carry into a phase that is later dropped no longer counts: the ticket is again the earlier phase's
+  phase order. A carry whose source phase is dropped since still stands (the target's reference cannot be removed), and
+  its "from" names that phase with no number, the reading `PhaseView.number` gives a dropped phase (the coordinator's
+  ruling on review 2375 F10). A carry into a phase that is later dropped no longer counts: the ticket is again the earlier phase's
   own work.
 - **The headline counts each ticket once (D16).** "11 of 21 done" counts the programme's distinct tickets that are
   neither dropped nor closed (nor left open in an ended plan), whatever phases reference them; closed and left-open
@@ -307,13 +309,15 @@ ticket state, without changing the hierarchy's work model.
   is, and such a ticket reads "closed" with its reason, counted apart from done and outstanding (Table 6 row 2; the
   coordinator's ruling on review 2268's F10). Only verified evidence makes "done".
 - **The evidence is verified when it is recorded, and again on every read.** `{ runId }` verifies when that run is a
-  work run of this programme, its state is `done`, and its own ticket is an auto ticket (`run-<id>`) or none, so a run
-  that did one declared ticket is never the evidence of another. `{ pr }` verifies when the landing line holds that
+  work run of this programme, its state is `done`, and its own ticket is that ticket itself, an auto ticket (`run-<id>`)
+  or none, so a run that did one declared ticket is never the evidence of another, while the run that finished a ticket
+  is its evidence (the done arm and the back-fill store exactly that; review 2375 F2). `{ pr }` verifies when the landing line holds that
   pull request for the ticket's own project in state `landed` ("merged into its base"); the ticket's project, not the
   programme's home, because a re-projected ticket's pull request lands in its own project (F19 of review 2268). The
   server holds no other merge fact for a bare pull request number, so in a project with no landing line the verb
   refuses `{ pr }` and the coordinator names the run that carried it. A piece of evidence closes at most one ticket:
-  evidence already stored on another ticket of the programme does not verify (F2 of review 2268). The verb refuses
+  evidence already stored on another ticket of the programme does not verify (F2 of review 2268), except on the run's
+  own auto ticket, which folds into the declared ticket it is evidence of, so the fold is reachable (review 2375 F2). The verb refuses
   `evidence-unverified` when the evidence does not hold, and reuses `plan ticket-move`'s words for the same conditions
   (F21): `plan-runs-open` for a ticket a run holds, and `plan-bad-body` for a ticket that is not `open`. On a read,
   evidence that no longer holds makes the ticket read "marked done, but …" with the reason (Table 6, row 4).
@@ -458,19 +462,25 @@ serves it. The console only draws the words.*
 - **How a put treats them (D18).** `plan put` may carry `phases`, each with its `refs` (epic and ticket keys), diffed by
   key like epics: a phase that disappears needs `droppedWhy`. An absent `phases` key leaves the stored phases as they
   are. A put's references are added to what is stored, never replace it, so a put written before a carry can never undo
-  the carry. A new reference to an unknown or dropped epic or ticket is refused `unknown-ref`; a reference already
-  stored to an object dropped since is kept and reads as nothing (a whole-epic reference to a dropped epic still holds
+  the carry. A new reference to an unknown or dropped epic or ticket is refused `unknown-ref` wherever it stands in the
+  put, on a dropped phase and on a phase the same put drops included, while other content on a dropped phase (its
+  title, summary and position) is ignored, as `diffPlan` ignores it on a dropped epic (the coordinator's ruling on
+  review 2375 F9). A reference already stored to an object dropped since is kept and reads as nothing (a whole-epic reference to a dropped epic still holds
   its done tickets, §3). A put whose phase order puts a recorded carry's target at or before its source is refused
   `bad-carry` (F12). At most 24 phases, like epics.
 - **One verb for a reference (D17).** `plan phase-ref` adds one reference, removes one, or carries a ticket from phase A
   to a later phase B. A carry writes, in A, a ticket reference marked carried to B (even when A holds the ticket through
   a whole-epic reference), and in B a ticket reference, both in one transaction. It is refused `bad-carry` when the
   ticket is not A's work, B is not later than A, either phase is dropped, or the ticket is done. `add` and `remove` name
-  a phase that is not dropped; an unknown or dropped phase, or a reference to an unknown or dropped object, is refused
-  `unknown-ref`, and so is a `remove` of a reference the phase does not hold. **Which removes are refused (F12):** the
+  a phase that is not dropped; an unknown or dropped phase, an unknown object, or an `add` of a reference to a dropped
+  object is refused `unknown-ref`, and so is a `remove` of a reference the phase does not hold. A `remove` of a stored
+  reference to an object dropped since is allowed, the one way a stale reference ever leaves a phase (review 2375
+  F14). **Which removes are refused (F12):** the
   `remove` of a ticket reference that is either end of a recorded carry, the source's reference marked carried (to a
   phase that is not dropped) or the reference in the carry's target, is refused `bad-carry`; every other remove is
-  allowed. The verb refuses `plan-closed` once the plan has ended, as `plan put` does.
+  allowed. A carry whose source phase is dropped since stands: its target's reference still cannot be removed, and
+  only dropping the target voids it (the coordinator's ruling on review 2375 F10). The verb refuses `plan-closed` once
+  the plan has ended, as `plan put` does.
 - **A phase's number is derived once (F6).** A phase's number is its 1-based place among the phases that are not
   dropped, in order. One pure function in `planPolicy.ts` (L1) derives it, and both the plan read's `PhaseView.number`
   (WM0) and the work map's phase and carry numbers (WM2) take it from there, so the console never counts positions.
@@ -481,8 +491,9 @@ serves it. The console only draws the words.*
   `ticket-unavailable`, decided in `planGate` after `wave-epic-mismatch`. `unknown-ref`, `bad-carry` (WM0) and
   `evidence-unverified` (WM1) join `PLAN_REFUSALS`; `plan ticket-done` reuses `plan-runs-open` and `plan-bad-body` for
   a held or not-open ticket, as `plan ticket-move` does, so no `ticket-not-open` is added (F21). Each has its status
-  (`REFUSAL_STATUS` or `RUN_REFUSAL_STATUS`). Only the coordinator's client sends these verbs, and the only plan word
-  with a console sentence today is `linear-text-public` (measured in `pwa/src/lib/refusalWords.ts`), so the build adds
+  (`REFUSAL_STATUS` or `RUN_REFUSAL_STATUS`). Only the coordinator's client sends these verbs, and the only plan words
+  with a console sentence today are `linear-text-public` and `item-act-mismatch` (measured in
+  `pwa/src/lib/refusalWords.ts`; review 2375 F11), so the build adds
   none, and WM0 corrects `PLAN_REFUSALS`' doc comment, which says every word has one (F20).
 - **The two new routes** (`POST /api/programmes/:slug/plan/phases/refs` and `…/plan/tickets/done`) take the caller's
   identity from the query through the plan routes' shared door, like every plan verb, never from the body. Each has a
@@ -603,13 +614,14 @@ waves) is no longer mine: it is Q5.*
   before its source are refused `bad-carry`, and every other remove is allowed; both verbs refuse `plan-closed`; a
   phase's number counts only phases not dropped.
 - **Done.** A run closing `done` stores its time and `{ runId }`; the migration back-fills a done ticket's evidence from
-  its run; `plan ticket-done` stores evidence that verifies and refuses evidence that does not, evidence already stored
-  on another ticket, a run whose own ticket is a declared one, a ticket not `open`, a held ticket, a `{ pr }` in a
+  its run; `plan ticket-done` stores evidence that verifies (a run whose own ticket is this ticket, an auto ticket or
+  none, the auto ticket's own stored evidence included) and refuses evidence that does not, evidence already stored on
+  another declared ticket, a run whose own ticket is another declared one, a ticket not `open`, a held ticket, a `{ pr }` in a
   project with no landing line, and a caller that is not the coordinator.
 - **The run gate.** `ticket-required` refuses a run with no ticket into an epic with an open declared ticket, only in a
   plan that declares phases; a plan with no phases opens it as today; a ticket a run holds does not count.
 - **The decider.** `server/test/work-map.test.ts`: one case per row of Tables 6 and 6a; the verdicts reader empty skips
-  rows 5 and 6 and says so; a whole-epic reference picks up a ticket added later and leaves out a dropped one; two
+  rows 7 and 8 and says so; a whole-epic reference picks up a ticket added later and leaves out a dropped one; two
   whole-epic references to one epic keep its tickets in both phases and count them once; a recorded carry reads both
   ways; a ticket carried and done later stays carried in the earlier phase; a ticket carried twice reads at each step;
   a carry into a dropped phase is void; a phase's finish time is its latest own done or carry time, or unknown; a
@@ -651,8 +663,8 @@ waves) is no longer mine: it is Q5.*
     hierarchy spec's §4.1 (its "Wave" design call) and §16 call 2, and its plan's clause 21 ("epics plan-sized with
     their waves"). The build holds it as one task of its own, WM6.
 - The operator approved the spec (item 363, "start the build at WM0"), and the coordinator's rulings on review 2268
-  (2026-11-17): the hierarchy's close with a reason is kept as its own outcome, "closed" (F10), and F1 to F25 are
-  carried into WM0's first commit as amendments.
+  (2026-11-17): the hierarchy's close with a reason is kept as its own outcome, "closed" (F10), and F1 to F9 and F12 to
+  F25 are carried into WM0's first commit as amendments, F11 as one sentence, F26 is moot and F27 one dropped sentence.
 
 ### Waiting on you
 

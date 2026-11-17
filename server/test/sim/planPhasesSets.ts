@@ -2,7 +2,8 @@
 // `server/src/coord/planPolicy.ts`, each run against every case of `../planPhasesCases.ts` loaded over the mutated copy.
 // Registered in mutation-floors.test.ts's MUTANT_SETS, with a floor each in mutation-floors.json. The brief's red checks:
 // each bad-carry arm removed (BC-1 to BC-5), the unknown-ref checks (UR-*), the droppedWhy requirement (DW-1) and review
-// 2268 F12's refusals (F12-1 and F12-2 for the remove of a carry's two ends, F12-3 for a put that reorders a carry).
+// 2268 F12's refusals (F12-1 and F12-2 for the remove of a carry's two ends, F12-3 for a put that reorders a carry), and
+// review 2375's rows F5 to F10 and F14 (F7's bound sits in the put's parse; its mutants ride the put's set).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PHASE_CASES, type PlanPolicyModule } from '../planPhasesCases.js';
@@ -34,6 +35,16 @@ export const DIFF_PHASES_SET = set([
   { id: 'UR-8', old: "if (f !== undefined) return f.ticket.state !== 'dropped' && !(f.ticket.state === 'open' && !epicLive(f.epic.key));", new: 'if (f !== undefined) return !(f.ticket.state === \'open\' && !epicLive(f.epic.key));' },
   // D18: a reference the phase already holds is never re-judged (one stored before its object dropped is kept).
   { id: 'K-1', old: 'if (was !== undefined && id !== undefined && was.refs.some((x) => x.kind === r.kind && x.refId === id)) continue;', new: '' },
+  // Review 2375 F5: a put never revives a dropped phase (its title, position and new references are ignored).
+  { id: 'F5-1', old: '    if (was !== undefined && was.droppedWhy !== null) continue;\n    if (was === undefined) {', new: '    if (was === undefined) {' },
+  // Review 2375 F6: a ticket the put adds is referable only in an epic the put keeps live.
+  { id: 'F6-1', old: 'return put.epics.some((e) => epicLive(e.key) && (e.tickets', new: 'return put.epics.some((e) => (e.tickets' },
+  // Review 2375 F7: the put's bound of 200 references a phase (D-8715's refsPerPhase), in the put's own parse.
+  { id: 'F7-1', old: 'if (p.refs.length > PLAN_BOUNDS.refsPerPhase) return tooLarge(', new: 'if (false) return tooLarge(' },
+  { id: 'F7-1b', old: 'if (p.refs.length > PLAN_BOUNDS.refsPerPhase)', new: 'if (p.refs.length >= PLAN_BOUNDS.refsPerPhase)' },
+  // Review 2375 F9: a new reference is judged on a phase the put drops, and on a dropped phase, before the rest is ignored.
+  { id: 'F9-1', old: '      const adds = newRefs(p, was);\n      if (!adds.ok) return adds;\n      if (was.droppedWhy === null) changes', new: '      if (was.droppedWhy === null) changes' },
+  { id: 'F9-2', old: '    const adds = newRefs(p, was);\n    if (!adds.ok) return adds;\n    if (was !== undefined && was.droppedWhy !== null) continue;', new: '    if (was !== undefined && was.droppedWhy !== null) continue;\n    const adds = newRefs(p, was);\n    if (!adds.ok) return adds;' },
   // F12: a put that orders a carry's target at or before its source.
   { id: 'F12-3', old: 'if (from !== undefined && to !== undefined && to <= from) {', new: 'if (false) {' },
   { id: 'F12-3b', old: 'if (from !== undefined && to !== undefined && to <= from) {', new: 'if (from !== undefined && to !== undefined && to < from - 1) {' },
@@ -50,6 +61,8 @@ export const PHASE_REF_VERDICT_SET = set([
   { id: 'BC-5b', old: "if (!held || carriedOut || t.state === 'dropped')", new: "if (!held || t.state === 'dropped')" },
   { id: 'BC-5c', old: "if (!held || carriedOut || t.state === 'dropped')", new: 'if (!held || carriedOut)' },
   { id: 'BC-5d', old: 'const carriedOut = tref !== undefined && live(tref.carriedTo);', new: 'const carriedOut = tref !== undefined && tref.carriedTo !== null;' },
+  // Review 2375 F8: a whole-epic reference holds that epic's tickets only.
+  { id: 'F8-1', old: "from.refs.some((r) => r.kind === 'epic' && r.refId === t.epicId)", new: "from.refs.some((r) => r.kind === 'epic')" },
   // The unknown-ref checks of add and remove.
   { id: 'UR-1', old: "if (obj.state === 'dropped') return refuse('unknown-ref',", new: "if (false) return refuse('unknown-ref'," },
   { id: 'UR-2', old: 'if (phase === undefined || phase.droppedWhy !== null) {', new: 'if (phase === undefined) {' },
@@ -57,6 +70,10 @@ export const PHASE_REF_VERDICT_SET = set([
   // F12's remove rule: either end of a recorded carry.
   { id: 'F12-1', old: "if (held.kind === 'ticket' && live(held.carriedTo)) {", new: 'if (false) {' },
   { id: 'F12-1b', old: "if (held.kind === 'ticket' && live(held.carriedTo)) {", new: "if (held.kind === 'ticket' && held.carriedTo !== null) {" },
+  // Review 2375 F10: a carry from a dropped source stands, so its target end is still refused.
+  { id: 'F10-1', old: 'phases.some((p) => p.id !== phase.id &&', new: 'phases.some((p) => p.id !== phase.id && p.droppedWhy === null &&' },
+  // Review 2375 F14: removing a stored reference to an object dropped since is allowed.
+  { id: 'F14-1', old: "  if (held === undefined) return refuse('unknown-ref', `phase ${phase.key} holds no reference", new: "  if (obj.state === 'dropped') return refuse('unknown-ref', 'dropped');\n  if (held === undefined) return refuse('unknown-ref', `phase ${phase.key} holds no reference" },
   { id: 'F12-2', old: "if (held.kind === 'ticket' && phases.some((p) => p.id !== phase.id &&", new: 'if (false && phases.some((p) => p.id !== phase.id &&' },
 ]);
 
