@@ -3442,20 +3442,39 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
+  // The decision-model records and day counts (Overlord spec §3.7 H6, Table 11.1a; W2, plan `w2-decision-model.md` Task 4):
+  // `decision_records`, one answer per key ("never asked twice"; the key holds the host kind and origin and the line the row
+  // was gathered under, review 2262 F20), refs and non-private inline fields only, never an operator message's text
+  // (question 7); `decision_days`, each row's HTTP attempts per UTC day by serve and maintain, the calls reserved by requests
+  // in flight, and M19's time unavailable. Writers in `decisionModelStore.ts` alone: `recordDecision`, and
+  // `reserveDecisionCalls` and `settleDecisionCalls` (the anchor columns are PR B's `recordAnchorRun`). NEW TABLES, nothing
+  // on an existing table: an older build ignores them (Table 11.1a). Nothing reads or writes them until PR B wires the caller.
+  // The slot is positional: overlaps A (#2949) took 85, so this is 86 (the coordinator's word, 2026-11-17, mail 22345).
+  `
+  CREATE TABLE decision_records (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, modelId TEXT NOT NULL,
+    hostKind TEXT NOT NULL, origin TEXT NOT NULL, stateHash TEXT NOT NULL, lineGen INTEGER NOT NULL, verdict TEXT NOT NULL,
+    p REAL NOT NULL, band TEXT NOT NULL, ms INTEGER NOT NULL, refs TEXT NOT NULL, inline TEXT, at INTEGER NOT NULL,
+    UNIQUE (row, revision, modelId, hostKind, origin, stateHash, lineGen));
+  CREATE TABLE decision_days (row TEXT NOT NULL, day TEXT NOT NULL, serve INTEGER NOT NULL DEFAULT 0,
+    maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
+    anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
+  `,
+
+  // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
   // The previous generation's account (account organization plan 2026-11-16, Task D1, §4; #2909): `prevLane` on
   // `continuity_generations`, the `lane` of the identity's newest row within the term when the next is minted, as
   // `prevModel` is. ONE writer, `continuityStore.ts#mintGeneration`; `generationsLane.ts#renewalInputsOf` relates it to
   // `lane` by the roster's organization labels (`startOtherOrg`, the Overlord's `resumed-other-org`). Nothing is
   // back-filled: NULL is a first generation, a predecessor with no lane, or a row an older build wrote, and each reads as
   // "previous account unknown", which blinds the row and never reads as "same" (slug unknown-org-is-no-preference).
-  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 86` takes rule 3 (it warns,
+  // ONE NULLABLE COLUMN on an existing table: an older build opening a file at `user_version 87` takes rule 3 (it warns,
   // reads as-is and migrates nothing), never names it, and boots; its mint leaves the column NULL, which reads as above.
   // ROLLBACK EXPOSURE (review 2335 F1): `resumed-other-org` is the first trigger word added after the vocabulary shipped.
   // An older build's `genRowOf` refuses a row whose `dueWhy` or `blind` carries a word it does not know, and
   // `liveGenerations` is all-or-failure, so one such row fails that build's whole generations read (fail-closed by design,
   // review 2003 F13). It takes a rollback below this PR onto a database that already holds such a row.
-  // Overlaps (#2949) landed 85, so this is 86 (the coordinator's word, 2026-11-17). RE-MEASURE the slot before the PR and
-  // before merge (it must print 85 before this entry is counted):
+  // Overlaps (#2949) landed 85 and decision model A (#2948) 86, so this is 87 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 86 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

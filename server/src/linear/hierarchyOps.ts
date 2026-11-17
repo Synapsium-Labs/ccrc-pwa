@@ -26,11 +26,16 @@ export const LINEAR_CCRC_JOURNAL_OPS = [
 ] as const;
 export type LinearCcrcJournalOp = (typeof LINEAR_CCRC_JOURNAL_OPS)[number];
 
+/** The status values an initiative takes (R6, D-8674: FX2's answer 2). A finished programme is `Completed`, an
+ *  abandoned one `Canceled`; spelled once, here. */
+export const LINEAR_INITIATIVE_STATUSES = ['Proposed', 'Planned', 'Active', 'Completed', 'Canceled'] as const;
+export type LinearInitiativeStatus = (typeof LINEAR_INITIATIVE_STATUSES)[number];
+
 /** The closed record a row's `variables` reads: ids are lowercase UUIDs, texts already through `linear-egress`. */
 export type CcrcOpInput = Readonly<Record<string, string | number | boolean | null | readonly string[]>>;
 export type CcrcShaped =
   | { ok: true; value: Record<string, unknown>; created: string | null }
-  | { ok: false; word: LinearAnswerRefusalWord };
+  | { ok: false; word: LinearAnswerRefusalWord; /** C1: which retry-guard answer a `linear-invalid` create was (the object exists already). */ detail?: 'conflict' | 'name-taken' };
 
 type JournalOp = LinearCcrcJournalOp | 'create' | 'update' | 'comment' | 'link';
 type HierarchyKey = keyof typeof LINEAR_HIERARCHY_DOCUMENTS;
@@ -186,8 +191,27 @@ const listShape = (key: string, read: Read<Record<string, unknown>>, paged: bool
   return { ok: true, value: { nodes, next: info['hasNextPage'] ? end : null }, created: null };
 };
 
+const CONFLICT_ON_INSERT = /^conflict on insert of [A-Za-z]+$/;
+const NAME_NOT_UNIQUE = /^name not unique$/;
+/** C1 (D-8407): a create's recorded retry-guard answers, told from a real `linear-invalid`: an `INPUT_ERROR` "conflict on
+ *  insert of <Type>" (the caller's id exists), and, for a milestone only, "name not unique". Read before `dataOf`. */
+function retryGuardOf(body: unknown, milestone: boolean): CcrcShaped | null {
+  const errors = isObj(body) ? body['errors'] : undefined;
+  if (!Array.isArray(errors)) return null;
+  for (const e of errors) {
+    if (!isObj(e) || !isObj(e['extensions']) || e['extensions']['code'] !== 'INPUT_ERROR' || typeof e['message'] !== 'string') continue;
+    if (CONFLICT_ON_INSERT.test(e['message'])) return { ok: false, word: 'linear-invalid', detail: 'conflict' };
+    if (milestone && NAME_NOT_UNIQUE.test(e['message'])) return { ok: false, word: 'linear-invalid', detail: 'name-taken' };
+  }
+  return null;
+}
+
 /** A mutation's answer: `success` true, and for a create the new object's id. */
 const writeShape = (key: string, object: string | null, creates: boolean, withIdentifier = false) => (body: unknown): CcrcShaped => {
+  if (creates) {
+    const guard = retryGuardOf(body, key === 'projectMilestoneCreate');
+    if (guard !== null) return guard;
+  }
   const data = dataOf(body);
   if (isShaped(data)) return data;
   const payload = data[key];
