@@ -335,7 +335,8 @@ async function questionRig(st: State): Promise<Rig> {
     ] };
 }
 
-async function linearRig(st: State): Promise<Rig & { calls: () => string[]; search: (id: string) => Promise<LightMyRequestResponse> }> {
+async function linearRig(st: State): Promise<Rig & { calls: () => string[]; search: (id: string) => Promise<LightMyRequestResponse>;
+  create: (id: string, body: unknown) => Promise<LightMyRequestResponse> }> {
   const home = mkTmp('ccrc-other-lanes-routes-linear-');
   const db = openCoordDb(path.join(home, 'coord.db'));
   const r = await proxyRig({ db, over: { coord: new CoordStore(db) }, sessions: ROWS });
@@ -346,6 +347,7 @@ async function linearRig(st: State): Promise<Rig & { calls: () => string[]; sear
   const verbs = [['create', ''], ['update', '/:id'], ['comment', '/:id/comments'], ['link', '/:id/links']] as const;
   return { db, passCallers: [COORD, WORKER, PLAIN, PROFC], plain: PLAIN, calls: () => r.calls.map((c) => c.op),
     search: (id) => r.call('search', { as: { id, uuid: `u-${id}` }, body: BODIES.search }),
+    create: (id, body) => r.call('create', { as: { id, uuid: `u-${id}` }, body }),
     probe: async () => JSON.stringify({ calls: r.calls.map((c) => c.op), events: r.rows().length }),
     doors: verbs.map(([verb, suffix]) => ({ name: `linear ${verb}`, route: route(suffix),
       call: (id: string, uuid: string) => r.call(verb, { as: { id, uuid }, body: BODIES[verb] }) })) };
@@ -468,6 +470,18 @@ describe('what stays open to the bound body', () => {
     expect(oak.statusCode).toBe(200);
     expect(parsed(oak)).toEqual(parsed(coord));
     expect(rig.calls()).toEqual(['Search', 'Search']);
+    expect(rig.db.prepare('SELECT COUNT(*) AS n FROM linear_events').get()).toEqual({ n: 0 });
+  });
+
+  it('a Linear write with a bad body is refused as the Overlord before the validator, and nothing reaches Linear', async () => {
+    const rig = await linearRig('live');
+    const oak = await rig.create(OAK, {});
+    const coord = await rig.create(COORD, {});
+    expect({ status: oak.statusCode, error: (parsed(oak) as { error?: string }).error })
+      .toEqual({ status: 403, error: 'overlord-uses-its-doors' });
+    expect(coord.statusCode, 'the same bad body from anyone else is the validator\'s answer').toBe(400);
+    expect((parsed(coord) as { error?: string }).error).not.toBe('overlord-uses-its-doors');
+    expect(rig.calls()).toEqual([]);
     expect(rig.db.prepare('SELECT COUNT(*) AS n FROM linear_events').get()).toEqual({ n: 0 });
   });
 
