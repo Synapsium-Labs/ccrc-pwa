@@ -38,12 +38,17 @@
 // spawn, the release stamp, the wrapper and the gate code files), and every batch's preflight compares with that. So a
 // weekly run is never refused claude-version-moved or tree-moved for a move since setup. One week's arms run on one
 // release: a resumed `arms` on another release refuses `release-moved` (its pin, `quiz/arms-release.json`), and `report`
-// refuses `release-moved` when `arms` and `judge` ran on different releases.
+// refuses `release-moved` when `arms` and `judge` ran on different releases. A resumed `arms` reuses a passed step 0b
+// result only when every build it probed is the fresh expected node's, and otherwise probes again before the next arm.
 //
 // Where it writes and what it spends (F7). Its files go under --out, the driver's --out rule (prepareOut: outside any git
-// tree, 0700, the driver's marker) plus this file's own marker beside it. Its spawns use a transient directory under the
-// system temp, run with the account's real HOME and CLAUDE_CONFIG_DIR and spend its pool up to the setup's --budget, the
-// weekly cap (OQ3: 5M token-equivalents), stopping at the 70% limits threshold or the budget, whichever comes first. An
+// tree, 0700, the driver's marker) plus this file's own marker beside it, written only into a directory it has just made:
+// an existing --out without this marker, a W2 run's above all, refuses out-refused before any write, and `arms` refuses a
+// --out holding this setup's setup.json. Its spawns use a transient directory under the system temp and run with the
+// account's real HOME and CLAUDE_CONFIG_DIR. --budget is one week's total, the arms and the judge together (OQ3's weekly
+// cap, 5M token-equivalents): the arms stop at it on the week's ledger, and the judge's cap is what the arms left of it.
+// The 70% limits threshold still bounds each account's pool at every spawn, whichever stop comes first. The source
+// phase's writer spend lands in the setup's --out, not a week's. An
 // arm's admitted `ccrc history` read appends one arm-tagged counter line to the live spool, as W2's arms do (W2-D46).
 // It reads the store only through the driver's openReplayStore (history-replay.test.ts's node:sqlite scan covers this
 // file), never writes a history marker, and never runs a writing form of `ccrc history`.
@@ -66,13 +71,13 @@ import { ARM_MODEL_FORBIDDEN_RE, BOOTSTRAP, EXACT_MODEL_ID_RE, LABELLER, OPEN_RE
 import { DriverRefusal, LIMITS_DEFAULTS, OUT_JSON_CAP, QUIZ_META_FILE, SETTINGS_MODES, SOURCED_FILE, SOURCED_KIND, STEP0B_PROBES,
   STEP0B_SYNTHETIC_TRANSCRIPT, STOP_SIGNALS, TREATMENT_ARM, admissionCheckOf, admitAccount, armAttemptsOf, armBatchCount, armBatchPreflight,
   armJob, batchGate, armPayloads, armToolsOf, claimOut, codeShas, denialCheckOf, driverWordClass, drawSeedHex, ensurePlainDir, familiesOf,
-  finishedOutcome, frozenEntryOf, frozenListText, initChecksOf, judgeItemsOf, judgeJobsOf, judgeMapOf, judgeMapText, loadFrozen, loadInput,
+  finishedOutcome, frozenEntryOf, frozenListText, initChecksOf, judgeItemsOf, judgeJobsOf, judgeMapOf, judgeSpentOf, judgeMapText, loadFrozen, loadInput,
   lstatOrNull, measureClaudeVersion, mergeSourced, onStopSignal, openJudge, openReplayStore, openWriter, paneRefusal, parseArgs,
   persistenceCheckOf, persistenceMeasured, pinOutBytes, prepareOut, preflightSpawn, probeFindingOf, qidOf, questionCountsOf,
   questionStateOf, quizMetaReport, readAnswerRecords, readArmAnswers, readArmManifests, readPlain, readReleaseStamp, readRoster,
   recheckBatch, refuse, refuseColonInRealOut, refuseIfStopping, refuseOpusModel, refuseOutOfRangeValues, refuseRecallOff,
   refuseSpawnAdmission, refuseSyntheticPresent, refuseUnusableInputs, refuseWriterModel, requireListed, rosterConfigDirs, runBatch,
-  settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
+  settleAnswers, shaOfPlain, sourceQuiz, sourcedReport, spawnArgv, spendLinesOf, spentSoFar, step0bCardOf, step0bFailureDetail, step0bMechanics,
   step0bRunName, step0bRunOf, step0bStdinOf, step0bVerdictOf, step0bProbesOf, subagentToolsOf, subcommandHome, turnBoundCheckOf,
   warnFailedRuns, wrapperSha, writeArmManifest, writeFrozenList, writePlain } from './history-replay.mjs';
 
@@ -213,20 +218,25 @@ function singleStatesOf(ctx, questions) {
  *    release: string, steer: string, agents: string, step0b: { rel: string, sha256: string },
  *    questions: Array<{ qid: string, state: string, answer: { answer_field: { state: string }, correct: boolean } | null }> }} o */
 export function singleSummaryOf(o) {
-  const answers = { value: 0, unknown: 0, absent: 0, correct: 0 };
-  for (const q of o.questions) {
-    if (q.state !== 'answered' || q.answer === null) continue;
-    answers[q.answer.answer_field.state] += 1;
-    if (q.answer.correct === true) answers.correct += 1;
-  }
+  const { counts, answers } = summaryTallyOf(o.questions);
   return {
     kind: SUMMARY_KIND, v: 1, setup_sha256: o.setupSha256, frozen_sha256: o.frozenSha256, store_id: o.storeId, arm: TREATMENT_ARM,
     settings_mode: o.settingsMode, budget: o.budget, spend: o.spend, batches: o.batches, stop: o.stop, stamps: [...o.stamps].sort(),
     started_ms: o.startedMs, finished_ms: o.finishedMs, claude_code_versions: [...new Set(o.versions)].sort(), ccrc_release: o.release,
     steer_armed: o.steer, agents_on_armed: o.agents, step0b: o.step0b,
-    counts: questionCountsOf(o.questions.map((q) => q.state)), answers,
-    questions: o.questions.map((q) => ({ qid: q.qid, state: q.state })),
+    counts, answers, questions: o.questions.map((q) => ({ qid: q.qid, state: q.state })),
   };
+}
+/** The summary's counts and answer tally from its questions' states and settled answers: what `arms` writes and what
+ *  `report` recomputes from the answer records. Pure.  @param {Array<{ state: string, answer: any }>} questions */
+export function summaryTallyOf(questions) {
+  const answers = { value: 0, unknown: 0, absent: 0, correct: 0 };
+  for (const q of questions) {
+    if (q.state !== 'answered' || q.answer === null) continue;
+    answers[q.answer.answer_field.state] += 1;
+    if (q.answer.correct === true) answers.correct += 1;
+  }
+  return { counts: questionCountsOf(questions.map((q) => q.state)), answers };
 }
 
 /** Term 3: no key in REPORT_FORBIDDEN_KEYS at any depth, and no `PASS` in the text. A violation is a defect of this file,
@@ -331,13 +341,19 @@ function loadOwn(flags, name, kind, setupSha256) {
 }
 
 // ── measuring and acting ────────────────────────────────────────────────────────────────────────────────────────────
-/** --out by the driver's rule (prepareOut), then this file's marker beside the driver's: written once, and a marker that
- *  is anything but exactly OUT_KIND refuses out-refused. */
+/** --out by the driver's rule (prepareOut), then this file's marker beside the driver's. The marker is written only into a
+ *  directory prepareOut has just made; an existing directory must already hold it, exactly OUT_KIND. So any other
+ *  directory, a W2 run's --out (the driver's marker alone) above all, refuses out-refused before anything is written:
+ *  this file never writes answers, batches or spend rows into a W2 run (skip condition 2). The reverse, the driver's
+ *  checkOut accepting a single-arm --out, is in a gate code file and stays a residual (the task note). */
 function openOut(outArg) {
+  let fresh = false;
+  try { lstatSync(path.resolve(outArg)); } catch (e) { fresh = e?.code === 'ENOENT'; }
   const out = prepareOut(outArg);
   refuseColonInRealOut(out);
   const read = readPlain(path.join(out, OUT_MARKER), 64);
-  if (read.state === 'absent') writePlain(out, OUT_MARKER, `${OUT_KIND}\n`);
+  if (read.state === 'absent' && fresh) writePlain(out, OUT_MARKER, `${OUT_KIND}\n`);
+  else if (read.state === 'absent') refuse('out-refused', `${OUT_MARKER} absent: this --out was not made by this file, and is never adopted`);
   else if (read.state !== 'bytes' || read.bytes.toString('utf8') !== `${OUT_KIND}\n`) refuse('out-refused', `${OUT_MARKER} is not this file's marker`);
   return out;
 }
@@ -534,20 +550,29 @@ function pinArmsRelease(out, setupSha256, release) {
  *  probe runs (each taught spelling, the three denials, the Agent call), every arm run's init showing exactly its tools, no
  *  MCP server, no plugin and the ccrc-history skill. Every check must pass (step0bVerdictOf, fail-closed). The result is
  *  written whatever it shows; a failure refuses `pilot-failed` before any arm spawns. A result already here for this
- *  setup is read, not re-run: passed, the arms go on; failed, the week needs a fresh --out. */
+ *  setup is read: failed, the week needs a fresh --out; passed, it is reused only when every build it probed is the
+ *  fresh expected node's, and on any other build step 0b runs again, over it, before the next arm (the coordinator's
+ *  ruling on review 2409's F4: no arm runs on a build step 0b never probed). */
 async function step0bOf(c) {
   const rel = step0bRel(c.settingsMode);
   const have = readPlain(path.join(c.out, rel), OUT_JSON_CAP);
+  let round = 0;
   if (have.state === 'bytes') {
     let r = null;
     try { r = JSON.parse(have.bytes.toString('utf8')); } catch { r = null; }
-    if (!plainObject(r) || r.kind !== STEP0B_KIND || r.setup_sha256 !== c.setupSha256) refuse('out-refused', `${rel} is not this run's step 0b result`);
+    if (!plainObject(r) || r.kind !== STEP0B_KIND || r.setup_sha256 !== c.setupSha256 || !Array.isArray(r.batches)) {
+      refuse('out-refused', `${rel} is not this run's step 0b result`);
+    }
     if (r.passed !== true) refuse('pilot-failed', `${rel} records a failed step 0b: run the week again on a fresh --out`);
-    return { rel, sha256: shaOfPlain(c.out, rel), versions: r.batches.map((b) => b.claude_code_version) };
-  }
-  if (have.state !== 'absent') refuse('out-refused', `${rel} is unreadable`);
+    const versions = r.batches.map((b) => b?.claude_code_version);
+    if (versions.length > 0 && versions.every((v) => v === c.expected.claude_code_version)) return { rel, sha256: shaOfPlain(c.out, rel), versions };
+    process.stderr.write(`${PREFIX}: step 0b probed ${[...new Set(versions)].join(', ')}, this node runs ${c.expected.claude_code_version}: probing again\n`);
+    round = (Number.isSafeInteger(r.round) && r.round >= 0 ? r.round : 0) + 1;
+  } else if (have.state !== 'absent') refuse('out-refused', `${rel} is unreadable`);
   const { launch, out, model, settingsMode, lang, gate, claim, q, home } = c;
-  const nameOf = (run) => step0bRunName(SECTION, settingsMode, run);
+  // Round 0's runs carry the driver's step 0b names; a re-probe's round k runs under `<mode>.r<k>`, since the driver's
+  // runBatch reuses a finished run of the same name rather than spawning it again.
+  const nameOf = (run) => (round === 0 ? step0bRunName(SECTION, settingsMode, run) : `${SECTION}/step0b/${settingsMode}.r${round}/${run}`);
   const spawnPre = () => preflightSpawn({ launch, home, out, lang, gate, expected: c.expected });
   const batches = [];
   const pre0 = await spawnPre();
@@ -579,7 +604,7 @@ async function step0bOf(c) {
   const verdict = step0bVerdictOf(checks);
   const agent = outcomes[probes.findIndex((p) => p.expect === 'subagent')];
   const output = {
-    kind: STEP0B_KIND, v: 1, setup_sha256: c.setupSha256, store_id: c.storeId, measured_ms: Date.now(), account: launch.accountId, model,
+    kind: STEP0B_KIND, v: 1, setup_sha256: c.setupSha256, store_id: c.storeId, round, measured_ms: Date.now(), account: launch.accountId, model,
     settings_mode: settingsMode, question: { qid: q.qid, ccrc_id: q.ccrc_id, generation: q.generation, boundary_uuid: q.boundary_uuid },
     synthetic_transcript: c.transcript, probes: [...STEP0B_PROBES], batches, checks, subagent: subagentToolsOf(agent.facts.toolPairs), persistence,
     runs: [step0bRunOf('box', box), ...outcomes.map((o) => step0bRunOf('arm', o))],
@@ -638,6 +663,9 @@ export async function armsCommand(flags, env, deps = { recheck: recheckBatch, pa
     await step0bCardOf(cardCtx);   // W2-D78 (iii) and the card, before --out
     refuseSyntheticPresent(transcript);
     const out = openOut(flags.out);
+    if (lstatOrNull(out, SETUP_FILE) !== null && shaOfPlain(out, SETUP_FILE) === setup.sha256) {
+      refuse('out-refused', `--out holds this setup's ${SETUP_FILE}: a week runs in a fresh --out of its own, never the setup's`);
+    }
     const claim = claimOut(out);
     try {
       const startedMs = Date.now();
@@ -726,9 +754,21 @@ export function judgeJobsAgreed({ items, map, idx, freshIdx }) {
   return first;
 }
 
+/** The judge's cap: the setup's --budget less the spend this week's ledger records outside the judge's own rows. --budget
+ *  is the week's total (the operator's weekly cap), so the arms and the judge together never pass it, where the driver's
+ *  judge would take the whole budget again. The driver's judge gate counts only judge rows against its cap, so a resumed
+ *  judge neither counts its own rows twice nor starts on a fresh budget: it stops where the first one would have. A cap
+ *  at or under nothing refuses `budget-exhausted` before any spawn.  @param {string} out  @param {number} budget */
+function judgeCapOf(out, budget) {
+  const rows = spendLinesOf(out);
+  const outside = rows.reduce((a, r) => a + r.tokens, 0) - judgeSpentOf(rows);
+  if (outside >= budget) refuse('budget-exhausted', `spent ${outside} of ${budget} before the judge: --budget is the week's, arms and judge together`);
+  return budget - outside;
+}
+
 /** `judge`: the non-correct answers of the one arm (judgeItemsOf over [TREATMENT_ARM]: a correct answer never reaches the
  *  judge, a run-failed question is excluded) through the driver's openJudge, under the setup's exact Opus judge model, its
- *  rubric and settings mode, its budget on this week's ledger, preflighted against a fresh expected node (F5). Writes
+ *  rubric and settings mode, capped at what the week's --budget leaves (judgeCapOf), preflighted against a fresh expected node (F5). Writes
  *  quiz/judge.map.json (W2's kind, pinned) and quiz/judged.json (this file's kind); its sha on stderr. */
 export async function judgeCommand(flags, env) {
   checkForm('judge', flags);
@@ -747,13 +787,14 @@ export async function judgeCommand(flags, env) {
     const summary = loadSummary(flags, out, setup.sha256, fz.sha256);
     const claim = claimOut(out);
     try {
+      const cap = judgeCapOf(out, s.budget);
       const map = judgeMapOf(s.seed, fz.list.entries, [TREATMENT_ARM]);
       pinOutBytes(out, JUDGE_MAP_REL, judgeMapText(SECTION, fz.sha256, map), 'judge-map');
       const picked = judgeItemsOf({ entries: fz.list.entries, answers: readArmAnswers(out, SECTION), arms: [TREATMENT_ARM], shaMinPrefix: s.labeller.sha_min_prefix });
       const jobs = judgeJobsAgreed({ items: picked.items, map, idx: rs.idx, freshIdx: pairIndexOf(rs.db, home) });
       const expected = await freshExpected({ launch, home, out, lang: env.LANG });
       const judge = await openJudge({ home, accountId: s.account, model: s.judge_model, settingsMode: s.settings_mode, rubricId: s.rubric_id,
-        claim, budget: s.budget, limits: s.limits, expected, lang: env.LANG });
+        claim, budget: cap, limits: s.limits, expected, lang: env.LANG });
       const items = await judge.judge(SECTION, jobs);
       const count = (pred) => items.filter(pred).length;
       const output = {
@@ -781,7 +822,9 @@ export async function judgeCommand(flags, env) {
 
 // ── report ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 /** `report`: the setup, the frozen list, the arms summary and the judged file, each by sha and each naming the others; the
- *  answer records this --out holds; `release-moved` when the arms and the judge ran on different releases. Writes
+ *  answer records this --out holds, from which the summary's counts and answers are recomputed (a difference refuses
+ *  `input-invalid arms-summary-mismatch`, before any scoring); `release-moved` when the arms and the judge ran on
+ *  different releases. Writes
  *  single-report.json (canonical JSON, one newline: singleReportOf, with no comparison figure) and its sha on stderr. */
 export async function reportCommand(flags) {
   checkForm('report', flags);
@@ -800,6 +843,14 @@ export async function reportCommand(flags) {
     for (const { record } of readAnswerRecords(out, SECTION, 'input-invalid')) {
       if (record.arm !== TREATMENT_ARM || record.record_sha256 !== setup.sha256) refuse('input-invalid', `answer record ${record.qid} is not this run's treatment arm`);
       answers.set(record.qid, record);
+    }
+    const again = summaryTallyOf(fz.list.entries.map((e) => {
+      const r = answers.get(e.qid);
+      return { state: r === undefined ? 'not-run' : r.question_state,
+        answer: r === undefined || !plainObject(r.answer_field) ? null : { answer_field: r.answer_field, correct: r.correct === true } };
+    }));
+    if (canonicalJson(again.counts) !== canonicalJson(summary.value.counts) || canonicalJson(again.answers) !== canonicalJson(summary.value.answers)) {
+      refuse('input-invalid', 'arms-summary-mismatch: its counts or answers are not what this --out\'s answer records say');
     }
     const report = singleReportOf({ setup: setup.value, setupSha256: setup.sha256, frozen: fz.list, frozenSha256: fz.sha256, summary: summary.value,
       summarySha256: summary.sha256, judged: judged.value, judgedSha256: judged.sha256, answers });

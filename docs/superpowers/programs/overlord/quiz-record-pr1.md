@@ -89,7 +89,8 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
   driver's pure builders (`armsSummaryOf`, `judgeTallyOf`, `judgeMapOf`), which its writers call, rather than through a
   two-arm stub walk of `arms --section quiz`, which needs signed W2 records.
 - **step0b-result-own-kind:** step 0b's result is written under the module's own kind at `quiz/step0b/<mode>.json`, and a
-  resumed `arms` reads it rather than probing again: passed, the arms go on; failed, the week needs a fresh `--out`.
+  resumed `arms` reads it rather than probing again: passed on the build this node runs, the arms go on (on another
+  build it probes again: fix round 1, F4); failed, the week needs a fresh `--out`.
 - **one-week-one-release-pin:** `arms` pins the release at `quiz/arms-release.json`, so a resumed `arms` on another release
   refuses `release-moved`; the plan named only `report`'s check.
 - **module-local-words:** `in-session` and `release-moved` are the module's own words (`QUIZ_SINGLE_REASONS`), not
@@ -100,6 +101,38 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
   written after it: their red was measured by mutation (above) rather than before the code.
 - **notes-under-programs-overlord:** this note and the runbook are under `docs/superpowers/programs/overlord/`, by the
   coordinator's ruling (mail 23122, the operator's ruling of 2026-11-17), not beside the plan.
+
+## Fix round 1 (review 2409, the coordinator's rulings)
+
+- **F1:** `openOut` writes the module's marker only into a directory `prepareOut` has just made. An existing directory
+  must already hold the module's own marker, so any other, a W2 run's `--out` (the driver's marker alone) above all,
+  refuses `out-refused` before anything is written. A case runs `arms`, `judge` and `report` against a W2-marked
+  `--out` and checks each refusal and the directory's bytes, unchanged.
+- **F2:** Task 6's walk now drives the driver's own writers: the real writer handle pins `quiz/writer/<qid>.input.json`,
+  and `writeBaselineRecord` writes `quiz/baseline.json`. The required kinds include `ccrc-history-w2-baseline`, and all
+  three readers refuse both files.
+- **F3:** `--budget` is one week's total. The judge's cap is `--budget` less the spend the week's ledger records outside
+  the judge's rows (`judgeCapOf`), so a resumed judge neither counts its own rows twice nor starts on a fresh budget. A
+  cap at or under nothing refuses `budget-exhausted` before any spawn. The driver's judge runs each batch at its own
+  concurrency (2) under one gate pass, so it stops per batch. The header and the runbook say this, that the 70% limits
+  stop still bounds each account, and that the source phase's writer spend lands in `<OUT>`.
+- **F4:** a resumed `arms` reuses a passed step 0b result only when every build it probed is the fresh expected node's.
+  On any other build it probes again, before the next arm, and refuses `pilot-failed` on a failed probe. A re-probe's
+  round `k` runs under `quiz/step0b/<mode>.r<k>/`, because the driver's `runBatch` reuses a finished run of the same
+  name rather than spawning it again, and the result records its `round`.
+- **F5:** `report` recomputes the summary's `counts` and `answers` from the answer records (`summaryTallyOf`, which
+  `singleSummaryOf` now uses too) and refuses `input-invalid arms-summary-mismatch` before it scores.
+- **F6:** `arms` refuses `out-refused` on a `--out` holding this setup's `setup.json`.
+- **Residual, for whoever resumes W2, beside skip condition 3:** the driver's `checkOut` still accepts a single-arm
+  `--out`, which holds the driver's marker too, so a W2 subcommand pointed at a weekly `<WEEK>` would adopt it. The fix is
+  in `deploy/history-replay.mjs`, a `GATE_CODE_FILES` member outside the waiver, so it is not made here.
+- The driver's bytes are unchanged by the round: the waiver's strip-and-`cmp` above prints `31`, then `identical`.
+- Mutants, each applied to a copy of the module and restored from it with `cmp`, all 7 killed: the marker written into
+  any existing directory (F1), the setup `--out` check dropped (F6), the judge given the whole budget, and the cap's
+  refusal dropped (F3), a passed step 0b always reused, and a re-probe under the round-0 names (F4), and the report's
+  recompute dropped (F5).
+- Departures, by slug: **judge-cap-is-the-weeks-remainder** (the driver's own judge takes the whole budget again),
+  **step0b-reprobe-rounds** (the `<mode>.r<k>` run names).
 
 ## An incident to report
 

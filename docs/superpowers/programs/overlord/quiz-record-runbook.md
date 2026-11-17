@@ -18,7 +18,11 @@ lanes card).
 
 - `<OUT>` is a directory of the operator's choosing, outside every work tree, made once. It holds the setup and the
   frozen questions, and lives as long as the quiz lane runs.
-- `<WEEK>` is a fresh directory for each run. Remove it by hand once its run is confirmed or discarded.
+- `<WEEK>` is a fresh directory for each run, never `<OUT>`: `arms` refuses `out-refused` on a `--out` holding this
+  setup's `setup.json`. Remove it by hand once its run is confirmed or discarded.
+- The module adopts only a directory it made itself or one already holding its own marker. Any other existing directory,
+  a W2 run's `--out` above all, refuses `out-refused` before anything is written, so a weekly run never writes into a W2
+  run's answers or spend ledger.
 - Both are the lifecycle class `history-quiz-single-out` (`shared/lifecycle.ts`): mode 0700, marked by
   `.ccrc-history-quiz-single` beside the driver's own marker.
 - Each `--x-sha256` is the hex the previous command printed as `sha256 <hex>` on stderr.
@@ -66,11 +70,19 @@ Confirming the first run while all three W1a rows read Shadow makes it the basel
 - One week runs on one release: an `arms` resumed on another release refuses `release-moved`, and so does `report` when
   `arms` and `judge` ran on different releases. Run the week again on a fresh `<WEEK>`.
 - A version move of Claude Code since `setup` is not refused: `arms` and `judge` each measure the node at their own start.
+  A resumed `arms` on a Claude Code build its step 0b result never probed runs step 0b again before the next arm, and
+  refuses `pilot-failed` if a probe fails then.
+- `report` recomputes the summary's counts and answer tally from the week's answer records and refuses `input-invalid
+  arms-summary-mismatch` on any difference, before it scores.
 
 ## What a run spends and touches
 
-- The spawns run with the named account's real `HOME` and `CLAUDE_CONFIG_DIR` and spend its pool, up to the
-  `--budget` of 5M token-equivalents, the weekly cap. The spend ledger under `<WEEK>` says what the run used.
+- The spawns run with the named account's real `HOME` and `CLAUDE_CONFIG_DIR` and spend its pool. `--budget` (5M
+  token-equivalents, the weekly cap) is the week's total, the arms and the judge together: `arms` stops at it, and
+  `judge` stops at what the arms left of it, a resumed `judge` included. Each stop is checked before a batch, so the
+  ledger can end a batch's runs past it. The 70% limits threshold still bounds each account's pool at every spawn,
+  whichever stop comes first. The spend ledger under `<WEEK>` says what the week used.
+- The source phase's writer spend lands in `<OUT>`'s ledger, not a week's, and counts against no week's budget.
 - Each spawn's working directory is a transient directory under the system temp.
 - An arm's admitted `ccrc history` read appends one arm-tagged counter line to the live spool, as W2's arms do.
 - The store is read read-only; no history marker is written, and no writing form of `ccrc history` runs.

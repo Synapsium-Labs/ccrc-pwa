@@ -43,8 +43,8 @@ const CONTROL = D.CONTROL_ARM as string;
 const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 /** The recording stub: logs every run (argv, the recall arm, stdin); `--version` prints STUB_VERSION's first line. A
- *  print-mode run is keyed by sha256(settings mode, a newline, its stdin) and prints `<STUB_DIR>/<key>.jsonl` (else a
- *  plain answered stream), exits `<key>.exit` (else 0), and with `<key>.sleep` writes its pid to `<key>.pid` and sleeps. */
+ *  print-mode run is keyed by sha256(settings mode, a newline, its stdin) and prints `<STUB_DIR>/<key>.jsonl` (else
+ *  `<STUB_DIR>/default.jsonl`, else nothing), exits `<key>.exit` (else 0), and with `<key>.sleep` writes its pid to `<key>.pid` and sleeps. */
 const STUB = `#!/usr/bin/env node
 (async () => {
   const fs = await import('node:fs');
@@ -65,7 +65,7 @@ const STUB = `#!/usr/bin/env node
     fs.writeFileSync(at(dir + '/' + key + '.pid'), String(process.pid));
     await new Promise((r) => setTimeout(r, Number(sleep)));
   }
-  process.stdout.write(opt(dir + '/' + key + '.jsonl') ?? ${JSON.stringify('')});
+  process.stdout.write(opt(dir + '/' + key + '.jsonl') ?? opt(dir + '/default.jsonl') ?? '');
   process.exitCode = Number(opt(dir + '/' + key + '.exit') ?? '0');
 })();
 `;
@@ -231,6 +231,19 @@ async function week(o: { budget?: string; mode?: string } = {}) {
   put(home, mode, payloadOf(q[3]!.qid), '.exit', '1');
   const out = freshOut('week');
   return { home, s, fz, q, out, mode, argv: (extra: string[] = []): string[] => ['arms', '--out', out, ...inp('setup', s), ...inp('frozen', fz), ...extra] };
+}
+
+/** The week's setup rewritten with `patch` (a new sha, which w.argv() then names). */
+function reSetup(w: { s: Saved & { value: R } }, patch: R): void {
+  const v = { ...w.s.value, ...patch };
+  writeFileSync(w.s.path, `${L.canonicalJson(v) as string}\n`, { mode: 0o600 });
+  w.s.sha = shaOfFile(w.s.path);
+  w.s.value = v;
+}
+/** Every file under `dir` with its bytes' sha, and every directory: a snapshot to compare before and after. */
+function tree(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? [`${d.name}/`, ...tree(join(dir, d.name)).map((x) => `${d.name}/${x}`)]
+    : [`${d.name} ${shaOfFile(join(dir, d.name))}`])).sort();
 }
 
 // ── Task 3: the module's first acts, setup, source, freeze and marker ───────────────────────────────────────────────
@@ -625,6 +638,137 @@ describe('Task 5: the single-arm report, with no comparison figure', () => {
   });
 });
 
+// ── Fix round 1 (review 2409): the --out the module adopts, the week's budget, step 0b on a moved build, the summary ──
+describe('fix round 1: a --out the module did not make is never adopted (F1), and a week never runs in the setup\'s (F6)', () => {
+  it('arms, judge and report against a W2 run\'s --out (the driver\'s marker alone) each refuse out-refused and leave its bytes unchanged', async () => {
+    const f = await reportFixture();
+    const w2 = D.prepareOut(freshOut('w2')) as string;   // a W2 run's --out, as the driver makes it
+    mkdirSync(join(w2, 'quiz'), { mode: 0o700 });
+    writeFileSync(join(w2, 'quiz', 'w2-answer.json'), '{"kind":"fixture"}\n', { mode: 0o600 });
+    writeFileSync(join(w2, 'spend.jsonl'), '', { mode: 0o600 });
+    const before = tree(w2);
+    const forms: Array<[string, string[]]> = [
+      ['arms', ['arms', '--out', w2, ...inp('setup', f.s), ...inp('frozen', f.fz)]],
+      ['judge', ['judge', '--out', w2, ...inp('setup', f.s), ...inp('frozen', f.fz), ...inp('arms-summary', f.sum)]],
+      ['report', ['report', '--out', w2, ...inp('setup', f.s), ...inp('frozen', f.fz), ...inp('arms-summary', f.sum), ...inp('judged', f.judged)]],
+    ];
+    const spawned = runs(f.home).length;
+    for (const [name, argv] of forms) {
+      const r = await run(f.home, argv, FAKE);
+      expect(r.refusal, name).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/^\.ccrc-history-quiz-single absent: /) });
+      expect(tree(w2), `${name} wrote nothing into the W2 --out`).toEqual(before);
+    }
+    expect(runs(f.home).length, 'nothing was spawned').toBe(spawned);
+    expect(existsSync(join(w2, '.ccrc-history-quiz-single'))).toBe(false);
+  });
+
+  it('arms refuses a --out holding this setup\'s setup.json, before its claim and any spawn', async () => {
+    const w = await week();
+    const before = tree(w.s.out);
+    const r = await run(w.home, ['arms', '--out', w.s.out, ...inp('setup', w.s), ...inp('frozen', w.fz)], FAKE);
+    expect(r.refusal).toMatchObject({ word: 'out-refused', detail: expect.stringMatching(/holds this setup's setup\.json/) });
+    expect(tree(w.s.out)).toEqual(before);
+    expect(runs(w.home)).toEqual([]);
+  });
+});
+
+describe('fix round 1: --budget is the week\'s, the arms and the judge together (F3)', () => {
+  it('the judge\'s cap is what the arms left of --budget, and a resumed judge stops at the same point', async () => {
+    const w = await week();
+    // Each judge run spends 65 and labels nothing, so every job owes a second attempt: the driver's judge runs a batch of
+    // its two jobs at its own concurrency (2) under one gate pass, then the gate stops the second attempts' batch.
+    writeFileSync(join(w.home, STUB_DIR, 'default.jsonl'), stream({ text: 'LABEL: fixture' }));
+    const scratch = freshOut('measure');
+    expect((await run(w.home, ['arms', '--out', scratch, ...inp('setup', w.s), ...inp('frozen', w.fz)], FAKE)).refusal).toBeNull();
+    const armsSpend = D.spentSoFar(scratch) as number;
+    expect(armsSpend, 'fixture: the arms spend something').toBeGreaterThan(0);
+    reSetup(w, { budget: armsSpend + 1 });
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    expect(D.spentSoFar(w.out), 'the arms spend the same on the week\'s ledger').toBe(armsSpend);
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    const judgeArgv = ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)];
+    const at = runs(w.home).length;
+    const first = await run(w.home, judgeArgv, FAKE);
+    expect(first.refusal?.word).toBe('budget-exhausted');
+    expect(runs(w.home).length - at, 'one batch of judge runs, then the week\'s budget is spent').toBe(2);
+    const again = await run(w.home, judgeArgv, FAKE);
+    expect(again.refusal?.word, 'a resumed judge gets no fresh budget').toBe('budget-exhausted');
+    expect(runs(w.home).length - at, 'and stops at the same point').toBe(2);
+    expect(existsSync(join(w.out, 'quiz', 'judged.json'))).toBe(false);
+  });
+
+  it('arms that spent the whole --budget leave the judge nothing: it refuses before any spawn', async () => {
+    const w = await week();
+    const scratch = freshOut('measure');
+    expect((await run(w.home, ['arms', '--out', scratch, ...inp('setup', w.s), ...inp('frozen', w.fz)], FAKE)).refusal).toBeNull();
+    const armsSpend = D.spentSoFar(scratch) as number;
+    reSetup(w, { budget: armsSpend + 1 });
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    // One more arms-side row (a repeated name, as the ledger allows) takes the arms' spend past the whole --budget.
+    const ledger = join(w.out, 'spend.jsonl');
+    const rows = readFileSync(ledger, 'utf8').split('\n').filter((l) => l !== '');
+    const extra = rows.find((l) => !l.includes('/judge/') && (JSON.parse(l) as R).tokens > 0)!;
+    writeFileSync(ledger, `${rows.join('\n')}\n${extra}\n`);
+    const outside = D.spentSoFar(w.out) as number;
+    expect(outside).toBeGreaterThan(armsSpend);
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    const at = runs(w.home).length;
+    const r = await run(w.home, ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)], FAKE);
+    expect(r.refusal).toEqual({ word: 'budget-exhausted', detail: `spent ${outside} of ${armsSpend + 1} before the judge: --budget is the week's, arms and judge together` });
+    expect(runs(w.home).length).toBe(at);
+  });
+});
+
+describe('fix round 1: a resumed arms probes step 0b again on a build it never probed (F4)', () => {
+  const step0bRuns = (home: string): number => runs(home).length - questionRuns(home).length;
+
+  it('the same build reuses the passed result; another build probes again before the next arm, and its result replaces the old', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const n = step0bRuns(w.home);
+    expect(n, 'fixture: step 0b ran').toBeGreaterThan(0);
+    const same = await run(w.home, w.argv(), FAKE);
+    expect(same.refusal).toBeNull();
+    expect(step0bRuns(w.home), 'the build it probed: reused').toBe(n);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const moved = await run(w.home, w.argv(), FAKE);
+    expect(moved.refusal).toBeNull();
+    expect(moved.stderr).toMatch(/step 0b probed 2\.9\.1 \(Claude Code\), this node runs 2\.9\.2 \(Claude Code\): probing again/);
+    expect(step0bRuns(w.home), 'another build: probed again').toBe(2 * n);
+    const res = json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    expect(new Set((res.batches as R[]).map((b) => b.claude_code_version))).toEqual(new Set(['2.9.2 (Claude Code)']));
+    expect(json(join(w.out, 'quiz', 'arms-summary.json')).step0b.sha256).toBe(shaOfFile(join(w.out, 'quiz', 'step0b', `${w.mode}.json`)));
+  });
+
+  it('a re-probe that fails refuses pilot-failed, records the failure, and leaves the summary as it was', async () => {
+    const w = await week();
+    expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    const sum = shaOfFile(sumPath);
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');
+    const noSkill = stream({ skills: [], session: 'fixture-qs-noskill', calls: [{ command: 'x' }] });
+    plantStep0b(w.home, w.mode, Object.fromEntries((D.STEP0B_PROBES as string[]).map((p) => [p, noSkill])));
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal?.word).toBe('pilot-failed');
+    expect(json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`))).toMatchObject({ passed: false });
+    expect(shaOfFile(sumPath), 'no summary after a failed probe').toBe(sum);
+    expect((await run(w.home, w.argv(), FAKE)).refusal?.word, 'and the week stays failed').toBe('pilot-failed');
+  });
+});
+
+describe('fix round 1: report recomputes the summary from the answer records (F5)', () => {
+  it('an answer record edited after the judge refuses arms-summary-mismatch before any scoring, and no report is written', async () => {
+    const f = await reportFixture();
+    const p = join(f.out, 'quiz', 'answers', `${f.q[1]!.qid as string}.${TREATMENT}.json`);
+    const rec = json(p);
+    expect(rec.correct, 'fixture: q[1] answered wrongly').toBe(false);
+    writeFileSync(p, `${L.canonicalJson({ ...rec, correct: true }) as string}\n`);
+    const r = await run(f.home, f.reportArgv());
+    expect(r.refusal).toMatchObject({ word: 'input-invalid', detail: expect.stringMatching(/^arms-summary-mismatch: /) });
+    expect(existsSync(join(f.out, 'single-report.json'))).toBe(false);
+  });
+});
+
 // ── Task 6: W2's readers refuse every file the module writes (the history coordinator's skip condition 1) ─────────
 /** Whether every one of W2's record readers refuses this file: loadFinalRecord and loadArmRun (both sections) refuse it
  *  as a record, and validateOpenRecord's draft and final checks fail it. */
@@ -655,16 +799,30 @@ describe('Task 6: W2\'s readers refuse every file the module writes (skip condit
     const f = await reportFixture();
     await run(f.home, f.reportArgv());
     const made = [entry(FAM_A, 7)];
-    await run(f.home, ['source', '--out', f.s.out, ...inp('setup', f.s)], { sourceQuiz: async () => ({ entries: made.map((e, i) => ({ ...e, rank: ['k', i] })), fidelity: [], counts: {}, asof_same_ms_hits: {} }) });
+    // The stand-in drives the driver's own writers: the real writer handle pins quiz/writer/<qid>.input.json before its run,
+    // and writeBaselineRecord writes quiz/baseline.json (W2's kind), as the real sourceQuiz does.
+    const sourceQuiz = async (o: R): Promise<R> => {
+      const e = made[0]!;
+      const leaf = { text: `the fixture leaf records ${e.fact_raw as string}`, rawLen: 64 };
+      await o.writer.ask('quiz', { ...e, leaf, pair: null, span: [leaf] });
+      D.writeBaselineRecord(o.out, 'quiz', { storeId: STORE, rows: [D.baselineRow(e.boundary_uuid, { state: 'discard', why: 'fixture-discard' })] });
+      return { entries: made.map((x, i) => ({ ...x, rank: ['k', i] })), fidelity: [], counts: {}, asof_same_ms_hits: {} };
+    };
+    expect((await run(f.home, ['source', '--out', f.s.out, ...inp('setup', f.s)], { sourceQuiz })).refusal).toBeNull();
+    const writerInput = join(f.s.out, 'quiz', 'writer', `${made[0]!.qid as string}.input.json`);
+    expect(existsSync(writerInput), 'the walk reaches a real writer input').toBe(true);
     const sourcedPath = join(f.s.out, 'quiz', 'sourced.json');
     await run(f.home, ['freeze', '--out', f.s.out, ...inp('setup', f.s), '--sourced', sourcedPath, '--sourced-sha256', shaOfFile(sourcedPath)]);
     const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name)]));
     const files = [...walk(f.s.out), ...walk(f.out)].filter((p) => !p.endsWith('.lock'));
     const kinds = new Set(files.map((p) => { try { return (json(p).kind as string | undefined) ?? '-'; } catch { return '-'; } }));
     for (const k of ['ccrc-history-quiz-single-setup', 'ccrc-history-quiz-single-step0b', 'ccrc-history-quiz-single-arms-summary', 'ccrc-history-quiz-single-judged',
-      'ccrc-history-quiz-single-report', 'ccrc-history-w2-answer', 'ccrc-history-w2-arm-batch', 'ccrc-history-w2-judge-map', D.SOURCED_KIND as string, 'ccrc-history-w2-quiz']) {
+      'ccrc-history-quiz-single-report', 'ccrc-history-w2-answer', 'ccrc-history-w2-arm-batch', 'ccrc-history-w2-judge-map', D.SOURCED_KIND as string, 'ccrc-history-w2-quiz',
+      D.BASELINE_RECORD_KIND as string]) {
       expect(kinds, `the walk reaches a ${k} file`).toContain(k);
     }
+    expect(D.BASELINE_RECORD_KIND).toBe('ccrc-history-w2-baseline');
+    expect(files, 'the writer input is among the walked files').toContain(writerInput);
     const accepted = files.map((p) => ({ p: p.slice(f.home.length), r: refusedByW2(p, f.fz) })).filter((x) => !x.r.ok);
     expect(accepted).toEqual([]);
   });
