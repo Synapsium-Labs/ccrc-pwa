@@ -3558,6 +3558,36 @@ export const MIGRATIONS: readonly string[] = [
     CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
     CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
   `,
+
+  // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
+  // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
+  // and written by `overlordDesignationStore.ts`'s writers from one `RecordedActor`. The CHECK lists are the L0 maps' keys
+  // (`designation-actor.test.ts` holds them). The defaults are MEASURED, not guessed: only the account gate's doors wrote
+  // the row before this, so every row reads operator, account-gate, operator, and a pending actor standing is filled the same.
+  // SIX COLUMNS on an existing table: an older build opening a file at `user_version 92` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names them, and its writers leave the pending three as they were, which a half pending
+  // actor then reads as `unmeasured` here (fail closed). Positional: sibling W1 and W2 pieces add migrations too, so this
+  // number is renumbered at landing. RE-MEASURE the slot before the PR and before merge (it must print 91 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE overlord_designation ADD COLUMN actorKind TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorIssuer TEXT NOT NULL DEFAULT 'account-gate'
+    CHECK (actorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorStrength TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorStrength IN ('attributed','workload','operator'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorKind TEXT
+    CHECK (pendingActorKind IS NULL OR pendingActorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorIssuer TEXT
+    CHECK (pendingActorIssuer IS NULL OR pendingActorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorStrength TEXT
+    CHECK (pendingActorStrength IS NULL OR pendingActorStrength IN ('attributed','workload','operator'));
+  UPDATE overlord_designation SET pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'
+    WHERE pendingActor IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -745,9 +745,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, the previous generation's account, account organization D),
-    // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(91);
-    expect(MIGRATIONS.length).toBe(91);
+    // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1)
+    // and MIGRATIONS[91] (the designation row's actor kind, issuer and strength, Overlord W1 gates A).
+    expect(COORD_SCHEMA_VERSION).toBe(92);
+    expect(MIGRATIONS.length).toBe(92);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {

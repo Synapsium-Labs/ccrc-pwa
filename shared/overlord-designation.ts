@@ -5,6 +5,7 @@
 // door's body parser. The account set is `poolset.ts#PoolSet`, reused. It imports types only, and nothing from
 // `node:*`, because the PWA bundles this file.
 import type { PoolSet } from './poolset.js';
+import type { ActorWire } from './overlord-identity.js';
 
 /** The model classes the operator may choose for the Overlord (C45). */
 export const OVERLORD_MODEL_CLASSES = ['fable', 'opus'] as const;
@@ -44,10 +45,14 @@ export interface DesignationView {
   readonly pending: {
     readonly sessionId: string; readonly kind: PendingKind; readonly deadlineAt: number; readonly since: number;
     readonly actor: string; readonly generation: string | null;
+    /** The pending actor's kind, issuer and strength beside its subject (gates A, review M4); absent from an older server. */
+    readonly actorDetail?: ActorWire;
   } | null;
   readonly term: number; readonly designatedTerm: number;
   readonly model: OverlordModelClass; readonly accountPools: PoolSet;
   readonly pastIds: readonly string[]; readonly actor: string;
+  /** The live actor's kind, issuer and strength beside `actor`, its subject (gates A, H3); absent from an older server. */
+  readonly actorDetail?: ActorWire;
   readonly lastAttempt: { readonly sessionId: string; readonly outcome: AttemptOutcome; readonly at: number } | null;
   readonly stopsOwed: readonly string[];
 }

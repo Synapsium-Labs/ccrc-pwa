@@ -19,6 +19,7 @@ import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js'
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { actorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { refuseRoute } from '../src/refuse.js';
 import type { DeliverResult } from '../src/continuity/sessionHost.js';
 import { DESIGNATE_CCD_WORDS } from '../../shared/overlord-designation.js';
@@ -27,6 +28,10 @@ import { STATE_DEADLINE_S } from '../../shared/continuity.js';
 import { fakeTime } from './fakeTime.js';
 import { ROSTER, limit } from './sim/designationSets.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+
+/** A retire's actor as the door mints it: the gate's actor through the identity port (gates A). */
+const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(actorOf('device-a', 'abcdef0123456789'));
 
 // Opening a coord db replays every migration, which is slow under load: migrate ONE template, and copy it for each test.
 let template = '';
@@ -144,7 +149,8 @@ async function rig(opts: { serial?: 'real' | 'off' } = {}): Promise<Rig> {
     : (fn) => { serialRuns.n += 1; const run = tail.then(fn, fn); tail = run.catch(() => undefined); return run; };
   const app = Fastify({ logger: false });
   registerOverlordRoutes(app, {
-    gate, serial, coord, journal, body, host: host as unknown as OverlordRouteDeps['host'],
+    gate, identity: attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }),
+    serial, coord, journal, body, host: host as unknown as OverlordRouteDeps['host'],
     clock: time.ports.clock, entropy: time.ports.entropy, dec: () => null,
     facts: {
       ccdWords: () => facts.ccdWords, serverWords: ['continuity-v1'], builds: () => facts.builds, roster: () => ROSTER,
@@ -462,7 +468,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
   it('a refused bind (the attempt is gone) fails the attempt too, and the session is stopped', async () => {
     const r = await rig();
     // The create's own answer retires the attempt behind the door's back, as a retire without the serialiser would.
-    r.body.createAnswer = (id) => { r.coord.retire(r.journal, { actor: 'x', at: 1, opKey: 'r' }); r.body.alive.add(id); return { ok: true, generation: GEN }; };
+    r.body.createAnswer = (id) => { r.coord.retire(r.journal, { actor: OPERATOR, at: 1, opKey: 'r' }); r.body.alive.add(id); return { ok: true, generation: GEN }; };
     const res = await post(r);
     expect(res.statusCode).toBe(502);
     expect(res.json().detail).toContain('no longer pending');
@@ -490,7 +496,7 @@ describe('a failure after the row is written ends the attempt, owes the stop of 
   it('drainOwedStops: an off that fails after a stop that succeeds leaves the id owed, unstopped in the answer (review 2366 N1)', async () => {
     const r = await rig();
     const id = (await post(r)).json().sessionId as string;
-    r.coord.retire(r.journal, { actor: 'x', at: 1, opKey: 'k' });
+    r.coord.retire(r.journal, { actor: OPERATOR, at: 1, opKey: 'k' });
     expect(view(r)!.stopsOwed).toEqual([id]);
     const before = r.body.log.length;
     r.body.keepAwakeAnswer = (s) => (s === 'off' ? { ok: false, detail: 'marker unreadable' } : { ok: true, foreign: [] });
@@ -755,7 +761,7 @@ describe('retire', () => {
   it('drainOwedStops drains each id once, however many times it is named', async () => {
     const r = await rig();
     const id = (await post(r)).json().sessionId as string;
-    r.coord.retire(r.journal, { actor: 'x', at: 1, opKey: 'k' });
+    r.coord.retire(r.journal, { actor: OPERATOR, at: 1, opKey: 'k' });
     expect(view(r)!.stopsOwed).toEqual([id]);
     const out = await drainOwedStops({ body: r.body, coord: r.coord }, [id, id]);
     expect(out).toEqual({ stopped: [id], owed: [] });
