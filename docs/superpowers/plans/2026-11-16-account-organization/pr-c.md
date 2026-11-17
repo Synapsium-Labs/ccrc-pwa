@@ -19,12 +19,13 @@ thinking inside it is bound to an organization.
 
 | Task | What | Where |
 |---|---|---|
-| C1 | `_org_cur`, `_org_tie`: the tie-break, reading the current account's label once, at the first tie | `ccd/ccd`, before `_swap_target` |
+| C1 | `_org_cur`, `_org_is`, `_org_tie`: the tie-break, reading every label once per call into a table, at the first question | `ccd/ccd`, before `_swap_target` |
+| C1 | `_org_rel_of`: the relation over two labels in hand, with no fork; `_org_rel` asks it, its contract unchanged (fix round 2) | `ccd/ccd`, beside `_org_rel` |
 | C1 | The loop's comparison in both brackets | `_swap_target` |
 | C1 | `_org_note`, `_org_near_say`: the near miss, measured only when asked (`CCD_ORGNEAR_ASK`) | `ccd/ccd` |
 | C1 | `_orgnear_cut`, the rescue sites asking, and the dispatch carrying `CCD_SWAP_ORGNEAR` | `_auto_swap_check`, `_watchdog_one`, `_dispatch_swap` |
 | C1 | `meas.org` and `meas.orgnear` on the `swap` record | `cmd_swap` |
-| C1 | Five C1 rows | `ccd/contexts.tsv` |
+| C1 | Seven C1 rows | `ccd/contexts.tsv` |
 | C1 | `org` and `orgnear` declared as `LifecycleMeas` keys, and read by `reviveMeas` (fix round 1) | `shared/api.ts`, `server/src/coord/journalparse.ts` |
 | C1 | The placement parity fixture runs every row labelled (`LEAST_LOADED_ORGS`) | `server/test/fixtures/leastLoaded.ts`, `projected-home.test.ts` |
 | C2 | The header | `cmd_swap` |
@@ -46,12 +47,17 @@ thinking inside it is bound to an organization.
 - `orgnear-omitted-from-dispatch-when-none`: a rescue with no near miss passes no tenth argument to `_dispatch_swap`,
   so every dispatch on an unlabelled fleet composes exactly the arguments it did on `main`
   (`ccd-limit-watchdog.test.ts` pins them).
-- `org-tie-read-costs-one-fork`: the current account's label is read with one `$(_acct_org …)`, once per
-  `_swap_target` call, and only at the first equal score in a bracket (or, on a rescue, at the first scored candidate).
-  The two leaving fixtures of `ccd-tick-budget.test.ts` tie two lanes at 30, so their steady tick rises one fork, no
-  exec: leaving 113/43 -> 114/43, fable-leaving 121/47 -> 122/47. No other fixture moves. A fork-free read would need
-  the generated `accounts.sh` to carry the labels as data, which is PR A's file and was not worth one fork on a
-  must-leave tick. The file's holder (ccd arms B) released it first.
+- `org-tie-read-costs-one-fork` (restated in fix round 2, measured): `_swap_target` reads every account's label with
+  ONE `$( )` over the roster (`_org_cur`), once per call, and only at the first equal score in a bracket (or, on a
+  rescue, at the first scored candidate). Each relation then comes from that table through `_org_rel_of`, the
+  relation's fork-free core, so a call costs one fork whatever the labels, and no exec. Measured on
+  `ccd-tick-budget.test.ts`: the two leaving fixtures, unlabelled, rise one fork (leaving 113/43 -> 114/43,
+  fable-leaving 121/47 -> 122/47), and the same `leaving` with every candidate labelled costs the same 114/43 (its own
+  case pins it). Before fix round 2 that labelled figure was 120/43: `_org_rel` re-read both labels in a `$( )` of its
+  own, so a tie with a `same` candidate cost six forks more. An older `accounts.sh` with no `_ccrc_org` costs the same
+  one fork (the guard runs inside it). A fork-free read would need `accounts.sh` to carry the labels as data, which is
+  PR A's file. `cmd_swap`'s `meas.org` still asks `_org_rel` (one `$( )` and its two label reads), once per swap, never
+  on a tick. The file's holder (ccd arms B) released it first.
 - `placement-labels-in-the-fixture`: §3 says PR C gives the shared least-loaded fixture rows labels. They are one
   fixture-level map, `LEAST_LOADED_ORGS`, that the projected-home runner applies to every row in both rosters, rather
   than a field on each of the 57 rows. `gpt` is left unlabelled. `ccd-default-pool.test.ts`, the fixture's other
@@ -105,10 +111,39 @@ the PR's local gate did not run that suite. Both keys are now declared on `Lifec
 declaration and green after it, with `lifecycle-wire`, `journalparse`, the type checks, `single-definition/*`,
 `rings/*`, `growth-check` armed and `deviation-refs`.
 
+## Fix round 2: review 2333
+
+The review found no reason not to land, and three minor findings, all fixed:
+
+- **F1:** the overflow bracket's load-over-organization is pinned: an `other` overflow lane at 20 beats a `same` one at
+  30 with no home-able candidate. It kills the mutant that tests the organization before the score in that bracket
+  alone.
+- **F2:** the two other sites that cut the near miss off are pinned, the tick's retry with the class gate dropped and
+  the limit watchdog, each with a labelled fixture that has a near miss. They started from the refute pass's drafts.
+  Each goes red when its cut is replaced with `:`.
+- **F3 (ruled):** the labels are read once per call into a table, and relations come from it (the departure above,
+  restated and measured). A labelled `leaving` fixture in `ccd-tick-budget` ratchets the labelled figure, and a case in
+  `ccd-swap-target-org` counts the label reads of a rescue-asked call with ties: each roster account once.
+- **Nits:** `_org_near_say`'s unread score argument is gone (N2), and `journalparse.ts`'s count comments say forty-two
+  (N3). N1 is left as it is, as ruled.
+
+`ccd-swap-target-org` has 31 cases now. Its mutants were re-run against the new code, and all 20 were killed (table
+below). The labelled budget case fails on the code before this round (120/43 against 114/43).
+
+| Mutant (fix round 2) | Killed by |
+|---|---|
+| organization tested before the score, overflow bracket only (F1) | the overflow bracket's lower `other` lane |
+| the retry's cut replaced with `:` (F2) | the tick's retry with the class gate dropped |
+| the watchdog's cut replaced with `:` (F2) | the limit watchdog |
+| the table holds the current account only | the tie-break cases (12) |
+| a candidate related by the current account's label | the tie-break cases (12) |
+| the table re-read at every question | the read-once case |
+
 ## Growth
 
-`ccd/ccd` grows by 24 net code lines against the merge base, within the limit of 40, with no waiver. `shared/api.ts`
-grows by 4 net code lines in fix round 1 (two members, two map keys). `growth-check`
+Measured after fix round 2 against the merge base, comment lines excluded: `ccd/ccd` grows by 33 net code lines
+(`git diff --numstat`: +82 -23), within the limit of 40, with no waiver. `shared/api.ts` grows by 4 (two members and
+two map keys; +8 -0 with their doc comments). The first round's "24" was loose, as the review measured. `growth-check`
 runs green armed.
 
 ## Environment notes

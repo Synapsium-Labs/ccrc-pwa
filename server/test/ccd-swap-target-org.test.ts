@@ -107,6 +107,15 @@ describe('the tie-break: organization decides only between equal scores', () => 
     expect(target('claude-a', 'claude', '1')).toBe('claude-d rc=0');
   });
 
+  it('a lower-scored `other` overflow lane beats a higher-scored `same` one: load first in the overflow bracket too', () => {
+    // The overflow twin of the home-able case above, so a tie test moved ahead of the score in that bracket alone is red.
+    labels({ 'claude-a': 'org-a', gpt: 'org-b', 'claude-d': 'org-a' }, ['claude-d']);
+    installWrapper('gpt');
+    seed('claude-a', 'claude'); limits('claude-a', 100, 100); limits('claude', 100, 100); limits('claude-b', 100, 100);
+    limits('gpt', 20, 20); limits('claude-d', 30, 30);
+    expect(target('claude-a', 'claude', '1')).toBe('gpt rc=0');
+  });
+
   it('the tie breaks between two unmeasured candidates (rank 100) as well', () => {
     labels({ 'claude-a': 'org-a', 'claude-b': 'org-b', 'claude-d': 'org-a' });
     blockedAway();   // claude-b and claude-d: no telemetry, both rank 100
@@ -200,6 +209,21 @@ describe('orgnear: the near miss, asked for by the rescue sites only', () => {
   });
 });
 
+describe('the labels are read once per call, whatever they hold', () => {
+  it('a rescue-asked call with ties and several `same` losers reads each roster label exactly once', () => {
+    // Every candidate here asks a question (asked calls note each `same` score, and two pairs tie), so a table that
+    // were not kept would be read again for each.
+    labels({ 'claude-a': 'org-a', claude: 'org-a', 'claude-b': 'org-b', 'claude-d': 'org-a' });
+    seed('claude-a', 'claude-a'); limits('claude-a', 100, 100);
+    limits('claude', 40, 40); limits('claude-b', 20, 20); limits('claude-d', 40, 40);
+    const out = h.sh(`_acct_org() { echo "$1" >> "$HOME/org-reads"; declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
+      out=$(CCD_ORGNEAR_ASK=1 _swap_target ${ID} claude-a claude-a 1 0); printf '%s' "\${out//$'\\n'/|}"`, ENV);
+    expect(out).toBe('claude-b|orgnear=40');
+    const reads = fs.readFileSync(path.join(h.home, 'org-reads'), 'utf8').split('\n').filter(Boolean).sort();
+    expect(reads).toEqual(DEFAULT_TEST_ROSTER.accounts.map((a) => a.id).sort());
+  });
+});
+
 describe('CONTROL: with no labels at all, every answer is today\'s', () => {
   beforeEach(() => { seedAccountsSh(h.home); });
 
@@ -247,6 +271,70 @@ describe('the rescue tick carries the near miss into the dispatch', () => {
     blockedAway(); limits('claude-b', 30, 30); limits('claude-d', 30, 30);
     h.sh(`${BLOCKED} _auto_swap_check ${ID}`, ENV);
     expect(swapLog()).toMatch(new RegExp(`dispatch ${ID} -> claude-d arm=rescue orgnear=$`, 'm'));
+  });
+});
+
+// The other two sites that ask for the near miss cut it off before the dispatch: the tick's retry with the class gate
+// dropped, and the limit watchdog. Each fixture has a near miss (`claude-d`, `same`, at 40 lost to `claude-a`, `other`), so
+// a site that skipped its cut would dispatch the two-line answer as the destination's name. The dispatch stub prints
+// a newline in the name as `<NL>`.
+const ORGS_NEAR = { claude: 'org-a', 'claude-a': 'org-b', 'claude-b': 'org-a', 'claude-d': 'org-a' };
+const DISPATCH_NL = `_dispatch_swap() { local t="\${2//$'\\n'/<NL>}"; echo "dispatch $1 -> $t arm=$3 orgnear=\${10-}" >> "$HOME/ccd-calls"; };`;
+const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
+const iso = (e: number): string => new Date(e * 1000).toISOString();
+
+describe('the other two rescue sites cut the near miss off too', () => {
+  it('the tick\'s retry with the class gate dropped', () => {
+    labels(ORGS_NEAR); seed('claude', 'claude');
+    fs.mkdirSync(path.join(h.home, '.cc-limits'), { recursive: true });
+    for (const [w, five] of [['claude', 100], ['claude-a', 10], ['claude-b', 40], ['claude-d', 40]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`), JSON.stringify(
+        { five, seven: five === 100 ? 5 : five, ts: T0, fiveResetAt: T0 + 10000, sevenResetAt: T0 + 400000 }));
+    }
+    // A live limit row in the transcript, and a class gate that refuses every lane until it is dropped.
+    const at = T0 - 5;
+    const p = h.sh(`_transcript_path ${ID}`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, JSON.stringify({
+      parentUuid: 'p', isSidechain: false, type: 'assistant', uuid: `b${at}`, timestamp: iso(at),
+      message: { model: '<synthetic>', role: 'assistant', content: [{ type: 'text', text: "You've hit your session limit · resets 9:10pm (UTC)" }] },
+      isApiErrorMessage: true, error: 'rate_limit', apiErrorStatus: 429,
+      quotaLimits: { status: 'rejected', resetsAt: at + 9000, rateLimitType: 'five_hour' },
+    }) + '\n');
+    fs.writeFileSync(path.join(h.home, 'pane.txt'), '? for shortcuts\n❯ \n');
+    h.sh(`tmux() { ${WIDE_PANE} case "\${1:-}" in
+        capture-pane) cat "$HOME/pane.txt" ;; list-panes) echo ${PANE_PID} ;;
+        display-message) [ -n "\${TMUX_CREATED:-}" ] && echo "$TMUX_CREATED" ;; esac; return 0; };
+      _pane_box_draft() { printf ''; };
+      ${DISPATCH_NL}
+      _route_peek_to() { printf -v "$1" ''; [[ "$3" == class ]] && printf -v "$1" opus; return 0; };
+      _class_gate() { [[ -z "\${2:-}" ]] && return 0; return 2; };
+      _auto_swap_check ${ID}`, { TMUX_CREATED: String(T0 - 86400) });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a arm=rescue orgnear=40`]);
+  });
+
+  it('the limit watchdog', () => {
+    const W0 = 1_900_000_000;
+    const BORDER = '─'.repeat(28);
+    labels(ORGS_NEAR); seed('claude', 'claude');
+    fs.mkdirSync(path.join(h.home, '.cc-limits'), { recursive: true });
+    for (const [w, five, seven] of [['claude', 100, 10], ['claude-a', 5, 5], ['claude-b', 40, 40], ['claude-d', 40, 40]] as const) {
+      fs.writeFileSync(path.join(h.home, '.cc-limits', `${w}.json`),
+        JSON.stringify({ five, seven, ts: W0, ...(w === 'claude' ? { fiveResetAt: W0 + 10000 } : {}) }));
+    }
+    h.sh(`_reg_set ${ID} lastswap ${W0 - 100}`);
+    fs.writeFileSync(path.join(h.home, 'pane.txt'),
+      `  ⎿  You've hit your session limit · resets 9:10pm (UTC)\n${BORDER}\n❯ \n${BORDER}\n  ? for shortcuts\n`);
+    const stubs = `
+      date() { if [[ "\${1:-}" == +%s && -n "\${FAKE_NOW:-}" ]]; then echo "$FAKE_NOW"; else command date "$@"; fi; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+        case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
+        case "\${1:-}" in capture-pane) cat "$HOME/pane.txt" ;; list-panes) echo ${PANE_PID} ;;
+          display-message) [ -n "\${TMUX_CREATED:-}" ] && echo "$TMUX_CREATED" ;; esac; return 0; };
+      ${DISPATCH_NL}
+      _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };`;
+    for (const w of [W0, W0 + 300]) h.sh(`${stubs} cmd_limit_watchdog`, { TMUX_CREATED: String(w - 86400), FAKE_NOW: String(w) });
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude-a arm=watchdog orgnear=40`]);
   });
 });
 

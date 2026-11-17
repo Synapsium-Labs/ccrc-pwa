@@ -152,7 +152,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
 }
 
 /**
- * `LifecycleMeas`'s full thirty-five keys, and only those — a 36th key is a
+ * `LifecycleMeas`'s full forty-two keys, and only those — a 43rd key is a
  * compile error here (TS2353) exactly as it is on the interface itself
  * (`shared/api.ts`'s own `LIFECYCLE_MEAS_KEY_MAP`).
  *
@@ -186,7 +186,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * `task-29-report.md`.
  *
  * What the brief's "ten declared, rest lives in raw" design intent survives
- * as: any key a future ccd emits that is NOT one of these thirty-FIVE still
+ * as: any key a future ccd emits that is NOT one of these forty-two still
  * never reaches `meas` — it is still recoverable only from `raw`, verbatim.
  */
 export function reviveMeas(v: unknown): LifecycleMeas | null {

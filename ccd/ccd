@@ -2567,8 +2567,12 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # The organization label (accounts.sh's _ccrc_org), guarded like `_acct_pool`, and the relation of two accounts by it: the bash twin
 # of `shared/accountOrg.ts#orgRelation` (org-relation.test.ts). One account is `same`; a missing label is `unknown`.
 _acct_org() { declare -F _ccrc_org >/dev/null 2>&1 && _ccrc_org "$1"; return 0; }
-_org_rel() { local a b; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
-  if [[ -z "$a" || -z "$b" ]]; then echo unknown; elif [[ "$a" == "$b" ]]; then echo same; else echo other; fi; return 0; }
+# `_org_rel_of` is the relation itself, over two labels already in hand, with no fork; `_org_rel` reads both and asks it.
+_org_rel_of() {   # var a b a-label b-label -> sets var to same|other|unknown
+  local __r=other; if [[ "$2" == "$3" ]]; then __r=same; elif [[ -z "$4" || -z "$5" ]]; then __r=unknown
+  elif [[ "$4" == "$5" ]]; then __r=same; fi; printf -v "$1" '%s' "$__r"; }
+_org_rel() { local a b r; [[ "$1" == "$2" ]] && { echo same; return 0; }; a=$(_acct_org "$1"); b=$(_acct_org "$2")
+  _org_rel_of r "$1" "$2" "$a" "$b"; echo "$r"; return 0; }
 # Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
 # CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
 # unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
@@ -20134,22 +20138,29 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
 # THE ORGANIZATION TIE-BREAK (account organization plan §3, slugs `org-tie-break-only` and
 # `unknown-org-is-no-preference`). Organization decides only between EQUAL scores inside one bracket of
 # `_swap_target`'s candidate loop: a candidate that relates `same` to the current account (`_org_rel`) replaces an
-# equal best that does not. It never beats a lower score, a bracket or a gate. These three read `_swap_target`'s
-# locals by dynamic scope (`cur`, `corg`, `corgr`). The current account's label is read once, at the first question,
-# and an unlabelled current account answers "no preference" at once, with no further read: its pick is today's.
-_org_cur() { [[ -n "$corgr" ]] || { corg=$(_acct_org "$cur"); corgr=1; }; [[ -n "$corg" ]]; }
+# equal best that does not. It never beats a lower score, a bracket or a gate. These read `_swap_target`'s locals by
+# dynamic scope (`cur`, `corg`, `corgr`, `corgs`). Every label is read once per call, at the first question, with ONE
+# `$( )` over the roster (`_org_cur`; `_ccrc_org` is generated from that roster, so an account off it has no label),
+# and each relation comes from that table through `_org_rel_of`, so a call costs one fork whatever the labels. An unlabelled current account answers "no preference" at once: its pick is today's.
+_org_cur() {
+  if [[ -z "$corgr" ]]; then corgr=1; local __a __o __t
+    __t=$(for __a in ${CCRC_ACCOUNTS[@]+"${CCRC_ACCOUNTS[@]}"}; do printf '%s\t' "$__a"; _acct_org "$__a"; echo; done)
+    while IFS=$'\t' read -r __a __o; do [[ -n "$__a" && -n "$__o" ]] && corgs[$__a]=$__o; done <<<"$__t"
+    corg=${corgs[$cur]-}
+  fi; [[ -n "$corg" ]]; }
+_org_is() {   # word cand -> rc 0 when cand relates <word> to the current account, from `_org_cur`'s table
+  local __w; _org_rel_of __w "$cur" "$2" "$corg" "${corgs[$2]-}"; [[ "$__w" == "$1" ]]; }
 _org_tie() {   # cand best -> rc 0 when cand relates `same` to the current account and best does not
-  _org_cur && [[ "$(_org_rel "$cur" "$1")" == same && "$(_org_rel "$cur" "$2")" != same ]]; }
+  _org_cur && _org_is same "$1" && ! _org_is same "$2"; }
 # THE NEAR MISS (`meas.orgnear`, plan §3 and §9's Q2): the lowest score of a `same` candidate that lost to a
 # lower-scored `other` one. Measured only when the caller asks (`CCD_ORGNEAR_ASK`, the rescue sites), and handed
 # back as a SECOND stdout line, `orgnear=<n>`, because this function runs in a command substitution: a variable
 # would be lost, and its exit code already carries the rc vocabulary. Every caller that does not ask reads one line.
 _org_note() {   # var cand score -> lowers var to score when asked and cand relates `same`
-  [[ -n "${CCD_ORGNEAR_ASK:-}" && "$3" -lt "${!1}" ]] && _org_cur && [[ "$(_org_rel "$cur" "$2")" == same ]] \
-    && printf -v "$1" '%s' "$3"; return 0; }
-_org_near_say() {   # winner its-score bracket-same-min -> prints `orgnear=<n>` when an `other` winner beat a `same` loser (the min stays 999 unasked)
-  [[ "$3" -lt 999 ]] && _org_cur && [[ "$(_org_rel "$cur" "$1")" == other ]] \
-    && printf 'orgnear=%s\n' "$3"; return 0; }
+  [[ -n "${CCD_ORGNEAR_ASK:-}" && "$3" -lt "${!1}" ]] && _org_cur && _org_is same "$2" && printf -v "$1" '%s' "$3"
+  return 0; }
+_org_near_say() {   # winner bracket-same-min -> prints `orgnear=<n>` when an `other` winner beat a `same` loser (the min stays 999 unasked)
+  [[ "$2" -lt 999 ]] && _org_cur && _org_is other "$1" && printf 'orgnear=%s\n' "$2"; return 0; }
 _orgnear_cut() {   # target-var orgnear-var -> splits the asked-for `orgnear=` line off the destination
   local __oc=${!1}; printf -v "$2" '%s' ""; [[ "$__oc" == *$'\n'orgnear=* ]] || return 0
   printf -v "$2" '%s' "${__oc##*$'\n'orgnear=}"; printf -v "$1" '%s' "${__oc%%$'\n'*}"; }
@@ -20191,7 +20202,7 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
   # must not leave a trail (slice 1, fix round 2). `default` and no record are
   # the same thing here: today's walk, byte for byte — every rc-2/3/4 pin in the
   # pool suites holds by construction because nothing below runs without `cls`.
-  local cls src pass pcls unserv unmeas corg="" corgr="" bsame osame
+  local cls src pass pcls unserv unmeas corg="" corgr="" bsame osame; local -A corgs=()
   _route_peek_to cls "$id" class; [[ "$cls" == default ]] && cls=""   # D-4963: the out-var form, no subshell
   # D-8123: `CCD_CLASS_GATE_OFF=1` reads as "no class". Only the rescue arm of `_auto_swap_check` sets it, once, for a
   # hard-blocked session whose class window came back undecidable (rc 5): a stranded session is worse than one placed
@@ -20603,8 +20614,8 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout (asked, 
   # name itself stays exactly what an rc-0 move would have carried. Nothing is
   # stamped here: this function writes nothing, and `_auto_swap_check` is what
   # turns rc 6 into the `degraded` stamp and the journal row.
-  if [[ -n "$best" ]]; then echo "$best"; _org_near_say "$best" "$best_score" "$bsame"
-  elif [[ -n "$obest" ]]; then echo "$obest"; _org_near_say "$obest" "$obest_score" "$osame"; else return 1; fi
+  if [[ -n "$best" ]]; then echo "$best"; _org_near_say "$best" "$bsame"
+  elif [[ -n "$obest" ]]; then echo "$obest"; _org_near_say "$obest" "$osame"; else return 1; fi
   [[ "$pass" -eq 2 ]] && return 6
   return 0
 }
