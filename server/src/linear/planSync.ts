@@ -14,6 +14,11 @@
  * newer plan) is `moot`: nothing is sent for it. Do NOT call `passFor` for a key from inside its own `withFlight` function:
  * the flight waits for itself.
  *
+ * A STEP'S FAILURE HOLDS ITS WORKSPACE, NOT THE PROGRAMME (D-8183, D-8702). A deferring answer holds the step's workspace for its programme
+ * (`hold`, on that workspace's own backoff step) and the pass goes on with the runnable steps in other workspaces; the programme's
+ * row is deferred, as a failure, to the earliest hold only when nothing else is runnable. The holds are in process memory (the row's
+ * own hold is persisted); the probe's settled marks and the episodes' streaks are the store's, so a restart keeps them.
+ *
  * WHAT IS WRITTEN BEFORE A CALL. The binding row is `pending` before a create is sent (`ensurePending`) and `bound` after;
  * a row found `pending` at the start of a step is a create a previous pass may have sent (a crash, a timeout), so the
  * step recovers first (C2'): it adopts only ccrc's own object, the one at the create's requestId (an initiative or a project
@@ -45,7 +50,7 @@ import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import { RESTORED_LINE_PREFIX, restoredLines } from './driftPolicy.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, nextDirectoryStreak, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
+  adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
   withoutPutBack, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
@@ -73,7 +78,7 @@ const LAST_BACKOFF_MS = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]!;
 export interface RestoreTarget {
   bindingId: number; seen: string | null; tag: string;
   /** The drift is in the project's link to its initiative (or the initiative's to it): the link is made again under the restore's own
-   *  request id. Absent: the update alone (the sync's own next step re-sends the link by its old id, which answers `conflict` when it stands). */
+   *  request id. Absent: the update alone (an update keeps the stored link mark, D-8183, so the sync sends no second link). */
   link?: boolean;
   comment?: { body: string; requestId: string };
   restoredLine?: { line: string; linearDescription: string | null };
@@ -144,9 +149,6 @@ export class PlanSync {
    *  earliest hold only when nothing else is runnable. Each hold escalates on its own step counter (`attempts` under the same key). In
    *  process memory: a restart forgets them (the row's own hold is persisted). */
   private readonly wsHolds = new Map<string, { until: number; why: SyncDeferral }>();
-  /** D-8701's episodes (the bounded waits): each workspace's streak of fills reading `unknown` initiatives (`probe|<ws>`) or
-   *  project statuses never read (`statuses|<ws>`). In process memory: a restart starts the streak again. */
-  private readonly streaks = new Map<string, DirectoryStreak>();
   constructor(private readonly deps: PlanSyncDeps) {}
 
   // ── The tick ──
@@ -202,8 +204,7 @@ export class PlanSync {
     for (const [ws, slugs] of this.deps.plan.settledProbes()) {
       const slot = slots.get(ws);
       const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
-      const streak = this.streaks.get(`probe|${ws}`);
-      if (streak !== undefined && (filledAt === null || filledAt === streak.lastFilledAt)) continue;
+      if (!probeRecheckDue(this.streakOf(`probe|${ws}`), filledAt)) continue;
       for (const slug of slugs) this.deps.plan.markSyncDue(slug, now - PLAN_SYNC_DEBOUNCE_MS);
       this.deps.plan.clearSettledProbes(ws);
     }
@@ -397,11 +398,10 @@ export class PlanSync {
     const { plan } = this.deps;
     const slug = found.run.program;
     const boundNow = (): string | null => plan.bindingsOf(slug).find((x) => x.localKind === 'ticket' && x.localId === found.ticket.id && x.state === 'bound' && x.identifier !== null)?.identifier ?? null;
-    const already = boundNow();
-    if (already !== null) return { identifier: already };          // M-5: bound already, so the wait is for nothing
-    // A7/A12: a programme held by a failure's backoff (Linear unreachable, a refused key) starts no pass from a dispatch: the
-    // dispatch goes as it would without the sync, and the PR is linked once the issue appears.
-    if (plan.heldSyncUntil(slug, this.deps.now()) !== null) return { identifier: null };
+    // M-5: bound already, so the wait is for nothing. A7/A12: a programme held by a failure's backoff (Linear unreachable, a refused key)
+    // starts no pass from a dispatch: the dispatch goes as it would without the sync, and the PR is linked once the issue appears.
+    const first = dispatchWaitVerdict({ identifier: boundNow(), programmeHeldUntil: plan.heldSyncUntil(slug, this.deps.now()), workspaceHeld: false, now: this.deps.now() });
+    if (first !== 'wait') return { identifier: boundNow() };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, budgetMs); });
     try {
@@ -430,7 +430,8 @@ export class PlanSync {
    *  would without the sync. The timer is the caller's and is already running, so this may read the store. */
   private async startFor(slug: string, t: TicketRow, budgetMs: number): Promise<void> {
     const ws = await this.workspaceOfTicket(slug, t);
-    if (ws !== null && this.releaseOf(slug, ws) > this.deps.now()) return;
+    const held = dispatchWaitVerdict({ identifier: null, programmeHeldUntil: null, workspaceHeld: ws !== null && this.releaseOf(slug, ws) > this.deps.now(), now: this.deps.now() });
+    if (held !== 'wait') return;
     this.deps.plan.markSyncDue(slug, this.deps.now() - PLAN_SYNC_DEBOUNCE_MS);
     await this.passFor(slug, this.deps.now() + budgetMs);
   }
@@ -477,9 +478,9 @@ export class PlanSync {
           // bounds what the asks cost.
           // Past the episode's bound (D-8701, ruling of mail 22220) it is settled without the initiative, its coordinator told
           // once, and no refill is asked for it: the next refill or plan change looks again.
-          const probe = probeWaitsVerdict(waits, (ws) => this.streaks.get(`probe|${ws}`));
+          const probe = probeWaitsVerdict(waits, (ws) => this.streakOf(`probe|${ws}`));
           for (const ws of probe.bounded) {
-            this.mailEpisode(slug, ws, 'probe');
+            this.mailEpisode(slug, ws, 'probe', built.snap);
             plan.addSettledProbe(ws, slug);
           }
           const waitsOn = probe.waitOn.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
@@ -497,7 +498,7 @@ export class PlanSync {
         if (waitedOn.length > 0) {
           // I1: statuses never read wait on the backoff, and past the bound the coordinator is told once per episode.
           const unread = new Set(built.unread);
-          const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streaks.get(`statuses|${ws}`) })));
+          const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streakOf(`statuses|${ws}`) })));
           for (const ws of w.tell) this.mailEpisode(slug, ws, 'statuses');
           this.deferFor(slug, w.cause);
         } else if (held.length > 0) this.deferUntil(slug, held[0]!.until, held[0]!.why);   // the earliest workspace hold (D-8702)
@@ -820,13 +821,9 @@ export class PlanSync {
   /** The time a deferral waits to, by the step counter kept under `key`: a programme's slug, or a
    *  workspace hold's `<slug>|<workspaceId>`. The counter moves only when the deferral used a backoff step. */
   private deferTime(key: string, d: Deferral, o: { floorMs?: number; until?: number }): number {
-    const now = this.deps.now();
-    const step = (): number => {
-      const n = this.attempts.get(key) ?? 0;
-      this.attempts.set(key, n + 1);
-      return PLAN_SYNC_BACKOFF_MS[Math.min(n, PLAN_SYNC_BACKOFF_MS.length - 1)]!;
-    };
-    return d.wait === 'directory' ? now + DIRECTORY_WAIT_MS : d.wait === 'until' ? (o.until ?? now + step()) : now + Math.max(o.floorMs ?? 0, step());
+    const step = this.attempts.get(key) ?? 0;
+    if (deferralUsesBackoff(d)) this.attempts.set(key, step + 1);
+    return deferralUntil(d, { now: this.deps.now(), backoffMs: PLAN_SYNC_BACKOFF_MS[Math.min(step, PLAN_SYNC_BACKOFF_MS.length - 1)]!, ...o, directoryWaitMs: DIRECTORY_WAIT_MS });
   }
 
   /** Defer the programme for `cause` as `deferralOf` says (M5): its kind, and its time. Answers the time deferred to. For the
@@ -901,19 +898,28 @@ export class PlanSync {
     this.mailFailed(s, word);
   }
 
-  /** One look at a workspace's fill, written into its streak (L1's `nextDirectoryStreak` decides). */
+  /** D-8701's episodes (the bounded waits): each workspace's streak of fills reading `unknown` initiatives (`probe|<ws>`) or project
+   *  statuses never read (`statuses|<ws>`). The store's (D-8183): a restart keeps the streak, so an episode's bound and its one mail
+   *  stand across it. */
+  private streakOf(key: string): DirectoryStreak | undefined { return this.deps.plan.streaksOf().get(key); }
+
+  /** One look at a workspace's fill, written into its streak when it changed (L1's `nextDirectoryStreak` decides). */
   private observe(key: string, look: FillLook): void {
-    const next = nextDirectoryStreak(this.streaks.get(key), look);
-    if (next === undefined) this.streaks.delete(key); else this.streaks.set(key, next);
+    const prev = this.streakOf(key);
+    const next = nextDirectoryStreak(prev, look);
+    if (next !== prev) this.deps.plan.setStreak(key, next ?? null);
   }
 
   /** D-8701's episode mail: once per programme, workspace and episode (its first fill names it), in a fixed sentence. */
-  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses'): void {
-    const streak = this.streaks.get(`${kind}|${workspaceId}`);
+  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', snap?: SyncSnapshot): void {
+    const streak = this.streakOf(`${kind}|${workspaceId}`);
     if (streak === undefined) return;
     if (kind === 'probe') {
+      // The facts the sentence is built from (L1's `probeEpisodeText`): is the programme's initiative bound in this workspace, and has the
+      // programme ended (so the initiative's close waits too).
+      const bound = snap?.program != null && snap.bindings.some((b) => b.localKind === 'programme' && b.localId === snap.program!.rowid && b.workspaceId === workspaceId && b.state === 'bound' && b.linearId !== null);
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} initiatives-unknown since ${streak.since} (${slug})`,
-        `ccrc cannot tell whether initiatives are on in the Linear workspace ${workspaceId}, so the initiative of ${slug} there is waiting. Its projects, milestones and issues still sync, not linked to an initiative; ccrc looks again at the next directory refill or plan change.`);
+        probeEpisodeText({ slug, workspaceId, initiativeBound: bound, endWaiting: snap?.program?.end != null }));
     } else {
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} statuses-unread since ${streak.since} (${slug})`,
         `ccrc could not read the project statuses of the Linear workspace ${workspaceId}, so nothing of ${slug} in that workspace syncs until they read. The sync retries on its backoff.`);

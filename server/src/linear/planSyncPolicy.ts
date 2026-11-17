@@ -5,7 +5,8 @@
  *
  * ONE WRITER PER FACT. The fingerprint of a managed object is F(the fields ccrc writes to it); the binding stores it, and
  * a step is emitted only when it differs. A `failed` binding emits nothing for itself or anything under it; the pass
- * reads `failedInputs` to see that a changed plan changed what that binding would send.
+ * reads `failedInputs` to see that a changed plan changed what that binding would send. A project's link to its initiative and an
+ * issue's link to its pull request ride the stored fingerprint as `<base>+<mark>` (`withLinkMark`, D-8183): no link row.
  */
 import { createHash } from 'node:crypto';
 import type { BindingKind, EpicState, PlanEndOutcome, TicketState } from '../../../shared/plan.js';
@@ -99,6 +100,21 @@ const withoutUndefined = (v: unknown): unknown => Array.isArray(v) ? v.map(witho
 export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): string {
   const json = rfc8785Json(withoutUndefined(fields), (detail) => new Error(`plannedFingerprint: ${detail}`));
   return createHash('sha256').update(json, 'utf8').digest('hex').slice(0, 16);
+}
+
+/** D-8183 (carried items 8 and 9; D-8677's link-by-fingerprint, still no link row): a link made after a binding's last write rides
+ *  its stored fingerprint, which reads `<base>` or `<base>+<mark>`: `<base>` is F(the planned fields without the link), `<mark>` is
+ *  F({ link: <initiativeId> }) for a project's link to its initiative, F({ pr: <url> }) for an issue's pull request link. */
+const LINK_MARK_SEPARATOR = '+';
+/** A stored fingerprint: the base alone, or the base with the link's mark. */
+export function withLinkMark(base: string, mark: string | null): string {
+  return mark === null ? base : `${base}${LINK_MARK_SEPARATOR}${mark}`;
+}
+/** A stored fingerprint read back: its base and its mark (null: none, or no fingerprint at all). */
+export function linkMarkOf(stored: string | null): { base: string | null; mark: string | null } {
+  if (stored === null) return { base: null, mark: null };
+  const i = stored.indexOf(LINK_MARK_SEPARATOR);
+  return i < 0 ? { base: stored, mark: null } : { base: stored.slice(0, i), mark: stored.slice(i + 1) };
 }
 
 /** A v4-shaped UUID from sha256(`seed`): the one function every request id of ccrc's Linear writes is made by (D-8183). */
@@ -399,28 +415,33 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null), statusId: pStatus, teamIds, initiativeId,
     };
     const plannedTeamKeys = planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; });
-    const fpFull = plannedFingerprint(planned);
-    const fpNull = plannedFingerprint({ ...planned, initiativeId: null });
+    // D-8183: the project's fingerprint is `<base>` or `<base>+<mark>` (`withLinkMark`): the base is the planned fields without the
+    // initiative link, the mark is the link to the live initiative once made. An update keeps the stored mark (nothing unlinks); the
+    // link step writes it. Current is the base matching AND (the initiative not live, or the stored mark the live one's).
+    const fpBase = plannedFingerprint({ ...planned, initiativeId: null });
+    const liveMark = initiative?.live === true ? plannedFingerprint({ link: initiative.id }) : null;
+    const keptMark = eb?.state === 'bound' ? linkMarkOf(eb.fingerprint).mark : null;
     /** The Linear ids of this project's bound checkpoints' milestones, filled by the checkpoint loop below (D-8183). */
     const milestoneIds: string[] = [];
-    const projectIsCurrent = (st: string | null): boolean => st === fpFull || (initiative?.live === false && st === fpNull);
-    // D-8183 (round 1 A1, §5.2's order): the project gains a team before an issue is created in it. `projectCurrent` is whether the
-    // project's stored fingerprint is the plan's (it holds the planned `teamIds`); a ticket's create on another team waits for it.
-    const projectCurrent = eb?.state === 'bound' && eb.linearId !== null && projectIsCurrent(eb.fingerprint);
+    const projectIsCurrent = (st: string | null): boolean => { const m = linkMarkOf(st); return m.base === fpBase && (liveMark === null || m.mark === liveMark); };
+    // D-8183 (round 1 A1, §5.2's order): the project gains a team before an issue is created in it. `projectHasTeams` is whether the
+    // project's stored base is the plan's (it holds the planned `teamIds`, whatever its link); a ticket's create on another team waits for it.
+    const projectHasTeams = eb?.state === 'bound' && eb.linearId !== null && linkMarkOf(eb.fingerprint).base === fpBase;
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
       b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned, teamKeys: plannedTeamKeys,
       // A project not yet linked to a failed initiative is current unlinked: no link is made to it until it binds again.
-      fp: fpNull, isCurrent: projectIsCurrent,
+      fp: withLinkMark(fpBase, keptMark), isCurrent: projectIsCurrent,
       create: () => ({ input: { name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       update: (id) => ({ input: { id, name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       link: (forced) => {
-        if (initiative?.live !== true || eb === undefined) return null;
-        if (forced === null && (eb.fingerprint !== fpNull || fpNull === fpFull)) return null;
+        if (initiative?.live !== true || liveMark === null || eb === undefined) return null;
+        const held = linkMarkOf(eb.fingerprint);
+        if (forced === null && (held.base !== fpBase || held.mark === liveMark)) return null;
         const requestId = requestIdOf('epic', e.id, wsId, forced === null ? 'link' : `restore-${forced}`);
         return {
           kind: 'link', op: 'initiativeToProjectCreate', local: { kind: 'epic', id: e.id }, workspaceId: wsId, teamKey: pl.teamKey, bindingId: eb.id,
-          input: { requestId, initiativeId, projectId: eb.linearId! }, fields: ['project'], requestId, fingerprint: fpFull,
+          input: { requestId, initiativeId, projectId: eb.linearId! }, fields: ['project'], requestId, fingerprint: withLinkMark(fpBase, liveMark),
         };
       },
       recover: 'name-and-creator',
@@ -506,18 +527,23 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       const wantPr = pr !== undefined && ident !== null && ticketRefOfBranch(pr.branch ?? '', tpl.teamKey) !== ident.toUpperCase();
       // A create (no issue yet) in a team the epic's project is not in: it waits until the project's update with that team is current.
       const createsOnOtherTeam = (tb === undefined || tb.state !== 'bound' || tb.linearId === null) && tpl.teamKey.toUpperCase() !== pl.teamKey.toUpperCase();
-      const fpNull = plannedFingerprint(ip);
-      const fpFull = wantPr ? plannedFingerprint({ ...ip, prUrl: pr.url }) : fpNull;
+      // D-8183: the same encoding as the project's link: `<base>` or `<base>+<mark>` with the mark F({ pr: <url> }) once the link was sent. A
+      // pass where no PR is known keeps the stored mark and sends nothing; an update keeps it; a new URL is linked once.
+      const fpBase = plannedFingerprint(ip);
+      const prMark = wantPr && pr !== undefined ? plannedFingerprint({ pr: pr.url }) : null;
+      const keptMark = tb?.state === 'bound' ? linkMarkOf(tb.fingerprint).mark : null;
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
-        b: tb, ready: (t.checkpointId === null || milestoneId !== null) && (projectCurrent || !createsOnOtherTeam), statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
-        planned: ip, fp: fpNull, isCurrent: (st) => st === fpFull,
+        b: tb, ready: (t.checkpointId === null || milestoneId !== null) && (projectHasTeams || !createsOnOtherTeam), statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
+        planned: ip, fp: withLinkMark(fpBase, keptMark), isCurrent: (st) => { const m = linkMarkOf(st); return m.base === fpBase && (prMark === null || m.mark === prMark); },
         link: (forced) => {
-          if (forced !== null || !wantPr || tb === undefined || tb.linearId === null || tb.fingerprint !== fpNull) return null;
+          if (forced !== null || prMark === null || pr === undefined || tb === undefined || tb.linearId === null) return null;
+          const held = linkMarkOf(tb.fingerprint);
+          if (held.base !== fpBase || held.mark === prMark) return null;
           const requestId = requestIdOf('ticket', t.id, wsId, 'pr');
           return {
             kind: 'link', op: 'issueLink', local: tlocal, workspaceId: wsId, teamKey: tpl.teamKey, bindingId: tb.id,
-            input: { requestId, issueId: tb.linearId, url: pr.url, title: `PR #${pr.number}` }, fields: ['url', 'title'], requestId, fingerprint: fpFull,
+            input: { requestId, issueId: tb.linearId, url: pr.url, title: `PR #${pr.number}` }, fields: ['url', 'title'], requestId, fingerprint: withLinkMark(fpBase, prMark),
           };
         },
         create: () => ({
@@ -572,6 +598,17 @@ const DEFERRALS: Readonly<Record<DeferCause, Deferral>> = {
 /** M5: the one table of what each deferral is; the executor asks it at every site that defers. */
 export function deferralOf(cause: DeferCause): Deferral { return DEFERRALS[cause]; }
 
+/** D-8183 (carried item 7): the time a deferral waits to. `backoffMs` is the step the caller holds for it (consulted when the
+ *  deferral waits on the backoff, or on an `until` the cause did not carry), `floorMs` a wait it may not be shorter than (Linear's
+ *  retry-after), `until` the time an `until` deferral carries, `directoryWaitMs` the short directory wait. */
+export function deferralUntil(d: Deferral, o: { now: number; backoffMs: number; floorMs?: number; until?: number; directoryWaitMs: number }): number {
+  if (d.wait === 'directory') return o.now + o.directoryWaitMs;
+  if (d.wait === 'until') return o.until ?? o.now + o.backoffMs;
+  return o.now + Math.max(o.floorMs ?? 0, o.backoffMs);
+}
+/** Whether a deferral takes a step of the backoff (the caller's counter then moves): only one that waits on it. */
+export function deferralUsesBackoff(d: Deferral): boolean { return d.wait === 'backoff'; }
+
 // ── D-8701's episodes: the bounded waits (coordinator ruling, mail 22220; review I1) ──
 
 /** How many consecutive directory fills reading the same unsettled answer bound an episode. */
@@ -592,6 +629,33 @@ export function nextDirectoryStreak(prev: DirectoryStreak | undefined, look: Fil
 }
 
 const bounded = (st: DirectoryStreak | undefined): boolean => st !== undefined && st.refills >= DIRECTORY_EPISODE_REFILLS;
+
+/** D-8183 (carried item 7): whether a programme settled without its initiative at a probe episode's bound is due again: its
+ *  workspace's directory was refilled since the episode's last fill, or the episode ended (no streak). No fill held, or the same
+ *  one the episode last saw, is nothing new. */
+export function probeRecheckDue(streak: DirectoryStreak | undefined, filledAt: number | null): boolean {
+  return streak === undefined || (filledAt !== null && filledAt !== streak.lastFilledAt);
+}
+
+/** D-8183 (carried items 7 and 10): what a dispatch does about its ticket's issue. `bound`: it is bound already (the wait is for
+ *  nothing). `go-without`: the programme's row (`programmeHeldUntil`, a failure's hold) or the ticket's workspace is held, so the
+ *  dispatch goes as it would without the sync. `wait`: start or join the pass and wait for it, up to the budget. */
+export function dispatchWaitVerdict(o: { identifier: string | null; programmeHeldUntil: number | null; workspaceHeld: boolean; now: number }): 'bound' | 'go-without' | 'wait' {
+  if (o.identifier !== null) return 'bound';
+  return (o.programmeHeldUntil !== null && o.programmeHeldUntil > o.now) || o.workspaceHeld ? 'go-without' : 'wait';
+}
+
+/** D-8183 (carried item 10): the sentence of the probe episode's mail, with no Linear text. An initiative not yet bound waits to be
+ *  created; one bound waits for its UPDATE (a rename, or the programme's end moving it to Completed or Canceled), and its projects stay
+ *  linked as they are; at a programme's end such an initiative stays unclosed (Active in Linear) until a refill reads `on`. */
+export function probeEpisodeText(o: { slug: string; workspaceId: string; initiativeBound: boolean; endWaiting: boolean }): string {
+  const tell = `ccrc cannot tell whether initiatives are on in the Linear workspace ${o.workspaceId}, so`;
+  if (!o.initiativeBound) {
+    return `${tell} the initiative of ${o.slug} there is waiting. Its projects, milestones and issues still sync, not linked to an initiative; ccrc looks again at the next directory refill or plan change.`;
+  }
+  const end = o.endWaiting ? ' The programme has ended, and the initiative stays unclosed until ccrc can tell: it is closed once ccrc can tell.' : '';
+  return `${tell} the initiative's update waits; its projects stay linked as they are. Its projects, milestones and issues still sync; ccrc looks again at the next directory refill or plan change.${end}`;
+}
 
 /** The initiatives probe's waits (`planSyncSteps`' `waits`): a workspace whose streak is short still waits (ask a refill,
  *  defer); one at the bound is settled without its initiative (projects unlinked) and its coordinator is told once. The

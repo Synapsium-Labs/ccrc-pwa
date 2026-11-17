@@ -13,7 +13,7 @@ import { planViewOf } from '../src/coord/planRoutes.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
-import { planSyncSteps, requestIdOf, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
+import { linkMarkOf, planSyncSteps, requestIdOf, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
@@ -581,6 +581,51 @@ describe('the pass: moves and closes', () => {
     expect(sent.some((a) => a.input['statusId'] === U(34) || a.input['stateId'] === U(24))).toBe(false);
   });
 
+  const epicFingerprint = (r: Rig): string | null => r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic')!.fingerprint;
+  const renameEpic = (r: Rig, title: string): void => {
+    r.plan.applyPlanChanges(SLUG, changes({ epics: { insert: [], update: [{ id: epicRow(r, 'e1').id, title }], drop: [] } }), OWNER, r.t.now, null);
+  };
+
+  it('D-8183 (round 1 A3, round 2 A4): an update of a linked project sends no second link, and its fingerprint keeps the link mark', async () => {
+    const r = await rig();
+    await tick(r);
+    const mark = linkMarkOf(epicFingerprint(r)).mark;
+    expect(mark).not.toBeNull();                          // the link is in the stored fingerprint: no link row
+    const from = r.asks.length;
+    renameEpic(r, 'Renamed epic'); await tick(r);
+    expect(opsOf(r, from)).toEqual(['projectUpdate']);
+    expect(linkMarkOf(epicFingerprint(r)).mark).toBe(mark);
+    due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['projectUpdate']);    // settled
+  });
+
+  it('D-8183: a failed initiative sends its linked projects no update, and a project updated meanwhile is not linked again when it binds again', async () => {
+    const r = await rig();
+    await tick(r);
+    r.respond.current = (ask) => (ask.op === 'initiativeUpdate' ? { ok: false, word: 'not-found', maybeSent: false } : defaultRespond(ask));
+    r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme renamed', SLUG);
+    const from = r.asks.length;
+    due(r); await tick(r);
+    const ib = r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'programme')!;
+    expect(ib).toMatchObject({ state: 'failed', failedWord: 'not-found' });
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate']);                      // the failure sends the linked project nothing
+    renameEpic(r, 'Renamed epic'); due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate']);     // the plan changed: one update, no link to a failed initiative
+    r.respond.current = defaultRespond;
+    r.plan.requeueFailed({ bindingId: ib.id, to: 'bound' });
+    due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'initiativeUpdate']);   // the initiative binds again: no second link
+  });
+
+  it('D-8183: a project created while the initiative is live is linked once', async () => {
+    const r = await rig({ epics: 'two' });
+    await tick(r);
+    expect(opsOf(r).filter((o) => o === 'initiativeToProjectCreate')).toHaveLength(2);   // one link per project
+    renameEpic(r, 'Renamed epic'); due(r); await tick(r);
+    due(r); await tick(r);
+    expect(opsOf(r).filter((o) => o === 'initiativeToProjectCreate')).toHaveLength(2);
+  });
+
   it('plan close abandoned cancels projects and open issues with the reason', async () => {
     const r = await rig();
     await tick(r);
@@ -589,7 +634,7 @@ describe('the pass: moves and closes', () => {
     r.plan.closePlan(SLUG, 'abandoned', 'the work moved to another programme', r.t.now);
     await tick(r);
     const sent = r.asks.slice(from);
-    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'issueOwned', 'issueComment', 'issueUpdate', 'initiativeToProjectCreate']);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'issueOwned', 'issueComment', 'issueUpdate']);   // D-8183: the update keeps the link mark, so no second link
     expect(sent[0]!.input).toMatchObject({ status: 'Canceled', description: expect.stringContaining('Abandoned on ') });
     expect(sent[1]!.input['statusId']).toBe(U(34));
     expect(sent[3]!.input['body']).toEqual(expect.stringContaining('the work moved to another programme'));

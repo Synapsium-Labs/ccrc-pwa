@@ -602,6 +602,65 @@ describe('D-8701 episodes: the bounded waits (coordinator ruling, mail 22220; I1
     expect(opsOf(r).slice(from)).toEqual(['initiativeCreate', 'initiativeToProjectCreate']);
   });
 
+  it('the probe: a streak at 2 refills survives a restart, and the episode sends one mail however often it restarts (D-8183, carried item 6)', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, initiatives: 'unknown' } });
+    await r.sync.tick(afterDebounce(r));                    // refill 1
+    await refill(r);                                        // refill 2
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(0);
+    r.sync = r.build();                                     // a restart: the streak is the store's
+    await refill(r);                                        // refill 3: the bound, in the new process
+    expect(dueAt(r)).toBeNull();
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+    r.sync = r.build();                                     // another restart, and more passes of the same episode
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await refill(r);
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+  });
+
+  it('unread statuses: a restart keeps the streak too, so the bound mails once', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    await refill(r);
+    r.sync = r.build();
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+    r.sync = r.build();
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+  });
+
+  describe('D-8183 carried item 10: the probe mail says what waits', () => {
+    /** A synced programme (initiative bound), then the probe reads unknown and the initiative has an update waiting. */
+    async function boundThenUnknown(end: boolean): Promise<Rig> {
+      const r = await rig();
+      await r.sync.tick(afterDebounce(r));
+      expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound' });
+      r.dir.entries = { ...DIRECTORY, initiatives: 'unknown' };
+      if (end) r.plan.closePlan(SLUG, 'done', null, r.t.now);
+      else r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme A renamed', SLUG);
+      r.plan.markSyncDue(SLUG, r.t.now);
+      await refill(r); await refill(r); await refill(r);
+      return r;
+    }
+    it('a bound initiative whose update waits: its projects stay linked as they are', async () => {
+      const m = episodeMails(await boundThenUnknown(false), 'initiatives-unknown');
+      expect(m).toHaveLength(1);
+      expect(m[0]!.body).toContain("the initiative's update waits; its projects stay linked as they are");
+      expect(m[0]!.body).not.toContain('not linked to an initiative');
+      expect(m[0]!.body).not.toContain('closed once ccrc can tell');
+    });
+    it("a bound initiative at the programme's end stays unclosed until ccrc can tell", async () => {
+      const m = episodeMails(await boundThenUnknown(true), 'initiatives-unknown');
+      expect(m).toHaveLength(1);
+      expect(m[0]!.body).toContain('closed once ccrc can tell');
+    });
+    it('an initiative never created reads as before', async () => {
+      const m = episodeMails(await unknownStreak(), 'initiatives-unknown');
+      expect(m[0]!.body).toContain('the initiative of prog-a there is waiting');
+    });
+  });
+
   it('the probe: no operator item is raised on unknown', async () => {
     const r = await unknownStreak();
     expect(r.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });

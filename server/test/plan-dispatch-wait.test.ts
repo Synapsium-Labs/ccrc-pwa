@@ -109,6 +109,26 @@ describe('the dispatch wait (D-8182, §5.6)', () => {
     expect(links(r)).toHaveLength(1);                                    // sent once
   });
 
+  it('D-8183 (round 1 A4): a pass with no PR known sends no update and no second link; a new URL is linked once', async () => {
+    const r = await rig({ mode: 'public' });
+    await tick(r);
+    const updates = (): number => ops(r).filter((o) => o === 'issueUpdate').length;
+    r.prs.set(r.runs[0]!, { number: 7, branch: null });
+    await tick(r);
+    expect(links(r)).toHaveLength(1);
+    const n = updates();
+    r.prs.delete(r.runs[0]!);                                            // a pass where no PR is known (the fleet listing has moved on)
+    await tick(r); await tick(r);
+    expect(updates()).toBe(n);                                           // no update
+    r.prs.set(r.runs[0]!, { number: 7, branch: null });
+    await tick(r); await tick(r);
+    expect(links(r)).toHaveLength(1);                                    // and no second link when it is known again
+    expect(updates()).toBe(n);
+    r.prs.set(r.runs[0]!, { number: 8, branch: null });                  // a new URL is linked once
+    await tick(r); await tick(r);
+    expect(links(r).map((a) => a.input['url'])).toEqual(['https://github.com/owner/repo/pull/7', 'https://github.com/owner/repo/pull/8']);
+  });
+
   it('a link answered conflict counts as made, and is not sent again', async () => {
     const r = await rig({ mode: 'public' });
     await tick(r);
