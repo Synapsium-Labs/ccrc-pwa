@@ -766,6 +766,8 @@ export const MOCKUP_TEXT = {
   frameTitle: 'Mockup: {name}',
   census: 'Assets and references · {loaded} loaded · {notLoaded} not loaded',
   links: 'Links · {n}',
+  /** The line closing a fold that lists only its first rows (`MOCKUP_CENSUS_ROW_CAP`): how many more it does not list. */
+  moreNotListed: '{n} more not listed',
   upTo: 'up to {size}',
   /** Spec 5.6.4's hint, shown after an external reference's sentence. */
   vendor: 'or vendor it next to the mockup',

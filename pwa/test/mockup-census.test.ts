@@ -5,9 +5,9 @@
 import { describe, expect, it } from 'vitest';
 import { docsApi, type DocPin, type DocSectionSlug } from '../../shared/docs';
 import {
-  censusCounts, censusOf, censusRefText, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts,
+  capRows, censusCounts, censusOf, censusRefText, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts,
 } from '../src/docs/mockup/census';
-import { MOCKUP_CENSUS_REF_UNITS } from '../src/docs/mockup/policy';
+import { MOCKUP_CENSUS_REF_UNITS, MOCKUP_CENSUS_ROW_CAP } from '../src/docs/mockup/policy';
 import type { MockupAssetRow, MockupRef, MockupRefVerdict, MockupSize } from '../src/docs/mockup/ports';
 import type { MockupExtract } from '../src/docs/mockup/load';
 import { DOC_IMAGE_REFUSED_SENTENCE, MOCKUP_VERDICT_SENTENCE } from '../src/docs/docsText';
@@ -34,6 +34,41 @@ describe('MOCKUP_CENSUS_REF_UNITS (the 120 cut, one named constant)', () => {
     expect(censusRefText('a\tb')).toBe('aU+0009b');
     expect(censusRefText('a\u007fb')).toBe('aU+007Fb');
     expect(censusRefText('\u0000')).toBe('U+0000');
+  });
+});
+
+describe('MOCKUP_CENSUS_ROW_CAP and capRows (the on-screen folds list at most that many rows)', () => {
+  const rowsOf = (n: number): number[] => Array.from({ length: n }, (_, i) => i);
+
+  it('is exactly 500', () => {
+    expect(MOCKUP_CENSUS_ROW_CAP).toBe(500);
+  });
+
+  it('at or under the cap every row is shown and none is hidden', () => {
+    expect(capRows([])).toEqual({ shown: [], more: 0 });
+    expect(capRows(rowsOf(1))).toEqual({ shown: [0], more: 0 });
+    expect(capRows(rowsOf(499)).more).toBe(0);
+    expect(capRows(rowsOf(500)).shown).toHaveLength(500);
+    expect(capRows(rowsOf(500)).more).toBe(0);
+  });
+
+  it('one over the cap hides exactly one: the first 500 in order, and more is 1', () => {
+    const c = capRows(rowsOf(501));
+    expect(c.shown).toHaveLength(500);
+    expect(c.shown[0]).toBe(0);
+    expect(c.shown[499]).toBe(499);
+    expect(c.more).toBe(1);
+  });
+
+  it('far over the cap shows the cap and counts the rest', () => {
+    const c = capRows(rowsOf(2500));
+    expect(c.shown).toHaveLength(500);
+    expect(c.more).toBe(2000);
+  });
+
+  it('answers with the rows it was given when none is hidden (no copy of a small list)', () => {
+    const rows = rowsOf(3);
+    expect(capRows(rows).shown).toBe(rows);
   });
 });
 

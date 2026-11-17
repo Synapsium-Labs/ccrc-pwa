@@ -7,13 +7,14 @@
 //   - `censusOf`, `censusCounts`, `hasConservativeAdmission`, `draftPinsOf`: one row per reference with its sentence, the
 //     fold's two totals, the conservative-admission note and the draft count the screen's banner takes;
 //   - `linksOf`: where each `a[href]` and `area[href]` of the page goes;
-//   - `censusRefText`: a reference as shown (cut at `MOCKUP_CENSUS_REF_UNITS`, every non-ASCII character as `U+XXXX`).
+//   - `censusRefText`: a reference as shown (cut at `MOCKUP_CENSUS_REF_UNITS`, every non-ASCII character as `U+XXXX`);
+//   - `capRows`: the rows a fold draws (at most `MOCKUP_CENSUS_ROW_CAP`) and how many more it does not list.
 // The route of an in-app target is the caller's (`routeOf`): `docsLocation` stays the one builder of a Docs page location.
 import { docsApi, resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
 import { fillSentence, kib, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, mockupVerdictSentence } from '../docsText';
 import type { MockupExtract } from './load';
 import { parseMockupOrigin } from './origins';
-import { MOCKUP_CENSUS_REF_UNITS } from './policy';
+import { MOCKUP_CENSUS_REF_UNITS, MOCKUP_CENSUS_ROW_CAP } from './policy';
 import type { HttpsOrigin, MockupAssetRow } from './ports';
 
 /** A reference as the census and the links list show it (base 5.6.7): cut at `MOCKUP_CENSUS_REF_UNITS` code units with
@@ -165,6 +166,13 @@ export function draftPinsOf(rows: readonly MockupAssetRow[], project: string): n
   const pins = new Set<string>();
   for (const row of rows) if (row.verdict.v === 'inline' && row.verdict.draft) pins.add(docsApi.file(project, row.verdict.pin));
   return pins.size;
+}
+
+/** The rows an on-screen fold draws: at most `MOCKUP_CENSUS_ROW_CAP`, the first ones in order, and how many more it does not
+ *  list. Totals (a fold's summary) are counted over the whole list, never over `shown`. */
+export function capRows<T>(rows: readonly T[]): { readonly shown: readonly T[]; readonly more: number } {
+  if (rows.length <= MOCKUP_CENSUS_ROW_CAP) return { shown: rows, more: 0 };
+  return { shown: rows.slice(0, MOCKUP_CENSUS_ROW_CAP), more: rows.length - MOCKUP_CENSUS_ROW_CAP };
 }
 
 /** One link of the page for the links list: where the pure resolver says it goes. */

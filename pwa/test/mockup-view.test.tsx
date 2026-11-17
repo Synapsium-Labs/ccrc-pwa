@@ -16,11 +16,11 @@ import { DocsScreen } from '../src/screens/DocsScreen';
 import { MockupView, type MockupViewProps } from '../src/docs/MockupView';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
-import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence } from '../src/docs/docsText';
 import { ExportBodyContext, GATE_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
 import { buildMockupSrcdoc, loadMockupAssets } from '../src/docs/mockup/load';
 import {
-  MOCKUP_AUTO_RENDER_BYTES, MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH,
+  MOCKUP_AUTO_RENDER_BYTES, MOCKUP_CENSUS_ROW_CAP, MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH,
   MOCKUP_MAX_OPEN_FORMATTING, MOCKUP_MAX_TAGS, mockupCsp, metaFor,
 } from '../src/docs/mockup/policy';
 import type { HttpsOrigin, MockupAssetReader, MockupContext, MockupReadAnswer } from '../src/docs/mockup/ports';
@@ -700,6 +700,79 @@ describe('the census rows and the links list (M5.14; base 5.6.6, 5.6.7)', () => 
   });
 });
 
+describe('the census and links folds draw at most MOCKUP_CENSUS_ROW_CAP rows, then one line saying how many more are not listed', () => {
+  const imgs = (n: number): string => Array.from({ length: n }, (_, i) => `<img src="m${i}.png">`).join('');
+  const anchors = (n: number): string => Array.from({ length: n }, (_, i) => `<a href="#k${i}">k${i}</a>`).join('');
+  const more = (c: HTMLElement, selector: string): string | null => c.querySelector(`${selector} .docs-mockup-more`)?.textContent ?? null;
+
+  it('pins the cap at exactly 500', () => {
+    expect(MOCKUP_CENSUS_ROW_CAP).toBe(500);
+  });
+
+  it('exactly 500 references: 500 census rows, no extra line, and the summary counts all of them', async () => {
+    const m = mount({ html: imgs(500) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    expect(m.container.querySelector(`${CENSUS} > summary`)?.textContent).toBe('Assets and references · 0 loaded · 500 not loaded');
+    openFold(m.container, CENSUS);
+    expect(m.container.querySelectorAll(`${CENSUS} li.docs-mockup-row`)).toHaveLength(500);
+    expect(more(m.container, CENSUS)).toBeNull();
+  });
+
+  it('501 references: 500 census rows in order, then one line that says 1, and the summary still counts all 501', async () => {
+    const m = mount({ html: imgs(501) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    expect(m.container.querySelector(`${CENSUS} > summary`)?.textContent).toBe('Assets and references · 0 loaded · 501 not loaded');
+    openFold(m.container, CENSUS);
+    const refs = [...m.container.querySelectorAll(`${CENSUS} li.docs-mockup-row .docs-mockup-ref`)].map((r) => r.textContent);
+    expect(refs).toHaveLength(500);
+    expect(refs[0]).toBe('m0.png');
+    expect(refs[499]).toBe('m499.png');
+    expect(refs).not.toContain('m500.png');
+    expect(more(m.container, CENSUS)).toBe(fillSentence(MOCKUP_TEXT.moreNotListed, { n: 1 }));
+    expect(more(m.container, CENSUS)).toBe('1 more not listed');
+    expect(m.container.querySelectorAll(`${CENSUS} .docs-mockup-more`)).toHaveLength(1);
+  });
+
+  it('a larger page says how many more: 620 references list 500 and the line says 120', async () => {
+    const m = mount({ html: imgs(620) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    openFold(m.container, CENSUS);
+    expect(m.container.querySelectorAll(`${CENSUS} li.docs-mockup-row`)).toHaveLength(500);
+    expect(more(m.container, CENSUS)).toBe('120 more not listed');
+    expect(m.container.querySelector(`${CENSUS} > summary`)?.textContent).toBe('Assets and references · 0 loaded · 620 not loaded');
+  });
+
+  it('exactly 500 links: 500 rows and no extra line', async () => {
+    const m = mount({ html: anchors(500) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    expect(m.container.querySelector(`${LINKS} > summary`)?.textContent).toBe('Links · 500');
+    openFold(m.container, LINKS);
+    expect(m.container.querySelectorAll(`${LINKS} li.docs-mockup-row`)).toHaveLength(500);
+    expect(more(m.container, LINKS)).toBeNull();
+  });
+
+  it('501 links: 500 rows in order, then one line that says 1, and the summary still says 501', async () => {
+    const m = mount({ html: anchors(501) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    expect(m.container.querySelector(`${LINKS} > summary`)?.textContent).toBe('Links · 501');
+    openFold(m.container, LINKS);
+    const rows = [...m.container.querySelectorAll(`${LINKS} li.docs-mockup-row`)].map((r) => r.textContent);
+    expect(rows).toHaveLength(500);
+    expect(rows[0]).toBe('#k0');
+    expect(rows[499]).toBe('#k499');
+    expect(more(m.container, LINKS)).toBe('1 more not listed');
+    expect(m.container.querySelectorAll(`${LINKS} .docs-mockup-more`)).toHaveLength(1);
+  });
+
+  it('a page under the cap draws its rows and no line in either fold', async () => {
+    const m = mount({ html: imgs(3) + anchors(3) });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    openFold(m.container, CENSUS);
+    openFold(m.container, LINKS);
+    expect(m.container.querySelectorAll('.docs-mockup-more')).toHaveLength(0);
+  });
+});
+
 describe('Full screen, New tab and Close (base 5.6.7)', () => {
   it('Full screen navigates to the frame=full URL', async () => {
     const m = mount({ html: '<p>a</p>' });
@@ -1251,6 +1324,15 @@ describe('what the view publishes for Export (completion plan Task 9; M5.EX6)', 
     // The cleanup ends it synchronously; the bound only turns a missing end into an assertion, never a hung test.
     const pending = new Promise<'pending'>((r) => { setTimeout(() => r('pending'), 2000); });
     expect(await Promise.race([body.assets.settled, pending])).toEqual({ s: 'ended' });
+  });
+
+  it('the folds\' row cap leaves Export alone: the published plan holds every reference, past the cap', async () => {
+    const m = publishing({ html: Array.from({ length: MOCKUP_CENSUS_ROW_CAP + 5 }, (_, i) => `<img src="m${i}.png">`).join('') });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    const body = mockupOf(m.current());
+    expect(body.assets.plan.rows).toHaveLength(MOCKUP_CENSUS_ROW_CAP + 5);
+    const end = await body.assets.settled;
+    expect(end.s === 'loaded' ? end.result.plan.rows : []).toHaveLength(MOCKUP_CENSUS_ROW_CAP + 5);
   });
 
   it('a context that does not open the page (a mid-update leaf) publishes no body', async () => {

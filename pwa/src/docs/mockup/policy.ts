@@ -47,6 +47,12 @@ export const MOCKUP_MAX_ATTRIBUTES = 32;
  *  so an author's text cannot run a row long. `censusRefText` (`census.ts`) is its one reader. */
 export const MOCKUP_CENSUS_REF_UNITS = 120;
 
+/** The most rows each on-screen fold of the viewer draws, the census and the links list alike (base 5.6.7): 500. A page may
+ *  name thousands of references; past this the fold lists the first 500 and one closed line says how many more are not listed.
+ *  The fold summaries still count every reference, and the saved Export is not cut by it. `capRows` (`census.ts`) is its one
+ *  reader. */
+export const MOCKUP_CENSUS_ROW_CAP = 500;
+
 /** The formatting elements an HTML parser reconstructs (base 5.6.2's list). */
 export const MOCKUP_FORMATTING_ELEMENTS: ReadonlySet<string> = new Set([
   'a', 'b', 'big', 'code', 'em', 'font', 'i', 'nobr', 's', 'small', 'strike', 'strong', 'tt', 'u',

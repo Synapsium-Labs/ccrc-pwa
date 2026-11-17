@@ -38,7 +38,7 @@ import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
 import { buildMockupSrcdoc, extractMockupRefs, loadMockupAssets, type MockupExtract } from './mockup/load';
 import {
-  censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
+  capRows, censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
 } from './mockup/census';
 import { scriptTextOrigins } from './mockup/origins';
 import { parseMockup } from './mockup/parse';
@@ -61,6 +61,11 @@ export interface MockupViewProps {
   readonly relist: () => void;
   /** The leaf's own Download button (D-8711). */
   readonly download: ReactNode;
+}
+
+/** The closed line that ends a fold which lists only its first rows: how many more it does not list, or nothing. */
+function MoreNotListed(p: { readonly n: number }): ReactNode {
+  return p.n > 0 ? <p className="docs-note docs-mockup-more">{fillSentence(MOCKUP_TEXT.moreNotListed, { n: p.n })}</p> : null;
 }
 
 /** The view's one hand-drawn button: a bordered `.docs-leaf-action`, as Source and Download are. `pressed` is a toggle's state. */
@@ -342,8 +347,11 @@ function MockupLive(p: MockupViewProps & {
     () => (loaded === null || build === null || origins === null ? [] : censusOf(build.plan.rows, loaded.extract, scriptOrigins, origins, routeOf)),
     [loaded, build, origins, scriptOrigins, routeOf],
   );
+  // The fold summaries count every reference; the folds draw the first rows only (`capRows`).
   const { loaded: loadedCount, notLoaded } = censusCounts(census);
+  const censusDrawn = useMemo(() => capRows(census), [census]);
   const links = useMemo(() => linksOf(doc, page, routeOf), [doc, page, routeOf]);
+  const linksDrawn = useMemo(() => capRows(links), [links]);
 
   const leafUrl = urlOf(page, 'inline');
   const fullUrl = urlOf(page, 'full');
@@ -429,7 +437,7 @@ function MockupLive(p: MockupViewProps & {
             <>
               {conservative && <p className="docs-note docs-mockup-conservative">{MOCKUP_TEXT.conservative}</p>}
               <ul className="docs-mockup-rows">
-                {census.map((r) => (
+                {censusDrawn.shown.map((r) => (
                   <li key={r.key} className="docs-mockup-row">
                     <span className="docs-mockup-ref">{r.ref}</span>
                     {r.target !== null && (
@@ -445,6 +453,7 @@ function MockupLive(p: MockupViewProps & {
                   </li>
                 ))}
               </ul>
+              <MoreNotListed n={censusDrawn.more} />
             </>
           )}
         />
@@ -453,9 +462,12 @@ function MockupLive(p: MockupViewProps & {
         <Fold
           className="docs-mockup-links" summary={fillSentence(MOCKUP_TEXT.links, { n: links.length })}
           rows={() => (
-            <ul className="docs-mockup-rows">
-              {links.map((l, i) => <li key={i} className="docs-mockup-row"><LinkRow link={l} /></li>)}
-            </ul>
+            <>
+              <ul className="docs-mockup-rows">
+                {linksDrawn.shown.map((l, i) => <li key={i} className="docs-mockup-row"><LinkRow link={l} /></li>)}
+              </ul>
+              <MoreNotListed n={linksDrawn.more} />
+            </>
           )}
         />
       )}
