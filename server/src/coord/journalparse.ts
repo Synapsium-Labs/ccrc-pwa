@@ -219,6 +219,8 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     heldBy: s(o, 'heldBy'),
     // D-5945 — the stale index locks rung 6 passed, on a reclaim or expiry intent (`LifecycleMeas.staleLock`).
     staleLock: s(o, 'staleLock'),
+    // Account organization PR C (#2909) — a `swap` row's organization relation and a rescue's near miss (`LifecycleMeas.org`).
+    org: s(o, 'org'), orgnear: s(o, 'orgnear'),
   };
 }
 

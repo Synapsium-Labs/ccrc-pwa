@@ -25,6 +25,7 @@ thinking inside it is bound to an organization.
 | C1 | `_orgnear_cut`, the rescue sites asking, and the dispatch carrying `CCD_SWAP_ORGNEAR` | `_auto_swap_check`, `_watchdog_one`, `_dispatch_swap` |
 | C1 | `meas.org` and `meas.orgnear` on the `swap` record | `cmd_swap` |
 | C1 | Five C1 rows | `ccd/contexts.tsv` |
+| C1 | `org` and `orgnear` declared as `LifecycleMeas` keys, and read by `reviveMeas` (fix round 1) | `shared/api.ts`, `server/src/coord/journalparse.ts` |
 | C1 | The placement parity fixture runs every row labelled (`LEAST_LOADED_ORGS`) | `server/test/fixtures/leastLoaded.ts`, `projected-home.test.ts` |
 | C2 | The header | `cmd_swap` |
 
@@ -93,9 +94,21 @@ each run against the new test file, and the file was restored and compared byte 
 One redundant check went with the mutation pass: `_org_near_say` re-asked `CCD_ORGNEAR_ASK`, but an unasked call never
 lowers the bracket's minimum from 999, so the check could not change an answer.
 
+## Fix round 1: the two keys the server's reader did not know
+
+The PR's first full CI run was red on one test, `ccd-lifecycle-contain.test.ts`: `meas.org` and `meas.orgnear` were
+not on `LIFECYCLE_MEAS_KEYS`, the one list of keys the server's reader takes (`reviveMeas`). The reader drops any other
+key at ingest, so the swap record's two keys would have reached only the raw line. The plan names no server file, and
+the PR's local gate did not run that suite. Both keys are now declared on `LifecycleMeas` (`string | null`, the way
+`_lc_emit` writes them) and read by `reviveMeas`, and the scan's measured count rises from 40 to 42. The
+`shared/api.ts` edit is a co-edit its holder granted (desktop polish C39). The scan's fail was measured red before the
+declaration and green after it, with `lifecycle-wire`, `journalparse`, the type checks, `single-definition/*`,
+`rings/*`, `growth-check` armed and `deviation-refs`.
+
 ## Growth
 
-`ccd/ccd` grows by 24 net code lines against the merge base, within the limit of 40, with no waiver. `growth-check`
+`ccd/ccd` grows by 24 net code lines against the merge base, within the limit of 40, with no waiver. `shared/api.ts`
+grows by 4 net code lines in fix round 1 (two members, two map keys). `growth-check`
 runs green armed.
 
 ## Environment notes
