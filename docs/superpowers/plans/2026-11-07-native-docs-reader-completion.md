@@ -616,6 +616,11 @@ Base `7ccd594c3` (main with B2 #2886 and ledger #2893), branch `ws/docs-reader-c
 {"id": "NDR-C1-T7-N2-desc", "pkg": "pwa", "file": "src/docs/mockup/css.ts", "old": "  return tokens.map((t, i) => ({ key: keyOf(i), raw: t.raw, basePath: base, kind: t.kind, depth }));", "new": "  return tokens.map((t, i) => ({ key: keyOf(i), raw: t.raw, basePath: base, kind: t.kind, depth })).sort((a, b) => b.kind.localeCompare(a.kind));", "tests": ["test/mockup-css.test.ts", "test/mockup-load.test.ts"], "status": "red", "red": "Tests  4 failed | 84 passed (88): keys are the parent key then the token index; depth is the parent's plus one; the base is the stylesheet's own path", "sha256": "6e0209d90e7d4fd2d2c6d5cb388be9dfc44fc850021470a98c8a3ca2e88199f9", "restored": true}
 ```
 
+- Superseded since C2 (noted at D1, review run 2378's F2): `C1-T7-auth-to-missing` quotes the end's own return, which C2's fix
+  round 2 M-c (`a6536db6f`) removed from `load.ts`, so the row can no longer be applied. Its mutation, an `auth` word turned
+  into a `missing` verdict, is re-recorded on `now()`'s surviving line as `NDR-D1-FI2-AUTH-TO-MISSING` (D1's fence), red on
+  the same test. The row above keeps C1's recording.
+
 **Lab and M5 rows C1 owns** (as ruled in fix round 1: measured means a committed test in this tree reproduces it).
 - Measured above: M5.7 (mockup half), M5.8, M5.9, M5.10, M5.11, M5.12, M5.16 (the DOMParser and `default-src 'none'` bullets), M5.21 (`parseMockupOrigin`, `mockupCsp`), M5.22's pre-scan half (each refusal's typed return, with zero parsers constructed), M5.EX4, M5.B8, and D-8662's typed `too-large` return.
 - M5.EX3: the test gates each 2 MiB `import(` repetition at 250 ms, against the spec's 50 ms (the spec's figure stands); this box read 3.9 to 13.0 ms (**local**, the row prints it). Its script-text census check (`via: 'script-text'`) is C2's.
@@ -1167,8 +1172,11 @@ review fix round below.
   - M-b `82ec8e091`: `loadMockupAssets` stays, because C1's recorded rows and tests address the loader by this name; its header
     says so, and that its callers are tests. The loader's contract moves to `startMockupLoad`.
   - M-c `a6536db6f`: the loader's end is `now()` with no row left open (`finish` resolves `now(NONE_OPEN)`), so one rule fails
-    open rows. Fix round 1's NOW rows and C1's loader rows stay red. C1's `NDR-C1-FR2-F7-LOAD-ADMITTED` quoted the end's own
-    return, which is gone; `NDR-C2-FR2-MC-END-ADMITTED` re-records its mutation on the shared return, red on the same test.
+    open rows. Fix round 1's NOW rows stay red, and so do the five C1 rows on `load.ts` this round replayed (named under its
+    mutation rows below); C1's other rows on `load.ts` were not replayed. (Corrected at D1, review run 2378's F2: this
+    sentence first read "C1's loader rows stay red".) C1's `NDR-C1-FR2-F7-LOAD-ADMITTED` quoted the end's own return, which
+    is gone; `NDR-C2-FR2-MC-END-ADMITTED` re-records its mutation on the shared return, red on the same test. So did
+    `C1-T7-auth-to-missing`, which this round did not name: D1 re-records it as `NDR-D1-FI2-AUTH-TO-MISSING` (D1's first item).
   - M-d `9102e3d33`: three states of a load read at Export's deadline, each red on a mutation of its own. A stylesheet that
     completed while an earlier one still loads is inlined with its own reference neutralised and listed as left out (that
     reference is not a row yet, and `now()`'s doc now says so): `NDR-C2-FR2-MD-UNFED-CHILD`. A draft that loaded beside a slow
@@ -1278,6 +1286,50 @@ that C2 does not change; Open names what blocks it.
 | lab 7 | Kept (existing evidence) | the design's per-flag measurement; no sandbox token but `allow-scripts` (rule 3, the M5.13 rows) |
 | lab 10 | Open: routed to D by the coordinator | the browser app harness blocks service workers (`browser/app.ts`); C2 changes no worker code; D, Task 13 (mail 22598) |
 
+### D1 — run 2380 (the first item and Tasks 11-12), 2026-11-17
+
+Base `e5dc8a747` (main with C2 #2969, merged as `62c1565d2`, and ledger #2983), branch `ws/docs-reader-d1`. D runs as two
+serial runs (the coordinator's ledger decision of 2026-11-17): this is D1; Tasks 13 and 14 are D2's. Reserve 8716-8718,
+issued to this run, with no departure defined at run-open. Every figure below is reproduced by a committed test unless it is
+marked **local**. Mutation rows are measured in the tree, one at a time, from a saved copy outside the work tree, each child
+under `prlimit --nproc=4096` (1 488 tasks under the user when the run began, **local**) and `timeout -k 10 600` (900 for a
+browser row), restored and its sha256 checked.
+
+**First item (review run 2378's findings on C2), one commit per finding.** The review's report was gone from its clips
+directory when this run opened (the review child had been reclaimed); it was recovered from the review session's own record.
+- F1 `ac6d4fa3a` (important): the mockup viewer subscribed to `onAuthRegained` only in an effect keyed on the published
+  result, so it listened only after the whole load had ended. `clearAuthLost` announces once, to the listeners already
+  subscribed, so a sign-in that completed while the load was still pending, after one asset had answered `auth`, was missed,
+  and that row stayed failed. The viewer contract is that an `auth` row reads again after sign-in (Task 8's reader-assets row;
+  the Review Focus's "401 sign-in/retry"). Each attempt now subscribes at its start and latches a sign-in made during its load,
+  as the reader's body does since review 2372 F1: a result with a row failed with `auth` then starts ONE new attempt at once
+  and builds nothing; after the load a sign-in starts it as before; a result with no `auth` row drops the listener, the first
+  movement drops the aborted attempt's, and the attempt's cleanup drops it otherwise. Nothing reads `isAuthLost` at attach
+  time, so an `auth` row cannot loop. The test file counts live listeners through a wrapper around the real announcer. Red
+  first: the mid-load case and the pending attempt's listener count failed against the old code (`Tests  2 failed | 2 passed |
+  83 skipped (87)`). Five rows are red: the latch, the result's drop, the movement's drop, the cleanup's drop and the watching
+  arm.
+- F3 `b4bb4e83f` (important; the review's advisories A1 and A2 are the same finding): the reader body's drop of its listener
+  after a walk with no 401 had no test that failed without it. The test file counts live listeners the same way. A new case
+  raises a sign-in after a walk with no 401 and finds no listener of the body and nothing restarted, and the case named
+  "…the body mounts once and stops listening" now asserts that the listener it held during the walk is gone after it. Test
+  only: the guard was already there. `NDR-D1-FI3-NO-401-UNWATCH` is red (2 failed).
+- F2 (important): row `C1-T7-auth-to-missing`, Task 7's named auth→missing mutation, could no longer be applied, because its
+  `old` line left `load.ts` in C2's M-c; and C2's M-c bullet said "C1's loader rows stay red" where that round replayed five.
+  C1's fence now notes the row superseded, with its reason, and the M-c bullet names what was replayed, each correction saying
+  so in place. The mutation is re-recorded on `now()`'s surviving line, as the review re-pointed it:
+  `NDR-D1-FI2-AUTH-TO-MISSING` is red on the same test (`auth stays failed with its own word, never missing`, 1 failed, the
+  count the review read). The guard itself was intact.
+
+```json
+{"id": "NDR-D1-FI1-LATCH", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "        } else if (regained) {", "new": "        } else if (false) {", "tests": ["test/mockup-view.test.tsx"], "t": "review 2378 F1", "status": "red", "red": "Tests  1 failed | 3 passed | 83 skipped (87): a sign-in that completes while the load is still pending, after a read answered auth, reads again in ONE new attempt once the load ends (review 2378 F1)", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
+{"id": "NDR-D1-FI1-RESULT-UNWATCH", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "failure === 'auth')) {\n          unwatch();\n", "new": "failure === 'auth')) {\n", "tests": ["test/mockup-view.test.tsx"], "t": "review 2378 F1", "status": "red", "red": "Tests  2 failed | 2 passed | 83 skipped (87): a sign-in that completes while the load is still pending, after a read answered auth, reads again in ONE new attempt once the load ends (review 2378 F1)", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
+{"id": "NDR-D1-FI1-MOVED-UNWATCH", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "      ctl.abort();\n      unwatch();\n      end({ s: 'ended' });", "new": "      ctl.abort();\n      end({ s: 'ended' });", "tests": ["test/mockup-view.test.tsx"], "t": "review 2378 F1", "status": "red", "red": "Tests  1 failed | 3 passed | 83 skipped (87): the first movement drops the aborted attempt's listener: a sign-in before the next context starts nothing (review 2378 F1)", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
+{"id": "NDR-D1-FI1-CLEANUP-UNWATCH", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "    return () => {\n      unwatch();\n", "new": "    return () => {\n", "tests": ["test/mockup-view.test.tsx"], "t": "review 2378 F1", "status": "red", "red": "Tests  2 failed | 2 passed | 83 skipped (87): a sign-in that completes while the load is still pending, after a read answered auth, reads again in ONE new attempt once the load ends (review 2378 F1)", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
+{"id": "NDR-D1-FI1-WATCHING", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "          watching = true;", "new": "          watching = false;", "tests": ["test/mockup-view.test.tsx"], "t": "sign-in", "status": "red", "red": "Tests  1 failed | 13 passed | 73 skipped (87): sign-in: a row failed with auth reads again in ONE new attempt when sign-in returns; a later auth row subscribes again", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
+{"id": "NDR-D1-FI3-NO-401-UNWATCH", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "      if (images.auth === 0) {\n        unwatch();\n", "new": "      if (images.auth === 0) {\n", "tests": ["test/reader-frame.test.tsx"], "t": "no 401", "status": "red", "red": "Tests  2 failed | 2 passed | 63 skipped (67): a sign-in during a walk that answered no 401 starts nothing: the body mounts once and stops listening", "sha256": "8baf5f63de51086904c36c177c73b1fd362048796ffe1394220b366ed543f703", "restored": true}
+{"id": "NDR-D1-FI2-AUTH-TO-MISSING", "pkg": "pwa", "file": "src/docs/mockup/load.ts", "old": "      return word === undefined ? row : { ...row, verdict: { v: 'failed', failure: word } };", "new": "      return word === undefined ? row : word === 'auth' ? { ...row, verdict: { v: 'missing', why: 'absent-at-commit' } } : { ...row, verdict: { v: 'failed', failure: word } };", "tests": ["test/mockup-load.test.ts"], "status": "red", "red": "Tests  1 failed | 45 passed (46): auth stays failed with its own word, never missing", "sha256": "143100d9d5b06cd8bc46ea5126c85f6eb277ca51325f54245806a792300e7416", "restored": true}
+```
 
 ## Where things stand
 
