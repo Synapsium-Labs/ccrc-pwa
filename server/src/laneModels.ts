@@ -7,11 +7,11 @@
 // Concurrent reads of one lane on one io share one op; there is no cache, so `no-store` still means "as the files are".
 //
 // THE FILES UNDER THE GRANT AS THE FALLBACK (D-8688, retired by R3b). When nothing ran (`unsupported`: an agent that
-// predates the op; `refused`, `not-started`, `busy`), and when `show` refused on the catalogue or on the registry's
-// parse WITH the catalogue (the coordinator's ruling of 2026-11-16: a lane must never become unreadable where the file
-// read answers), `readLaneModelFiles` reads the registry and catalogue (`registryFileName`, `catalogueFileName` under
-// `~/.ccrc/models`) through the fleet's `read` op (the agent admits exactly these two names, `isLaneModelsReadName`)
-// and hands every judgement to the models kernel. Its answer carries no `advance`.
+// predates the op; `refused`, `not-started`, `busy`), and when `show` failed on something the files path never reads
+// (FALLBACK_REFUSALS, or `ccrc` dying before the lane; the coordinator's ruling of 2026-11-16: a lane must never become
+// unreadable where the file read answers), `readLaneModelFiles` reads the registry and catalogue (`registryFileName`,
+// `catalogueFileName` under `~/.ccrc/models`) through the fleet's `read` op (the agent admits exactly these two names,
+// `isLaneModelsReadName`) and hands every judgement to the models kernel. Its answer carries no `advance`.
 //
 // The two non-readings stay two (`LaneModelsRead`): `absent` is a lane with no class registry, `unreadable` one whose
 // registry exists and could not be read or parsed, or an op that RAN and gave no usable answer (`timeout`,
@@ -27,9 +27,14 @@ import {
 } from '../../shared/models.js';
 import type { FleetIO } from './io.js';
 
-/** `show` refusals that fall back to the files (ruling of 2026-11-16): the op path reads the catalogue before the
- *  registry and refuses on it, and parses the registry WITH the catalogue, where the files path does neither. */
-const FALLBACK_REFUSALS: readonly string[] = ['catalogue-unreadable', 'catalogue-invalid', 'registry-invalid'];
+/** `show` refusals that fall back to the files (ruling of 2026-11-16, D-8693): the op path reads the catalogue before
+ *  the registry and refuses on it, and parses the registry WITH the catalogue; it reads the fleet box's roster first
+ *  (`readRoster`'s three words); and `ccd/ccrc`'s `_models_answer` refuses `no-answer` when its node half answered
+ *  nothing usable. The files path does none of these. */
+const FALLBACK_REFUSALS: readonly string[] = [
+  'catalogue-unreadable', 'catalogue-invalid', 'registry-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid',
+  'no-answer',
+];
 
 /** One `show` per (io, lane) in flight; the entry goes when it settles, so the next read asks again. */
 const inFlightShows = new WeakMap<FleetIO, Map<string, Promise<ModelsAsked>>>();
@@ -81,17 +86,20 @@ async function readLaneModelFiles(io: FleetIO, ccrcDir: string, lane: string): P
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStrOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
-/** THE ONE reader of `show`'s JSON in TypeScript. `'fallback'` is one of the three `show` refusals the files path
- *  reads past (FALLBACK_REFUSALS); every other answer off the grammar is `unreadable`, and a half view is never
- *  returned. */
+/** THE ONE reader of `show`'s JSON in TypeScript. `'fallback'` is a `show` refusal the files path reads past
+ *  (FALLBACK_REFUSALS), or `ccrc` dying before the lane (`_ccrc_die`: exit 1, nothing on stdout, since `show` prints
+ *  its body unconditionally); every other answer off the grammar is `unreadable`, and a half view is never returned.
+ *  The exit code must agree with the body: an answer at 0, a refusal at 1 or 2. */
 function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsRead | 'fallback' {
   if (code !== 0 && code !== 1 && code !== 2) return { kind: 'unreadable' };
+  if (stdout === '' && code === 1) return 'fallback';
   // exactly one JSON object, with at most one trailing newline
   const body = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
   if (body === '' || body.includes('\n')) return { kind: 'unreadable' };
   let raw: unknown;
   try { raw = JSON.parse(body); } catch { return { kind: 'unreadable' }; }
   if (!isObj(raw)) return { kind: 'unreadable' };
+  if ((raw.ok === false) !== (code !== 0)) return { kind: 'unreadable' };
   if (raw.ok === false) {
     if (raw.error === 'no-such-account') return { kind: 'absent' };
     return typeof raw.error === 'string' && FALLBACK_REFUSALS.includes(raw.error) ? 'fallback' : { kind: 'unreadable' };

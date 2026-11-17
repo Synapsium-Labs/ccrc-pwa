@@ -31,6 +31,8 @@ import { BLOCKED_CAUSES, REASON_MAX, causeOf, unmeasuredMoveNotice } from '../..
 import type { ClassAdvance } from '../../shared/model-advance.mjs';
 import { contextWindowFor, modelEnvBlock } from '../../shared/modelenv.mjs';
 import { laneClassModels, parseCatalogue, parseWindows } from '../../shared/models.js';
+import { readLaneModels } from '../src/laneModels.js';
+import type { FleetIO } from '../src/io.js';
 import {
   STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
 } from './fixtures/advanceCases.js';
@@ -3434,6 +3436,29 @@ describe('show carries labels and the pending intent (R3, D-8686)', () => {
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect((r.body['advance'] as Record<string, unknown>)['pending']).toEqual(pending);
     expect((r.body['advance'] as Record<string, unknown>)['state']).toBe('ok');
+  });
+
+  // The producer-consumer contract: the real verb's stdout, read by the server's one reader (`readShowAnswer`, behind
+  // `readLaneModels`) through a stub `io.models`, gives the files path's classes and an `ok` advance state. A drift in
+  // either half (a dropped `pending`, a renamed key) reds here, not only in its own half's pin.
+  it("show's real stdout, read by readLaneModels, gives the lane's classes and an ok advance", async () => {
+    plantAdv(LEGACY_EXTERNAL_ID);
+    const adv = backfillAdvance({ registry: ADV_REGISTRY, seedFamilies: CODEX_SEEDS });
+    const cls = (Object.keys(ADV_REGISTRY.classes) as ModelClass[]).find((c) => ADV_REGISTRY.classes[c] !== null)!;
+    const pending = { class: cls, from: ADV_REGISTRY.classes[cls], to: 'model-9.9-gamma', effortFrom: null, effortTo: null, at: NOW };
+    plantAdvance(LEGACY_EXTERNAL_ID, { ...adv, pending });
+    const r = op('show', '--file', rosterPath(), '--id', LEGACY_EXTERNAL_ID);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const io = {
+      models: async () => ({ kind: 'exited', code: r.code, stdout: r.stdout }),
+      readFileMeasured: async () => { throw new Error('the op path reads no file'); },
+    } as unknown as FleetIO;
+    const got = await readLaneModels(io, path.join(home, '.ccrc'), LEGACY_EXTERNAL_ID);
+    expect(got.kind).toBe('read');
+    if (got.kind !== 'read') return;
+    expect(got.classes).toEqual(laneClassModels(parseRegistry(ADV_REGISTRY), parseCatalogue(ADV_CATALOGUE)));
+    expect(got.advance?.state).toBe('ok');
+    expect(got.advance?.pending).toEqual(pending);
   });
 
   it("an Anthropic lane's labels is null", () => {

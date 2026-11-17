@@ -1,6 +1,6 @@
 // Auto-advance plan W4a Tasks 18-19, as re-planned (D-8686, D-8687, D-8688, D-5228, D-8693): `readLaneModels` reads the
-// `models` op's `show` first and the lane's files under the D-8406 grant only when nothing ran (or `show` refused on
-// the catalogue or on the registry's parse with it, the coordinator's ruling of 2026-11-16). `lane-models.test.ts`
+// `models` op's `show` first and the lane's files under the D-8406 grant only when nothing ran (or `show` failed on
+// something the files path never reads, the coordinator's ruling of 2026-11-16). `lane-models.test.ts`
 // pins the files path unchanged beside this file. Every case runs against fixture HOMEs and stub ops: the local arm's
 // case spawns a bash stub under a fixture home, never a real `ccrc`, and never anything under the real home.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { localIO, localIOFor, type FleetIO } from '../src/io.js';
 import { createIo } from '../src/remote/io.js';
+import { AgentOpError, LinkNotSentError } from '../src/remote/errors.js';
 import { readReadyOps } from '../src/remote/client.js';
 import { readLaneModels } from '../src/laneModels.js';
 import { MODELS_OP, type ModelsAsked } from '../../shared/agent-protocol.js';
@@ -145,23 +146,69 @@ describe('readLaneModels through the op (D-8686)', () => {
     expect(await rig(exited(showJson('lane-a', { advance: 'ok' }))).read()).toEqual({ kind: 'unreadable' });
   });
 
-  it('refusals: no-such-account is absent, any other word unreadable, with no file read', async () => {
+  it('refusals: no-such-account is absent (exit 1 or 2), any other word unreadable, with no file read', async () => {
     const a = rig(exited(refusal('no-such-account'), 1));
     expect(await a.read()).toEqual({ kind: 'absent' });
-    const b = rig(exited(refusal('lock-busy'), 1));
+    // the verb's grammar admits exit 2 for a refusal too
+    const a2 = rig(exited(refusal('no-such-account'), 2));
+    expect(await a2.read()).toEqual({ kind: 'absent' });
+    // `unknown-argument`: a word `ccd/ccrc`'s show arm emits (exit 2), for an argv this server's builder never sends
+    const b = rig(exited(refusal('unknown-argument'), 2));
     expect(await b.read()).toEqual({ kind: 'unreadable' });
     const c = rig(exited(refusal('registry-unreadable'), 1));
     expect(await c.read()).toEqual({ kind: 'unreadable' });
-    expect([...a.reads, ...b.reads, ...c.reads]).toEqual([]);
+    // a synthetic word no build emits: unknown is unreadable, never a fallback
+    const d = rig(exited(refusal('not-a-show-word'), 1));
+    expect(await d.read()).toEqual({ kind: 'unreadable' });
+    expect([...a.reads, ...a2.reads, ...b.reads, ...c.reads, ...d.reads]).toEqual([]);
   });
 
   // The coordinator's ruling of 2026-11-16 (D-8693): `show` reads the catalogue before the registry and refuses on it,
-  // and parses the registry WITH the catalogue, where the files path does neither; so these three refusals read the
-  // files, as "nothing ran" does, and a lane never becomes unreadable where the file read answers.
-  it.each(['catalogue-unreadable', 'catalogue-invalid', 'registry-invalid'])('a %s refusal reads the files instead', async (word) => {
+  // and parses the registry WITH the catalogue, where the files path does neither; it also reads the fleet box's
+  // roster before any lane file (`roster-*`, `deploy/models-op.mjs`'s readRoster), and `ccd/ccrc`'s `_models_answer`
+  // refuses `no-answer` on a node half that answered nothing usable, where the files path reads neither. So these
+  // refusals read the files, as "nothing ran" does, and a lane never becomes unreadable where the file read answers.
+  it.each([
+    'catalogue-unreadable', 'catalogue-invalid', 'registry-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid',
+    'no-answer',
+  ])('a %s refusal reads the files instead', async (word) => {
     const r = rig(exited(refusal(word), 1));
     expect(await r.read()).toEqual(FILES);
     expect(r.reads).toHaveLength(2);
+  });
+
+  it('a fallback word at exit 2 reads the files too', async () => {
+    const r = rig(exited(refusal('roster-invalid'), 2));
+    expect(await r.read()).toEqual(FILES);
+    expect(r.reads).toHaveLength(2);
+  });
+
+  // `ccd/ccrc`'s `_ccrc_die` (e.g. `_models_deps` without jq) exits 1 with its message on stderr and NOTHING on stdout,
+  // before any lane sub runs: `show` prints its body unconditionally and `_models_answer` refuses `no-answer` on an
+  // empty one, so an empty stdout at exit 1 is that die alone. The files path reads past it; at exit 0 or 2 it is off
+  // the grammar.
+  it('an empty stdout at exit 1 (ccrc died before the lane) reads the files; at exit 0 or 2 it is unreadable', async () => {
+    const r = rig(exited('', 1));
+    expect(await r.read()).toEqual(FILES);
+    expect(r.reads).toHaveLength(2);
+    for (const code of [0, 2]) {
+      const s = rig(exited('', code));
+      expect(await s.read(), String(code)).toEqual({ kind: 'unreadable' });
+      expect(s.reads).toEqual([]);
+    }
+  });
+
+  it('an exit code that contradicts the body is unreadable: an answer at exit 1 or 2, a refusal at exit 0', async () => {
+    for (const code of [1, 2]) {
+      const r = rig(exited(showJson('lane-a'), code));
+      expect(await r.read(), `answer at ${code}`).toEqual({ kind: 'unreadable' });
+      expect(r.reads).toEqual([]);
+    }
+    for (const word of ['no-such-account', 'catalogue-invalid', 'roster-absent']) {
+      const r = rig(exited(refusal(word), 0));
+      expect(await r.read(), `${word} at 0`).toEqual({ kind: 'unreadable' });
+      expect(r.reads).toEqual([]);
+    }
   });
 
   it.each([
@@ -191,6 +238,9 @@ describe('readLaneModels through the op (D-8686)', () => {
     expect(await r({ labels: { ...LABELS, [C1]: { ...LABELS[C1], model: 'model-6.0-gamma' } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ labels: { ...LABELS, [C3]: { model: null } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: 'low' } } })).toEqual({ kind: 'unreadable' });
+    // an array is not enough: every element must be a string
+    expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: ['low', 5] } } })).toEqual({ kind: 'unreadable' });
+    expect(await r({ labels: { ...LABELS, [C0]: { ...LABELS[C0], efforts: [null] } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ registry: { ...REG, classes: { ...PIN, [C0]: 5 } } })).toEqual({ kind: 'unreadable' });
     expect(await r({ registry: 'x' })).toEqual({ kind: 'unreadable' });
   });
@@ -217,6 +267,14 @@ describe('readLaneModels through the op (D-8686)', () => {
       expect(await r.read()).toEqual({ kind: 'unreadable' });
       expect(r.reads).toEqual([]);
     });
+
+  it('never rejects: a models that rejects (a contract breach) reads unreadable, no file, and the next read asks again', async () => {
+    const r = rig(() => Promise.reject(new Error('x')));
+    await expect(r.read()).resolves.toEqual({ kind: 'unreadable' });
+    expect(r.reads).toEqual([]);
+    await expect(r.read()).resolves.toEqual({ kind: 'unreadable' });
+    expect(r.calls).toHaveLength(2);
+  });
 
   it('coalescing: two concurrent reads of one lane on one io call models once; a third after them calls again', async () => {
     let release!: () => void;
@@ -261,6 +319,57 @@ describe('the mixed pairs (D-8688)', () => {
     expect(got).toEqual(FILES);
     expect(frames.map((f) => f.op)).toEqual(['read', 'read']);
     expect(frames.some((f) => f.op === MODELS_OP)).toBe(false);
+  });
+
+  // `createIo().models`'s error mapping (D-8688): before the wire, or an agent that predates the op, is "nothing ran"
+  // (the files answer); anything after the send, or an answer off the grammar, is `lost` (unreadable).
+  describe('createIo(client).models maps each failure to its own word', () => {
+    const fake = (onModels: () => Promise<unknown>) => {
+      const home = mkTmp('ccrc-lanemodels-op-map-');
+      seedLane(home, 'lane-a');
+      const frames: Array<Record<string, unknown>> = [];
+      const client = {
+        state: { agentOps: [MODELS_OP] },
+        request: async (f: Record<string, unknown>) => {
+          frames.push(f);
+          if (f.op === 'read') return { t: 'res', id: 1, ok: true, data: readFileSync(f.path as string, 'utf8') };
+          return onModels();
+        },
+      };
+      return { io: createIo(client as never), frames, ccrcDir: path.join(home, '.ccrc') };
+    };
+
+    it.each([
+      ['an agent bad-request', 'unsupported', () => Promise.reject(new AgentOpError('bad-request', null))],
+      ['a frame that never left', 'not-started', () => Promise.reject(new LinkNotSentError('disconnected'))],
+      ['a link failure after the send', 'lost', () => Promise.reject(new Error('disconnected'))],
+      ['another agent error after the send', 'lost', () => Promise.reject(new AgentOpError('internal', null))],
+      ['an answer off the grammar', 'lost', () => Promise.resolve({ kind: 'exited', code: 'x', stdout: '', fleetIdentity: null })],
+    ] as const)('%s is %s', async (_n, kind, onModels) => {
+      const f = fake(onModels);
+      expect(await f.io.models('lane-a', 'show')).toEqual({ kind });
+      expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP]);
+    });
+
+    it.each([
+      ['bad-request', () => Promise.reject(new AgentOpError('bad-request', null))],
+      ['never sent', () => Promise.reject(new LinkNotSentError('aborted'))],
+    ] as const)('readLaneModels over a %s answer reads the files', async (_n, onModels) => {
+      const f = fake(onModels);
+      expect(await readLaneModels(f.io, f.ccrcDir, 'lane-a')).toEqual(FILES);
+      expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP, 'read', 'read']);
+    });
+
+    it('a bad lane is refused by the builder before the wire', async () => {
+      const f = fake(() => Promise.reject(new Error('never asked')));
+      expect(await f.io.models('litellm', 'show')).toEqual({ kind: 'refused', why: 'bad-lane' });
+      expect(f.frames).toEqual([]);
+    });
+
+    it('an exited answer passes through without its fleetIdentity', async () => {
+      const f = fake(() => Promise.resolve({ kind: 'exited', code: 0, stdout: showJson('lane-a'), fleetIdentity: null }));
+      expect(await f.io.models('lane-a', 'show')).toEqual({ kind: 'exited', code: 0, stdout: showJson('lane-a') });
+    });
   });
 
   describe('new server + new agent, end to end', () => {
