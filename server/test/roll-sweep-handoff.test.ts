@@ -130,7 +130,8 @@ describe('rollPass: the act-time re-check reads the continuity row again (review
     const mark = { ok: true, state: 'done', bg: 0, crons: 0, turnAt: NOW - 2 * HOUR - MIN, stopAt: NOW - 2 * HOUR, restartAt: null } as HibernateMark;
     const deps: RollSweepDeps = {
       coord: withBindingsOf({ openRunsForSession: (...a: Parameters<CoordStore['openRunsForSession']>) => coord.openRunsForSession(...a),
-        activeClaims: () => coord.activeClaims(), outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n) }),
+        activeClaims: () => coord.activeClaims(), outstandingMailFor: (id: string, n?: number) => coord.outstandingMailFor(id, n),
+        designationRead: () => coord.designationRead() }),
       continuity: coord,
       targets: () => CLAUDE_ROLL_TARGETS_DEFAULT,
       // The pass reads the node's install once; the act-time re-check reads it again, and the operator arms `continuity` between the two.
