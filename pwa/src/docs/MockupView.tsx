@@ -170,7 +170,7 @@ function MockupLive(p: MockupViewProps & {
   // The current attempt's plan and the end of its load, for Export; `null` between attempts.
   const [exported, setExported] = useState<MockupExportAssets | null>(null);
   const [fatal, setFatal] = useState<{ readonly error: unknown } | null>(null);
-  // The attempt number: a new value starts a new attempt over the same context (a retry, a sign-in).
+  // The attempt number: a new value starts a new attempt over the same context (a sign-in).
   const [attemptNo, setAttemptNo] = useState(0);
   // The current attempt finished after a movement it was not allowed to re-list for: the changing note and Retry show.
   const [changing, setChanging] = useState(false);
@@ -281,10 +281,9 @@ function MockupLive(p: MockupViewProps & {
     });
     return off;
   }, [loaded]);
-  const retry = (): void => {
-    host.current.relist();
-    setAttemptNo((n) => n + 1);
-  };
+  // Retry re-lists and nothing else: the context that re-list produces starts the attempt, so none runs over the stale listing
+  // (review M5).
+  const retry = (): void => host.current.relist();
 
   // The attempt's Export body, from the moment it has a plan; it changes only with the attempt.
   const exportBody = useMemo<ExportBody | null>(

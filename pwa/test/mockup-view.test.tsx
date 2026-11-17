@@ -972,7 +972,7 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
   });
 
-  it('a second movement in this view (attempt Q): no second relist and no third attempt, the changing note and Retry; Retry relists and reads again, uncapped', async () => {
+  it('a second movement in this view (attempt Q): no second relist and no third attempt, the changing note and Retry; Retry re-lists only, the next context starts the attempt, uncapped', async () => {
     const reads = scripted((pin) => (pin.path === 'moved.png' && pin.kind === 'committed' && pin.commit !== COMMIT_C ? MOVED : OK()));
     const relist = vi.fn<() => void>();
     const html = '<img src="moved.png"><img src="x.png">';
@@ -995,27 +995,53 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     openFold(m.container, CENSUS);
     expect(rowOf(m.container, 'moved.png')).toContain(`failed: ${DOCS_FAILURE_SENTENCE['draft-changed']}`);
     expect(button(MOCKUP_TEXT.retry)).toBeInTheDocument();
-    // Retry: the user's re-list, and a new attempt over the current context right away.
+    // Retry: the user's re-list ONLY (review M5): no attempt starts over the stale listing, and nothing reads.
     fireEvent.click(button(MOCKUP_TEXT.retry));
     expect(relist).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2);
+    expect(reads.calls).toHaveLength(readsAfterQ);
+    expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument();
+    // The context the re-list produces starts the attempt; its own movement does not re-list by itself (the automatic one is
+    // spent): the note stays, and Retry is uncapped.
+    m.again({ html, context: ctxQ(), reader: reads.reader, relist });
     await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3));
     await waitFor(() => expect(reads.paths().filter((x) => x === 'moved.png')).toHaveLength(3));
-    // Its own movement does not re-list by itself (the automatic one is spent): the note stays, and Retry is uncapped.
     await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
     await flush();
     expect(relist).toHaveBeenCalledTimes(2);
     expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3);
     fireEvent.click(button(MOCKUP_TEXT.retry));
     expect(relist).toHaveBeenCalledTimes(3);
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(4));
-    // The new context the re-list produces starts another attempt (and aborts that one); the note goes with the old attempt.
-    const signal4 = vi.mocked(loadMockupAssets).mock.calls[3]![2];
+    await flush();
+    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(3);
+    // The new context the re-list produces starts another attempt; the note goes with the old attempt.
     m.again({ html, context: ctxQ(COMMIT_C), reader: reads.reader, relist });
-    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(5));
-    expect(signal4.aborted).toBe(true);
+    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(4));
     await waitFor(() => expect(screen.queryByText(MOCKUP_TEXT.changing)).toBeNull());
     expect(screen.queryByRole('button', { name: MOCKUP_TEXT.retry })).toBeNull();
     expect(relist).toHaveBeenCalledTimes(3);
+  });
+
+  it('Retry re-lists only: it makes no read until a new context arrives, and then ONE attempt reads (review M5)', async () => {
+    const relist = vi.fn<() => void>();
+    const html = '<img src="moved.png">';
+    const first = ctxOf([entry('specs', 'moved.png')]);
+    const moving = scripted((pin, nth) => (pin.path === 'moved.png' && nth === 1 ? MOVED : OK()));
+    const n = mount({ html, context: first, reader: moving.reader, relist });
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    const readsBefore = moving.calls.length;
+    fireEvent.click(button(MOCKUP_TEXT.retry));
+    expect(relist).toHaveBeenCalledTimes(2);
+    await flush();
+    expect(moving.calls).toHaveLength(readsBefore);
+    expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(1);
+    n.again({ html, context: ctxQ(), reader: moving.reader, relist });
+    await waitFor(() => expect(vi.mocked(loadMockupAssets)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(moving.calls).toHaveLength(readsBefore + 1));
+    await waitFor(() => expect(n.frame()).not.toBeNull());
+    await flush();
+    expect(moving.calls).toHaveLength(readsBefore + 1);
   });
 
   it('a historical page (page.at set): a movement word is just that row failed; zero relists, no changing note', async () => {
