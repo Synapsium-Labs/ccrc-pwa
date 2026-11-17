@@ -99,11 +99,16 @@ const dueKeyOf = (e: { program: string | null; project: string }): string =>
 
 // ── The queue ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`. Opens no transaction. */
+/** Mark a programme (or `upkeep:<project>`) due. Keeps the earlier `dueAt`, except that a row deferred for a FAILURE keeps
+ *  its own (A7/A12: a plan write, a run transition or an attach never pulls a backoff back to now). Opens no transaction.
+ *
+ *  The row's `attempts` column (migration 59, read nowhere before) is the failure mark: `deferSync` counts a failure
+ *  deferral there and sets it to 0 for an ordinary one; `clearSyncDue` deletes the row. No migration (D-8673). */
 export function markSyncDueInTx(db: DatabaseSync, program: string, at: number): void {
   if (program === LINEAR_SYNC_PROGRAMME) return;
   db.prepare(
-    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET dueAt = MIN(dueAt, excluded.dueAt)',
+    'INSERT INTO plan_sync_due (program, dueAt) VALUES (?, ?) ON CONFLICT(program) DO UPDATE SET '
+    + 'dueAt = CASE WHEN attempts > 0 THEN dueAt ELSE MIN(dueAt, excluded.dueAt) END',
   ).run(program, at);
 }
 export function markSyncDue(db: DatabaseSync, program: string, at: number): void { markSyncDueInTx(db, program, at); }
@@ -114,8 +119,17 @@ export function dueSyncs(db: DatabaseSync, now: number): string[] {
 export function clearSyncDue(db: DatabaseSync, program: string): void {
   db.prepare('DELETE FROM plan_sync_due WHERE program = ?').run(program);
 }
-export function deferSync(db: DatabaseSync, program: string, until: number): void {
-  db.prepare('UPDATE plan_sync_due SET dueAt = ?, attempts = attempts + 1 WHERE program = ?').run(until, program);
+/** Why a due row is deferred: a `failure`'s backoff (the next mark must not shorten it, A7/A12) or an ordinary `wait`. */
+export type SyncDeferral = 'failure' | 'wait';
+/** Defer a due row to `until`, for a `failure` or a `wait` ({@link SyncDeferral}). */
+export function deferSync(db: DatabaseSync, program: string, until: number, why: SyncDeferral): void {
+  db.prepare('UPDATE plan_sync_due SET dueAt = ?, attempts = CASE WHEN ? THEN attempts + 1 ELSE 0 END WHERE program = ?')
+    .run(until, why === 'failure' ? 1 : 0, program);
+}
+/** The `dueAt` of a row deferred for a failure whose backoff has not passed at `now`; null when none holds the programme. */
+export function heldSyncUntil(db: DatabaseSync, program: string, now: number): number | null {
+  const r = db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ? AND attempts > 0 AND dueAt > ?').get(program, now) as Raw | undefined;
+  return r === undefined ? null : (r.dueAt as number);
 }
 
 // ── Reads ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -429,26 +443,42 @@ export function ensurePending(db: DatabaseSync, kind: BindingKind, localId: numb
     .run(kind, localId, workspaceId, teamKey);
   return bindingOf(db, kind, localId, workspaceId)!;
 }
-export function markBound(db: DatabaseSync, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number): void {
+/** `teamKey`, when given, replaces the stored key (an issue moved to another team); absent or null leaves it. */
+export function markBound(db: DatabaseSync, id: number, linearId: string, identifier: string | null, fingerprint: string, now: number, teamKey?: string | null): void {
   db.prepare(
-    "UPDATE linear_bindings SET linearId = ?, identifier = ?, fingerprint = ?, syncedAt = ?, state = 'bound', failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE id = ?",
-  ).run(linearId, identifier, fingerprint, now, id);
+    "UPDATE linear_bindings SET linearId = ?, identifier = ?, fingerprint = ?, syncedAt = ?, state = 'bound', failedAt = NULL, failedWord = NULL, failedInputs = NULL, teamKey = COALESCE(?, teamKey) WHERE id = ?",
+  ).run(linearId, identifier, fingerprint, now, teamKey ?? null, id);
 }
 export function markFailed(db: DatabaseSync, id: number, word: string, inputs: string, now: number): void {
   db.prepare("UPDATE linear_bindings SET state = 'failed', failedAt = ?, failedWord = ?, failedInputs = ? WHERE id = ?").run(now, word, inputs, id);
 }
-/** `failed` bindings back to `pending`, clearing the three `failed*` columns; `where` narrows by workspace, one binding or
- *  failures older than a time. Returns how many it returned. */
-export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; bindingId?: number; olderThan?: number }): number {
-  const conds = ["state = 'failed'"];
+/** `failed` bindings back to `to`, clearing the three `failed*` columns and keeping the stored fingerprint; `where` narrows by
+ *  workspace, one binding or failures older than a time. C17 (`requeueVerdict` decides `to`): only a binding with a Linear
+ *  object returns to `bound`, only one without returns to `pending`, so a row is never a create of an object that exists.
+ *  Returns how many it returned. */
+export function requeueFailed(db: DatabaseSync, where: { workspaceId?: string; bindingId?: number; olderThan?: number; to: 'bound' | 'pending' }): number {
+  const conds = ["state = 'failed'", where.to === 'bound' ? 'linearId IS NOT NULL' : 'linearId IS NULL'];
   const args: (string | number)[] = [];
   if (where.workspaceId !== undefined) { conds.push('workspaceId = ?'); args.push(where.workspaceId); }
   if (where.bindingId !== undefined) { conds.push('id = ?'); args.push(where.bindingId); }
   if (where.olderThan !== undefined) { conds.push('failedAt < ?'); args.push(where.olderThan); }
   const res = db.prepare(
-    `UPDATE linear_bindings SET state = 'pending', failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE ${conds.join(' AND ')}`,
-  ).run(...args);
+    `UPDATE linear_bindings SET state = ?, failedAt = NULL, failedWord = NULL, failedInputs = NULL WHERE ${conds.join(' AND ')}`,
+  ).run(where.to, ...args);
   return Number(res.changes);
+}
+/** Every `operator-act` checkpoint of a programme that is still open and names an operator item: what the sync's tick checks
+ *  against the item's state (design §4.1: ccrc marks it met when that item is done). */
+export function openOperatorActs(db: DatabaseSync): { checkpointId: number; itemId: number; program: string }[] {
+  return (db.prepare(
+    "SELECT c.id AS checkpointId, c.itemId AS itemId, e.program AS program FROM plan_checkpoints c JOIN plan_epics e ON e.id = c.epicId "
+    + "WHERE c.state = 'open' AND c.kind = 'operator-act' AND c.itemId IS NOT NULL AND e.program IS NOT NULL ORDER BY c.id",
+  ).all() as Raw[]).map((r) => ({ checkpointId: r.checkpointId as number, itemId: r.itemId as number, program: r.program as string }));
+}
+/** The `programs` row's rowid: the key of the programme's own bindings (C6); null for a slug with no row. */
+export function programmeRowId(db: DatabaseSync, slug: string): number | null {
+  const r = db.prepare('SELECT rowid AS rid FROM programs WHERE slug = ?').get(slug) as Raw | undefined;
+  return r === undefined ? null : Number(r.rid);
 }
 /** Every binding of a programme's objects (its own row, its epics, checkpoints and tickets), or, for `upkeep:<project>`,
  *  of that project's Upkeep epic and its tickets. A programme's own binding is keyed by the `programs` row's `rowid`. */
@@ -542,8 +572,8 @@ export function coordinatorIdsOf(db: DatabaseSync): string[] {
 const PORT_FUNCTIONS = {
   planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
-  bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, hierarchySettingsOf, setHierarchySettings,
-  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf,
+  bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
+  hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

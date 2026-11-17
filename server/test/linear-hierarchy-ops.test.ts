@@ -170,3 +170,22 @@ describe('the initiatives probe and the provenance line', () => {
     expect(withCcrcProvenance('')).toBe(LINEAR_CCRC_PROVENANCE_LINE);
   });
 });
+
+describe('the retry-guard answers (C1, D-8407)', () => {
+  it.each([
+    ['initiativeCreate', 'mutation-initiative-create-same-id', 'conflict'],
+    ['projectCreate', 'mutation-project-create-same-id', 'conflict'],
+    ['projectMilestoneCreate', 'mutation-project-milestone-create-same-id', 'name-taken'],
+    ['issueCreate', 'extra-issue-create-caller-id-retry', 'conflict'],
+  ] as const)('%s reads %s as linear-invalid with detail %s', (op, fixture, detail) => {
+    expect(LINEAR_CCRC_OPS[op].shape(linearRecord(fixture).body)).toEqual({ ok: false, word: 'linear-invalid', detail });
+  });
+
+  it('name not unique is a conflict for a milestone only, and any other INPUT_ERROR carries no detail', () => {
+    const body = linearRecord('mutation-project-milestone-create-same-id').body;
+    expect(LINEAR_CCRC_OPS['projectCreate'].shape(body)).toMatchObject({ ok: false });
+    expect((LINEAR_CCRC_OPS['projectCreate'].shape(body) as { detail?: string }).detail).toBeUndefined();
+    const other = linearRecord('error-linear-invalid-state').body;
+    expect((LINEAR_CCRC_OPS['issueCreate'].shape(other) as { detail?: string }).detail).toBeUndefined();
+  });
+});

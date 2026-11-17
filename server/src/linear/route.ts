@@ -72,7 +72,7 @@ export function routableSlots(store: Listed): LinearRouteSlot[] {
 }
 
 /** A file slot's record while it describes the key now in the file (the digest rule), else null. */
-function currentDetails(s: Listed['slots'][number]) {
+export function currentDetails(s: Listed['slots'][number]) {
   return s.key.kind === 'key' && s.record.kind === 'details' && s.record.details.keyDigest === s.key.digest ? s.record.details : null;
 }
 
