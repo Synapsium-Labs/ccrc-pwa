@@ -6,6 +6,7 @@
 // only: project `demo`, branch `main`,
 // `example-org/example-repo`, `/repo/...`, `https://a.example`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import {
@@ -13,6 +14,7 @@ import {
   type DocsTreeOk, type DraftsFacts,
 } from '../../shared/docs';
 import { exportStateFor } from '../src/docs/DocsHead';
+import { ExportSheet } from '../src/docs/ExportSheet';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { detachUrls } from '../src/docs/docsLinks';
 import {
@@ -835,7 +837,7 @@ interface MockupOpts {
 
 /** The page parsed by the real parser, planned and loaded over a fake reader, and handed to `exportInputOf` as the header
  *  would, for the leaf `specs/m.html`. */
-async function mockupInput(html: string, files: MockupFiles = {}, o: MockupOpts = {}): Promise<ExportInput> {
+async function mockupRequest(html: string, files: MockupFiles = {}, o: MockupOpts = {}): Promise<ExportRequest> {
   const parsed = parseMockup(html);
   if (!parsed.ok) throw new Error('the pre-scan refused the fixture');
   const entries = [
@@ -863,11 +865,14 @@ async function mockupInput(html: string, files: MockupFiles = {}, o: MockupOpts 
     .then((result): MockupLoadEnd => ({ s: 'loaded', result: o.edit === undefined ? result : o.edit(result) }));
   const settled = o.end === 'never' ? new Promise<MockupLoadEnd>(() => {})
     : o.end === 'ended' ? Promise.resolve<MockupLoadEnd>({ s: 'ended' }) : loadedEnd;
-  const request: ExportRequest = {
+  return {
     page, tree, assets: null, readAt: NOW,
     source: { kind: 'mockup', pin, show: fileResponse(html).show, doc: parsed.doc, assets: { plan, settled } },
   };
-  return exportInputOf(request, { exportedAt: NOW, theme: null });
+}
+
+async function mockupInput(html: string, files: MockupFiles = {}, o: MockupOpts = {}): Promise<ExportInput> {
+  return exportInputOf(await mockupRequest(html, files, o), { exportedAt: NOW, theme: null });
 }
 
 async function builtMockup(html: string, files: MockupFiles = {}, o: MockupOpts = {}, limits: ExportLimits = NO_LIMIT) {
@@ -977,6 +982,40 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     for (const id of ['b', 'c', 'd', 'e']) expect(inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
     expect(listOf(doc, EXPORT_TEXT.mockupInlined)).toEqual([`${specsRepo('a.png')} (${Math.ceil(one / 1024)} KiB, committed)`]);
     expect(listOf(doc, EXPORT_TEXT.mockupOmitted)).toEqual(['b.png', 'c.png', 'd.png', 'e.png'].map(specsRepo));
+  }, 120_000);
+
+  // Review I1: a file is omitted only when NONE of its uses was written; the builder derives the inlined list, and so the
+  // draft count that makes Save ask, from the files it handed in minus `omitted`.
+  const FIVE_USES = mockupPage(
+    ['i1', 'i2', 'i3', 'i4', 'i5'].map((id) => `<img id="${id}" src="big.png" alt="${id}">`).join(''),
+  );
+
+  it('a draft image used five times, three of them written under the size bound, is listed as inlined and counts as a draft (review I1)', async () => {
+    const { result, inner } = await builtMockup(FIVE_USES, { 'big.png': BIG(2 * 1024 * 1024) }, { draftPage: true, draftAssets: ['big.png'] });
+    expect(inner.querySelectorAll('img[src^="data:image/png;base64,"]')).toHaveLength(3);
+    expect(result.mockup).toEqual({
+      inlined: [{ path: specsRepo('big.png'), size: 2 * 1024 * 1024, draft: true }],
+      omitted: [],
+    });
+  }, 120_000);
+
+  it('the sheet\'s first Save tap on that file shows the draft confirm and saves nothing (review I1)', async () => {
+    const request = await mockupRequest(FIVE_USES, { 'big.png': BIG(2 * 1024 * 1024) }, { draftPage: true, draftAssets: ['big.png'] });
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    render(<ExportSheet request={request} onClose={() => {}} load={async () => ({ buildExport })} />);
+    fireEvent.click(await screen.findByRole('button', { name: /^Save / }, { timeout: 60_000 }));
+    expect(click).not.toHaveBeenCalled();
+    expect(screen.getByText('This file includes 1 uncommitted file from main checkout.')).toBeInTheDocument();
+  }, 120_000);
+
+  it('a stylesheet cut by the size bound lists its nested file as omitted too, never as inlined (review I1)', async () => {
+    const MIB = 1024 * 1024;
+    const html = mockupPage(
+      `${['i1', 'i2', 'i3'].map((id) => `<img id="${id}" src="big.png" alt="${id}">`).join('')}<link rel="stylesheet" href="s.css">`,
+    );
+    const { result } = await builtMockup(html, { 'big.png': BIG(2 * MIB), 's.css': 'p{background:url(bg.png)}', 'bg.png': BIG(2 * MIB) });
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('big.png')]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('s.css'), specsRepo('bg.png')]);
   }, 120_000);
 
   it('a stripped body that is over the limit on its own gives too-large; one with room for no asset lists every asset as left out', async () => {

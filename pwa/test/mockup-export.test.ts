@@ -584,6 +584,27 @@ describe('inlining (base 5.6.9 Step 2): a held file becomes data: with the ROW M
     expect(levels[levels.length - 1]).not.toContain('@import "');
   });
 
+  it('a stylesheet cycle\'s files are inlined, never listed as omitted: the use the depth bound neutralises is not the file\'s only use (review I1)', async () => {
+    const { out } = await run(page('<p>x</p>', '<link rel="stylesheet" href="a.css">'), {
+      'a.css': '@import "b.css"; p{color:red}', 'b.css': '@import "a.css"; q{color:blue}',
+    });
+    expect(out.omitted).toEqual([]);
+  });
+
+  it('a stylesheet the size bound cuts lists its nested file as omitted too (nothing of it was written), and a nested file another use wrote is not (review I1)', async () => {
+    const big = new Uint8Array(2 * MIB).fill(7);
+    const { out } = await run(page(
+      '<img src="big.png"><img src="big.png"><img src="big.png"><img src="shared.png"><link rel="stylesheet" href="s.css">',
+    ), { 'big.png': big, 's.css': 'p{background:url(bg.png)} q{background:url(shared.png)}', 'bg.png': big, 'shared.png': 'S' });
+    expect(out.omitted).toEqual([repo('s.css'), repo('bg.png')]);
+  });
+
+  it('a nested file whose stylesheet is not in the result is omitted too: no use of it was written (review I1)', async () => {
+    const drop = (r: MockupAssetResult): MockupAssetResult => ({ ...r, assets: new Map([...r.assets].filter(([k]) => !k.includes('s.css'))) });
+    const { out } = await run(page('<p>x</p>', '<link rel="stylesheet" href="s.css">'), { 's.css': 'p{background:url(bg.png)}', 'bg.png': 'B' }, drop);
+    expect(out.omitted).toEqual([repo('s.css'), repo('bg.png')]);
+  });
+
   it('a link whose href is a data: URL loses it too: the links step, not the URL allowlist (which keeps data:), removes it', async () => {
     const { out } = await run(page('<a id="d1" href="data:text/plain,one">one</a><svg><a id="d2" href="data:text/plain,two"><text>two</text></a></svg>'));
     const d = innerOf(out.html);
@@ -608,7 +629,9 @@ describe('inlining (base 5.6.9 Step 2): a held file becomes data: with the ROW M
     const uses = out.html.match(/src="data:image\/png;base64,/g) ?? [];
     expect(uses).toHaveLength(3);
     expect(out.html.split(EXPORT_MISSING_SENTENCE['over-size'])).toHaveLength(3);
-    expect(out.omitted).toEqual([repo('big.png')]);
+    // Three of its five uses were written, so the file is not omitted (review I1): omitted lists a file only when NONE of
+    // its uses was written.
+    expect(out.omitted).toEqual([]);
     expect(out.html.length).toBeLessThan(10 * MIB);
   });
 

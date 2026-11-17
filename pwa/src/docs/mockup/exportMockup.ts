@@ -23,7 +23,7 @@
 //   5. LINKS    `href` and `xlink:href` off every `a` and `area`, the text kept, the target in `title` and in `links`.
 //   6. INNER    the CSP meta first in `<head>`, then the serialised clone.
 // A missing asset keeps its element without its URL; an `img` or `input[type=image]` takes the closed missing sentence as
-// its `alt`, and every asset not inlined is listed once, in DOM order.
+// its `alt`, and every asset none of whose uses was written is listed once, in DOM order.
 import { docRepoPath, docsApi, resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
 import { EXPORT_MISSING_SENTENCE } from '../docsText';
 import { DOCS_EXPORT_CSP, DOCS_EXPORT_MAX_BYTES, EXPORT_PREFIX, type ExportMissing } from '../export/policy';
@@ -33,8 +33,10 @@ import { MOCKUP_MAX_CSS_DEPTH } from './policy';
 import type { MockupAssetResult, MockupAssetRow, MockupRef, MockupRefVerdict } from './ports';
 
 /** What the snapshot answers: `html` is the inner document (`EXPORT_PREFIX` and the stripped clone's markup, the CSP meta
- *  first in `<head>`); `links` the removed link targets in DOM order; `omitted` the assets not inlined, each once in DOM
- *  order, as a resolved repo path or, where the reference does not resolve to one, as written. */
+ *  first in `<head>`); `links` the removed link targets in DOM order; `omitted` every asset NONE of whose uses was written
+ *  into `html` (nested files of a stylesheet included), each once in DOM order, as a resolved repo path or, where the
+ *  reference does not resolve to one, as written. A file with one use written and another cut is not omitted: the builder
+ *  derives what the file inlined, and how many drafts, from the files it handed in minus `omitted`. */
 export interface MockupSnapshot {
   readonly html: string;
   readonly links: readonly string[];
@@ -258,9 +260,14 @@ function missingWhy(verdict: MockupRefVerdict | undefined): ExportMissing {
   }
 }
 
-/** Inlines every reference the result holds into `extract`'s Document, and answers what it could not: `omitted` in DOM
- *  order (a stylesheet's own references where the stylesheet is used), and `why`, the reason by the reference as written
- *  on the page, for the `alt` of an image. */
+/** One built use of a file: its `data:` URL, and the repo path of every file whose bytes that URL holds (the file itself,
+ *  and for a stylesheet the files nested inside it that it inlined). */
+interface BuiltUse { readonly url: string; readonly files: readonly string[] }
+
+/** Inlines every reference the result holds into `extract`'s Document, and answers what it could not: `omitted`, each
+ *  asset NONE of whose uses was written into the Document (repo path, or the reference as written where it does not
+ *  resolve), once, in DOM order; a file with one use written and another cut is inlined, not omitted. And `why`, the
+ *  reason by the reference as written on the page, for the `alt` of an image. */
 function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { readonly omitted: readonly string[]; readonly why: ReadonlyMap<string, ExportMissing> } {
   const { plan } = assets;
   const project = plan.context.project;
@@ -271,18 +278,20 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
     const key = fileKeyOf(row.ref);
     if (key !== null && !first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
   }
-  const omitted = new Set<string>();
+  const seen = new Set<string>(); // every asset a use of which was cut or could not be built, first seen first
+  const written = new Set<string>(); // every asset a use of which was written into the Document
   const why = new Map<string, ExportMissing>();
   const omit = (ref: MockupRef, row: MockupAssetRow | undefined): void => {
     if (ref.kind === 'script' || ref.kind === 'module') return;
     if (row?.verdict.v === 'kept' || ref.raw.trim() === '') return;
-    omitted.add(labelOf(ref));
+    seen.add(labelOf(ref));
     if (ref.depth === 0 && !why.has(ref.raw)) why.set(ref.raw, missingWhy(row?.verdict));
   };
 
-  const built = new Map<string, string>();
-  /** One use of a file at nesting depth `depth`: its `data:` URL (the row's MIME), or null when it is not inlined. */
-  const build = (row: MockupAssetRow, depth: number): string | null => {
+  const built = new Map<string, BuiltUse>();
+  /** One use of a file at nesting depth `depth`: its `data:` URL (the row's MIME) and the files that URL holds, or null when
+   *  it is not inlined. */
+  const build = (row: MockupAssetRow, depth: number): BuiltUse | null => {
     if (row.verdict.v !== 'inline') return null;
     const key = fileKeyOf(row.ref);
     const canon = key === null ? undefined : first.get(key);
@@ -290,27 +299,33 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
     const asset = assets.assets.get(docsApi.file(project, canon.verdict.pin));
     if (asset === undefined) return null;
     const mime = canon.verdict.mime;
+    const path = docRepoPath(canon.verdict.pin.section, canon.verdict.pin.path);
     if (canon.verdict.kind !== 'css') {
       const known = built.get(key);
       if (known !== undefined) return known;
-      const url = `data:${mime};base64,${base64Of(asset.bytes)}`;
-      built.set(key, url);
-      return url;
+      const use = { url: `data:${mime};base64,${base64Of(asset.bytes)}`, files: [path] };
+      built.set(key, use);
+      return use;
     }
     const at = `${key}@${depth}`;
     const known = built.get(at);
     if (known !== undefined) return known;
     const { tokens, refs } = scanCssBytesRefs(asset.bytes, canon.ref);
     const deep = depth + 1 <= MOCKUP_MAX_CSS_DEPTH;
+    const files = new Set<string>([path]);
     const nested = refs.map((r) => {
       const child = rowByKey.get(r.key);
-      const url = deep && child !== undefined ? build(child, depth + 1) : null;
-      if (url === null) omit(r, child);
-      return url;
+      const use = deep && child !== undefined ? build(child, depth + 1) : null;
+      if (use === null) omit(r, child);
+      else for (const f of use.files) files.add(f);
+      return use?.url ?? null;
     });
-    const url = `data:${mime};base64,${base64Of(applyEdits(asset.bytes, sheetEdits(asset.bytes, tokens, (i) => nested[i] ?? null, depth)))}`;
-    built.set(at, url);
-    return url;
+    const use = {
+      url: `data:${mime};base64,${base64Of(applyEdits(asset.bytes, sheetEdits(asset.bytes, tokens, (i) => nested[i] ?? null, depth)))}`,
+      files: [...files],
+    };
+    built.set(at, use);
+    return use;
   };
 
   const replacements = new Map<string, string>();
@@ -319,20 +334,26 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
   for (const ref of extract.refs) {
     if (ref.kind === 'script' || ref.kind === 'module') continue;
     const row = rowByKey.get(ref.key);
-    let url = cut || row === undefined ? null : build(row, 0);
-    if (url !== null && spent + url.length > DOCS_EXPORT_MAX_BYTES) {
+    let use = cut || row === undefined ? null : build(row, 0);
+    if (use !== null && spent + use.url.length > DOCS_EXPORT_MAX_BYTES) {
       cut = true;
-      url = null;
+      // Nothing of a cut use is written: a stylesheet's nested files go out with it, unless another use wrote them.
+      for (const f of use.files) seen.add(f);
+      use = null;
     }
-    if (url === null) {
+    if (use === null) {
       omit(ref, row);
     } else {
-      spent += url.length;
-      replacements.set(ref.key, url);
+      spent += use.url.length;
+      replacements.set(ref.key, use.url);
+      for (const f of use.files) written.add(f);
     }
   }
   extract.apply(replacements);
-  return { omitted: [...omitted], why };
+  // An admitted file no use of which was reached (a nested file of a stylesheet that was cut before it was built, or whose
+  // bytes the result does not hold) is not written either.
+  for (const { verdict } of plan.rows) if (verdict.v === 'inline') seen.add(docRepoPath(verdict.pin.section, verdict.pin.path));
+  return { omitted: [...seen].filter((label) => !written.has(label)), why };
 }
 
 /** An `img` or `input[type=image]` whose `src` is still not `data:` was not inlined: it takes the closed missing sentence
