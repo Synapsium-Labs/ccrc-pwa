@@ -62,6 +62,7 @@ import * as portfolio from './portfolioStore.js';
 import * as answerMarks from './answerMarkStore.js';
 import * as collisions from './claimCollisions.js';
 import * as pairs from './programmePairsStore.js';
+import * as programmeFacts from './programmeFactsStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -11303,6 +11304,10 @@ export class CoordStore {
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
   overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
   markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
+  insertRemaining(program: string, byId: string, statement: programmeFacts.NewRemaining, edges: readonly programmeFacts.NewEdge[], build: string | null, now: number): programmeFacts.InsertRemainingResult { return programmeFacts.insertRemaining(this.db, program, byId, statement, edges, build, now); }
+  remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
+  openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
+  edgeTargetCheck(slug: string, target: programmeFacts.EdgeTarget): { ok: true } | { ok: false; detail: string } { return programmeFacts.edgeTargetCheck(this.db, slug, target); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

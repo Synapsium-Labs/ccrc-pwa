@@ -94,6 +94,10 @@ const LINKING_SRC = read('server/src/linking/routes.ts');
  *  `POST /api/coord/programmes/:slug/calls`, a box-token machine lane. Handled like the ledgers' file: registered from
  *  `registerCoordRoutes`, written in a file of its own, so a scan of `coord/routes.ts` alone would not see it. */
 const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
+/** A further file that registers routes and lane source (Overlord W2 remaining work A): the remaining-work door's one route,
+ *  `POST /api/coord/programmes/:slug/remaining`, a box-token machine lane. Handled like the call record's file: registered from
+ *  `registerCoordRoutes`, written in a file of its own, so a scan of `coord/routes.ts` alone would not see it. */
+const REMAINING_SRC = read('server/src/coord/programmeRemainingRoute.ts');
 /** The TWELFTH file that registers routes and the ninth lane source (D-8181): the plan verbs' seven. `plan show` is a session-or-token
  *  read and the six writes are box-token lanes, every one consulting `checkMailToken` in its own registration. */
 const PLAN_SRC = read('server/src/coord/planRoutes.ts');
@@ -221,12 +225,13 @@ const LEDGER_LANES = lanesIn(LEDGER_SRC);
 const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
 const LINKING_LANES = lanesIn(LINKING_SRC);
 const CALLS_LANES = lanesIn(CALLS_SRC);
+const REMAINING_LANES = lanesIn(REMAINING_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
 
 /** A named `new Set([...])` literal in `coord-pause-route.test.ts`, read from the
  *  file that decides it rather than retyped — the same literal
@@ -377,7 +382,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a, the probes piece: the probe door's two lanes in the continuity file: eighty-four machine lanes in all.
   'eighty-three', 'eighty-four',
   // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
-  'eighty-five'];
+  'eighty-five',
+  // Overlord W2 remaining work A: POST /api/coord/programmes/:slug/remaining, a box-token lane in the remaining-work door's file: eighty-six machine lanes in all.
+  'eighty-six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -531,7 +538,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -764,6 +771,12 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
         .map((r) => r.key);
     })();
     expect(requireSites.length, 'the outside-the-prefixes scan collapsed').toBeGreaterThan(2);
+    // The programme doors written in files of their own (the call record's, D-8126; the remaining-work door's, Overlord W2)
+    // are requireMailToken lanes outside both prefixes too, which the scan of `coord/routes.ts` above cannot see: each is named.
+    expect([...CALLS_LANES, ...REMAINING_LANES]).toEqual(['POST /api/coord/programmes/:slug/calls', 'POST /api/coord/programmes/:slug/remaining']);
+    for (const key of [...CALLS_LANES, ...REMAINING_LANES]) {
+      expect(bullet, `the bullet does not name ${key}, a requireMailToken lane in a file of its own`).toContain(`\`${key}\``);
+    }
     for (const key of requireSites) {
       // `toContain` on a bare key would let a LONGER sibling satisfy a shorter
       // one — `POST /api/claims` is a substring of `POST /api/claims/:id/release`
