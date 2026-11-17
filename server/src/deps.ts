@@ -27,6 +27,7 @@ import type { OperatorModelStore } from './operatorModel/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
 import type { PlanSync } from './linear/planSync.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
+import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { WatcherCoordPort } from './coord/ports.js';
@@ -210,6 +211,9 @@ export interface Deps {
   /** The weekly replay quiz lane's port (Overlord W1a, `continuity/quizStore.ts#quizLanePortOf`), built once in `index.ts`.
    *  Absent (a test, a script): the lane does not run. */
   quiz?: QuizLanePort;
+  /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
+   *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
+  decisions?: DecisionDeps;
   /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
   planSync?: PlanSync | null;
   /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
