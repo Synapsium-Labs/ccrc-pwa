@@ -26,13 +26,13 @@ import { useDocsHighlightStore } from '../lib/highlighterContext';
 import { onAuthRegained } from '../lib/auth';
 import { navigate } from '../lib/router';
 import { DocsAssetContext } from './DocImage';
-import { DOC_NOT_UTF8_NOTE, docMarkdownSource, mib } from './DocMarkdown';
+import { DOC_NOT_UTF8_NOTE, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
 import { GATE_BODY, usePublishExportBody, type ExportBody, type MockupExportAssets, type MockupLoadEnd } from './exportBody';
 import { DocsPageLink } from './DocsTreeView';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, fillSentence, pluralS,
+  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, fillSentence, kib, pluralS,
 } from './docsText';
 import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
@@ -544,7 +544,7 @@ export function MockupView(p: MockupViewProps): ReactNode {
         <SourceActions
           text={text} download={p.download}
           lead={(
-            <Action onClick={() => setTapped(true)}>{fillSentence(MOCKUP_TEXT.render, { size: mib(show.size) })}</Action>
+            <Action onClick={() => setTapped(true)}>{fillSentence(MOCKUP_TEXT.render, { size: kib(show.size) })}</Action>
           )}
         />
       </div>

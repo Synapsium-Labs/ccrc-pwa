@@ -257,7 +257,8 @@ describe('the size gate (M5.22; base 5.6.2 step 3)', () => {
   it('1 048 577 bytes shows "Render mockup · …" and constructs no parser until tapped, then one', async () => {
     const m = mount({ html: '<p>a</p>', size: 1_048_577 });
     const go = button(/^Render mockup · /);
-    expect(go.textContent).toBe('Render mockup · 1.0 MiB');
+    // Base 5.6.2 step 3 says "Render mockup · N KiB" (review M6); 1 048 577 bytes is 1025 KiB, rounded up as `kib` does.
+    expect(go.textContent).toBe('Render mockup · 1025 KiB');
     expect(button('Source')).toBeInTheDocument();
     expect(button('Download')).toBeInTheDocument();
     await flush();
