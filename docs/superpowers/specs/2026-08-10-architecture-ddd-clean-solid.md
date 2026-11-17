@@ -112,11 +112,15 @@ written. That is the whole DDD argument, measured rather than asserted.
 11. **Operator Model** (Overlord W1, the W1 index's question 4) — `server/src/operatorModel/` and its vocabulary,
    `shared/operatorMessages.ts`: the operator's private store, `operator-model.db`, which holds the operator's messages to
    the designated session and the read ledger of every read an Overlord door serves, and the privacy journal that keeps a
-   message id from being issued twice. Language: **message** (one row the operator's console sent), **move** (a change of
+   message id from being issued twice; and, since Overlord W2's private names B, the operator's uploaded private-name list
+   (keyed hashes only, its key in the operator-secrets store's `.server` slot), its decider `nameListState`, its one reader
+   `readPrivateNameList` and its two doors (`nameListRoutes.ts`). Language: **message** (one row the operator's console sent), **move** (a change of
    a message's state, by the message moves table), **settlement** (cited, acknowledged, or marked), **read line** (one
-   read a door served), **privacy record** (one line of the privacy journal). Allowed dependencies: L0
-   (`shared/operatorMessages.ts`, `refusal.ts`, `utf8.ts`, `api.ts`'s types); K's `sqliteFile.ts`, `chainedJournal.ts`,
-   `canonical.ts`, `appendOnlyFile.ts` and `chainedJournalFile.ts`, and the `Clock`; context 5's `coord/tx.ts`, a type
+   read a door served), **privacy record** (one line of the privacy journal), **name list** (the operator's uploaded
+   private names, stored as entries under the server's key, the canary first). Allowed dependencies: L0
+   (`shared/operatorMessages.ts`, `privateNames.ts`, `private-names.mjs`, `refusal.ts`, `utf8.ts`, `api.ts`'s types); K's `sqliteFile.ts`, `chainedJournal.ts`,
+   `canonical.ts`, `appendOnlyFile.ts` and `chainedJournalFile.ts`, and the `Clock` and `Entropy`; context 5's `coord/tx.ts`,
+   the operator-secrets store's `.server` slot API and its slot serialiser (`coord/ledgersSecrets.ts`), a type
    from `coord/stall.ts` (the turn marker's words) and, in its L4 files, `queueSystemMail` (`coord/rundefsTx.ts`), the
    operator mark writer and `CoordStore`'s `hasMailWithSubject`; context 1's account gate (`accounts/gate.ts`,
    `accounts/audit.ts`) and the egress mask (`SecretMasker`), at the route's act; the designation's reader. Nothing

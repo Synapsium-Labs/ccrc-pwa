@@ -5,6 +5,7 @@
 // - `operator_messages` rows are inserted only by `recordMessage`, and their state and stamps change only through
 //   `moveMessage`, which asks `messageMove` (L1) first and refuses what it refuses;
 // - read-ledger lines are written only by `recordRead`;
+// - the private-name list (`private_name_list`, `private_name_entries`) is written only by `replacePrivateNames`;
 // - the privacy journal is appended only through the issuer `recordMessage` calls inside its transaction (and, from
 //   Task 3, by the store's open, which re-anchors it).
 // No transaction spans `coord.db` and this file: a caller that also writes `coord.db` commits here first.
@@ -19,6 +20,7 @@ import {
   type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadLine,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
+import { isNameListMode, type NameListMode } from '../../../shared/privateNames.js';
 import { chainedTailHealPlan, type ChainedTail } from '../chainedJournal.js';
 import { chainedJournalFileAt, type ChainedFileSeen, type ChainedJournalFile } from '../chainedJournalFile.js';
 import { openOperatorModelDb } from './db.js';
@@ -73,6 +75,17 @@ export interface MessageRecorded {
    *  written. */
   readonly replay: boolean;
 }
+
+/** One entry of the uploaded name list as the store holds it: the shape `entryOf` makes (`shared/private-names.mjs`), keyed
+ *  hashes and a token count, never a name. */
+export interface NameListEntryRow { readonly h: string; readonly f: string; readonly n: number; readonly mode: NameListMode }
+/** The name list as the store holds it: never uploaded, or the list with its time, its rows, its generation and its entries. */
+export type PrivateNamesRead =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'list'; readonly uploadedAt: number; readonly rows: number; readonly generation: number; readonly entries: readonly NameListEntryRow[] };
+const HASH32 = /^[0-9a-f]{32}$/;
+const isEntryRow = (e: NameListEntryRow): boolean => typeof e === 'object' && e !== null && typeof e.h === 'string' && HASH32.test(e.h)
+  && typeof e.f === 'string' && HASH32.test(e.f) && Number.isSafeInteger(e.n) && e.n >= 1 && isNameListMode(e.mode);
 
 /** The column list every row read names: `SELECT *` is banned, so an unknown column a later build adds is ignored. */
 const ROW_COLUMNS = 'id, at, term, state, text, cut, sha256, queuedAt, deliveredAt, pickedUpAt, settledAt, settledBy, spentAt';
@@ -195,6 +208,53 @@ export class OperatorModelStore {
     } catch (err) {
       return { ok: false, error: 'write-failed', detail: message(err) };
     }
+  }
+
+  /** The one writer of the uploaded name list (Overlord W2, private names B): deletes every entry, inserts `entries` in their
+   *  order, and writes the list row with its generation raised, in one transaction, so a failure leaves the previous list and
+   *  generation whole. `entries` is what the upload door built under the server's key, the canary first; never a name. */
+  replacePrivateNames(entries: readonly NameListEntryRow[], rows: number, at: number): StoreWrite<{ readonly generation: number }> {
+    if (!Array.isArray(entries) || entries.length === 0) return { ok: false, error: 'refused', detail: 'entries: the canary at least' };
+    const bad = entries.findIndex((e) => !isEntryRow(e));
+    if (bad >= 0) return { ok: false, error: 'refused', detail: `entries[${bad}]: not an entry of the matcher's shape` };
+    if (!isCount(rows)) return { ok: false, error: 'refused', detail: 'rows: not a non-negative safe integer' };
+    if (!isCount(at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
+    if (!this.db.isOpen) return { ok: false, error: 'not-open', detail: 'the private store is not open' };
+    try {
+      return tx(this.db, () => {
+        const prior = this.db.prepare('SELECT generation FROM private_name_list WHERE id = 1').get() as { generation: number } | undefined;
+        const generation = (prior?.generation ?? 0) + 1;
+        this.db.prepare('DELETE FROM private_name_entries').run();
+        const put = this.db.prepare('INSERT INTO private_name_entries (pos, h, f, n, mode) VALUES (?, ?, ?, ?, ?)');
+        entries.forEach((e, pos) => { put.run(pos, e.h, e.f, e.n, e.mode); });
+        this.db.prepare('INSERT INTO private_name_list (id, uploadedAt, rows, generation) VALUES (1, ?, ?, ?) '
+          + 'ON CONFLICT (id) DO UPDATE SET uploadedAt = excluded.uploadedAt, rows = excluded.rows, generation = excluded.generation')
+          .run(at, rows, generation);
+        return { ok: true as const, value: { generation } };
+      });
+    } catch (err) {
+      return { ok: false, error: 'write-failed', detail: message(err) };
+    }
+  }
+
+  /** The name list: `none` when never uploaded, or the list with its entries in order. A list row with no entries cannot be
+   *  written (the canary is always first), and an entry of another shape or mode is one this build cannot read, so either
+   *  reads `unmeasured`, never a list a check would trust. */
+  privateNamesRead(): StoreRead<PrivateNamesRead> {
+    return this.read((): PrivateNamesRead => {
+      const l = this.db.prepare('SELECT uploadedAt, rows, generation FROM private_name_list WHERE id = 1').get() as
+        { uploadedAt: number; rows: number; generation: number } | undefined;
+      if (l === undefined) return { kind: 'none' };
+      const entries = this.db.prepare('SELECT h, f, n, mode FROM private_name_entries ORDER BY pos').all() as unknown as NameListEntryRow[];
+      if (entries.length === 0) throw new Error('the name list has a row and no entries');
+      if (!entries.every(isEntryRow)) throw new Error('the name list holds an entry this build cannot read');
+      return { kind: 'list', uploadedAt: l.uploadedAt, rows: l.rows, generation: l.generation, entries: entries.map((e) => ({ h: e.h, f: e.f, n: e.n, mode: e.mode })) };
+    });
+  }
+
+  /** The list's generation alone (one row), or `none` when never uploaded: the reader's cache key. */
+  privateNamesGeneration(): StoreRead<number | 'none'> {
+    return this.read(() => (this.db.prepare('SELECT generation FROM private_name_list WHERE id = 1').get() as { generation: number } | undefined)?.generation ?? 'none');
   }
 
   messageById(id: number): StoreRead<OperatorMessageRow | 'absent'> {

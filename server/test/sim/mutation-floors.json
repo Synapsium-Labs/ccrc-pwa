@@ -149,5 +149,6 @@
   "shared/private-names.mjs#hashEntry": 1,
   "shared/private-names.mjs#privateNameHits": 1,
   "server/src/coord/doneTests.ts#parseDoneTest": 1,
-  "server/src/coord/doneTests.ts#targetVerdict": 1
+  "server/src/coord/doneTests.ts#targetVerdict": 1,
+  "server/src/operatorModel/nameListState.ts#nameListState": 1
 }
