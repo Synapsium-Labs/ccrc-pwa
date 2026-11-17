@@ -17,6 +17,7 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 afterEach(() => removeTmpFixtures());
 
 const HEAD_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_authority_head'))!;
+const DESIGNATION_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_designation'))!;
 const WIDEN: OverlordAuthorityMove = { kind: 'authority-rung', opKey: 'op-w', from: 'advise', to: 'full' };
 const NARROW: OverlordAuthorityMove = { kind: 'authority-rung', opKey: 'op-n', from: 'full', to: 'advise' };
 const COHERENT: CoherenceVerdict = { kind: 'coherent' };
@@ -37,6 +38,7 @@ function fixture(): { dir: string; db: DatabaseSync; leaf: string } {
   const dir = mkTmp('ccrc-overlord-guard-');
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
+  db.exec(DESIGNATION_MIGRATION); // `OVERLORD_AUTHORITY_TABLES` lists its table, so boot coherence reads it beside the head row
   return { dir, db, leaf: path.join(dir, OVERLORD_AUTHORITY_BASENAME) };
 }
 
