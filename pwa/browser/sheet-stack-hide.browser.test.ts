@@ -4,12 +4,17 @@
 //   with all three open, in the same task as the Cancel (the confirm still animating out), and once the confirm has
 //   gone: only the sheet directly under the confirm is announced as it closes, and Session actions and the page stay
 //   hidden behind it (C38's rule, review 2287).
-// - Review 2310 F2, no stack, in the app: the session screen's menu sheet, whose Move to another account row closes it
-//   and opens the swap sheet in one commit (`SessionFlows`), over a chat holding a code block, whose Copy label is a
-//   live region (`markdown.tsx`): the aria-hidden package keeps the path to it visible and marks its siblings, an
-//   element the page hid itself among them.
-// In both, every element the page hid itself before the first sheet opened is still hidden at each read and after every
-// sheet has gone (Task C40: the sheet never lifts an aria-hidden it did not set).
+// - Review 2310 F2 and review 2323 F1, no stack, in the app: the session screen's menu sheet, whose Move to another
+//   account row closes it and opens the swap sheet in one commit (`SessionFlows`; the swap sheet is rendered BEFORE the
+//   menu sheet in the tree). The page's containers the menu's Radix hid are announced as soon as the swap sheet starts to
+//   close, as on main, and the focus Radix gives back to More is not inside a hidden container. Two transcripts: one
+//   whose code block holds a live region (`markdown.tsx`'s Copy label: the aria-hidden package keeps the path to it
+//   visible and marks its siblings, so an element the page hid itself is planted beside the code block), and one with
+//   none (the whole app root is marked; the element is planted at the body's level).
+// In all of them, every element the page hid itself before the first sheet opened is still hidden at each read and after
+// every sheet has gone (Task C40: the sheet never lifts an aria-hidden it did not set). The page is read as its hidden
+// containers (every `aria-hidden` element outside the dialogs that the page did not hide itself, the focus guards aside),
+// not as `main`'s ancestors, which a live region inside `main` keeps visible (review 2323 F3).
 // Run: `( cd pwa && CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts
 // browser/sheet-stack-hide.browser.test.ts )`.
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -56,12 +61,13 @@ const FIXTURE: AppFixture = {
 };
 
 const TS = new Date((NOW - 600) * 1000).toISOString();
-/** The session screen's transcript: one answer holding a code block, whose Copy label is a live region. */
-const FRAMES = (): object[] => [
+/** The session screen's transcript: one answer holding a code block, whose Copy label is a live region, or plain text. */
+const FRAMES = (live: boolean): object[] => [
   { type: 'backlog', uuid: 'u-1', offset: 1, file: '/w/t.jsonl', missing: false, searchComplete: true, fileMeasured: true,
     events: [
       { kind: 'user', uuid: 'q1', ts: TS, text: 'show the command' },
-      { kind: 'assistant', uuid: 'a1', ts: TS, text: 'Here it is:\n\n```sh\nnpm test\n```\n\nRun it from the package.' },
+      { kind: 'assistant', uuid: 'a1', ts: TS,
+        text: live ? 'Here it is:\n\n```sh\nnpm test\n```\n\nRun it from the package.' : 'Run npm test from the package.' },
     ] },
   { type: 'status', status: 'idle', statusUpdatedAt: null },
 ];
@@ -81,8 +87,13 @@ interface Layers {
   /** Each mounted dialog in document order (the order they opened): its title, its state, and whether it or an ancestor
    *  is aria-hidden. */
   readonly dialogs: readonly { readonly title: string; readonly state: string | null; readonly hidden: boolean }[];
-  /** Whether the page's own content (`main`) or an ancestor of it is aria-hidden. */
+  /** The page's hidden containers: every `aria-hidden="true"` element outside the dialogs (neither inside one nor holding
+   *  one) that the page did not hide itself before the first sheet opened, Radix's focus guards aside. */
+  readonly pageMarks: readonly string[];
+  /** Whether any of those is hidden: the page is aria-hidden behind a dialog. */
   readonly page: boolean;
+  /** Whether the focused element (when it is not the body and not in a dialog) sits inside a hidden container. */
+  readonly focusHidden: boolean;
   /** The elements hidden before the first sheet opened that are no longer `aria-hidden="true"`. */
   readonly lostOwn: readonly string[];
 }
@@ -103,9 +114,16 @@ const read = (page: Page): Promise<Layers> => page.evaluate(() => {
     title: (d.querySelector('h2')?.textContent ?? '').trim(), state: d.getAttribute('data-state'), hidden: up(d),
   }));
   const own = (window as unknown as { __c40Own: Element[] }).__c40Own;
-  const lostOwn = own.filter((el) => el.isConnected && el.getAttribute('aria-hidden') !== 'true')
-    .map((el) => `${el.tagName}.${el.getAttribute('class') ?? ''}`.slice(0, 80));
-  return { dialogs, page: up(document.querySelector('main')), lostOwn };
+  const name = (el: Element): string => `${el.tagName}.${el.getAttribute('class') ?? ''}`.slice(0, 80);
+  const lostOwn = own.filter((el) => el.isConnected && el.getAttribute('aria-hidden') !== 'true').map(name);
+  const open = [...document.querySelectorAll('[role="dialog"]')];
+  const pageMarks = [...document.querySelectorAll('[aria-hidden="true"]')]
+    .filter((el) => !own.includes(el) && !el.hasAttribute('data-radix-focus-guard')
+      && !open.some((d) => d.contains(el) || el.contains(d)))
+    .map(name);
+  const active = document.activeElement;
+  const focusHidden = active !== null && active !== document.body && !open.some((d) => d.contains(active)) && up(active);
+  return { dialogs, pageMarks, page: pageMarks.length > 0, focusHidden, lostOwn };
 });
 
 describe('Session actions, Swap account, its confirm, Cancel (Task C40, review 2310 F4)', () => {
@@ -160,58 +178,65 @@ describe('Session actions, Swap account, its confirm, Cancel (Task C40, review 2
   }
 });
 
-describe('the session menu\'s Move to another account, over a chat with a live region (Task C40, review 2310 F2)', () => {
+describe('the session menu\'s Move to another account (Task C40, review 2310 F2, review 2323 F1 and F3)', () => {
   for (const view of VIEWS) {
-    it(`${view.skin}, ${view.width}px: the swap sheet the menu hands to never lifts an element the page hid itself`, async () => {
-      const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
-      try {
-        await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
-          servedSocket(ws);
-          for (const frame of FRAMES()) ws.send(JSON.stringify(frame));
-        });
-        await page.goto(`${server!.origin}/s/${SESSION.id}`);
-        await page.waitForSelector('.chat-item .code-block [aria-live]', { timeout: 30_000 });
-        await page.getByRole('button', { name: 'More' }).waitFor();
-        // Measured (Task C40): in this app, with this transcript, the menu marks no element the page hid itself, so an
-        // element the page hid itself is planted where the shape needs one, beside the path to the live region (a direct
-        // child of the answer that holds the code block), as an icon beside a message's blocks would be.
-        await page.evaluate(() => {
-          const planted = document.createElement('span');
-          planted.setAttribute('aria-hidden', 'true');
-          planted.className = 'c40-planted';
-          planted.textContent = '*';
-          document.querySelector('.chat-item .code-block')!.parentElement!.appendChild(planted);
-        });
-        const remembered = await rememberOwn(page);
-        expect(remembered, 'CONTROL: the page hides some elements itself (icons, decoration)').toBeGreaterThan(0);
+    for (const live of [true, false]) {
+      const shape = live ? 'a chat with a live region' : 'a chat with no live region';
+      it(`${view.skin}, ${view.width}px, ${shape}: the page is announced as the swap sheet closes; nothing the page hid is lifted`, async () => {
+        const { page, ctx, errors } = await openApp(browser!, view, FIXTURE);
+        try {
+          await ctx.routeWebSocket(/\/ws\/session\//, (ws) => {
+            servedSocket(ws);
+            for (const frame of FRAMES(live)) ws.send(JSON.stringify(frame));
+          });
+          await page.goto(`${server!.origin}/s/${SESSION.id}`);
+          await page.waitForSelector(live ? '.chat-item .code-block [aria-live]' : '.chat-item .msg-assist', { timeout: 30_000 });
+          await page.getByRole('button', { name: 'More' }).waitFor();
+          // Measured (Task C40): with the live-region transcript the menu marks no element the page hid itself, so one is
+          // planted where the shape needs it: beside the path to the live region (a direct child of the answer holding the
+          // code block), or, with no live region, at the body's level, beside the app root the menu marks.
+          await page.evaluate((withLive) => {
+            const planted = document.createElement('span');
+            planted.setAttribute('aria-hidden', 'true');
+            planted.className = 'c40-planted';
+            planted.textContent = '*';
+            const at = withLive ? document.querySelector('.chat-item .code-block')!.parentElement! : document.body;
+            at.appendChild(planted);
+          }, live);
+          const remembered = await rememberOwn(page);
+          expect(remembered, 'CONTROL: the page hides some elements itself (icons, decoration)').toBeGreaterThan(0);
 
-        await page.getByRole('button', { name: 'More' }).click();
-        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
-        await page.waitForTimeout(300);
-        // The shape review 2310 F2 needs: an element the page hid itself that the menu's Radix has marked, so the
-        // aria-hidden package takes it as the page's and will never put it back once anything lifts it.
-        const marked = await page.evaluate(() => (window as unknown as { __c40Own: Element[] }).__c40Own
-          .filter((el) => el.isConnected && el.hasAttribute('data-aria-hidden')).length);
-        expect(marked, 'CONTROL: the menu marked an element the page hid itself (the path to the live region)').toBeGreaterThan(0);
+          await page.getByRole('button', { name: 'More' }).click();
+          await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+          await page.waitForTimeout(300);
+          // The shape review 2310 F2 needs: an element the page hid itself that the menu's Radix has marked, so the
+          // aria-hidden package takes it as the page's and will never put it back once anything lifts it.
+          const marked = await page.evaluate(() => (window as unknown as { __c40Own: Element[] }).__c40Own
+            .filter((el) => el.isConnected && el.hasAttribute('data-aria-hidden')).length);
+          expect(marked, 'CONTROL: the menu marked an element the page hid itself').toBeGreaterThan(0);
 
-        await page.getByRole('button', { name: 'Move to another account' }).click();
-        await page.locator('.sheet-body .acct-suggested').waitFor();
-        expect((await read(page)).lostOwn, 'an element the page hid itself was lifted as the menu handed to the swap sheet')
-          .toEqual([]);
-        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+          await page.getByRole('button', { name: 'Move to another account' }).click();
+          await page.locator('.sheet-body .acct-suggested').waitFor();
+          await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(1);
+          await page.waitForTimeout(300);
+          const swapOpen = await read(page);
+          expect(swapOpen.page, 'CONTROL: the page is hidden while the swap sheet is open').toBe(true);
+          expect(swapOpen.lostOwn, 'an element the page hid itself was lifted as the menu handed to the swap sheet').toEqual([]);
 
-        await page.keyboard.press('Escape');
-        const closing = await read(page);
-        expect(closing.dialogs.map((d) => d.state), 'CONTROL: the swap sheet is animating out').toEqual(['closed']);
-        expect(closing.page, 'the page is still aria-hidden while the swap sheet closes').toBe(false);
-        expect(closing.lostOwn, 'the closing swap sheet lifted an element the page hid itself').toEqual([]);
-        await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(0);
-        await page.waitForTimeout(100);
-        const after = await read(page);
-        expect(after.page, 'the page stayed hidden after the swap sheet left').toBe(false);
-        expect(after.lostOwn, 'an element the page hid itself was left announced for good').toEqual([]);
-        expect(errors).toEqual([]);
-      } finally { await ctx.close(); }
-    });
+          await page.keyboard.press('Escape');
+          const closing = await read(page);
+          expect(closing.dialogs.map((d) => d.state), 'CONTROL: the swap sheet is animating out').toEqual(['closed']);
+          expect(closing.pageMarks, 'the page\'s containers are still aria-hidden while the swap sheet closes').toEqual([]);
+          expect(closing.focusHidden, 'the focus is inside an aria-hidden container while the swap sheet closes').toBe(false);
+          expect(closing.lostOwn, 'the closing swap sheet lifted an element the page hid itself').toEqual([]);
+          await expect.poll(async () => (await read(page)).dialogs.length, { timeout: 10_000 }).toBe(0);
+          await page.waitForTimeout(100);
+          const after = await read(page);
+          expect(after.pageMarks, 'the page stayed hidden after the swap sheet left').toEqual([]);
+          expect(after.lostOwn, 'an element the page hid itself was left announced for good').toEqual([]);
+          expect(errors).toEqual([]);
+        } finally { await ctx.close(); }
+      });
+    }
   }
 });
