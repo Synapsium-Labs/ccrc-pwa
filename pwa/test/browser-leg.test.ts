@@ -237,4 +237,11 @@ describe("the parse gates print their medians in CI, not only on request (C2's f
     expect(source.match(/process\.env\[/g) ?? []).toEqual([]);
     expect(source.match(/process\.env\.\w/g) ?? []).toEqual([]);
   });
+
+  it('the switch guards what prints: the engine line, every gate\'s line and the control\'s line (review of the first item, nit 2)', () => {
+    const source = readFileSync(path.join(PWA, 'browser', 'mockup-parse.browser.test.ts'), 'utf8');
+    expect(source.match(/if \(MEASURE\) process\.stderr\.write\(`M5B8-MEASURE engine /g) ?? []).toHaveLength(1);
+    // gate() reports every gating fixture; the E13 control reports its own reading.
+    expect(source.match(/if \(MEASURE\) report\(/g) ?? []).toHaveLength(2);
+  });
 });
