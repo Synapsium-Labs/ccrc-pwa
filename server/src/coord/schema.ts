@@ -3560,6 +3560,21 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // The decision model's arming, host and lines (Overlord spec §3.7 H6, Table 11.1a and 11.1d; W2, plan `w2-decision-model.md`
   // Task 6). `decision_rows`, each row's switch (`off`, `shadow`, `armed`), its daily ceiling, an armed gate's line and the
   // server's hold: in `OVERLORD_AUTHORITY_TABLES`, so it is NEVER SEEDED (a row with no journal head reads `missing` at boot
@@ -3568,9 +3583,9 @@ export const MIGRATIONS: readonly string[] = [
   // here). `decision_lines`, every admitted line, newest per row and key current, with its canary and its anchors' baseline.
   // ONE writer each, in `decisionModelStore.ts`: `moveDecisionRowInTx`, `setDecisionHostInTx`, and `admitDecisionLine` with
   // `recordCanary` for the canary columns. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names
-  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90 and designation A (#2950) 91, so this is 92
-  // by position (the coordinator's standing license, 2026-11-17); whoever lands second renumbers. RE-MEASURE the slot before
-  // the PR and before merge (it must print 91 before this entry is counted):
+  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90, designation A (#2950) 91 and done tests A (#2964) 92, so this is
+  // 93 by position (the coordinator's standing license, 2026-11-17); whoever lands second renumbers. RE-MEASURE the slot
+  // before the PR and before merge (it must print 92 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
