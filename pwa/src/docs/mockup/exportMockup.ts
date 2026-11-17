@@ -14,9 +14,10 @@
 //               inlined data: URLs are bounded by `DOCS_EXPORT_MAX_BYTES` (a file over it could never be saved, and an
 //               unbounded repeat of one large sheet would exhaust memory before the builder could measure anything).
 //   3. STRIP    template, noscript (unwrapped), script, frames, objects, embed, base, `meta[http-equiv]`, every `link` but a
-//               `data:` stylesheet; every `on*` attribute and `srcdoc`, `action`, `formaction`, `ping`; `srcset` unless every
-//               candidate is `data:`; every URL attribute of the allowlist unless it is `data:` (a same-document `#` fragment
-//               stays on an SVG element other than `a` and `image`); SMIL animations that target `href`.
+//               `data:` stylesheet; every `on*` attribute and `srcdoc`, `action`, `formaction`, `ping`, `attributionsrc`;
+//               `srcset` and `imagesrcset` unless every candidate is `data:`; every URL attribute of the allowlist unless it
+//               is `data:` (a same-document `#` fragment stays on an SVG element other than `a` and `image`); SMIL
+//               animations that target `href`.
 //   4. CSS      `css.ts`'s two patterns over every style, `style` attribute, attribute holding `url(` and decoded `data:`
 //               stylesheet: a `url()` off `data:` becomes `url("data:,")`, such an `@import` is dropped. The forms the scanner
 //               misses (`image-set()`, CSS escapes inside `url`) rest on the CSP (M5.B10).
@@ -376,8 +377,10 @@ const URL_ATTRIBUTES: ReadonlySet<string> = new Set([
   'archive', 'background', 'cite', 'classid', 'codebase', 'data', 'href', 'icon', 'itemid', 'longdesc', 'manifest',
   'poster', 'profile', 'src', 'usemap', 'xlink:href',
 ]);
-/** Attributes that act when the page is opened or submitted: always dropped. */
-const ACTIVE_ATTRIBUTES: ReadonlySet<string> = new Set(['srcdoc', 'action', 'formaction', 'ping']);
+/** Attributes that act when the page is opened or submitted, or that ask the browser to report to a URL: always dropped. */
+const ACTIVE_ATTRIBUTES: ReadonlySet<string> = new Set(['srcdoc', 'action', 'formaction', 'ping', 'attributionsrc']);
+/** The attributes that hold a list of image candidates: `srcset`, and the `link`'s own `imagesrcset`. One rule for both. */
+const CANDIDATE_LISTS: ReadonlySet<string> = new Set(['srcset', 'imagesrcset']);
 /** The SMIL elements that can set an attribute over time. */
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(['animate', 'set', 'animateMotion', 'animateTransform']);
 const HREF_NAMES: ReadonlySet<string> = new Set(['href', 'xlink:href']);
@@ -439,7 +442,7 @@ function stripAttributes(clone: Document): void {
       const name = attr.name.toLowerCase();
       if (name.startsWith('on') || ACTIVE_ATTRIBUTES.has(name)) {
         el.removeAttributeNode(attr);
-      } else if (name === 'srcset') {
+      } else if (CANDIDATE_LISTS.has(name)) {
         if (!srcsetIsAllData(attr.value)) el.removeAttributeNode(attr);
       } else if (URL_ATTRIBUTES.has(name)) {
         const local = svg && HREF_NAMES.has(name) && isFragment(attr.value) && el.localName !== 'a' && el.localName !== 'image';

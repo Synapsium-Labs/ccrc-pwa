@@ -174,6 +174,20 @@ describe('M5.EX1: every strip step, one planted element each (base 5.6.9 Step 3 
     // known to be data:, so the attribute goes (coordinator mail 22461: the extractor's grammar, one srcset parser).
     ['a srcset whose non-data candidate has a descriptor the grammar drops', '<img id="i" srcset="data:image/png;base64,AAAA 1x, https://x.example/2.png 2q" alt="m">', '',
       (d) => { expect(d.getElementById('i')?.hasAttribute('srcset')).toBe(false); }],
+    // `imagesrcset` is the `link`'s own `srcset`: the same rule (review minor 4). The link survives as a data: stylesheet, so
+    // its attribute must not carry a request.
+    ['a kept data: stylesheet link\'s imagesrcset', '<p>p</p>',
+      '<link rel="stylesheet preload" as="image" href="data:text/css,p{}" imagesrcset="https://x.example/a.png 1x">',
+      (d) => {
+        expect(d.querySelectorAll('link[rel~="stylesheet"]')).toHaveLength(1);
+        expect(d.querySelector('link')!.hasAttribute('imagesrcset')).toBe(false);
+      }],
+    ['an img attributionsrc (a request the browser makes with the image)',
+      '<img id="i" src="data:image/png;base64,AAAA" attributionsrc="https://x.example/r" alt="i"><a id="a" href="https://link.example/a" attributionsrc="https://x.example/a">a</a>', '',
+      (d) => {
+        expect(d.getElementById('i')!.hasAttribute('src')).toBe(true);
+        expect(attrsOf(d).filter((a) => a.name === 'attributionsrc')).toEqual([]);
+      }],
     ['an SMIL href animation',
       '<svg><rect id="r" width="1" height="1"><animate attributeName="href" to="https://x.example/a"/><set attributeName="xlink:href" to="https://x.example/b"/>'
       + '<animateMotion attributeName="href" to="https://x.example/c"/><animateTransform attributeName="href" to="https://x.example/d"/>'
@@ -247,6 +261,11 @@ describe('M5.EX1: every strip step, one planted element each (base 5.6.9 Step 3 
     const d = innerOf(out.html);
     expect(d.getElementById('i')?.getAttribute('srcset')).toBe('data:image/png;base64,AAAA 1x, data:image/png;base64,BBBB 2x');
     expect(d.querySelector('link')?.getAttribute('href')).toBe('data:text/css;base64,cHtjb2xvcjpyZWR9');
+  });
+
+  it('an all-data imagesrcset on a kept data: stylesheet link stays, as an all-data srcset does (review minor 4)', async () => {
+    const { out } = await run(page('<p>x</p>', '<link rel="stylesheet preload" as="image" href="data:text/css,p{}" imagesrcset="data:image/png;base64,AAAA 1x, data:image/png;base64,BBBB 2x">'));
+    expect(innerOf(out.html).querySelector('link')?.getAttribute('imagesrcset')).toBe('data:image/png;base64,AAAA 1x, data:image/png;base64,BBBB 2x');
   });
 
   it('every other URL attribute of the allowlist is dropped unless it is data:', async () => {
