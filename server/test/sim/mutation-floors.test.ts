@@ -42,6 +42,7 @@ import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
 import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
 import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
+import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { simulate } from './run.js';
 import {
@@ -204,6 +205,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...OVERLAPS_MUTANT_SETS,
   ...PRIVATE_NAMES_MUTANT_SETS,
   ...RENEWAL_READING_MUTANT_SETS,
+  ...PLAN_PHASES_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
 };
 
