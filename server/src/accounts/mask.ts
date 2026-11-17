@@ -303,15 +303,15 @@ export interface MaskOpts {
 }
 
 /** A sliced mask's slice and the raw overlap read on each side of it (D-5995): one slice of pane history costs a few
- *  milliseconds, and the overlap is 16 KiB, so a key or a wrapped shape a cut splits is matched whole. It was what a
- *  drawer holds for one run (9 KiB), narrower than a key's rows with a colour escape on each: an 8,192-byte key at 118
- *  columns in `capture-pane -e -J`'s form (10,092 bytes) showed up to 640 key bytes when the slice boundary fell inside
- *  it, and more at 64 columns (review 2352 F2). 16 KiB holds such a key's block at every width it is joined at (11,901
- *  bytes at most, with a 19-byte colour escape on every row); a block longer than that, past about 60 bytes of escapes
- *  a row, can still show its rows beyond the overlap (D-5995). The overlap stays a bound that does not grow with the
- *  text (`secret-mask.test.ts` pins 16 KiB). */
+ *  milliseconds, and the overlap is the chain hold (`CHAIN_HELD_MAX`, 18 KiB), so a key or a wrapped shape a cut splits
+ *  is matched whole. It was what a drawer holds for one run (9 KiB), narrower than a key's rows with a colour escape on
+ *  each: an 8,192-byte key at 118 columns in `capture-pane -e -J`'s form (10,092 bytes) showed up to 640 key bytes when
+ *  the slice boundary fell inside it, and more at 64 columns (review 2352 F2). At 16 KiB a block with five escapes on
+ *  every row (17,802 bytes) still showed up to 576 key bytes; the chain hold is what the drawer holds a key's rows over,
+ *  so pane history holds the same blocks. The overlap stays a bound that does not grow with the text
+ *  (`secret-mask.test.ts` pins it). */
 const SLICE_UNITS = 64 * 1024;
-const SLICE_OVERLAP = 16 * 1024;
+const SLICE_OVERLAP = CHAIN_HELD_MAX;
 
 /** Masks `text` for every egress of session-derived text. */
 export class SecretMasker {

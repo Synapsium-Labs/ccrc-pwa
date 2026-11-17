@@ -490,6 +490,34 @@ describe('D-8710 — a key whose rows are longer than what a drawer holds for on
     }
   }, 300_000);
 
+  it('pane history: a key block of 17,802 bytes, five escapes on every row, is masked across the slice boundary (F2)', async () => {
+    // A two-column indent and five escapes before each row and five after, at 64 columns: 128 rows of 8,192 key bytes in
+    // a 17,802-byte block, longer than the 16 KiB overlap 29219c442 read on each side of a slice, so rows past it showed
+    // (up to 576 key bytes at 12 of 87 placements). The overlap is the chain hold now, which holds the block.
+    const pre = `  ${SGR}\x1b[48;2;20;20;20m\x1b[1m\x1b[3m\x1b[4m`;
+    const post = '\x1b[24m\x1b[23m\x1b[22m\x1b[49m\x1b[39m';
+    const key = keyOf(8_192, 2361);
+    const m = fingerprinted(key);
+    try {
+      const shows = leaks(key);
+      const lines: string[] = [];
+      for (let i = 0; i < key.length; i += 64) lines.push(`${pre}${key.slice(i, i + 64)}${post}`);
+      const block = `key:\n${lines.join('\n')}\ndone\n`;
+      expect(block.length).toBe(17_802);
+      const bad: string[] = [];
+      for (let filler = 64 * 1024 - block.length - 200; filler < 64 * 1024 + 200 && bad.length < 5; filler += 211) {
+        let before = '';
+        for (let i = 0; before.length < filler; i++) before += `line ${i} of ordinary output\n`;
+        const out = await m.maskTextSliced(`${before}${block}${'tail line\n'.repeat(50)}`, { rows: true });
+        const marks = count(out, SECRET_MASK);
+        if (shows(out) || marks !== lines.length) bad.push(`block at ${before.length}: ${shows(out) ? 'key bytes shown' : 'no key bytes'}, ${marks} marks`);
+      }
+      expect(bad).toEqual([]);
+    } finally {
+      m.close();
+    }
+  }, 300_000);
+
   it('a frame whose row-join candidates pass the byte budget is cut with the notice, never drawn (F4)', async () => {
     // 64 Ki of lines that each hold one 12-unit run chain every row into candidates of every held length; with 21 keys
     // held the 2 MiB the row join may hash in a frame runs out before the key after them. That frame must end in the

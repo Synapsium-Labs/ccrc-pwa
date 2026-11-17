@@ -1390,7 +1390,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     // that it does not grow with the text, the load-independent part of the per-slice cost the old wall-clock row bounded
     // (a quadratic regression such as `context: text.slice(0, at)` would otherwise pass).
     expect(overlaps.length).toBe(slices.length * 2);
-    expect(Math.max(...overlaps)).toBeLessThanOrEqual(16 * 1024);
+    expect(Math.max(...overlaps)).toBeLessThanOrEqual(18 * 1024);
     // slice, pause, slice, ..., slice: never two slices or two pauses adjacent
     expect(events.map((e) => (e === 'pause' ? 'p' : 's')).join('')).toBe(Array.from({ length: slices.length * 2 - 1 }, (_, i) => (i % 2 === 0 ? 's' : 'p')).join(''));
     expect(leaksNone(sliced, CMP)).toBe(true);
