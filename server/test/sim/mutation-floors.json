@@ -107,6 +107,7 @@
   "server/src/chainedJournal.ts#decodeChainedLine": 1,
   "server/src/chainedJournal.ts#ChainVerifier": 1,
   "server/src/chainedJournal.ts#chainedTailHealPlan": 1,
+  "server/src/chainedJournalFile.ts#verifiedHeadHolds": 1,
   "server/src/operatorModel/messages.ts#messageMove": 1,
   "server/src/operatorModel/messages.ts#deliveryStageOf": 1,
   "server/src/operatorModel/messages.ts#capMessageText": 1,
