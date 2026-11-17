@@ -396,16 +396,19 @@ describe('the inner document and the links (base 5.6.9 Steps 5 and 6)', () => {
     expect(out.html).not.toContain('link.example/never');
   });
 
-  it('a link target, and an author\'s title or alt, that holds url( keeps its real text; a style and an SVG paint attribute that hold one are still neutralised (review 2361 M1)', async () => {
+  it('a link target that holds url( keeps its real text in title, written after the strip; an author\'s title or alt that holds one is neutralised as step 4 says (review 2372 F2)', async () => {
     const { out } = await run(page(
-      '<a id="l" href="https://link.example/url(a).png">l</a><span id="t" title="see url(t.png)">t</span><img id="i" alt="url(i.png)" src="data:,">'
+      '<a id="l" href="https://link.example/url(a).png">l</a><a id="m" href="https://link.example/m" title="see url(https://x.example/t)">m</a>'
+      + '<span id="t" title="see url(t.png)">t</span><img id="i" alt="url(i.png)" src="data:,">'
       + '<div id="s" style="background:url(https://x.example/s.png)"></div><svg><rect id="r" fill="url(https://x.example/p.svg#g)"/></svg>',
     ));
     const d = innerOf(out.html);
-    expect(out.links).toEqual(['https://link.example/url(a).png']);
-    expect(d.getElementById('l')!.getAttribute('title')).toBe('https://link.example/url(a).png');
-    expect(d.getElementById('t')!.getAttribute('title')).toBe('see url(t.png)');
-    expect(d.getElementById('i')!.getAttribute('alt')).toBe('url(i.png)');
+    expect(out.links).toEqual(['https://link.example/url(a).png', 'https://link.example/m']);
+    expect(d.getElementById('l')!.getAttribute('title'), 'the target is written after step 4').toBe('https://link.example/url(a).png');
+    expect(d.getElementById('m')!.getAttribute('title'), 'the author\'s part stripped, the target after it intact')
+      .toBe('see url("data:,") (https://link.example/m)');
+    expect(d.getElementById('t')!.getAttribute('title')).toBe('see url("data:,")');
+    expect(d.getElementById('i')!.getAttribute('alt')).toBe('url("data:,")');
     expect(d.getElementById('s')!.getAttribute('style')).toContain('url("data:,")');
     expect(d.getElementById('r')!.getAttribute('fill')).toBe('url("data:,")');
     expect(out.html).not.toContain('x.example');
@@ -418,7 +421,8 @@ describe('the inner document and the links (base 5.6.9 Steps 5 and 6)', () => {
 <svg><image href="https://x.example/p.png"/><use href="https://x.example/s.svg#a"/><use href="#a"/><rect fill="url(https://x.example/g.svg#g)" style="background:url(https://x.example/b.png)"/></svg>
 <form action="https://x.example/f"><button formaction="https://x.example/b">b</button></form>
 <object data="https://x.example/o"></object><embed src="https://x.example/e"><iframe src="https://x.example/f"></iframe>
-<div style="background:url('https://x.example/q.png')" background="https://x.example/bg" onclick="x()"></div>`,
+<div style="background:url('https://x.example/q.png')" background="https://x.example/bg" onclick="x()"></div>
+<span title="url(https://x.example/t.png)">an author's title</span><img alt="see url(https://x.example/a.png)" src="data:,">`,
       `<base href="https://x.example/"><link rel="stylesheet" href="https://x.example/s.css"><link rel="preload" href="https://x.example/p">
 <meta http-equiv="refresh" content="1;url=https://x.example/"><style>@import "https://x.example/i.css"; a{background:url(https://x.example/z.png)}</style>`,
     );

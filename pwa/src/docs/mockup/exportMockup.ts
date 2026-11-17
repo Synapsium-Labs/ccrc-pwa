@@ -21,7 +21,9 @@
 //   4. CSS      `css.ts`'s two patterns over every style, `style` attribute, attribute holding `url(` and decoded `data:`
 //               stylesheet: a `url()` off `data:` becomes `url("data:,")`, such an `@import` is dropped. The forms the scanner
 //               misses (`image-set()`, CSS escapes inside `url`) rest on the CSP (M5.B10).
-//   5. LINKS    `href` and `xlink:href` off every `a` and `area`, the text kept, the target in `title` and in `links`.
+//   5. LINKS    `href` and `xlink:href` off every `a` and `area`, the text kept, the target in `title` and in `links`. The
+//               targets are taken before step 3 (which would drop the `href`) and written into `title` after step 4, so an
+//               author's `title` is neutralised as step 4 says and the target keeps its real text.
 //   6. INNER    the CSP meta first in `<head>`, then the serialised clone.
 //
 // This inliner is LEGITIMATELY DIFFERENT from `buildMockupSrcdoc`'s (`load.ts`), not a second copy of it (CLAUDE.md,
@@ -432,10 +434,6 @@ const CANDIDATE_LISTS: ReadonlySet<string> = new Set(['srcset', 'imagesrcset']);
 /** The SMIL elements that can set an attribute over time. */
 const SMIL_ELEMENTS: ReadonlySet<string> = new Set(['animate', 'set', 'animateMotion', 'animateTransform']);
 const HREF_NAMES: ReadonlySet<string> = new Set(['href', 'xlink:href']);
-/** The attributes whose value is text a reader sees and the browser never loads from or reads as CSS: the `url(` strip leaves
- *  them as written, so a link target that step 5 writes into `title`, and an author's `title` or `alt` that mentions `url(`,
- *  keep their real text (review 2361 M1). */
-const TEXT_ATTRIBUTES: ReadonlySet<string> = new Set(['title', 'alt']);
 
 /** Whether every candidate of a `srcset` value is a `data:` URL, read with the extractor's own srcset grammar
  *  (`parseSrcset`, `load.ts`): at least one candidate, every candidate's URL `data:`, and no candidate the grammar
@@ -475,24 +473,39 @@ function dropInertElements(clone: Document): void {
   }
 }
 
-/** Step 5: `href` and `xlink:href` off every `a` and `area` (HTML and SVG), the target into `title` and into the answer. */
-function removeLinks(clone: Document): string[] {
-  const links: string[] = [];
+/** A link step 5 took off its element, with the element it was on. */
+interface TakenLink {
+  readonly el: Element;
+  readonly target: string;
+}
+
+/** Step 5, first half: `href` and `xlink:href` off every `a` and `area` (HTML and SVG), each non-empty target kept, in DOM
+ *  order. It runs before the strip, which drops every `href` that is not `data:` and so would leave step 5 nothing to read. */
+function takeLinks(clone: Document): TakenLink[] {
+  const taken: TakenLink[] = [];
   for (const el of clone.querySelectorAll('a, area')) {
     const target = el.getAttribute('href') ?? el.getAttribute('xlink:href');
     el.removeAttribute('href');
     el.removeAttribute('xlink:href');
-    if (target === null || target.trim() === '') continue;
-    links.push(target);
+    if (target !== null && target.trim() !== '') taken.push({ el, target });
+  }
+  return taken;
+}
+
+/** Step 5, second half: each target into its element's `title` and into the answer. It runs after step 4, as base 5.6.9
+ *  orders them (review 2372 F2): an author's `title` was stripped as every other attribute holding `url(` is, and the target
+ *  written after it keeps its real text, the one non-`data:` URL M5.EX1 allows ("the link text moved into `title`"). */
+function writeLinkTitles(taken: readonly TakenLink[]): string[] {
+  for (const { el, target } of taken) {
     const title = el.getAttribute('title') ?? '';
     el.setAttribute('title', title === '' ? target : `${title} (${target})`);
   }
-  return links;
+  return taken.map((t) => t.target);
 }
 
 /** Steps 3 and 4 over every attribute: handlers and active attributes out, `srcset` and the URL allowlist checked, CSS in
- *  a `style` attribute (or any attribute holding `url(`, an SVG paint attribute's included, but `TEXT_ATTRIBUTES`)
- *  neutralised. */
+ *  a `style` attribute, or in any other attribute holding `url(` (an SVG paint attribute's, and an author's `title` and
+ *  `alt`, as base 5.6.9 step 4 says), neutralised. */
 function stripAttributes(clone: Document): void {
   for (const el of clone.querySelectorAll('*')) {
     const svg = el instanceof SVGElement;
@@ -505,7 +518,7 @@ function stripAttributes(clone: Document): void {
       } else if (URL_ATTRIBUTES.has(name)) {
         const local = svg && HREF_NAMES.has(name) && isFragment(attr.value) && el.localName !== 'a' && el.localName !== 'image';
         if (!isDataUrl(attr.value) && !local) el.removeAttributeNode(attr);
-      } else if (name === 'style' || (!TEXT_ATTRIBUTES.has(name) && /url\(/i.test(attr.value))) {
+      } else if (name === 'style' || /url\(/i.test(attr.value)) {
         attr.value = stripCssText(attr.value);
       }
     }
@@ -549,8 +562,9 @@ export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): M
   const { omitted, why } = inlineAssets(extractMockupRefs(clone, `${section}/${path}`), assets);
   markMissingImages(clone, why);
   dropInertElements(clone);
-  const links = removeLinks(clone);
+  const taken = takeLinks(clone);
   stripAttributes(clone);
+  const links = writeLinkTitles(taken);
   addCspMeta(clone);
   return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted };
 }
