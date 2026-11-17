@@ -163,13 +163,15 @@ describe('the done-test reader: one gatherer, one decider, and no other reader o
     expect(a.bodySaysMerged, 'the admitted function never decides merged').toBe(false);
   });
 
-  it('CONTROL (F4): a reader beside prOfRunFrom, and a prOfRunFrom that says merged, are each found', () => {
-    const fn = ['export function prOfRunFrom(coord: CoordStore) {', '  return (id) => coord.run(id).run.prLineage.at(-1);', '}'];
-    expect(admission(fn.join('\n'))).toMatchObject({ restReads: false, bodyReads: true, bodySaysMerged: false });
-    expect(admission([...fn, 'export const other = (r: RunRow) => r.prLineage;'].join('\n')).restReads).toBe(true);
-    expect(admission([...fn, 'export const other = (r: RunRow) => r.closePr;'].join('\n')).restReads).toBe(true);
-    const merged = ['export function prOfRunFrom(coord: CoordStore) {', "  return (id) => coord.run(id).run.prLineage.find((e) => e.phase === 'merged');", '}'];
-    expect(admission(merged.join('\n')).bodySaysMerged).toBe(true);
-    expect(admission('export const x = (r: RunRow) => r.prLineage;').body).toBe('');
+  it.each(ADMITTED.map((a) => [a.file, a.head] as const))('CONTROL (F4) for %s: a reader beside the admitted function, and one that says merged, are each found', (_file, head) => {
+    const name = /function (\w+)/.exec(head.source)![1]!;
+    const fn = [`export function ${name}(coord: CoordStore) {`, '  return (id) => coord.run(id).run.prLineage.at(-1);', '}'];
+    expect(admission(fn.join('\n'), head)).toMatchObject({ restReads: false, bodyReads: true, bodySaysMerged: false });
+    expect(admission([...fn, 'export const other = (r: RunRow) => r.prLineage;'].join('\n'), head).restReads).toBe(true);
+    expect(admission([...fn, 'export const other = (r: RunRow) => r.closePr;'].join('\n'), head).restReads).toBe(true);
+    expect(admission([...fn, "const q = db.prepare('SELECT prLineage FROM runs WHERE id = ?');"].join('\n'), head).restReads).toBe(true);
+    const merged = [`export function ${name}(coord: CoordStore) {`, "  return (id) => coord.run(id).run.prLineage.find((e) => e.phase === 'merged');", '}'];
+    expect(admission(merged.join('\n'), head).bodySaysMerged).toBe(true);
+    expect(admission('export const x = (r: RunRow) => r.prLineage;', head).body).toBe('');
   });
 });
