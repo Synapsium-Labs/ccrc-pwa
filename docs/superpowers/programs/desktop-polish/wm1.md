@@ -113,5 +113,7 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 11 | `box-token-census` (after the README lines) with the two new files | 10.75 | 121 passed |
 | 12 | After CI's first run (shard 7 of 12 red on two guards: `coordinator-skill.test.ts`, `ticket-required` named nowhere in the skill; `mail-routes.test.ts`, the landing fact's kind `not-landed` an undeclared kebab token, renamed `unlanded`): those two, the two new files, `ccrc-api-closed`, `run-routes`, `mail-inbox-skills`, `routing-references`, `dead-coordinator-prose` | 8.94 | 9 files, 801 passed |
 | 13 | `mutation-floors` for the four new keys and the floors-and-sets check, after the rename | 6.91 | 5 passed |
+| 14 | After the one merge of `origin/main` 457997a78 (the coordinator's word; only the route counts conflicted, with #2992: 260 routes at the gate, 263 scanned, 163 gated): `auth-gate`, `box-token-census`, `single-definition`, `coordinator-skill`, `mail-routes`, `coord-db` and the two new files | 10.68 | 45 files, 2473 passed |
+| 15 | `mutation-floors`' floors-and-sets, no-floor-falls and CONTROL checks after the merge | 8.50 | 3 passed |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.
