@@ -200,16 +200,25 @@ function useSheetFocus(open: boolean, initialFocus: RefObject<HTMLElement | null
  *  open Radix dialog (`[role="dialog"][data-state="open"]`) is still mounted, only the marks over or inside the topmost
  *  one are, so the page and any dialog under that one stay hidden behind it. A reopen during
  *  the exit, where Radix hides nothing again, puts them back. Only marks this sheet's own open added are ever lifted: a
- *  node already `aria-hidden` as it opens is left as it was, whoever hid it (Task C40, D-8698; review 2310 F1, F2). That
- *  covers an element the page hid itself which a dialog still closing has already marked: the `aria-hidden` package takes
- *  such a node as hidden by the page and never puts it back, so a lift would leave it announced for good. Radix's focus
- *  guards are left too. Radix's own undo at the unmount then removes what is left. */
+ *  node already `aria-hidden` as its panel mounts is left as it was, whoever hid it (Task C40, D-8698; review 2310 F1, F2).
+ *  That covers an element the page hid itself which a dialog still closing has already marked: the `aria-hidden` package
+ *  takes such a node as hidden by the page and never puts it back, so a lift would leave it announced for good. Radix's
+ *  focus guards are left too. Radix's own undo at the unmount then removes what is left.
+ *
+ *  THE READ IS AT THE PANEL'S MOUNT, in its callback ref (review 2323 F1). Radix mounts a dialog's content one commit after
+ *  `open` turns true (its portal mounts first), so the ref runs after the passive effects of the commit that opened the
+ *  sheet, where a sheet closing in that same commit lifts its marks, whichever of the two comes first in the tree; and it
+ *  runs in the layout phase, before Radix's own passive `hideOthers` marks anything for this sheet. Read in the `open`
+ *  effect instead, a sheet rendered before the one closing (the session screen's follow-up sheets come before its menu)
+ *  read the menu's marks as already there, and kept the page hidden through its own exit. */
 function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
   const panel = useRef<HTMLElement | null>(null);
   const lifted = useRef<Element[]>([]);
-  // Every node already hidden as the sheet opens, read before this sheet's Radix marks anything: what the page hid itself,
+  // Every node already hidden as the panel mounts, read before this sheet's Radix marks anything: what the page hid itself,
   // and what a dialog still mounted had marked, which the `aria-hidden` package cannot tell apart from the page's own.
   const before = useRef<ReadonlySet<Element>>(new Set());
+  // The panel element `before` was read for: a ref re-attached to the same element (a new callback identity) reads nothing.
+  const readFor = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const el = panel.current;
     if (open) {
@@ -218,8 +227,6 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
       // the page itself, which Radix's undo never clears.
       if (el !== null && el.isConnected) {
         for (const node of lifted.current) if (node.isConnected) node.setAttribute('aria-hidden', 'true');
-      } else {
-        before.current = new Set(document.querySelectorAll('[aria-hidden="true"]'));
       }
       lifted.current = [];
       return;
@@ -237,7 +244,13 @@ function useHidingFollowsOpen(open: boolean): (el: HTMLElement | null) => void {
     for (const node of marked) node.removeAttribute('aria-hidden');
     lifted.current = marked;
   }, [open]);
-  return useCallback((el: HTMLElement | null): void => { panel.current = el; }, []);
+  return useCallback((el: HTMLElement | null): void => {
+    if (el !== null && el !== readFor.current) {
+      readFor.current = el;
+      before.current = new Set(document.querySelectorAll('[aria-hidden="true"]'));
+    }
+    panel.current = el;
+  }, []);
 }
 
 /** SHIFT+TAB PRESSED FIRST STAYS IN THE SHEET (Task C38, D-8670; PR10b's reviews). The Sheet focuses its panel before
