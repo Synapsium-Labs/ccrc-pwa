@@ -1341,6 +1341,58 @@ directory when this run opened (the review child had been reclaimed); it was rec
 {"id": "NDR-D1-FI2-AUTH-TO-MISSING", "pkg": "pwa", "file": "src/docs/mockup/load.ts", "old": "      return word === undefined ? row : { ...row, verdict: { v: 'failed', failure: word } };", "new": "      return word === undefined ? row : word === 'auth' ? { ...row, verdict: { v: 'missing', why: 'absent-at-commit' } } : { ...row, verdict: { v: 'failed', failure: word } };", "tests": ["test/mockup-load.test.ts"], "status": "red", "red": "Tests  1 failed | 45 passed (46): auth stays failed with its own word, never missing", "sha256": "143100d9d5b06cd8bc46ea5126c85f6eb277ca51325f54245806a792300e7416", "restored": true}
 ```
 
+**First item's review (Sonnet · high, the four commits above).** No important finding. Minor 1 is fixed in `c3db9091b` (the
+auth-row listener case signs in before it unmounts, so its name says what it checks, and it is red on the cleanup row too);
+the nit in `ef6b7386d` (a comment on what stays shown when a latched sign-in discards a result). Minor 2 stays as recorded:
+in the movement case, the listener count carries `NDR-D1-FI1-MOVED-UNWATCH`, and its "starts nothing" half is not red on its
+own, because without the drop `watching` is still false.
+
+**Task 11 — the bounded client line diff.**
+- `reader/diff.ts`, ring L1: it imports only `utf8Bytes` (`shared/utf8.ts`) and `DOCS_MAX_DOC_BYTES` (`shared/docs.ts`).
+  `reader-diff.test.ts` has 49 cases. Red first, against a stub that always answered `unavailable`: `Tests  42 failed | 7
+  passed (49)`. The seven that passed were the constants, determinism, two refusal fixtures, the bytes fixture's own size,
+  one parser case and the purity scan.
+- The line model is markdown-it's, because the rendered `data-line` comes from its source map: `\r\n`, a lone `\r` and `\n`
+  each end a line, and a final line ending starts no line. The real parser's `data-line` is checked against the diff's
+  numbering for LF and CRLF documents, with and without a final newline, rendered with the reader's own options.
+- The bounds, refused in this order: bytes (`utf8Bytes` against `DOCS_MAX_DOC_BYTES`; no new byte constant); lines
+  (`READER_DIFF_MAX_LINES`, 20 000 a side); work (`READER_DIFF_MAX_WORK`, 2 000 000 units: every line comparison, the trims'
+  included, every frontier advance, and every trace cell copied, the band of 2d + 1 cells a step); output
+  (`READER_DIFF_MAX_MARKS`, 512, counting ranges and removals together). The spec's "at most 512 output ranges/removals" is
+  read as one count, the stricter reading, and the brief's "512 output marks" names it so; `NDR-D1-T11-OUTPUT-SEPARATE`
+  holds it.
+- A middle with one side empty after the trims (a pure insertion or deletion) is answered as one range or one removal with
+  no search, so a 20 000-line insertion is not refused for work. That is the exact answer, not a second algorithm.
+- The oracle: 2 000 seeded random pairs against an LCS dynamic program in the test file. The uncovered after-lines form a
+  common subsequence of LCS length, the shape rules hold, and the reverse diff agrees.
+- The removal mark against the real library (`removedAfter` 0, and an empty after document) is pinned in Task 12's browser
+  file with the actual frame: the library's checker and marker (`readChangeSet` and `placesOf` in `enhance/changes.js`) are
+  not exported.
+- Wall clock (**local**, vitest's per-test durations; no disk benchmark): 750 + 750 disjoint lines, refused for work, 6 ms;
+  300 + 300, 5 ms; 513 isolated insertions, 3 ms; 20 000 identical lines, 5 ms; the bytes boundary (three diffs of 2 MiB
+  sides), 15 ms; the 2 000-pair oracle, 98 ms.
+- No row for the trims' comparisons: they are counted, but no fixture tells them apart from the search's units without a
+  hook that reports the count, and the lines bound holds them under 40 000 units.
+- Rows: 13, each red (the four bounds, the combined mark count, the line origin, CRLF, the final line ending, both removal
+  origins, and each kind of work).
+
+```json
+{"id": "NDR-D1-T11-BYTES-GUARD", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  if (utf8Bytes(before) > DOCS_MAX_DOC_BYTES || utf8Bytes(after) > DOCS_MAX_DOC_BYTES) {", "new": "  if (false as boolean) {", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  3 failed | 46 passed (49): one byte over on the before side is unavailable for bytes", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-LINES-GUARD", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  if (beforeLines.length > READER_DIFF_MAX_LINES || afterLines.length > READER_DIFF_MAX_LINES) {", "new": "  if (false as boolean) {", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  3 failed | 46 passed (49): one line over on the before side is unavailable for lines", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-WORK-GUARD", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  let work = spent;", "new": "  let work = -Infinity;", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  2 failed | 47 passed (49): 750 unique lines against 750 other unique lines exhaust the budget and nothing else is over", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-OUTPUT-GUARD", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  if (ranges.length + removedAfter.length > READER_DIFF_MAX_MARKS) return", "new": "  if (false as boolean) return", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  2 failed | 47 passed (49): 513 isolated insertions are unavailable for output, and the work budget is not what refuses them", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-OUTPUT-SEPARATE", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "ranges.length + removedAfter.length > READER_DIFF_MAX_MARKS", "new": "Math.max(ranges.length, removedAfter.length) > READER_DIFF_MAX_MARKS", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  1 failed | 48 passed (49): 256 insertions and 257 deletions are 513 marks and unavailable for output", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-LINE-ORIGIN", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  let afterNumber = head;\n  let survivor = head;", "new": "  let afterNumber = head - 1;\n  let survivor = head;", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  20 failed | 29 passed (49): an insertion after line 1 is the range [2,2] and no removal", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-CRLF", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "const LINE_ENDING = /\\r\\n?|\\n/;", "new": "const LINE_ENDING = /\\n/;", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  3 failed | 46 passed (49): CRLF, LF and a lone CR are the same line ending, in both directions", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-FINAL-NEWLINE", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  if (ENDS_WITH_LINE_ENDING.test(s)) parts.pop();", "new": "  if (false as boolean) parts.pop();", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  5 failed | 44 passed (49): a final line ending starts no line, in both directions", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-REMOVAL-ORIGIN", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "      removedAfter.push(survivor);\n      lostInGap = false;", "new": "      removedAfter.push(survivor + 1);\n      lostInGap = false;", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  7 failed | 42 passed (49): a deletion before the first line is removedAfter 0 and no range", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-REMOVAL-ORIGIN-END", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "  else if (lostInGap) removedAfter.push(survivor);", "new": "  else if (lostInGap) removedAfter.push(survivor + 1);", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  10 failed | 39 passed (49): a deletion after the last surviving line is marked after that line", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-SNAKE-NOT-COUNTED", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "      while (x < n && y < m) {\n        work += 1;\n", "new": "      while (x < n && y < m) {\n", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  1 failed | 48 passed (49): 550 against 550 disjoint lines is over the budget only when every kind of work is counted", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-ADVANCE-NOT-COUNTED", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "      work += 1;\n      if (work > READER_DIFF_MAX_WORK) return null;\n      let x =", "new": "      if (work > READER_DIFF_MAX_WORK) return null;\n      let x =", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  1 failed | 48 passed (49): 550 against 550 disjoint lines is over the budget only when every kind of work is counted", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+{"id": "NDR-D1-T11-TRACE-NOT-COUNTED", "pkg": "pwa", "file": "src/docs/reader/diff.ts", "old": "      work += 2 * d + 1;", "new": "      work += 0;", "tests": ["test/reader-diff.test.ts"], "status": "red", "red": "Tests  2 failed | 47 passed (49): 750 unique lines against 750 other unique lines exhaust the budget and nothing else is over", "sha256": "14ac36519b688a2cbe4f0ddababe8351a35bbf6cfc783240988d94160508f790", "restored": true}
+```
+
+
 ## Where things stand
 
 ### Agreed
