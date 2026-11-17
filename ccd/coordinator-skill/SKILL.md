@@ -163,7 +163,7 @@ the diff is never read by this session.
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
-  the held workspace — that is the recovery the hold exists for.
+  the held workspace: the recovery the hold exists for.
 - **Your own run row disagrees with the ledger.** The run row is the machine's
   record and the ledger is the human's; if they disagree, the ledger is what a
   reviewer will read, so fix the ledger in a commit and say so in the report.
