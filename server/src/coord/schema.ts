@@ -3459,6 +3459,17 @@ export const MIGRATIONS: readonly string[] = [
     maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
     anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
   `,
+
+  // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
