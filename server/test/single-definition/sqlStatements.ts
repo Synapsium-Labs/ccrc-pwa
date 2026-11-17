@@ -32,14 +32,11 @@ const isStringPiece = (n: ts.Node): boolean =>
   ts.isStringLiteral(n) || ts.isNoSubstitutionTemplateLiteral(n) || ts.isTemplateExpression(n);
 /** The deepest string piece holding `at`, climbed through `+` and parentheses to the whole statement expression. */
 const statementAt = (sf: ts.SourceFile, at: number): ts.Node | null => {
-  let found: ts.Node | null = null;
-  const visit = (n: ts.Node): void => {
-    if (at < n.getStart(sf) || at >= n.getEnd()) return;
-    if (isStringPiece(n)) found = n;
-    n.forEachChild(visit);
+  const deepest = (n: ts.Node): ts.Node | null => {
+    if (at < n.getStart(sf) || at >= n.getEnd()) return null;
+    return n.forEachChild(deepest) ?? (isStringPiece(n) ? n : null);
   };
-  visit(sf);
-  let n: ts.Node | null = found;
+  let n: ts.Node | null = deepest(sf);
   while (n !== null && n.parent !== undefined
     && ((ts.isBinaryExpression(n.parent) && n.parent.operatorToken.kind === ts.SyntaxKind.PlusToken) || ts.isParenthesizedExpression(n.parent))) {
     n = n.parent;
