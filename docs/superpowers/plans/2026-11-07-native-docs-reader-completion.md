@@ -1377,9 +1377,14 @@ own, because without the drop `watching` is still false.
   no search, so a 20 000-line insertion is not refused for work. That is the exact answer, not a second algorithm.
 - The oracle: 2 000 seeded random pairs against an LCS dynamic program in the test file. The uncovered after-lines form a
   common subsequence of LCS length, the shape rules hold, and the reverse diff agrees.
-- The removal mark against the real library (`removedAfter` 0, and an empty after document) is pinned in Task 12's browser
-  file with the actual frame: the library's checker and marker (`readChangeSet` and `placesOf` in `enhance/changes.js`) are
-  not exported.
+- What Task 12's browser file pins against the real library, with the actual frame (the library's checker and marker,
+  `readChangeSet` and `placesOf` in `enhance/changes.js`, are not exported): `removedAfter` 0 on the real frame (trim.md:
+  the frame takes a removal before the first line, marks no block for it, and marks the other changes); and, for the empty
+  after document, the real `readerDiff` answer (`{ ranges: [], removedAfter: [0] }`) and no comparison menu from 1.1.0 (no
+  trigger, so the frame never asks). That second half is the released library's measured behaviour: 1.1.0 builds its menu
+  only for a page that is a document (`isDocument`), and an empty page is none, so no mark on an empty after document is
+  measured, and none is manufactured (Task 11's step: pin the real library's behaviour, do not manufacture a different
+  mark). Corrected in place at fix round 1 (review 2407's A2, ruled no departure).
 - Wall clock (**local**, vitest's per-test durations; no disk benchmark): 750 + 750 disjoint lines, refused for work, 6 ms;
   300 + 300, 5 ms; 513 isolated insertions, 3 ms; 20 000 identical lines, 5 ms; the bytes boundary (three diffs of 2 MiB
   sides), 15 ms; the 2 000-pair oracle, 98 ms.
