@@ -1188,7 +1188,13 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     'the saved file lists at most MOCKUP_CENSUS_ROW_CAP assets left out, then one closed line for the rest, and the result keeps every one (D-8712): %i',
     async (n) => {
       const html = mockupPage(Array.from({ length: n }, (_, i) => `<img src="https://ext.example/i${i}.png" alt="">`).join(''));
-      const { doc, result } = await builtMockup(html);
+      const { doc, inner, result } = await builtMockup(html);
+      // Every placeholder stays: the cap is the list's, and an image past its 500th row keeps its alt (review 2372 M-e).
+      const images = [...inner.querySelectorAll('img')];
+      expect(images).toHaveLength(n);
+      expect(images.filter((img) => img.hasAttribute('src'))).toHaveLength(0);
+      expect(images.filter((img) => img.getAttribute('alt') !== EXPORT_MISSING_SENTENCE.external)).toHaveLength(0);
+      expect(images.at(-1)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.external);
       const shown = listOf(doc, EXPORT_TEXT.mockupOmitted);
       expect(shown).toHaveLength(Math.min(n, MOCKUP_CENSUS_ROW_CAP));
       expect(shown[0]).toBe('https://ext.example/i0.png');
