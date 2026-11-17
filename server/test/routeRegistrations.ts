@@ -142,7 +142,7 @@ export const registrationsIn = (src: string): { key: string; at: number }[] => {
 
 /** Every handler in one source file whose body consults the box token, keyed
  *  `VERB /path`. Bodies run from a route's own registration to the next one,
- *  the same slice `auth-gate.test.ts:432-440` takes. */
+ *  the same slice `auth-gate.test.ts` takes for its handler bodies. */
 export const lanesIn = (src: string): string[] => {
   const starts = registrationsIn(src);
   return starts
