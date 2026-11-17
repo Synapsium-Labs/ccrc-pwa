@@ -15,7 +15,7 @@ const LANE_ID = 'lane-a-project-a';
 /** The facts `FleetWatcher.mailPass` asks `roleFactsOf` for (`core-vocab.test.ts`'s "one MAIL_PACE" pins that call). */
 const laneFacts = (child: ChildMark, claims: boolean): RoleFacts => roleFactsOf(LANE_ID, {
   child, childRunKind: 'unmeasured', openCoordinators: new Set(claims ? [LANE_ID] : ['lane-b-project-a']),
-  intentDeclared: 'unmeasured',
+  intentDeclared: 'unmeasured', designation: { kind: 'none' },
 });
 
 // A role with no row, or a row for no role, is a compile error twice over: the table `satisfies

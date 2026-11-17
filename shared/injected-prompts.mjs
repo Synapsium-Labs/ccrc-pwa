@@ -51,6 +51,12 @@ export const INJECTED_PROMPTS = Object.freeze({
   'renewal-first-prompt': Object.freeze({
     text: 'Read your card with `ccrc-api card`, then answer your probes with `ccrc-api probe`.', match: 'exact', typer: 'server',
   }),
+  // A new Overlord body's first turn, sent by the designate door after the create (Overlord W1, designation A, X4:
+  // `overlordRoutes.ts` through `SessionHost.deliver`). It sends the body to its card, as the renewal's does.
+  'overlord-first-prompt': Object.freeze({
+    text: 'You are the Overlord. Read your card with `ccrc-api card` first, then answer your probes with `ccrc-api probe`.',
+    match: 'exact', typer: 'server',
+  }),
 });
 
 /** The rows' keys, in the list's order. */

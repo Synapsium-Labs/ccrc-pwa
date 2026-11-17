@@ -9,7 +9,7 @@
 //   the caller's heal), `malformed` (the kernel's refusal code and message, and `lines`, the count of LF bytes, which bounds
 //   every acknowledged sequence: a record is acknowledged only once its LF is durable), or `unmeasured` (the port could not
 //   read it). Never a null.
-// - `appendNext(check)` re-reads and verifies the whole file on EVERY call, hands `check` what it read (everything but
+// - `appendNext(check)` re-reads the whole file and verifies it on EVERY call, hands `check` what it read (everything but
 //   `unmeasured`, which answers `unreadable` before `check` runs), and on `go` appends the next record after the verified
 //   head (`chainNext`, `encodeChainedRecord`, `appendLine`) through the snapshot of that same read, which it then spends. A
 //   snapshot is single-use and never reused across calls. A file that is `malformed` or ends in a torn tail has no head to
@@ -22,8 +22,22 @@
 // - `mayApply` is false for every failure before the port's append or cut was entered, and true for every failure after.
 // - Each journal's own class decides when it reads and what it checks against its rows, and holds the transaction check:
 //   only it knows its database. This adapter knows no row and no transaction.
+// - THE VERIFIED-HEAD CACHE (the act journal plan's question 10, ruling F16 of review 2275). Every read, append and cut still
+//   reads the whole file through the port, and a snapshot is still single-use: the cache is of a verified head, never of a
+//   snapshot. What it saves is the kernel's verify of the bytes before that head (each line's strict decode, canonical
+//   re-encode and two SHA-256 preimages). It is a field of this instance, in memory only, so it is never shared across
+//   instances or paths, and a restart verifies in full. Its key is the device and inode the port read the bytes from, the
+//   length of the verified prefix (every complete record, up to the head's LF) and SHA-256 of exactly those bytes
+//   (`verifiedHeadHolds`, the one decision). The digest covers every byte the cache stands for, so a rewrite in place, a
+//   truncate and regrow, or any other bytes are a miss; the device and inode make a replaced file a miss even with the same
+//   bytes. One SHA-256 pass over the prefix is cheap beside the verify it replaces. On a hit only the bytes after the head
+//   are verified, and they must continue the chain from it (`chainNext`). Any refusal there, any defect, or any miss falls
+//   back to the whole-file verify, so every answer, its code and its detail are what a cold read answers on the same bytes.
+//   The records it hands out are frozen, so no caller can change what the next hit hands back.
 import { createHash } from 'node:crypto';
-import { appendOnlyFileAt, NODE_APPEND_ONLY_FS, type AppendOnlyCut, type AppendOnlyFsOps } from './appendOnlyFile.js';
+import {
+  appendOnlyFileAt, NODE_APPEND_ONLY_FS, type AppendOnlyCut, type AppendOnlyFsOps, type AppendOnlyLeafId,
+} from './appendOnlyFile.js';
 import {
   buildChainedRecord, chainNext, chainedTornTailError, encodeChainedRecord, parseChainedBytes,
   type ChainedJournalFormat, type ChainedJournalRecord, type ChainedRefusal, type ChainedTail, type ChainedTailHealPlan,
@@ -56,7 +70,8 @@ export interface ChainedJournalFile<E> {
   /** A fresh read and verify; holds no snapshot. `lines` on `malformed` counts LF bytes, bounding every acknowledged
    *  sequence. */
   read(): ChainedFileRead<E>;
-  /** Re-reads and verifies the whole file, asks `check` with what it read, and on `go` appends the next record
+  /** Re-reads the whole file and verifies it (on a verified-head hit, only the bytes after that head), asks `check` with
+   *  what it read, and on `go` appends the next record
    *  (`chainNext`, `encodeChainedRecord`, `appendLine`) through the same snapshot, which it then spends. Never reuses
    *  a snapshot across calls. */
   appendNext<S>(check: (read: ChainedFileSeen<E>) => ChainedAppendStep<E, S>): ChainedAppendResult<E, S>;
@@ -64,6 +79,24 @@ export interface ChainedJournalFile<E> {
    *  is the quarantine directory's name inside the journal's own directory (one path component). */
   cutAside(how: ChainedCutHow, asideDir: string): { ok: true } | { ok: false; error: ChainedCutError; mayApply: boolean };
 }
+
+/** The verified-head cache's key: the file's device and inode, the verified prefix's length and SHA-256 of its bytes. */
+export interface VerifiedHeadKey { readonly dev: bigint; readonly ino: bigint; readonly size: number; readonly sha256: string }
+const sha256Hex = (bytes: Uint8Array): string => createHash('sha256').update(bytes).digest('hex');
+/** The cache's one decision, pure: the bytes before the cached head are exactly the bytes verified, in the same file. An
+ *  empty prefix is never a hit, since it would skip nothing. */
+export function verifiedHeadHolds(key: VerifiedHeadKey | null, leaf: AppendOnlyLeafId, bytes: Uint8Array): boolean {
+  return key !== null && key.size > 0 && key.dev === leaf.dev && key.ino === leaf.ino && bytes.length >= key.size
+    && sha256Hex(bytes.subarray(0, key.size)) === key.sha256;
+}
+/** A decoded record, frozen through: it may be handed out again by a later hit. */
+const frozen = <T>(v: T): T => {
+  if (typeof v === 'object' && v !== null && !Object.isFrozen(v)) {
+    Object.freeze(v);
+    for (const x of Object.values(v)) frozen(x);
+  }
+  return v;
+};
 
 const countLf = (bytes: Uint8Array): number => {
   let n = 0;
@@ -81,9 +114,17 @@ export function chainedJournalFileAt<E, X extends ChainedRefusal>(
   const refusalClass = fmt.fail('bad-field', 'the refusal class').constructor as new (...args: never[]) => X;
   const isRefusal = (err: unknown): err is X => err instanceof refusalClass;
 
+  /** The bytes after the last LF (`cut`), or null when there are none. */
+  const tailAt = (bytes: Uint8Array, cut: number): ChainedTail | null => {
+    if (cut === bytes.length) return null;
+    const leftover = new Uint8Array(bytes.subarray(cut));
+    const torn = chainedTornTailError(fmt, leftover);
+    return { offset: cut, bytes: leftover, sha256: sha256Hex(leftover), code: torn.code === 'missing-final-lf' ? 'missing-final-lf' : 'torn-tail' };
+  };
+
   /** The whole file's bytes, verified: every complete line decoded and chained from sequence 1, and the bytes after the
    *  last LF kept as the tail. */
-  const classify = (bytes: Uint8Array): ChainedFileSeen<E> => {
+  const verifyAll = (bytes: Uint8Array): ChainedFileSeen<E> => {
     const cut = bytes.lastIndexOf(0x0a) + 1;
     let records: ChainedJournalRecord<E>[];
     try {
@@ -92,15 +133,40 @@ export function chainedJournalFileAt<E, X extends ChainedRefusal>(
       if (!isRefusal(err)) throw err;
       return { kind: 'malformed', code: err.code, detail: err.message, lines: countLf(bytes) };
     }
-    if (cut === bytes.length) return { kind: 'records', records, tail: null };
-    const leftover = new Uint8Array(bytes.subarray(cut));
-    const torn = chainedTornTailError(fmt, leftover);
-    return {
-      kind: 'records', records, tail: {
-        offset: cut, bytes: leftover, sha256: createHash('sha256').update(leftover).digest('hex'),
-        code: torn.code === 'missing-final-lf' ? 'missing-final-lf' : 'torn-tail',
-      },
-    };
+    return { kind: 'records', records: frozen(records), tail: tailAt(bytes, cut) };
+  };
+
+  // The verified-head cache: the records this instance last verified, and the key that shows their bytes unchanged.
+  let verified: { key: VerifiedHeadKey; records: readonly ChainedJournalRecord<E>[] } | null = null;
+
+  /** On a hit, only the bytes after the held head, which must continue its chain; null on anything else there, so the
+   *  caller verifies in full and answers as a cold read (a defect is rethrown by that verify). The held prefix ends in the
+   *  head's LF, so the last LF is at or after it. */
+  const verifyAfter = (held: NonNullable<typeof verified>, bytes: Uint8Array): ChainedFileSeen<E> | null => {
+    const cut = bytes.lastIndexOf(0x0a) + 1;
+    let fresh: ChainedJournalRecord<E>[];
+    try {
+      fresh = parseChainedBytes(fmt, bytes.subarray(held.key.size, cut));
+    } catch {
+      return null;
+    }
+    const next = chainNext(held.records[held.records.length - 1]!);
+    const first = fresh[0];
+    if (first !== undefined && (first.sequence !== next.sequence || first.previousDigest !== next.previousDigest)) return null;
+    return { kind: 'records', records: fresh.length === 0 ? held.records : Object.freeze([...held.records, ...fresh.map(frozen)]), tail: tailAt(bytes, cut) };
+  };
+
+  /** What `bytes` hold, through the cache: a hit verifies only what follows the held head, a miss the whole file. */
+  const classify = (bytes: Uint8Array, leaf: AppendOnlyLeafId): ChainedFileSeen<E> => {
+    const held = verified !== null && verifiedHeadHolds(verified.key, leaf, bytes) ? verified : null;
+    verified = null;
+    const seen = (held === null ? null : verifyAfter(held, bytes)) ?? verifyAll(bytes);
+    if (seen.kind === 'records' && seen.records.length > 0) {
+      const size = seen.tail === null ? bytes.length : seen.tail.offset;
+      const key = held !== null && held.key.size === size ? held.key : { dev: leaf.dev, ino: leaf.ino, size, sha256: sha256Hex(bytes.subarray(0, size)) };
+      verified = { key, records: seen.records };
+    }
+    return seen;
   };
 
   return {
@@ -108,14 +174,14 @@ export function chainedJournalFileAt<E, X extends ChainedRefusal>(
       const r = file.read();
       if (!r.ok) return { kind: 'unmeasured', why: r.error };
       r.snapshot.release();
-      return r.kind === 'absent' ? { kind: 'absent' } : classify(r.bytes);
+      return r.kind === 'absent' ? { kind: 'absent' } : classify(r.bytes, r.leaf);
     },
 
     appendNext(check) {
       const r = file.read();
       if (!r.ok) return { ok: false, error: r.error, mayApply: false };
       try {
-        const seen: ChainedFileSeen<E> = r.kind === 'absent' ? { kind: 'absent' } : classify(r.bytes);
+        const seen: ChainedFileSeen<E> = r.kind === 'absent' ? { kind: 'absent' } : classify(r.bytes, r.leaf);
         const step = check(seen);
         if ('stop' in step) return { ok: false, stopped: step.stop };
         if (seen.kind === 'malformed' || (seen.kind === 'records' && seen.tail !== null)) {
@@ -139,7 +205,7 @@ export function chainedJournalFileAt<E, X extends ChainedRefusal>(
         let cut: AppendOnlyCut;
         if (how.kind === 'tail') {
           const p = how.plan;
-          const seen = classify(r.bytes);
+          const seen = classify(r.bytes, r.leaf);
           const t = seen.kind === 'records' ? seen.tail : null;
           if (t === null || t.offset !== p.offset || t.bytes.length !== p.bytes || t.sha256 !== p.sha256 || t.code !== p.code) {
             return { ok: false, error: 'changed', mayApply: false };

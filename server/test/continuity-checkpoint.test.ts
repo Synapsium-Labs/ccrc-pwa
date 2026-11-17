@@ -291,7 +291,7 @@ describe('the card\'s checkpoint fact', () => {
     mint(c, 'renewed');
     c.putCheckpoint({ generationId: g1, notes: [], rulings, handover: null, at: NOW });
     expect((await facts(c)).checkpoint).toMatchObject({ kind: 'read', value: { at: NOW } });
-    for (const outcome of ['crashed', 'swapped', 'woken', 'woken-elsewhere', 'unmeasured', 'cleared'] as const) {
+    for (const outcome of ['crashed', 'swapped', 'woken', 'woken-elsewhere', 'unmeasured', 'cleared', 'retired'] as const) {
       c.db.prepare('UPDATE continuity_generations SET outcome = ? WHERE id = ?').run(outcome, g1);
       expect((await facts(c)).checkpoint, outcome).toEqual({ kind: 'read', value: null });
     }

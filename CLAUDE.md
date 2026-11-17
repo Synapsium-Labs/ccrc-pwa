@@ -653,7 +653,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `PUT /api/overlord/private-names` (the upload, which replaces the list, behind the account gate's step-up, so it refuses while
   sign-in is dark) and `GET /api/overlord/private-names` (whether a list is stored, never what is in it), consult no box token
   either and are session-gated when armed; they register from `server/src/operatorModel/nameListRoutes.ts`, which the census
-  reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The replay quiz's
+  reads as a lane source of its own and checks against a hand-kept `NAME_LIST_DOORS` in both directions. The Overlord's designation doors
+  (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
+  its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
+  coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. They register from `server/src/coord/overlordRoutes.ts`
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The replay quiz's
 rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
 run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
 either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is

@@ -30,10 +30,12 @@ import { RESPONSES_MUTANT_SETS } from './responsesSets.js';
 import { VOCABULARY_MUTANT_SETS } from './vocabularySets.js';
 import { POOL_SET_MUTANT_SETS } from './poolSetSets.js';
 import { CHAINED_JOURNAL_MUTANT_SETS } from './chainedJournalSets.js';
+import { CHAINED_JOURNAL_FILE_MUTANT_SETS } from './chainedJournalFileSets.js';
 import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
@@ -187,11 +189,13 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...VOCABULARY_MUTANT_SETS,
   ...POOL_SET_MUTANT_SETS,
   ...CHAINED_JOURNAL_MUTANT_SETS,
+  ...CHAINED_JOURNAL_FILE_MUTANT_SETS,
   ...OPERATOR_MODEL_MUTANT_SETS,
   ...RESPONSES_MUTANT_SETS,
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...DESIGNATION_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
   ...PROGRAMME_FACTS_MUTANT_SETS,
   ...OVERLAPS_MUTANT_SETS,

@@ -6,7 +6,9 @@ import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
-import { serviceability, type LaneFacts, type ShareReading } from '../../shared/serviceability.js';
+import { askingOf, serviceability, type LaneFacts, type ShareReading } from '../../shared/serviceability.js';
+import type { SessionPoolSide } from '../../shared/poolrule.js';
+import type { SetPlacement } from '../../shared/overlord-designation.js';
 import type { ModelClass } from '../../shared/models.js';
 import { shareFor, type SharesRead } from './shares.js';
 import { LANE_STATE_DIR_NAME } from '../../shared/agent-protocol.js';
@@ -186,7 +188,7 @@ function reportsLimits(t: AccountDef['telemetry']): boolean {
 }
 
 /** One lane's facts for `serviceability()`: the roster's two operator facts are read as `unset`/`none` when absent. */
-function laneFactsOf(a: AccountDef, limits: Record<string, AccountLimits>, shares: SharesRead): LaneFacts {
+export function laneFactsOf(a: AccountDef, limits: Record<string, AccountLimits>, shares: SharesRead): LaneFacts {
   return {
     anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id),
     fableBilling: a.fableBilling ?? 'unset', continuity: a.continuity !== null ? 'recorded' : 'none',
@@ -324,7 +326,7 @@ function laneFactsOf(a: AccountDef, limits: Record<string, AccountLimits>, share
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
 export function projectHome(
-  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  roster: Roster, limits: Record<string, AccountLimits>, pool: SessionPoolSide,
   edges: ReadonlyMap<string, readonly string[]>,
   cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
   nowS: number = Math.floor(Date.now() / 1000),
@@ -341,7 +343,8 @@ export function projectHome(
   const live = cls === 'default' ? eligible : eligible.filter((a) =>
     // `anthropic` is `telemetry === 'anthropic'`: an `openrouter` lane and a `none` compatible lane (D-5521)
     // are not Anthropic backends, so `fable` is `unservable` (`backend`) there.
-    serviceability(cls, laneFactsOf(a, limits, shares), 'other', nowS)
+    // A project side asks as `other`, byte for byte as before; a set side asks as `set-side` (the Overlord's arms).
+    serviceability(cls, laneFactsOf(a, limits, shares), askingOf(pool), nowS)
       .kind !== 'unservable');
   // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
   // the deferred minor that named this line). A class-emptied pool and an
@@ -406,11 +409,33 @@ export function projectHome(
 export function projectPlacement(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
   edges: ReadonlyMap<string, readonly string[]>,
+  cls?: ModelClass | 'default', shares?: SharesRead, nowS?: number,
+): ProjectPlacement;
+/** A set side (C46) answers `SetPlacement`, declared in `shared/overlord-designation.ts`: no field of the wire
+ *  `ProjectPlacement` takes a new meaning (review M11). */
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: Exclude<SessionPoolSide, ProjectPoolWire>,
+  edges: ReadonlyMap<string, readonly string[]>,
+  cls?: ModelClass | 'default', shares?: SharesRead, nowS?: number,
+): SetPlacement;
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
+  cls?: ModelClass | 'default', shares?: SharesRead, nowS?: number,
+): ProjectPlacement | SetPlacement;
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: SessionPoolSide,
+  edges: ReadonlyMap<string, readonly string[]>,
   cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
   nowS: number = Math.floor(Date.now() / 1000),
-): ProjectPlacement {
+): ProjectPlacement | SetPlacement {
   if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
   const home = projectHome(roster, limits, pool, edges, cls, shares, nowS);
+  if (pool.state === 'set') {
+    return home === null ? { kind: 'none', set: pool.set } : { kind: 'projected', wrapper: home.wrapper, score: home.score };
+  }
+  // `set-unreadable` and `set-malformed` are undecidable and left above; only a project side reaches here.
+  if (pool.state === 'set-unreadable' || pool.state === 'set-malformed') return { kind: 'unmeasurable' };
   if (home === null) {
     const notPlaceable = { kind: 'none' as const, pool: pool.state === 'tagged' ? pool.name : null };
     // The trailing three parameters default so a caller that never passes a
