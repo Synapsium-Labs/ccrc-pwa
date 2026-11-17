@@ -1469,7 +1469,9 @@ built in two parts by Sonnet · high implementers, each read before it was commi
   images, and the body awaits the seed before it mounts. `changes(sha)` reads exactly two committed pins, the opened one and
   `readerChangesBase`'s, through the screen's own queue and loaders (no new endpoint, cache, lane or verb), and answers
   `readerDiff`'s marks over the text the frame rendered (a head whose text differs from it answers `null`); a draft, a
-  failure, no text, an overflow and an ended body answer `null`, never empty marks. `openVersion` navigates through
+  failure, no text, an overflow and an ended body answer `null`, never empty marks, with one exception: an `absent-path`
+  answer for the base, and only that word and only for the base, reads as the empty text, so every line is marked new
+  (fix round 1's F1, ruled conformance; this sentence corrected in fix round 2). `openVersion` navigates through
   `docsLocation` (the ref and frame kept) and records the day filter for the new entry. `useReaderOnly` reads the filter
   from the current history entry's `history.state`, writes a pending filter into the entry it was set for, follows every
   `popstate` (the router's `navigate` sends one even when the URL does not change), and survives a reload; the filter is
