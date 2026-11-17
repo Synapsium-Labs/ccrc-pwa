@@ -100,6 +100,7 @@ describe('the initiatives-off item (D-8182)', () => {
     const r = await rig();
     await tick(r);
     r.db.prepare('DELETE FROM plan_sync_due').run();
+    r.t.now += 60_000;                                    // past the workspace holds the first tick's failures set (D-8183)
     r.dir.initiatives = 'on';
     const asks: string[] = [];
     (r.sync as unknown as { deps: { call: (a: { op: string }) => Promise<unknown> } }).deps.call = async (a) => { asks.push(a.op); return { ok: false, word: 'unreachable', maybeSent: false }; };

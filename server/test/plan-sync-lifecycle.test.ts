@@ -688,6 +688,43 @@ describe('the pass: moves and closes', () => {
     return { r, t2: epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id };
   }
 
+  it("D-8183 (round 1 A1): a ticket added later on a second team: the project gains the team (projectUpdate) before the issue is created (issueCreate)", async () => {
+    const r = await rig({ extraTeam: true });
+    await tick(r);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const from = r.asks.length;
+    await tick(r);
+    const sent = opsOf(r, from);
+    expect(sent).toContain('issueCreate');
+    expect(sent.indexOf('projectUpdate')).toBeGreaterThanOrEqual(0);
+    expect(sent.indexOf('projectUpdate')).toBeLessThan(sent.indexOf('issueCreate'));
+    expect(sentInput(r, 'projectUpdate', from)['teamIds']).toEqual([WS.a.teams[0].id, CCC_TEAM.id].sort());
+    expect(sentInput(r, 'issueCreate', from)['teamId']).toBe(CCC_TEAM.id);
+  });
+
+  it('D-8183 (round 1 A11): a create lost under the old team key is adopted under the changed key, then the next pass sends the move', async () => {
+    const r = await rig({ extraTeam: true });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'AAA' WHERE project = 'project-b'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    r.respond.current = (ask) => (ask.op === 'issueCreate' && ask.input['title'] === 'Ticket t2' ? { ok: false, word: 'timeout', maybeSent: true } : defaultRespond(ask));
+    await tick(r);                                         // the create is sent and its reply lost: the binding stays pending
+    const lost = r.asks.find((a) => a.op === 'issueCreate' && a.input['title'] === 'Ticket t2')!;
+    const t2 = epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id;
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'pending' });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();   // the key changes before the recovery
+    r.respond.current = (ask) => {
+      if (ask.op === 'issueCreate' && ask.input['title'] === 'Ticket t2') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
+      if (ask.op === 'issueOwned' && ask.input['id'] === lost.input['requestId']) return ok({ issue: { id: lost.input['requestId'], identifier: 'AAA-42', teamKey: 'AAA', stateType: 'unstarted' } });
+      return defaultRespond(ask);
+    };
+    r.t.now += 400_000;                                    // past the backoff of the lost create's timeout hold
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'bound', teamKey: 'CCC' });      // the move's ok records the planned team
+    expect(r.asks.slice(from).find((a) => a.op === 'issueUpdate' && a.target === 'AAA-42')).toMatchObject({ teamKey: 'AAA', destinationTeamKey: 'CCC' });
+  });
+
   it("F3: a second team's ticket whose project key is cleared sends no projectUpdate (the team stays on the epic's project)", async () => {
     const { r } = await secondTeam();
     r.db.prepare('UPDATE project_linking SET teamKey = NULL WHERE project = ?').run('project-b');

@@ -56,7 +56,11 @@ export type Local = { kind: BindingKind; id: number };
 /** How a create that may have been sent is recovered (C2). */
 export type Recover = 'name-and-creator' | 'name-in-project' | 'request-id';
 
-interface StepBase { local: Local; workspaceId: string; teamKey: string | null; /** F(planned inputs, team key and workspace): what a `failed` binding stores. */ inputs: string }
+interface StepBase {
+  local: Local; workspaceId: string; teamKey: string | null; /** F(planned inputs, team key and workspace): what a `failed` binding stores. */ inputs: string;
+  /** D-8707: a project step's planned teams' keys, all of them (the write policy is asked about each); absent on every other step. */
+  teamKeys?: readonly string[];
+}
 export type SyncStep =
   | (StepBase & { kind: 'create'; op: CcrcOpName; bindingId: number | null; input: CcrcOpInput; fields: string[]; requestId: string; recover: Recover; fingerprint: string })
   | (StepBase & {
@@ -219,6 +223,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     b: BindingRow | undefined; ready: boolean; statusMissing: boolean; texts: string[]; facts: Fact[];
     planned: Record<string, unknown>; fp: string; isCurrent: (stored: string | null) => boolean;
     create: () => { input: CcrcOpInput; fields: string[] };
+    /** A project's planned teams' keys (D-8707), on its create and update steps. */
+    teamKeys?: readonly string[];
     update: (linearId: string) => { input: CcrcOpInput; fields: string[]; extras?: { stateType?: string; comment?: { requestId: string; body: string } } };
     recover: Recover;
     /** A link step on the bound object; its `inputs` are the object's own (what a failed binding reports), set by `decide`. Given
@@ -236,7 +242,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     if (d.b?.state === 'bound' && d.b.linearId !== null) {
       owned.push({ bindingId: d.b.id, kind: d.owned.kind, local, owned: d.owned.fields, current: d.isCurrent(d.b.fingerprint) });
     }
-    const base = { local, workspaceId: d.workspaceId, teamKey: d.teamKey, inputs };
+    const base = { local, workspaceId: d.workspaceId, teamKey: d.teamKey, inputs, ...(d.teamKeys === undefined ? {} : { teamKeys: d.teamKeys }) };
     const skip = (why: SkipWhy, detail: string | null = null): void => {
       phases[d.phase]!.push({ kind: 'skip', local, why, workspaceId: d.workspaceId, bindingId: d.b?.id ?? null, inputs, detail });
     };
@@ -392,15 +398,20 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     const planned = {
       name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null), statusId: pStatus, teamIds, initiativeId,
     };
+    const plannedTeamKeys = planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; });
     const fpFull = plannedFingerprint(planned);
     const fpNull = plannedFingerprint({ ...planned, initiativeId: null });
     /** The Linear ids of this project's bound checkpoints' milestones, filled by the checkpoint loop below (D-8183). */
     const milestoneIds: string[] = [];
+    const projectIsCurrent = (st: string | null): boolean => st === fpFull || (initiative?.live === false && st === fpNull);
+    // D-8183 (round 1 A1, §5.2's order): the project gains a team before an issue is created in it. `projectCurrent` is whether the
+    // project's stored fingerprint is the plan's (it holds the planned `teamIds`); a ticket's create on another team waits for it.
+    const projectCurrent = eb?.state === 'bound' && eb.linearId !== null && projectIsCurrent(eb.fingerprint);
     decide({
       phase: 1, kind: 'epic', id: e.id, workspaceId: wsId, teamKey: pl.teamKey, op: { create: 'projectCreate', update: 'projectUpdate' },
-      b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned,
+      b: eb, ready: true, statusMissing: pStatus === null, texts: [planned.name, planned.description], facts: [pl.fact], planned, teamKeys: plannedTeamKeys,
       // A project not yet linked to a failed initiative is current unlinked: no link is made to it until it binds again.
-      fp: fpNull, isCurrent: (st) => st === fpFull || (initiative?.live === false && st === fpNull),
+      fp: fpNull, isCurrent: projectIsCurrent,
       create: () => ({ input: { name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       update: (id) => ({ input: { id, name: planned.name, description: planned.description, statusId: pStatus, teamIds: planned.teamIds }, fields: ['name', 'description', 'status', 'teams'] }),
       link: (forced) => {
@@ -417,7 +428,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
         kind: 'project',
         fields: {
           name: planned.name, description: planned.description, statusType: PROJECT_STATUS_TYPE[eff.state],
-          teamKeys: planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; }),
+          teamKeys: plannedTeamKeys,
           initiativeIds: initiative?.live === true ? [initiative.id] : [], milestoneIds,
         },
       },
@@ -493,11 +504,13 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       const pr = s.ticketPrs?.[t.id];
       const ident = tb?.state === 'bound' ? tb.identifier : null;
       const wantPr = pr !== undefined && ident !== null && ticketRefOfBranch(pr.branch ?? '', tpl.teamKey) !== ident.toUpperCase();
+      // A create (no issue yet) in a team the epic's project is not in: it waits until the project's update with that team is current.
+      const createsOnOtherTeam = (tb === undefined || tb.state !== 'bound' || tb.linearId === null) && tpl.teamKey.toUpperCase() !== pl.teamKey.toUpperCase();
       const fpNull = plannedFingerprint(ip);
       const fpFull = wantPr ? plannedFingerprint({ ...ip, prUrl: pr.url }) : fpNull;
       decide({
         phase: 3, kind: 'ticket', id: t.id, workspaceId: wsId, teamKey: tpl.teamKey, op: { create: 'issueCreate', update: 'issueUpdate' },
-        b: tb, ready: t.checkpointId === null || milestoneId !== null, statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
+        b: tb, ready: (t.checkpointId === null || milestoneId !== null) && (projectCurrent || !createsOnOtherTeam), statusMissing: iStatus === null, texts: [ip.title, ip.description, ...(cancelBody === null ? [] : [cancelBody])], facts: [tpl.fact],
         planned: ip, fp: fpNull, isCurrent: (st) => st === fpFull,
         link: (forced) => {
           if (forced !== null || !wantPr || tb === undefined || tb.linearId === null || tb.fingerprint !== fpNull) return null;
@@ -615,33 +628,33 @@ export interface AdoptionAsk {
   requestId: string;
   /** The directory's viewer: the key ccrc writes with. Null when no directory is held (nothing is then provably ccrc's). */
   viewer: string | null;
-  /** The step's planned team key: a project must be in it, an issue on it. */
-  teamKey: string | null;
   /** Every Linear id another binding holds. */
   held: ReadonlySet<string>;
 }
-export type AdoptionVerdict = { verdict: 'adopt'; id: string } | { verdict: 'none' };
+/** `teamKey` is the object's own team as it was read (an issue's; a project has several, and the step's planned team stays its
+ *  binding's): absent when the read did not answer one. */
+export type AdoptionVerdict = { verdict: 'adopt'; id: string; teamKey?: string } | { verdict: 'none' };
 
 /**
- * C2' (amending C2), C11 and R2: which object, if any, is ccrc's own, after a create that may have been sent (`recover`) or
- * one answered "conflict on insert" (`bindExisting`). Only the object at the requestId, held by no other binding, and: an
- * initiative or a project made by the viewer (a project in the planned team); a milestone as it is (it was read inside
- * ccrc's own bound project, and has no creator, R3); an issue on the planned team. A name-only match is never ours (every
- * kind takes a caller id, FX2): `none`, and the caller sends the create (recovery) or fails the binding (a conflict).
+ * C2' (amending C2), C11, R2 and D-8183 (round 1 A11): which object, if any, is ccrc's own, after a create that may have been sent
+ * (`recover`) or one answered "conflict on insert" (`bindExisting`). Only the object at the requestId, held by no other binding,
+ * and: an initiative or a project made by the viewer; a milestone as it is (it was read inside ccrc's own bound project, and has no
+ * creator, R3); an issue, by its id alone. The planned TEAM is no part of the rule: the team key may have changed between a lost
+ * create reply and the recovery, and an object made under the old key is ccrc's all the same; an issue's actual team is answered,
+ * so the binding records it and the next pass's update moves the issue (C15). A name-only match is never ours (every kind takes a
+ * caller id, FX2): `none`, and the caller sends the create (recovery) or fails the binding (a conflict).
  */
 export function adoptionVerdict(kind: AdoptionKind, nodes: readonly AdoptionNode[], a: AdoptionAsk): AdoptionVerdict {
-  const team = a.teamKey === null ? null : a.teamKey.toUpperCase();
   const ours = (n: AdoptionNode): boolean => {
     if (n.id !== a.requestId || a.held.has(n.id)) return false;
     switch (kind) {
-      case 'milestone': return true;
-      case 'issue': return team !== null && typeof n.teamKey === 'string' && n.teamKey.toUpperCase() === team;
-      case 'initiative': return a.viewer !== null && n.creatorId === a.viewer;
-      case 'project': return a.viewer !== null && n.creatorId === a.viewer && (team === null || (n.teamKeys ?? []).some((k) => k.toUpperCase() === team));
+      case 'milestone': case 'issue': return true;
+      case 'initiative': case 'project': return a.viewer !== null && n.creatorId === a.viewer;
     }
   };
   const found = nodes.find(ours);
-  return found === undefined ? { verdict: 'none' } : { verdict: 'adopt', id: found.id };
+  if (found === undefined) return { verdict: 'none' };
+  return kind === 'issue' && typeof found.teamKey === 'string' ? { verdict: 'adopt', id: found.id, teamKey: found.teamKey } : { verdict: 'adopt', id: found.id };
 }
 
 /** An issue as `issueOwned` answered it, for C12's read. */
