@@ -148,11 +148,17 @@ describe('decisionAskStore: the store as the one caller uses it; no method throw
 
 describe('the migration', () => {
   it('a database one version back gains the two tables and keeps every row of every older table', () => {
-    // One version back from THIS migration, found by what it creates rather than by being last: a later migration (remaining
-    // work A's, Overlord W2) sits above it, so stepping back also drops what every later migration created.
-    const at = MIGRATIONS.findIndex((m) => /CREATE TABLE decision_records\b/.test(m));
+    // One version back from THIS migration, found by its text rather than by being last: later migrations sit above it (87,
+    // asks.revision and operator_items.revision, Overlord W2 row revisions; 88, programme_remaining and programme_edges,
+    // Overlord W2 remaining work), so each later one is undone first, newest first: its added columns and its tables.
+    const at = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE decision_records'));
     expect(at).toBeGreaterThan(0);
-    const later = MIGRATIONS.slice(at + 1).flatMap((m) => [...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => x[1]!));
+    const laterMigrations = MIGRATIONS.slice(at + 1);
+    const later = laterMigrations.flatMap((m) => [...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => x[1]!));
+    const undo = [...laterMigrations].reverse().map((m) => [
+      ...[...m.matchAll(/ALTER TABLE (\w+) ADD COLUMN (\w+)/g)].map((x) => `ALTER TABLE ${x[1]} DROP COLUMN ${x[2]};`),
+      ...[...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => `DROP TABLE ${x[1]};`),
+    ].join(' ')).join(' ');
     db.prepare('INSERT INTO response_boots (epoch, bootedAt, buildSha) VALUES (1, 2, NULL)').run();
     const tables = (d: DatabaseSync): string[] => (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as
       { name: string }[]).map((t) => t.name);
@@ -160,7 +166,7 @@ describe('the migration', () => {
     const counts = (d: DatabaseSync) => Object.fromEntries(older.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
     const before = counts(db);
     expect(before['response_boots']).toBe(1);
-    db.exec(`${later.map((t) => `DROP TABLE ${t};`).join(' ')} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${at};`);
+    db.exec(`${undo} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${at};`);
     db.close();
     const again = openCoordDb(file);
     expect(again.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });

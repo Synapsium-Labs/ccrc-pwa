@@ -3461,6 +3461,17 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
+  // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
+  // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
+  // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
+  `
+  ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+  `,
+
+  // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
   // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
   // reason, at the plan when `runId` is null or at that run's wave boundary); `programme_edges`, what the programme waits
@@ -3468,8 +3479,8 @@ export const MIGRATIONS: readonly string[] = [
   // (`shared/programmeFacts.ts#edgeTargetKey`), so the partial unique index sees two equal targets as one open edge. ONE
   // writer of both inserts, `programmeFactsStore.ts#insertRemaining`, in the statement's transaction; the edge's state
   // columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's edge arm's alone. NEW TABLES only:
-  // an older build at this `user_version` takes rule 3 and never names them. Decision model A (#2948) landed 86, so this is
-  // 87 by position (the coordinator's standing license, 2026-11-17); whoever of the open PRs holding 87 lands second
+  // an older build at this `user_version` takes rule 3 and never names them. Row revisions (#2965) landed 87, so this is
+  // 88 by position (the coordinator's standing license, 2026-11-17); whoever of the open PRs holding 88 lands second
   // renumbers at landing, on the coordinator's word. RE-MEASURE the slot:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

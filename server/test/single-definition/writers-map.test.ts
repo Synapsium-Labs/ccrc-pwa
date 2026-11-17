@@ -18,6 +18,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { parseFile, ts } from '../scan/parse.js';
+import { sqlWrites } from './sqlStatements.js';
 import { ccdSourceLines, bashCodeOf } from '../consolidationCensus.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, rel, stallCode } from './helpers.js';
 
@@ -316,24 +317,11 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days',
   'programme_remaining', 'programme_edges'] as const;
 
-/** Each table's writers, `file#Class.method`, sorted and unique. `tables` is the table list to read: coord.db's by default,
- *  and the private store's for its own describe (Overlord W1 private store A). */
+/** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
+ *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
 export const tableWriters = (files: readonly string[], tables: readonly string[] = TABLES): Record<string, string[]> => {
   const out: Record<string, Set<string>> = Object.fromEntries(tables.map((t) => [t, new Set<string>()]));
-  const verb = new RegExp(`(?:INSERT(?:\\s+OR\\s+\\w+)?\\s+INTO|UPDATE|DELETE\\s+FROM|REPLACE\\s+INTO)\\s+(${tables.join('|')})\\b`, 'g');
-  for (const f of files) {
-    // Comment lines blanked to spaces, so prose naming a statement is not a writer and offsets still hold.
-    const text = readFileSync(f, 'utf8').replace(/^\s*(?:\*|\/\*|\/\/).*$/gm, (l) => ' '.repeat(l.length));
-    if (!tables.some((t) => text.includes(t))) continue;
-    const hits = [...text.matchAll(verb)];
-    if (hits.length === 0) continue;
-    const syms = parseFile(f).symbols;
-    for (const m of hits) {
-      const at = m.index!;
-      const inner = syms.filter((s) => s.start <= at && at < s.end).sort((a, b) => (a.end - a.start) - (b.end - b.start))[0];
-      out[m[1]!]!.add(`${rel(f)}#${inner?.name ?? '(module)'}`);
-    }
-  }
+  for (const w of sqlWrites(files, tables)) out[w.table]!.add(w.writer);
   return Object.fromEntries(Object.entries(out).map(([t, s]) => [t, [...s].sort()]));
 };
 
