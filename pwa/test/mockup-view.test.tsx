@@ -459,6 +459,30 @@ describe('a second load tears the frame down (M5.15; base 5.6.6)', () => {
     },
   );
 
+  it('a re-list whose asset changed but kept its size is a NEW element: the view compares the whole page, never its length (review 2372 F3)', async () => {
+    let reads = 0;
+    const reader: MockupAssetReader = {
+      read: async () => {
+        reads += 1;
+        return { kind: 'ok', bytes: reads === 1 ? bytesOf(1, 2, 3) : bytesOf(4, 5, 6) };
+      },
+    };
+    const setup = (): Setup => ({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader });
+    const m = mount(setup());
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    await flush();
+    const first = m.frame()!;
+    const firstDoc = first.getAttribute('srcdoc')!;
+    m.again(setup());
+    await waitFor(() => expect(m.frame()!.getAttribute('srcdoc')).not.toBe(firstDoc));
+    await flush();
+    expect(reads).toBe(2);
+    expect(m.frame()!.getAttribute('srcdoc')!.length, 'the changed page keeps its length').toBe(firstDoc.length);
+    expect(m.frame()).not.toBe(first);
+    expect(first.isConnected).toBe(false);
+    expect(screen.queryByText(MOCKUP_TEXT.navigatedAway)).toBeNull();
+  });
+
   it('a new context whose assets changed also publishes into a NEW element (review I1)', async () => {
     const reads = fakeReader();
     const gate = (entries: DocsEntry[]): Setup => ({ html: '<img src="a.png"><img src="b.png">', context: ctxOf(entries), reader: reads.reader });

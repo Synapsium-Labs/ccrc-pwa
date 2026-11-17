@@ -58,6 +58,9 @@
 //                        element's `innerHTML` reaches B and runs the handler
 //   second-load teardown the real viewer removes a frame that navigates itself (script or meta refresh) and shows its notice
 //                        and Reload mockup; CONTROL: Reload mockup mounts a new frame within a time the no-frame window exceeds
+//   re-list              a re-list (the freshness chip) over identical files keeps the same frame element, with no notice; a
+//                        same-size stylesheet change publishes a NEW element whose one load is its page, with no notice;
+//                        CONTROL: a changed srcdoc written into the same element shows the notice, and bounds both windows
 //   no parent messages   `parent.postMessage` from the scripted frame changes nothing in the console; the page's own counter
 //                        sees each message arrive
 //   chrome and widths    at 412x915 and 1280x800 the toolbar controls are at least 44 px tall and inside the viewport, the frame
@@ -1097,15 +1100,23 @@ describe('E12: the browser\'s DOMParser on a hostile page', () => {
 // ---- the app rows: the real built PWA ----------------------------------------------------------------------------------------
 
 const DOCS: Map<string, string> = new Map();
+/** How many times the file route answered each path: a re-list row's proof that the view's new attempt read again. */
+const READS: Map<string, number> = new Map();
+/** Whether a POST to the refresh route answers with the listing as it stands (the re-list row only); every other row gets
+ *  the 204 it always had. */
+const relisting = { on: false };
 const blobOf = (p: string): string => Buffer.from(p).toString('hex').padEnd(40, '0').slice(0, 40);
+const listing = () => treeResponse(treeOk({
+  entries: [...DOCS].map(([p, t]) => entry(SECTION, p, { committed: { kind: 'file', blob: blobOf(p), size: Buffer.byteLength(t) } })),
+}));
 
 function docsAnswer(url: URL): { status: number; headers: Record<string, string>; body: string } {
   const json = 'application/json; charset=utf-8';
   if (url.pathname.endsWith('/tree')) {
-    const entries = [...DOCS].map(([p, t]) => entry(SECTION, p, { committed: { kind: 'file', blob: blobOf(p), size: Buffer.byteLength(t) } }));
-    return { status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': json }, body: JSON.stringify(treeResponse(treeOk({ entries }))) };
+    return { status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': json }, body: JSON.stringify(listing()) };
   }
   const p = url.searchParams.get('path') ?? '';
+  READS.set(p, (READS.get(p) ?? 0) + 1);
   const text = DOCS.get(p);
   if (text === undefined) return { status: 404, headers: { 'content-type': json }, body: JSON.stringify({ ok: false, failure: 'not-a-file' }) };
   const show = {
@@ -1137,7 +1148,15 @@ async function openDocs(width: number, height: number): Promise<AppSession> {
   await app.ctx.addInitScript(APP_HOOK);
   await app.ctx.route((u) => u.pathname.startsWith('/api/docs/'), async (route) => {
     const req = route.request();
-    if (req.method() !== 'GET') { await route.fulfill({ status: 204 }); return; }
+    if (req.method() !== 'GET') {
+      if (relisting.on && new URL(req.url()).pathname.endsWith('/refresh')) {
+        const body = { ok: true, fetch: { state: 'skipped', why: 'local-ref' }, tree: listing() };
+        await route.fulfill({ status: 200, headers: { ...DOCS_RESPONSE_HEADERS, 'content-type': 'application/json; charset=utf-8' }, body: JSON.stringify(body) });
+        return;
+      }
+      await route.fulfill({ status: 204 });
+      return;
+    }
     const a = docsAnswer(new URL(req.url()));
     await route.fulfill({ status: a.status, headers: a.headers, body: a.body });
   });
@@ -1184,6 +1203,77 @@ describe('the real viewer', () => {
       process.stderr.write(`TEARDOWN-MEASURE ${via}: a remount mounted a frame ${Math.round(t)} ms after the tap\n`);
       expect(t * 3, `${via}: the no-frame window (2000 ms) is at least three times a remount`).toBeLessThanOrEqual(2000);
       expect(tagged(origins.hits, row), `${via}: the target never received a request`).toEqual([]);
+    }
+  }, 180_000);
+
+  it('a re-list over identical files keeps the frame element with no notice; a same-size asset change publishes a NEW element, with no notice (review I1, 2361 M2, 2372 F3)', async () => {
+    // Same length on purpose: the two stylesheets differ in bytes only, so only a whole-page compare tells the builds apart.
+    const before = 'p{color:red}';
+    const after = 'p{color:tan}';
+    expect(after.length).toBe(before.length);
+    const sheet = (css: string): string => Buffer.from(css).toString('base64');
+    const pageOf = (name: string): string => `<!doctype html><html><head><meta charset="utf-8"><title>${name}</title><link rel="stylesheet" href="${name}.css"></head><body><p>${name}</p></body></html>`;
+    const frameAttr = (page: Page, name: string): Promise<string | null> =>
+      page.evaluate((n) => document.querySelector('iframe.docs-mockup-frame')?.getAttribute(n) ?? null, name);
+    const away = (page: Page): Promise<number> => page.locator('.docs-mockup-away').count();
+    relisting.on = true;
+    try {
+      // CONTROL first: a changed srcdoc written into the SAME element is reloaded in place by Chrome, and the view reads that
+      // second load as the page navigating away. Its latency bounds the windows below (3x, at least 1.5 s).
+      DOCS.set('relist-control.html', pageOf('relist-control'));
+      DOCS.set('relist-control.css', before);
+      const ctl = await openDocs(1280, 800);
+      await ctl.page.goto(leaf('relist-control.html'));
+      await framed(ctl.page);
+      await until('the control frame\'s first load to pass', async () => (await frameAttr(ctl.page, 'srcdoc'))?.includes(sheet(before)) || null);
+      await sleep(300);
+      const t0 = await ctl.page.evaluate(([from, to]) => {
+        const f = document.querySelector('iframe.docs-mockup-frame') as HTMLIFrameElement;
+        f.setAttribute('srcdoc', (f.getAttribute('srcdoc') ?? '').replace(from, to));
+        return performance.now();
+      }, [sheet(before), sheet(after)] as const);
+      await ctl.page.locator('.docs-mockup-away').waitFor({ timeout: 30_000 });
+      const controlMs = (await ctl.page.evaluate(() => performance.now())) - t0;
+      process.stderr.write(`RELIST-MEASURE control: a srcdoc changed in place showed the notice within ${Math.round(controlMs)} ms\n`);
+      const bound = windowFrom(controlMs);
+
+      DOCS.set('relist.html', pageOf('relist'));
+      DOCS.set('relist.css', before);
+      const { app, page } = await openDocs(1280, 800);
+      await page.goto(leaf('relist.html'));
+      await framed(page);
+      await page.evaluate(() => document.querySelector('iframe.docs-mockup-frame')?.setAttribute('data-probe', 'first'));
+      const firstDoc = await frameAttr(page, 'srcdoc');
+      expect(firstDoc, 'the first build inlines the first stylesheet').toContain(sheet(before));
+
+      // Identical files: the re-list's attempt reads the stylesheet again and builds the same page, so the element stays.
+      const read0 = READS.get('relist.css') ?? 0;
+      await page.locator('button.docs-fresh').click();
+      await until('the re-list to read the stylesheet again', async () => (READS.get('relist.css') ?? 0) > read0 || null);
+      await sleep(bound);
+      expect(await page.locator('iframe.docs-mockup-frame[data-probe="first"]').count(), 'identical: the same element stands').toBe(1);
+      expect(await frameAttr(page, 'srcdoc'), 'identical: the same page').toBe(firstDoc);
+      expect(await away(page), 'identical: no notice').toBe(0);
+
+      // A same-size change: a new element carries the new page, and its one load is its page, not a navigation.
+      DOCS.set('relist.css', after);
+      const read1 = READS.get('relist.css') ?? 0;
+      await page.locator('button.docs-fresh').click();
+      await until('the re-list to read the changed stylesheet', async () => (READS.get('relist.css') ?? 0) > read1 || null);
+      const published = await until('a new frame element with the new page, or the notice', async () => page.evaluate((s) => {
+        if (document.querySelector('.docs-mockup-away') !== null) return 'the notice';
+        const f = document.querySelector('iframe.docs-mockup-frame');
+        return f !== null && !f.hasAttribute('data-probe') && (f.getAttribute('srcdoc') ?? '').includes(s) ? 'a new element' : null;
+      }, sheet(after)));
+      expect(published, 'changed: the new page reaches a new element, and no notice shows').toBe('a new element');
+      expect((await frameAttr(page, 'srcdoc'))?.length, 'the changed page keeps its length').toBe(firstDoc?.length);
+      await sleep(bound);
+      expect(await page.locator('iframe.docs-mockup-frame').count(), 'changed: one frame stands').toBe(1);
+      expect(await page.locator('iframe.docs-mockup-frame[data-probe="first"]').count(), 'changed: the old element is gone').toBe(0);
+      expect(await away(page), 'changed: no notice').toBe(0);
+      expect(app.errors, 'no page error').toEqual([]);
+    } finally {
+      relisting.on = false;
     }
   }, 180_000);
 
