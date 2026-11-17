@@ -422,7 +422,62 @@ describe('readerDiff: a seeded oracle over small random documents', () => {
     return set;
   }
 
-  it('2 000 random pairs satisfy the oracle, the shape rules and symmetry', () => {
+  /**
+   * Whether the diff's removals are exactly where some optimal alignment loses lines. The survivors are the after lines
+   * `ranges` leave out, in order. The answer is valid iff the survivors embed in the before lines, in order and by exact
+   * line, so that every gap (before the first survivor, marked 0; between two, marked after the earlier; after the last,
+   * marked after it, or 0 when there is no survivor) holds a before line exactly when its mark is in `removedAfter`.
+   * Different optimal alignments place removals differently, so no single reference alignment is compared.
+   */
+  function removalsAreValid(before: readonly string[], after: readonly string[], d: Available): boolean {
+    const covered = coveredSet(d);
+    const marks = new Set(d.removedAfter);
+    const survivorAt: number[] = [];
+    for (let i = 1; i <= after.length; i += 1) if (!covered.has(i)) survivorAt.push(i);
+    const allowed = new Set<number>([0, ...survivorAt]);
+    if (marks.size !== d.removedAfter.length) return false;
+    for (const mark of marks) if (!allowed.has(mark)) return false;
+    const n = before.length;
+    const L = survivorAt.length;
+    const gapOk = (mark: number, size: number): boolean => size > 0 === marks.has(mark);
+    if (L === 0) return gapOk(0, n);
+    // reach[j]: survivor i can sit at before line j with every gap before it matching its mark
+    let reach: boolean[] = before.map((line, j) => line === after[survivorAt[0]! - 1] && gapOk(0, j));
+    for (let i = 1; i < L; i += 1) {
+      const next: boolean[] = before.map(() => false);
+      for (let j = 0; j < n; j += 1) {
+        if (before[j] !== after[survivorAt[i]! - 1]) continue;
+        for (let p = 0; p < j; p += 1) {
+          if (reach[p] && gapOk(survivorAt[i - 1]!, j - p - 1)) {
+            next[j] = true;
+            break;
+          }
+        }
+      }
+      reach = next;
+    }
+    return reach.some((ok, j) => ok && gapOk(survivorAt[L - 1]!, n - 1 - j));
+  }
+
+  it('the removal check rejects a removal marked after the next survivor', () => {
+    const before = ['a', 'x', 'b', 'c'];
+    const after = ['a', 'b', 'c'];
+    expect(avail(before.join('\n'), after.join('\n')).removedAfter).toEqual([1]);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [1] })).toBe(true);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [2] })).toBe(false);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [] })).toBe(false);
+  });
+
+  it('the removal check wants one removal for each separated deletion gap', () => {
+    const before = ['a', 'x', 'b', 'y', 'c'];
+    const after = ['a', 'b', 'c'];
+    expect(avail(before.join('\n'), after.join('\n')).removedAfter).toEqual([1, 2]);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [1, 2] })).toBe(true);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [1] })).toBe(false);
+    expect(removalsAreValid(before, after, { kind: 'available', ranges: [], removedAfter: [2] })).toBe(false);
+  });
+
+  it('2 000 random pairs satisfy the oracle, the shape rules, where removals land and symmetry', () => {
     const rnd = prng(20261117);
     const alphabet = ['a', 'b', 'c', 'd'];
     const side = (): { text: string; lines: string[] } => {
@@ -456,6 +511,7 @@ describe('readerDiff: a seeded oracle over small random documents', () => {
       const survivors = y.lines.filter((_, i) => !covered.has(i + 1));
       expect(isSubsequence(survivors, x.lines), label).toBe(true);
       expect(survivors.length, label).toBe(lcs);
+      expect(removalsAreValid(x.lines, y.lines, d), label).toBe(true);
       let prevRemoved = -1;
       for (const r of d.removedAfter) {
         expect(r, label).toBeGreaterThan(prevRemoved);
@@ -467,6 +523,7 @@ describe('readerDiff: a seeded oracle over small random documents', () => {
       expect(d.removedAfter.length === 0, label).toBe(x.lines.length === lcs);
       const back = avail(y.text, x.text);
       expect(coveredSet(back).size, label).toBe(x.lines.length - lcs);
+      expect(removalsAreValid(y.lines, x.lines, back), label).toBe(true);
       expect(coveredSet(d).size, label).toBe(y.lines.length - lcs);
     }
     // a finite bound on the whole oracle, not a benchmark
