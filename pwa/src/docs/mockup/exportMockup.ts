@@ -44,7 +44,7 @@ import { DOCS_EXPORT_CSP, DOCS_EXPORT_MAX_BYTES, EXPORT_PREFIX, type ExportMissi
 import { rewriteCssBytes, scanCssBytes, scanCssBytesRefs, type CssToken } from './css';
 import { base64Of, extractMockupRefs, parseSrcset, type MockupExtract } from './load';
 import { MOCKUP_MAX_CSS_DEPTH } from './policy';
-import type { MockupAssetResult, MockupAssetRow, MockupRef, MockupRefVerdict } from './ports';
+import type { MockupAssetPlan, MockupAssetResult, MockupAssetRow, MockupRef, MockupRefVerdict } from './ports';
 
 /** What the snapshot answers: `html` is the inner document (`EXPORT_PREFIX` and the stripped clone's markup, the CSP meta
  *  first in `<head>`); `links` the removed link targets in DOM order; `omitted` every asset NONE of whose uses was written
@@ -270,6 +270,53 @@ function missingWhy(verdict: MockupRefVerdict | undefined): ExportMissing {
   }
 }
 
+/** The row that defines each admitted file, keyed by the pin's API URL, as the result's `assets` map is: an admitted row
+ *  already carries its pin, and within one attempt's context a path has exactly one pin, so no reference is resolved a
+ *  second time here. The first admitted row of a file defines it (its reference is the base of the stylesheet's own). */
+function canonicalFiles(plan: MockupAssetPlan): ReadonlyMap<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }> {
+  const first = new Map<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }>();
+  for (const row of plan.rows) {
+    if (row.verdict.v !== 'inline' || row.size === null) continue;
+    const key = docsApi.file(plan.context.project, row.verdict.pin);
+    if (!first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
+  }
+  return first;
+}
+
+/** The admitted files the result holds, one entry each, ordered by the file's FIRST USE depth-first in document order: a
+ *  stylesheet's nested files right after that stylesheet's use (while their depth of use stays within
+ *  `MOCKUP_MAX_CSS_DEPTH`), as `buildMockupSrcdoc` decides uses. The builder's size cut keeps a prefix of this order, so it
+ *  keeps the earliest uses, the page's own order and not the plan's (every page use, then every nested file). A file the
+ *  result does not hold is not listed and nothing under it is reached: nothing is built from it. */
+export function heldInUseOrder(result: MockupAssetResult): ReadonlyArray<{ readonly key: string; readonly verdict: InlineVerdict }> {
+  const { plan } = result;
+  const first = canonicalFiles(plan);
+  const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
+  const out: Array<{ readonly key: string; readonly verdict: InlineVerdict }> = [];
+  const listed = new Set<string>();
+  const expanded = new Set<string>(); // (file, depth): a stylesheet is read once at each depth of use
+  const visit = (row: MockupAssetRow, depth: number): void => {
+    if (row.verdict.v !== 'inline') return;
+    const key = docsApi.file(plan.context.project, row.verdict.pin);
+    const canon = first.get(key);
+    const asset = result.assets.get(key);
+    if (canon === undefined || asset === undefined) return;
+    if (!listed.has(key)) {
+      listed.add(key);
+      out.push({ key, verdict: canon.verdict });
+    }
+    const at = `${key}@${depth}`;
+    if (canon.verdict.kind !== 'css' || depth + 1 > MOCKUP_MAX_CSS_DEPTH || expanded.has(at)) return;
+    expanded.add(at);
+    for (const r of scanCssBytesRefs(asset.bytes, canon.ref).refs) {
+      const child = rowByKey.get(r.key);
+      if (child !== undefined) visit(child, depth + 1);
+    }
+  };
+  for (const row of plan.rows) if (row.ref.depth === 0) visit(row, 0);
+  return out;
+}
+
 /** One built use of a file: its `data:` URL, and the repo path of every file whose bytes that URL holds (the file itself,
  *  and for a stylesheet the files nested inside it that it inlined). */
 interface BuiltUse { readonly url: string; readonly files: readonly string[] }
@@ -282,14 +329,7 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
   const { plan } = assets;
   const project = plan.context.project;
   const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
-  // A file is keyed by its pin's API URL, as the result's `assets` map is: an admitted row already carries its pin, and
-  // within one attempt's context a path has exactly one pin, so no reference is resolved a second time here.
-  const first = new Map<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }>();
-  for (const row of plan.rows) {
-    if (row.verdict.v !== 'inline' || row.size === null) continue;
-    const key = docsApi.file(project, row.verdict.pin);
-    if (!first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
-  }
+  const first = canonicalFiles(plan);
   const seen = new Set<string>(); // every asset a use of which was cut or could not be built, first seen first
   const written = new Set<string>(); // every asset a use of which was written into the Document
   const why = new Map<string, ExportMissing>();

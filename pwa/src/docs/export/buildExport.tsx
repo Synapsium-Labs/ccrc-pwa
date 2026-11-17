@@ -20,7 +20,7 @@
 // at most `limits.imageWaitMs` for the attempt's assets (past it, or when the attempt ended, no asset is inlined and every
 // admitted one is listed as still loading, or failed) and counts the FINAL file's bytes, the inner document escaped into
 // the attribute plus the wrapper: the snapshot with every loaded asset, else with none (over: `too-large`), else the
-// largest prefix of the files, in the plan's DOM order, that fits (`fits` is the one measure).
+// largest prefix of the files, in the order of their first use (`heldInUseOrder`), that fits (`fits` is the one measure).
 //
 // Ring L4 delivery.
 import { Fragment, type ReactElement, type ReactNode } from 'react';
@@ -36,7 +36,7 @@ import type { DocLinkContextValue } from '../DocLink';
 import type { DetachedUrls } from '../docsLinks';
 import { DOC_IMAGE_TEXT, EXPORT_TEXT, fillSentence, kib, pluralS } from '../docsText';
 import type { MockupExportAssets, MockupLoadEnd } from '../exportBody';
-import { TIMED_OUT, buildMockupSnapshot } from '../mockup/exportMockup';
+import { TIMED_OUT, buildMockupSnapshot, heldInUseOrder } from '../mockup/exportMockup';
 import type { MockupAssetPlan, MockupAssetResult } from '../mockup/ports';
 import { exportColouring, type ExportColouring } from './colouring';
 import { settleExportAssets, type ExportAsset, type ExportAssets } from './exportAssets';
@@ -286,7 +286,8 @@ function fileOf(input: ShellInput, images: ReadonlyMap<HastElement, ExportImageD
 // The mockup arm (spec 5.6.9, 4.17 "Size"; completion plan Task 9; rows M5.EX1, M5.EX5, M5.EX7)
 // ---------------------------------------------------------------------------------------------------------------
 
-/** One admitted asset the attempt's result holds, in the plan's order (DOM order, then stylesheet discovery order). */
+/** One admitted asset the attempt's result holds, in the order of its first use (`heldInUseOrder`: depth-first in document
+ *  order, a stylesheet's nested files right after its use). */
 interface HeldFile {
   /** The key of `MockupAssetResult.assets`: the pin's own API URL. */
   readonly key: string;
@@ -308,13 +309,9 @@ function heldFiles(result: MockupAssetResult): HeldFile[] {
     }
   }
   const out: HeldFile[] = [];
-  const seen = new Set<string>();
-  for (const { verdict } of rows) {
-    if (verdict.v !== 'inline') continue;
-    const key = docsApi.file(context.project, verdict.pin);
+  for (const { key, verdict } of heldInUseOrder(result)) {
     const held = result.assets.get(key);
-    if (held === undefined || seen.has(key)) continue;
-    seen.add(key);
+    if (held === undefined) continue;
     const url = `data:${verdict.mime};base64,`.length + 4 * Math.ceil(held.bytes.length / 3);
     out.push({
       key, path: docRepoPath(verdict.pin.section, verdict.pin.path), draft: verdict.draft, size: held.bytes.length,

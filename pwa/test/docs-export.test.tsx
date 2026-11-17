@@ -1037,6 +1037,26 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     expect(fillSentence(EXPORT_TEXT.mockupDiagrams, { m: 3, s: 's', es: '' })).toBe('3 diagrams appear as source');
   });
 
+  it('the size cut keeps assets in document order: a stylesheet first on the page, with its nested file, is kept before the page images that come later (review minor 7)', async () => {
+    // A stylesheet's nested file sits right after the stylesheet's own use, as the srcdoc build orders uses; the plan lists
+    // the nested file after every page use. Room for the stylesheet with its background and one more file at most.
+    const html = mockupPage(
+      '<img id="a" src="a.png" alt="a"><img id="b" src="b.png" alt="b"><img id="c" src="c.png" alt="c">',
+      '<link rel="stylesheet" href="s.css">',
+    );
+    const files: MockupFiles = { 's.css': 'p{background:url(bg.png)}', 'bg.png': BIG(200_000), 'a.png': BIG(200_000), 'b.png': BIG(200_000), 'c.png': BIG(200_000) };
+    const whole = await builtMockup(html, files);
+    const one = await builtMockup(html, { ...files, 'bg.png': BIG(100), 'a.png': BIG(100), 'b.png': BIG(100), 'c.png': BIG(100) });
+    const maxBytes = one.result.size + 360_000;
+    expect(whole.result.size).toBeGreaterThan(maxBytes);
+    const { result, inner } = await builtMockup(html, files, {}, { maxBytes, imageWaitMs: 1000 });
+    expect(result.size).toBeLessThanOrEqual(maxBytes);
+    expect(result.mockup?.inlined.map((f) => f.path)).toEqual([specsRepo('s.css'), specsRepo('bg.png')]);
+    expect(result.mockup?.omitted).toEqual(['a.png', 'b.png', 'c.png'].map(specsRepo));
+    expect(inner.querySelector('link')?.getAttribute('href')?.startsWith('data:text/css;base64,')).toBe(true);
+    for (const id of ['a', 'b', 'c']) expect(inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
+  }, 60_000);
+
   it('a stripped body that is over the limit on its own gives too-large; one with room for no asset lists every asset as left out', async () => {
     const html = mockupPage(`<p>${'x'.repeat(100_000)}</p><img src="a.png" alt="a">`);
     const input = await mockupInput(html, { 'a.png': BIG(3000) });

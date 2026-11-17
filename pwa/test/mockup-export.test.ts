@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { docRepoPath, docsApi, type DocPin, type DocsEntry } from '../../shared/docs';
 import { EXPORT_MISSING_SENTENCE } from '../src/docs/docsText';
 import { DOCS_EXPORT_CSP, EXPORT_PREFIX } from '../src/docs/export/policy';
-import { buildMockupSnapshot } from '../src/docs/mockup/exportMockup';
+import { buildMockupSnapshot, heldInUseOrder } from '../src/docs/mockup/exportMockup';
 import { extractMockupRefs, loadMockupAssets } from '../src/docs/mockup/load';
 import { parseMockup } from '../src/docs/mockup/parse';
 import { planMockupAssets } from '../src/docs/mockup/plan';
@@ -637,6 +637,20 @@ describe('inlining (base 5.6.9 Step 2): a held file becomes data: with the ROW M
     const drop = (r: MockupAssetResult): MockupAssetResult => ({ ...r, assets: new Map([...r.assets].filter(([k]) => !k.includes('s.css'))) });
     const { out } = await run(page('<p>x</p>', '<link rel="stylesheet" href="s.css">'), { 's.css': 'p{background:url(bg.png)}', 'bg.png': 'B' }, drop);
     expect(out.omitted).toEqual([repo('s.css'), repo('bg.png')]);
+  });
+
+  it('the held files are ordered by their first use, depth-first in document order: a stylesheet\'s nested files right after its use, a repeat not again (review minor 7)', async () => {
+    const { result } = await run(
+      page('<img src="a.png"><img src="b.png"><img src="a.png"><img src="c.png">', '<link rel="stylesheet" href="s.css">'),
+      { 's.css': '@import "t.css"; p{background:url(bg.png)}', 't.css': 'q{background:url(deep.png)}', 'bg.png': 'B', 'deep.png': 'D', 'a.png': 'A', 'b.png': 'B2', 'c.png': 'C' },
+    );
+    expect(heldInUseOrder(result).map((h) => h.verdict.pin.path)).toEqual(['s.css', 't.css', 'deep.png', 'bg.png', 'a.png', 'b.png', 'c.png']);
+  });
+
+  it('a file the result does not hold is not listed, and nothing nested under it is reached', async () => {
+    const drop = (r: MockupAssetResult): MockupAssetResult => ({ ...r, assets: new Map([...r.assets].filter(([k]) => !k.includes('s.css'))) });
+    const { result } = await run(page('<img src="a.png">', '<link rel="stylesheet" href="s.css">'), { 's.css': 'p{background:url(bg.png)}', 'bg.png': 'B', 'a.png': 'A' }, drop);
+    expect(heldInUseOrder(result).map((h) => h.verdict.pin.path)).toEqual(['a.png']);
   });
 
   it('a link whose href is a data: URL loses it too: the links step, not the URL allowlist (which keeps data:), removes it', async () => {
