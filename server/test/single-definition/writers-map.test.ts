@@ -315,7 +315,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges'] as const;
+  'programme_remaining', 'programme_edges', 'programme_forecasts'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -419,6 +419,9 @@ describe(TABLES_PIN, () => {
       // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
       programme_edges: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
+      // score arm's outcome write, each reached only from its arm of the forecast lane.
+      programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
     });
   });
 
@@ -559,6 +562,19 @@ describe(TABLES_PIN, () => {
       'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
       `${S}insertRemaining`,
     ]);
+  });
+  // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): each writer is reached only from its
+  // arm of the forecast lane, and `scoreForecast` writes the outcome columns alone, never a seal's dates, seed or statement.
+  it.each(['sealForecast', 'scoreForecast'])('%s is called exactly once outside the store, inside the forecast lane', (fn) => {
+    expect(callSitesOf(fn)(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/forecastLane.ts#runForecastLane',
+      `${S}${fn}`,
+    ]);
+  });
+  it('scoreForecast\'s one UPDATE sets outcome and scoredAt alone, and only on an open row', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_forecasts\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
+    expect(updates.map((m) => [m[1], m[2]])).toEqual([['outcome = ?, scoredAt = ?', "id = ? AND outcome = 'open'"]]);
   });
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.

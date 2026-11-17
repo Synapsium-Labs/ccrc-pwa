@@ -4,14 +4,16 @@
 // property cases take their run count as an argument: the suite runs the plan's 200, a mutant fewer.
 import { expect } from 'vitest';
 import {
-  ABANDON_REDRAWS_MAX, CALIBRATION_MIN_N, FORECAST_FLEET_MIN, FORECAST_OWN_MIN,
+  ABANDON_REDRAWS_MAX, CALIBRATION_MIN_N, FORECAST_FLEET_MIN, FORECAST_OWN_MIN, SEAL_WAIT_MINUTES,
   type Forecast, type LeadHistory, type SealedForecast,
 } from '../../shared/programmeFacts.js';
 import type * as Forecasts from '../src/coord/forecast.js';
+import type { LeadRun, UnsealedClose } from '../src/coord/forecast.js';
+import { DISPATCH_ABANDON_CLOSE_DETAIL } from '../src/coord/runCloseSwitch.js';
 import type * as Seeded from '../src/time/seeded.js';
 import { mulberry32 } from './fakeTime.js';
 
-export type ForecastModule = Pick<typeof Forecasts, 'forecastProgramme' | 'forecastOutcome' | 'forecastCalibration'>;
+export type ForecastModule = Pick<typeof Forecasts, 'forecastProgramme' | 'forecastOutcome' | 'forecastCalibration' | 'sealBoundary' | 'leadHistoryFrom'>;
 export type SeededModule = Pick<typeof Seeded, 'seededDraws' | 'streamFor'>;
 export interface Case<M> { name: string; run: (m: M) => void }
 
@@ -334,5 +336,90 @@ export const CALIBRATION_CASES: Case<ForecastModule>[] = [
   } },
 ];
 
+// ── sealBoundary ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const MIN = 60_000;
+const close = (o: Partial<UnsealedClose> = {}): UnsealedClose => ({
+  runId: 9, program: 'prog-a', closedAt: AS_OF, statement: { id: 4, at: AS_OF + 5 * MIN, lo: 1, hi: 3 }, named: true, ...o,
+});
+
+export const SEAL_BOUNDARY_CASES: Case<ForecastModule>[] = [
+  { name: 'sealBoundary: a statement naming the close seals at once, as of the later of the close and the statement', run: (m) => {
+    expect(m.sealBoundary(close(), AS_OF + MIN)).toEqual({ kind: 'seal', asOf: AS_OF + 5 * MIN, statementId: 4, remaining: { lo: 1, hi: 3 } });
+    expect(m.sealBoundary(close({ statement: { id: 4, at: AS_OF - DAY, lo: 0, hi: 2 } }), AS_OF)).toEqual(
+      { kind: 'seal', asOf: AS_OF, statementId: 4, remaining: { lo: 0, hi: 2 } });
+  } },
+  { name: 'sealBoundary: a close no statement names waits until SEAL_WAIT_MINUTES after it, then seals', run: (m) => {
+    const c = close({ named: false });
+    expect(m.sealBoundary(c, AS_OF + SEAL_WAIT_MINUTES * MIN - 1)).toEqual({ kind: 'wait' });
+    expect(m.sealBoundary(c, AS_OF + SEAL_WAIT_MINUTES * MIN)).toMatchObject({ kind: 'seal', asOf: AS_OF + 5 * MIN, statementId: 4 });
+  } },
+  { name: 'sealBoundary: no statement at all seals as of the close, with no range', run: (m) => {
+    expect(m.sealBoundary(close({ named: false, statement: null }), AS_OF + DAY)).toEqual({ kind: 'seal', asOf: AS_OF, statementId: null, remaining: null });
+  } },
+  { name: 'sealBoundary: the boundary never moves with the pass\'s time (F19)', run: (m) => {
+    const c = close({ named: false });
+    expect(m.sealBoundary(c, AS_OF + 5 * DAY)).toEqual(m.sealBoundary(c, AS_OF + SEAL_WAIT_MINUTES * MIN));
+  } },
+];
+
+// ── leadHistoryFrom ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+let leadId = 1;
+const lr = (o: Partial<LeadRun>): LeadRun => ({
+  id: o.id ?? leadId++, program: o.program ?? 'prog-a', wave: o.wave ?? 1, kind: o.kind ?? 'work', state: o.state ?? 'done',
+  openedAt: o.openedAt ?? AS_OF - 20 * DAY, dispatchedAt: o.dispatchedAt === undefined ? (o.openedAt ?? AS_OF - 20 * DAY) + MIN : o.dispatchedAt,
+  closedAt: o.closedAt === undefined ? AS_OF - DAY : o.closedAt, closeDetail: o.closeDetail ?? null,
+  claimedBy: o.claimedBy === undefined ? 'lane-a-project-a' : o.claimedBy,
+});
+const own = (m: ForecastModule, runs: LeadRun[], asOf = AS_OF) => m.leadHistoryFrom(runs, 'prog-a', asOf).own;
+
+export const LEAD_HISTORY_CASES: Case<ForecastModule>[] = [
+  { name: 'leadHistoryFrom: close to close, the first wave from its earliest openedAt, a later-opened wave from its open', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 15 * DAY }), lr({ wave: 2, openedAt: AS_OF - 16 * DAY, closedAt: AS_OF - 12 * DAY }),
+      lr({ wave: 3, openedAt: AS_OF - 11 * DAY, closedAt: AS_OF - 10 * DAY })]))
+      .toEqual({ done: [5 * DAY, 3 * DAY, DAY], abandoned: [], rework: [], waves: 3, abandons: 0, reworks: 0, leadsUnmeasured: 0 });
+  } },
+  { name: 'leadHistoryFrom: close order, not wave order, sets each wave\'s start', run: (m) => {
+    // Wave 2 closes before wave 1: it is timed from its open; wave 1 from wave 2's close.
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 10 * DAY }), lr({ wave: 2, openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 15 * DAY })]).done)
+      .toEqual([3 * DAY, 5 * DAY]);
+  } },
+  { name: 'leadHistoryFrom: a reworked wave gives its first run\'s lead and a rework lead per later run', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, state: 'failed', closedAt: AS_OF - 18 * DAY, closeDetail: 'review-requested-changes' }),
+      // The second run opened before the first closed: its rework lead starts at the first's close.
+      lr({ wave: 1, openedAt: AS_OF - 19 * DAY, closedAt: AS_OF - 16 * DAY }), lr({ wave: 1, openedAt: AS_OF - 16 * DAY, closedAt: AS_OF - 13 * DAY })]))
+      .toMatchObject({ done: [2 * DAY], rework: [2 * DAY, 3 * DAY], waves: 1, reworks: 1 });
+  } },
+  { name: 'leadHistoryFrom: abandons and the dispatch abandon are abandoned leads; never-started is no wave; another failure no sample', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, state: 'failed', closedAt: AS_OF - 19 * DAY, closeDetail: 'abandon:operator' }),
+      lr({ wave: 2, openedAt: AS_OF - 19 * DAY, state: 'failed', closedAt: AS_OF - 17 * DAY, closeDetail: DISPATCH_ABANDON_CLOSE_DETAIL }),
+      lr({ wave: 3, openedAt: AS_OF - 17 * DAY, state: 'failed', closedAt: AS_OF - 16 * DAY, closeDetail: 'abandon:never-started' }),
+      lr({ wave: 4, openedAt: AS_OF - 17 * DAY, closedAt: AS_OF - 14 * DAY }),
+      lr({ wave: 5, openedAt: AS_OF - 14 * DAY, state: 'failed', closedAt: AS_OF - 13 * DAY, closeDetail: 'merge-conflict' }),
+      lr({ wave: 6, openedAt: AS_OF - 14 * DAY, closedAt: AS_OF - 12 * DAY })]))
+      .toEqual({ done: [3 * DAY, DAY], abandoned: [DAY, 2 * DAY], rework: [], waves: 4, abandons: 2, reworks: 0, leadsUnmeasured: 0 });
+  } },
+  { name: 'leadHistoryFrom: a review run and an unknown kind are no wave; a rebuilt wave and a lead not above zero are unmeasured', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 18 * DAY }), lr({ wave: 1, kind: 'review', openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 17 * DAY }),
+      lr({ wave: 2, kind: 'mystery', openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 17.5 * DAY }),
+      lr({ wave: 3, openedAt: AS_OF - 18 * DAY, dispatchedAt: AS_OF - 18 * DAY, claimedBy: null, closedAt: AS_OF - 15 * DAY }),
+      lr({ wave: 4, openedAt: AS_OF - 14 * DAY, closedAt: AS_OF - 15 * DAY })]))
+      .toMatchObject({ done: [2 * DAY], waves: 1, leadsUnmeasured: 2 });
+  } },
+  { name: 'leadHistoryFrom: as of asOf, a later close is still open and a later run does not exist', run: (m) => {
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 18 * DAY }), lr({ wave: 2, openedAt: AS_OF - 18 * DAY, closedAt: AS_OF - 5 * DAY }),
+      lr({ wave: 1, openedAt: AS_OF - 9 * DAY, closedAt: AS_OF - 8 * DAY })], AS_OF - 10 * DAY))
+      .toMatchObject({ done: [2 * DAY], rework: [], waves: 1, reworks: 0 });
+    expect(own(m, [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 18 * DAY })], AS_OF - 18 * DAY).done).toEqual([2 * DAY]);
+  } },
+  { name: 'leadHistoryFrom: the fleet pools every programme, the own one included; own is empty for an unknown slug', run: (m) => {
+    const runs = [lr({ wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 18 * DAY }),
+      lr({ program: 'prog-b', wave: 1, openedAt: AS_OF - 20 * DAY, closedAt: AS_OF - 17 * DAY, state: 'failed', closeDetail: 'abandon:x' })];
+    expect(m.leadHistoryFrom(runs, 'prog-a', AS_OF).fleet).toEqual({ done: [2 * DAY], abandoned: [3 * DAY], rework: [], waves: 2, abandons: 1, reworks: 0, leadsUnmeasured: 0 });
+    expect(m.leadHistoryFrom(runs, 'prog-z', AS_OF).own).toEqual(hist());
+  } },
+];
+
 export const forecastCases = (runs: number): Case<ForecastModule>[] =>
-  [...FORECAST_ROW_CASES, ...forecastPropertyCases(runs), ...OUTCOME_CASES, ...CALIBRATION_CASES];
+  [...FORECAST_ROW_CASES, ...forecastPropertyCases(runs), ...OUTCOME_CASES, ...CALIBRATION_CASES, ...SEAL_BOUNDARY_CASES, ...LEAD_HISTORY_CASES];

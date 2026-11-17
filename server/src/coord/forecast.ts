@@ -1,7 +1,8 @@
 // Overlord W2, forecasts A (spec 2026-11-09 §5.6, H38, M30; plan
 // docs/superpowers/plans/2026-11-16-overlord-w2/w2-forecasts-health.md, Tasks 1 and 2). Ring: L1, context Coordination
 // (C5). PURE: no `fs`, no store, no clock and no `Math.random`; `asOf`, `now` and the seed are the caller's. It imports
-// `shared/`, `../time/seeded.ts` and `../perf/stats.ts` (K) only.
+// `shared/`, `../time/seeded.ts` and `../perf/stats.ts` (K), and `./runCloseSwitch.ts` (L1) for the dispatch abandon's
+// close detail.
 //
 // `forecastProgramme` answers when a programme will land: a Monte Carlo over its past wave lead times, seeded so a sealed
 // row replays exactly. `forecastOutcome` scores a seal at its 85% date against measured closes alone, never a statement,
@@ -12,14 +13,20 @@
 // one case per row and the properties).
 import {
   ABANDON_REDRAWS_MAX, CALIBRATION_BAND, CALIBRATION_CUTS, CALIBRATION_CUT_STEP_DAYS, CALIBRATION_MIN_N, CALIBRATION_WINDOW_DAYS,
-  FORECAST_FLEET_MIN, FORECAST_OWN_MIN, FORECAST_TRIALS,
+  FORECAST_FLEET_MIN, FORECAST_OWN_MIN, FORECAST_TRIALS, SEAL_WAIT_MINUTES,
   type Calibration, type CalibrationCut, type Forecast, type ForecastSource, type ForecastVerdict, type LeadHistory,
   type SealedForecast,
 } from '../../../shared/programmeFacts.js';
+import { isRunKind } from '../../../shared/api.js';
+import { NEVER_STARTED_DETAIL, countsAsWave, isRebuiltRun, waveRepresentative } from '../../../shared/programmes.js';
 import { percentile } from '../perf/stats.js';
+import { DISPATCH_ABANDON_CLOSE_DETAIL } from './runCloseSwitch.js';
 import { seededDraws, streamFor, type SeededStream } from '../time/seeded.js';
 
 const DAY_MS = 24 * 3_600_000;
+/** Calibration's step between cuts, a week: its own fact, which only shares the number with other seven-day spans
+ *  (`token-shared.test.ts` names it in a row of its own). */
+const CALIBRATION_CUT_STEP_MS = CALIBRATION_CUT_STEP_DAYS * DAY_MS;
 
 /** The programme's own history and the fleet's (every programme's), as of the seal's boundary. */
 export interface ForecastHistory { readonly own: LeadHistory; readonly fleet: LeadHistory }
@@ -105,7 +112,7 @@ export function forecastCalibration(scored: readonly ScoredSeal[], now: number):
   const [lo, hi] = CALIBRATION_BAND;
   const cuts: CalibrationCut[] = [];
   for (let k = 0; k < CALIBRATION_CUTS; k++) {
-    const at = now - k * CALIBRATION_CUT_STEP_DAYS * DAY_MS;
+    const at = now - k * CALIBRATION_CUT_STEP_MS;
     const from = at - CALIBRATION_WINDOW_DAYS * DAY_MS;
     const read = scored.filter((s) => s.scoredAt > from && s.scoredAt <= at);
     const met = read.filter((s) => s.outcome === 'met').length;
@@ -114,4 +121,103 @@ export function forecastCalibration(scored: readonly ScoredSeal[], now: number):
   if (cuts.some((c) => c.share === null)) return { state: 'unmeasured', cuts };
   const outside = cuts.every((c) => c.share! < lo || c.share! > hi);
   return { state: outside ? 'uncalibrated' : 'calibrated', cuts };
+}
+
+const MINUTE_MS = 60_000;
+
+/** One run as the lead history reads it, straight from `runs`. */
+export interface LeadRun {
+  readonly id: number; readonly program: string; readonly wave: number; readonly kind: string; readonly state: string;
+  readonly openedAt: number; readonly dispatchedAt: number | null; readonly closedAt: number | null;
+  readonly closeDetail: string | null; readonly claimedBy: string | null;
+}
+
+const isAbandonDetail = (d: string | null): boolean =>
+  d !== null && d !== NEVER_STARTED_DETAIL && (d.startsWith('abandon:') || d === DISPATCH_ABANDON_CLOSE_DETAIL);
+const isLead = (ms: number): boolean => Number.isFinite(ms) && ms > 0;
+
+interface LeadWave { closedAt: number; runs: LeadRun[]; rep: LeadRun }
+
+/** One programme's history as of `asOf` (questions 2 and 3, the wave rule of `shared/programmes.ts`). Only runs opened by
+ *  `asOf` exist, and a run closed after `asOf` is still open. A wave stands as its `waveRepresentative`; it is closed when
+ *  that run is, at its `closedAt`. Its lead starts at the later of the previous wave's close (close order) and its
+ *  earliest `openedAt`. A wave whose representative closed `done` gives a done lead; one closed `failed` by an abandon
+ *  (never `abandon:never-started`, which is no wave at all) an abandoned lead. A reworked wave (two or more work runs:
+ *  `RUN_TRANSITIONS` gives a closed run no exit, so this is also the only reopening) gives its first run's lead as its
+ *  done or abandoned lead and each later run's lead, from the run before it, as a rework lead, so the samples of a wave
+ *  sum to its close-to-close lead. A wave with a run `isRebuiltRun` marks, or a lead that is not a finite number above
+ *  zero, is counted in `leadsUnmeasured`, never added. */
+function programmeLeads(runs: readonly LeadRun[], asOf: number): LeadHistory {
+  const byWave = new Map<number, LeadRun[]>();
+  for (const r of runs) {
+    if (!isRunKind(r.kind) || !countsAsWave(r.kind) || r.openedAt > asOf) continue;
+    const list = byWave.get(r.wave) ?? [];
+    list.push(r);
+    byWave.set(r.wave, list);
+  }
+  const closedBy = (r: LeadRun): number | null => (r.closedAt !== null && r.closedAt <= asOf ? r.closedAt : null);
+  const waves: LeadWave[] = [];
+  for (const list of byWave.values()) {
+    const sorted = [...list].sort((a, b) => a.id - b.id);
+    const rep = waveRepresentative(sorted.map((r) => ({ id: r.id, open: closedBy(r) === null, r })))!.r;
+    const at = closedBy(rep);
+    if (at === null || rep.closeDetail === NEVER_STARTED_DETAIL) continue;
+    waves.push({ closedAt: at, runs: sorted, rep });
+  }
+  waves.sort((a, b) => a.closedAt - b.closedAt || a.rep.id - b.rep.id);
+  const out = { done: [] as number[], abandoned: [] as number[], rework: [] as number[], waves: 0, abandons: 0, reworks: 0, leadsUnmeasured: 0 };
+  let prevClose: number | null = null;
+  for (const w of waves) {
+    const start = Math.max(prevClose ?? -Infinity, Math.min(...w.runs.map((r) => r.openedAt)));
+    prevClose = w.closedAt;
+    const abandoned = w.rep.state === 'failed' && isAbandonDetail(w.rep.closeDetail);
+    if (w.rep.state !== 'done' && !abandoned) continue;
+    if (w.runs.some(isRebuiltRun)) { out.leadsUnmeasured += 1; continue; }
+    const closes = w.runs.map(closedBy);
+    const main = (w.runs.length === 1 ? w.closedAt : closes[0] ?? NaN) - start;
+    const reworks: number[] = [];
+    for (let i = 1; i < w.runs.length; i++) reworks.push((closes[i] ?? NaN) - Math.max(closes[i - 1] ?? NaN, w.runs[i]!.openedAt));
+    if (!isLead(main) || !reworks.every(isLead)) { out.leadsUnmeasured += 1; continue; }
+    out.waves += 1;
+    if (abandoned) { out.abandoned.push(main); out.abandons += 1; } else out.done.push(main);
+    if (reworks.length > 0) { out.rework.push(...reworks); out.reworks += 1; }
+  }
+  return out;
+}
+
+/** The programme's own history and the fleet's (every programme's samples and counts pooled), as of `asOf`. */
+export function leadHistoryFrom(runs: readonly LeadRun[], program: string, asOf: number): ForecastHistory {
+  const byProgram = new Map<string, LeadRun[]>();
+  for (const r of runs) { const l = byProgram.get(r.program) ?? []; l.push(r); byProgram.set(r.program, l); }
+  const empty: LeadHistory = { done: [], abandoned: [], rework: [], waves: 0, abandons: 0, reworks: 0, leadsUnmeasured: 0 };
+  let own = empty;
+  const fleet = { done: [] as number[], abandoned: [] as number[], rework: [] as number[], waves: 0, abandons: 0, reworks: 0, leadsUnmeasured: 0 };
+  for (const [slug, list] of [...byProgram].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    const h = programmeLeads(list, asOf);
+    if (slug === program) own = h;
+    fleet.done.push(...h.done); fleet.abandoned.push(...h.abandoned); fleet.rework.push(...h.rework);
+    fleet.waves += h.waves; fleet.abandons += h.abandons; fleet.reworks += h.reworks; fleet.leadsUnmeasured += h.leadsUnmeasured;
+  }
+  return { own, fleet };
+}
+
+/** A closed work run with no seal yet, paired with its statement (`programmeFactsStore.ts#unsealedClosesOf`): the newest
+ *  one naming the run (`named`), else the newest standing `SEAL_WAIT_MINUTES` after the close, else null. */
+export interface UnsealedClose {
+  readonly runId: number; readonly program: string; readonly closedAt: number;
+  readonly statement: { readonly id: number; readonly at: number; readonly lo: number; readonly hi: number } | null;
+  readonly named: boolean;
+}
+export type SealBoundary =
+  | { readonly kind: 'wait' }
+  | { readonly kind: 'seal'; readonly asOf: number; readonly statementId: number | null; readonly remaining: RemainingRange | null };
+
+/** Question 4, first match: a statement names the close: seal now, as of the later of the close and the statement; else,
+ *  before `SEAL_WAIT_MINUTES` after the close: wait; else seal with the statement then standing, or none. A seal is
+ *  computed as of its boundary, never as of the pass, so a late seal is the seal it would have been on time (F19). */
+export function sealBoundary(c: UnsealedClose, now: number): SealBoundary {
+  if (!c.named && now - c.closedAt < SEAL_WAIT_MINUTES * MINUTE_MS) return { kind: 'wait' };
+  const s = c.statement;
+  return { kind: 'seal', asOf: s === null ? c.closedAt : Math.max(c.closedAt, s.at), statementId: s?.id ?? null,
+    remaining: s === null ? null : { lo: s.lo, hi: s.hi } };
 }

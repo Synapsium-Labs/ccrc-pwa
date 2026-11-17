@@ -370,6 +370,8 @@ deps.linearJournal = linearJournal;
 deps.plan = planStorePort(coord.db);
 // The weekly replay quiz lane's port (Overlord W1a), over the same coord.db; it raises nothing until the record path ships.
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
+// The forecast lane's port (Overlord W2 forecasts A): the store's own delegates, over the same coord.db.
+deps.forecasts = coord;
 deps.linearPolicy = allowAll;
 // The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
 deps.planSync = planSyncFor({

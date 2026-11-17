@@ -157,5 +157,7 @@
   "server/src/time/seeded.ts#seededDraws": 1,
   "server/src/coord/forecast.ts#forecastProgramme": 1,
   "server/src/coord/forecast.ts#forecastOutcome": 1,
-  "server/src/coord/forecast.ts#forecastCalibration": 1
+  "server/src/coord/forecast.ts#forecastCalibration": 1,
+  "server/src/coord/forecast.ts#sealBoundary": 1,
+  "server/src/coord/forecast.ts#leadHistoryFrom": 1
 }

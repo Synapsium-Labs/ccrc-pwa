@@ -218,6 +218,11 @@ export const FORECAST_OWN_MIN = 20;
 export const FORECAST_FLEET_MIN = 20;
 /** The most abandoned leads one wave of a trial can lose before its done lead (question 3). */
 export const ABANDON_REDRAWS_MAX = 3;
+/** Question 4: a close no statement names waits this long for its boundary's statement, then seals with the newest
+ *  statement standing at that time. */
+export const SEAL_WAIT_MINUTES = 30;
+/** The seal arm looks back this far for a close with no seal; one closed during a longer gap is never sealed. */
+export const SEAL_LOOKBACK_DAYS = 7;
 
 /** One source's samples (question 3): `done`, `abandoned` and `rework` lead times in ms, each finite and above zero;
  *  `waves`, `abandons` and `reworks` the counts the two shares are taken from. `leadsUnmeasured` counts the waves the
