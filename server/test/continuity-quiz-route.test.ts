@@ -95,7 +95,7 @@ describe('the frozen bootstrap copy', () => {
 describe('POST /api/continuity/quiz-runs (the record door, box token)', () => {
   it('no token answers 401, and a wrong one too; nothing is written', async () => {
     const r = await rig();
-    for (const headers of [{}, { 'x-ccrc-mail-token': 'e'.repeat(64) }]) {
+    for (const headers of [{}, { 'x-ccrc-mail-token': 'e'.repeat(64) }] as Record<string, string>[]) {
       const res = await record(r, bodyOf(r), headers);
       expect(res.statusCode, res.body).toBe(401);
       expect(json(res)).toMatchObject({ ok: false, error: 'unauthenticated' });

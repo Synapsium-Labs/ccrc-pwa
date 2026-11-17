@@ -105,10 +105,20 @@ export interface LaneArmQuizPending {
   absent: number;
 }
 
+/** The quiz baseline's three states on the card, a view word each, never a refusal. */
+export const LANE_ARM_QUIZ_STATES = ['recorded', 'not-yet', 'unreadable'] as const;
+export type LaneArmQuizState = (typeof LANE_ARM_QUIZ_STATES)[number];
+export function isLaneArmQuizState(v: unknown): v is LaneArmQuizState {
+  return typeof v === 'string' && (LANE_ARM_QUIZ_STATES as readonly string[]).includes(v);
+}
+
 /** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet")
  *  and the pending runs, oldest first (or why they could not be read). */
 export interface LaneArmQuizView {
-  baseline: { state: 'recorded'; at: number } | { state: 'not-yet' } | { state: 'unreadable'; detail: string };
+  baseline:
+    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number }
+    | { state: Extract<LaneArmQuizState, 'not-yet'> }
+    | { state: Extract<LaneArmQuizState, 'unreadable'>; detail: string };
   pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
 }
 
