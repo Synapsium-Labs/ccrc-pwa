@@ -11,10 +11,13 @@ import type { DocLinkContextValue } from '../src/docs/DocLink';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
 import { detachUrls } from '../src/docs/docsLinks';
-import { loadReaderImages } from '../src/docs/reader/images';
+import { loadReaderImages, READER_IMAGE_REF_MAX_UNITS } from '../src/docs/reader/images';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { READER_IMAGE_BUDGET_BYTES } from '../src/lib/readerLimits';
 import { draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
+// The library's seed limits are not on its public entry points (`/frame` exports `SEED_HTML_MAX_CHARS` and `BRIDGE_LIMITS`
+// only), so the pin reads the published file the seed check itself runs from.
+import { SEED_LIMITS } from '../node_modules/@synapsium-labs/docserver/dist/frame/seed.js';
 
 /** The library's image grammar, re-spelled from the spec's type list (the library's own pattern is internal). */
 const IMAGE_DATA_URL = /^data:image\/(png|jpeg|gif|webp|avif|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;
@@ -216,5 +219,68 @@ describe('loadReaderImages: the reader frame\'s images as data: URLs (the W8a pl
     expect(Object.keys(out.urls)).toEqual(['d1.png', 'd2.png', 'c.png']);
     expect(out.drafts).toBe(2);
     expect(a.onDraftAsset).not.toHaveBeenCalled();
+  });
+});
+
+describe('a failed load: a 401 is counted, any other failure is not (completion plan Task 8)', () => {
+  it('a ref that answered 401 is left out of urls and counted in auth, and the others load', async () => {
+    const names = ['a.png', 'b.png', 'c.png'];
+    let n = 0;
+    const a = rig(async (): Promise<DocsRasterAnswer> => {
+      n += 1;
+      return n === 2 ? { s: 'auth' } : { s: 'ok', value: { bytes: pngOf(), mime: 'image/png' } };
+    }, 1);
+    const out = await run(names, withImages(names), a);
+    expect(Object.keys(out.urls)).toEqual(['a.png', 'c.png']);
+    expect(out.auth).toBe(1);
+  });
+
+  it('a failure that is not a 401 leaves auth at 0, and so does a page whose images all load', async () => {
+    const names = ['a.png', 'b.png'];
+    let n = 0;
+    const a = rig(async (): Promise<DocsRasterAnswer> => {
+      n += 1;
+      if (n === 1) return { s: 'unreachable' };
+      throw new Error('boom');
+    }, 1);
+    const out = await run(names, withImages(names), a);
+    expect(out.urls).toEqual({});
+    expect(out.auth).toBe(0);
+    expect((await run(['a.png'], withImages(['a.png']), rig())).auth).toBe(0);
+  });
+});
+
+describe('an over-long ref is left out alone (completion plan Task 8)', () => {
+  /** A ref of exactly `units` code units (at least 10) that resolves to `i.png`: a document path is at most 1024 bytes, so
+   *  a ref past 1024 units can only be dots and no-op segments in front of an ordinary name, which the plan resolves. */
+  const refOf = (units: number): string => {
+    const rest = units - 'i.png'.length;
+    // `./` is two units; one `a/../` (five) makes the odd remainders even.
+    return rest % 2 === 0 ? './'.repeat(rest / 2) + 'i.png' : './'.repeat((rest - 5) / 2) + 'a/../' + 'i.png';
+  };
+
+  it('READER_IMAGE_REF_MAX_UNITS is the library\'s own seed limit', () => {
+    expect(READER_IMAGE_REF_MAX_UNITS).toBe(SEED_LIMITS.imageRefMaxCodeUnits);
+  });
+
+  it('a ref over the limit is neither planned nor loaded, and the ordinary ref still loads', async () => {
+    const long = refOf(READER_IMAGE_REF_MAX_UNITS + 1);
+    expect(long.length).toBe(READER_IMAGE_REF_MAX_UNITS + 1);
+    // Control: the long ref is an ordinary pinned image to the planner, so only the length rule can leave it out.
+    expect(planImageRef(withImages(['i.png']), long, 0).kind).toBe('pinned');
+    const a = rig();
+    const out = await run([long, 'ok.png'], withImages(['i.png', 'ok.png']), a);
+    expect(Object.keys(out.urls)).toEqual(['ok.png']);
+    expect(a.raster).toHaveBeenCalledTimes(1);
+    expect(out.auth).toBe(0);
+  });
+
+  it('a ref of exactly the limit still loads', async () => {
+    const exact = refOf(READER_IMAGE_REF_MAX_UNITS);
+    expect(exact.length).toBe(READER_IMAGE_REF_MAX_UNITS);
+    const a = rig();
+    const out = await run([exact], withImages(['i.png']), a);
+    expect(Object.keys(out.urls)).toEqual([exact]);
+    expect(a.raster).toHaveBeenCalledTimes(1);
   });
 });

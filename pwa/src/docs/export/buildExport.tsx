@@ -12,22 +12,38 @@
 // highlighter (M4.EX17). The element never leaves this file, which exports only `buildExport` and types (M4.EX16); only
 // `ExportSheet.tsx` imports it, through one dynamic `import()`, so `react-dom/server` stays out of the main chunk.
 //
+// A mockup (spec 5.6.9; completion plan Task 9) is one more arm of the same builder, never a second one. Its body is the
+// viewer's inert Document and the attempt's plan, not a page this file renders: the snapshot (`mockup/exportMockup.ts`,
+// built on a clone) is the INNER document, which this file puts in the wrapper's one frame, `<iframe sandbox=""
+// srcDoc={inner}>`, the only `iframe` and `srcDoc` of the file (M4.EX16, M5.16), beside the same shell, banner and
+// provenance as any export, the inlined-files list, the omitted list and the links list (all React, so escaped). It waits
+// at most `limits.imageWaitMs` for the attempt's assets. Past it, the attempt's load is read as it stands (its `now`,
+// `startMockupLoad`'s, with the timed-out word): every asset already loaded is inlined, and every admitted one still loading
+// is listed as still loading (base decision 3, 4.17's html row; review 2361 F2). An attempt that ended without a result
+// inlines nothing and lists every admitted asset as failed. It counts the FINAL file's bytes, the inner document escaped
+// into the attribute plus the wrapper: the snapshot with every loaded asset, else with none (over: `too-large`), else the
+// largest prefix of the files, in the order of their first use (`heldInUseOrder`), that fits (`fits` is the one measure).
+//
 // Ring L4 delivery.
 import { Fragment, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server.browser';
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { PROSE, cn } from '@ccrc/ui';
-import { DOCS_RASTER_TYPES, docsApi, type RasterMime } from '../../../../shared/docs';
+import { DOCS_RASTER_TYPES, docRepoPath, docsApi, type RasterMime } from '../../../../shared/docs';
 import { codeBlocksOf, type HighlightStore } from '../../lib/highlightStore';
 import { codeBlockParts } from '../../lib/markdown';
 import { renderHast } from '../../lib/renderHast';
 import { SVG_DATA_PREFIX, planImageRef, rasterDataUrl, svgDataUrl } from '../DocImage';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DetachedUrls } from '../docsLinks';
-import { DOC_IMAGE_TEXT, EXPORT_TEXT, fillSentence, pluralS } from '../docsText';
+import { DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_TEXT, fillSentence, kib, pluralS } from '../docsText';
+import type { MockupExportAssets, MockupLoadEnd } from '../exportBody';
+import { TIMED_OUT, buildMockupSnapshot, heldInUseOrder, mockupDiagramCount } from '../mockup/exportMockup';
+import { capRows } from '../mockup/census';
+import type { MockupAssetPlan, MockupAssetResult } from '../mockup/ports';
 import { exportColouring, type ExportColouring } from './colouring';
 import { settleExportAssets, type ExportAsset, type ExportAssets } from './exportAssets';
-import { EXPORT_COMPONENTS, ExportCode, ExportMarkdownContext, type ExportImageDecision } from './exportMarkdown';
+import { EXPORT_COMPONENTS, ExportCode, ExportMarkdownContext, exportLinkTarget, type ExportImageDecision } from './exportMarkdown';
 import {
   DOCS_EXPORT_CSP, DOCS_EXPORT_IMAGE_WAIT_MS, DOCS_EXPORT_MAX_BYTES, EXPORT_GENERATOR, EXPORT_PREFIX, type ExportMissing,
 } from './policy';
@@ -47,9 +63,15 @@ export type ExportBodyInput =
     readonly image:
       | { readonly kind: 'raster'; readonly bytes: Uint8Array; readonly mime: RasterMime }
       | { readonly kind: 'svg'; readonly bytes: Uint8Array };
+  }
+  | {
+    readonly kind: 'mockup'; readonly doc: Document; readonly assets: MockupExportAssets;
+    /** The leaf's place and its listing, for the links list (spec 4.17's link table). */
+    readonly link: Pick<DocLinkContextValue, 'section' | 'path' | 'tree'>;
   };
 
-export interface ExportInput {
+/** `ExportInput` of one arm; the unqualified one is any arm. */
+export interface ExportInput<B extends ExportBodyInput = ExportBodyInput> {
   readonly title: string;
   readonly name: string;
   /** The exporter's `data-theme` (refinement (e)); `null`: the dark default, which has none. */
@@ -57,7 +79,7 @@ export interface ExportInput {
   /** C: the commit every permalink names (`ExportProvenance.commit`). */
   readonly commit: string;
   readonly provenance: ExportProvenance;
-  readonly body: ExportBodyInput;
+  readonly body: B;
   /** The page's image registry, for a Markdown body's images; `null`: none. */
   readonly assets: ExportAssets | null;
 }
@@ -65,10 +87,23 @@ export interface ExportInput {
 /** The file's two limits; production passes none and gets `policy.ts`'s (refinement (p)). */
 export interface ExportLimits { readonly maxBytes: number; readonly imageWaitMs: number }
 
+/** One file a mockup export inlined (spec 5.6.9 "Inlined files are listed"): its repo path, its size and whether it is a
+ *  draft. Hidden-on-screen files are listed too. */
+export interface ExportInlinedFile { readonly path: string; readonly size: number; readonly draft: boolean }
+
+/** What a mockup export lists, for the sheet as the file lists it: the inlined files and the assets left out (each once,
+ *  in DOM order, as a repo path or the reference as written). */
+export interface ExportMockupFacts {
+  readonly inlined: readonly ExportInlinedFile[];
+  readonly omitted: readonly string[];
+}
+
 export type ExportResult =
   | {
     readonly ok: true; readonly name: string; readonly bytes: Uint8Array<ArrayBuffer>; readonly size: number;
     readonly notes: readonly string[]; readonly deferred: number;
+    /** A mockup's lists; `null`: not a mockup. */
+    readonly mockup: ExportMockupFacts | null;
   }
   | { readonly ok: false; readonly why: 'too-large' };
 
@@ -79,6 +114,10 @@ const NO_IMAGES: ReadonlyMap<HastElement, ExportImageDecision> = new Map();
 const LEADING_DOCTYPE = /^<!doctype html>/i;
 const encoder = new TextEncoder();
 const missing = (why: ExportMissing): ExportImageDecision => ({ kind: 'missing', why });
+
+type MockupArm = Extract<ExportBodyInput, { kind: 'mockup' }>;
+/** Every arm the Markdown, text, plain and image builder draws: all but the mockup's, which has its own below. */
+type ShellInput = ExportInput<Exclude<ExportBodyInput, MockupArm>>;
 
 /** Every `img` of `tree`, in document order. Iterative. */
 function imagesOf(tree: HastRoot): HastElement[] {
@@ -134,7 +173,7 @@ async function decideImages(
 
 /** What the build adds to the provenance for one attempt: the colouring and image lines, the banner's images clause,
  *  and the store the body draws with (`null` once colouring is dropped). */
-function partsOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean) {
+function partsOf(input: ShellInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean) {
   const body = input.body;
   const store = coloured && (body.kind === 'tree' || body.kind === 'text') ? body.store : null;
   const colouring: ExportColouring | null = body.kind === 'tree'
@@ -158,7 +197,7 @@ function partsOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImag
   return { store, notes, metas, banner, deferred: counts.get('deferred') ?? 0 };
 }
 
-function bodyOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImageDecision>, store: HighlightStore | null): ReactNode {
+function bodyOf(input: ShellInput, images: ReadonlyMap<HastElement, ExportImageDecision>, store: HighlightStore | null): ReactNode {
   const body = input.body;
   switch (body.kind) {
     case 'tree':
@@ -195,8 +234,15 @@ function bodyOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImage
   }
 }
 
-function documentOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean): ReactElement {
-  const parts = partsOf(input, images, coloured);
+/** What a shell shows besides its body: the metas, the notes and the banner. */
+interface ShellParts {
+  readonly metas: readonly ExportMeta[];
+  readonly notes: readonly string[];
+  readonly banner: string | null;
+}
+
+/** The one `<html>` every export is: head, banner, provenance, then `content`. */
+function shellOf(input: ExportInput, parts: ShellParts, content: ReactNode): ReactElement {
   return (
     <html data-theme={input.theme ?? undefined}>
       <head>
@@ -216,27 +262,248 @@ function documentOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportI
             </dl>
             {parts.notes.length > 0 && <ul className="ccrc-export-notes">{parts.notes.map((n, i) => <li key={i}>{n}</li>)}</ul>}
           </section>
-          {bodyOf(input, images, parts.store)}
+          {content}
         </div>
       </body>
     </html>
   );
 }
 
-/** The file for one attempt: `EXPORT_PREFIX` joined to the rendered `<html>`, here and nowhere else. */
-function fileOf(input: ExportInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean): Uint8Array<ArrayBuffer> {
-  const markup = renderToStaticMarkup(documentOf(input, images, coloured));
+function documentOf(input: ShellInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean): ReactElement {
+  const parts = partsOf(input, images, coloured);
+  return shellOf(input, parts, bodyOf(input, images, parts.store));
+}
+
+/** The file for an element: `EXPORT_PREFIX` joined to the rendered `<html>`, here and nowhere else. */
+function fileOfElement(element: ReactElement): Uint8Array<ArrayBuffer> {
+  const markup = renderToStaticMarkup(element);
   return encoder.encode(EXPORT_PREFIX + markup.replace(LEADING_DOCTYPE, ''));
 }
 
+/** The file for one attempt of a Markdown, text, plain or image body. */
+function fileOf(input: ShellInput, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean): Uint8Array<ArrayBuffer> {
+  return fileOfElement(documentOf(input, images, coloured));
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The mockup arm (spec 5.6.9, 4.17 "Size"; completion plan Task 9; rows M5.EX1, M5.EX5, M5.EX7)
+// ---------------------------------------------------------------------------------------------------------------
+
+/** One admitted asset the attempt's result holds, in the order of its first use (`heldInUseOrder`: depth-first in document
+ *  order, a stylesheet's nested files right after its use). */
+interface HeldFile {
+  /** The key of `MockupAssetResult.assets`: the pin's own API URL. */
+  readonly key: string;
+  readonly path: string;
+  readonly draft: boolean;
+  readonly size: number;
+  /** What the file adds to the saved file, from its `data:` URL's length and its uses on the page: an estimate, which a
+   *  stylesheet's nested files and the placeholders' words make run low or high (the measured file decides). */
+  readonly estimate: number;
+}
+
+function heldFiles(result: MockupAssetResult): HeldFile[] {
+  const { rows, context } = result.plan;
+  const uses = new Map<string, number>();
+  for (const row of rows) {
+    if (row.verdict.v === 'inline' && row.ref.depth === 0) {
+      const key = docsApi.file(context.project, row.verdict.pin);
+      uses.set(key, (uses.get(key) ?? 0) + 1);
+    }
+  }
+  const out: HeldFile[] = [];
+  for (const { key, verdict } of heldInUseOrder(result)) {
+    const held = result.assets.get(key);
+    if (held === undefined) continue;
+    const url = `data:${verdict.mime};base64,`.length + 4 * Math.ceil(held.bytes.length / 3);
+    out.push({
+      key, path: docRepoPath(verdict.pin.section, verdict.pin.path), draft: verdict.draft, size: held.bytes.length,
+      estimate: url * (uses.get(key) ?? 1),
+    });
+  }
+  return out;
+}
+
+/** The attempt's plan with no bytes: every admitted row failed with `failure`, so the snapshot lists each as not
+ *  inlined and words it by that failure (`'ended'`: the attempt was aborted or its load failed, so no bytes will come). */
+function unheld(plan: MockupAssetPlan, failure: string): MockupAssetResult {
+  const rows = plan.rows.map((row) => (row.verdict.v === 'inline' ? { ...row, verdict: { v: 'failed' as const, failure } } : row));
+  return { plan: { ...plan, rows }, actualBytes: 0, assets: new Map() };
+}
+
+/** The attempt's end, or `'timed-out'` once `ms` have passed without one. It never rejects. */
+function settledWithin(settled: Promise<MockupLoadEnd>, ms: number): Promise<MockupLoadEnd | 'timed-out'> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve('timed-out'), ms);
+    const done = (end: MockupLoadEnd): void => {
+      clearTimeout(timer);
+      resolve(end);
+    };
+    void settled.then(done, () => done({ s: 'ended' }));
+  });
+}
+
+/** One try at the file: the snapshot with the first `k` held files, what it lists, and the measured bytes. */
+interface MockupTry {
+  readonly bytes: Uint8Array<ArrayBuffer>;
+  readonly facts: ExportMockupFacts;
+  readonly notes: readonly string[];
+}
+
+/** One titled list of the wrapper's chrome: its heading, then one `li` per child, then, when `more` rows are not drawn, the
+ *  one closed line that says how many. */
+function MockupList(p: { readonly heading: string; readonly more?: number; readonly children: ReactNode }): ReactNode {
+  return (
+    <section className="ccrc-export-provenance" aria-label={p.heading}>
+      <h2 className="ccrc-export-note">{p.heading}</h2>
+      <ul className="ccrc-export-notes">{p.children}</ul>
+      {p.more !== undefined && p.more > 0 && <p className="ccrc-export-note">{fillSentence(MOCKUP_TEXT.moreNotListed, { n: p.more })}</p>}
+    </section>
+  );
+}
+
+function MockupContent(p: { readonly title: string; readonly html: string; readonly facts: ExportMockupFacts; readonly links: ReactNode }): ReactNode {
+  const { facts } = p;
+  // The assets left out, one label each, drawn on every size-fit try: the first rows, then how many more (D-8712). The
+  // result's `facts` keep the whole list, for the sheet, which caps its own.
+  const omitted = capRows(facts.omitted);
+  return (
+    <article className="doc-body">
+      {facts.inlined.length > 0 && (
+        <MockupList heading={EXPORT_TEXT.mockupInlined}>
+          {facts.inlined.map((f, i) => (
+            <li key={i}>
+              {fillSentence(EXPORT_TEXT.inlinedFile, {
+                path: f.path, size: kib(f.size), source: f.draft ? EXPORT_TEXT.fileDraft : EXPORT_TEXT.fileCommitted,
+              })}
+            </li>
+          ))}
+        </MockupList>
+      )}
+      {facts.omitted.length > 0 && (
+        <MockupList heading={EXPORT_TEXT.mockupOmitted} more={omitted.more}>{omitted.shown.map((o, i) => <li key={i}>{o}</li>)}</MockupList>
+      )}
+      {p.links}
+      {/* A srcdoc is transparent and mockups are authored on white (base 5.6.7): the frame's holder draws in the light
+          palette (`data-theme`, from the file's own tokens stylesheet), so its ground is the light white surface token
+          whatever the exporter's theme, as the viewer's canvas is (docs.css). */}
+      <div data-theme="light" style={{ background: 'var(--bg-surface)' }}>
+        <iframe
+          sandbox="" srcDoc={p.html} title={fillSentence(EXPORT_TEXT.mockupFrame, { name: p.title })}
+          style={{ display: 'block', width: '100%', height: '75vh', border: 0, colorScheme: 'light' }}
+        />
+      </div>
+    </article>
+  );
+}
+
+/** The links list (spec 5.6.9 step 5: "Links in this page", through spec 4.17's link table, as permalinks at C): each
+ *  target as text, linked where the table gives a permalink or an external page, an inert span otherwise. */
+function MockupLinks(p: { readonly links: readonly string[]; readonly input: ExportInput<MockupArm> }): ReactNode {
+  if (p.links.length === 0) return null;
+  const { input } = p;
+  return (
+    <MockupList heading={EXPORT_TEXT.mockupLinks}>
+      {p.links.map((raw, i) => {
+        const t = exportLinkTarget(input.body.link, input.commit, raw);
+        switch (t.kind) {
+          case 'permalink':
+            return <li key={i}><a href={t.href} rel="noopener noreferrer">{raw}</a></li>;
+          case 'external':
+            return <li key={i}><a href={t.href} target="_blank" rel="noopener noreferrer">{raw}</a></li>;
+          case 'fragment':
+            return <li key={i}>{raw}</li>;
+          case 'inert':
+            return <li key={i}><span className="ccrc-export-inert" title={t.title}>{raw}</span></li>;
+        }
+      })}
+    </MockupList>
+  );
+}
+
+/** The notes a mockup export carries: the provenance's, how many diagrams appear as source (none: no note), and what rests
+ *  on the file's own policy. */
+const mockupNotes = (input: ExportInput<MockupArm>, diagrams: number): readonly string[] => [
+  ...input.provenance.notes,
+  ...(diagrams === 0 ? [] : [fillSentence(EXPORT_TEXT.mockupDiagrams, { m: diagrams, s: pluralS(diagrams), es: diagrams === 1 ? 's' : '' })]),
+  EXPORT_TEXT.mockupCss,
+];
+
+async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLimits): Promise<ExportResult> {
+  const arm = input.body;
+  const end = await settledWithin(arm.assets.settled, limits.imageWaitMs);
+  // A wait that runs out keeps what has loaded: only the rows still loading become placeholders, worded as still loading
+  // (base decision 3, section 4.17; review 2361 F2).
+  const result = end === 'timed-out' ? arm.assets.now(TIMED_OUT) : end.s === 'loaded' ? end.result : unheld(arm.assets.plan, 'ended');
+  const diagrams = mockupDiagramCount(arm.doc);
+  const held = heldFiles(result);
+  const attempt = (k: number): MockupTry => {
+    const files = held.slice(0, k);
+    const assets = new Map(files.flatMap((f) => {
+      const a = result.assets.get(f.key);
+      return a === undefined ? [] : [[f.key, a] as const];
+    }));
+    const snap = buildMockupSnapshot(arm.doc, { ...result, assets });
+    const left = new Set(snap.omitted);
+    const facts: ExportMockupFacts = {
+      inlined: files.filter((f) => !left.has(f.path)).map((f) => ({ path: f.path, size: f.size, draft: f.draft })),
+      omitted: snap.omitted,
+    };
+    const notes = mockupNotes(input, diagrams);
+    const parts: ShellParts = { metas: input.provenance.metas, notes, banner: input.provenance.banner };
+    const content = (
+      <MockupContent title={input.title} html={snap.html} facts={facts} links={<MockupLinks links={snap.links} input={input} />} />
+    );
+    return { bytes: fileOfElement(shellOf(input, parts, content)), facts, notes };
+  };
+  // The one measure: the FINAL file's bytes, the inner document escaped into the frame's attribute plus the wrapper.
+  const fits = (t: MockupTry): boolean => t.bytes.length <= limits.maxBytes;
+  const done = (t: MockupTry): ExportResult =>
+    ({ ok: true, name: input.name, bytes: t.bytes, size: t.bytes.length, notes: t.notes, deferred: 0, mockup: t.facts });
+
+  const whole = attempt(held.length);
+  if (fits(whole)) return done(whole);
+  let best = attempt(0);
+  if (held.length === 0 || !fits(best)) return { ok: false, why: 'too-large' };
+  // The files back in DOM order while the file fits: the estimate (each `data:` URL, per use) gives the first try, and the
+  // measured file decides, so the answer is always a measured fit: `lo` fits, `hi` does not.
+  let lo = 0;
+  let hi = held.length;
+  let room = limits.maxBytes - best.bytes.length;
+  let guess = 0;
+  for (const f of held) {
+    if (f.estimate > room) break;
+    room -= f.estimate;
+    guess += 1;
+  }
+  while (hi - lo > 1) {
+    const k = Math.min(hi - 1, Math.max(lo + 1, guess));
+    const t = attempt(k);
+    if (fits(t)) {
+      lo = k;
+      best = t;
+    } else {
+      hi = k;
+    }
+    guess = Math.floor((lo + hi) / 2);
+  }
+  return done(best);
+}
+
 export async function buildExport(input: ExportInput, limits: ExportLimits = LIMITS): Promise<ExportResult> {
+  const arm = input.body;
+  if (arm.kind === 'mockup') return buildMockupExport({ ...input, body: arm }, limits);
+  return buildShellExport({ ...input, body: arm }, limits);
+}
+
+async function buildShellExport(input: ShellInput, limits: ExportLimits): Promise<ExportResult> {
   const body = input.body;
   const decided = body.kind === 'tree'
     ? await decideImages(body.tree, { ...body.link, urls: body.urls }, input.assets, limits.imageWaitMs)
     : NO_IMAGES;
   const done = (bytes: Uint8Array<ArrayBuffer>, images: ReadonlyMap<HastElement, ExportImageDecision>, coloured: boolean): ExportResult => {
     const parts = partsOf(input, images, coloured);
-    return { ok: true, name: input.name, bytes, size: bytes.length, notes: parts.notes, deferred: parts.deferred };
+    return { ok: true, name: input.name, bytes, size: bytes.length, notes: parts.notes, deferred: parts.deferred, mockup: null };
   };
   const whole = fileOf(input, decided, true);
   if (whole.length <= limits.maxBytes) return done(whole, decided, true);

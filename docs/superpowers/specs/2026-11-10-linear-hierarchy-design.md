@@ -346,6 +346,13 @@ The wait never runs past its bound, so trouble in Linear never stalls the fleet.
 - **Milestone description:** the checkpoint's kind and, once met, the met line.
 - **Issue:** the ticket's title and body.
 
+**Linear's cap (D-8708, measured live on 2026-11-17).** Linear refuses an initiative or project description over 255
+characters. So each description puts its status notes first (the initiative's Abandoned and Paused lines, the
+project's Dropped and "Part of" lines), then the text above, and is cut at its end with `…` so that it fits with the
+footer line. A milestone description is fitted the same way. The full text stays in ccrc's plan. The public-text check
+below reads both the full and the cut text. Sending the full text in Linear's longer `content` field waits for a
+capture that measures its limit, on the operator's go.
+
 Every text passes the `linear-egress` redactor profile and ends with the server's fixed footer line, as session writes
 do today. No text names a console URL, a host, a session or an account.
 

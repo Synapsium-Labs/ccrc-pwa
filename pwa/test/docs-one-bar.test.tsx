@@ -70,7 +70,7 @@ function rig(): Rig {
       inputs.push(input);
       return handle as unknown as ReaderMount;
     }),
-    images: vi.fn(async () => ({ urls: {}, drafts: 0 })),
+    images: vi.fn(async () => ({ urls: {}, drafts: 0, auth: 0 })),
   };
   return { reader, inputs, command };
 }

@@ -7,10 +7,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { DOC_SECTION_SLUGS, type DocsShowOk } from '../../shared/docs';
+import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
-  DOC_MARKDOWN_ACTION, docGateSentence, docsPlainNote,
+  DOC_FORMATTING, DOC_MARKDOWN_ACTION, docGateSentence, docsPlainNote,
 } from '../src/docs/DocMarkdown';
 import { ReaderFrame, lazyMountReader, type ReaderDeps } from '../src/docs/ReaderFrame';
 import type { ReaderMount, ReaderMountInput } from '../src/docs/reader/bridge';
@@ -98,7 +99,7 @@ function harness(over: Partial<{
     inputs.push(input);
     return handle as ReaderMount;
   }));
-  const imagesFn = vi.fn<ReaderDeps['images']>(async () => ({ urls: {}, drafts: over.drafts ?? 0 }));
+  const imagesFn = vi.fn<ReaderDeps['images']>(async () => ({ urls: {}, drafts: over.drafts ?? 0, auth: 0 }));
   const parser = vi.fn<MarkdownParser>(async (): Promise<ParseOutcome> => parseMarkdown('# Formatted', 'docs'));
   return {
     reader: { render: renderFn, mount: mountFn, images: imagesFn },
@@ -166,6 +167,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  clearAuthLost();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -605,6 +607,256 @@ describe('the lifetime of a mount (spec 4.1)', () => {
   });
 });
 
+/** One image the way the loader hands it back: a `data:` URL under its ref. */
+const IMG_URL = 'data:image/png;base64,AAAA';
+
+describe('a body whose images answered 401 asks once more when sign-in returns (completion plan Task 8)', () => {
+  it('mounts once, then on sign-in asks the images again, destroys the old mount and mounts with the image', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 1, auth: 1 });
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 1, auth: 0 });
+    render(frame(h));
+    await ready(h);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.inputs[0]?.document.images).toEqual({});
+    expect(h.onDraftAsset.mock.calls).toEqual([[1]]);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(2));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.inputs[1]?.document.images).toEqual({ 'i.png': IMG_URL });
+    expect(h.handle.destroy).toHaveBeenCalledTimes(1);
+    // The first run's draft count went back before the second run counted its own.
+    expect(h.onDraftAsset.mock.calls).toEqual([[1], [-1], [1]]);
+  });
+
+  // Review 2372 F1: sign-in is announced once, so the body listens from before its images walk.
+  it('a sign-in that completes while a queued image load is still pending starts the new body once the walk ends, and its mount shows the image', async () => {
+    const h = harness();
+    let walked!: (i: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { walked = r; }));
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 1, auth: 0 });
+    render(frame(h));
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(1));
+    // A load of the walk answered 401 (the login screen is up), and sign-in completes while a queued load is still pending.
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { walked({ urls: {}, drafts: 1, auth: 1 }); await Promise.resolve(); });
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.inputs[0]?.document.images, 'the one mount is the new body\'s, with the image the 401 had kept out').toEqual({ 'i.png': IMG_URL });
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+    // The first body counted no drafts and mounted nothing: only the new body's count stands.
+    expect(h.onDraftAsset.mock.calls).toEqual([[1]]);
+  });
+
+  it('a sign-in during a walk that answered no 401 starts nothing: the body mounts once and stops listening', async () => {
+    const h = harness();
+    let walked!: (i: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { walked = r; }));
+    render(frame(h));
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { walked({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 }); await Promise.resolve(); });
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  // Review 2361 F1: the run after sign-in is a new body, so it lands where its own outcome says, from `rendering`.
+  /** A harness whose first run mounts with a 401 image and whose render after sign-in answers `second`. */
+  function armed(second: () => Promise<ReaderRenderOutcome>): Harness {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.renderFn.mockResolvedValueOnce(RENDERED).mockImplementationOnce(second);
+    return h;
+  }
+  /** The first mount is ready (no note), then sign-in returns and the second render is asked. */
+  async function signInAgain(h: Harness): Promise<void> {
+    const first = await ready(h);
+    act(() => { first.onReady(); });
+    expect(screen.queryByText(DOC_FORMATTING)).toBeNull();
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.renderFn).toHaveBeenCalledTimes(2));
+  }
+
+  it('a second run whose render times out lands on the plain view with the timeout note and mounts nothing more', async () => {
+    const h = armed(async () => ({ kind: 'timeout', budgetMs: 4000 }));
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByText(docsPlainNote({ kind: 'timeout', budgetMs: 4000 }))).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).toHaveBeenCalledTimes(1);
+    expect(h.parser).not.toHaveBeenCalled();
+    expect(container.querySelector('.docs-reader')).toBeNull();
+  });
+
+  it('a second run whose render is refused lands on the plain view, which formats the body itself', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = armed(async () => ({ kind: 'refused', why: 'container-depth', line: 3, value: 99 }));
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.docs-reader')).toBeNull();
+    // The plain view, not the fallback, which draws the same heading under its fixed note (review 2372 M-f).
+    expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
+    expect(warn.mock.calls.map((c) => String(c[0]))).toContain('ccrc: reader not rendered (refused: container-depth at line 3)');
+  });
+
+  it('a second run whose render rejects lands on the plain view', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = armed(async () => { throw new Error('the worker went away'); });
+    const { container } = render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('.docs-reader')).toBeNull();
+    expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
+  });
+
+  it('a sign-in while the first mount is still in flight: the new body mounts with the image, and the late first mount is destroyed when it lands (review 2372 M-f)', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 });
+    const late = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+    let land!: () => void;
+    h.mountFn.mockImplementationOnce((_el, input) => new Promise((resolve) => {
+      h.inputs.push(input);
+      land = () => resolve(late as unknown as ReaderMount);
+    }));
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(2));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.inputs[1]?.document.images).toEqual({ 'i.png': IMG_URL });
+    await act(async () => { land(); await Promise.resolve(); });
+    expect(late.destroy, 'the first body was gone when its mount landed').toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy, 'the new body\'s mount stands').not.toHaveBeenCalled();
+  });
+
+  it('while the second run renders, the "Formatting…" note shows, and it goes once the new mount is ready', async () => {
+    let release!: (o: ReaderRenderOutcome) => void;
+    const h = armed(() => new Promise((r) => { release = r; }));
+    render(frame(h));
+    await signInAgain(h);
+    expect(await screen.findByText(DOC_FORMATTING)).toBeInTheDocument();
+    release(RENDERED);
+    await waitFor(() => expect(h.inputs).toHaveLength(2));
+    act(() => { h.inputs[1]!.onReady(); });
+    expect(screen.queryByText(DOC_FORMATTING)).toBeNull();
+  });
+
+  it('asks once: a second sign-in after a body with no 401 left does nothing', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    render(frame(h));
+    await ready(h);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(2));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.mountFn).toHaveBeenCalledTimes(2);
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a body whose images answered no 401 is not run again by sign-in', async () => {
+    const h = harness();
+    render(frame(h));
+    await ready(h);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.renderFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it('a fallback takes the subscription away: sign-in afterwards runs nothing again', async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    render(frame(h));
+    const input = await ready(h);
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('a run that is replaced takes its subscription away: sign-in after a new text asks once, not twice', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    const { rerender } = render(frame(h, { text: '# A' }));
+    await ready(h);
+    rerender(frame(h, { text: '# B' }));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(2));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.mountFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('an unmount takes the subscription away: sign-in afterwards asks for nothing', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    const { unmount } = render(frame(h));
+    await ready(h);
+    unmount();
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('an old body cannot publish into a new body (completion plan Task 8)', () => {
+  it('body A\'s images, resolving after the leaf changed, count no drafts and reach no mount', async () => {
+    const h = harness();
+    const answers: ((i: { urls: Record<string, string>; drafts: number; auth: number }) => void)[] = [];
+    const signals: AbortSignal[] = [];
+    h.imagesFn.mockImplementation((_refs, _link, _assets, signal) => new Promise((resolve) => {
+      signals.push(signal);
+      answers.push((i) => resolve(i));
+    }));
+    const { rerender } = render(frame(h));
+    await waitFor(() => expect(answers).toHaveLength(1));
+    rerender(frame(h, { bodyKey: 'k2' }));
+    await waitFor(() => expect(answers).toHaveLength(2));
+    expect(signals[0]?.aborted).toBe(true);
+    expect(signals[1]?.aborted).toBe(false);
+    await act(async () => { answers[0]?.({ urls: { 'a.png': IMG_URL }, drafts: 2, auth: 1 }); await Promise.resolve(); });
+    expect(h.mountFn).not.toHaveBeenCalled();
+    expect(h.onDraftAsset).not.toHaveBeenCalled();
+    await act(async () => { answers[1]?.({ urls: { 'b.png': IMG_URL }, drafts: 1, auth: 0 }); await Promise.resolve(); });
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    expect(h.inputs[0]?.document.images).toEqual({ 'b.png': IMG_URL });
+    expect(h.onDraftAsset.mock.calls).toEqual([[1]]);
+    // A's 401 count did not subscribe the new body to sign-in either.
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('the default reader (spec 4.1)', () => {
   it('with no Worker, DocsScreen`s default reader is null and docsRunner.render is never called', async () => {
     const saved = Object.getOwnPropertyDescriptor(globalThis, 'Worker');
@@ -728,6 +980,32 @@ describe('ccrc\'s bar (the take-up plan, Task 5)', () => {
     expect(lastBar(p2)).not.toBeNull();
     unmount();
     expect(lastBar(p2)).toBeNull();
+  });
+
+  it('sign-in withdraws the old mount\'s bar until the new mount is ready, then publishes the new one (completion plan Task 8; review M7d)', async () => {
+    const h = harness();
+    let release!: (v: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { release = r; }));
+    const publish = vi.fn<(bar: ReaderBar | null) => void>();
+    render(slotted(h, 'host-bar', publish));
+    const first = await ready(h);
+    act(() => { first.onReady(); });
+    const oldBar = lastBar(publish);
+    expect(oldBar).not.toBeNull();
+    // Sign-in returns: the destroyed mount's bar must not stand while the new run is still asking for its images.
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(h.handle.destroy).toHaveBeenCalledTimes(1));
+    expect(lastBar(publish)).toBeNull();
+    // The new mount is up and ready: its own bar is published.
+    release({ urls: {}, drafts: 0, auth: 0 });
+    await waitFor(() => expect(h.inputs).toHaveLength(2));
+    act(() => { h.inputs[1]!.onReady(); });
+    const newBar = lastBar(publish);
+    expect(newBar).not.toBeNull();
+    expect(newBar).not.toBe(oldBar);
   });
 
   it('the slot\'s bar is read as the mount starts: a later change does not remount', async () => {

@@ -742,11 +742,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, overlaps and goal conflicts, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, the decision-model records, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, the row revisions, Overlord W2),
-    // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A),
+    // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2),
-    // and MIGRATIONS[89] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
-    expect(COORD_SCHEMA_VERSION).toBe(90);
-    expect(MIGRATIONS.length).toBe(90);
+    // and MIGRATIONS[89] (prevLane on continuity_generations, the previous generation's account, account organization D),
+    // and MIGRATIONS[90] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
+    expect(COORD_SCHEMA_VERSION).toBe(91);
+    expect(MIGRATIONS.length).toBe(91);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -859,10 +860,11 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
-    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A),
+    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
-    // and MIGRATIONS[89] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(90);
+    // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
+    // and MIGRATIONS[90] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(91);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -3043,7 +3045,7 @@ describe('coord.db: the programme\'s phases (programme work map WM0, D-8715; spe
 
   it('TWO NEW TABLES and nothing on an existing table, after the plan tables', () => {
     expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_tickets (')) + 1);
-    expect(SLOT).toBe(90);
+    expect(SLOT).toBe(91);
     const statements = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean);
     expect(statements.map((x) => x.split('(')[0]!.trim())).toEqual(['CREATE TABLE plan_phases', 'CREATE TABLE plan_phase_refs']);
   });
