@@ -415,7 +415,8 @@ export const PASS_WORDS = Object.freeze([
  *  `at-cap`, `capture-paused-low-disk`, `mode-wrong`, `schema-newer`,
  *  `cap-malformed`, `cap-near`, `breaker-open`, `roster-unreadable`,
  *  `root-is-symlink`, `fts-unavailable`, `status-unreadable`, D-4346's `blob-undecodable` and `drain-rejected`, and D-4347's
- *  `spool-planted`, and D-5633's `export-marks-unchecked` and `export-marks-stalled`. */
+ *  `spool-planted`, and D-5633's `export-marks-unchecked` and `export-marks-stalled`, and D-8726's `fts-segments-high` and
+ *  `fts-segments-near-limit`. */
 const healthRows = (cls, words) => words.map((w) => [w, cls]);
 const healthEntries = [
   // D-4168: within the shim's grace with no tick yet, doctor answers PASS, not §9.6 step 3's WARN.
@@ -425,14 +426,14 @@ const healthEntries = [
     'redact-source-unreadable', 'cap-near', 'agents-paused-at-cap', 'breaker-open', 'roster-unreadable', 'root-is-symlink',
     'export-due', 'export-paused-low-disk', 'retention-unmeasured', 'retention-lowered',
     'export-segment-missing', 'export-segment-damaged', 'journal-record-skipped', 'journal-growth', 'blob-undecodable',
-    'drain-rejected', 'spool-planted', 'export-marks-unchecked',
+    'drain-rejected', 'spool-planted', 'export-marks-unchecked', 'fts-segments-high',
   ]),
   ...healthRows('fail', [
     'tick-stale', 'lag-high', 'at-cap', 'capture-paused-low-disk', 'mode-wrong', 'schema-newer',
     'store-not-wal', 'store-unmeasured', 'recovery-stalled', 'store-root-dangling', 'store-missing',
     'store-mismatch', 'store-unbound', 'store-unreachable', 'store-recoverable', 'store-wal-orphaned',
     'store-zero-byte', 'store-schema-missing', 'migration-refused', 'migration-needs-op', 'journal-unwritable',
-    'export-segment-newer', 'export-overdue', 'export-marks-stalled', 'status-unreadable',
+    'export-segment-newer', 'export-overdue', 'export-marks-stalled', 'status-unreadable', 'fts-segments-near-limit',
   ]),
 ];
 export const HEALTH_WORDS = Object.freeze(Object.fromEntries(healthEntries));
@@ -4425,6 +4426,14 @@ export function decidePassLive(marker, identityNow) {
 //      lag-unmeasured. Any of them suppresses the two freshness FAILs.
 //   4. The remaining FAILs, then the WARNs, in §9.6's order.
 
+/** D-8726 (history-fts-fold-once): FTS5 refuses a segment past FTS5_MAX_SEGMENT in one index (ext/fts5/fts5_index.c,
+ *  fts5AllocateSegid), so every write that then needs a new segment fails at COMMIT with SQLITE_FULL. From
+ *  FTS_SEGMENTS_DRAIN up the merge steps never fold (a fold takes a new segment id) and only continue and drain, and doctor
+ *  FAILs fts-segments-near-limit; from FTS_SEGMENTS_WARN up it WARNs fts-segments-high. fts-structure.mjs reads the count. */
+export const FTS5_MAX_SEGMENT = 2000;
+export const FTS_SEGMENTS_WARN = 500;
+export const FTS_SEGMENTS_DRAIN = 1500;
+
 /** Meta keys `status` reads whose WRITERS ship after B1: B2's recovery step
  *  keeps `recover_unmoved_ticks` (ticks since its cursor last moved) and B4's
  *  post-bind check keeps the two export ones. Spelled once, here, for the
@@ -4553,6 +4562,9 @@ export const HEALTH_REMEDIES = Object.freeze({
   'export-segment-damaged': `put a whole copy of each named file back if one exists (the source box or a backup), and keep another copy of it outside ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ for good, but not while a recovery is open: text the store pruned that only that file held cannot be exported again; otherwise move each named file out of ~/.ccrc/history/${EXPORT_DIR}/<store_id>/ (its live rows export again by themselves); a later ccrc history doctor --restore or --rebuild stops at a segment it cannot read`,
   // D-5633 (history-export-bind-check-doctor): the fallback texts; remedyFor answers by the word the check stopped on.
   'export-marks-unchecked': `none needed while the check resumes each tick; otherwise act on the word it stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
+  // D-8726 (history-fts-fold-once). doctor --repair rebuilds both indexes whole, and dropping an index needs no new segment.
+  'fts-segments-high': `none needed while the count falls: the merge steps start a merge only when none is in progress, and the count falls when the one in progress ends; if it keeps rising, read the sweep: ${SWEEP_LOG}`,
+  'fts-segments-near-limit': `none needed while the count falls: from ${FTS_SEGMENTS_DRAIN} segments the merge steps only continue merges and fold none, so the count falls when they end; if it does not, or the sweep fails with "database or disk is full", the operator runs ccrc history doctor --repair, which rebuilds both indexes whole, from a terminal outside any session`,
   'export-marks-stalled': `act on the word the check stopped on (history off, a long-running reader, an unreadable export directory), or read the sweep: ${SWEEP_LOG}`,
   'journal-record-skipped': `none needed if the journal came from a newer build; otherwise read the sweep: ${SWEEP_LOG} (no operator verb clears this count: the journal audit recounts it from the journal each time it runs)`,
   'journal-growth': `read the sweep: ${SWEEP_LOG}; the journal grows faster than twice its estimate`,
@@ -4665,6 +4677,16 @@ function bindingDetail(word, h) {
     case 'store-not-wal': return 'the store is not in WAL mode, and the writer could not set it';
     default: return `status refused: ${word}`;
   }
+}
+
+/** D-8726: one line per FTS5 index at or past a threshold, under the class it reaches. An absent count judges nothing. */
+function ftsSegmentLines(h) {
+  const out = { warn: [], fail: [] };
+  for (const [table, n] of [['blobs_fts', h.ftsSegments?.blobs], ['nodes_fts', h.ftsSegments?.nodes]]) {
+    if (typeof n !== 'number' || n < FTS_SEGMENTS_WARN) continue;
+    out[n >= FTS_SEGMENTS_DRAIN ? 'fail' : 'warn'].push(`${table} holds ${n} segments; FTS5 allows ${FTS5_MAX_SEGMENT}, and a write that needs another then fails`);
+  }
+  return out;
 }
 
 export function deriveHealth(h) {
@@ -4844,6 +4866,9 @@ export function deriveHealth(h) {
   // unlistable, failed) for over EXPORT_MARKS_STALL_MS FAILs in place of its WARN below (coordinator ruling R5, as amended).
   const markCheck = markCheckArm(h);
   if (markCheck === 'stalled') fail.push(item('export-marks-stalled', markCheckDetail(markCheck, h)));
+  // D-8726 (history-fts-fold-once): each FTS5 index's segments, as status read them from its structure record.
+  const segments = ftsSegmentLines(h);
+  if (segments.fail.length > 0) fail.push(item('fts-segments-near-limit', segments.fail.join('; ')));
 
   // 5. the WARNs.
   if (h.fts === 'fts5-absent' || h.fts === 'probe-failed') warn.push(item('fts-unavailable', `search unavailable (${h.fts}); capture continues`));
@@ -4872,6 +4897,7 @@ export function deriveHealth(h) {
   // D-5634 (history-export-segment-whole-check): a listed segment the check after a bind found not whole or not this store's.
   if (h.exportSegmentDamaged.length > 0) warn.push(item('export-segment-damaged', `export segment(s) ${h.exportSegmentDamaged.join(', ')} are not whole or not this store's; the check after a bind treated them as missing, so their marks were cleared and their rows export again`));
   if (markCheck === 'unchecked') warn.push(item('export-marks-unchecked', markCheckDetail(markCheck, h)));   // D-5633: the stalled FAIL above replaces it
+  if (segments.warn.length > 0) warn.push(item('fts-segments-high', segments.warn.join('; ')));
   if (h.journalSkipped > 0) warn.push(item('journal-record-skipped', `${h.journalSkipped} journal record(s) were skipped as malformed or of an unknown kind`));
   if (h.journalGrowth30d > JOURNAL_GROWTH_BYTES) {
     warn.push(item('journal-growth', `the journal grew ${h.journalGrowth30d} bytes in 30 days (over ${JOURNAL_GROWTH_BYTES})`));
