@@ -630,6 +630,44 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
     expect(h.onDraftAsset.mock.calls).toEqual([[1], [-1], [1]]);
   });
 
+  // Review 2372 F1: sign-in is announced once, so the body listens from before its images walk.
+  it('a sign-in that completes while a queued image load is still pending starts the new body once the walk ends, and its mount shows the image', async () => {
+    const h = harness();
+    let walked!: (i: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { walked = r; }));
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 1, auth: 0 });
+    render(frame(h));
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(1));
+    // A load of the walk answered 401 (the login screen is up), and sign-in completes while a queued load is still pending.
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { walked({ urls: {}, drafts: 1, auth: 1 }); await Promise.resolve(); });
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.inputs[0]?.document.images, 'the one mount is the new body\'s, with the image the 401 had kept out').toEqual({ 'i.png': IMG_URL });
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+    // The first body counted no drafts and mounted nothing: only the new body's count stands.
+    expect(h.onDraftAsset.mock.calls).toEqual([[1]]);
+  });
+
+  it('a sign-in during a walk that answered no 401 starts nothing: the body mounts once and stops listening', async () => {
+    const h = harness();
+    let walked!: (i: { urls: Record<string, string>; drafts: number; auth: number }) => void;
+    h.imagesFn.mockImplementationOnce(() => new Promise((r) => { walked = r; }));
+    render(frame(h));
+    await waitFor(() => expect(h.imagesFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { walked({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 }); await Promise.resolve(); });
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
   // Review 2361 F1: the run after sign-in is a new body, so it lands where its own outcome says, from `rendering`.
   /** A harness whose first run mounts with a 401 image and whose render after sign-in answers `second`. */
   function armed(second: () => Promise<ReaderRenderOutcome>): Harness {

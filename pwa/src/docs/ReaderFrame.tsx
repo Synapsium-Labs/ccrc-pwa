@@ -25,8 +25,10 @@
 // those sign-ins): the old body's cleanup tears the mount down and gives its drafts back, and the new body runs the render,
 // the images and the mount from `rendering`, its "Formatting…" note shown, once per sign-in. A run inside the old body would
 // start where that body landed, and `readerBodyReducer` takes `plain` only from `rendering` and `ready` only from
-// `mounting`, so a second render that timed out or was refused would land nowhere (review 2361 F1). A body whose images
-// reported none never listens.
+// `mounting`, so a second render that timed out or was refused would land nowhere (review 2361 F1). The body listens from
+// before its images walk: sign-in is announced once, and a sign-in that completes while a queued load is still pending is
+// latched, so a walk that ends with a 401 starts the new body at once, with no mount of its own (review 2372 F1). A body whose
+// images reported none stops listening when the walk ends.
 //
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
@@ -196,7 +198,7 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let landed = false;
     let counted = 0;
     let uncount: ((delta: number) => void) | null = null;
-    /** The listener for sign-in, held only while this run's images reported a 401. */
+    /** The listener for sign-in: subscribed before the images walk, and kept after it only when the walk reported a 401. */
     let unwatchAuth: (() => void) | null = null;
 
     const drop = (): void => {
@@ -281,6 +283,21 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       }
 
       const second = live.current;
+      // Sign-in is listened for from before the images walk, not after it: `clearAuthLost` announces once, to the listeners
+      // already subscribed, and a sign-in can complete while a queued image load is still pending (review 2372 F1). The
+      // listener latches that sign-in; once the walk has ended, a 401 left in it starts the new body at once.
+      let regained = false;
+      /** Set once the walk has reported a 401: from then on a sign-in starts the new body itself. */
+      let watching = false;
+      unwatchAuth = onAuthRegained(() => {
+        if (!watching) {
+          regained = true;
+          return;
+        }
+        // Sign-in returned: `ReaderFrame` starts a new body, whose run asks the images again; this body's cleanup ends this run.
+        unwatch();
+        live.current.props.onSignedIn();
+      });
       let images: ReaderImages;
       try {
         images = second.assets === null
@@ -292,17 +309,21 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         return;
       }
       if (ac.signal.aborted || landed) return;
+      if (images.auth === 0) {
+        unwatch();
+      } else if (regained) {
+        // A sign-in completed during the walk, after a load answered 401: the new body asks the images again, so this body
+        // counts no drafts and mounts nothing.
+        unwatch();
+        live.current.props.onSignedIn();
+        return;
+      } else {
+        watching = true;
+      }
       if (second.assets !== null && images.drafts !== 0) {
         counted = images.drafts;
         uncount = second.assets.onDraftAsset;
         uncount(counted);
-      }
-      if (images.auth > 0) {
-        // Sign-in returned: `ReaderFrame` starts a new body, whose run asks the images again; this body's cleanup ends this run.
-        unwatchAuth = onAuthRegained(() => {
-          unwatch();
-          live.current.props.onSignedIn();
-        });
       }
 
       const cur = live.current;
