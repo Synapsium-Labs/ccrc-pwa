@@ -155,12 +155,12 @@ describe('the testbox ops on the wire (D-7411, D-7555)', () => {
   const res = (c: TestClient, id: number) =>
     c.waitFor((m) => (m as { t?: string; id?: number }).t === 'res' && (m as { id?: number }).id === id) as Promise<Record<string, unknown>>;
 
-  it('both ops are in ready.ops, which has 11 words (the ninth is the backup op, D-7858; the tenth the readdir-mtimes word; the eleventh overlord-history, Overlord W1), every one on CAP_WORD', async () => {
+  it('both ops are in ready.ops, which has 12 words (the ninth is the backup op, D-7858; the tenth the readdir-mtimes word; the eleventh the models op, D-8688; the twelfth overlord-history, Overlord W1), every one on CAP_WORD', async () => {
     const c = await connect(world());
     const ops = (await c.hello() as AgentReady).ops!;
     expect(ops).toContain(TESTBOX_OP);
     expect(ops).toContain(TESTBOX_TOOLS_SYNC_OP);
-    expect(ops).toHaveLength(11);
+    expect(ops).toHaveLength(12);
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
     expect(TESTBOX_TOOLS_SYNC_OP).toBe('testbox-tools-sync');
   });

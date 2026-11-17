@@ -1047,3 +1047,42 @@ describe('the admin-merge door is not a server verb', () => {
     expect(holders).toEqual([]);
   });
 });
+
+// Auto-advance plan W4a (D-8687, D-8692): the `models` op, the sixth wire-triggered spawn, is not an exec path either.
+describe('layer 4e — the models op is not an exec path and the whitelist is unchanged', () => {
+  it('EXEC_COMMANDS is unchanged, ccrc and models are on neither list, and the exec op refuses the argv', () => {
+    expect([...EXEC_COMMANDS]).toEqual(['tmux', 'ccd']);
+    expect(Object.keys(EXEC_WHITELIST).sort()).toEqual(['ccd', 'tmux']);
+    for (const w of ['ccrc', 'models']) {
+      expect(EXEC_COMMANDS as readonly string[], w).not.toContain(w);
+      expect(FORBIDDEN_COMMANDS as readonly string[], w).not.toContain(w);
+    }
+    for (const cmd of [...FORBIDDEN_COMMANDS, 'ccrc', 'models']) {
+      expect(isExecAllowed(cmd, ['models', 'lane-a', 'show']), cmd).toBe(false);
+    }
+  });
+
+  it("`case 'models'` and agent/src/modelsop.ts name no exec-surface symbol, and ctx.spawnModels is reached only inside the case", async () => {
+    const { readFileSync } = await import('node:fs');
+    const path = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'agent', 'src');
+    const EXEC_PATH = /\b(?:isExecAllowed|runExec|resolveSpawnCmd|checkPath)\s*\(|\bEXEC_WHITELIST\b/;
+    const code = (src: string): string => src.split('\n').filter((l) => !/^\s*(?:\/\/|\/\*|\*)/.test(l)).map((l) => l.replace(/\s\/\/.*$/, '')).join('\n');
+    const readSrc = (name: string): string => readFileSync(path.join(dir, name), 'utf8');
+    const cutBetween = (src: string, open: string, close: RegExp): string => {
+      const at = src.indexOf(open);
+      expect(at, `${open} is there`).toBeGreaterThanOrEqual(0);
+      const after = src.slice(at + open.length);
+      return after.slice(0, close.exec(after)!.index);
+    };
+    const server = readSrc('server.ts');
+    const handle = cutBetween(server, 'async function handleReq(', /\n\}\n/);
+    const body = cutBetween(handle, "case 'models': {", /\n    (?:case '|default:)/);
+    const reach = (src: string): number => code(src).match(/\bctx\.spawnModels\b/g)?.length ?? 0;
+    expect(code(body)).not.toMatch(EXEC_PATH);
+    expect(reach(body), 'reached once inside the case').toBe(1);
+    expect(reach(server.replace(body, '')), 'never outside it').toBe(0);
+    expect(code(readSrc('modelsop.ts'))).not.toMatch(EXEC_PATH);
+  });
+});

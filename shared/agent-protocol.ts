@@ -105,7 +105,7 @@ export interface AgentReady {
   t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
   observedEpoch?: number | null;
   /** The op words defined for this list are `UPDATE_OP` (`'update'`), which programme wave 5's agent sends, and
-   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1); `readReadyOps` reads them. */
+   *  `TOKEN_SYNC_OP` (`'token-sync'`, box-token lifecycle wave 1) and `MODELS_OP` (`'models'`, auto-advance W4); `readReadyOps` reads them. */
   ops?: string[];   // ADDITIVE (design 2026-09-20 §8/§10): the ops this agent answers; absent from every agent before W4
 }
 
@@ -423,7 +423,7 @@ export interface DiskReq { t: 'req'; id: number; op: 'disk' }
  *  Every argument failure is answered `ok: true` with `kind: 'refused'` and the node's `fleetIdentity`, never
  *  `bad-request`, which from this op means "the agent predates it". */
 export interface TestboxAdminReq { t: 'req'; id: number; op: 'testbox-admin'; sub: TestboxAdminSub; fields: TestboxAdminFields }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|UpdateReq|TokenSyncReq|AccountOpReq|DiskReq|PressureReq|TestboxReq|TestboxToolsSyncReq|TestboxAdminReq|BackupReq|OverlordHistoryReq|ModelsReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 /** `detail` is ADDITIVE (design 2026-09-20 §10, D-3373): what an
  *  agent can say beyond the word — the `--detach` parent's first stderr line,
@@ -1182,3 +1182,119 @@ export interface OverlordHistoryReq extends OverlordHistoryRequest { t: 'req'; i
 /** The op's name, and the word an agent that serves the history store lists in `ready.ops` (Task 4). */
 export const OVERLORD_HISTORY_OP = 'overlord-history';
 import type { OverlordHistoryRequest } from './overlordHistory.js';
+
+// ── the `models` op (auto-advance spec 2026-10-13 §2.7, D14; plan W4 Task 16 as re-planned, D-8687, D-8692) ──
+// The SIXTH wire-triggered spawn outside the exec whitelist, on the `account` and `testbox-admin` ops' template: the
+// agent (`agent/src/modelsop.ts`, `agent/src/server.ts`) builds argv with `buildModelsArgv` and spawns
+// `<home>/.local/bin/ccrc models <lane> show`, or `… models <lane> hold|release|revert <class>`, and answers how it
+// ended, `ok: true` with a `kind` and `fleetIdentity` (`ModelsOpAnswer`), a refusal and a held gate included; the
+// agent never parses the verb's stdout. The server's two arms (`server/src/remote/io.ts`, and `server/src/io.ts`'s
+// `localIOFor`) call the same builder first and read the answer with `readModelsOpAnswer`. Bash cannot import this:
+// the verbs the op spawns are `ccd/ccrc`'s own `MODELS_SUBS`, and `server/test/models-op-shared.test.ts` holds the
+// actions to that list. ADDITIVE: no `FLEET_PROTO` bump; an agent that predates it never lists the word in
+// `ready.ops`, so the server never sends it, and `bad-request` from it means "this agent predates the op".
+//
+// An import placed here rather than at the head of the file: this file is cited by line, and the import is
+// hoisted either way (`shared/api.ts` does the same).
+import { CLASSES, MODELS_LANE_ID_RE, MODELS_RESERVED_IDS, type ModelClass } from './models.js';
+
+/** The op's name, and the word an agent that answers it lists in `ready.ops`. */
+export const MODELS_OP = 'models';
+
+/** The four actions the op runs: `ccrc models <lane> <action>`, each one of `ccd/ccrc`'s `MODELS_SUBS`. */
+export const MODELS_ACTIONS = ['show', 'hold', 'release', 'revert'] as const;
+export type ModelsAction = (typeof MODELS_ACTIONS)[number];
+
+export function isModelsAction(v: unknown): v is ModelsAction {
+  return typeof v === 'string' && (MODELS_ACTIONS as readonly string[]).includes(v);
+}
+
+export function isModelsClass(v: unknown): v is ModelClass {
+  return typeof v === 'string' && (CLASSES as readonly string[]).includes(v);
+}
+
+/** The ONE lane guard: MODELS_LANE_ID_RE and not one of MODELS_RESERVED_IDS (the words `ccrc models` reads as box subs). */
+export function isModelsLaneId(v: unknown): v is string {
+  return typeof v === 'string' && MODELS_LANE_ID_RE.test(v) && !MODELS_RESERVED_IDS.includes(v);
+}
+
+/** Why the builder refused, checked in this order. */
+export const MODELS_ARGV_REFUSALS = ['bad-lane', 'bad-action', 'bad-class'] as const;
+export type ModelsArgvRefusal = (typeof MODELS_ARGV_REFUSALS)[number];
+
+/** THE ONE BUILDER, called by validateReq, by the agent's case again, and by both server arms before anything is
+ *  sent or spawned. Checked in this order: lane (bad-lane), action (bad-action), then class: `show` with any class
+ *  value other than `undefined` is bad-class; a writing action whose class fails isModelsClass is bad-class.
+ *  The argv is FROZEN: ['models', lane, 'show'] or ['models', lane, action, cls]. */
+export function buildModelsArgv(lane: unknown, action: unknown, cls: unknown):
+  { readonly ok: true; readonly argv: readonly string[] } | { readonly ok: false; readonly why: ModelsArgvRefusal } {
+  if (!isModelsLaneId(lane)) return { ok: false, why: 'bad-lane' };
+  if (!isModelsAction(action)) return { ok: false, why: 'bad-action' };
+  if (action === 'show') {
+    return cls === undefined ? { ok: true, argv: Object.freeze(['models', lane, 'show']) } : { ok: false, why: 'bad-class' };
+  }
+  if (!isModelsClass(cls)) return { ok: false, why: 'bad-class' };
+  return { ok: true, argv: Object.freeze(['models', lane, action, cls]) };
+}
+
+/** The child's bound: SIGTERM to its group here, SIGKILL MODELS_KILL_GRACE_MS later. Above the lane-files lock's
+ *  20 s wait (`ccd/ccrc`'s `${CCRC_MODELS_LOCK_S:-20}`, which the child's three-name environment cannot override),
+ *  so a verb that waits out a writer refuses `lock-busy` itself and is never killed holding the lock. */
+export const MODELS_SPAWN_TIMEOUT_MS = 40_000;
+/** After the SIGTERM to the child's group, how long before the SIGKILL: the account op's grace
+ *  (`ACCOUNT_OP_KILL_GRACE_MS`'s value), re-derived, and pinned equal to it. */
+export const MODELS_KILL_GRACE_MS = 5_000;
+/** After the SIGKILL, how long the agent waits for the child's pipes to close before it answers anyway. */
+export const MODELS_OP_DRAIN_MS = 2_000;
+/** The most stdout the agent keeps: one byte more kills the group and answers `too-large`. */
+export const MODELS_OP_OUTPUT_MAX_BYTES = 262_144;
+/** The server's FleetClient.request deadline: the bound, the grace, the drain and a margin (accountOpRequestTimeoutMs's rule). */
+export const MODELS_OP_REQUEST_TIMEOUT_MS = MODELS_SPAWN_TIMEOUT_MS + MODELS_KILL_GRACE_MS + MODELS_OP_DRAIN_MS + 5_000;
+
+/** ONE member of the `req` envelope: `show` carries no `class`; a writing action carries one. A frame with any other
+ *  key is malformed (`bad-request`). */
+export type ModelsReq =
+  | { t: 'req'; id: number; op: 'models'; lane: string; action: 'show' }
+  | { t: 'req'; id: number; op: 'models'; lane: string; action: Exclude<ModelsAction, 'show'>; class: ModelClass };
+
+/** How one `models` op ended on the node, each arm kept apart (AccountOpOutcome's arms, plus `busy`):
+ *  exited (the verb ran; `stdout` is its whole output, unread by the agent), timeout / too-large (killed; outcome
+ *  UNKNOWN), not-started (nothing ran), refused (the builder refused; nothing ran), busy (the agent's one gate was
+ *  held; nothing ran). */
+export type ModelsOpOutcome =
+  | { kind: 'exited'; code: number; stdout: string }
+  | { kind: 'timeout' } | { kind: 'too-large' } | { kind: 'not-started' }
+  | { kind: 'refused'; why: ModelsArgvRefusal }
+  | { kind: 'busy' };
+
+/** The op's `ok: true` payload; `fleetIdentity` is the node's `~/.ccrc/node-id` through `NODE_ID_RE`, or `null`. */
+export type ModelsOpAnswer = ModelsOpOutcome & { fleetIdentity: string | null };
+
+/** THE ONE READER of a `models` op's answer: readAccountOpAnswer's grammar (fleetIdentity null or NODE_ID_RE; exited
+ *  code an integer 0..255 and stdout a string; refused `why` in MODELS_ARGV_REFUSALS), plus `busy`. null is "no answer
+ *  to trust", never an outcome. */
+export function readModelsOpAnswer(raw: unknown): ModelsOpAnswer | null {
+  if (typeof raw !== 'object' || raw === null) return null;
+  const r = raw as Record<string, unknown>;
+  const fid = r.fleetIdentity;
+  if (fid !== null && (typeof fid !== 'string' || !NODE_ID_RE.test(fid))) return null;
+  const fleetIdentity = fid as string | null;
+  switch (r.kind) {
+    case 'exited':
+      if (typeof r.code !== 'number' || !Number.isInteger(r.code) || r.code < 0 || r.code > 255) return null;
+      if (typeof r.stdout !== 'string') return null;
+      return { kind: 'exited', code: r.code, stdout: r.stdout, fleetIdentity };
+    case 'timeout': case 'too-large': case 'not-started': case 'busy':
+      return { kind: r.kind, fleetIdentity };
+    case 'refused':
+      if (typeof r.why !== 'string' || !(MODELS_ARGV_REFUSALS as readonly string[]).includes(r.why)) return null;
+      return { kind: 'refused', why: r.why as ModelsArgvRefusal, fleetIdentity };
+    default:
+      return null;
+  }
+}
+
+/** How one `models` call ended as the SERVER's seam answers it (FleetIO.models): the node's outcome, plus
+ *  `unsupported` (an agent that does not list the op, an older agent answering bad-request, or the bare localIO;
+ *  nothing ran) and `lost` (the frame left and no answer came back, or one off readModelsOpAnswer's grammar; UNKNOWN). */
+export type ModelsAsked = ModelsOpOutcome | { kind: 'unsupported' } | { kind: 'lost' };
