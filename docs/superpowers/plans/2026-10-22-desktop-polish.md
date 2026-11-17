@@ -4157,11 +4157,38 @@ screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
 
 **What was done.**
 - **Records first.** C41's records (`c41.md` §10 and §12, its section above, D-5995 items (3), (7) and (16), and the
-  2 MiB row-join cut) say what review 2411 measured, each residual marked `mask-fail-open-forms`.
+  2 MiB row-join cut) say what review 2411 measured, each residual marked `mask-fail-open-forms`; once the fixes landed,
+  D-5995 (3), (7) and (16) say what C44 closed and what it costs.
+- **Measured on `main`** (synthetic keys, `main`'s masker and this branch's in one script). F1: the whole key in a
+  styled listing, an OSC 8 listing at 110 columns and a cursor-positioned listing at 200 columns in small chunks; one row
+  (110 bytes) at 66 of 330 three-chunk cases and 702 of 839 cuts at a 7 or 13 ms gap. F2: the whole key at 16 of 16
+  placements with 2,600 blanks of indent a row. F3: 1,477 to 7,538 bytes of a key coloured per character on one joined
+  row. F7's arm: 98 bytes of a 108-byte shape key whose row ends at the window's first byte.
+- **The change** (`server/src/accounts/mask.ts` only). F1: the walk holds a run that joins back into the drawer's sent
+  text from its first unsent byte (`floor`), not a row later; a run that ends its row and reaches past it is held from
+  it. Not `lead = ''`: it reds `secret-mask.test.ts`'s "a compatible key typed slowly" row (measured). F2: the cap arm
+  reads from the row before when its read ends in an indent or between escapes, and a read that is all one row's indent
+  grows. F3: slices and windows end outside an escape, a chain cut at a cap is carried on through every later slice in
+  its own units, and a text's unfinished row is handed to the next text. F4: `WHOLE_HELD_MAX` 256 KiB → 64 KiB, past
+  which a chain's rows are masked: the review's hostile key-free slices and pushes fall from 10 to 47 ms to 5.8 to 18.1
+  ms at the same load. F7: r19's arm takes the open tail only. The drawer's one-mark taint reads through escapes.
+- **Tests.** Seven cases in `drawer-mask-rows.test.ts` (describe "D-8728"), six red at `main` (five for key bytes, the
+  F4 row for its read bound) and the seventh red on its mutant; the drawer's cap row checks key bytes first (F8); the
+  6,000-character row allows a mark each for the rows either side of a key masked past the hold. The `secret-mask.test.ts`
+  overlap pin's comment (F11), with its claim holder's consent. Twelve mutants, each red (`c44.md` §5).
+- **Carried, measured and unchanged** (`c44.md` §7): `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`,
+  `shape-walk-narrow-rows`, `egress-no-row-join`. The 300-key fuzz stays a script (F9: past ten minutes).
 
 - **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
   start fail closed, its cap arm masks a chain's rows whatever the read ends in, and its re-reads are bounded in cost
-  (review 2411 F1 to F4, F7). Further departures are named by slug in `c44.md`.
+  (review 2411 F1 to F4, F7). Further departures are named by slug in `c44.md` §9: the 64 KiB hold (`mask-hold-64k`),
+  the floor rather than an empty lead (`drawer-lead-floor-not-empty`), five holes found in the task and closed
+  (`drawer-lead-bel-hyperlink`, `pane-cap-blank-read`, `chain-row-tail-cont`, `drawer-taint-through-escapes`,
+  `r19-row-tail-arm`), and the F11 comment in a file another run claims (`secret-mask-comment-consent`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip, but for load timeouts that `main`'s masker
+shows too (`c44.md` §11); the D-8728 rows are red at `main` as `c44.md` §4 says; each mutant in `c44.md` §5 reds;
+the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
 
