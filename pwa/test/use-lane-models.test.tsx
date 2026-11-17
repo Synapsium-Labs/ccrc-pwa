@@ -12,8 +12,8 @@ afterEach(() => { clearScreenCache(); vi.restoreAllMocks(); });
 const readOf = (opus: string): LaneModelsRead => ({
   kind: 'read',
   classes: {
-    fable: { model: 'm-fable', label: 'Fable Model' }, opus: { model: `m-${opus}`, label: opus },
-    sonnet: { model: 'm-sonnet', label: 'Sonnet Model' }, haiku: { model: 'm-haiku', label: 'Haiku Model' },
+    fable: { model: 'm-fable', label: 'Fable Model', efforts: null }, opus: { model: `m-${opus}`, label: opus, efforts: null },
+    sonnet: { model: 'm-sonnet', label: 'Sonnet Model', efforts: null }, haiku: { model: 'm-haiku', label: 'Haiku Model', efforts: null },
   },
 });
 const answer = (lane: string, models: LaneModelsRead) => ({ ok: true, lane, models });

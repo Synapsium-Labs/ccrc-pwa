@@ -34,6 +34,8 @@ import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
+import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -187,6 +189,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...OVERLAPS_MUTANT_SETS,
+  ...PRIVATE_NAMES_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

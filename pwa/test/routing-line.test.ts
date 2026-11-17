@@ -16,15 +16,17 @@ const route = (over: Partial<Route> & { fields?: Route['fields'] } = {}): Route 
 });
 
 const line = (
-  row: FleetSession, provider: Parameters<typeof routeView>[2], lane = 'Lane A', models: LaneModelsRead | null = null,
-) => routingLine(row, routeView(row, row.wrapper, provider, models), lane, models);
+  row: FleetSession, provider: Parameters<typeof routeView>[3], lane = 'Lane A', models: LaneModelsRead | null = null,
+) => routingLine(row, routeView(row, row.wrapper, undefined, provider, models), lane, models);
 
 /** D-8406: a dedicated lane's model files, as `GET /api/models/:lane` answers them. */
 const GPT_LANE: LaneModelsRead = {
   kind: 'read',
   classes: {
-    fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra' }, opus: { model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol' },
-    sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra' }, haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna' },
+    fable: { model: 'gpt-6-astra', label: 'GPT-6-Astra', efforts: null },
+    opus: { model: 'gpt-6.1-sol', label: 'GPT-6.1-Sol', efforts: null },
+    sonnet: { model: 'gpt-6.1-terra', label: 'GPT-6.1 Terra', efforts: null },
+    haiku: { model: 'gpt-6-luna', label: 'GPT-6 Luna', efforts: null },
   },
 };
 
@@ -61,7 +63,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
       route: route({ fields: { class: 'opus' } }),
     });
     for (const provider of [null, accountProvider([entry()], 'lane-a')]) {
-      const view = routeView(row, 'lane-a', provider, null);
+      const view = routeView(row, 'lane-a', undefined, provider, null);
       expect(view.classPending).toBe(false);
       expect(view.wireQueuedField).not.toBe('class');
       const out = routingLine(row, view, 'Lane A', null);
@@ -77,7 +79,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
     });
     // An OpenRouter lane, and a second OpenAI lane that is not the dedicated one (it gets the Anthropic list).
     for (const provider of ['openrouter', 'openai'] as const) {
-      const view = routeView(row, 'lane-a', provider, null);
+      const view = routeView(row, 'lane-a', undefined, provider, null);
       expect(view.classPending).toBe(false);
       expect(view.wireQueuedField).not.toBe('class');
       expect(routingLine(row, view, 'Lane A', null).sentence).not.toMatch(/asked|queued/);
@@ -88,13 +90,37 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'gpt', model: 'gpt-6.1-terra', effort: 'high',
       route: route({ fields: { class: 'opus' } }),
     });
-    const view = routeView(gpt, 'gpt', 'openai', GPT_LANE);
+    const view = routeView(gpt, 'gpt', undefined, 'openai', GPT_LANE);
     expect(view.classPending).toBe(true);
     expect(view.wireQueuedField).toBe('class');
     expect(routingLine(gpt, view, 'gpt', GPT_LANE).sentence).toContain('· asked GPT-6.1-Sol');
     // The pane reading the asked model back clears it, a context suffix and all.
     const landed = { ...gpt, model: 'gpt-6.1-sol[1m]' };
-    expect(routeView(landed, 'gpt', 'openai', GPT_LANE).classPending).toBe(false);
+    expect(routeView(landed, 'gpt', undefined, 'openai', GPT_LANE).classPending).toBe(false);
+  });
+
+  it('a pending class on a managed Codex lane the wrapper fallback does not name reads asked, from its roster row (D-8686)', () => {
+    // `lane-b` is a neutral second Codex lane: only its roster row puts it on the dedicated list, where its provider's
+    // readback is measurable. With no row the fallback puts it on the Anthropic list and nothing is asked.
+    const lane: LaneModelsRead = {
+      kind: 'read',
+      classes: {
+        fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+        opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: null },
+        sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: null },
+        haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: null },
+      },
+    };
+    const codex = { kind: 'codex', managed: true, telemetry: 'codex' } as const;
+    const row = fleetSession({
+      wrapper: 'lane-b', model: 'model-6-beta', effort: 'high', route: route({ fields: { class: 'opus' } }),
+    });
+    const withRow = routeView(row, 'lane-b', codex, 'openai', lane);
+    expect(withRow.classPending).toBe(true);
+    expect(routingLine(row, withRow, 'Lane B', lane).sentence).toContain('· asked Gamma 6.1');
+    const noRow = routeView(row, 'lane-b', undefined, 'openai', lane);
+    expect(noRow.classPending).toBe(false);
+    expect(routingLine(row, noRow, 'Lane B', lane).sentence).not.toMatch(/asked/);
   });
 
   it('a dedicated lane whose model files are not read yet, absent or unreadable never reads asked (D-8406)', () => {
@@ -103,7 +129,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
       route: route({ fields: { class: 'opus' } }),
     });
     for (const models of [null, { kind: 'absent' }, { kind: 'unreadable' }] as const) {
-      const view = routeView(gpt, 'gpt', 'openai', models);
+      const view = routeView(gpt, 'gpt', undefined, 'openai', models);
       expect(view.classPending).toBe(false);
       expect(routingLine(gpt, view, 'gpt', models).sentence).not.toMatch(/asked/);
     }
@@ -135,7 +161,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low',
       route: route({ fields: { class: 'opus', effort: 'high' } }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic', null);
+    const view = routeView(row, 'lane-a', undefined, 'anthropic', null);
     // Today's precedence: the effort is the field the wire reports as queued.
     expect(view.wireQueuedField).toBe('effort');
     expect(view.classPending).toBe(true);
@@ -146,7 +172,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
 
   it('with no routing record nothing is pending', () => {
     const row = fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: null });
-    const view = routeView(row, 'lane-a', 'anthropic', null);
+    const view = routeView(row, 'lane-a', undefined, 'anthropic', null);
     expect(view.classPending).toBe(false);
     expect(view.effortPending).toBe(false);
     expect(view.wireQueuedField).toBeNull();
@@ -158,7 +184,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
       route: route({ unreadable: ['effort'] }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic', null);
+    const view = routeView(row, 'lane-a', undefined, 'anthropic', null);
     expect(view.effortUnreadable).toBe(true);
     expect(view.effortPending).toBe(false);
     expect(routingLine(row, view, 'Lane A', null).sentence)
@@ -166,7 +192,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
   });
 
   it('the parts join to the sentence', () => {
-    const rows: [FleetSession, Parameters<typeof routeView>[2]][] = [
+    const rows: [FleetSession, Parameters<typeof routeView>[3]][] = [
       [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ fields: { class: 'opus', effort: 'high' } }) }), 'anthropic'],
       [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ unreadable: ['class'] }) }), 'anthropic'],
       [fleetSession({ wrapper: 'lane-a', route: route({ fields: { effort: 'high' }, inert: ['effort'] }) }), null],
@@ -184,7 +210,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
   });
 
   it("every '·' is a sep part, and each sep leads, past plain words only, to a door, an ask or a note", () => {
-    const rows: [FleetSession, Parameters<typeof routeView>[2]][] = [
+    const rows: [FleetSession, Parameters<typeof routeView>[3]][] = [
       [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ fields: { class: 'opus', effort: 'high' } }) }), 'anthropic'],
       [fleetSession({ wrapper: 'lane-a', model: 'Sonnet 5', effort: 'low', route: route({ unreadable: ['class'] }) }), 'anthropic'],
       [fleetSession({ wrapper: 'lane-a', route: route({ fields: { class: 'opus' }, inert: ['class', 'effort'] }) }), 'anthropic'],
@@ -238,7 +264,7 @@ describe('the routing line says what runs and asks only what it can measure', ()
       wrapper: 'lane-a', model: 'Sonnet 5', effort: 'medium',
       route: route({ fields: { class: 'opus' }, inert: ['class'] }),
     });
-    const view = routeView(row, 'lane-a', 'anthropic', null);
+    const view = routeView(row, 'lane-a', undefined, 'anthropic', null);
     expect(view.classInert).toBe(true);
     expect(view.classPending).toBe(false);
     const out = routingLine(row, view, 'Lane A', null);
@@ -284,13 +310,13 @@ describe('the routing line says what runs and asks only what it can measure', ()
 
 describe('classReadbackMeasurable', () => {
   it('is true only where the provider is known and is the provider of the list modelOptions picks', () => {
-    expect(classReadbackMeasurable('lane-a', 'anthropic')).toBe(true);
-    expect(classReadbackMeasurable('lane-a', 'openai')).toBe(false);
-    expect(classReadbackMeasurable('lane-a', 'openrouter')).toBe(false);
-    expect(classReadbackMeasurable('lane-a', null)).toBe(false);
-    expect(classReadbackMeasurable('gpt', 'openai')).toBe(true);
-    expect(classReadbackMeasurable('gpt', 'anthropic')).toBe(false);
-    expect(classReadbackMeasurable('gpt', null)).toBe(false);
+    expect(classReadbackMeasurable('lane-a', undefined, 'anthropic')).toBe(true);
+    expect(classReadbackMeasurable('lane-a', undefined, 'openai')).toBe(false);
+    expect(classReadbackMeasurable('lane-a', undefined, 'openrouter')).toBe(false);
+    expect(classReadbackMeasurable('lane-a', undefined, null)).toBe(false);
+    expect(classReadbackMeasurable('gpt', undefined, 'openai')).toBe(true);
+    expect(classReadbackMeasurable('gpt', undefined, 'anthropic')).toBe(false);
+    expect(classReadbackMeasurable('gpt', undefined, null)).toBe(false);
   });
 });
 

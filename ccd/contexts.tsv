@@ -967,3 +967,7 @@ _pool_set_start_warn	C1
 cmd_pool_answer	C1
 cmd_keep_awake	C4
 _keep_awake_ours	C4
+_role_long_lived	C3
+_route_holddown_holds	C1
+_route_holddown_settle	C1
+_fresh_crossing_end	C1

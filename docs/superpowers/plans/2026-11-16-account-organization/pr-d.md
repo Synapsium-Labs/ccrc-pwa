@@ -23,7 +23,7 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
 
 | Task | What | Where |
 |---|---|---|
-| D1 | Migration 85: `ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT` | `server/src/coord/schema.ts` |
+| D1 | Migration 86: `ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT` | `server/src/coord/schema.ts` |
 | D1 | `GenRow.prevLane`, read by `genRowOf`; the mint writes the newest row's `lane`, as `prevModel` | `server/src/continuity/continuityStore.ts` |
 | D2 | `'resumed-other-org'` in the trigger vocabulary, after `resumed-other-class` | `shared/continuity.ts` |
 | D2 | `RenewalInputs.startOtherOrg`, its predicate, `TRIGGER_CLASS` hard, the Overlord's row after `resumed-other-class` | `server/src/continuity/renewalDue.ts` |
@@ -33,15 +33,24 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
 ## Departures, by slug
 
 - `migration-85-not-84`: the brief said the next free slot was 84. Responses B (#2914) landed 84 on `main` before this
-  branch was cut, so this entry is 85. Several open PRs hold 84 or more; whoever lands second renumbers at landing, on
-  the coordinator's word.
+  branch was cut, so this entry was 85. Overlaps (#2949) then landed 85, and in fix round 1 the coordinator ruled a merge
+  of `main` and the next slot, 86. Whoever lands second renumbers again at landing, on the coordinator's word.
 - `own-account-unknown-is-unmeasured`: Table 3 has no row for a resumed generation whose own `lane` is null (the
   registry's wrapper was unmeasured, or the start was not the newest). It reads unmeasured, `account unknown`, the same
   direction as `previous account unknown`, and never "same".
 - `org-of-absent-is-unlabelled`: `GenerationsInput.orgOf` is optional. Absent, every account reads unlabelled, so a resume
   onto another account is unmeasured and the row is blind (the safe direction). Only the watcher passes it.
+- `own-account-unknown-is-unmeasured` and `org-of-absent-is-unlabelled` stand as recorded (the coordinator's rulings in
+  fix round 1); Table 3 gains the own-account row in the programme's ledger PR, not here.
 - `org-read-at-the-lane-pass`: the relation uses the roster the server holds when the lane reads the row, as Table 3
   says. A label changed after a resume changes the reading on the next pass; the reading is never stored.
+
+## Rollback exposure (review 2335 F1)
+
+`resumed-other-org` is the first trigger word added after the vocabulary shipped. An older build's `genRowOf` refuses a
+row whose `dueWhy` or `blind` carries a word it does not know, and `liveGenerations` is all-or-failure, so one such row
+fails that build's whole generations read. That is fail-closed by design (review 2003 F13). It takes a rollback below
+this PR onto a database that already holds such a row. The migration's comment says the same.
 
 ## Peer grants
 
@@ -63,7 +72,7 @@ Green: the new file, `continuity-renewal-due`, `continuity-vocabulary`, `continu
 `run-close-switch`, `rings/*`, `single-definition/*`, `sim/mutation-floors` (the `renewalDue` floor), `growth-check`
 armed, `topology-clean`, `anchors`, `citations`, `deviation-refs`, the server and pwa type checks, and the whole `coord*`
 set, 29 files, one at a time. Under load (15 to 20) four cases timed out at their 20 s limit and passed alone with a longer
-one: two in `coord-db` (each about 21 s, a fresh chain of 85 migrations) and two in `coord-store` (the delegation identity
+one: two in `coord-db` (each about 21 s, a fresh chain of the whole migration list) and two in `coord-store` (the delegation identity
 table and the outstanding-mail clamp, which inserts 510 rows, about 27 s). None touches this change. The full test-tree type check was killed by the
 test slice's shared memory cap, so the touched test files were type-checked through a scratch config, and CI runs the whole.
 
