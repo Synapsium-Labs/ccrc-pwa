@@ -450,6 +450,21 @@ describe('M5.EX2: a template-shaped spec (synthetic: never a copy of a real spec
   });
 });
 
+describe('the diagram count (base 5.6.9\'s table: "<m> diagrams appear as source"; review minor 6)', () => {
+  it('counts the elements of the snapshot whose class list holds mermaid, and no other: not a look-alike, not one the strip removed', async () => {
+    const { out } = await run(page(
+      '<pre class="mermaid">a</pre><div class="x mermaid y">b</div><svg><g class="mermaid"></g></svg>'
+      + '<pre class="mermaid-not">c</pre><pre class="MERMAID">d</pre><pre class="mermaids">e</pre>'
+      + '<template><pre class="mermaid">gone</pre></template><object><pre class="mermaid">gone</pre></object><pre id="p">f</pre>',
+    ));
+    expect(out.diagrams).toBe(3);
+  });
+
+  it('is 0 for a page with none', async () => {
+    expect((await run(page('<p class="intro">x</p>'))).out.diagrams).toBe(0);
+  });
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 // Inlining, the row MIME, missing assets
 // ---------------------------------------------------------------------------------------------------------------

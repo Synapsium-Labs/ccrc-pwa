@@ -55,6 +55,9 @@ export interface MockupSnapshot {
   readonly html: string;
   readonly links: readonly string[];
   readonly omitted: readonly string[];
+  /** How many elements of `html` have `mermaid` in their class list: the template shape's diagram blocks, which appear in
+   *  the file as source (base 5.6.9's table: "<m> diagrams appear as source"). */
+  readonly diagrams: number;
 }
 
 type InlineVerdict = Extract<MockupRefVerdict, { readonly v: 'inline' }>;
@@ -477,6 +480,14 @@ function addCspMeta(clone: Document): void {
   into.insertBefore(meta, into.firstChild);
 }
 
+/** The elements of the stripped clone whose class list holds `mermaid`: compared as a class token, case-sensitively, so
+ *  neither a look-alike class nor the case-folding of a quirks-mode selector counts. */
+function countDiagrams(clone: Document): number {
+  let n = 0;
+  for (const el of clone.querySelectorAll('[class]')) if (el.classList.contains('mermaid')) n += 1;
+  return n;
+}
+
 /** The mockup export's snapshot of `doc` (the viewer's parsed inert Document, never changed) with the loaded `assets`. */
 export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): MockupSnapshot {
   const clone = doc.cloneNode(true) as Document;
@@ -486,6 +497,7 @@ export function buildMockupSnapshot(doc: Document, assets: MockupAssetResult): M
   dropInertElements(clone);
   const links = removeLinks(clone);
   stripAttributes(clone);
+  const diagrams = countDiagrams(clone);
   addCspMeta(clone);
-  return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted };
+  return { html: EXPORT_PREFIX + clone.documentElement.outerHTML, links, omitted, diagrams };
 }

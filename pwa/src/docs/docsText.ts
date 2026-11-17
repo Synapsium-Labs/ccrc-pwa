@@ -689,6 +689,9 @@ export const EXPORT_TEXT = {
   inlinedFile: '{path} ({size}, {source})',
   fileCommitted: 'committed',
   fileDraft: 'uncommitted draft',
+  /** The provenance's count of diagram blocks that stay as source (base 5.6.9's table): `{m}` the count, `{s}` its plural and
+   *  `{es}` the verb's (`1 diagram appears`, `2 diagrams appear`). */
+  mockupDiagrams: '{m} diagram{s} appear{es} as source',
   /** What rests on the file's content-security policy and is not rewritten by the snapshot (spec 5.6.9, M5.B10). */
   mockupCss: 'Styles that use image-set() or escapes inside url() are not rewritten in this copy; the content-security '
     + 'policy in this file stops them loading anything.',

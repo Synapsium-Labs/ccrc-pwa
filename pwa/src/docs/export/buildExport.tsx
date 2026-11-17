@@ -347,6 +347,7 @@ function settledWithin(settled: Promise<MockupLoadEnd>, ms: number): Promise<Moc
 interface MockupTry {
   readonly bytes: Uint8Array<ArrayBuffer>;
   readonly facts: ExportMockupFacts;
+  readonly notes: readonly string[];
 }
 
 /** One titled list of the wrapper's chrome: its heading, then one `li` per child. */
@@ -415,8 +416,13 @@ function MockupLinks(p: { readonly links: readonly string[]; readonly input: Exp
   );
 }
 
-/** The notes a mockup export carries: the provenance's, and what rests on the file's own policy. */
-const mockupNotes = (input: ExportInput<MockupArm>): readonly string[] => [...input.provenance.notes, EXPORT_TEXT.mockupCss];
+/** The notes a mockup export carries: the provenance's, how many diagrams appear as source (none: no note), and what rests
+ *  on the file's own policy. */
+const mockupNotes = (input: ExportInput<MockupArm>, diagrams: number): readonly string[] => [
+  ...input.provenance.notes,
+  ...(diagrams === 0 ? [] : [fillSentence(EXPORT_TEXT.mockupDiagrams, { m: diagrams, s: pluralS(diagrams), es: diagrams === 1 ? 's' : '' })]),
+  EXPORT_TEXT.mockupCss,
+];
 
 async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLimits): Promise<ExportResult> {
   const arm = input.body;
@@ -435,16 +441,17 @@ async function buildMockupExport(input: ExportInput<MockupArm>, limits: ExportLi
       inlined: files.filter((f) => !left.has(f.path)).map((f) => ({ path: f.path, size: f.size, draft: f.draft })),
       omitted: snap.omitted,
     };
-    const parts: ShellParts = { metas: input.provenance.metas, notes: mockupNotes(input), banner: input.provenance.banner };
+    const notes = mockupNotes(input, snap.diagrams);
+    const parts: ShellParts = { metas: input.provenance.metas, notes, banner: input.provenance.banner };
     const content = (
       <MockupContent title={input.title} html={snap.html} facts={facts} links={<MockupLinks links={snap.links} input={input} />} />
     );
-    return { bytes: fileOfElement(shellOf(input, parts, content)), facts };
+    return { bytes: fileOfElement(shellOf(input, parts, content)), facts, notes };
   };
   // The one measure: the FINAL file's bytes, the inner document escaped into the frame's attribute plus the wrapper.
   const fits = (t: MockupTry): boolean => t.bytes.length <= limits.maxBytes;
   const done = (t: MockupTry): ExportResult =>
-    ({ ok: true, name: input.name, bytes: t.bytes, size: t.bytes.length, notes: mockupNotes(input), deferred: 0, mockup: t.facts });
+    ({ ok: true, name: input.name, bytes: t.bytes, size: t.bytes.length, notes: t.notes, deferred: 0, mockup: t.facts });
 
   const whole = attempt(held.length);
   if (fits(whole)) return done(whole);

@@ -1018,6 +1018,25 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     expect(result.mockup?.omitted).toEqual([specsRepo('s.css'), specsRepo('bg.png')]);
   }, 120_000);
 
+  it('the provenance says how many diagrams appear as source: "2 diagrams", "1 diagram", and nothing when there are none (base 5.6.9; review minor 6)', async () => {
+    const diagrams = (n: number): string => mockupPage(
+      '<h1>T</h1>' + Array.from({ length: n }, (_, i) => `<pre class="mermaid">graph TD; A${i}-->B</pre>`).join(''),
+    );
+    const noteIn = (b: Awaited<ReturnType<typeof builtMockup>>): string[] =>
+      [...b.doc.querySelectorAll('.ccrc-export-notes li')].map((l) => l.textContent ?? '');
+    const two = await builtMockup(diagrams(2));
+    expect(noteIn(two)).toContain('2 diagrams appear as source');
+    expect(two.result.notes).toContain('2 diagrams appear as source');
+    const one = await builtMockup(diagrams(1));
+    expect(noteIn(one)).toContain('1 diagram appears as source');
+    expect(one.result.notes).toContain('1 diagram appears as source');
+    const none = await builtMockup(diagrams(0));
+    expect(noteIn(none).some((n) => /as source/.test(n))).toBe(false);
+    expect(none.result.notes.some((n) => /as source/.test(n))).toBe(false);
+    // The note is the closed word, filled with the count only.
+    expect(fillSentence(EXPORT_TEXT.mockupDiagrams, { m: 3, s: 's', es: '' })).toBe('3 diagrams appear as source');
+  });
+
   it('a stripped body that is over the limit on its own gives too-large; one with room for no asset lists every asset as left out', async () => {
     const html = mockupPage(`<p>${'x'.repeat(100_000)}</p><img src="a.png" alt="a">`);
     const input = await mockupInput(html, { 'a.png': BIG(3000) });
