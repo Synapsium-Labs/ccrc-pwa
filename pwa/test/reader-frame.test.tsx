@@ -705,6 +705,8 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
     expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.docs-reader')).toBeNull();
+    // The plain view, not the fallback, which draws the same heading under its fixed note (review 2372 M-f).
+    expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
     expect(warn.mock.calls.map((c) => String(c[0]))).toContain('ccrc: reader not rendered (refused: container-depth at line 3)');
   });
 
@@ -716,6 +718,29 @@ describe('a body whose images answered 401 asks once more when sign-in returns (
     expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
     expect(h.mountFn).toHaveBeenCalledTimes(1);
     expect(container.querySelector('.docs-reader')).toBeNull();
+    expect(container.textContent).not.toContain(READER_FALLBACK_NOTE);
+  });
+
+  it('a sign-in while the first mount is still in flight: the new body mounts with the image, and the late first mount is destroyed when it lands (review 2372 M-f)', async () => {
+    const h = harness();
+    h.imagesFn.mockResolvedValueOnce({ urls: {}, drafts: 0, auth: 1 });
+    h.imagesFn.mockResolvedValueOnce({ urls: { 'i.png': IMG_URL }, drafts: 0, auth: 0 });
+    const late = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+    let land!: () => void;
+    h.mountFn.mockImplementationOnce((_el, input) => new Promise((resolve) => {
+      h.inputs.push(input);
+      land = () => resolve(late as unknown as ReaderMount);
+    }));
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    raiseAuthLost('expired');
+    act(() => clearAuthLost());
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(2));
+    expect(h.imagesFn).toHaveBeenCalledTimes(2);
+    expect(h.inputs[1]?.document.images).toEqual({ 'i.png': IMG_URL });
+    await act(async () => { land(); await Promise.resolve(); });
+    expect(late.destroy, 'the first body was gone when its mount landed').toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy, 'the new body\'s mount stands').not.toHaveBeenCalled();
   });
 
   it('while the second run renders, the "Formatting…" note shows, and it goes once the new mount is ready', async () => {
