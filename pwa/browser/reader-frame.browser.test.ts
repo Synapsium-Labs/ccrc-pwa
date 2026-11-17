@@ -178,31 +178,39 @@ const blobOf = (path: string): string => createHash('sha1').update(path).digest(
 interface HookConfig {
   /** Parent realm: make `setAttribute('csp', ...)` on an iframe do nothing (WebKit's and Gecko's condition). */
   readonly skipCspAttr?: boolean;
-  /** Parent realm: hold a srcdoc iframe's `load` listener calls until the navigated child (`navigateTo`) says so: the
-   *  first until the child is up, every later one until it holds the port. The library's first `load` handler then
-   *  posts its hello to the child whichever load fired first, and its 'navigated' fallback cannot remove the frame
-   *  before the child has taken that hello. It replaces a fixed 700 ms delay, which promised neither (merge queue run
-   *  41551141767: "the child received the port: expected 0 to be greater than 0"). Measured under load, the frame hook
-   *  runs in the srcdoc at readyState `interactive`, after the bootstrap's scripts (20 of 20 runs), and the srcdoc's
-   *  own load fired before the hook navigated in 2 of 27; with a child that commits more than 700 ms after that load,
-   *  the hello goes to the srcdoc. And a child slower than about 1.3 s pushed the delayed handler past the 2 s
-   *  watchdog, so no hello was posted at all.
-   *  The child's word that it holds the port is also the evidence: the parent records it (`__childPorts`) and answers it,
-   *  and the child speaks on the port (`onHello`) only after that answer. An op the child sends can make the reader
-   *  remove the frame at once (the forged ready does: the reader falls back with `nonce`), and anything the child sent
-   *  around then can be lost with the frame: its console line (Playwright drops a console call whose context is
-   *  already gone; hosted runs 44160844545 and 44168803467: "the child received the port (hellos: [])"), or its window
-   *  message (measured: 1 run of 30 recorded no word from a child whose hello line was captured). */
+  /** Parent realm: hold a srcdoc iframe's `load` listener calls until the navigated child (`navigateTo`) has done its
+   *  part: the first until the child is up, every later one until the reader's own end of the port has received every
+   *  op the child sends (`onHello`). The library's first `load` handler then posts its hello to the child whichever
+   *  load fired first, and its 'navigated' fallback (a later call, which removes the frame) runs only after the child's
+   *  ops have reached the reader, so it can discard neither the hello nor the parent's answer to the child's word. It
+   *  replaces a fixed 700 ms delay, which promised neither (merge queue run 41551141767: "the child received the port:
+   *  expected 0 to be greater than 0"). Measured under load, the frame hook runs in the srcdoc at readyState
+   *  `interactive`, after the bootstrap's scripts (20 of 20 runs), and the srcdoc's own load fired before the hook
+   *  navigated in 2 of 27 (the load-first ordering, which `navigateAfterLoad` forces); with a child that commits more
+   *  than 700 ms after that load, the hello goes to the srcdoc. And a child slower than about 1.3 s pushed the delayed
+   *  handler past the 2 s watchdog, so no hello was posted at all.
+   *  The evidence is the parent's own: the child's word that it holds the port, which the parent records
+   *  (`__childPorts`) and answers before the child speaks on the port, and what the reader's end of the port received
+   *  (`__readerPortIn`, each message counted after the reader's own handler has run it). Anything the child sends can
+   *  be lost with the frame once an op makes the reader remove it (the forged ready does: the reader falls back with
+   *  `nonce`): its console line (Playwright drops a console call whose context is already gone; hosted runs 44160844545
+   *  and 44168803467: "the child received the port (hellos: [])"), or its window message (measured: 1 run of 30
+   *  recorded no word from a child whose hello line was captured). */
   readonly holdLoadForChild?: boolean;
   /** Parent realm: messages posted on the frame's end of the port just before it is handed to the frame, so they are
    *  on the wire ahead of anything the frame says (the Playwright init script reaches a srcdoc frame before its
    *  scripts in some loads and after them in others, so a frame-realm hook cannot be relied on to speak first). */
   readonly earlyOps?: readonly unknown[];
   /** Frame realm: messages posted on the port once it is captured (a navigated child's, which has no scripts of the
-   *  library's to be ahead of); with `holdLoadForChild`, once the parent has recorded the child's word. */
+   *  library's to be ahead of); with `holdLoadForChild`, once the parent has recorded and answered the child's word. */
   readonly onHello?: readonly unknown[];
   /** Frame realm: the srcdoc document navigates here at once. */
   readonly navigateTo?: string;
+  /** With `holdLoadForChild`: the load-first ordering, forced at its worst. The srcdoc navigates only when the parent
+   *  hook has taken the srcdoc's own load listener call (the parent tells it to), and the parent answers the child's
+   *  word only once it holds the child's load call too, so the library's 'navigated' fallback is pending before the
+   *  child can speak. */
+  readonly navigateAfterLoad?: boolean;
 }
 
 function hookScript(cfg: HookConfig): string {
@@ -217,27 +225,53 @@ function hookScript(cfg: HookConfig): string {
         return orig.call(this, n, v);
       };
     }
+    let handed = null;
     if (CFG.holdLoadForChild) {
-      // Two gates, each opened by the child's own word (it sits in the sandbox with no allow-same-origin, so its
-      // messages carry origin "null" and it names itself): the first load listener call waits until the child is up,
-      // every later one until the child holds the port. A later call is the library's 'navigated' fallback, which
-      // removes the frame; run before the child has taken its hello, it would discard that hello with the frame.
-      const state = { up: false, port: false };
+      // Two gates on the library's srcdoc load listener, each opened by the child's own doing: the first call waits
+      // until the child is up (its word: it sits in the sandbox with no allow-same-origin, so its messages carry origin
+      // "null" and it names itself), every later one until the reader's own end of the port has received every op the
+      // child sends. A later call is the library's 'navigated' fallback, which removes the frame; run any earlier, it
+      // would discard the hello, or the parent's answer to the child's word, with the frame.
+      const state = { up: false, spoke: false };
       const held = [];
       let ran = 0;
+      window.__loadCalls = 0; window.__readerPortIn = [];
       const pump = () => {
-        while (held.length > 0 && (ran === 0 ? state.up : state.port)) { ran += 1; held.shift()(); }
+        while (held.length > 0 && (ran === 0 ? state.up : state.spoke)) { ran += 1; held.shift()(); }
+      };
+      // The reader's own end of the port: the channel whose other end the library hands the frame with its hello.
+      const MC = window.MessageChannel;
+      const channels = [];
+      window.MessageChannel = function MessageChannel() { const c = new MC(); channels.push(c); return c; };
+      window.MessageChannel.prototype = MC.prototype;
+      handed = (frameEnd) => {
+        const c = channels.find((x) => x.port2 === frameEnd);
+        if (c === undefined) return;
+        // Added after the library set this end's onmessage (it does before the frame loads), so it runs after the
+        // reader's own handler: a message is counted once the reader has acted on it.
+        c.port1.addEventListener('message', (e) => {
+          window.__readerPortIn.push(e.data !== null && typeof e.data === 'object' ? String(e.data.t) : typeof e.data);
+          if (window.__readerPortIn.length >= (CFG.onHello || []).length) state.spoke = true;
+          pump();
+        });
+      };
+      const own = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow').get;
+      let answer = null;
+      const answerWhenDue = () => {
+        if (answer !== null && (!CFG.navigateAfterLoad || window.__loadCalls >= 2)) { const a = answer; answer = null; a(); }
       };
       window.addEventListener('message', (e) => {
         const d = e.data;
         if (!d || d.ccrcHookChild === undefined || d.href !== CFG.navigateTo) return;
         if (d.ccrcHookChild === 'up') state.up = true;
         if (d.ccrcHookChild === 'port') {
-          // Recorded, then answered, before any held call can remove the frame: the child speaks on the port only after
-          // this answer.
-          state.port = true;
+          // Recorded, then answered (at once, or with navigateAfterLoad once the child's load call is held too); the
+          // child speaks on the port only after this answer. No held call can remove the frame before the answer
+          // arrives: the later ones wait for the child's ops on the reader's port (state.spoke).
           window.__childPorts.push(d.href);
-          if (e.source) e.source.postMessage({ ccrcHookAck: 'port', href: d.href }, '*');
+          const to = e.source;
+          answer = () => { if (to) to.postMessage({ ccrcHookAck: 'port', href: d.href }, '*'); };
+          answerWhenDue();
         }
         pump();
       });
@@ -245,7 +279,16 @@ function hookScript(cfg: HookConfig): string {
       EventTarget.prototype.addEventListener = function (type, cb, opts) {
         if (type === 'load' && this instanceof HTMLIFrameElement && typeof cb === 'function' && this.hasAttribute('srcdoc')) {
           const orig = cb; const self = this;
-          cb = function (ev) { held.push(() => orig.call(self, ev)); pump(); };
+          cb = function (ev) {
+            window.__loadCalls += 1;
+            held.push(() => orig.call(self, ev));
+            pump();
+            if (CFG.navigateAfterLoad && window.__loadCalls === 1) {
+              const w = own.call(self);
+              if (w) w.postMessage({ ccrcHookGo: true }, '*');
+            }
+            answerWhenDue();
+          };
         }
         return add.call(this, type, cb, opts);
       };
@@ -263,6 +306,7 @@ function hookScript(cfg: HookConfig): string {
                 window.__posts.push({ at: performance.now(), target: a[1], data: JSON.parse(JSON.stringify(a[0])), ports: a[2] ? a[2].length : 0 });
                 if (a[2] && a[2][0]) {
                   window.__postPorts.push(a[2][0]);
+                  if (handed !== null) handed(a[2][0]);
                   for (const op of (CFG.earlyOps || [])) a[2][0].postMessage(op);
                 }
                 return t.postMessage(...a);
@@ -305,7 +349,7 @@ function hookScript(cfg: HookConfig): string {
         for (const m of (CFG.onHello || [])) p.postMessage(m);
       };
       if (!heldFor) { speak(); return; }
-      // The word first, the ops only once the parent has recorded it (see holdLoadForChild).
+      // The word first, the ops only once the parent has recorded and answered it (see holdLoadForChild).
       window.addEventListener('message', (a) => {
         if (a.data && a.data.ccrcHookAck === 'port' && a.data.href === location.href) speak();
       });
@@ -314,7 +358,12 @@ function hookScript(cfg: HookConfig): string {
     // The child is the frame's current document once its own script runs, its hello listener above already in place:
     // the parent hook may now run the first load listener call it held.
     if (heldFor) top.postMessage({ ccrcHookChild: 'up', href: location.href }, '*');
-    if (CFG.navigateTo && location.href === 'about:srcdoc') location.href = CFG.navigateTo;
+    if (CFG.navigateTo && location.href === 'about:srcdoc') {
+      const go = () => { location.href = CFG.navigateTo; };
+      // The load-first ordering (navigateAfterLoad): only once the parent hook has taken this document's load call.
+      if (CFG.navigateAfterLoad) window.addEventListener('message', (e) => { if (e.data && e.data.ccrcHookGo === true) go(); });
+      else go();
+    }
   }
 })();`;
 }
@@ -558,6 +607,11 @@ const store = (page: Page): Promise<Record<string, string>> => page.evaluate(() 
 });
 const readerKeys = async (page: Page): Promise<string[]> => Object.keys(await store(page)).filter((k) => k.startsWith(READER_STORE_PREFIX));
 const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
+/** The reasons the console's own fallback line gave (`ReaderFrame`'s "ccrc: reader fell back (<reason>)"), in order. */
+const fellBackFor = (logs: readonly string[]): string[] => logs.flatMap((l) => {
+  const m = /ccrc: reader fell back \(([a-z-]+)\)/.exec(l);
+  return m === null ? [] : [m[1]!];
+});
 
 /** The origins' hits on `/battery/<name>`, by name, since `from`. */
 function reached(from: number, who: readonly ('a' | 'b')[] = ['a', 'b']): string[] {
@@ -970,7 +1024,8 @@ describe('W8a reader frame in Chrome', () => {
     await s.page.waitForFunction(() => location.pathname.endsWith('/other.md'), undefined, { timeout: 10_000 });
   }, 120_000);
 
-  it('M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect', async () => {
+  /** The M8.B5 control: the srcdoc navigates to the child at once, or (`loadFirst`) in the forced load-first ordering. */
+  const childControl = async (loadFirst: boolean): Promise<void> => {
     const child = origins.b + '/child';
     const ops = [
       { t: 'navigate', href: './other.md' },
@@ -983,7 +1038,7 @@ describe('W8a reader frame in Chrome', () => {
     const lna = await checksOffBrowser();
     const s = await openSession({
       index: (html) => html.replace(SHELL_META, ''),
-      hook: { holdLoadForChild: true, navigateTo: child, onHello: ops },
+      hook: { holdLoadForChild: true, navigateTo: child, onHello: ops, navigateAfterLoad: loadFirst },
     }, lna);
     sessions.splice(sessions.indexOf(s.app), 1);
     const from = origins.hits.length;
@@ -999,10 +1054,29 @@ describe('W8a reader frame in Chrome', () => {
       (href) => (window as unknown as { __childPorts: string[] }).__childPorts.includes(href), child, { timeout: 10_000 },
     ).then(() => true, () => false);
     expect(said, `the child never said, within 10 s, that it holds the port (hello lines captured: ${JSON.stringify(hellos)})`).toBe(true);
+    // Every op the child sent reached the reader: its own end of the port received them, in order (each counted after
+    // the reader's handler ran it), and the reader fell back on the last, the forged ready (nonce), not on a second
+    // load (navigated) or its watchdog (timeout). So the no-effect claims below rest on ops the reader acted on.
+    const seen = await s.page.evaluate(() => {
+      const w = window as unknown as { __readerPortIn: string[]; __loadCalls: number };
+      return { portIn: w.__readerPortIn, loadCalls: w.__loadCalls };
+    });
+    expect(seen.portIn, 'the reader\'s own end of the port received every op the child sent, in order').toEqual(ops.map((o) => o.t));
+    await expect.poll(() => fellBackFor(s.logs), { timeout: 5_000, message: 'the reader fell back once, on the child\'s forged ready (nonce)' })
+      .toEqual(['nonce']);
+    if (loadFirst) expect(seen.loadCalls, 'the load-first ordering: the srcdoc\'s own load call, then the child\'s, both held').toBe(2);
     expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
     expect(await readerKeys(s.page), 'no store write').toEqual([]);
     expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
     await s.app.ctx.close();
+  };
+
+  it('M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect', async () => {
+    await childControl(false);
+  }, 120_000);
+
+  it('M8.B5 control, load first: the srcdoc\'s own load is taken before the child\'s, and the navigated fallback waits for the child\'s ops', async () => {
+    await childControl(true);
   }, 120_000);
 
   it('M8.B5 wall: with the shell meta present and the local-network checks off, the frame navigating itself reaches nothing (A3)', async () => {
