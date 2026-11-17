@@ -6,7 +6,7 @@ departures and measurements the build added, by slug. No D-number is minted here
 
 ## In short
 
-- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 87: overlaps A (#2949) landed 85 and decision model A (#2948) 86 first, renumbered on the coordinator's word),
+- **Built as the plan states:** `shared/doneTests.ts`, `runs.closePr` (migration 88: overlaps A (#2949) landed 85, decision model A (#2948) 86 and row revisions (#2965) 87 first, renumbered on the coordinator's word),
   `closePrFactsOf`, `parseDoneTest`, `targetVerdict`, `readTarget`, the reader's census, the writers-map pin of
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
@@ -31,7 +31,7 @@ departures and measurements the build added, by slug. No D-number is minted here
 - **CI round 1:** `mail-routes.test.ts`'s kebab census found the done-test words undeclared; they are admitted through
   `coord/doneTests.ts#isDoneTestKebab`, and dropping one word from its map reds the scan.
 - **CI round 2:** after decision model A (#2948) took 86, `decision-model-records.test.ts`'s migration case rolled back to
-  `COORD_SCHEMA_VERSION - 1`, so migration 87 re-added `closePr` and refused ("duplicate column name"). The case now finds
+  `COORD_SCHEMA_VERSION - 1`, so the next migration re-added `closePr` and refused ("duplicate column name"). The case now finds
   its own slot by its DDL and undoes every later entry first: renewal readings A's shared text (its claim, co-edit granted),
   with `[...after].reverse()` for `toReversed`, which the tests' compile target lacks.
 - **Mutation:** `parseDoneTest` 10 of 10 mutants killed, `targetVerdict` 30 of 30, floors 1. The vocabulary's spelled
