@@ -3949,6 +3949,69 @@ fixture.
 
 **Rollback.** A plain revert.
 
+### Task C40: the sheet never lifts an aria-hidden it did not set (D-8698) — now
+
+**Why.** C38's third review (2310) found one gap, in two shapes, in how the Sheet tells the page's own hidden elements
+from Radix's marks. The `aria-hidden` package marks a node that is already hidden as uncontrolled and never puts its
+`aria-hidden` back. The Sheet took the page's own to be the hidden nodes with no Radix mark. So when a dialog still
+mounted had marked an element the page hid itself, the next sheet lifted that element as it closed, and it stayed
+announced for good. The two shapes are a sheet opened while the previous one is still in its exit (F2, a regression from
+`main` since C38) and two confirms overlapping over a sheet that holds a live region (F1). `c40.md` holds the
+measurements, the search of the app for F2, the mutants and the browser run.
+
+**What was done.**
+- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`, and a record it reads,
+  `ui/src/lib/modal-layers.ts`). An element the page hid itself is never lifted, whatever modal marked it. Every other
+  mark is lifted, whether it is the sheet's own or another modal's. C38's topmost-dialog rule, the re-hide on a reopen
+  during the exit and the focus guards are unchanged. A single sheet with no overlapping exit behaves as before.
+- **The record** (fix round 2, review 2334 F1 and F2). Each modal layer, `Sheet` and the command palette's drawer,
+  records at its panel's mount, before its own Radix hiding runs, what the page hid itself: the hidden nodes no modal has
+  marked, plus what every layer still mounted recorded.
+
+  The answer does not depend on tree order or on another modal's marks. So it removes the first build's cost (review
+  2323 F1: a sheet rendered before the closing menu kept the page hidden through its exit). It also removes round 1's
+  two costs: the palette's hand-off, and a layer that an effect closes one commit after the sheet under it. The ordering
+  of the read before Radix's hiding is inferred from, and verified against, the installed React and Radix sources. Its
+  effect is measured in jsdom and in Chrome.
+- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows and two extensions (25 rows):
+  - F2 and F1, red on `main`.
+  - The menu's hand-off with the opening sheet earlier in the tree, red on the first build.
+  - Four rows for the palette's hand-off (both tree orders, the palette closing or gone) and one for the effect-driven
+    layer, all red on round 1.
+  - Two StrictMode hand-offs.
+  - The focus guards staying hidden while a sheet closes.
+  - Section 1's first row closing its reopened sheet again, and the three-deep row asserted after the confirm unmounts.
+
+  `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds three groups:
+  - the stacked swap flow (Session actions, Swap account, its confirm, Cancel; review 2310 F4);
+  - the session menu's hand-off over a chat with and without a live region, red on `main`'s Sheet;
+  - the palette's hand-off to Show shortcuts, red on `main`'s and on round 1's.
+- **F2 in the app.** Seven handlers in five places close one modal and open another in one commit (found by a code
+  search); the session menu's rows and the palette's commands are the common ones. In Chrome, on one transcript with a
+  code block, the menu marked none of the elements the page hid itself. So F2 is not reached on that page with that
+  transcript. The browser rows plant such an element to hold the fix in the real flows.
+- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (review 2310 F6).
+
+- **D-8698** — `c40-lift-only-own-marks`: Task C40, issued on 2026-11-16. The Sheet never lifts an element the page hid
+  itself, whatever modal marked it, and lifts every other mark. What the page hid is a record each modal layer (`Sheet`
+  and the command palette's drawer) keeps at its panel's mount: the hidden nodes no modal has marked, plus what every
+  layer still mounted recorded (fix round 2, review 2334). It replaces two earlier reads, each of which cost a window
+  where the page stayed hidden through a sheet's exit while `main` announced it:
+  - the first build's read of every hidden node in the `open` effect (review 2323 F1);
+  - round 1's same read at the panel's mount (review 2334 F1, the palette's hand-off; F2, a layer an effect closes one
+    commit after the sheet under it).
+
+  No cost of this kind is known now. The only modal layers are the two that keep the record. A future Radix modal that
+  does not keep it would bring the old read's costs back, for its own marks only (inferred).
+
+**Acceptance.** The new jsdom rows are red on `main` (F2, F1), on the first build (the reversed tree order) or on round
+1 (the palette's hand-off, the effect-driven layer), and green at the tip; every C38 row stays green. The new browser
+file passes in Chrome. Its hand-off rows are red on `main`'s Sheet, and its palette rows are red on round 1's. Every pwa
+test file that renders a Sheet, a QuickConfirm or the command palette passes, as do ui's typecheck and the deviation-refs,
+dtbd and topology-clean guards.
+
+**Rollback.** A plain revert.
+
 ### Task C41: a key across any number of rows is masked, in the terminal view and pane history (D-8710) — now
 
 **Why.** Review 2326 (F3) found an exact-bytes leak on `main` that C39 neither caused nor changed: the masker joined a
