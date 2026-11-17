@@ -367,7 +367,9 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1a, the probes piece: the probe door's two lanes in the continuity file: eighty-four machine lanes in all.
   'eighty-three', 'eighty-four',
   // Overlord W1 sandbox: POST /api/sessions/:id/start/loads, the hook's loads report, a box-token lane in the continuity file: eighty-five machine lanes in all.
-  'eighty-five'];
+  'eighty-five',
+  // D-8183: the inbound path's two (`POST /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage`) in the plan file: eighty-seven machine lanes in all.
+  'eighty-six', 'eighty-seven'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

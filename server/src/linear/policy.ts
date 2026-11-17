@@ -13,8 +13,9 @@
 import type { LinearCcrcJournalOp } from './hierarchyOps.js';
 
 /** ccrc's own passes (D-8180), THE ONE LIST: the type below is derived from it and `ccrcActor` (`journal.ts`) mints
- *  an actor for each member and for nothing else. Attribution only, as the session pair is. */
-export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back'] as const;
+ *  an actor for each member and for nothing else. Attribution only, as the session pair is. `inbound` (D-8183) is the drift lane's
+ *  close of an inbound issue: its comment and its cancel. */
+export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back', 'inbound'] as const;
 /** Which of ccrc's own passes a write belongs to. */
 export type CcrcPass = (typeof LINEAR_CCRC_PASSES)[number];
 

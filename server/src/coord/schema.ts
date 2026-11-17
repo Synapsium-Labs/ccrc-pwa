@@ -3470,8 +3470,8 @@ export const MIGRATIONS: readonly string[] = [
   // approved map, `itemId` the operator item that asks for it, `reportItemId` the report's), and `linear_migration_moves`: one
   // row per subject it moves, with the object before and after, unique per (migration, subject) so a re-run never doubles a move.
   // `linear_inbound`: an issue a person filed in a managed team, seen by the inbound sweep; `state` is `waiting | mailed |
-  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason and `actedAt` when the close's
-  // Linear write landed; `title` and `body` are the reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the
+  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason, `actedAt` when the close's
+  // Linear write landed and `itemId` the operator item a `raise` made (the one fact that links a raised row to its answer); `title` and `body` are the reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the
   // plan's ticket bounds, so `plan triage upkeep` and `plan take` make the ticket without calling Linear (D-8705).
   // `linear_sync_streaks` and `linear_probe_settled` persist the plan sync's D-8701 episode streaks and its settled-probe marks,
   // which wave 3 kept in process memory (its carried findings 1 and 6).
@@ -3495,7 +3495,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE UNIQUE INDEX linear_migration_moves_one ON linear_migration_moves(migrationId, subject);
   CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
     identifier TEXT NOT NULL, title TEXT NOT NULL, body TEXT, seenAt INTEGER NOT NULL, mailedTo TEXT, mailedAt INTEGER,
-    handedTo TEXT, reason TEXT, actedAt INTEGER, state TEXT NOT NULL);
+    handedTo TEXT, reason TEXT, actedAt INTEGER, state TEXT NOT NULL, itemId INTEGER);
   CREATE TABLE linear_sync_streaks (key TEXT PRIMARY KEY, keyDigest TEXT NOT NULL, since INTEGER NOT NULL,
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));

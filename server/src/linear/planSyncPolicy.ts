@@ -26,13 +26,15 @@ export const LINEAR_PROJECT_NAME_MAX_CHARS = 80;
 // ── The snapshot ──
 
 export interface SyncSnapshot {
+  /** The programme the plan belongs to; null for a project's Upkeep epic (D-8183, the due key `upkeep:<project>`), which has no
+   *  programme: no initiative step, no programme end, no "Part of" line and no notice. */
   program: {
     slug: string; /** The `programs` row's rowid: the key of the programme's own bindings (C6). */ rowid: number; title: string;
     end: { outcome: PlanEndOutcome; why: string | null; at: number } | null; inShort: string | null;
     doneWhen: { text: string; proved: boolean }[];
     /** The programme reads `paused` (§5.3): the initiative's description notes it, its status unchanged. */
     paused?: boolean;
-  };
+  } | null;
   plan: StoredPlan;
   bindings: BindingRow[];
   workspaces: {
@@ -95,13 +97,17 @@ export function plannedFingerprint(fields: Readonly<Record<string, unknown>>): s
   return createHash('sha256').update(json, 'utf8').digest('hex').slice(0, 16);
 }
 
-/** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
-export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel' | 'pr' | `restore-${string}`): string {
-  const hex = createHash('sha256').update(`${kind}:${localId}:${workspaceId}${part === undefined ? '' : `:${part}`}`).digest('hex').slice(0, 32).split('');
+/** A v4-shaped UUID from sha256(`seed`): the one function every request id of ccrc's Linear writes is made by (D-8183). */
+export function uuidOf(seed: string): string {
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 32).split('');
   hex[12] = '4';
   hex[16] = ['8', '9', 'a', 'b'][parseInt(hex[16]!, 16) & 3]!;
   const h = hex.join('');
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+}
+/** A v4-shaped UUID from sha256(`<kind>:<localId>:<workspaceId>`), with `:<part>` appended for a part (C5). */
+export function requestIdOf(kind: BindingKind, localId: number, workspaceId: string, part?: 'link' | 'cancel' | 'pr' | `restore-${string}`): string {
+  return uuidOf(`${kind}:${localId}:${workspaceId}${part === undefined ? '' : `:${part}`}`);
 }
 
 // ── Texts (§6.1) ──
@@ -117,7 +123,10 @@ export function fitProjectName(name: string): string {
   return `${cps.slice(0, LINEAR_PROJECT_NAME_MAX_CHARS - 1).join('').trimEnd()}…`;
 }
 
-export function initiativeDescription(s: SyncSnapshot): string {
+/** A snapshot of a programme: `program` is there (an Upkeep epic's is null). */
+export type ProgrammeSnapshot = SyncSnapshot & { program: NonNullable<SyncSnapshot['program']> };
+
+export function initiativeDescription(s: ProgrammeSnapshot): string {
   const parts: string[] = [];
   if (s.program.inShort !== null && s.program.inShort !== '') parts.push(s.program.inShort);
   if (s.program.doneWhen.length > 0) parts.push(['Done when:', ...s.program.doneWhen.map((d) => `- [${d.proved ? 'x' : ' '}] ${d.text}`)].join('\n'));
@@ -252,7 +261,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
 
   // ── The programme's end (§5.4): what an epic and a ticket are for Linear once the programme has ended. `programs.state` is
   // never read for it (D-51 sets it at every wave gap): only the snapshot's `end`.
-  const end = s.program.end;
+  const prog = s.program;
+  const end = prog?.end ?? null;
   const endDay = end === null ? '' : dayOf(end.at);
   interface Eff { state: EpicState; why: string | null; by: 'own' | 'abandon' }
   const effEpic = (e: EpicRow): Eff => {
@@ -288,7 +298,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
   const anchoredIn = (e: EpicRow, wsId: string): boolean => { const at = epicBindingWs(e); return at.length === 0 || at.includes(wsId); };
   const wsIds = [...new Set([
     ...placed.flatMap((e) => { const p = places.get(e.id)!; return p.ok && anchoredIn(e, p.workspaceId) ? [p.workspaceId] : []; }),
-    ...s.bindings.flatMap((b) => (b.localKind === 'programme' && b.localId === s.program.rowid ? [b.workspaceId] : [])),
+    ...s.bindings.flatMap((b) => (prog !== null && b.localKind === 'programme' && b.localId === prog.rowid ? [b.workspaceId] : [])),
   ])];
   /** The project facts that speak for a workspace's initiative (its setting, its text check): those of the epics placed
    *  there or bound there; for an initiative bound where no epic is any more, every epic's. */
@@ -298,8 +308,8 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     return here.length > 0 ? here : of(() => true);
   };
   const anyEpicState = (st: string): boolean => s.plan.epics.some((e) => e.state === st);
-  const initiativeStatus: LinearInitiativeStatus = s.program.end !== null
-    ? (s.program.end.outcome === 'done' ? INITIATIVE.completed : INITIATIVE.canceled)
+  const initiativeStatus: LinearInitiativeStatus = end !== null
+    ? (end.outcome === 'done' ? INITIATIVE.completed : INITIATIVE.canceled)
     : anyEpicState('active') || anyEpicState('done') ? INITIATIVE.active : INITIATIVE.planned;
   /** The initiative each workspace's projects link to: its Linear id, and whether its binding is `bound` (`live`). A failed
    *  initiative that has a Linear object keeps its projects' links as they are (A3: no update that unlinks, no second link
@@ -308,18 +318,20 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
   /** Per workspace, the Linear ids of the bound projects the initiative should link (D-8183), filled by the epic loop below. */
   const linkedProjects = new Map<string, string[]>();
   for (const wsId of wsIds) {
+    // An Upkeep epic has no programme and so no initiative (D-8183): its project is made in the team and linked to nothing.
+    if (prog === null) break;
     // A workspace the snapshot does not describe (no slot serves it now) cannot be written: nothing is decided for it.
     const ws = s.workspaces.find((w) => w.workspaceId === wsId);
     if (ws === undefined) continue;
     const facts = factsIn(wsId);
-    const b = bindingOf('programme', s.program.rowid, wsId);
+    const b = bindingOf('programme', prog.rowid, wsId);
     if ((b?.state === 'bound' || b?.state === 'failed') && b.linearId !== null) initiativeIdOf.set(wsId, { id: b.linearId, live: b.state === 'bound' });
-    const local: Local = { kind: 'programme', id: s.program.rowid };
+    const local: Local = { kind: 'programme', id: prog.rowid };
     if (ws.initiatives === 'off' || !facts.some((f) => f.initiatives === 'on')) {
       phases[0]!.push({ kind: 'skip', local, why: 'initiatives-off', workspaceId: wsId, bindingId: b?.id ?? null, inputs: null, detail: null });
       continue;
     }
-    const planned = { name: egress(s.program.title), description: initiativeDescription(s), status: initiativeStatus };
+    const planned = { name: egress(prog.title), description: initiativeDescription({ ...s, program: prog }), status: initiativeStatus };
     // A probe that has not answered (`unknown`) defers the initiative's step: nothing is sent for it, and the workspace waits
     // for a refill unless its initiative is bound and current already (D-8182 fix round 1, F1).
     if (ws.initiatives === 'unknown') {
@@ -327,7 +339,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       continue;
     }
     decide({
-      phase: 0, kind: 'programme', id: s.program.rowid, workspaceId: wsId, teamKey: null, op: { create: 'initiativeCreate', update: 'initiativeUpdate' },
+      phase: 0, kind: 'programme', id: prog.rowid, workspaceId: wsId, teamKey: null, op: { create: 'initiativeCreate', update: 'initiativeUpdate' },
       b, ready: true, statusMissing: false, texts: [planned.name, planned.description], facts, planned, fp: plannedFingerprint(planned),
       isCurrent: (st) => st === plannedFingerprint(planned),
       create: () => ({ input: planned, fields: ['name', 'description', 'status'] }),
@@ -378,7 +390,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
       return held === undefined ? planned : [...planned, held.id];
     })])].sort();
     const planned = {
-      name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, s.program.title, off), statusId: pStatus, teamIds, initiativeId,
+      name: fitProjectName(e.title), description: projectDescription({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null), statusId: pStatus, teamIds, initiativeId,
     };
     const fpFull = plannedFingerprint(planned);
     const fpNull = plannedFingerprint({ ...planned, initiativeId: null });

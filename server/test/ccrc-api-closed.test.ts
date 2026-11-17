@@ -192,8 +192,10 @@ describe('the corpora no longer invoke curl', () => {
       'plan.met',
       'plan.put',
       'plan.show',
+      'plan.take',
       'plan.ticket-add',
       'plan.ticket-move',
+      'plan.triage',
       'runs.end-request',
       'runs.list',
       'runs.open',
@@ -418,8 +420,9 @@ describe('the client stays closed', () => {
     // timers piece) took it to eighty-one: `parse_timer` builds each body whole from the pane's pair, no splice and no fill.
     // The probe door's two (Overlord, the probes piece: `sessions.probe`, a read, and `probe.answer`, which takes the note door's
     // rule) to eighty-three. The loads door's `sessions.loads` (Overlord W1 sandbox, Task 4; a POST of the hook's spooled body,
-    // no splice and no fill) to eighty-four.
-    expect(routeKeys().size).toBe(84);
+    // no splice and no fill) to eighty-four. `plan.take` and `plan.triage` (D-8183; the caller's own body, the identity in the
+    // query, no fill) to eighty-six.
+    expect(routeKeys().size).toBe(86);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

@@ -19,7 +19,12 @@ import {
   managedTeams, markDriftCommented, recordDrift, setDriftItem, setDriftMark, setDriftSince, setInboundState, setStreak, settledProbes,
   streaksOf, upsertInbound, managedSince, bindingByLinearId, dueKeyOfBinding, ensurePending, markBound,
 } from '../src/coord/planStore.js';
-import { LINEAR_SYNC_PROGRAMME, PLAN_BOUNDS } from '../../shared/plan.js';
+import {
+  ADOPTED_FINGERPRINT, adoptIssueBindingInTx, bindingsOf, ensureUpkeepEpicInTx, inboundByIdentifier, inboundTicketInTx, moveTicketToProgrammeInTx,
+  placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, upkeepEpicOf, upkeepPlanOf, upkeepTicketByIdentifier,
+  boundLinearIdsOf, upkeepProjectsOf,
+} from '../src/coord/planStore.js';
+import { LINEAR_SYNC_PROGRAMME, PLAN_BOUNDS, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE } from '../../shared/plan.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const PLAN_SLOT = 59;   // the plan model's migration (the plan's own number was 57; slots 55 to 58 went first)
@@ -565,5 +570,134 @@ describe('the drift pass\'s two lookups (D-8183)', () => {
     expect(dueKeyOfBinding(db, upBinding.id)).toBe('upkeep:project-a');
     expect(dueKeyOfBinding(db, 99999)).toBeNull();
     expect(typeof planStorePort(db).dueKeyOfBinding).toBe('function');
+  });
+});
+
+
+// ── The Upkeep epic and the inbound ticket (D-8183, Task 4.3) ──
+
+describe('the Upkeep epic (D-8183)', () => {
+  const dueKeys = (): string[] => (db.prepare('SELECT program FROM plan_sync_due ORDER BY program').all() as { program: string }[]).map((r) => r.program);
+  it('ensureUpkeepEpicInTx inserts the project\'s epic once: no programme, key upkeep, no waves, active, never settled', () => {
+    expect(upkeepEpicOf(db, 'project-a')).toBeNull();
+    expect(upkeepPlanOf(db, 'project-a')).toEqual({ program: 'upkeep:project-a', planBy: null, required: false, epics: [] });
+    const id = tx(db, () => ensureUpkeepEpicInTx(db, 'project-a', 50));
+    expect(tx(db, () => ensureUpkeepEpicInTx(db, 'project-a', 60))).toBe(id);
+    expect(db.prepare("SELECT COUNT(*) AS n FROM plan_epics WHERE program IS NULL").get()).toEqual({ n: 1 });
+    expect(upkeepEpicOf(db, 'project-a')).toMatchObject({
+      id, program: null, project: 'project-a', key: UPKEEP_EPIC_KEY, title: UPKEEP_EPIC_TITLE, waves: [], state: 'active', openedAt: 50,
+      summary: 'Issues filed in Linear that no programme has taken yet.', checkpoints: [], tickets: [],
+    });
+    expect(upkeepPlanOf(db, 'project-a').epics.map((e) => e.id)).toEqual([id]);
+    expect(upkeepEpicOf(db, 'project-b')).toBeNull();
+    tx(db, () => settleEpicInTx(db, id, 70));
+    expect(upkeepEpicOf(db, 'project-a')!.state).toBe('active');
+  });
+  it('inboundTicketInTx makes an inbound task, open, with the reporter text, and marks its due key', () => {
+    const epicId = tx(db, () => ensureUpkeepEpicInTx(db, 'project-a', 50));
+    const id = tx(db, () => inboundTicketInTx(db, { program: null, epicId, checkpointId: null, key: 'inbound-aaa-12', title: 'Title', body: 'Body', project: 'project-a' }, 51));
+    expect(ticketById(db, id)).toMatchObject({ program: null, epicId, key: 'inbound-aaa-12', kind: 'task', source: 'inbound', state: 'open', title: 'Title', body: 'Body', project: 'project-a', runId: null });
+    expect(dueKeys()).toEqual(['upkeep:project-a']);
+    expect(upkeepEpicOf(db, 'project-a')!.tickets.map((t) => t.id)).toEqual([id]);
+  });
+  it('adoptIssueBindingInTx binds the ticket at the existing issue with the adopted fingerprint', () => {
+    const epicId = tx(db, () => ensureUpkeepEpicInTx(db, 'project-a', 50));
+    const id = tx(db, () => inboundTicketInTx(db, { program: null, epicId, checkpointId: null, key: 'inbound-aaa-12', title: 'T', body: '', project: 'project-a' }, 51));
+    tx(db, () => adoptIssueBindingInTx(db, id, 'ws-a', 'AAA', 'lin-12', 'AAA-12', 52));
+    expect(bindingsOf(db, 'upkeep:project-a').filter((b) => b.localKind === 'ticket')).toEqual([
+      expect.objectContaining({ localId: id, workspaceId: 'ws-a', teamKey: 'AAA', linearId: 'lin-12', identifier: 'AAA-12', fingerprint: ADOPTED_FINGERPRINT, state: 'bound', syncedAt: 52 }),
+    ]);
+    expect(ADOPTED_FINGERPRINT).toBe('adopted');
+    expect(upkeepTicketByIdentifier(db, 'AAA-12')?.id).toBe(id);
+    expect(upkeepTicketByIdentifier(db, 'AAA-99')).toBeNull();
+  });
+  it('moveTicketToProgrammeInTx changes program, epic and checkpoint in one statement, marks both due keys and settles both epics', () => {
+    declare('prog-a');
+    const target = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
+    const cp = (db.prepare('SELECT id FROM plan_checkpoints').get() as { id: number }).id;
+    const up = tx(db, () => ensureUpkeepEpicInTx(db, 'project-a', 50));
+    const id = tx(db, () => inboundTicketInTx(db, { program: null, epicId: up, checkpointId: null, key: 'inbound-aaa-12', title: 'T', body: '', project: 'project-a' }, 51));
+    db.prepare('DELETE FROM plan_sync_due').run();
+    // the target epic is settled done while its other ticket is done: moving an open ticket in does not close it, and a done epic would reopen on a run, not here
+    tx(db, () => moveTicketToProgrammeInTx(db, id, 'prog-a', target, cp, 60));
+    expect(ticketById(db, id)).toMatchObject({ program: 'prog-a', epicId: target, checkpointId: cp, source: 'inbound' });
+    expect(dueKeys()).toEqual(['prog-a', 'upkeep:project-a']);
+    expect(upkeepEpicOf(db, 'project-a')!.tickets).toEqual([]);
+    expect(planOf(db, 'prog-a').epics[0]!.tickets.map((t) => t.key)).toEqual(['t1', 'inbound-aaa-12']);
+    expect(upkeepEpicOf(db, 'project-a')!.state).toBe('active');
+  });
+  it('a ticket moved out of a finished epic does not leave it half done, and a source epic with nothing open settles', () => {
+    declare('prog-a');
+    const e1 = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
+    applyPlanChanges(db, 'prog-a', changes({ epics: { insert: [epicIn('e2', [2], 1)], update: [], drop: [] } }), 'coord-a', 11, null);
+    const e2 = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a' AND key = 'e2'").get() as { id: number }).id;
+    const t = ticketById(db, (db.prepare("SELECT id FROM plan_tickets WHERE key = 't1'").get() as { id: number }).id)!;
+    // e1 has c1 (open) and t1: meet c1 and finish t1, leaving only an inbound ticket open in e1
+    db.prepare("UPDATE plan_checkpoints SET state = 'met' WHERE epicId = ?").run(e1);
+    const extra = tx(db, () => inboundTicketInTx(db, { program: 'prog-a', epicId: e1, checkpointId: null, key: 'inbound-aaa-13', title: 'T', body: '', project: 'project-a' }, 12));
+    db.prepare("UPDATE plan_tickets SET state = 'done' WHERE id = ?").run(t.id);
+    expect(planOf(db, 'prog-a').epics.find((e) => e.id === e1)!.state).toBe('planned');
+    tx(db, () => moveTicketToProgrammeInTx(db, extra, 'prog-a', e2, null, 13));
+    expect(planOf(db, 'prog-a').epics.find((e) => e.id === e1)!.state).toBe('done');
+  });
+  it('the composites are one transaction each: place in Upkeep, take an inbound row into an epic, take an Upkeep ticket', () => {
+    upsertInbound(db, inboundIn('L12', { identifier: 'AAA-12', title: 'Reporter title', body: 'Reporter body' }));
+    const placed = placeInboundInUpkeep(db, { linearId: 'L12', project: 'project-a', now: 70 });
+    expect(placed).toMatchObject({ ok: true });
+    expect(inboundOf(db, 'L12')!.state).toBe('placed');
+    const t = upkeepTicketByIdentifier(db, 'AAA-12')!;
+    expect(t).toMatchObject({ title: 'Reporter title', body: 'Reporter body', source: 'inbound', key: 'inbound-aaa-12' });
+    expect(inboundByIdentifier(db, 'AAA-12')?.linearId).toBe('L12');
+    expect(inboundByIdentifier(db, 'AAA-77')).toBeNull();
+    expect(dueKeys()).toContain('upkeep:project-a');
+    declare('prog-a');
+    const e1 = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
+    expect(takeUpkeepTicket(db, { ticketId: t.id, program: 'prog-a', epicId: e1, checkpointId: null, now: 80 })).toMatchObject({ ok: true });
+    expect(ticketById(db, t.id)!.program).toBe('prog-a');
+    upsertInbound(db, inboundIn('L13', { identifier: 'AAA-13', title: 'Second', body: null }));
+    setInboundState(db, 'L13', { state: 'handed', handedTo: 'coord-a' });
+    expect(takeInboundIntoEpic(db, { linearId: 'L13', program: 'prog-a', epicId: e1, checkpointId: null, project: 'project-a', now: 90 })).toMatchObject({ ok: true });
+    expect(inboundOf(db, 'L13')!.state).toBe('taken');
+    const mine = planOf(db, 'prog-a').epics[0]!.tickets.find((x) => x.key === 'inbound-aaa-13')!;
+    expect(mine).toMatchObject({ source: 'inbound', title: 'Second', body: '', kind: 'task', project: 'project-a' });
+    expect(bindingsOf(db, 'prog-a').find((b) => b.localKind === 'ticket' && b.localId === mine.id)).toMatchObject({ linearId: 'L13', fingerprint: ADOPTED_FINGERPRINT, identifier: 'AAA-13' });
+  });
+  it('boundLinearIdsOf lists the workspace\'s bound Linear ids, and upkeepProjectsOf the projects with an Upkeep epic', () => {
+    declare('prog-a');
+    const ep = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
+    markBound(db, ensurePending(db, 'epic', ep, 'ws-a', 'AAA').id, 'lin-2', null, 'fp', 5);
+    ensurePending(db, 'epic', ep + 100, 'ws-a', 'AAA');                  // pending, no Linear id
+    markBound(db, ensurePending(db, 'epic', ep + 101, 'ws-b', 'AAA').id, 'lin-9', null, 'fp', 5);
+    markBound(db, ensurePending(db, 'ticket', 7, 'ws-a', 'AAA').id, 'lin-1', 'AAA-1', 'fp', 5);
+    expect(boundLinearIdsOf(db, 'ws-a')).toEqual(['lin-1', 'lin-2']);
+    expect(boundLinearIdsOf(db, 'ws-none')).toEqual([]);
+    expect(upkeepProjectsOf(db)).toEqual([]);
+    tx(db, () => { ensureUpkeepEpicInTx(db, 'project-b', 1); ensureUpkeepEpicInTx(db, 'project-a', 1); });
+    expect(upkeepProjectsOf(db)).toEqual(['project-a', 'project-b']);
+  });
+  it('inTransaction runs its function in one transaction and rolls it back when it throws', () => {
+    const port = planStorePort(db);
+    upsertInbound(db, inboundIn('L12'));
+    expect(() => port.inTransaction(() => { port.setInboundState('L12', { state: 'handed', handedTo: 'prog-a' }); throw new Error('mail failed'); })).toThrow('mail failed');
+    expect(inboundOf(db, 'L12')!.state).toBe('waiting');
+    expect(port.inTransaction(() => { port.setInboundState('L12', { state: 'handed', handedTo: 'prog-a' }); return 7; })).toBe(7);
+    expect(inboundOf(db, 'L12')).toMatchObject({ state: 'handed', handedTo: 'prog-a' });
+  });
+  it('a composite that fails half way leaves nothing behind', () => {
+    upsertInbound(db, inboundIn('L12', { identifier: 'AAA-12' }));
+    declare('prog-a');
+    const e1 = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
+    // an existing ticket with the derived key makes the insert fail on UNIQUE(program, key), after the state would have changed
+    insertTicket(db, tkIn('e1', 'inbound-aaa-12'), 5);
+    expect(() => takeInboundIntoEpic(db, { linearId: 'L12', program: 'prog-a', epicId: e1, checkpointId: null, project: 'project-a', now: 9 })).toThrow();
+    expect(inboundOf(db, 'L12')!.state).toBe('waiting');
+    expect(bindingsOf(db, 'prog-a').filter((b) => b.linearId === 'L12')).toEqual([]);
+  });
+  it('every new function joins the port', () => {
+    const port = planStorePort(db) as unknown as Record<string, unknown>;
+    for (const f of ['inTransaction', 'boundLinearIdsOf', 'upkeepProjectsOf', 'upkeepEpicOf', 'upkeepPlanOf', 'ensureUpkeepEpicInTx', 'inboundTicketInTx', 'adoptIssueBindingInTx', 'moveTicketToProgrammeInTx',
+      'inboundByIdentifier', 'upkeepTicketByIdentifier', 'placeInboundInUpkeep', 'takeInboundIntoEpic', 'takeUpkeepTicket']) {
+      expect(typeof port[f], f).toBe('function');
+    }
   });
 });

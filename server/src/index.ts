@@ -377,13 +377,13 @@ deps.linearPolicy = allowAll;
 deps.planSync = planSyncFor({
   coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
   privateTrackerKeys: cfg.privateTrackerKeys, readLinearStore: () => readLinearStore(cfg.ccrcDir),
-  currentFleet: () => watcher.currentFleet(),
+  currentFleet: () => watcher.currentFleet(), presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
 });
 // The Linear drift pass (D-8183): reads a managed team's changes and has the sync put the plan's values back; ticked by the watcher's `linearDrift` lane.
 deps.driftPass = driftPassFor({
   coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
   readLinearStore: () => readLinearStore(cfg.ccrcDir), currentFleet: () => watcher.currentFleet(), viaFleet: (ids) => linearJournal.viaFleet(ids),
-  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), directory: linearRefresher.directory,
 });
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

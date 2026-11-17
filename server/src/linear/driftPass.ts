@@ -27,7 +27,7 @@ import type { BindingRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
-import { LINEAR_SYNC_PROGRAMME, type BindingKind } from '../../../shared/plan.js';
+import { LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, type BindingKind } from '../../../shared/plan.js';
 import { OPEN_ITEM_STATES, type CoordinatorPresence } from '../../../shared/ledgers.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from './ccrcCall.js';
 import type { LinearJournal } from './journal.js';
@@ -41,6 +41,8 @@ import {
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
+import type { LinearDirectoryRead } from './directory.js';
+import { InboundLane } from './inboundLane.js';
 
 /** The most pages of one document a pass follows (a runaway guard): past it the pass keeps its old watermark. */
 export const DRIFT_MAX_PAGES = 10;
@@ -54,9 +56,12 @@ export interface DriftPassDeps {
   readLinearStore: () => Promise<LinearStoreRead>;
   call: (ask: CcrcOpAsk) => Promise<CcrcOpOutcome>;
   now: () => number;
-  /** Task 4.3's (the inbound path): taken now so the wiring is done once. */
+  /** The inbound path's (D-8183, `inboundLane.ts`): a coordinator's standing (an owner who is gone raises the item), and which of
+   *  these issue identifiers a session's own create made. */
   presenceOf: (id: string) => CoordinatorPresence;
   viaFleet: (identifiers: readonly string[]) => ReadonlySet<string>;
+  /** A workspace's directory, for the `canceled` status an inbound close moves its issue to; absent (a test): a close is never acted. */
+  directory?: LinearDirectoryRead;
   /** Whether the run's pull request is recorded merged (an issue Linear reads `completed` by the integration, not drift). */
   prMergedOf?: (runId: number) => boolean;
 }
@@ -84,20 +89,28 @@ type Planned = { bindings: BindingRow[]; owned: PlannedOwned[] };
 
 export class DriftPass {
   private running = false;
+  private readonly inbound: InboundLane;
 
-  constructor(private readonly deps: DriftPassDeps) {}
+  constructor(private readonly deps: DriftPassDeps) { this.inbound = new InboundLane(deps); }
 
   // ── The tick ──
 
-  /** One beat: take at most one workspace, the one longest unread that is due, and run its pass. A tick that finds another in
-   *  flight (a lane the runner restarted) returns at once. */
+  /** One beat: take at most one workspace, the one longest unread that is due, and run its pass; then, every beat whether a pass
+   *  ran or not, the inbound lane's routing and acts (D-8183), after the pass so an issue it just found is mailed in the same beat.
+   *  A pass that throws still lets the lane run, and throws afterwards. A tick that finds another in flight (a lane the runner
+   *  restarted) returns at once. */
   async tick(now: number): Promise<void> {
     if (this.running) return;
     this.running = true;
+    let failure: { error: unknown } | null = null;
     try {
-      const ws = await this.dueWorkspace(now);
-      if (ws !== null) await this.passOf(ws.workspaceId, ws.slot, ws.teams, now);
+      try {
+        const ws = await this.dueWorkspace(now);
+        if (ws !== null) await this.passOf(ws.workspaceId, ws.slot, ws.teams, now);
+      } catch (error) { failure = { error }; }
+      await this.inbound.tick(now);
     } finally { this.running = false; }
+    if (failure !== null) throw failure.error;
   }
 
   private async dueWorkspace(now: number): Promise<{ workspaceId: string; slot: SlotInfo; teams: string[] } | null> {
@@ -159,6 +172,9 @@ export class DriftPass {
         this.compare(ws, key, kind, node, binding, po, p, now, workOf(key));
       }
     }
+
+    // D-8183: an issue no binding holds, filed in a managed team outside ccrc, is inbound (the lane stores it; the beat mails it).
+    this.inbound.detect(ws, read.nodes.issue, managed, now);
 
     // One restore per programme key, then each outcome recorded.
     const raise: { binding: BindingRow; kind: DriftKind; key: string; why: 'restored' | 'refused' | 'unrestorable'; word: string | null }[] = [];
@@ -347,7 +363,8 @@ export class DriftPass {
   private planKeyOf(key: string, b: BindingRow): string {
     if (b.localKind === 'programme') return key;
     if (b.localKind === 'ticket') return this.deps.plan.ticketById(b.localId)?.key ?? String(b.localId);
-    for (const e of this.deps.plan.planOf(key).epics) {
+    const stored = key.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.plan.upkeepPlanOf(key.slice(UPKEEP_DUE_PREFIX.length)) : this.deps.plan.planOf(key);
+    for (const e of stored.epics) {
       if (b.localKind === 'epic' && e.id === b.localId) return e.key;
       const c = e.checkpoints.find((x) => x.id === b.localId);
       if (b.localKind === 'checkpoint' && c !== undefined) return c.key;
@@ -372,7 +389,7 @@ export class DriftPass {
     }
     const key = plan.dueKeyOfBinding(bindingId);
     const binding = key === null ? undefined : plan.bindingsOf(key).find((b) => b.id === bindingId);
-    const owner = key === null || key.startsWith('upkeep:') ? null : plan.planOwnerOf(key);
+    const owner = key === null || key.startsWith(UPKEEP_DUE_PREFIX) ? null : plan.planOwnerOf(key);
     if (key === null || binding === undefined || owner === null) {
       const moved = coord.moveItem(itemId, 'settle', 'ccrc', { note: 'Handed to nobody: this object has no coordinator (an Upkeep plan, or a programme with none).' }, now, ctx);
       return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
@@ -398,13 +415,15 @@ function linearOwnedOf(kind: DriftKind, node: Node): OwnedFields {
 export function driftPassFor(o: {
   coord: CoordStore; plan: PlanStorePort; planSync: PlanSync; ccrcDir: string; rate: LinearRateService; journal: LinearJournal; policy: LinearWritePolicy;
   readLinearStore: DriftPassDeps['readLinearStore']; presenceOf: DriftPassDeps['presenceOf']; viaFleet: DriftPassDeps['viaFleet'];
+  /** The refresher's directory (an inbound close reads the team's `canceled` status from it). */
+  directory?: DriftPassDeps['directory'];
   /** The watcher's newest fleet listing: where a run's open PR is read before its close folds the lineage. */
   currentFleet?: () => readonly FleetSession[] | null;
 }): DriftPass {
   return new DriftPass({
     coord: o.coord, plan: o.plan, planSync: o.planSync, readLinearStore: o.readLinearStore,
     call: (ask) => runCcrcOp({ ccrcDir: o.ccrcDir, rate: o.rate, journal: o.journal, policy: o.policy, timeoutMs: PLAN_SYNC_CALL_TIMEOUT_MS }, ask),
-    now: Date.now, presenceOf: o.presenceOf, viaFleet: o.viaFleet, prMergedOf: prMergedOfFrom(o.coord, o.currentFleet ?? (() => null)),
+    now: Date.now, presenceOf: o.presenceOf, viaFleet: o.viaFleet, directory: o.directory, prMergedOf: prMergedOfFrom(o.coord, o.currentFleet ?? (() => null)),
   });
 }
 

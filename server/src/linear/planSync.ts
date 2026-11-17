@@ -26,11 +26,12 @@
  */
 import type { CoordStore } from '../coord/store.js';
 import { planViewOf } from '../coord/planRoutes.js';
-import { programmeEnd } from '../coord/planPolicy.js';
-import type { BindingRow, PlanStorePort, StoredPlan, SyncDeferral, TicketRow } from '../coord/planStore.js';
+import { linearOwnerOfProject, programmeEnd } from '../coord/planPolicy.js';
+import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { ADOPTED_FINGERPRINT, type BindingRow, type PlanStorePort, type StoredPlan, type SyncDeferral, type TicketRow } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { LINEAR_SYNC_PROGRAMME, type BindingKind } from '../../../shared/plan.js';
+import { LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, type BindingKind } from '../../../shared/plan.js';
 import type { FleetSession } from '../../../shared/api.js';
 import { slugForTicket } from '../linking/policy.js';
 import { markLinearRejected } from './connection.js';
@@ -64,9 +65,6 @@ export const PLAN_SYNC_DISPATCH_WAIT_MS = 12_000;
 const DIRECTORY_WAIT_MS = 10_000;
 /** A runaway guard: one pass never takes more steps than this. */
 const MAX_STEPS_PER_PASS = 500;
-/** The fingerprint of an adopted object (recovery, conflict): it was never sent the current inputs, so it matches no planned
- *  one and the next re-read emits one absolute update (or link) that writes the real fingerprint. */
-const ADOPTED = 'adopted';
 const LAST_BACKOFF_MS = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]!;
 
 /** One binding the drift pass asks to have put back (D-8183): `seen` is the binding's fingerprint when the pass read Linear, `tag`
@@ -106,6 +104,8 @@ export interface PlanSyncDeps {
   prOfRun?: (runId: number) => { number: number; branch: string | null } | null;
   /** A test's shorter tick budget. */
   tickDeadlineMs?: number;
+  /** The Linear owner of a project (D-8183): who an Upkeep epic's failure mails, since it has no coordinator. None: no mail. */
+  upkeepOwnerOf?: (project: string) => string | null;
 }
 
 export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
@@ -179,15 +179,16 @@ export class PlanSync {
   private async requeueSweep(now: number): Promise<void> {
     const slots = slotsOf(await this.deps.readLinearStore());
     this.recheckSettledProbes(slots, now);
-    for (const p of this.deps.coord.programs()) {
+    const keys = [...this.deps.coord.programs().map((p) => p.slug), ...this.deps.plan.upkeepProjectsOf().map((project) => `${UPKEEP_DUE_PREFIX}${project}`)];
+    for (const key of keys) {
       let requeued = false;
-      for (const b of this.deps.plan.bindingsOf(p.slug)) {
+      for (const b of this.deps.plan.bindingsOf(key)) {
         if (b.state !== 'failed') continue;
         const slot = slots.get(b.workspaceId);
         const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
         requeued = this.requeue(b, requeueVerdict(b, { kind: 'time', filledAt, olderThan: now - LAST_BACKOFF_MS })) || requeued;
       }
-      if (requeued) this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
+      if (requeued) this.deps.plan.markSyncDue(key, now - PLAN_SYNC_DEBOUNCE_MS);
     }
   }
 
@@ -287,7 +288,7 @@ export class PlanSync {
 
   /** What the plan says each bound object's owned fields are (D-8183, §6.2), from the very deciders the sync sends by
    *  (`planSyncSteps`' `owned`): one computation, never a second copy of the rules. Read-only: it reads the stores, writes none,
-   *  calls nothing in Linear and joins no flight. Null when the key has no programme (an Upkeep key has none until `plan triage`). */
+   *  calls nothing in Linear and joins no flight. Null when the key has no programme (or, for `upkeep:<project>`, no Upkeep epic yet). */
   async plannedOwned(key: string): Promise<{ bindings: BindingRow[]; owned: PlannedOwned[] } | null> {
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
     const built = this.snapshot(key, store);
@@ -417,11 +418,6 @@ export class PlanSync {
 
   private async runPass(slug: string, deadlineAt: number): Promise<'done' | 'deferred'> {
     const { plan } = this.deps;
-    if (slug.startsWith('upkeep:')) {
-      // C9: an Upkeep epic can exist only once wave 4's `plan triage` does; until then there is nothing to send.
-      plan.clearSyncDue(slug);
-      return 'done';
-    }
     for (let taken = 0; ; taken += 1) {
       if (this.deps.now() >= deadlineAt || taken >= MAX_STEPS_PER_PASS) return 'deferred';
       let store: LinearStoreRead;
@@ -432,7 +428,7 @@ export class PlanSync {
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
-      try { this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
+      try { if (built.snap.program !== null) this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
       const { steps, failedInputs, notices, waits } = planSyncSteps(built.snap);
       for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
       let requeued = false;
@@ -491,18 +487,23 @@ export class PlanSync {
     return s.bindingId === null || bindings.find((b) => b.id === s.bindingId)?.state !== 'failed';
   }
 
-  /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). */
+  /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). A key
+   *  `upkeep:<project>` reads that project's Upkeep epic instead (D-8183): `program` is null, there is no programme row, and a
+   *  project with no Upkeep epic has no snapshot. */
   private snapshot(slug: string, store: LinearStoreRead): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
-    const rowid = plan.programmeRowId(slug);
-    const prog = coord.programs().find((p) => p.slug === slug);
-    if (rowid === null || prog === undefined) return null;
-    const stored = withoutPutBack(plan.planOf(slug));            // Task 3.1: a record Put back dropped is never in the snapshot
+    const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
+    const rowid = upkeep ? null : plan.programmeRowId(slug);
+    const found = upkeep ? undefined : coord.programs().find((p) => p.slug === slug);
+    const prog = rowid === null || found === undefined ? null : { rowid, row: found };
+    if (!upkeep && prog === null) return null;
+    const stored = withoutPutBack(upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug));   // Task 3.1: a record Put back dropped is never in the snapshot
+    if (upkeep && stored.epics.length === 0) return null;
     const bindings = plan.bindingsOf(slug);
-    const planEnd = plan.planEndOf(slug);
+    const planEnd = upkeep ? null : plan.planEndOf(slug);
     const tickets = stored.epics.flatMap((e) => e.tickets);
-    const outcome = programmeEnd({
-      planEnd: planEnd?.outcome ?? null, programState: prog.state, epics: stored.epics,
+    const outcome = prog === null ? null : programmeEnd({
+      planEnd: planEnd?.outcome ?? null, programState: prog.row.state, epics: stored.epics,
       openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
     });
     const slots = slotsOf(store);
@@ -521,7 +522,7 @@ export class PlanSync {
     const workspaces: SyncSnapshot['workspaces'] = [];
     // The workspaces the projects resolve to, and those the programme's initiative is bound in (F2: an old workspace's
     // initiative is still updated and closed after a team key moved away).
-    const initiativeWs = bindings.flatMap((b) => (b.localKind === 'programme' && b.localId === rowid ? [b.workspaceId] : []));
+    const initiativeWs = bindings.flatMap((b) => (rowid !== null && b.localKind === 'programme' && b.localId === rowid ? [b.workspaceId] : []));
     for (const workspaceId of new Set([...projects.flatMap((p) => (p.workspaceId === null ? [] : [p.workspaceId])), ...initiativeWs])) {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
@@ -539,13 +540,13 @@ export class PlanSync {
       this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
-    const goals = coord.goalsFor(slug);
+    const goals = prog === null ? null : coord.goalsFor(slug);
     const ticketPrs = this.ticketPrsOf(tickets, bindings);
     const snap: SyncSnapshot = {
-      program: {
-        slug, rowid, title: prog.title, inShort: goals.inShort,
+      program: prog === null || goals === null ? null : {
+        slug, rowid: prog.rowid, title: prog.row.title, inShort: goals.inShort,
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
-        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.state === 'paused',
+        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.row.state === 'paused',
       },
       plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
     };
@@ -706,7 +707,7 @@ export class PlanSync {
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') return 'send';
-    this.bind(b, v.id, null, ADOPTED, step.teamKey);
+    this.bind(b, v.id, null, ADOPTED_FINGERPRINT, step.teamKey);
     return 'bound';
   }
 
@@ -758,7 +759,7 @@ export class PlanSync {
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') { this.fail(s, 'linear-invalid'); return 'next'; }
-    this.bind(b, v.id, identifier, ADOPTED, step.teamKey);
+    this.bind(b, v.id, identifier, ADOPTED_FINGERPRINT, step.teamKey);
     return 'next';
   }
 
@@ -866,13 +867,18 @@ export class PlanSync {
 
   /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */
   private mailOpenIssuesLeft(slug: string, count: number): void {
-    const owner = this.deps.plan.planOwnerOf(slug);
+    const owner = this.ownerOf(slug);
     if (owner === null) return;
     const subject = `Linear sync: programme ${slug} open-issues-left`;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
     const body = `The programme ${slug} has ended as done with ${count} open ${count === 1 ? 'issue' : 'issues'} in Linear. The sync left ${count === 1 ? 'it' : 'them'} open: close or re-plan ${count === 1 ? 'it' : 'them'}.`;
     tx(coord.db, () => { insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
+  }
+
+  /** Who is told about a key: a programme's coordinator, or an Upkeep epic's project's Linear owner (D-8183); none: nobody. */
+  private ownerOf(slug: string): string | null {
+    return slug.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.upkeepOwnerOf?.(slug.slice(UPKEEP_DUE_PREFIX.length)) ?? null : this.deps.plan.planOwnerOf(slug);
   }
 
   private mailFailed(s: Told, word: string): void {
@@ -889,7 +895,7 @@ export class PlanSync {
   }
 
   private mailOnce(slug: string, subject: string, body: string): void {
-    const owner = this.deps.plan.planOwnerOf(slug);
+    const owner = this.ownerOf(slug);
     if (owner === null) return;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
@@ -933,6 +939,8 @@ export function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
 export function planSyncFor(o: {
   coord: CoordStore; plan: PlanStorePort; ccrcDir: string; rate: LinearRateService; journal: LinearJournal; policy: LinearWritePolicy;
   refresher: LinearRefresher; privateTrackerKeys: readonly string[]; readLinearStore: PlanSyncDeps['readLinearStore'];
+  /** A coordinator's standing, for the Linear owner an Upkeep epic's failure mail goes to (D-8183). */
+  presenceOf: (id: string) => CoordinatorPresence;
   /** The watcher's newest fleet listing: where a run's open PR is read before its close folds the lineage. */
   currentFleet?: () => readonly FleetSession[] | null;
 }): PlanSync {
@@ -945,6 +953,9 @@ export function planSyncFor(o: {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
     now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
+    upkeepOwnerOf: (project) => linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
+      latestProgrammeCoordinator: (p) => o.plan.latestProgrammeCoordinator(p), presence: o.presenceOf,
+    }).id,
   });
 }
 

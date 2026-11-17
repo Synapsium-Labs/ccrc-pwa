@@ -20,8 +20,13 @@ describe('the plan vocabulary has one home (D-8181)', () => {
   it('the plan lists, bounds and reserved words are declared once, in shared/plan.ts', () => {
     for (const c of ['EPIC_STATES', 'CHECKPOINT_KINDS', 'CHECKPOINT_STATES', 'TICKET_KINDS', 'TICKET_SOURCES', 'TICKET_STATES',
       'PLAN_END_OUTCOMES', 'BINDING_KINDS', 'BINDING_STATES', 'MIGRATION_STATES', 'INBOUND_STATES', 'HIERARCHY_STATES', 'PLAN_BOUNDS',
-      'UPKEEP_EPIC_KEY', 'UPKEEP_EPIC_TITLE', 'PLAN_REFUSALS']) {
+      'UPKEEP_EPIC_KEY', 'UPKEEP_EPIC_TITLE', 'PLAN_REFUSALS', 'TRIAGE_DECISIONS']) {
       expect(holders(decl(c)), c).toEqual(['shared/plan.ts']);
     }
+  });
+
+  it('the adopted fingerprint is spelled once, in the plan store (D-8183)', () => {
+    expect(holders(decl('ADOPTED_FINGERPRINT'))).toEqual(['server/src/coord/planStore.ts']);
+    expect(holders(/\bconst\s+ADOPTED\b/)).toEqual([]);
   });
 });

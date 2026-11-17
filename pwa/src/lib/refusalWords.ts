@@ -294,6 +294,10 @@ const API_ERROR_TEXT: Record<string, string> = {
   'linear-text-public': 'This text names a ticket id, a person or a private name, and this project is public, so it was not saved or sent. Say it in words a stranger could read.',
   // D-8182: the hierarchy item route answers it when the item's action does not take that act.
   'item-act-mismatch': 'That item does not take this action, so nothing was changed. Reload the item and choose again.',
+  // D-8183: `plan triage` answers `not-linear-owner` to a caller that does not own the team's Linear issues, and `plan triage` and
+  // `plan take` answer `issue-not-inbound` for an issue that is not waiting for that caller; the box names neither the owner nor the issue.
+  'not-linear-owner': 'Only the Linear owner of this team decides what becomes of an issue filed in Linear, so nothing was changed. Ask the owner, or name another one on the project.',
+  'issue-not-inbound': 'That issue is not waiting for this decision: it was already decided, or it was not handed to you. Nothing was changed.',
   // Account pools (spec §5.6). Three codes, three different things the box
   // established — and NOT one sentence between them, because the remedies are
   // not the same: cross on purpose, fix a file on the fleet box, or type a

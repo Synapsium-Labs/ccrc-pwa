@@ -11,6 +11,7 @@ import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isReviewRoundsRefusal } from '../../shared/refusal.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
+import { isLinearActionVerb } from '../../shared/ledgers.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -872,6 +873,10 @@ describe('the rejection table is total, in both directions', () => {
         || isRunRefuseCode(tok)
         // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
         || isPlanKebab(tok)
+        // THE HIERARCHY ITEMS' VERBS (D-8182, D-8183): `coord/hierarchyRoutes.ts`'s item-act `switch` names an action's verb as a
+        // literal (`'linear-drift'`, `'linear-owner'`). A verb rides an operator item's `action`, never a `refused` or `reject.code`.
+        // Admitted through L0's guard, derived from `LINEAR_ACTION_VERB_MAP`, never NOT_CODES.
+        || isLinearActionVerb(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and

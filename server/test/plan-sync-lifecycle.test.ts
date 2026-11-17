@@ -13,7 +13,7 @@ import { planViewOf } from '../src/coord/planRoutes.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
-import { planSyncSteps, requestIdOf, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
+import { planSyncSteps, requestIdOf, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
@@ -48,8 +48,8 @@ const directory = {
 const AAA = { id: U(1), key: 'AAA' };
 const KEY = { id: U(3), key: 'KEY' };
 
-function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; end?: SyncSnapshot['program']['end']; paused?: boolean;
-  mode?: 'public' | 'private'; wsInitiatives?: 'on' | 'off' | 'unknown'; teamKey?: string | null; inShort?: string | null; epicIds?: number } = {}): SyncSnapshot {
+function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; end?: ProgrammeSnapshot['program']['end']; paused?: boolean;
+  mode?: 'public' | 'private'; wsInitiatives?: 'on' | 'off' | 'unknown'; teamKey?: string | null; inShort?: string | null; epicIds?: number } = {}): ProgrammeSnapshot {
   const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: o.tickets ?? [] }] };
   return {
     program: { slug: 'prog', rowid: 7, title: 'The programme', end: o.end ?? null, inShort: o.inShort === undefined ? 'Short words' : o.inShort,
@@ -62,7 +62,7 @@ function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: Tic
   };
 }
 /** Apply every create and update the deciders emit as if sent, until nothing is left: the state after a full first sync. */
-function settle(s: SyncSnapshot): SyncSnapshot {
+function settle<S extends SyncSnapshot>(s: S): S {
   let nextId = 100;
   let linear = 500;
   for (let i = 0; i < 14; i += 1) {

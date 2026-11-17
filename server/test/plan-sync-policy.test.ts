@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
   adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type SyncSnapshot, type SyncStep,
+  requeueVerdict, requestIdOf, uuidOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
@@ -38,8 +38,8 @@ const directory = {
 };
 
 function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; bindings?: BindingRow[]; mode?: 'public' | 'private' | 'unknown';
-  initiatives?: 'on' | 'off'; wsInitiatives?: 'on' | 'off' | 'unknown'; dir?: typeof directory | null; teamKey?: string | null; end?: SyncSnapshot['program']['end'];
-  extraProjects?: SyncSnapshot['projects'] } = {}): SyncSnapshot {
+  initiatives?: 'on' | 'off'; wsInitiatives?: 'on' | 'off' | 'unknown'; dir?: typeof directory | null; teamKey?: string | null; end?: ProgrammeSnapshot['program']['end'];
+  extraProjects?: SyncSnapshot['projects'] } = {}): ProgrammeSnapshot {
   const plan: StoredPlan = {
     program: 'prog', planBy: null, required: true,
     epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: o.tickets ?? [] }],
@@ -57,7 +57,7 @@ const ops = (steps: SyncStep[]): string[] => steps.map((s) => (s.kind === 'skip'
 const boundEpic = (fp = 'stale'): BindingRow => bind({ localKind: 'epic', localId: 1, fingerprint: fp });
 type SnapOpts = Parameters<typeof snap>[0];
 /** `snap(o)` with the epic's project bound at the fingerprint a first create would have written, so no project step follows. */
-function snapBound(o: SnapOpts = {}, extra: BindingRow[] = []): SyncSnapshot {
+function snapBound(o: SnapOpts = {}, extra: BindingRow[] = []): ProgrammeSnapshot {
   const first = planSyncSteps(snap({ ...o, bindings: [] })).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
   if (first?.kind !== 'create') throw new Error('no project create');
   return snap({ ...o, bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint }), ...extra, ...(o?.bindings ?? [])] });
@@ -400,5 +400,52 @@ describe('D-8701 episodes: bounded waits (coordinator ruling, mail 22220; I1)', 
       .toEqual({ cause: 'statuses-unread', tell: ['ws-1'] });
     expect(directoryWaitVerdict([{ workspaceId: 'ws-1', missing: 'statuses', streak: streak(3) }, { workspaceId: 'ws-2', missing: 'directory', streak: undefined }]))
       .toEqual({ cause: 'directory-missing', tell: ['ws-1'] });
+  });
+});
+
+describe('an Upkeep epic: a snapshot with no programme (D-8183)', () => {
+  const upkeep = (o: SnapOpts = {}): SyncSnapshot => ({ ...snap({ ...o, epic: { program: null, key: 'upkeep', waves: [], ...(o.epic ?? {}) } }), program: null });
+  it('creates the project in the team: no initiative step, no skip for initiatives, no link, no milestones, no notice', () => {
+    for (const initiatives of ['on', 'off'] as const) {
+      const d = planSyncSteps(upkeep({ initiatives }));
+      expect(ops(d.steps)).toEqual(['create:projectCreate']);
+      expect(d.notices).toEqual([]);
+      expect(d.waits).toEqual([]);
+      expect(JSON.stringify(d.steps[0])).not.toContain('Part of');
+      expect(d.steps[0]).toMatchObject({ input: { name: 'Epic one', teamIds: [TEAM] } });
+    }
+    // a workspace whose initiatives read `unknown` has nothing to wait for either: there is no initiative step to defer
+    expect(planSyncSteps(upkeep({ wsInitiatives: 'unknown' })).waits).toEqual([]);
+  });
+  it('the bound project is never linked, and its owned fields name no initiative and no milestone', () => {
+    const first = planSyncSteps(upkeep()).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    const bound = upkeep({ bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint })] });
+    const d = planSyncSteps(bound);
+    expect(d.steps).toEqual([]);
+    expect(d.owned).toEqual([expect.objectContaining({ kind: 'project', owned: expect.objectContaining({ initiativeIds: [], milestoneIds: [] }) })]);
+  });
+  it('an inbound ticket bound with the adopted fingerprint gets one absolute update into the project, never a create', () => {
+    const first = planSyncSteps(upkeep({ tickets: [tk({ program: null, source: 'inbound', kind: 'task' })] })).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    const s = upkeep({
+      tickets: [tk({ program: null, source: 'inbound', kind: 'task' })],
+      bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint }), bind({ localKind: 'ticket', localId: 1, fingerprint: 'adopted', identifier: 'AAA-12' })],
+    });
+    expect(ops(planSyncSteps(s).steps)).toEqual(['update:issueUpdate']);
+    expect(planSyncSteps(s).steps[0]).toMatchObject({ input: { projectId: U(501), title: 'Ticket one' }, bindingId: expect.any(Number) });
+  });
+  it('a programme snapshot still reads its initiative step first (the null is only the Upkeep key)', () => {
+    expect(ops(planSyncSteps(snap()).steps)).toEqual(['create:initiativeCreate', 'create:projectCreate']);
+  });
+});
+
+describe('uuidOf (D-8183)', () => {
+  it('is the v4-shaped hash requestIdOf builds from, so one function names every request id', () => {
+    expect(uuidOf('ticket:1:ws-a:cancel')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(requestIdOf('ticket', 1, 'ws-a', 'cancel')).toBe(uuidOf('ticket:1:ws-a:cancel'));
+    expect(requestIdOf('epic', 2, 'ws-a')).toBe(uuidOf('epic:2:ws-a'));
+    expect(uuidOf('inbound:L1')).not.toBe(uuidOf('inbound:L2'));
+    expect(uuidOf('inbound:L1')).toBe(uuidOf('inbound:L1'));
   });
 });

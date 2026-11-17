@@ -33,6 +33,10 @@ export type MigrationState = (typeof MIGRATION_STATES)[number];
  *  plan, placed, closed in Linear with a reason, or raised to the operator. */
 export const INBOUND_STATES = ['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised'] as const;
 export type InboundState = (typeof INBOUND_STATES)[number];
+/** What the team's Linear owner decides about an inbound issue (`plan triage`, D-8183): hand it to a programme, place it in the
+ *  team's Upkeep epic, close it with a reason, or raise it to the operator. */
+export const TRIAGE_DECISIONS = ['hand', 'upkeep', 'close', 'raise'] as const;
+export type TriageDecision = (typeof TRIAGE_DECISIONS)[number];
 /** A project's place in the per-team migration, as its row in the console says it. */
 export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
 export type HierarchyState = (typeof HIERARCHY_STATES)[number];

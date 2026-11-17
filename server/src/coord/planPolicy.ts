@@ -3,11 +3,14 @@
 import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
-  CHECKPOINT_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, isPlanKey,
+  CHECKPOINT_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
   type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPutBody,
-  type PlanRefusal, type PlanTicketBody, type TicketState,
+  type PlanRefusal, type PlanTicketBody, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
-import type { Changes, CheckpointPatch, EpicPatch, NewCheckpoint, NewEpic, NewTicket, PlanChanges, StoredPlan, TicketPatch } from './planStore.js';
+import { isLinearIdentifier } from '../linear/ops.js';
+import type {
+  Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewTicket, PlanChanges, StoredPlan, TicketPatch,
+} from './planStore.js';
 
 /** An epic is done when no checkpoint is `open`, no ticket is `open` or `started`, and at least one checkpoint is `met` or
  *  one ticket `done` (design §4.1). An epic with nothing in it, or with everything dropped, is not done: a plan declared
@@ -411,6 +414,112 @@ export function linearOwnerOf(project: string, f: OwnerFacts):
   if (id === null) return { id: null, source: 'none', live: false, gone: true };
   const p = f.presence(id);
   return { id, source: f.named !== null ? 'named' : 'default', live: p === 'alive', gone: p === 'dead' || p === 'absent' };
+}
+
+/** D-8183 (§7.5, design call): the project whose Linear owner applies to a team key: the one marked `ownsTeam` among those with
+ *  that key (compared upper-case), else the one that set the key first (the lowest `order`), else, when none has an order, the
+ *  only holder; null when no project holds the key. The ONE place the rule is written: the hierarchy routes' `ownerNow`, the
+ *  triage route and the drift pass all ask it. */
+export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjectFacts[]): string | null {
+  const key = teamKey.toUpperCase();
+  const holders = rows.filter((r) => r.teamKey !== null && r.teamKey.toUpperCase() === key);
+  const marked = holders.find((r) => r.ownsTeam);
+  if (marked !== undefined) return marked.project;
+  const ordered = holders.filter((r) => r.order !== null).sort((x, y) => (x.order as number) - (y.order as number));
+  return (ordered[0] ?? holders[0])?.project ?? null;
+}
+
+/** The Linear owner of a team (`teamOwnerProject`'s project, then `linearOwnerOf` with that project's own named owner), with the
+ *  project it was decided for; null when no project holds the key. */
+export function linearOwnerOfTeam(
+  teamKey: string, rows: readonly HierarchyProjectFacts[], f: Pick<OwnerFacts, 'latestProgrammeCoordinator' | 'presence'>,
+): (ReturnType<typeof linearOwnerOf> & { project: string }) | null {
+  const project = teamOwnerProject(teamKey, rows);
+  if (project === null) return null;
+  const row = rows.find((r) => r.project === project)!;
+  return { ...linearOwnerOf(project, { named: row.linearOwner, ownsTeamProject: null, ...f }), project };
+}
+
+/** The Linear owner that applies to one project (design §7.5): its team's owning project's (`linearOwnerOfTeam`) when it holds a
+ *  key, else its own named owner or its latest programme's coordinator; with the project the owner was decided for. */
+export function linearOwnerOfProject(
+  project: string, rows: readonly HierarchyProjectFacts[], f: Pick<OwnerFacts, 'latestProgrammeCoordinator' | 'presence'>,
+): ReturnType<typeof linearOwnerOf> & { project: string } {
+  const row = rows.find((r) => r.project === project);
+  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f);
+  return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
+}
+
+// ── The inbound path's bodies and verdict (Task 4.3) ──
+
+export interface PlanTriageBody {
+  issue: string; decision: TriageDecision; programme?: string; epic?: string; checkpoint?: string; reason?: string; note?: string;
+}
+/** `plan triage`: the issue's identifier and one decision. `hand` needs the programme (its optional `epic` and `checkpoint` are
+ *  required by the route only when the programme is the owner's own, D-8706); `close` needs the reason. */
+export function parsePlanTriage(body: unknown): { ok: true; triage: PlanTriageBody } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['issue', 'decision', 'programme', 'epic', 'checkpoint', 'reason', 'note'], 'body');
+  if (x) return verbBad(x);
+  if (!isLinearIdentifier(body.issue)) return verbBad('issue is not a Linear issue identifier');
+  const { decision } = body;
+  if (typeof decision !== 'string' || !(TRIAGE_DECISIONS as readonly string[]).includes(decision)) return verbBad('decision is not hand, upkeep, close or raise');
+  const out: PlanTriageBody = { issue: body.issue, decision: decision as TriageDecision };
+  for (const k of ['programme', 'epic', 'checkpoint'] as const) {
+    const v = body[k];
+    if (v === undefined) continue;
+    if (!isPlanKey(v)) return verbBad(`${k} is not a plan key`);
+    out[k] = v;
+  }
+  for (const k of ['reason', 'note'] as const) {
+    const v = body[k];
+    if (v === undefined) continue;
+    if (!textOk(v, PLAN_BOUNDS.reasonChars, false)) return verbBad(`${k} is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
+    out[k] = v;
+  }
+  if (out.decision === 'hand' && out.programme === undefined) return verbBad('a hand names the programme');
+  if (out.decision === 'close' && out.reason === undefined) return verbBad('a close needs a reason');
+  return { ok: true, triage: out };
+}
+
+export type PlanTakeBody =
+  | { issue: string; epic: string; checkpoint?: string }
+  | { issue: string; close: { why: string } }
+  | { issue: string; return: { note: string } };
+/** `plan take`: the issue and exactly one arm: an epic (and optionally a checkpoint) to take it into, a close with a why, or a
+ *  return with a note. */
+export function parsePlanTake(body: unknown): { ok: true; take: PlanTakeBody } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['issue', 'epic', 'checkpoint', 'close', 'return'], 'body');
+  if (x) return verbBad(x);
+  if (!isLinearIdentifier(body.issue)) return verbBad('issue is not a Linear issue identifier');
+  const arms = (['epic', 'close', 'return'] as const).filter((k) => body[k] !== undefined);
+  if (arms.length !== 1) return verbBad('a take names exactly one of epic, close or return');
+  if (body.checkpoint !== undefined && arms[0] !== 'epic') return verbBad('checkpoint goes with epic');
+  const issue = body.issue;
+  if (arms[0] === 'epic') {
+    if (!isPlanKey(body.epic)) return verbBad('epic is not a plan key');
+    if (body.checkpoint !== undefined && !isPlanKey(body.checkpoint)) return verbBad('checkpoint is not a plan key');
+    return { ok: true, take: { issue, epic: body.epic, ...(body.checkpoint === undefined ? {} : { checkpoint: body.checkpoint as string }) } };
+  }
+  const arm = body[arms[0]!];
+  const field = arms[0] === 'close' ? 'why' : 'note';
+  if (!isObj(arm)) return verbBad(`${arms[0]} is not an object`);
+  const ax = closed(arm, [field], arms[0]!);
+  if (ax) return verbBad(ax);
+  const text = arm[field];
+  if (!textOk(text, PLAN_BOUNDS.reasonChars, false) || text.trim() === '') return verbBad(`${field} is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
+  return { ok: true, take: arms[0] === 'close' ? { issue, close: { why: text } } : { issue, return: { note: text } } };
+}
+
+/** Who may triage which issue: only the team's Linear owner (`not-linear-owner`, judged first), and only an issue that is
+ *  inbound and still waiting or mailed (`issue-not-inbound`). */
+export function triageVerdict(
+  caller: string, owner: { id: string | null }, row: Pick<InboundRow, 'state'> | null,
+): { ok: true } | { ok: false; word: 'not-linear-owner' | 'issue-not-inbound' } {
+  if (owner.id === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner' };
+  if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, word: 'issue-not-inbound' };
+  return { ok: true };
 }
 
 /** An inbound issue's reporter text, cut visibly to the plan's ticket bounds before it is stored (D-8705): the title to

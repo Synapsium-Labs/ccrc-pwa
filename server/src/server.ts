@@ -258,6 +258,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
+  '/api/projects/:project/upkeep',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
@@ -2110,7 +2112,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
-    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
