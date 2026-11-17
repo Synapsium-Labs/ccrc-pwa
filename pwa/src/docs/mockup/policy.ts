@@ -5,6 +5,11 @@
 import { DOCS_MAX_DOC_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES } from '../../../../shared/docs';
 import type { HttpsOrigin } from './ports';
 
+/** The most bytes of HTML the viewer renders on open, inclusive (base 5.6.2 step 3): half of `DOCS_MAX_DOC_BYTES`, so
+ *  1 MiB. A page over it waits for a tap ("Render mockup") before anything is parsed, and a page over
+ *  `DOCS_MAX_DOC_BYTES` is download-only. The viewer's gate and nothing else reads it. */
+export const MOCKUP_AUTO_RENDER_BYTES = DOCS_MAX_DOC_BYTES / 2;
+
 /** The deepest stack of open elements the pre-scan admits (base 5.6.2, lowered from 256 by D-8695). The merge queue's hosted
  *  runner read the text-heavy gate (`<b>`, the deepest stack, then text and comment runs to 2 MiB) at a 1 052 ms median
  *  at 256. Alone on the fleet box that shape read 240 ms at 128 and 132 ms at 64, with a floor near 130 ms from the

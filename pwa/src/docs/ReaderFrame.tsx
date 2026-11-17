@@ -19,6 +19,10 @@
 // take-up plan, refinement (i)).
 // A body stays where it landed until its `bodyKey` changes (`MarkdownBody` keys this component by it), so a fallback
 // never mounts again. The reason of G3, G4 and G6 is kept for the console and never reaches the page.
+// One thing runs the body again in place: images that answered 401 (`ReaderImages.auth`). Those images show the frame's own
+// "not loaded" chip, and signing in cures them, so a body whose images reported one listens for `onAuthRegained` (the plain
+// view's precedent, `useImageSrc`) and, when it fires, tears the mount down, gives its drafts back and runs the render, the
+// images and the mount again, once per sign-in. A body whose images reported none never listens.
 //
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
@@ -29,6 +33,7 @@ import { utf8ByteLength } from '../lib/markdownGuard';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import type { MarkdownParser } from '../lib/markdownRunner';
 import type { ReaderRenderOutcome } from '../lib/readerRenderJob';
+import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
 import { DocsAssetContext } from './DocImage';
@@ -88,7 +93,7 @@ type Ask =
   | { readonly kind: 'copy'; readonly ask: ReaderCopyAsk }
   | { readonly kind: 'copy-failed'; readonly ask: ReaderCopyFailedAsk };
 
-const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0 };
+const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0, auth: 0 };
 
 /** The pending fragment as the frame's `initialHash`: the address bar holds it percent-encoded, and the frame matches
  *  decoded ids. A malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
@@ -156,6 +161,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     readerBodyReducer, undefined, (): ReaderBodyState => (overGate ? { s: 'plain', why: 'over-gate' } : { s: 'rendering' }),
   );
   const [ask, setAsk] = useState<Ask | null>(null);
+  /** How many times sign-in has returned over a body with 401 images: part of the effect's deps, so each one runs it again. */
+  const [signedIn, setSignedIn] = useState(0);
   /** The bar this body's frame publishes once ready; `null`: its frame is on its own bar, or not mounted yet. */
   const [bar, setBar] = useState<ReaderBar | null>(null);
   const barSlot = useContext(ReaderBarContext);
@@ -185,6 +192,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
     let landed = false;
     let counted = 0;
     let uncount: ((delta: number) => void) | null = null;
+    /** The listener for sign-in, held only while this run's images reported a 401. */
+    let unwatchAuth: (() => void) | null = null;
 
     const drop = (): void => {
       mount?.destroy();
@@ -196,10 +205,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
       if (counted !== 0 && uncount !== null) uncount(-counted);
       counted = 0;
     };
+    const unwatch = (): void => {
+      unwatchAuth?.();
+      unwatchAuth = null;
+    };
     /** G3 and G6: the mount, if any, goes; the fixed note shows; the reason stays in the console. */
     const fallBack = (reason: string): void => {
       if (ac.signal.aborted || landed) return;
       landed = true;
+      unwatch();
       console.warn(`ccrc: reader fell back (${reason})`);
       drop();
       giveBack();
@@ -279,6 +293,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
         uncount = second.assets.onDraftAsset;
         uncount(counted);
       }
+      if (images.auth > 0) {
+        // Sign-in returned: this run ends (the cleanup below) and the next one asks the images again.
+        unwatchAuth = onAuthRegained(() => {
+          unwatch();
+          setBar(null);
+          setSignedIn((n) => n + 1);
+        });
+      }
 
       const cur = live.current;
       const el = hostRef.current;
@@ -351,10 +373,11 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string }): ReactNode 
 
     return () => {
       ac.abort();
+      unwatch();
       drop();
       giveBack();
     };
-  }, [overGate, text, bytes]);
+  }, [overGate, text, bytes, signedIn]);
 
   /** A write from a sheet's own button: the sheet closes when it lands and stays, saying so, when the clipboard refuses. */
   const writeFromSheet = (text: string, onRefused: () => void): void => {

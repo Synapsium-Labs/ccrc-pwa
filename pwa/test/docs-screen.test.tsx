@@ -20,7 +20,7 @@ import { detachUrls } from '../src/docs/docsLinks';
 import type { ReaderDeps } from '../src/docs/ReaderFrame';
 import { pinFor, type DocsVisit, type FileSlot } from '../src/docs/useDocsVisit';
 import { exportStateFor } from '../src/docs/DocsHead';
-import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPORT_WAIT_TEXT, MOCKUP_TEXT, SHARE_EXPORT_CLAUSE, fillSentence, shortCommit } from '../src/docs/docsText';
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
@@ -538,19 +538,66 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
   });
 
-  it.each(['/docs/demo/specs/m.html', '/docs/demo/specs/m.html?ref=main&frame=full'])(
-    'html (%s): the stand-in with its size, Source and Download, and no frame of any kind', async (url) => {
-      const html = '<p>mock</p><script>x()</script>';
-      const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
-      const { container } = open(url, f);
-      expect(await screen.findByText('HTML mockups open in a later release; Source shows the file and Download saves it.')).toBeInTheDocument();
-      expect(screen.getByText('Size: 1 KiB')).toBeInTheDocument();
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc]')).toBeNull();
-      fireEvent.click(screen.getByRole('button', { name: 'Source' }));
-      expect(container.querySelector('pre.doc-plain')?.textContent).toBe(html);
-      expect(container.querySelector('iframe, frame, object, embed, [srcdoc], script')).toBeNull();
-      expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
-    });
+  it('html: the mockup viewer (one sandboxed frame, Source and Download), and the stand-in sentence is gone', async () => {
+    const html = '<p>mock</p><script>x()</script>';
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', html, 'html') });
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(screen.queryByText(/HTML mockups open in a later release/)).toBeNull();
+    expect(container.querySelectorAll('iframe')).toHaveLength(1);
+    expect(container.querySelector('iframe')?.getAttribute('sandbox')).toBe('');
+    expect(screen.getByRole('button', { name: 'Run scripts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Source' }));
+    expect(container.querySelector('.docs-leaf .code-block')?.textContent).toContain('<p>mock</p>');
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument();
+  });
+
+  it('html with ?frame=full: the full-frame view (Close and the frame), no toolbar', async () => {
+    const f = byPath(treeOk({ entries: [entry('specs', 'm.html')] }), { 'm.html': fileAs('m.html', '<p>mock</p>', 'html') });
+    const { container } = open('/docs/demo/specs/m.html?ref=main&frame=full', f);
+    await waitFor(() => expect(container.querySelector('.docs-mockup[data-frame="full"] iframe')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Full screen' })).toBeNull();
+  });
+
+  it('html: a re-list that moves the commit of a committed page but not its blob does not remount the viewer (its state and its one-relist cap stay)', async () => {
+    const html = '<img src="a.png"><script>x()</script>';
+    const entries = [entry('specs', 'm.html'), entry('specs', 'a.png')];
+    const page = fileAs('m.html', html, 'html');
+    const sameBlob: DocsFileAnswer = page.s === 'ok'
+      ? { s: 'ok', value: { ...page.value, show: { ...page.value.show, blob: BLOB_1 } } }
+      : page;
+    const f = byPath(treeOk({ entries }), { 'm.html': sameBlob });
+    f.tree.mockReset();
+    f.tree.mockResolvedValueOnce(okTree(treeOk({ commit: COMMIT_A, entries })));
+    f.tree.mockResolvedValue(okTree(treeOk({ commit: COMMIT_B, entries })));
+    // The first read of the image waits for sign-in; every later one answers that the commit is gone (a movement).
+    f.raster.mockReset();
+    f.raster.mockResolvedValueOnce({ s: 'auth' });
+    f.raster.mockResolvedValue(failedAnswer('unknown-commit'));
+    const { container } = open('/docs/demo/specs/m.html', f);
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    const root = container.querySelector('.docs-mockup')!;
+    fireEvent.click(screen.getByRole('button', { name: 'Run scripts' }));
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    expect(f.tree).toHaveBeenCalledTimes(1);
+    // Sign-in reads again; the answer is a movement, so the view asks its host to re-list ONCE.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(2));
+    // The new listing is a new commit with the same blob: the view starts over from it, and is the same view.
+    await waitFor(() => expect(screen.getByText(MOCKUP_TEXT.changing)).toBeInTheDocument());
+    await waitFor(() => expect(container.querySelector('.docs-leaf iframe.docs-mockup-frame')).not.toBeNull());
+    expect(container.querySelector('.docs-mockup')).toBe(root);
+    expect(root.isConnected).toBe(true);
+    expect(container.querySelector('iframe')!.getAttribute('sandbox')).toBe('allow-scripts');
+    expect(screen.getByRole('button', { name: 'Stop scripts' })).toBeInTheDocument();
+    // The second movement was the view's own: no further re-list (the cap survived the re-list), and Retry is the user's.
+    await new Promise<void>((r) => { setTimeout(r, 50); });
+    expect(f.tree).toHaveBeenCalledTimes(2);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(f.tree).toHaveBeenCalledTimes(3));
+  });
 
   it('text with a registered grammar (x.ts) is highlighted through CodeBlock; x.txt is pre.doc-plain', async () => {
     const f = byPath(treeOk({ entries: [entry('specs', 'x.ts'), entry('specs', 'x.txt')] }), {

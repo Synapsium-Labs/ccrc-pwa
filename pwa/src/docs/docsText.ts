@@ -14,6 +14,8 @@ import type { ReaderCommand } from './reader/policy';
 import type { ImagePin } from './docsLinks';
 import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
 import type { ExportMissing, ExportPlain, ExportWait } from './export/policy';
+import type { MockupRefVerdict } from './mockup/ports';
+import { MOCKUP_MAX_CSS_DEPTH } from './mockup/policy';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
 export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
@@ -409,8 +411,6 @@ export const DOCS_VIEW_TEXT = {
   openDraftView: 'Open the draft view',
   loading: 'Loading…',
   noPreview: 'No preview ({size})',
-  htmlStandIn: 'HTML mockups open in a later release; Source shows the file and Download saves it.',
-  size: 'Size: {size}',
   symlink: 'This is a symbolic link in the repository; Docs does not follow it.',
   submodule: 'This is a git submodule; Docs does not open it.',
   nothingToShow: 'There is no committed version of this file to show here.',
@@ -718,3 +718,113 @@ export const EXPORT_WAIT_TEXT: Record<ExportWait, string> = {
   'gate': 'Choose Format or Show as text first',
   'image-failed': 'Image not loaded',
 };
+
+// ===== Mockup viewer (spec 4.7, 5.6.7, 5.6.8; native Docs reader C2, Task 8) =====
+// The viewer's words, in ONE block so it can be reviewed and revised as one. The quoted phrases are the spec's own; the
+// rest say only what the viewer shows or does, and nothing it does not (no promise and no control the spec leaves out).
+// `{field}`s are filled by `fillSentence`; `{s}` is `pluralS`'s.
+
+/** The viewer's own words. `Source` and `Download` are `DOCS_VIEW_TEXT`'s. */
+export const MOCKUP_TEXT = {
+  tooComplex: 'Too complex to render — shown as source',
+  /** Why a page is not rendered: `{reason}` is `MOCKUP_REFUSAL_SENTENCE`'s. */
+  refusal: 'Not rendered: {reason}.',
+  /** The pre-scan's measured counts, and the limits it held them to (`policy.ts`'s values). */
+  measured: 'Measured: depth {depth}, {tags} tags, {formatting} formatting elements open. '
+    + 'Limits: depth {maxDepth}, {maxTags} tags, {maxFormatting} formatting elements open, {maxAttributes} attributes on one tag.',
+  render: 'Render mockup · {size}',
+  tooLarge: 'Too large to render; use Download.',
+  embeds: 'embeds {k} uncommitted asset{s}',
+  scriptsOff: 'scripts off',
+  notLoaded: '{n} not loaded',
+  runScripts: 'Run scripts',
+  stopScripts: 'Stop scripts',
+  loadExternal: 'Load external ({n})',
+  fullScreen: 'Full screen',
+  newTab: 'New tab',
+  close: 'Close',
+  frameTitle: 'Mockup: {name}',
+  census: 'Assets and references · {loaded} loaded · {notLoaded} not loaded',
+  links: 'Links · {n}',
+  upTo: 'up to {size}',
+  /** Spec 5.6.4's hint, shown after an external reference's sentence. */
+  vendor: 'or vendor it next to the mockup',
+  namedInScript: 'named in script text',
+  conservative: 'Some assets reserved room for the largest file of their kind, because their size at this commit is not known; '
+    + 'assets that came after may have been kept out for lack of room.',
+  externalTitle: 'Load external',
+  externalNote: 'Those sites will see that you opened this.',
+  externalLoad: 'Load',
+  externalCancel: 'Cancel',
+  navigatedAway: 'This mockup tried to navigate away; links inside mockups do not open.',
+  reload: 'Reload mockup',
+  /** After a second movement in one view, when the automatic re-list is spent (the register of `DOCS_VIEW_TEXT.changing`). */
+  changing: "The listing changed while Docs read this mockup's files.",
+  retry: 'Retry',
+} as const;
+
+/** What the pre-scan's `why` says, after "Not rendered: " (base 5.6.2). */
+export const MOCKUP_REFUSAL_SENTENCE: Record<'too-deep' | 'too-many-tags' | 'too-many-formatting' | 'foreign-markup' | 'too-many-attributes', string> = {
+  'too-deep': 'its elements nest too deeply',
+  'too-many-tags': 'it has too many tags',
+  'too-many-formatting': 'it keeps too many formatting elements open at once',
+  'foreign-markup': 'it puts markup inside SVG or MathML content',
+  'too-many-attributes': 'a tag carries too many attributes',
+};
+
+/** One census sentence per verdict, exhaustive over `MockupRefVerdict` (every `v` and every `why`; a refused
+ *  `why` and a missing one are `DOC_IMAGE_REFUSED_SENTENCE`'s). `external` ends in a comma: `MOCKUP_TEXT.vendor` follows it.
+ *  `refusedOrigin` is an origin that is never offered. `unsupported.element` is an element the policy blocks, listed by
+ *  its own row; `dropped` is a `srcset` candidate that could not be read. */
+export const MOCKUP_VERDICT_SENTENCE = {
+  inline: 'loaded into the page',
+  kept: { 'fragment': 'kept as written: it names a place in the page', 'self-contained': 'kept as written: it carries its own bytes' },
+  external: 'on another site; blocked until Load external is chosen,',
+  refusedOrigin: 'on another site; not offered to load',
+  unsupported: {
+    'kind': 'its file type does not fit what the page uses it for',
+    'element': 'an element the policy blocks',
+    'css-depth': 'it is nested more than {n} stylesheets deep',
+  },
+  skipped: {
+    'too-large': 'its listed size is over the limit for its kind',
+    'over-budget': 'kept out by an asset or page size limit',
+  },
+  failed: 'failed: {sentence}',
+  dropped: 'a srcset candidate that could not be read',
+} as const;
+
+/** A `failed` row's reason: a client slot's or docs word's own sentence, else the two words only the viewer raises. */
+export const MOCKUP_FAILED_SENTENCE: Record<'size-mismatch' | 'unexpected-response', string> = {
+  'size-mismatch': 'the file is larger than the room reserved for it',
+  'unexpected-response': 'the server answered something that was not a Docs answer',
+};
+
+/** The sentence for `failure`, a word `loadMockupAssets` kept whole. */
+export function mockupFailedSentence(failure: string): string {
+  if (failure === 'auth' || failure === 'unreachable' || failure === 'no-docs-route') return DOCS_SLOT_SENTENCE[failure];
+  if (failure === 'size-mismatch' || failure === 'unexpected-response') return MOCKUP_FAILED_SENTENCE[failure];
+  return isDocsFailureWord(failure) ? failureSentence({ ok: false, failure }) : unknownWordSentence(failure);
+}
+
+/** The census sentence of one verdict. `offered`: an `external` verdict's origin is one `Load external` lists. */
+export function mockupVerdictSentence(v: MockupRefVerdict, offered: boolean): string {
+  switch (v.v) {
+    case 'inline':
+      return MOCKUP_VERDICT_SENTENCE.inline;
+    case 'kept':
+      return MOCKUP_VERDICT_SENTENCE.kept[v.why];
+    case 'external':
+      return offered ? MOCKUP_VERDICT_SENTENCE.external : MOCKUP_VERDICT_SENTENCE.refusedOrigin;
+    case 'refused':
+      return Object.hasOwn(DOC_IMAGE_REFUSED_SENTENCE, v.why) ? DOC_IMAGE_REFUSED_SENTENCE[v.why as DocImageRefusal] : v.why;
+    case 'missing':
+      return DOC_IMAGE_REFUSED_SENTENCE[v.why === 'absent-at-commit' ? 'absent' : v.why];
+    case 'unsupported':
+      return fillSentence(MOCKUP_VERDICT_SENTENCE.unsupported[v.why], { n: MOCKUP_MAX_CSS_DEPTH });
+    case 'skipped':
+      return MOCKUP_VERDICT_SENTENCE.skipped[v.why];
+    case 'failed':
+      return fillSentence(MOCKUP_VERDICT_SENTENCE.failed, { sentence: mockupFailedSentence(v.failure) });
+  }
+}

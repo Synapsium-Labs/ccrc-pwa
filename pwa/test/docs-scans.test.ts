@@ -174,7 +174,8 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   In `pwa/src/docs`: no `postMessage` call, no `MessageChannel` identifier, no `onmessage` member, no JSX `iframe`
 //   element or string holding `<iframe`, no `srcdoc` (any case) identifier, property name, JSX attribute or string, no
 //   `default-src 'none'` string (any case); except Export's two allowances, by exact path (A2b, M8.10): the `iframe`
-//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, and the
+//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, the mockup
+//   frame's `iframe` and `srcDoc` forms in `docs/MockupFrame.tsx` (C2 Task 8, M5.13), by exact path too, and the
 //   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
 //   path, never the directory. The allowance holds whether or not those files exist yet.
 //   Across `pwa/src`: `addEventListener('message', …)` as a member call or a bare call, and an assignment to
@@ -231,9 +232,14 @@ const MESSAGE_ASSIGN_HOMES: readonly string[] = ['src/lib/markdownWorker.ts', 's
 /** The only file with a value import of the render job: the worker entry (M8.21). */
 const renderJobValueHome = (file: string): boolean => file === 'src/lib/markdownWorker.ts';
 
-/** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string. */
+/** The mockup viewer's one frame file (C2 Task 8, M5.13): the only file besides Export's builder that may draw the JSX `iframe`
+ *  or name `srcdoc`, by exact path, never the directory or a prefix (`MockupFrame2.tsx` and `MockupView.tsx` are not it). */
+const MOCKUP_FRAME_HOME = 'src/docs/MockupFrame.tsx';
+
+/** Export's two allowances, by exact path (A2b, M8.10): the `iframe` element and `srcDoc`, and the `default-src 'none'` string;
+ *  and the mockup frame's `iframe` and `srcDoc` (`MOCKUP_FRAME_HOME`). */
 function exportAllows(kind: 'iframe' | 'policy', file: string): boolean {
-  return file === (kind === 'iframe' ? 'src/docs/export/buildExport.tsx' : 'src/docs/export/policy.ts');
+  return kind === 'iframe' ? file === 'src/docs/export/buildExport.tsx' || file === MOCKUP_FRAME_HOME : file === 'src/docs/export/policy.ts';
 }
 
 /** A module specifier an import, export or `import()` names; `value` is false for the type-only forms. */
@@ -460,6 +466,17 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(readerScan(dir).hits).toEqual([]);
     plant(dir, 'src/docs/mockup/origins.ts', "export const PLANTED_ORIGIN_POLICY = \"default-src 'none'\";\n");
     expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/mockup/origins.ts docs:default-src-none']);
+  });
+
+  it("M5.13: the mockup frame's iframe and srcDoc are allowed at src/docs/MockupFrame.tsx only; the same in MockupView.tsx and in a sibling path are red", () => {
+    const dir = treeCopy();
+    plant(dir, 'src/docs/MockupFrame.tsx', "\nexport const PlantedMockupFrame = () => <iframe srcDoc=\"x\" />;\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    plant(dir, 'src/docs/MockupView.tsx', "\nexport const PlantedMockupView = () => <iframe srcDoc=\"x\" />;\n");
+    expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/MockupView.tsx docs:iframe', 'src/docs/MockupView.tsx docs:srcDoc']);
+    const sibling = treeCopy();
+    plant(sibling, 'src/docs/MockupFrame2.tsx', "export const PlantedSibling = () => <iframe srcDoc=\"x\" />;\n");
+    expect(names(readerScan(sibling).hits, 'docs:')).toEqual(['src/docs/MockupFrame2.tsx docs:iframe', 'src/docs/MockupFrame2.tsx docs:srcDoc']);
   });
 
   it('M8.21: a value import of readerRenderJob sits only in the worker entry', () => {
@@ -1024,7 +1041,8 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 //     `docs/ExportSheet.tsx`, through a dynamic `import()`; `ExportSheet.tsx` calls `downloadExport`, reads no member
 //     named `bytes`, and holds no `srcDoc`, `innerHTML`, `document.write` or `window.open`; under `pwa/src/docs` and
 //     `lib/markdown*`, `new Blob(`, `new File(` and `URL.createObjectURL(` only in `docs/objectUrls.ts`; and in W5 no JSX
-//     `iframe` element and no `srcDoc` attribute anywhere in `pwa/src` (refinement (v));
+//     `iframe` element and no `srcDoc` attribute anywhere in `pwa/src` (refinement (v)); W6 (C2 Task 8) adds exactly one
+//     home, `docs/MockupFrame.tsx`, for both;
 //   - M4.EX17: the run-time import closure of `docs/export/buildExport.tsx`, static and dynamic, through every relative
 //     specifier, holds neither `lib/markdownHighlightWorker.ts` nor `lib/highlightGrammars.ts`, and no `highlight.js`
 //     specifier;
@@ -1223,6 +1241,8 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/DocImage.tsx imagePinFor',
       'src/docs/ExportSheet.tsx buildExport:dynamic',
       'src/docs/ExportSheet.tsx downloadExport',
+      'src/docs/MockupFrame.tsx iframe',
+      'src/docs/MockupFrame.tsx srcDoc',
       'src/docs/docsLinks.ts imagePinFor',
       'src/docs/export/buildExport.tsx react-dom/server',
       'src/docs/export/buildExport.tsx renderToStaticMarkup',
