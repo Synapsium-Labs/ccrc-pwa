@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { openCoordDb } from '../src/coord/db.js';
-import { COORD_SCHEMA_VERSION } from '../src/coord/schema.js';
+import { COORD_SCHEMA_VERSION, MIGRATIONS } from '../src/coord/schema.js';
 import {
   decisionAskStore, decisionRecordOf, decisionUsage, recordDecision, releaseDecisionReservations, reserveDecisionCalls,
   settleDecisionCalls, type DecisionRecordWrite,
@@ -148,14 +148,19 @@ describe('decisionAskStore: the store as the one caller uses it; no method throw
 
 describe('the migration', () => {
   it('a database one version back gains the two tables and keeps every row of every older table', () => {
+    // One version back from THIS migration, found by what it creates rather than by being last: a later migration (remaining
+    // work A's, Overlord W2) sits above it, so stepping back also drops what every later migration created.
+    const at = MIGRATIONS.findIndex((m) => /CREATE TABLE decision_records\b/.test(m));
+    expect(at).toBeGreaterThan(0);
+    const later = MIGRATIONS.slice(at + 1).flatMap((m) => [...m.matchAll(/CREATE TABLE (\w+)/g)].map((x) => x[1]!));
     db.prepare('INSERT INTO response_boots (epoch, bootedAt, buildSha) VALUES (1, 2, NULL)').run();
     const tables = (d: DatabaseSync): string[] => (d.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as
       { name: string }[]).map((t) => t.name);
-    const older = tables(db).filter((t) => !t.startsWith('decision_'));
+    const older = tables(db).filter((t) => !t.startsWith('decision_') && !later.includes(t));
     const counts = (d: DatabaseSync) => Object.fromEntries(older.map((t) => [t, (d.prepare(`SELECT COUNT(*) AS n FROM "${t}"`).get() as { n: number }).n]));
     const before = counts(db);
     expect(before['response_boots']).toBe(1);
-    db.exec(`DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${COORD_SCHEMA_VERSION - 1};`);
+    db.exec(`${later.map((t) => `DROP TABLE ${t};`).join(' ')} DROP TABLE decision_records; DROP TABLE decision_days; PRAGMA user_version = ${at};`);
     db.close();
     const again = openCoordDb(file);
     expect(again.prepare('PRAGMA user_version').get()).toEqual({ user_version: COORD_SCHEMA_VERSION });

@@ -51,7 +51,8 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   that `insertRemaining` never changes or removes an edge. Measured red, each applied to `programmeFactsStore.ts` and the
   file restored from a saved copy: an `UPDATE programme_edges` in the writer, an upsert of `programme_edges` in it, an
   `INSERT OR REPLACE INTO programme_remaining` and an upsert of `programme_remaining`.
-- **F7:** `auth-gate.test.ts` names the remaining-work door's file the twentieth, matching its header.
+- **F7:** `auth-gate.test.ts` names the remaining-work door's file by its place in the list, matching its header: the
+  twentieth at the fix round, the twenty-first after the fifth merge (private names B's `nameListRoutes.ts` landed first).
 - **F8:** `README.md`'s lane paragraph names both programme doors, the call record's (missing before) and this one. A
   hunk beyond the landing-order holder's consent below, made on the coordinator's ruling.
 - **F1, F5, F6, F9:** no action, as ruled.
@@ -74,8 +75,15 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 - **The landing-order holder's consent is narrow.** It covers exactly two hunks of `server/src/coord/routes.ts` (the
   import and the registration beside the call record's) and, in `README.md`, `eighty-five` to `eighty-six` at
   `b99bc6390`. A recount at landing (another lane landing first) needs that holder's fresh consent for the new words.
-- **Counts re-derived after the fourth merge of `main`** (route 252 behind the Linear hierarchy item route's 251; HTTP
-  249, gated 153, exempt 95; `user_version` 87; `run-close-switch.test.ts` replays thirty-four;
+- **The first full run after the fix round (CI on `b41823307`) was red in one case:** `decision-model-records.test.ts`'s
+  migration case stepped back to `COORD_SCHEMA_VERSION - 1`, which assumed decision model A's migration was the last; with
+  migration 87 above it, the reopen replayed 87 over its standing tables (`table programme_remaining already exists`). The
+  case now finds its own migration by what it creates, as `programme-facts-store.test.ts` does, and drops what every later
+  migration created before stepping back. It was not in this branch's local list, which ran `coord-db.test.ts` but not the
+  other migration suites; the merge commits' own runs are where a slot-taker's suite shows this.
+- **Counts re-derived after the fifth merge of `main`** (clause 16's conflict probe, after private names B, #2961, added
+  two session-gated doors; `coord.db`'s migrations unchanged there, so this stays 87): route 254 behind private names B's
+  253; HTTP 251, gated 155, exempt 95; `user_version` 87; `run-close-switch.test.ts` replays thirty-four;
   `shared/programmeFacts.ts` holds overlaps A's block and this PR's, each under its own head; `token-shared.test.ts`'s seven-day holders stay
   seventeen, with `EDGE_UNMEASURABLE_AFTER_MS` in its own row; the lane words and the `ccrc-api` rows unchanged,
   since responses B's doors are session-gated and add no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
