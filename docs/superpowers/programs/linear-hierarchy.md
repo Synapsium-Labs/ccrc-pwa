@@ -38,7 +38,7 @@ They decide every question the plan leaves open.
 | 1 | the proxy additions | D-8180 | #2612 | **merged** 2026-11-11 as `a9cfd134f` (no run) |
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
-| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17, review round 2 is run 2332 |
+| 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **in review** 2026-11-16: run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17; review round 2 (run 2332) found 1 important (plan text only) and 9 advisories: **accepted**, landing through the merge queue at `a1fb568bf` |
 | 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | not started |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
@@ -121,6 +121,31 @@ They decide every question the plan leaves open.
   more same-named objects can fail. The fix needs `creator { id }` on the by-id documents in the frozen `ops.ts`, so it
   waits for the next capture, on the operator's go. A1, A3, A4, A6, A10 and A11 are carried to wave 4.
 
+- **2026-11-17, review round 2 of wave 3 (run 2332), ruled by the coordinator.** Every ruling of fix round 1 is built
+  as ruled, each with a named test seen red. Wave 3 is accepted and lands at `a1fb568bf`. The rulings:
+  - F1 (the plan's interface text for `markSyncDue`, `deferSync` and `ensureTicketBound` is now false): the change
+    follows the plan's own outcome table ("deferred by the backoff"), so it is a departure in the interface text, not
+    in intent. It is D-8702 (failure-hold): `plan_sync_due.attempts` marks a failure's hold, `deferSync` takes
+    `why = failure | wait` and a wait resets the mark, `markSyncDue` keeps a held `dueAt`, and a held programme's
+    dispatch starts no pass. The coordinator defines it in the plan and amends the interface lines on this ledger PR,
+    after #2941 merges, so the worker's PR needs no further push.
+  - The worker's unruled calls are accepted. Unread project statuses keep waiting, with no settle, because the
+    workspace cannot sync until its statuses read; the cost is bounded in calls (about 36 to 108 directory calls an
+    hour per slot) and in mail (one an episode). The hold also covers rate-limited, malformed, a refused key, an
+    unreadable store and an ok answer with no id. The episode mail is once per programme, workspace and episode.
+  - Carried to wave 4: A1 (a restart loses the probe's settled mark, so a refill that reads `on` creates no initiative
+    until something marks the programme due: persist the mark or mark every programme due at boot); the in-memory
+    episode streaks (a restart can mail once more); M3 with A9 (a failing workspace starves the programme's later
+    steps in other workspaces: hold per workspace); A3 (three decisions left in planSync's L4: the probe re-check, the
+    held dispatch and `deferFor`); A4 (a project updated while its initiative failed re-sends its link once); A6 (the
+    probe mail misstates a bound initiative's wait and an unclosed end); A7 (a test that never asserts its second
+    statuses read); and round 1's A1, A3, A4 and A11.
+  - Carried to wave 7's brief: A5 (`ticketOfRun` reads tickets that were put back) and the F3/F5 interaction (a bound
+    ticket put back may take its held team off its project).
+  - Wording, fixed on this ledger PR: D-8699 retries at every requeue, refill and plan change, and only its mail is
+    once (A8); neither wait is bounded in time while refills fail, so "both waits are bounded" becomes "both are
+    bounded in calls and mail" (A2); M3 holds for as long as the failing workspace keeps failing, not 30 minutes (A9).
+
 ## Carried constraints
 
 Reviewers of every wave get these.
@@ -160,7 +185,9 @@ Reviewers of every wave get these.
 
 ## Next-wave brief
 
-Wave 3 (D-8182), the plan sync: plan Tasks 3.1 to 3.5, on a fresh child, building on `main` (waves 1 and 2 and FX2
-merged). Departures already ruled: D-8673 (no migration in this wave), D-8674 (abandoned → `Canceled`), and the FX2
-departures in D-8407 (milestone binds by name, "name not unique", the 80-character project name). New departures take
-numbers from this programme's block (numbers 8675 to 8681), issued by the coordinator.
+Wave 4 (D-8183), drift, inbound and public text: plan Tasks 4.1 onward, on a fresh child, building on `main` once wave 3
+(#2941) has merged. Its migration takes the next free slot (D-8673's rule). Before editing `server/src/coord/planPolicy.ts`,
+mail desktop-polish's coordinator: its Task WM6 also edits it, and whichever lands second merges onto the other.
+Carried in from wave 3: D-8681 (unlink when a project is set off), issueOwned's creator and extra teamIds (with
+D-8699, at the next capture, on the operator's go only), and the follow-ups listed under review round 2 above. New
+departures take numbers from this programme's second block (D-8703 to D-8708), issued by the coordinator.
