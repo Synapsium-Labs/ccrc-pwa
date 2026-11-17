@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import type { CheckpointRow, EpicRow, StoredPlan } from '../src/coord/planStore.js';
 import {
   fitLinearDescription, initiativeDescription, LINEAR_DESCRIPTION_MAX_CHARS, milestoneDescription, plannedFingerprint, planSyncSteps, projectDescription,
-  type SyncSnapshot, type SyncStep,
+  type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { withCcrcProvenance } from '../src/linear/hierarchyOps.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
@@ -32,7 +32,7 @@ const directory = {
 function snap(o: {
   epic?: Partial<EpicRow>; cps?: CheckpointRow[]; inShort?: string; doneWhen?: string[]; mode?: 'public' | 'private'; paused?: boolean;
   initiatives?: 'on' | 'off';
-} = {}): SyncSnapshot {
+} = {}): ProgrammeSnapshot {
   const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: [] }] };
   return {
     program: {

@@ -429,10 +429,14 @@ export function teamOwnerProject(teamKey: string, rows: readonly HierarchyProjec
   return (ordered[0] ?? holders[0])?.project ?? null;
 }
 
+/** What the owner rule reads of the world (the latest programme's coordinator, and a session's standing): `OwnerFacts` less the
+ *  named owner and the shared-team project, which the rows decide. */
+type OwnerReads = Omit<OwnerFacts, 'named' | 'ownsTeamProject'>;
+
 /** The Linear owner of a team (`teamOwnerProject`'s project, then `linearOwnerOf` with that project's own named owner), with the
  *  project it was decided for; null when no project holds the key. */
 export function linearOwnerOfTeam(
-  teamKey: string, rows: readonly HierarchyProjectFacts[], f: Pick<OwnerFacts, 'latestProgrammeCoordinator' | 'presence'>,
+  teamKey: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
 ): (ReturnType<typeof linearOwnerOf> & { project: string }) | null {
   const project = teamOwnerProject(teamKey, rows);
   if (project === null) return null;
@@ -443,7 +447,7 @@ export function linearOwnerOfTeam(
 /** The Linear owner that applies to one project (design §7.5): its team's owning project's (`linearOwnerOfTeam`) when it holds a
  *  key, else its own named owner or its latest programme's coordinator; with the project the owner was decided for. */
 export function linearOwnerOfProject(
-  project: string, rows: readonly HierarchyProjectFacts[], f: Pick<OwnerFacts, 'latestProgrammeCoordinator' | 'presence'>,
+  project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
 ): ReturnType<typeof linearOwnerOf> & { project: string } {
   const row = rows.find((r) => r.project === project);
   const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f);
