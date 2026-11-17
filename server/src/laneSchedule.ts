@@ -200,7 +200,7 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
   | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync';
 
 export interface LaneRow {
@@ -356,6 +356,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
     derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
+  },
+  // The overlaps arm (Overlord spec §5.5 and §5.6, Table 11.1c; W2, plan w2-overlaps.md Task 4): one read-and-record pass at a
+  // time over the refused claims' record, the radar's map and the claims history. In PR A it records pairs and sends nothing.
+  {
+    name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+    warnKey: 'ccrc-server: the overlaps arm failed',
+    derivedFrom: { name: 'landingRadar', reason: 'the arm reads the radar\'s map, which changes no faster than the radar lane writes it' },
   },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the

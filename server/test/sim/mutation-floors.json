@@ -131,6 +131,12 @@
   "server/src/coord/overlordAuthority.ts#authorityFold": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
+  "server/src/coord/overlaps.ts#overlapSightings": 1,
+  "server/src/coord/overlaps.ts#goalConflictSightings": 1,
+  "server/src/coord/overlaps.ts#pairMoves": 1,
+  "server/src/coord/overlaps.ts#relayConflictVerdict": 1,
+  "server/src/coord/overlaps.ts#pairBlocks": 1,
+  "server/src/coord/overlaps.ts#blockingPairs": 1,
   "shared/private-names.mjs#hashEntry": 1,
   "shared/private-names.mjs#privateNameHits": 1
 }

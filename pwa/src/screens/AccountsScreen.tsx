@@ -66,6 +66,7 @@ import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, S
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { AccountHomeAble } from '../fleet/AccountHomeAble';
+import { AccountOrgRow } from '../fleet/AccountOrgRow';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
@@ -527,6 +528,8 @@ export function AccountsScreen(): ReactNode {
           const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
           // Whether new sessions start here (D-8195): the roster's `homeAble`, or as a placement ack set it.
           const homeOn = acts.homeAcked[wrapper] ?? entry?.homeAble ?? true;
+          // The organization label (account organization B1): as the roster has it, or as an org ack read it back.
+          const org = Object.hasOwn(acts.orgAcked, wrapper) ? acts.orgAcked[wrapper] ?? null : entry?.org ?? null;
           const canAct = connect !== null && blocked === null && inRoster;
           // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
           const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
@@ -659,6 +662,17 @@ export function AccountsScreen(): ReactNode {
                   blocked={blocked}
                   busy={acts.busy[wrapper]}
                   onConfirm={(homeAble) => acts.place(wrapper, homeAble)}
+                />
+              )}
+              {inRoster && (
+                <AccountOrgRow
+                  id={wrapper}
+                  label={accountLabel(roster, wrapper)}
+                  org={org}
+                  canSet={connect !== null}
+                  blocked={blocked}
+                  busy={acts.busy[wrapper]}
+                  onSave={(o) => acts.setOrg(wrapper, o)}
                 />
               )}
               {/* The fold's credential act and Remove (spec §4.4; Task A19). Refused, they stay drawn and disabled, named by

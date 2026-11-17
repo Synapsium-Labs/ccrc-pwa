@@ -7,6 +7,10 @@
 // `deploy/account-op.mjs`'s `set-facts` op, reached through `ccrc account set` and the account set door
 // (`POST /api/accounts/:id/set`). Both are optional in `~/.ccrc/accounts.json`: absence means nobody set the fact,
 // and a written `null` is refused, as `pool`'s is.
+//
+// The organization label rides the same writer, door and wire (plan 2026-11-16-account-organization.md): a name the
+// operator chooses, never the organization's id. It is a preference, not a fact the serviceability gate reads, so it
+// never widens (`factsChangeWidens`). Its vocabulary is `shared/roster.ts`'s (`orgLabelVerdict`, `ORG_CLEAR_WORD`).
 
 /** H16: does Fable on this account bill usage credits. Absent in the file means nobody set it. */
 export const FABLE_BILLINGS = ['included', 'credits'] as const;
@@ -26,7 +30,7 @@ export interface RosterFactsWire {
   readonly org?: string;
 }
 
-/** The door's body: a change to either fact. */
+/** The door's body: a change to either fact, or to the organization label. */
 export interface RosterFactsChange {
   readonly fableBilling?: FableBilling;
   readonly continuity?: 'on' | 'off';
@@ -43,7 +47,7 @@ export function factsChangeWidens(c: RosterFactsChange): boolean {
   return c.fableBilling === 'included' || c.continuity === 'on';
 }
 
-/** The wire half of the two facts: a fact that is set is carried, an unset one is absent, never `null`. */
+/** The wire half of the two facts and the label: one that is set is carried, an unset one is absent, never `null`. */
 export function rosterFactsWireOf(a: {
   readonly fableBilling: FableBilling | null;
   readonly continuity: ContinuityRecord | null;

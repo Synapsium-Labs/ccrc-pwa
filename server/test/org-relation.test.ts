@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { orgRelation, orgSpread, ORG_RELATIONS } from '../../shared/accountOrg.js';
 import { parseRoster } from '../../shared/roster.js';
-import { ORG_BY_ID, ORG_RELATION_CASES, ORG_SPREAD_CASES, ORG_TEST_ROSTER } from './fixtures/orgRelation.js';
+import { ORG_BY_ID, ORG_EMPTY_LABEL_CASES, ORG_RELATION_CASES, ORG_SPREAD_CASES, ORG_TEST_ROSTER } from './fixtures/orgRelation.js';
 
 describe('the shared cases', () => {
   it('cover every relation word, and agree with the roster they name', () => {
@@ -19,6 +19,26 @@ describe('the shared cases', () => {
 describe('orgRelation, the TypeScript twin, over ORG_RELATION_CASES', () => {
   it.each(ORG_RELATION_CASES)('$name: $a and $b are $expect', ({ a, b, expect: want }) => {
     expect(orgRelation({ id: a, org: ORG_BY_ID[a]! }, { id: b, org: ORG_BY_ID[b]! })).toBe(want);
+  });
+});
+
+describe('an empty label is no label, in both twins (PR A review F3)', () => {
+  it.each(ORG_EMPTY_LABEL_CASES)('TypeScript: $name is $expect', ({ a, b, expect: want }) => {
+    expect(orgRelation(a, b)).toBe(want);
+  });
+
+  it('bash: every case answers the same, with _ccrc_org printing the empty labels', () => {
+    const h = makeCcdHarness('ccrc-org-rel-empty-');
+    try {
+      const labels = new Map<string, string>();
+      for (const c of ORG_EMPTY_LABEL_CASES) for (const s of [c.a, c.b]) labels.set(s.id, s.org ?? '');
+      const arms = [...labels].map(([id, org]) => `${id}) printf '%s' '${org}' ;;`).join(' ');
+      const script = `_ccrc_org() { case "$1" in ${arms} esac; }; `
+        + ORG_EMPTY_LABEL_CASES.map((c) => `printf '%s\\n' "$(_org_rel ${c.a.id} ${c.b.id})"`).join('; ');
+      expect(h.sh(script).split('\n')).toEqual(ORG_EMPTY_LABEL_CASES.map((c) => c.expect));
+    } finally {
+      h.cleanup();
+    }
   });
 });
 

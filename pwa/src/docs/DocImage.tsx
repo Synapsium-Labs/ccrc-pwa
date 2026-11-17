@@ -15,6 +15,7 @@ import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DocInLinkContext, DocLinkContext, type DocLinkContextValue } from './DocLink';
 import { docsLocation, imagePinFor } from './docsLinks';
+import { mockupSizeBasis } from './mockup/plan';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence,
   kib, slotSentence, type DocImageRefusal,
@@ -120,10 +121,13 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
   if (!ip.ok) return refused(ip.why);
-  // Refinement (n): on a version page the listing's size is the tip's, not the version's, so ccd's class cap answers.
-  const size = ctx.pageAt !== null ? undefined : ip.pin.kind === 'draft' ? e?.draft?.size : e?.committed?.size;
+  // Refinement (n): on a version page the listing's size is not checked, so ccd's class cap answers. Every other page
+  // asks the one size basis the mockup planner reserves by (`mockupSizeBasis`, D-8659): a listed size is checked here.
+  const basis = ctx.pageAt !== null ? null : mockupSizeBasis(e, ctx.tree, ip.pin, cls);
   const cap = DOCS_CLASS_CAP[cls];
-  if (typeof size === 'number' && size > cap) return refused('too-large', null, { size: kib(size), cap: kib(cap) });
+  if (basis !== null && basis.kind === 'listed' && basis.bytes > cap) {
+    return refused('too-large', null, { size: kib(basis.bytes), cap: kib(cap) });
+  }
   return {
     kind: 'pinned', pin: ip.pin, cls, draft: ip.draft, uncommittedNotShown: ip.uncommittedNotShown, leafHref,
     deferred: index === null || index >= DOCS_MAX_IMAGES_PER_PAGE,

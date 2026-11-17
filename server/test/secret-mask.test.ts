@@ -40,7 +40,7 @@ import { PushService } from '../src/push.js';
 import { askPushBody } from '../src/askbody.js';
 import { NotifyLog } from '../src/notifylog.js';
 import {
-  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
+  SecretMasker, SHAPE_ONLY_MASKER, DrawerMask, DRAWER_SECRET_MASK, fingerprintOf, fingerprintGeneration, fingerprintRow, RUNS_PER_CHUNK, MAX_CHUNKS,
 } from '../src/accounts/mask.js';
 import { SHAPE_MASK, shapeMatchers } from '../src/accounts/shapes.js';
 import { approvalsFixture, CHILD, PARENT } from './approvalsHarness.js';
@@ -343,7 +343,7 @@ describe('the drawer stream (D-5513)', () => {
     const d = new DrawerMask(new SecretMasker(), (t) => out.push(t), 50);
     d.push(`token: ${OAT.slice(0, 20)}`);
     d.push(`${OAT.slice(20)}\r\n`);
-    expect(out.join('')).toBe(`token: ${SECRET_MASK}\r\n`);
+    expect(out.join('')).toBe(`token: ${DRAWER_SECRET_MASK}\r\n`);
     out.length = 0;
     d.push('plain line\r\n');                    // ends on a delimiter: sent at once
     expect(out).toEqual(['plain line\r\n']);
@@ -397,7 +397,7 @@ describe('the drawer stream (D-5513)', () => {
       write(): void {} resize(): void {} kill(): void {}
     }
     const local = await drawerFrames(() => new StubPty(), (s) => s.includes('DONE'));
-    expect(local).toContain(SECRET_MASK);
+    expect(local).toContain(DRAWER_SECRET_MASK);
     expect(leaksNone(local, OAT)).toBe(true);
     await app!.close(); app = undefined;
 
@@ -412,7 +412,7 @@ describe('the drawer stream (D-5513)', () => {
       offPty: () => {},
     } as unknown as FleetClient;
     const remote = await drawerFrames(createSpawnPty(client), (s) => s.includes('DONE'));
-    expect(remote).toContain(SECRET_MASK);
+    expect(remote).toContain(DRAWER_SECRET_MASK);
     expect(leaksNone(remote, OAT)).toBe(true);
   });
 });
@@ -1060,11 +1060,11 @@ describe('the rulings: the drawer echoes at once and never masks ordinary text f
     const { m } = maskerOver(() => TOKEN_1, [CMP]);
     const k = typeSlowly(m, CMP);
     // the accepted gap (D-5995): a key's first 19 bytes, typed slower than the hold, leave before it could be one
-    expect(k.shown).toBe(`$ ${CMP.slice(0, 19)}${SECRET_MASK}\n$`);
+    expect(k.shown).toBe(`$ ${CMP.slice(0, 19)}${DRAWER_SECRET_MASK}\n$`);
     expect(leaksNone(k.raw, CMP.slice(19)), k.raw).toBe(true);
     m.close();
     const s = typeSlowly(new SecretMasker(), OAT);
-    expect(s.shown).toBe(`$ sk${SECRET_MASK}\n$`);
+    expect(s.shown).toBe(`$ sk${DRAWER_SECRET_MASK}\n$`);
     expect(leaksNone(s.raw, OAT.slice(2)), s.raw).toBe(true);
   });
 
@@ -1114,7 +1114,7 @@ describe('the rulings: the provisional mask waits for the run to end, and no lon
       d.push(`    ${CMP.slice(cut)}\r\n$ `);
       vi.advanceTimersByTime(80);
       expect(leaksNone(out.join(''), CMP), `cut ${cut}: ${JSON.stringify(out)}`).toBe(true);
-      expect(screen(out.join('')), `cut ${cut}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+      expect(screen(out.join('')), `cut ${cut}`).toBe(`key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
       d.dispose();
     }
     m.close();
@@ -1444,7 +1444,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
       const sent: number[] = [];
       for (const c of seq) { sent.push(Date.now()); d.push(c); vi.advanceTimersByTime(30); }
       const raw = out.map((o) => o.text).join('');
-      expect(raw, JSON.stringify(seq)).not.toContain(SECRET_MASK);
+      expect(raw, JSON.stringify(seq)).not.toContain(DRAWER_SECRET_MASK);
       // each key's character reaches the socket within 8 ms of its chunk
       const keys = seq.slice(1).map((c) => c.replace(/\x1b\[[?0-9;]*[A-Za-z]/g, ''));
       let k = 0; let seen = '';
@@ -1472,7 +1472,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
         expect(screen(out.join('')), `${key.length} cut ${cut}`).toMatch(/^export KEY=(?:‹secret masked›)?$/);
         d.push(`${key.slice(cut)}\r\n$ `);
         vi.advanceTimersByTime(40);
-        expect(screen(out.join('')), `${key.length} cut ${cut}`).toBe(`export KEY=${SECRET_MASK}\n$`);
+        expect(screen(out.join('')), `${key.length} cut ${cut}`).toBe(`export KEY=${DRAWER_SECRET_MASK}\n$`);
         d.dispose();
       }
     }
@@ -1484,7 +1484,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
       d.push(' ');
       vi.advanceTimersByTime(30);
       expect(screen(o.join('')), word).toBe(`$ ${word}`);
-      expect(o.join(''), word).not.toContain(SECRET_MASK);
+      expect(o.join(''), word).not.toContain(DRAWER_SECRET_MASK);
       d.dispose();
     }
     m.close();
@@ -1519,7 +1519,7 @@ describe('the round-2 review: the drawer, the cost and every write answer (D-599
     d.push('CCCCCCCCCCCC done\r\n');
     const shown = screen(out.join(''));
     expect(shown).not.toContain('C');
-    expect(shown.endsWith(`${SECRET_MASK} done`)).toBe(true);
+    expect(shown.endsWith(`${DRAWER_SECRET_MASK} done`)).toBe(true);
     d.dispose();
     m.close();
   });
@@ -1678,7 +1678,7 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
     vi.advanceTimersByTime(9);
     d.push(`    ${OAT.slice(10)}\r\n$ `);
     vi.advanceTimersByTime(80);
-    expect(screen(out.join(''))).toBe(`  ⎿  key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+    expect(screen(out.join(''))).toBe(`  ⎿  key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
     d.dispose();
   });
 
@@ -1694,7 +1694,7 @@ describe('the post-merge audit: a key the TUI wraps early on its row (D-5995)', 
         d.push(`    ${CMP.slice(cut)}\r\n$ `);
         vi.advanceTimersByTime(80);
         expect(leaksNone(out.join(''), CMP), `cut ${cut} gap ${gap}: ${JSON.stringify(out)}`).toBe(true);
-        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${SECRET_MASK}\n    ${SECRET_MASK}\n$`);
+        expect(screen(out.join('')), `cut ${cut} gap ${gap}`).toBe(`key ${DRAWER_SECRET_MASK}\n    ${DRAWER_SECRET_MASK}\n$`);
         d.dispose();
       }
     }
