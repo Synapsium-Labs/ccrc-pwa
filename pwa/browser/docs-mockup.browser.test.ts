@@ -570,7 +570,20 @@ async function runVector(v: Vector, shell: HostOptions['shell']): Promise<{ row:
     await until('the fixture to be alive', async () =>
       (await read(await frameAt(host.page, 0, 3000), () => (window as unknown as Loose)['__alive'])) === 1 || null);
     if (v === 'script') await (await frameAt(host.page)).evaluate(() => { (window as unknown as Loose)['__go'] = 1; });
-    else await (await frameAt(host.page)).locator('#lnk').click();
+    else {
+      // A real click can be lost here: the frame stays on about:srcdoc, loaded and with its link, and nothing navigates
+      // (measured: the click and api controls failed in about one run in three, before this change too; most likely the click
+      // arrives before Chrome routes input to a srcdoc frame that has just moved to its own process, which is not measured).
+      // So the click is repeated until the frame leaves about:srcdoc, for the target, A's /api/x, or Chrome's error page for a
+      // refused navigation. A click repeated over a navigation slower than 2 s only restarts it: the control still reaches its
+      // target, and the wall still refuses it.
+      const left = async (): Promise<true | null> => ((await frameAt(host.page, 0, 3000)).url() !== 'about:srcdoc' ? true : null);
+      for (let attempt = 1; ; attempt += 1) {
+        await (await frameAt(host.page)).locator('#lnk').click();
+        if (await until('the frame to leave about:srcdoc', left, 2000).then(() => true, () => false)) break;
+        if (attempt === 5) throw new Error('five link clicks started no navigation: the frame stayed on about:srcdoc');
+      }
+    }
   }
   return { row, host, from };
 }
