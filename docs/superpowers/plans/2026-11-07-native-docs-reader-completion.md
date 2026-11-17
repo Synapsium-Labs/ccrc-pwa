@@ -1770,7 +1770,7 @@ this tip that D1 does not change; Open names what blocks it; D2 names the row Ta
 | Plan Review Focus: late results after abort, replacement or fallback | Measured (D1) | adapter 5 and 5b, browser "a late read…"; a fallback leaves a `changes` read to settle unused (recorded) |
 | Plan Review Focus: huge diff | Measured (D1) | `reader-diff`'s bounds and the review's adversarial inputs (a text of millions of line endings, an over-long side) |
 | Plan Review Focus: version links, invalid `only` or hash | Measured (D1) | adapter 10; `reader-history`'s filter and hash cases |
-| Files outside Task 12's Modify list | Recorded | `pwa/src/screens/DocsScreen.tsx`, one line, the coordinator's ruling on ask 517 (mail 23011); the consequential test edits `reader-policy.test.ts` (the two mount-plan pins), `reader-frame.test.tsx` and `docs-version.test.tsx` (the version reads), each claimed |
+| Files outside Task 12's Modify list | Recorded | `pwa/src/screens/DocsScreen.tsx`, one line, the coordinator's ruling on ask 517 (mail 23011); the consequential test edits `reader-policy.test.ts` (the two mount-plan pins), `reader-frame.test.tsx` and `docs-version.test.tsx` (the version reads), each claimed; and `pwa/browser/reader-frame.browser.test.ts`, which is in Task 13's Modify list, not Task 12's: the M8.B5 control's harness only, edited under the coordinator's addendum to fix round 1 (mail 23545) and again for fix round 2's F1 (mail 23635), under claim 4845 |
 
 **Fix round 1 (review run 2407, round 1 of 3, at `84617b0ef`; the coordinator's rulings, mail 23425).** One commit per item.
 Besides this block, each item corrects D1's Results in place where it says so: the replay sentence in the close, Task 11's
