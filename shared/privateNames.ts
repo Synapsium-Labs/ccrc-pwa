@@ -27,6 +27,12 @@ export interface NameListRow { readonly text: string; readonly mode: NameListMod
 /** The upload's body: at least one row, or no row with `clear: true`, the console's confirmed "Clear the list" (the Settings
  *  plan's ruling, carried by the brief: an empty upload is refused unless it is that confirmed clear). */
 export interface NameListUpload { readonly rows: readonly NameListRow[]; readonly clear?: true }
+/** Why the upload refused one row (`bad-request`, beside `row`, the row's position, and never its text): not `{ text, mode }`;
+ *  a key other than those two; text empty or over `NAME_LIST_MAX_CHARS`; a mode not in `NAME_LIST_MODES`; a letter or digit
+ *  outside a-z and 0-9 after NFKC, which the check would not guard (review 2344 F3: the console's hint says to enter the name's
+ *  ASCII spelling); no letter or digit the check can match. */
+export const NAME_LIST_ROW_REFUSALS = ['shape', 'keys', 'length', 'mode', 'non-ascii', 'no-token'] as const;
+export type NameListRowRefusal = (typeof NAME_LIST_ROW_REFUSALS)[number];
 /** The upload's answer: how many rows it took, how many entries it stored (the canary and every row's entries), and when. */
 export interface NameListUploaded { readonly ok: true; readonly rows: number; readonly entries: number; readonly uploadedAt: number }
 

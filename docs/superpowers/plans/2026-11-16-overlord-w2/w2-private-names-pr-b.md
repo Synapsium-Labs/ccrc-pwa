@@ -58,9 +58,19 @@ Each departure is named by slug. The coordinator assigns the numbers.
   and one warning. That rule is pinned unchanged, at schema 2.
 - **`no-store-undo-to-move`**: the plan asks to "move its version pins and undo". The private store has a version pin
   (`operator-model-store.test.ts`, now 2) and no undo mechanism, so nothing else moved.
-- **`a-stored-key-is-reused`**: an upload whose key write fails only after the value reached its slot
-  (`OperatorSecretStoredUnrecorded`: the record or the directory fsync failed) goes on to store the list. The slot holds
-  that key, and the reader reads only the value file.
+- **`a-stored-key-is-reused`** (corrected in fix round 1, review 2344 F1): a key write can answer
+  `OperatorSecretStoredUnrecorded` for two causes. Either the value reached its slot and its record or the directory fsync
+  failed, or the value's write failed and the read-back could not read the slot, so the key may not be there. The door does
+  not rely on either cause. It reads the slot again, and stores the list only when the slot holds the minted key (the reader
+  reads only the value file). Otherwise it answers `write-failed`, with the store untouched. A test reaches each arm.
+- **`non-ascii-row-is-refused`** (fix round 1, review 2344 F3, the coordinator's ruling): the plan refuses a row exactly when
+  `tokens(text)` is empty. A row that still holds a letter or digit outside a-z and 0-9 after NFKC is now refused as well,
+  with `bad-request`, `row` (its position) and the reason word `non-ascii`, and nothing is written. The check folds to ASCII
+  only, so such a row would have been stored with part of the name unguarded, and the answer would not have said so. A
+  fullwidth or compatibility letter that NFKC folds to a-z passes; an accented letter, including one written with a
+  combining accent, does not. Every row refusal now carries a reason word from `NAME_LIST_ROW_REFUSALS`
+  (`shared/privateNames.ts`). **The W2 Settings piece's hint for `non-ascii` tells the operator to enter the name's ASCII
+  spelling.**
 - **`readme-untouched`**: the plan lists `README.md`'s auth paragraph. The README names none of the operator-secret or
   Overlord doors, so it has nothing to update.
 - **`path-table-by-glob`**: the plan says the architecture spec's path table gains the three C11 files and K gains
@@ -80,8 +90,22 @@ Each departure is named by slug. The coordinator assigns the numbers.
   `verdict.list` (`privateNameHits(text, list)`), and refuses `egress-refused` on `unreadable` and on a throw.
 - **Decision model B** shares the `.server` API. It widens the "only caller of `readServerSecretValue`" sentence in
   `ledgersSecrets.ts`'s header, and it may call `removeServerSecret` for its own key, never for `NAME_LIST_KEY_SLOT`.
-- **W2 Settings** uses `NAME_LIST_MODES` and the status words from `shared/privateNames.ts`, and sends
-  `{ rows: [], clear: true }` for Clear.
+- **W2 Settings** uses `NAME_LIST_MODES`, the status words and `NAME_LIST_ROW_REFUSALS` from `shared/privateNames.ts`. It
+  sends `{ rows: [], clear: true }` for Clear, and shows a hint for `non-ascii` saying to enter the name's ASCII spelling.
+
+## Fix round 1 (review 2344)
+
+- **F1:** the door reads the key slot again after `OperatorSecretStoredUnrecorded` (see `a-stored-key-is-reused`).
+- **F2:** `readNameListKey` reads a slot value that is not exactly 64 lowercase hex characters (what `mintNameListKey`
+  makes) as `unreadable`. The status then reads `key-unreadable`, never `list`, and an upload answers `write-failed` and
+  builds nothing under it.
+- **F3:** `non-ascii-row-is-refused`, above.
+- **F4:** no action, as ruled.
+- **F5:** three new route cases: the PUT's `not-configured`, both arms of the F1 continuation, and the box token without a
+  cookie on both doors (401, nothing written).
+- Each new guard is red when mutated, and was restored from a saved copy: the re-read removed; the re-read always refusing
+  (the stored arm is reached); the non-ASCII check removed; the check without NFKC; the key format check removed (red in
+  the reader and route suites).
 
 ## Measured
 

@@ -16,7 +16,7 @@ import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operator
 import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
 import { OPERATOR_SECRETS_DIR, SERVER_SECRETS_DIR, readServerSecretValue, serverSecretPath } from '../src/coord/ledgersSecrets.js';
 import { CANARY, entriesOf, entryOf } from '../../shared/private-names.mjs';
-import { NAME_LIST_BODY_MAX, NAME_LIST_KEY_SLOT, NAME_LIST_MAX_CHARS, NAME_LIST_MAX_ROWS } from '../../shared/privateNames.js';
+import { NAME_LIST_BODY_MAX, NAME_LIST_KEY_SLOT, NAME_LIST_MAX_CHARS, NAME_LIST_MAX_ROWS, NAME_LIST_ROW_REFUSALS } from '../../shared/privateNames.js';
 import { recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -26,7 +26,8 @@ const PASSPHRASE = 'a test passphrase for the name list suite';
 const ORIGIN = 'http://localhost:7788';
 const URL_ = '/api/overlord/private-names';
 /** Every synthetic name any test here sends: the leak scan looks for each in every answer and console line. */
-const NAMES = ['zz-alpha', 'zq-bravo-x9', 'zz-delta', 'zz-echo-q4', 'zz-oversize-marker'];
+const NAMES = ['zz-alpha', 'zq-bravo-x9', 'zz-delta', 'zz-echo-q4', 'zz-oversize-marker', 'zz-m\u00fcq', 'zz-e\u0301q', 'zz-\u03b6\u03ae', 'zz-\u0663q'];
+const BOX_TOKEN = 'box-token-for-the-name-list-suite';
 const issuer: PrivacyIssuer = { kind: 'ready', issue: () => ({ ok: true, id: 1 }) };
 
 let app: FastifyInstance | null = null;
@@ -41,11 +42,11 @@ afterEach(async () => {
 
 interface Rig {
   ccrcDir: string; home: string; db: DatabaseSync; store: OperatorModelStore; answers: string[]; console: string[];
-  send: (o: { method: 'GET' | 'PUT'; payload?: unknown; raw?: string; cookie?: boolean }) => Promise<LightMyRequestResponse>;
+  send: (o: { method: 'GET' | 'PUT'; payload?: unknown; raw?: string; cookie?: boolean; headers?: Record<string, string> }) => Promise<LightMyRequestResponse>;
   stepUp: () => Promise<void>;
 }
 
-async function rig(o: { armed?: boolean } = {}): Promise<Rig> {
+async function rig(o: { armed?: boolean; store?: boolean } = {}): Promise<Rig> {
   const lines: string[] = [];
   for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
     vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { lines.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a) ?? String(a))).join(' ')); });
@@ -61,7 +62,7 @@ async function rig(o: { armed?: boolean } = {}): Promise<Rig> {
   const base = testDeps(home, recorder().run);
   const armed = o.armed ?? true;
   const deps: Deps = {
-    ...base, operatorModel: store,
+    ...base, mailToken: BOX_TOKEN, ...(o.store === false ? { operatorModel: undefined } : { operatorModel: store }),
     cfg: { ...base.cfg, ccrcDir, authEnabled: armed, cookieSecure: false, rpId: 'localhost', origin: ORIGIN },
   };
   app = await buildServer(deps, new Bus());
@@ -75,10 +76,10 @@ async function rig(o: { armed?: boolean } = {}): Promise<Rig> {
   }
   const answers: string[] = [];
   const self = app;
-  const send: Rig['send'] = async ({ method, payload, raw, cookie: withCookie = true }) => {
+  const send: Rig['send'] = async ({ method, payload, raw, cookie: withCookie = true, headers = {} }) => {
     const res = await self.inject({
       method, url: URL_,
-      headers: { ...(withCookie ? { cookie } : {}), origin: ORIGIN, ...(payload === undefined && raw === undefined ? {} : { 'content-type': 'application/json' }) },
+      headers: { ...headers, ...(withCookie ? { cookie } : {}), origin: ORIGIN, ...(payload === undefined && raw === undefined ? {} : { 'content-type': 'application/json' }) },
       ...(raw !== undefined ? { payload: raw } : payload === undefined ? {} : { payload: JSON.stringify(payload) }),
     });
     answers.push(`${method} ${res.statusCode} ${JSON.stringify(res.headers)} ${res.body}`);
@@ -167,7 +168,7 @@ describe('PUT: the body, checked against the caps and the tokenizer, never echoe
     const cases: [unknown, RegExp][] = [
       [{ rows: Array.from({ length: NAME_LIST_MAX_ROWS + 1 }, () => good) }, /at most 1000 rows/],
       [{ rows: [good, { text: `zz-echo-q4${'y'.repeat(NAME_LIST_MAX_CHARS)}`, mode: 'part' }] }, /^row 1: text is 1 to 120/],
-      [{ rows: [good, good, { text: 'ζήτα', mode: 'part' }] }, /^row 2: no letter or digit/],
+      [{ rows: [good, good, { text: 'ζήτα', mode: 'part' }] }, /^row 2: a letter or digit outside a-z/],
       [{ rows: [{ text: '—', mode: 'exact' }] }, /^row 0: no letter or digit/],
       [{ rows: [good, { text: 'zz-echo-q4', mode: 'loose' }] }, /^row 1: mode is/],
       [{ rows: [{ text: 'zz-echo-q4', mode: 'part', note: 'zz-alpha' }] }, /^row 0: text and mode only/],
@@ -180,14 +181,48 @@ describe('PUT: the body, checked against the caps and the tokenizer, never echoe
       [{ rows: [{ text: '', mode: 'part' }] }, /^row 0: text is 1 to/],
       [{ rows: [null] }, /^row 0: not/],
     ];
+    const reasons = new Set<unknown>();
     for (const [body, detail] of cases) {
       const res = await put(r, body);
       expect(json(res), JSON.stringify(body).slice(0, 60)).toMatchObject({ error: 'bad-request' });
       expect(String(json(res)['detail'])).toMatch(detail);
       expect(res.headers['cache-control']).toBe('no-store');
+      const m = /^row (\d+):/.exec(String(json(res)['detail']));
+      // A row refusal carries its position and a reason word; a refusal of the whole body carries neither.
+      if (m === null) expect(Object.keys(json(res)).sort()).toEqual(['detail', 'error', 'ok']);
+      else { expect(json(res)['row']).toBe(Number(m[1])); reasons.add(json(res)['reason']); }
+    }
+    expect([...reasons].sort()).toEqual([...NAME_LIST_ROW_REFUSALS].sort());
+    expect(listOf(r)).toEqual({ kind: 'measured', value: { kind: 'none' } });
+    expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
+    expectNoLeak(r);
+  });
+});
+
+describe('PUT: a row with a letter or digit outside ASCII is refused, never half guarded (review 2344 F3, non-ascii-row-is-refused)', () => {
+  it('refused with the reason word non-ascii and the row\'s position, after NFKC; nothing is written and no text is echoed', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const good = { text: 'zz-delta', mode: 'part' };
+    // ü (a precomposed letter), e + U+0301 (NFKC composes it to é), Greek, and an Arabic-Indic digit three.
+    for (const text of ['zz-m\u00fcq', 'zz-e\u0301q', 'zz-\u03b6\u03ae', 'zz-\u0663q']) {
+      const res = await put(r, { rows: [good, { text, mode: 'part' }] });
+      expect(res.headers['cache-control']).toBe('no-store');
+      const body = json(res);
+      expect(body, JSON.stringify(text.length)).toMatchObject({ ok: false, error: 'bad-request', reason: 'non-ascii', row: 1 });
+      expect(String(body['detail'])).toMatch(/^row 1: a letter or digit outside a-z and 0-9/);
     }
     expect(listOf(r)).toEqual({ kind: 'measured', value: { kind: 'none' } });
     expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
+    expectNoLeak(r);
+  });
+
+  it('a row NFKC folds to ASCII (fullwidth letters) is accepted, and a row with no letter or digit at all keeps its own word', async () => {
+    const r = await rig();
+    await r.stepUp();
+    expect((await put(r, { rows: [{ text: '\uff5a\uff5a-\uff51\uff58', mode: 'part' }] })).statusCode).toBe(200);
+    expect(json(await put(r, { rows: [{ text: '\u2014', mode: 'exact' }] }))).toMatchObject({ error: 'bad-request', reason: 'no-token', row: 0 });
+    expect(json(await put(r, { rows: [{ text: 'zz-echo-q4', mode: 'loose' }] }))).toMatchObject({ error: 'bad-request', reason: 'mode', row: 0 });
     expectNoLeak(r);
   });
 });
@@ -327,6 +362,84 @@ describe('PUT: the upload, its key and its order', () => {
     r.db.exec('DROP TRIGGER stop_list');
     expect((await put(r, { rows: ROWS })).statusCode).toBe(200);
     expect(json(await get(r))).toMatchObject({ state: 'list', rows: 2 });
+    expectNoLeak(r);
+  });
+
+  it('a minted key whose record fails after it reached the slot: the slot is re-read, holds the key, and the list is stored under it', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const file = serverSecretPath(r.ccrcDir, NAME_LIST_KEY_SLOT);
+    mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    chmodSync(path.join(r.ccrcDir, OPERATOR_SECRETS_DIR), 0o700);
+    const record = `${file.slice(0, -'.secret'.length)}.json`;
+    mkdirSync(path.join(record, 'blocker'), { recursive: true });  // the record cannot be renamed over a non-empty directory
+    const res = await put(r, { rows: ROWS });
+    expect(res.statusCode, res.body).toBe(200);
+    const key = keyOf(r);
+    expect(listOf(r)).toMatchObject({ value: { kind: 'list', rows: 2, generation: 1 } });
+    const read = listOf(r);
+    expect(read.kind === 'measured' && read.value.kind === 'list' && read.value.entries[0]).toEqual(entryOf(CANARY, 'part', key));
+    expect(json(await get(r))).toMatchObject({ state: 'list', rows: 2 });
+    expectNoLeak(r);
+  });
+
+  it('a minted key that may not have reached the slot (its write failed, the read-back could not read): write-failed, the store untouched', async () => {
+    const r = await rig();
+    await r.stepUp();
+    const file = serverSecretPath(r.ccrcDir, NAME_LIST_KEY_SLOT);
+    const realOpen = fs.promises.open;
+    vi.spyOn(fs.promises, 'rename').mockImplementation(async (_from, to) => {
+      if (String(to) === file) throw Object.assign(new Error('EIO: injected'), { code: 'EIO' });
+      throw new Error(`unexpected rename to ${String(to)}`);
+    });
+    vi.spyOn(fs.promises, 'open').mockImplementation((async (p: fs.PathLike, flags?: unknown, mode?: unknown) => {
+      if (String(p) === file) throw Object.assign(new Error('EACCES: injected'), { code: 'EACCES' });
+      return realOpen(p, flags as never, mode as never);
+    }) as typeof fs.promises.open);
+    const res = await put(r, { rows: ROWS });
+    vi.restoreAllMocks();
+    expect(json(res)).toMatchObject({ error: 'write-failed' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(listOf(r)).toEqual({ kind: 'measured', value: { kind: 'none' } });
+    expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
+    expect(json(await get(r))).toEqual({ state: 'none' });
+  });
+
+  it('a slot value that is not a minted key: the status reads key-unreadable, never list, and an upload answers write-failed and builds nothing under it (review 2344 F2)', async () => {
+    const r = await rig();
+    await r.stepUp();
+    await put(r, { rows: ROWS });
+    const before = listOf(r);
+    const file = serverSecretPath(r.ccrcDir, NAME_LIST_KEY_SLOT);
+    for (const value of ['', 'c3'.repeat(16), 'A1'.repeat(32)]) {
+      writeFileSync(file, value, { mode: 0o600 });
+      expect(json(await get(r))).toEqual({ state: 'unreadable', reason: 'key-unreadable' });
+      expect(json(await put(r, { rows: ROWS }))).toMatchObject({ error: 'write-failed' });
+      expect(listOf(r)).toEqual(before);
+      expect(json(await get(r))).toEqual({ state: 'unreadable', reason: 'key-unreadable' });
+    }
+    expectNoLeak(r);
+  });
+
+  it('a server with no private store: not-configured, and no key is minted', async () => {
+    const r = await rig({ store: false });
+    await r.stepUp();
+    const res = await put(r, { rows: ROWS });
+    expect(json(res)).toMatchObject({ error: 'not-configured' });
+    expect(res.headers['cache-control']).toBe('no-store');
+    expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
+    expect(json(await get(r))).toEqual({ state: 'unreadable', reason: 'store' });
+    expectNoLeak(r);
+  });
+
+  it('the box token without a cookie opens neither door: refused by the session gate, nothing written', async () => {
+    const r = await rig();
+    for (const method of ['PUT', 'GET'] as const) {
+      const res = await r.send({ method, ...(method === 'PUT' ? { payload: { rows: ROWS } } : {}), cookie: false, headers: { 'x-ccrc-mail-token': BOX_TOKEN } });
+      expect(res.statusCode, `${method} ${res.body}`).toBe(401);
+    }
+    expect(listOf(r)).toEqual({ kind: 'measured', value: { kind: 'none' } });
+    expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
     expectNoLeak(r);
   });
 

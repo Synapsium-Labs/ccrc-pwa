@@ -30,9 +30,15 @@ interface Built { readonly generation: number; readonly key: string; readonly ro
 /** One built list per store, keyed by the store's identity. */
 const BUILT = new WeakMap<NameListStore, Built>();
 
-/** The key slot's value, measured: absent, unreadable or the key. Never logged. */
+/** What `mintNameListKey` makes: 32 bytes as lowercase hex. */
+const MINTED_KEY = /^[0-9a-f]{64}$/;
+
+/** The key slot's value, measured: absent, unreadable or the key. Never logged. A value that is not a minted key (not exactly 64
+ *  lowercase hex: a hand edit or a damaged file) reads `unreadable` (review 2344 F2): a short key would pass the canary once an
+ *  upload rebuilt the list under it, and the status would read `list` while the matcher refused every check under it. */
 export function readNameListKey(ccrcDir: string): ServerSecretRead {
-  return readServerSecretValue(ccrcDir, NAME_LIST_KEY_SLOT);
+  const r = readServerSecretValue(ccrcDir, NAME_LIST_KEY_SLOT);
+  return r.state === 'value' && !MINTED_KEY.test(r.value) ? { state: 'unreadable' } : r;
 }
 
 /** A new key, in memory only: 32 random bytes as hex, from the entropy port. The upload door writes it, after building the

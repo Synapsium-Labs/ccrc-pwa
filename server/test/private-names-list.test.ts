@@ -144,6 +144,20 @@ describe('readPrivateNameList: the one reader, over a fixture HOME and a fresh s
     } finally { chmodSync(file, 0o600); }
   });
 
+  it('a slot value that is not a minted key (not exactly 64 lowercase hex): key-unreadable, never list, even with a list built under it', async () => {
+    const h = home();
+    await writeNameListKey(h.ccrcDir, mintNameListKey(systemEntropy), 1_000, masked);
+    const file = serverSecretPath(h.ccrcDir, NAME_LIST_KEY_SLOT);
+    const bad = ['', 'ab', 'c3'.repeat(16), 'a1'.repeat(31) + 'a', 'a1'.repeat(32) + '0', 'A1'.repeat(32), 'g1'.repeat(32), `${'a1'.repeat(32)}\n`];
+    let at = 1_000;
+    for (const value of bad) {
+      writeFileSync(file, value, { mode: 0o600 });
+      expect(readPrivateNameList(h.store, h.ccrcDir), JSON.stringify(value.length)).toEqual({ state: 'unreadable', reason: 'key-unreadable' });
+      if (value.length > 0) await upload(h, value, ['zz-alpha'], (at += 1));
+      expect(readPrivateNameList(h.store, h.ccrcDir).state, JSON.stringify(value.length)).not.toBe('list');
+    }
+  });
+
   it('a generation that reads and entries that cannot (a list row with its entries gone): store, never none', async () => {
     const h = home();
     const key = mintNameListKey(systemEntropy);
