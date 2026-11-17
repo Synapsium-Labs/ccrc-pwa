@@ -62,14 +62,12 @@ cmd_keep_awake() {   # ccd keep-awake --session <id> --state on|off — set or c
 _keep_awake_ours() {   # id marker -> rc 0 iff $REG/<id>.<marker> is a regular, readable file, not a link, holding exactly the
   # stamp; rc 1 otherwise, never rc 2 (every caller but `off` treats "not provably ours" one way). It sets KEEP_AWAKE_READ
   # to one of four words, so `off` alone tells a foreign marker from one it cannot read: `ours`, `absent` (no entry, -e and
-  # -L both false), `foreign` (readable, other bytes) or `unreadable`. The read is bounded twice: in size (65 bytes, so a
-  # longer file or a NUL, turned into a newline, is not the stamp) and in time (`_plat_timeout 2`, so a FIFO swapped in
-  # between the -f test and the open cannot block). C locale: the same bytes give one verdict under any caller's locale.
-  local LC_ALL=C IFS=' ' f="$REG/$1.$2" v
-  KEEP_AWAKE_READ=absent; [[ -e "$f" || -L "$f" ]] || return 1
-  KEEP_AWAKE_READ=unreadable; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 1
-  v=$( { _plat_timeout 2 head -c 65 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 1
-  KEEP_AWAKE_READ=foreign; [[ "${v%x}" == "$KEEP_AWAKE_STAMP" ]] || return 1
+  # -L both false), `foreign` (readable, other bytes) or `unreadable`. The read is the one bounded field read
+  # (`_fresh_pick_field_to`, review 2336 F3): in size (65 bytes, so a longer file or a NUL, turned into a newline, is not the
+  # stamp) and in time (a FIFO swapped in after the type test cannot block). C locale: one verdict under any caller's locale.
+  local LC_ALL=C IFS=' ' kv
+  _fresh_pick_field_to kv "$1" "$2" 65; case $? in 1) KEEP_AWAKE_READ=absent; return 1 ;; 2) KEEP_AWAKE_READ=unreadable; return 1 ;; esac
+  KEEP_AWAKE_READ=foreign; [[ "$kv" == "$KEEP_AWAKE_STAMP" ]] || return 1
   KEEP_AWAKE_READ=ours
 }
 
@@ -86,11 +84,9 @@ _role_long_lived() {   # id -> rc 0 long-lived | 1 not (no profile entry, or the
   # entry at the route field `profile` is today's behaviour. An entry that is a link, not a regular file or not readable,
   # bytes outside the field's `^[a-z]{1,16}$`, a row that is absent, a key that is absent or not a boolean, or a launch
   # profiles file jq cannot read are all undecidable (rc 2), which every caller reads as long-lived: it fails safe (question
-  # 5). The read is bounded in size (17 bytes) and time (`_plat_timeout 2`: a FIFO swapped in after the -f test cannot block).
-  local LC_ALL=C IFS=' ' f="$REG/$1.profile" p v
-  [[ -e "$f" || -L "$f" ]] || return 1
-  [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
-  p=$( { _plat_timeout 2 head -c 17 -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; p="${p%x}"
+  # 5). The read is the one bounded field read (`_fresh_pick_field_to`, review 2336 F3), 17 bytes and time-bounded.
+  local LC_ALL=C IFS=' ' p v
+  _fresh_pick_field_to p "$1" profile 17; case $? in 1) return 1 ;; 2) return 2 ;; esac
   [[ "$p" =~ ^[a-z]{1,16}$ ]] || return 2
   v=$(jq -r --arg r "$p" '.[$r].longLived | if type == "boolean" then . else error("no boolean") end' "$LAUNCH_PROFILES_JSON" 2>/dev/null) || return 2
   case "$v" in true) return 0 ;; false) return 1 ;; *) return 2 ;; esac
@@ -128,6 +124,21 @@ _fresh_crossing_end() {   # id — a proven renewal ends a set-side crossing (sp
   echo "$(date '+%F %T') crosspool-ended $1: renewal" >> "$REG/swap.log"
   return 0
 }
+_fresh_pick_settle() {   # id cur pick u2 step — record a move once the receipt proved the fresh start. Always 0.
+  # A pick equal to the current account is no move (a stay, or a step that chose it): nothing. Otherwise the pick is the
+  # second writer of `wrapper` beside `cmd_swap` (slug fresh-pick-is-a-swap-row): the stopped session starts a new
+  # conversation, so there is no transcript to carry. Its row and `cmd_swap`'s side effects for an AUTOMATIC move follow:
+  # `swapblocked`, a strand, a rescue wait and a limit wait end, a standing pin is cleared (the automatic path's rule), and a
+  # move between an Anthropic and a non-Anthropic lane moves the typed note's floor. Never `home`, `lastswap` or a pin.
+  [[ "$3" == "$2" ]] && return 0
+  local o=0 n=0
+  _lc_done swap "$1" "" meas.from "$2" meas.wrapper "$3" meas.uuid "$4" meas.org "$(_org_rel "$2" "$3")" dec.reason fresh-pick
+  rm -f -- "$REG/$1.swapblocked" "$REG/$1.swappin" "$REG/$1.swappinnote" "$REG/$1.swappinexp"
+  _strand_clear "$1"; _rescuewait_close "$1" swap; _limitwait_close "$1" swap
+  _is_anthropic_backend "$2" && o=1; _is_anthropic_backend "$3" && n=1; (( o == n )) || _typed_note "$1" moved
+  echo "$(date '+%F %T') fresh-pick $1: $2 -> $3 step=$5" >> "$REG/swap.log"
+  return 0
+}
 # THE FRESH PICK (spec §3.4 C56 and C57, Table 3.4a; plan w1-ccd-arms Task 6): the account a renewal's fresh start lands on,
 # from the ordered list on the route record (`acctorder`), the designation's and the renewal lane's, never ccd's to write.
 # The soft line: step 1 and step 2 take an account only while its load (`_limit_score`, the larger window) is UNDER it.
@@ -148,14 +159,22 @@ _fresh_pick_ok() {   # account side -> rc 0 the account may take this session at
 _fresh_pick_field_to() {   # var id field cap -> rc 0 var = the field's bytes, at most cap (a NUL reads as a newline) | 1 no entry
   # | 2 a link, not a regular file, not readable, or the read failed, or `$REG` is not a searchable directory (it cannot say
   # whether an entry stands, so never "no entry": review 2336 F2). Bounded in size and in time (`_plat_timeout 2`), so a
-  # FIFO swapped in after the type test cannot block, as `_role_long_lived` reads `profile`; never `_route_get`, whose read is not.
-  local LC_ALL=C IFS=' ' f="$REG/$2.$3" v; printf -v "$1" ''
-  [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$f" || -L "$f" ]] || return 1; [[ -L "$f" || ! -f "$f" || ! -r "$f" ]] && return 2
-  v=$( { _plat_timeout 2 head -c "$4" -- "$f" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${v%x}"
+  # FIFO swapped in after the type test cannot block; never `_route_get`, whose read is not. THE ONE BOUNDED FIELD READ of
+  # this library (review 2336 F3): `_keep_awake_ours` and `_role_long_lived` read their fields through it too.
+  local LC_ALL=C IFS=' ' __ff="$REG/$2.$3" __fv; printf -v "$1" ''   # `__`-named, so no caller's var is shadowed
+  [[ -d "$REG" && -x "$REG" ]] || return 2; [[ -e "$__ff" || -L "$__ff" ]] || return 1; [[ -L "$__ff" || ! -f "$__ff" || ! -r "$__ff" ]] && return 2
+  __fv=$( { _plat_timeout 2 head -c "$4" -- "$__ff" | tr '\000' '\n'; } 2>/dev/null && printf x) || return 2; printf -v "$1" '%s' "${__fv%x}"
 }
-# shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by the fresh start in PR C2
-_fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|none; rc 1, var empty, FRESH_PICK_WHY = the cause
-  # CALLED BY NOTHING YET (PR C1): PR C2 adds step 3 and `stay` and calls it last in the fresh start's re-measure. It
+_fresh_pick_least_to() {   # var account load -> var = "<account> <load>", the least loaded so far. Always 0.
+  # A tie goes first to another account in the current account's organization, then to the earlier listed, the one already
+  # held (account organization plan carry K1): `_swap_target`'s own rule, `_org_tie` in ccd/ccd, the one writer of it (review
+  # 2360 F5), over `_fresh_pick_to`'s `cur` and its label table. The current account is never `same` to itself (F1).
+  local LC_ALL=C IFS=' ' __lb="${!1% *}" __lt="${!1#* }"
+  [[ -z "${!1}" ]] || (( 10#$3 < 10#$__lt )) || { (( 10#$3 == 10#$__lt )) && _org_tie "$2" "$__lb"; } && printf -v "$1" '%s' "$2 $3"; return 0
+}
+# shellcheck disable=SC2034  # FRESH_PICK_STEP and FRESH_PICK_WHY are the answer, read by `cmd_hibernate` in ccd/ccd
+_fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_PICK_STEP = 1|2|3|stay|none; rc 1, var empty, FRESH_PICK_WHY = the cause
+  # Called last in the fresh start's re-measure (`cmd_hibernate --roll --fresh`, PR C2), before the act. It
   # WRITES NOTHING, except `_authdead`'s D-3524 expiry of a stale marker (`_fresh_pick_ok`): no other registry field, no
   # stamp, no route row, no log line (the hold-down is read through its decider, `_route_holddown_holds`, which writes
   # nothing either). No `acctorder` entry is today's behaviour: the current account. The C locale makes the load parse
@@ -169,11 +188,17 @@ _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_
   # passes neither leaves one clause, its first failed check in one word (`_fresh_pick_ok`'s, `load` or `class`). A class of
   # `default` or none has no step 2 and no hold, and its gate still asks `_serviceable` with the id (main's signature,
   # serviceability A's seam), which answers servable unless a set side's account has no continuity record.
-  local LC_ALL=C IFS=' ' list side cls fb='' hold='' a s p2='' why='' rc
+  # STEP 3 (PR C2): no step 1 or 2 account, so the least loaded account at any MEASURED load whose gate on the class is rc 0
+  # (unless the hold holds), else the least loaded on the fallback; a tie by `_fresh_pick_least_to`. STAY (review 2148 F5): no
+  # step picks, and the current account passes the hard filter with a gate on the class or the fallback that is not rc 1
+  # (an unmeasured rc 2 never moves the Overlord, C46); a gate that is rc 1 on both classes refuses, since C56 leaves
+  # readiness at `stranded` only when no account can serve. With a list standing, an empty current account refuses.
+  local LC_ALL=C IFS=' ' list side cls fb='' hold='' a s p2='' b3='' b3f='' why='' rc cur="$3" corg='' corgr=''; local -A corgs=()   # `_org_tie`'s
   printf -v "$1" ''; FRESH_PICK_STEP=none; FRESH_PICK_WHY=''
   _fresh_pick_field_to list "$2" acctorder $((ROUTE_LIST_MAX_BYTES + 1)); rc=$?
   (( rc == 1 )) && { printf -v "$1" '%s' "$3"; return 0; }
   (( rc == 0 )) && _acctorder_valid "$list" || { FRESH_PICK_WHY="the ordered account list on $REG/$2.acctorder cannot be read; the server writes it again at its next sweep"; return 1; }
+  [[ -n "$3" ]] || { FRESH_PICK_WHY="the session's account on $REG/$2.wrapper cannot be read"; return 1; }
   side=$(_session_pool_side "$2"); [[ "$side" == set-unreadable || "$side" == set-malformed ]] && { FRESH_PICK_WHY=$(_pool_set_undecidable_why "${side#set-}" "$2"); return 1; }
   _fresh_pick_field_to cls "$2" class 65; rc=$?
   (( rc == 1 )) || { (( rc == 0 )) && _route_valid class "$cls"; } || { FRESH_PICK_WHY="the class on $REG/$2.class cannot be read; the designation writes it again"; return 1; }
@@ -181,11 +206,16 @@ _fresh_pick_to() {   # var id cur -> rc 0, var = the account to start on, FRESH_
   [[ -n "$cls" ]] && [[ -e "$REG/$2.degraded" || -L "$REG/$2.degraded" ]] && { _route_holddown_holds "$2"; (( $? != 1 )) && hold=1; }
   for a in ${list//,/ }; do
     _fresh_pick_ok "$a" "$side" || { why+="; $a $FRESH_PICK_FAIL"; continue; }
-    s=$(_limit_score "$a"); [[ "$s" =~ ^[0-9]{1,3}$ ]] && (( 10#$s < FRESH_PICK_SOFT_PCT )) || { why+="; $a load"; continue; }
-    [[ -z "$hold" ]] && _class_gate "$a" "$cls" "$2" && { printf -v "$1" '%s' "$a"; FRESH_PICK_STEP=1; return 0; }
-    [[ -n "$fb" && -z "$p2" ]] && _class_gate "$a" "$fb" "$2" && { p2=$a; continue; }
-    why+="; $a class"
+    s=$(_limit_score "$a"); [[ "$s" =~ ^[0-9]{1,3}$ ]] || { why+="; $a load"; continue; }
+    if [[ -z "$hold" ]] && _class_gate "$a" "$cls" "$2"; then
+      (( 10#$s < FRESH_PICK_SOFT_PCT )) && { printf -v "$1" '%s' "$a"; FRESH_PICK_STEP=1; return 0; }; _fresh_pick_least_to b3 "$a" "$s"
+    elif [[ -n "$fb" ]] && _class_gate "$a" "$fb" "$2"; then
+      (( 10#$s < FRESH_PICK_SOFT_PCT )) && [[ -z "$p2" ]] && p2=$a; _fresh_pick_least_to b3f "$a" "$s"
+    else why+="; $a class"; fi
   done
   [[ -n "$p2" ]] && { printf -v "$1" '%s' "$p2"; FRESH_PICK_STEP=2; return 0; }
+  b3=${b3:-$b3f}; [[ -n "$b3" ]] && { printf -v "$1" '%s' "${b3% *}"; FRESH_PICK_STEP=3; return 0; }
+  _fresh_pick_ok "$3" "$side" && { _class_gate "$3" "$cls" "$2"; (( $? != 1 )) || { [[ -n "$fb" ]] && { _class_gate "$3" "$fb" "$2"; (( $? != 1 )); }; }; } \
+    && { printf -v "$1" '%s' "$3"; FRESH_PICK_STEP=stay; return 0; }
   FRESH_PICK_WHY="no account on the ordered list can take it: ${why#; }"; return 1
 }

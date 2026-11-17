@@ -191,10 +191,11 @@ since a long-lived session's start or wake holds prompts in `carded` too (F7).
 
 ### migration-slot
 
-The migration is entry 89 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87 and renewal readings A
-(#2962) 88 on main, after responses B (#2914) took 84. Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the coordinator's word of 2026-11-17); the
-landing merges absorbed decision model A (86 -> 87, mail 22510), row revisions (87 -> 88, mail 22654) and renewal readings A (88 -> 89, mail 22766), under
-this run's standing renumber license. Others may hold 89 too; the second
+The migration is entry 90 on this branch: overlaps (#2949) landed 85, decision model A (#2948) 86, row revisions (#2965) 87, renewal readings A
+(#2962) 88 and remaining work A (#2951) 89 on main, after responses B (#2914) took 84. Fix round 1 of review 2312 absorbed overlaps (85 -> 86, on the
+coordinator's word of 2026-11-17); the landing merges absorbed decision model A (86 -> 87, mail 22510), row revisions (87 -> 88, mail 22654), renewal
+readings A (88 -> 89, mail 22766, its four source conflicts on the coordinator's word, mail 22774) and remaining work A (89 -> 90, mail 22872), under
+this run's standing renumber license. Others may hold 90 too; the second
 to land renumbers on the coordinator's word. Re-measure the
 slot before merge, as its comment says.
 Moving past decision model A's entry broke that PR's migration case (`decision-model-records.test.ts`), which assumed its entry was the

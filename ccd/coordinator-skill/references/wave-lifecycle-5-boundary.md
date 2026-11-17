@@ -51,6 +51,20 @@ the ordinary path verifies the head that is landing. That rule ends with the wav
 back to `working` (a send-back, or a lost merge race recorded from `merging`) or a fresh `wave-done` arrives, submit
 the worker's fingerprint exactly as the worker reports it.
 
+**State what is left.** At the plan and at every wave boundary, state the waves left as a range, with a reason, through
+`ccrc-api programme remaining`. State `0..0` before you close your last run: the door needs an open run of your
+programme. `runId` names the run whose boundary this is (leave it out at the plan). What the programme waits on goes in
+`edges`, each a `needs-landed` edge on another programme's run (`{"predicate":"run-closed","runId":N}`) or on a pull
+request that run's lineage lists (`{"predicate":"pr-merged","runId":N,"pr":P}`), or a `needs-decision` edge on an open
+item of your own programme (`{"predicate":"operator-confirms","itemId":N}`), each with a one-line `why`. Only the server
+clears an edge, when it measures the target; a later statement that leaves an edge out does not end it.
+
+```bash
+"$API" programme remaining <slug> --json - <<'JSON'
+{"lo":2,"hi":3,"reason":"wave 4 of the plan, and its review","runId":123}
+JSON
+```
+
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.

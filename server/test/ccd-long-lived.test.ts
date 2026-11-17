@@ -129,3 +129,63 @@ describe('_role_long_lived reads FLEET_ROLES.longLived through the launch row (s
     expect(fs.readdirSync(REG()).sort()).toEqual(before);
   });
 });
+
+// Review 2336 F3 (the Overlord W1 ccd arms, PR C2): `_keep_awake_ours` and `_role_long_lived` each read one registry field
+// bounded in size and time, as `_fresh_pick_field_to` does, so both move onto that one reader. These rows pin both
+// functions' answers over every entry shape BEFORE the move, green on the tree before it; the move changes no row.
+describe('the bounded field reads of _keep_awake_ours and _role_long_lived, pinned before they share one reader (review 2336 F3)', () => {
+  const at = (field: string): string => path.join(REG(), `${ID}.${field}`);
+  type Make = (f: string) => void;
+  const SHAPES: ReadonlyArray<readonly [string, Make]> = [
+    ['absent', () => { /* nothing */ }],
+    ['a dangling link', (f) => { fs.symlinkSync(`${f}.nowhere`, f); }],
+    ['a directory', (f) => { fs.mkdirSync(f); }],
+    ['a FIFO', (f) => { h.sh(`mkfifo '${f}'`); }],
+  ];
+  const ours = (pre = ''): string => h.sh(`${pre} _keep_awake_ours ${ID} no-roll; echo "$?:$KEEP_AWAKE_READ"`);
+
+  it('_keep_awake_ours: one answer per entry shape', () => {
+    const rows: Array<readonly [string, Make, string]> = [
+      ...SHAPES.map(([n, m]) => [n, m, n === 'absent' ? '1:absent' : '1:unreadable'] as const),
+      ['the stamp', (f) => { fs.writeFileSync(f, 'keep-awake v1'); }, '0:ours'],
+      ['a link to the stamp', (f) => { fs.writeFileSync(`${f}.real`, 'keep-awake v1'); fs.symlinkSync(`${f}.real`, f); }, '1:unreadable'],
+      ['the stamp and a newline', (f) => { fs.writeFileSync(f, 'keep-awake v1\n'); }, '1:foreign'],
+      ['the stamp and a NUL', (f) => { fs.writeFileSync(f, 'keep-awake v1\0'); }, '1:foreign'],
+      ['empty', (f) => { fs.writeFileSync(f, ''); }, '1:foreign'],
+      ['70 bytes opening with the stamp', (f) => { fs.writeFileSync(f, `keep-awake v1${'x'.repeat(57)}`); }, '1:foreign'],
+    ];
+    for (const [name, make, want] of rows) {
+      fs.rmSync(at('no-roll'), { recursive: true, force: true }); fs.rmSync(`${at('no-roll')}.real`, { force: true });
+      make(at('no-roll'));
+      expect(ours(), name).toBe(want);
+    }
+  });
+
+  it('_role_long_lived: one answer per entry shape', () => {
+    const rows: Array<readonly [string, Make, number]> = [
+      ...SHAPES.map(([n, m]) => [n, m, n === 'absent' ? 1 : 2] as const),
+      ['a link to a long-lived row', (f) => { fs.writeFileSync(`${f}.real`, 'overlord'); fs.symlinkSync(`${f}.real`, f); }, 2],
+      ['a NUL after a row', (f) => { fs.writeFileSync(f, 'overlord\0'); }, 2],
+      ['17 bytes', (f) => { fs.writeFileSync(f, 'q'.repeat(17)); }, 2],
+      ['16 bytes, no such row', (f) => { fs.writeFileSync(f, 'q'.repeat(16)); }, 2],
+    ];
+    for (const [name, make, want] of rows) {
+      fs.rmSync(profileAt(), { recursive: true, force: true }); fs.rmSync(`${profileAt()}.real`, { force: true });
+      make(profileAt());
+      expect(rc(), name).toBe(want);
+    }
+  });
+
+  // The one change the shared reader brings, made on its own before the move (slug field-reads-refuse-an-unsearchable-registry):
+  // a registry that cannot be searched cannot say whether an entry stands, so it is never "absent" (review 2336 F2's rule).
+  // Before, `off` answered `released` over markers it could not see, and a profile it could not see read "not long-lived".
+  it('a registry that cannot be searched: unreadable and undecidable, never absent (skipped as root)', () => {
+    if (process.getuid?.() === 0) return;
+    fs.writeFileSync(at('no-roll'), 'keep-awake v1'); fs.writeFileSync(profileAt(), 'overlord');
+    fs.chmodSync(REG(), 0o600);
+    try {
+      expect(ours()).toBe('1:unreadable');
+      expect(rc()).toBe(2);
+    } finally { fs.chmodSync(REG(), 0o755); }
+  });
+});
