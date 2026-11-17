@@ -4147,6 +4147,45 @@ rows `c42.md` names; the browser file passes in Chrome at 390 and 1280; ui's typ
 topology-clean guards pass.
 **Rollback.** A plain revert.
 
+### Task C43: task notes leave docs/superpowers/plans/, and the ledger guard holds new specs and plans to the review judge's layout (D-8719) — now
+
+**Why.** The operator ruled on 2026-11-17 that this repo follows its review judge's standard and fixes the judge's
+findings in-repo. The judge's one blocking reason on every programme PR was `spec-misplaced`: the PR's task note at
+`docs/superpowers/plans/<plan>/<task>.md`. Its layout rule (format F1) reads only files a PR adds: under the specs
+directory a new file is `YYYY-MM-DD-<slug>-design.md` or its `-design.promise-ids.json`, under the plans directory
+`YYYY-MM-DD-<slug>.md`, each directly in that directory, the slug `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` and at most 40
+characters. Its settings have no key for a notes directory, so the fix is ours. `docs/superpowers/programs/desktop-polish/c43.md`
+holds each changed place, each row and what reds it, the mutants and the open-PR measure.
+
+**Steps.**
+- [x] The new route: a per-task note is ADDED at `docs/superpowers/programs/<programme>/<task-or-pr>.md`; notes already
+  on `main` stay where they are. Every place that told a worker or a coordinator the old route now names the new one.
+- [x] The layout arm, red first: the ledger guard (the one existing mechanism) refuses an added or copied file, or a
+  rename's target, under `docs/superpowers/specs/` or `docs/superpowers/plans/` that is not one of the shapes above, as
+  `layout`, with the path and the shape it should take, on every branch and with no trailer escape; `enforce`, `warn`
+  and the fail-closed exit are kept. 13 rows were red before the arm (measured); 16 mutants are each killed (measured).
+- [x] CLAUDE.md: one bullet under "Conventions that shape every change" says we follow the judge's standard, names its
+  check, and points at the guard's layout arm. The judge's name leaves the committed hashed private-name list (the
+  operator's ruling of 2026-11-17: "yeah remove it from private names").
+- [x] The open-PR measure: 8 of 20 open PRs add a file the arm refuses (read-only, listed in `c43.md`).
+
+**Files.** `.github/ci/ledger-guard.mjs`, `.github/workflows/ci.yml` (the job's comment), `server/test/ci-ledger-guard.test.ts`,
+`ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15, and one unpinned sentence trimmed for the
+skill-size cap), `server/test/coordinator-skill.test.ts` (its
+pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `shared/private-names.mjs` and
+`server/test/private-names-characterization.test.ts` (the judge's row removed on the operator's ruling of 2026-11-17,
+and the digest re-pinned), this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
+
+- [x] Fix round 1 (review 2396): rows for a one-digit month or day, an uppercase or digit-first slug and text after
+  the extension; the layout rows assert the refusal line and the path; the README's warn-only sentence corrected; a
+  spec's images and mockup pages go under `docs/design/<spec file name less its extension>/` (the guard's message,
+  CLAUDE.md and CONTRIBUTING).
+
+**Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, skill-size-ratchet, the
+private-names suites, single-definition, deviation-refs, dtbd and topology-clean pass; the guard passes on this branch
+against `origin/main`.
+**Rollback.** A plain revert; the open PRs that add a note under `plans/<plan>/` pass the guard again.
+
 ### Task C44: the masker closes the fail-open forms C41 left, and bounds the cost of its re-reads (D-8728) — now
 
 **Why.** Review 2411 read C41 (#2966) and measured three forms in which the masker's ruled fail-closed claims do not
@@ -4562,6 +4601,11 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   as dead code. Ruled with it: Q8's default A applies to inline code in assistant messages, as the plan names it. The
   Docs reader's `doc-body` and the compaction recap's `compaction-body` keep today's inline code until the operator
   rules otherwise.
+- **D-8719** — `c43-notes-leave-plans`: Task C43, issued on 2026-11-17. A per-task note is added at
+  `docs/superpowers/programs/<programme>/<task-or-pr>.md`, no longer under `docs/superpowers/plans/<plan>/`, and the ledger
+  guard's layout arm refuses a new file under `docs/superpowers/specs/` or `docs/superpowers/plans/` outside the review
+  judge's layout (format F1), on every branch and with no trailer escape (the operator's ruling of 2026-11-17: follow the
+  judge's standard). Notes already on `main` stay where they are. Further departures, by slug, in `c43.md`.
 
 ## Out of scope
 

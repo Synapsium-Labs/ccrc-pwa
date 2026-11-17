@@ -106,7 +106,7 @@ describe('the scan, over twenty synthetic lines', () => {
 describe('the committed list and its consumer', () => {
   it('matchLine on a line that spells the canary hits its h8, and the digest is unchanged', () => {
     expect(matchLine(`a ${CANARY} b`, PRIVATE_NAMES)).toEqual([CANARY_H8]);
-    expect(PRIVATE_NAMES_DIGEST).toBe('ebfc36e51ca156f9c5dde591e2fcf235');
+    expect(PRIVATE_NAMES_DIGEST).toBe('2e2cc68002ad4dfffab0fce75c18f614');
     expect(entriesDigest(PRIVATE_NAMES)).toBe(PRIVATE_NAMES_DIGEST);
   });
 
