@@ -23,6 +23,19 @@
 //               misses (`image-set()`, CSS escapes inside `url`) rest on the CSP (M5.B10).
 //   5. LINKS    `href` and `xlink:href` off every `a` and `area`, the text kept, the target in `title` and in `links`.
 //   6. INNER    the CSP meta first in `<head>`, then the serialised clone.
+//
+// This inliner is LEGITIMATELY DIFFERENT from `buildMockupSrcdoc`'s (`load.ts`), not a second copy of it (CLAUDE.md,
+// "Consolidate, don't duplicate"): (1) another cap: the srcdoc build bounds the CHARACTERS of the viewer's frame string
+// (`MOCKUP_MAX_SRCDOC_CHARS`, one string it measures as it grows), while the saved file's cap is the FINAL file's bytes,
+// the inner document escaped into the `srcdoc` attribute plus the wrapper, which only the builder (`buildExport.tsx`) can
+// measure, so this file takes the assets the builder hands in and bounds only the runaway case (`DOCS_EXPORT_MAX_BYTES`
+// of data: URLs); (2) another strip: the srcdoc build leaves every non-inlined reference as written because its CSP is
+// the wall, while the saved file neutralises them (`url("data:,")`, a dropped `@import`, a removed attribute) so that no
+// URL survives for a reader to follow after the page is saved; (3) another output: the srcdoc build answers a string,
+// while this answers the stripped DOM clone, serialised once at the end, which is what lets the strip work on parsed
+// attributes and not on markup text. What the two share they share: `extractMockupRefs`, `parseSrcset`, `base64Of` and
+// `css.ts`'s scanner are imported from `load.ts` and `css.ts`, never reimplemented, and a file is keyed by its pin as
+// the result's `assets` map is.
 // A missing asset keeps its element without its URL; an `img` or `input[type=image]` takes the closed missing sentence as
 // its `alt`, and every asset none of whose uses was written is listed once, in DOM order.
 import { docRepoPath, docsApi, resolveDocRef, type DocSectionSlug } from '../../../../shared/docs';
@@ -232,13 +245,6 @@ function stripCssText(text: string): string {
 // ---------------------------------------------------------------------------------------------------------------
 // Step 2: inline
 // ---------------------------------------------------------------------------------------------------------------
-/** The file a reference reads, as `<section>/<path>`, or null when it is not a docs file. */
-function fileKeyOf(ref: MockupRef): string | null {
-  const slash = ref.basePath.indexOf('/');
-  const r = resolveDocRef({ section: ref.basePath.slice(0, slash) as DocSectionSlug, path: ref.basePath.slice(slash + 1) }, ref.raw);
-  return r.kind === 'doc' ? `${r.section}/${r.path}` : null;
-}
-
 /** How the sheet and the provenance name an asset: its repo path, or the reference as written where it does not resolve. */
 function labelOf(ref: MockupRef): string {
   const slash = ref.basePath.indexOf('/');
@@ -273,11 +279,13 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
   const { plan } = assets;
   const project = plan.context.project;
   const rowByKey = new Map<string, MockupAssetRow>(plan.rows.map((r) => [r.ref.key, r]));
+  // A file is keyed by its pin's API URL, as the result's `assets` map is: an admitted row already carries its pin, and
+  // within one attempt's context a path has exactly one pin, so no reference is resolved a second time here.
   const first = new Map<string, { readonly ref: MockupRef; readonly verdict: InlineVerdict }>();
   for (const row of plan.rows) {
     if (row.verdict.v !== 'inline' || row.size === null) continue;
-    const key = fileKeyOf(row.ref);
-    if (key !== null && !first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
+    const key = docsApi.file(project, row.verdict.pin);
+    if (!first.has(key)) first.set(key, { ref: row.ref, verdict: row.verdict });
   }
   const seen = new Set<string>(); // every asset a use of which was cut or could not be built, first seen first
   const written = new Set<string>(); // every asset a use of which was written into the Document
@@ -294,10 +302,10 @@ function inlineAssets(extract: MockupExtract, assets: MockupAssetResult): { read
    *  it is not inlined. */
   const build = (row: MockupAssetRow, depth: number): BuiltUse | null => {
     if (row.verdict.v !== 'inline') return null;
-    const key = fileKeyOf(row.ref);
-    const canon = key === null ? undefined : first.get(key);
-    if (key === null || canon === undefined) return null;
-    const asset = assets.assets.get(docsApi.file(project, canon.verdict.pin));
+    const key = docsApi.file(project, row.verdict.pin);
+    const canon = first.get(key);
+    if (canon === undefined) return null;
+    const asset = assets.assets.get(key);
     if (asset === undefined) return null;
     const mime = canon.verdict.mime;
     const path = docRepoPath(canon.verdict.pin.section, canon.verdict.pin.path);
