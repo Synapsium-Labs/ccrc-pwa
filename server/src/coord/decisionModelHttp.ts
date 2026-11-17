@@ -17,7 +17,10 @@
 //
 // THE BODY IS CAPPED WHILE IT IS READ (review 2324 F6): reading stops at the first chunk past 64 KiB.
 import type { ReadFailure } from '../../../shared/agent-protocol.js';
-import { DECISION_DEADLINE_MS, DECISION_RETRY_MIN_LEFT_MS, type DecisionHostKind } from '../../../shared/decisionModel.js';
+import {
+  DECISION_DEADLINE_MS, DECISION_MODEL_KEY_SLOT, DECISION_RETRY_MIN_LEFT_MS, type DecisionHostKind,
+} from '../../../shared/decisionModel.js';
+import { readServerSecretValue } from './ledgersSecrets.js';
 import type { TimePorts } from '../time/ports.js';
 import { isLiteralHost } from './decisionModel.js';
 import type { DecisionCall, DecisionFetch, DecisionModel, DecisionWireRequest } from './decisionModelPort.js';
@@ -27,6 +30,13 @@ export const DECISION_ANSWER_MAX_BYTES = 65536;
 
 /** What the key reader answers: the value, or why there is none, in the one absent/unreadable vocabulary (D-1438). */
 export type DecisionKeyRead = { kind: 'value'; value: string } | { kind: ReadFailure };
+
+/** The key, read from its `.server` slot at each call (question 6): absent, unreadable, or the value, never folded. Never
+ *  logged; the adapter sends it only as the bearer header. */
+export function readDecisionModelKey(ccrcDir: string): DecisionKeyRead {
+  const r = readServerSecretValue(ccrcDir, DECISION_MODEL_KEY_SLOT);
+  return r.state === 'value' ? { kind: 'value', value: r.value } : { kind: r.state === 'absent' ? 'absent' : 'unreadable' };
+}
 
 export interface DecisionHttpDeps {
   fetch: DecisionFetch;

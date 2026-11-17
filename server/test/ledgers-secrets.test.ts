@@ -28,8 +28,12 @@ import { SecretMasker, fingerprintGeneration, fingerprintOf, fingerprintRow, typ
 import { loadConfig, reloadRoster } from '../src/config.js';
 import {
   OPERATOR_SECRETS_DIR, OperatorSecretBadSlot, operatorSecretLaneId, operatorSecretPath, operatorSecretRows, readOperatorSecretMeta,
-  readStoredSecrets, removeOperatorSecret, sweepOperatorSecretTemps, withOperatorSecretRows, writeOperatorSecret,
+  OperatorSecretStoreUnsafe, SERVER_SECRETS_DIR, readServerSecretMeta, readServerSecretValue, removeServerSecret, serverSecretLaneId,
+  serverSecretPath, readStoredSecrets, removeOperatorSecret, sweepOperatorSecretTemps, withOperatorSecretRows, writeOperatorSecret,
+  writeServerSecret,
 } from '../src/coord/ledgersSecrets.js';
+import { readDecisionModelKey } from '../src/coord/decisionModelHttp.js';
+import { DECISION_MODEL_KEY_SLOT } from '../../shared/decisionModel.js';
 import { SECRET_BODY_LIMIT, registerLedgerOperatorRoutes } from '../src/coord/ledgersRoutes.js';
 import Fastify from 'fastify';
 import { RUN_MIN_BYTES } from '../src/accounts/shapes.js';
@@ -1945,5 +1949,174 @@ describe('a name that differs from a stored one only by case is refused (review 
     writeFileSync(path.join(dir, 'other-slot.secret'), 'x', { mode: 0o600 });
     expect((await save(r, id, mark())).statusCode).toBe(200);
     expect(readdirSync(dir).sort()).toEqual(['api-key.json', 'api-key.secret', 'other-slot.secret']);
+  });
+});
+
+// Overlord W2, decision model B (plan w2-decision-model.md, Task 6): the `.server` slot API is proved for the name list's key in
+// `private-names-list.test.ts` (round trip at 0600, absent against unreadable, the masker's re-key, the start-up sweep, removal,
+// a bad slot name, `.server` as no programme). This block adds only what that file does not: `readServerSecretMeta`, the
+// `decision-model-key` slot itself, and `readDecisionModelKey`. Fixture HOMEs only, fixture keys only.
+describe('the decision model\'s key slot (the .server slot API, decision model B)', () => {
+  const KEY = 'fixture-key-0123456789abcdef-not-real-0';
+  const masked = (): 'masked' => 'masked';
+  const ccrcDir = (): string => {
+    const dir = path.join(mkTmp('ccrc-decision-key-'), '.ccrc');
+    mkdirSync(dir, { recursive: true });
+    return dir;
+  };
+  const serverDir = (dir: string): string => path.dirname(serverSecretPath(dir, DECISION_MODEL_KEY_SLOT));
+  const mkTop = (dir: string): void => { mkdirSync(path.join(dir, OPERATOR_SECRETS_DIR), { recursive: true, mode: 0o700 }); };
+
+  it('the slot is decision-model-key, in the .server directory, on its own masker lane', () => {
+    expect(DECISION_MODEL_KEY_SLOT).toBe('decision-model-key');
+    expect(serverSecretLaneId(DECISION_MODEL_KEY_SLOT)).toBe('operator-secret:.server:decision-model-key');
+    expect(serverSecretPath('/x/.ccrc', DECISION_MODEL_KEY_SLOT)).toBe(`/x/.ccrc/${OPERATOR_SECRETS_DIR}/${SERVER_SECRETS_DIR}/decision-model-key.secret`);
+  });
+
+  it('readServerSecretMeta: null before a write; the record after (masked, setAt, no tail with tail none); {setAt: null} with the record gone', async () => {
+    const dir = ccrcDir();
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toBeNull();
+    const written = await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 7_000, masked, { tail: 'none' });
+    expect(written).toEqual({ setAt: 7_000, tail: '', masked: true });
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ setAt: 7_000, tail: '', masked: true });
+    const record = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT).replace(/\.secret$/, '.json');
+    expect(readFileSync(record, 'utf8')).not.toContain(KEY.slice(-4));
+    // a record that is gone, or one this build cannot parse, still says the slot holds a value
+    writeFileSync(record, 'not json');
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ setAt: null });
+    rmSync(record);
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ setAt: null });
+    // never the value
+    expect(JSON.stringify(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT))).not.toContain(KEY);
+  });
+
+  it('readServerSecretMeta: the shown tail of a write without tail none, a masker refusal, a bad slot, and what is not a regular file', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, 'other-key', 'Z'.repeat(40), 1, masked);
+    expect(readServerSecretMeta(dir, 'other-key')).toEqual({ setAt: 1, tail: 'ZZZZ', masked: true });
+    await writeServerSecret(dir, 'refused-key', 'Z'.repeat(40), 2, () => 'too-short');
+    expect(readServerSecretMeta(dir, 'refused-key')).toMatchObject({ setAt: 2, masked: false });
+    expect(readServerSecretMeta(dir, '../x')).toBeNull();
+    expect(readServerSecretMeta(dir, 'A/B')).toBeNull();
+    // a directory or a link where the value file should be holds no value
+    mkdirSync(path.join(serverDir(dir), 'dir-key.secret'));
+    expect(readServerSecretMeta(dir, 'dir-key')).toBeNull();
+    symlinkSync(serverSecretPath(dir, 'other-key'), path.join(serverDir(dir), 'link-key.secret'));
+    expect(readServerSecretMeta(dir, 'link-key')).toBeNull();
+  });
+
+  it('readServerSecretMeta: a value file that cannot be measured reads unreadable, not null', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    chmodSync(serverDir(dir), 0o000);
+    try {
+      expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ unreadable: true });
+    } finally {
+      chmodSync(serverDir(dir), 0o700);
+    }
+  });
+
+  it('the key round-trips through write, read and remove, and removal leaves no meta', async () => {
+    const dir = ccrcDir();
+    const register = vi.fn(masked);
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 5, register, { tail: 'none' });
+    expect(register).toHaveBeenCalledWith('operator-secret:.server:decision-model-key', KEY, { beside: false });
+    const file = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT);
+    expect(statSync(file).mode & 0o777).toBe(0o600);
+    expect(readServerSecretValue(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ state: 'value', value: KEY });
+    expect(await removeServerSecret(dir, DECISION_MODEL_KEY_SLOT)).toBe('removed');
+    expect(readServerSecretValue(dir, DECISION_MODEL_KEY_SLOT)).toEqual({ state: 'absent' });
+    expect(readServerSecretMeta(dir, DECISION_MODEL_KEY_SLOT)).toBeNull();
+    expect(readdirSync(serverDir(dir))).toEqual([]);
+    expect(await removeServerSecret(dir, DECISION_MODEL_KEY_SLOT)).toBe('none');
+  });
+
+  it('removing the decision key leaves another server slot alone', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 5, masked, { tail: 'none' });
+    await writeServerSecret(dir, 'private-names-key', 'N'.repeat(40), 6, masked, { tail: 'none' });
+    await removeServerSecret(dir, DECISION_MODEL_KEY_SLOT);
+    expect(readServerSecretValue(dir, 'private-names-key')).toEqual({ state: 'value', value: 'N'.repeat(40) });
+  });
+
+  it('readDecisionModelKey: absent with no store, no server directory and no file; the value once written', async () => {
+    const dir = ccrcDir();
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    mkTop(dir);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    mkdirSync(serverDir(dir), { mode: 0o700 });
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    // read at each call: a rewrite is seen at once, and a removal too
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, `${KEY}-2`, 2, masked, { tail: 'none' });
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: `${KEY}-2` });
+    await removeServerSecret(dir, DECISION_MODEL_KEY_SLOT);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'absent' });
+  });
+
+  it('readDecisionModelKey: unreadable (never absent, never the value) for a directory, a link, an open server directory or a store of another mode', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    const file = serverSecretPath(dir, DECISION_MODEL_KEY_SLOT);
+    // the value file replaced by a directory
+    rmSync(file);
+    mkdirSync(file);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    rmSync(file, { recursive: true });
+    // ... by a link to a file that holds a value
+    const elsewhere = path.join(path.dirname(dir), 'planted');
+    writeFileSync(elsewhere, KEY);
+    symlinkSync(elsewhere, file);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    rmSync(file);
+    // a regular file again, in a server directory open to others
+    writeFileSync(file, KEY, { mode: 0o600 });
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+    chmodSync(serverDir(dir), 0o755);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    chmodSync(serverDir(dir), 0o700);
+    // ... and a store open to others
+    chmodSync(path.join(dir, OPERATOR_SECRETS_DIR), 0o755);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'unreadable' });
+    chmodSync(path.join(dir, OPERATOR_SECRETS_DIR), 0o700);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+  });
+
+  it('a write into a server directory open to others is refused, and nothing is written', async () => {
+    const dir = ccrcDir();
+    mkTop(dir);
+    mkdirSync(serverDir(dir), { mode: 0o700 });
+    chmodSync(serverDir(dir), 0o755);
+    await expect(writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' })).rejects.toThrow(OperatorSecretStoreUnsafe);
+    expect(readdirSync(serverDir(dir))).toEqual([]);
+  });
+
+  it('a programme named .server is refused by the slug shape: no save, no read, no remove reaches the server directory', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    await expect(writeOperatorSecret(dir, SERVER_SECRETS_DIR, 'api-key', 'V'.repeat(40), 2, masked)).rejects.toThrow(OperatorSecretBadSlot);
+    await expect(removeOperatorSecret(dir, SERVER_SECRETS_DIR, DECISION_MODEL_KEY_SLOT)).rejects.toThrow(OperatorSecretBadSlot);
+    expect(readOperatorSecretMeta(dir, SERVER_SECRETS_DIR, DECISION_MODEL_KEY_SLOT)).toBeNull();
+    expect(readStoredSecrets(dir, SERVER_SECRETS_DIR)).toEqual({ state: 'invalid' });
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
+  });
+
+  it('the masker\'s re-key yields a row for the decision key\'s lane, and the stored-secrets read of a programme lists nothing of it', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    const rows = await operatorSecretRows(dir, (laneId, value) => ({ laneId, fingerprint: value === KEY ? 'k' : 'other' }) as never);
+    expect(rows).toEqual({ rows: [{ laneId: 'operator-secret:.server:decision-model-key', fingerprint: 'k' }], unreadable: false });
+    expect(readStoredSecrets(dir, 'prog-a')).toEqual({ state: 'ok', slots: [] });
+  });
+
+  it('the start-up sweep removes a crash\'s temp beside the decision key and leaves the key', async () => {
+    const dir = ccrcDir();
+    await writeServerSecret(dir, DECISION_MODEL_KEY_SLOT, KEY, 1, masked, { tail: 'none' });
+    const temp = path.join(serverDir(dir), `.${DECISION_MODEL_KEY_SLOT}.secret.tmp-0123456789abcdef`);
+    writeFileSync(temp, 'leftover', { mode: 0o600 });
+    sweepOperatorSecretTemps(dir);
+    expect(existsSync(temp)).toBe(false);
+    expect(readDecisionModelKey(dir)).toEqual({ kind: 'value', value: KEY });
   });
 });

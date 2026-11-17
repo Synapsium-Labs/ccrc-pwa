@@ -13,8 +13,9 @@
 // No programme slot's value is read for use (spec §5). THE SERVER-LEVEL SLOTS (Overlord W2, `name-list-key-in-a-server-slot`)
 // live in `<ccrcDir>/operator-secrets/.server/<slot>.secret`, a directory no programme can name (`.server` fails the slug
 // shape): the server's own keys, written by `writeServerSecret`, read by `readServerSecretValue`, removed by
-// `removeServerSecret`. The ONLY caller of `readServerSecretValue` is the private-name list's reader
-// (`operatorModel/nameListRead.ts`, slot `private-names-key`). The other reads of a VALUE in this file are the masker's re-key
+// `removeServerSecret`. The ONLY callers of `readServerSecretValue` are the private-name list's reader
+// (`operatorModel/nameListRead.ts`, slot `private-names-key`) and the decision model's key reader (decision model B,
+// `decisionModelHttp.ts#readDecisionModelKey`, slot `decision-model-key`, read at each call by the adapter). The other reads of a VALUE in this file are the masker's re-key
 // (`operatorSecretRows`, every slot of both kinds), which fingerprints each value under the current box token and keeps
 // nothing, and a failed write's read-back (`slotHolds`), which compares and drops. A stored slot outlives its item (the operator's ruling on programme item 9); the operator's
 // Remove door is the one way a slot leaves (`removeOperatorSecret`), and the stored-secrets read (`readStoredSecrets`) answers
@@ -486,6 +487,22 @@ export function readServerSecretValue(ccrcDir: string, slot: string): ServerSecr
   } finally {
     try { closeSync(fd); } catch { /* the read is answered */ }
   }
+}
+
+/** A server slot's record, as `readOperatorSecretMeta` reads a programme's: its metadata, `{setAt: null}` for a value whose
+ *  record is missing or unreadable, `{unreadable: true}` when the value file cannot be measured, or `null` when it holds no value.
+ *  Never the value. */
+export function readServerSecretMeta(ccrcDir: string, slot: string): OperatorSecretState | null {
+  let file: string;
+  try { file = serverSecretPath(ccrcDir, slot); } catch { return null; }
+  try {
+    if (!lstatSync(file).isFile()) return null;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException)?.code === 'ENOENT' ? null : { unreadable: true };
+  }
+  let raw: string;
+  try { raw = readFileSync(metaPathOf(file), 'utf8'); } catch { return { setAt: null }; }
+  return parseMeta(raw)?.meta ?? { setAt: null };
 }
 
 /** Removes one server slot: its value file, its record and its leftover temps, as `removeOperatorSecret` removes a

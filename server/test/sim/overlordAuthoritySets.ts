@@ -31,6 +31,11 @@ const CONFIRM = {
   newChain: false, binding: { kind: 'kept', sessionId: 'lane-a-project-a', generation: GEN }, operatorRung: 'advise',
   latches: [{ cause: 'restore-detected', cap: 'chat' }], accountSet: { pools: ['pool-a'], untagged: false }, modelClass: 'opus',
 } as const;
+const DECISION_ROW = {
+  kind: 'authority-decision-row', opKey: 'op-d', row: 'scope.widens', gate: true,
+  from: { mode: 'shadow', ceiling: 600, armedLine: null, held: false },
+  to: { mode: 'armed', ceiling: 600, armedLine: { id: 3, line: 0.9 }, held: false },
+} as const;
 /** Records chained from 1, built through the real kernel and the real format (the sets mutate the decider, not the format). */
 function chain(entries: readonly E[]): Rec[] {
   const out: Rec[] = [];
@@ -72,6 +77,32 @@ export function authorityEntryCases(m: Pick<Grammar, 'authorityEntry' | 'Overlor
     'a binding of another kind is refused, even with the kept fields': () => {
       expect(refused({ ...CONFIRM, binding: { kind: 'gone', sessionId: 'lane-a-project-a', generation: GEN } })).toBe('bad-field');
     },
+    'a decision-model row record is accepted as given, and its gate is checked against the catalogue': () => {
+      expect(m.authorityEntry(DECISION_ROW)).toEqual(DECISION_ROW);
+      expect(refused({ ...DECISION_ROW, gate: false })).toBe('bad-field');
+      expect(refused({ ...DECISION_ROW, row: 'relay.method', gate: true })).toBe('bad-field');
+      expect(refused({ ...DECISION_ROW, row: 'relay.method', gate: false })).toBe('accepted');
+    },
+    'a decision-model row refuses an unknown row, a missing key, an extra key in the record, a side and an armed line': () => {
+      expect(refused({ ...DECISION_ROW, row: 'row.unknown' })).toBe('bad-field');
+      expect(refused({ ...DECISION_ROW, from: { mode: 'off', ceiling: 600, held: false } })).toBe('bad-field');
+      expect(refused({ ...DECISION_ROW, from: { ...DECISION_ROW.from, extra: 1 } })).toBe('unknown-key');
+      expect(refused({ ...DECISION_ROW, to: { ...DECISION_ROW.to, armedLine: { id: 3, line: 0.9, extra: 1 } } })).toBe('unknown-key');
+    },
+    'a decision-model row\'s ceiling is an integer from 50 to 5000': () => {
+      const at = (ceiling: number): string => refused({ ...DECISION_ROW, to: { ...DECISION_ROW.to, ceiling } });
+      expect([at(49), at(50), at(5000), at(5001), at(60.5)]).toEqual(['bad-field', 'accepted', 'accepted', 'bad-field', 'bad-field']);
+    },
+    'a decision-model row\'s mode is off, shadow or armed': () => {
+      expect(refused({ ...DECISION_ROW, to: { ...DECISION_ROW.to, mode: 'on' } })).toBe('bad-field');
+      expect(refused({ ...DECISION_ROW, to: { ...DECISION_ROW.to, mode: 'off' } })).toBe('accepted');
+    },
+    'a decision-model row\'s armed line carries its id and a value from 0 to 1': () => {
+      const line = (armedLine: unknown): string => refused({ ...DECISION_ROW, to: { ...DECISION_ROW.to, armedLine } });
+      expect([line({ id: 3 }), line({ id: 3, line: 1.5 }), line({ id: 3, line: -0.5 }), line({ id: 0, line: 0.9 }), line({ id: 3, line: 0 }),
+        line({ id: 3, line: 1 }), line(null), line({ id: 3, line: Number.NaN })])
+        .toEqual(['bad-field', 'bad-field', 'bad-field', 'bad-field', 'accepted', 'accepted', 'accepted', 'bad-field']);
+    },
   };
 }
 
@@ -87,6 +118,21 @@ const ENTRY_SET: MutantSet<Grammar> = {
     { id: 'E7 a number as a token', old: "typeof v === 'string' && TOKEN_RE.test(v) ? v", new: 'TOKEN_RE.test(String(v)) ? v' },
     { id: 'E8 any cause', old: 'v.length <= CAUSE_MAX && CAUSE_RE.test(v)', new: 'v.length <= CAUSE_MAX' },
     { id: 'E9 any binding kind', old: "if (v['kind'] !== 'kept') return refuse", new: 'if (false) return refuse' },
+    { id: 'E11 gate unchecked', old: 'if (gate !== isDecisionGate(row)) return refuse', new: 'if (false) return refuse' },
+    { id: 'E12 any row', old: "if (!isDecisionRowId(row)) return refuse('bad-field', 'row is not a decision-model row');", new: '' },
+    { id: 'E13 no side keys', old: 'exactKeys(v, SIDE_KEYS, what);', new: ';' },
+    { id: 'E14 no line keys', old: 'exactKeys(l, LINE_KEYS, `${what}.armedLine`);', new: ';' },
+    { id: 'E15 any mode', old: "if (!isDecisionRowMode(mode)) return refuse('bad-field', `${what}.mode is not off, shadow or armed`);", new: '' },
+    { id: 'E16 ceiling 49', old: 'c < DECISION_CEILING_MIN ||', new: 'c < DECISION_CEILING_MIN - 1 ||' },
+    { id: 'E17 ceiling 5001', old: 'c > DECISION_CEILING_MAX)', new: 'c > DECISION_CEILING_MAX + 1)' },
+    { id: 'E18 ceiling 50 refused', old: 'c < DECISION_CEILING_MIN ||', new: 'c <= DECISION_CEILING_MIN ||' },
+    { id: 'E19 ceiling 5000 refused', old: 'c > DECISION_CEILING_MAX)', new: 'c >= DECISION_CEILING_MAX)' },
+    { id: 'E20 fractional ceiling', old: '!Number.isSafeInteger(c) ||', new: '' },
+    { id: 'E21 line above 1', old: 'line < 0 || line > 1)', new: 'line < 0)' },
+    { id: 'E22 line below 0', old: 'line < 0 || line > 1)', new: 'line > 1)' },
+    { id: 'E23 line 1 refused', old: 'line < 0 || line > 1)', new: 'line < 0 || line >= 1)' },
+    { id: 'E24 line not finite', old: '!Number.isFinite(line) ||', new: '' },
+    { id: 'E25 line id optional', old: "armedLine = { id: positiveInt(l['id'], `${what}.armedLine.id`), line };", new: "armedLine = { id: Number(l['id']), line };" },
     { id: 'E10 privacy null refused', old: "p === null ? null : countInt(p, 'privacySequenceAtConfirm')", new: "countInt(p, 'privacySequenceAtConfirm')" },
   ],
   suite: (mod) => authorityEntryCases(mod),
@@ -118,6 +164,22 @@ export function authorityDirectionCases(m: Pick<Grammar, 'authorityDirection'>):
       expect(d(set([['pool-a'], false], [['pool-a', 'pool-b'], false]))).toBe('widens');
       expect(d(set([['pool-a'], false], [['pool-a'], true]))).toBe('widens');
     },
+    'a decision-model row reads its direction from the entry alone: new spend widens, a gate that stops shutting widens, advice does not': () => {
+      const side = (mode: string, ceiling = 600, line: number | null = null, held = false) =>
+        ({ mode, ceiling, armedLine: line === null ? null : { id: 1, line }, held });
+      const row = (gate: boolean, from: unknown, to: unknown) =>
+        ({ kind: 'authority-decision-row', opKey: 'k', row: gate ? 'scope.widens' : 'relay.method', gate, from, to });
+      expect(d(row(false, side('off'), side('shadow')))).toBe('widens');
+      expect(d(row(true, side('off'), side('shadow')))).toBe('widens');
+      expect(d(row(false, side('shadow'), side('off')))).toBe('narrows');
+      expect(d(row(false, side('shadow'), side('shadow', 601)))).toBe('widens');
+      expect(d(row(false, side('shadow', 601), side('shadow')))).toBe('narrows');
+      expect(d(row(true, side('armed', 600, 0.9), side('shadow')))).toBe('widens');
+      expect(d(row(false, side('armed'), side('shadow')))).toBe('narrows');
+      expect(d(row(true, side('shadow'), side('armed', 600, 0.9)))).toBe('narrows');
+      expect(d(row(true, side('armed', 600, 0.9), side('armed', 600, 0.95)))).toBe('narrows');
+      expect(d(row(true, side('armed', 600, 0.9), side('armed', 600, 0.8)))).toBe('widens');
+    },
     'a model class widens to fable only': () => {
       expect(d({ kind: 'authority-model-class', from: 'opus', to: 'fable' })).toBe('widens');
       expect(d({ kind: 'authority-model-class', from: 'fable', to: 'opus' })).toBe('narrows');
@@ -134,6 +196,12 @@ const DIRECTION_SET: MutantSet<Grammar> = {
     { id: 'D3 a retire widens', old: "case 'authority-retire': case 'authority-latch-raise': return 'narrows';", new: "case 'authority-latch-raise': return 'narrows'; case 'authority-retire': return 'widens';" },
     { id: 'D4 untagged ignored', old: '(!to.untagged || from.untagged)', new: 'true' },
     { id: 'D5 within turned round', old: 'to.pools.every((p) => from.pools.includes(p))', new: 'from.pools.every((p) => to.pools.includes(p))' },
+    { id: 'D7 a decision row always narrows', old: 'return decisionRowDirection(entry.gate, entry.from, entry.to);', new: "return 'narrows';" },
+    { id: 'D8 a decision row always widens', old: 'return decisionRowDirection(entry.gate, entry.from, entry.to);', new: "return 'widens';" },
+    { id: 'D9 a decision row\'s gate turned round', old: 'decisionRowDirection(entry.gate, entry.from, entry.to)', new: 'decisionRowDirection(!entry.gate, entry.from, entry.to)' },
+    { id: 'D10 a decision row\'s sides swapped', old: 'decisionRowDirection(entry.gate, entry.from, entry.to)', new: 'decisionRowDirection(entry.gate, entry.to, entry.from)' },
+    { id: 'D11 a decision row is never a gate', old: 'decisionRowDirection(entry.gate, entry.from, entry.to)', new: 'decisionRowDirection(false, entry.from, entry.to)' },
+    { id: 'D12 a decision row is always a gate', old: 'decisionRowDirection(entry.gate, entry.from, entry.to)', new: 'decisionRowDirection(true, entry.from, entry.to)' },
     { id: 'D6 a class change widens', old: "entry.to === 'fable' ? 'widens' : 'narrows'", new: "entry.to !== entry.from ? 'widens' : 'narrows'" },
   ],
   suite: (mod) => authorityDirectionCases(mod),
@@ -161,6 +229,15 @@ export function authorityFoldCases(m: Pick<Grammar, 'authorityFold'>): Record<st
       expect(v.designation).toEqual({ term: 4, sessionId: 'lane-a-project-a', generation: GEN });
       expect(v.lastConfirm).toEqual({ sequence: 3, epochAtConfirm: 7, privacySequenceAtConfirm: null, restoreGeneration: 1 });
     },
+    'decision rows: two moves on one row keep the last to, two rows are kept apart, and a Confirm leaves them as they stood': () => {
+      const side = (ceiling: number) => ({ mode: 'shadow', ceiling, armedLine: null, held: false });
+      const move = (row: string, from: number, to: number): E =>
+        ({ kind: 'authority-decision-row', opKey: `op-${row}-${to}`, row, gate: row === 'scope.widens', from: side(from), to: side(to) } as E);
+      const v = m.authorityFold(chain([move('relay.method', 600, 500), move('scope.widens', 600, 400), move('relay.method', 500, 300)]));
+      expect([...v.decisionRows.entries()]).toEqual([['relay.method', side(300)], ['scope.widens', side(400)]]);
+      expect([...m.authorityFold(chain([])).decisionRows]).toEqual([]);
+      expect(m.authorityFold(chain([move('relay.method', 600, 500), CONFIRM as unknown as E])).decisionRows.get('relay.method')).toEqual(side(500));
+    },
     'a Confirm that cleared the binding leaves none': () => {
       expect(m.authorityFold(chain([designate, { ...CONFIRM, binding: { kind: 'cleared' } } as unknown as E])).designation)
         .toEqual({ term: 4, sessionId: null, generation: null });
@@ -177,6 +254,12 @@ const FOLD_SET: MutantSet<Grammar> = {
     { id: 'F4 latches kept past a Confirm', old: 'latchMap.clear();\n', new: '\n' },
     { id: 'F5 a Confirm always keeps the binding', old: "v.designation = e.binding.kind === 'kept'", new: 'v.designation = true' },
     { id: 'F6 lastConfirm has no sequence', old: 'sequence: r.sequence, epochAtConfirm', new: 'sequence: 0, epochAtConfirm' },
+    { id: 'F8 a decision row ignored', old: "case 'authority-decision-row': rowMap.set(e.row, e.to); break;", new: "case 'authority-decision-row': break;" },
+    { id: 'F9 a decision row takes from', old: 'rowMap.set(e.row, e.to)', new: 'rowMap.set(e.row, e.from)' },
+    { id: 'F10 one decision row for all', old: 'rowMap.set(e.row, e.to)', new: "rowMap.set('relay.method', e.to)" },
+    { id: 'F11 the first decision move stays', old: 'rowMap.set(e.row, e.to)', new: 'if (!rowMap.has(e.row)) rowMap.set(e.row, e.to)' },
+    { id: 'F12 a Confirm clears the decision rows', old: 'latchMap.clear();\n', new: 'latchMap.clear(); rowMap.clear();\n' },
+    { id: 'F13 the decision rows are not returned', old: 'decisionRows: rowMap };', new: 'decisionRows: new Map() };' },
     { id: 'F7 the rung takes from', old: "case 'authority-rung': v.operatorRung = e.to; break;", new: "case 'authority-rung': v.operatorRung = e.from; break;" },
   ],
   suite: (mod) => authorityFoldCases(mod),

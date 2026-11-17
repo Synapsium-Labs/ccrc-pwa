@@ -3537,6 +3537,33 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
   `,
+
+  // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
+  // The decision model's arming, host and lines (Overlord spec §3.7 H6, Table 11.1a and 11.1d; W2, plan `w2-decision-model.md`
+  // Task 6). `decision_rows`, each row's switch (`off`, `shadow`, `armed`), its daily ceiling, an armed gate's line and the
+  // server's hold: in `OVERLORD_AUTHORITY_TABLES`, so it is NEVER SEEDED (a row with no journal head reads `missing` at boot
+  // and rolls authority back); an absent row reads `DECISION_ROW_DEFAULT`, and the first move inserts it, journal record
+  // first. `decision_host`, the one host (kind, endpoint, origin, model id; the key itself is in the `.server` slot, never
+  // here). `decision_lines`, every admitted line, newest per row and key current, with its canary and its anchors' baseline.
+  // ONE writer each, in `decisionModelStore.ts`: `moveDecisionRowInTx`, `setDecisionHostInTx`, and `admitDecisionLine` with
+  // `recordCanary` for the canary columns. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names
+  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90, so this is 91 by position; other open PRs
+  // hold 91 too, and whoever lands second renumbers. RE-MEASURE the slot before the PR and before merge (it must print 90
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE decision_rows (row TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK (mode IN ('off', 'shadow', 'armed')),
+    ceiling INTEGER NOT NULL, armedLineId INTEGER, armedLineValue REAL, heldCause TEXT, heldAt INTEGER,
+    updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_host (id INTEGER PRIMARY KEY CHECK (id = 1), kind TEXT NOT NULL, endpoint TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, keySetAt INTEGER, updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_lines (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, hostKind TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, line REAL NOT NULL, labelled INTEGER NOT NULL, errors INTEGER NOT NULL,
+    bound REAL NOT NULL, canaryExpected INTEGER NOT NULL, canaryAsked INTEGER NOT NULL DEFAULT 0,
+    canaryCrossed INTEGER NOT NULL DEFAULT 0, baseline TEXT NOT NULL, admittedAt INTEGER NOT NULL);
+  CREATE INDEX decision_lines_by_key ON decision_lines (row, hostKind, origin, modelId, revision, id);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

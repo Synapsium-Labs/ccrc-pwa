@@ -111,6 +111,7 @@ describe('the store: three states per group, default shadow', () => {
       ALTER TABLE programs DROP COLUMN planBy; ALTER TABLE programs DROP COLUMN planAt; ALTER TABLE programs DROP COLUMN planRequired;
       ALTER TABLE programs DROP COLUMN planEnd; ALTER TABLE programs DROP COLUMN planEndWhy; ALTER TABLE programs DROP COLUMN planEndAt;
       DELETE FROM programs WHERE slug = 'linear-sync';`);
+    fresh.exec('DROP TABLE decision_lines; DROP TABLE decision_host; DROP TABLE decision_rows;');
     fresh.exec('DROP TABLE programme_edges; DROP TABLE programme_remaining;');
     fresh.exec('ALTER TABLE operator_items DROP COLUMN revision; ALTER TABLE asks DROP COLUMN revision;');
     fresh.exec('DROP TABLE programme_pairs; DROP TABLE claim_collisions;');

@@ -17,6 +17,9 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 afterEach(() => removeTmpFixtures());
 
 const HEAD_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_authority_head'))!;
+/** The migration that creates `decision_rows`, the one table `OVERLORD_AUTHORITY_TABLES` lists (decision model B): boot coherence reads
+ *  every listed table, so a fixture database without it reads `unmeasured` (rows). Found by its table, as the head migration is. */
+const DECISION_ROWS_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE decision_rows'))!;
 const WIDEN: OverlordAuthorityMove = { kind: 'authority-rung', opKey: 'op-w', from: 'advise', to: 'full' };
 const NARROW: OverlordAuthorityMove = { kind: 'authority-rung', opKey: 'op-n', from: 'full', to: 'advise' };
 const COHERENT: CoherenceVerdict = { kind: 'coherent' };
@@ -37,6 +40,7 @@ function fixture(): { dir: string; db: DatabaseSync; leaf: string } {
   const dir = mkTmp('ccrc-overlord-guard-');
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
+  db.exec(DECISION_ROWS_MIGRATION);
   return { dir, db, leaf: path.join(dir, OVERLORD_AUTHORITY_BASENAME) };
 }
 

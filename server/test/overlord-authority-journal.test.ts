@@ -34,6 +34,9 @@ const HEAD_MIGRATION = (() => {
   return m[0]!;
 })();
 
+/** The migration that creates `decision_rows`, the one table `OVERLORD_AUTHORITY_TABLES` lists (decision model B): boot coherence reads
+ *  every listed table, so a fixture database without it reads `unmeasured` (rows). Found by its table, as the head migration is. */
+const DECISION_ROWS_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE decision_rows'))!;
 type Fault = 'none' | 'open' | 'write' | 'fsync';
 interface Fx {
   dir: string; leaf: string; db: DatabaseSync; guard: OverlordAuthorityGuard; failures: AuthorityWriterFailure[];
@@ -50,6 +53,7 @@ function fx(opts: { content?: string; wall?: () => number } = {}): Fx {
   if (opts.content !== undefined) writeFileSync(leaf, opts.content);
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
+  db.exec(DECISION_ROWS_MIGRATION);
   const fault = { now: 'none' as Fault };
   let wrote = false;
   const eio = (): never => { throw Object.assign(new Error('EIO'), { code: 'EIO' }); };

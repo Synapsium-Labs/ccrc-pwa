@@ -129,7 +129,7 @@ export async function gatherDecisions(deps: DecisionAskDeps, ask: DecisionAsk): 
         if (p.do === 'skip') checks.set(r, decisionMissCheck(r, p.outcome, p.why, 0, 0));
         if (p.do === 'reuse' && rec.kind === 'record' && host !== null) {
           checks.set(r, { row: r, outcome: 'answered', revision: DECISION_QUESTIONS[r].revision, modelId: host.modelId,
-            hostKind: host.kind, lineGen: facts.get(r)!.lineGen, recordId: rec.id, verdict: rec.verdict, p: rec.p, band: rec.band,
+            hostKind: host.kind, origin: host.origin, lineGen: facts.get(r)!.lineGen, recordId: rec.id, verdict: rec.verdict, p: rec.p, band: rec.band,
             ms: 0, attempts: 0, reused: true, egress: egressWordOf(egress as Exclude<DecisionEgressWord, 'hit' | 'unreadable'>) });
         }
       }
@@ -178,7 +178,7 @@ export async function gatherDecisions(deps: DecisionAskDeps, ask: DecisionAsk): 
         // `recorded: false` names another answer's record under this key (an unreadable one, or a concurrent writer's), never
         // this answer's (review 2324 F5).
         checks.set(r, { row: r, outcome: 'answered', revision: DECISION_QUESTIONS[r].revision, modelId: host.modelId,
-          hostKind: host.kind, lineGen: f.lineGen, recordId: kept === null || 'failed' in kept || !kept.recorded ? null : kept.id,
+          hostKind: host.kind, origin: host.origin, lineGen: f.lineGen, recordId: kept === null || 'failed' in kept || !kept.recorded ? null : kept.id,
           verdict: a.verdict, p: a.p, band: a.band, ms: call.ms, attempts: call.attempts, reused: false,
           egress: egressWordOf(egress as Exclude<DecisionEgressWord, 'hit' | 'unreadable'>) });
       }
