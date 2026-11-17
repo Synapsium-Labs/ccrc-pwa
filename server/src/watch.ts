@@ -176,6 +176,7 @@ import { overlapsPass } from './coord/overlapsLane.js';
 import { gatherGenerationReadings, generationsPass, type CompactionsMemo, type EmptyTries } from './continuity/generationsLane.js';
 import { renewalHoldsMail } from './continuity/renewalFeed.js';
 import { renewalActsOf } from './continuity/renewalWiring.js';
+import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
@@ -6154,6 +6155,7 @@ export class FleetWatcher {
       const reads = turnReadDeps(this.deps, this);
       const rec = (id: string): SessionRecord | undefined => records.find((r) => r.id === id);
       const acts = renewalActsOf(this.deps, coord, records, reads, (r) => this.rowAtAct(r), this.stopDoneSerial, this.renewalMemo);
+      const w1 = renewalReadingsOf(this.deps, coord, records);   // W1's renewal readings, one wiring (and its memo) per pass
       const readings = await gatherGenerationReadings(coord, {
         usage: (id) => readUsageMeasured(io, cfg.registryDir, id, Math.floor(this.deps.time.clock.wall() / 1000)),
         eventsStamp: (id) => io.statMeasured(compactionsPaths(cfg.registryDir, id).pre),
@@ -6162,7 +6164,7 @@ export class FleetWatcher {
         turnMark: async (id) => { const r = rec(id); return r === undefined ? { ok: false, reason: 'unmeasured' } : turnMarkFor(reads, r); },
         processStartedAt: async (id) => { const r = rec(id); return r === undefined ? null : processStartedAtFor(reads, r); },
         release: () => this.nodeRelease(),
-        drainOf: acts.drainOf,
+        drainOf: acts.drainOf, w1: w1.w1,
       }, this.generationsCompactions);
       this.generationsProc ??= this.deps.time.entropy.uuid();
       const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,

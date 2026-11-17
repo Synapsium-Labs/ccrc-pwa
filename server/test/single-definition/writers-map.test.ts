@@ -314,7 +314,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'continuity_probes', 'continuity_reads', 'continuity_checkpoints', 'continuity_renew_calls', 'continuity_soft_renewals',
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
-  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'overlord_designation'] as const;
+  'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings', 'overlord_designation'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -417,6 +417,8 @@ describe(TABLES_PIN, () => {
       // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
       decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
       decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
+      renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
     });
   });
 
