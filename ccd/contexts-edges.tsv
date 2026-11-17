@@ -57,6 +57,7 @@ _end_note_gone -> _reg_get
 _end_record -> _reg_set
 _follow_continued_in -> _reg_get
 _follow_continued_in -> _reg_set
+_fresh_pick_settle -> _typed_note
 _graceful_stop_before -> _ci_proc_start
 _graceful_stop_same -> _ci_proc_start
 _hard_block_dated -> _pane_born
@@ -438,6 +439,8 @@ cmd_forget -> _tmx
 cmd_forget -> _ws_unsupervise
 cmd_hibernate -> _alive
 cmd_hibernate -> _fresh_crossing_end
+cmd_hibernate -> _fresh_pick_settle
+cmd_hibernate -> _fresh_pick_to
 cmd_hibernate -> _graceful_stop_after
 cmd_hibernate -> _graceful_stop_before
 cmd_hibernate -> _idle_for_keystroke

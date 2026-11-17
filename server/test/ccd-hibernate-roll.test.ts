@@ -18,7 +18,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness, boxed } from './ccdWsHelpers.js';
-import { eventsOf } from './lifecycleHelpers.js';
+import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-hibernate-roll-'); });
@@ -866,12 +866,199 @@ describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account 
 
   const bin = (w: string): string => `/.local/bin/${w}'`;
 
-  it('Step 1 characterization: a row with an ordered list whose first account could take it wakes on its current account', () => {
-    claimed('claude-b'); lim('claude-b', 20);
-    const r = fresh();
+  const swaps = (): Array<Record<string, unknown>> => eventsOf(h.home, 'swap');
+  const log = (): string => { try { return fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8'); } catch { return ''; } };
+  /** `_reg_set`'s writes of the named fields, in order, to `$HOME/writes` (the write order is the safety property). */
+  const WRITES = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+    + '_reg_set() { case "$2" in wrapper|fresh|uuid) echo "$2 $3" >> "$HOME/writes" ;; esac; _reg_set_real "$@"; };';
+  const writes = (): string[] => fs.readFileSync(path.join(h.home, 'writes'), 'utf8').split('\n').filter(Boolean);
+  const moving = (): void => { claimed('claude-b'); lim('claude-b', 20); };
+
+  it('a pick that moves: wrapper before .fresh and the uuid, the wake spawns under the new account, and after the receipt one swap row and the side effects', () => {
+    moving();
+    const rw = 'state=open kind=near since=1 reset=0 wrapper=claude';
+    h.sh(`_reg_set ${ID} swapblocked x; _reg_set ${ID} rescuewait '${rw}'; _reg_set ${ID} limitwait 'state=open since=1'
+      _reg_set ${ID} swappin claude; _reg_set ${ID} swappinnote x; _reg_set ${ID} swappinexp 9; _reg_set ${ID} stranded x`);
+    const r = fresh(WRITES);
+    expect(r.rc, r.err).toBe(0);
+    expect(r.out).toContain(`rolled ${ID}`);
+    const w = writes();
+    expect(w[0], 'wrapper is the first of the three').toBe('wrapper claude-b');
+    expect(w.slice(1, 3).map((l) => l.split(' ')[0])).toEqual(['fresh', 'uuid']);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(news(), 'one spawn').toHaveLength(1);
+    expect(news()[0]).toContain(bin('claude-b'));
+    expect(news()[0]).toMatch(/--session-id '[0-9a-f-]{36}'/);
+    const u2 = h.reg(ID, 'uuid');
+    const sw = swaps();
+    expect(sw, 'one swap row').toHaveLength(1);
+    expect(sw[0]).toMatchObject({ outcome: 'done' });
+    expect(measOf(sw[0]!)).toMatchObject({ from: 'claude', wrapper: 'claude-b', uuid: u2, org: 'unknown' });
+    expect(decOf(sw[0]!)).toMatchObject({ reason: 'fresh-pick' });
+    for (const f of ['swapblocked', 'swappin', 'swappinnote', 'swappinexp', 'stranded']) expect(has(f), f).toBe(false);
+    expect(h.reg(ID, 'rescuewait')).toMatch(/^state=closed .* end=swap$/);
+    expect(h.reg(ID, 'limitwait')).toMatch(/^state=closed since=1 end=swap until=\d+$/);
+    expect(h.reg(ID, 'home'), 'home is never the pick\'s').toBe('claude');
+    expect(has('lastswap'), 'no lastswap').toBe(false);
+    expect(log()).toContain(`hibernate ${ID}: fresh start, uuid ${UUID} -> ${u2}, account claude -> claude-b\n`);
+    expect(log()).toContain(`fresh-pick ${ID}: claude -> claude-b step=1\n`);
+  });
+
+  it('a stay: the current account, today\'s log line, and no swap row', () => {
+    claimed('claude-b');
+    const r = fresh(WRITES);
     expect(r.rc, r.err).toBe(0);
     expect(h.reg(ID, 'wrapper')).toBe('claude');
-    expect(news(), 'one spawn').toHaveLength(1);
+    expect(writes().some((l) => l.startsWith('wrapper ')), 'no wrapper write').toBe(false);
     expect(news()[0]).toContain(bin('claude'));
+    expect(swaps()).toEqual([]);
+    expect(log()).toMatch(new RegExp(`hibernate ${ID}: fresh start, uuid ${UUID} -> [0-9a-f-]{36}\n`));
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('a move between two Anthropic lanes writes no moved note; from a non-Anthropic current account it writes one', () => {
+    moving(); h.sh(`_reg_set ${ID} typed '1000 since'`);
+    expect(fresh().rc).toBe(0);
+    expect(h.reg(ID, 'typed'), 'claude -> claude-b: the floor stays').toBe('1000 since');
+  });
+
+  it('from a non-Anthropic current account (gpt) the move writes the moved note', () => {
+    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    moving(); h.sh(`_reg_set ${ID} wrapper gpt; _reg_set ${ID} typed '1000 since'`);
+    // The live status is read from the current lane's own config directory.
+    const dir = path.join(h.home, '.claude-gpt', 'sessions'); fs.mkdirSync(dir, { recursive: true });
+    fs.copyFileSync(path.join(h.home, '.claude', 'sessions', `${PID}.json`), path.join(dir, `${PID}.json`));
+    expect(h.sh('_is_anthropic_backend gpt; echo $?')).toBe('1');
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(h.reg(ID, 'wrapper')).toBe('claude-b');
+    expect(Number(h.reg(ID, 'typed').split(' ')[0]), 'the floor moved to now').toBeGreaterThan(1000);
+  });
+
+  // A concurrent wake (the real `cmd_ensure`, as the W1a rows run it) planted right after the `wrapper` write, before `.fresh`.
+  const RACE = `_alive() { grep -q new-session "$HOME/ccd-calls" 2>/dev/null; }; `
+    + 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+    + `_reg_set() { _reg_set_real "$@"; local rc=$?; if [[ "$2" == wrapper && ! -e "$HOME/woke-once" ]]; then : > "$HOME/woke-once"; ( cmd_ensure ${ID} ) >/dev/null 2>&1; fi; return $rc; };`;
+
+  it('a concurrent wake between the wrapper write and .fresh resumes the old uuid, leaves no receipt: exit 7, old uuid and wrapper back, no swap row', () => {
+    moving();
+    const r = fresh(RACE);
+    expect(r.rc, r.err).toBe(7);
+    expect(r.err).toContain('roll-fresh-unproven');
+    expect(news().some((l) => l.includes(`--resume '${UUID}'`)), 'the concurrent wake resumed the OLD conversation').toBe(true);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(has('fresh')).toBe(false);
+    expect(swaps()).toEqual([]);
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('a wrapper write that fails: no wake, exit 4, the old wrapper and uuid back', () => {
+    moving();
+    const failing = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { [[ "$2" == wrapper && "$3" == claude-b ]] && return 1; _reg_set_real "$@"; };';
+    const r = fresh(failing);
+    expect(r.rc, r.err).toBe(4);
+    expect(news()).toEqual([]);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(has('fresh')).toBe(false);
+    expect(swaps()).toEqual([]);
+  });
+
+  it('a wake that fails (exit 4) puts back the old wrapper and uuid, with no swap row', () => {
+    moving();
+    const r = fresh('_spawn_start() { echo "ccd: spawn failed" >&2; return 5; };');
+    expect(r.rc, r.err).toBe(4);
+    expect(r.err).toContain('roll-wake-failed');
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(swaps()).toEqual([]);
+    expect(log()).not.toContain('fresh-pick');
+  });
+
+  it('an unproven wake (exit 7, the wake moved it at the ceiling) puts back the old wrapper and uuid, with no swap row', () => {
+    moving();
+    const r = fresh('_wake_ceiling_move() { WAKE_MOVE_TARGET=claude-d; return 0; };');
+    expect(r.rc, r.err).toBe(7);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 5 with the uuid reading the new one keeps the new wrapper', () => {
+    moving();
+    const unwritable = 'cmd_ensure() { rm -f -- "$REG/$1.hibernated"; mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
+    const r = fresh(unwritable);
+    expect(r.rc, r.err).toBe(5);
+    expect(h.reg(ID, 'uuid')).not.toBe(UUID);
+    expect(h.reg(ID, 'wrapper'), 'the account follows the new uuid').toBe('claude-b');
+    expect(swaps()).toEqual([]);
+  });
+
+  it('exit 5 with the uuid reading the old one writes the old wrapper back', () => {
+    moving();
+    // The chain fails at its uuid write (so the uuid still reads the old one), and the put-back cannot write .hibernated.
+    const failing = 'eval "$(declare -f _reg_set | sed \'1s/^_reg_set/_reg_set_real/\')"; '
+      + '_reg_set() { [[ "$2" == uuid && "$3" != ' + UUID + ' ]] && return 1; '
+      + 'if [[ "$2" == hibernated && -e "$HOME/act-done" ]]; then return 1; fi; [[ "$2" == hibernated ]] && : > "$HOME/act-done"; _reg_set_real "$@"; };';
+    const r = fresh(failing);
+    expect(r.rc, r.err).toBe(5);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper'), 'the account follows the old uuid').toBe('claude');
+    expect(swaps()).toEqual([]);
+  });
+
+  it('a busy pane with a list nobody can take refuses busy, not unplaced: the pick is last', () => {
+    claimed('claude-b'); fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    live('busy');
+    const r = fresh();
+    expect(r.rc).toBe(3);
+    expect(r.err).toContain('ccd: session-busy: busy');
+    expect(r.err).not.toContain('unplaced');
+  });
+
+  it('a refusal (unplaced) leaves everything untouched, but for _authdead\'s D-3524 expiry of a stale marker', () => {
+    claimed('claude-a,claude-b');
+    fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    // claude-a's auth-dead marker predates its credential file, so `_authdead` (its one owner) expires it: the one write
+    // the pick may make (C1's ruling, review 2336 F1). claude-a then has no load figure, so nothing picks it.
+    const cred = path.join(h.home, h.sh('_ccrc_secrets_file claude-a'));
+    fs.mkdirSync(path.dirname(cred), { recursive: true }); fs.writeFileSync(cred, 'x');
+    fs.writeFileSync(path.join(reg(), 'claude-a-authdead'), '1000000000 auth-401');
+    h.sh(`_reg_set ${ID} degraded opus; touch -d @1700000000 "$REG/${ID}.degraded"`);
+    const snap = (): string[] => fs.readdirSync(reg()).sort().map((f) => `${f} ${fs.lstatSync(path.join(reg(), f)).mtimeMs}`);
+    const before = snap();
+    const callsBefore = calls().length;
+    const r = fresh();
+    expect(r.rc, r.err).toBe(3);
+    expect(r.err).toBe(`ccd: session-busy: unplaced — no account on the ordered list can take it: claude-a load; claude-b disabled; nothing was touched\n`);
+    expect(snap(), 'the registry is byte- and time-identical but for the expired marker').toEqual(before.filter((l) => !l.startsWith('claude-a-authdead ')));
+    expect(fs.existsSync(path.join(reg(), 'claude-a-authdead')), 'the expired marker went').toBe(false);
+    expect(eventsOf(h.home, 'hibernate')).toEqual([]);
+    expect(calls().slice(callsBefore).filter((l) => /kill-session|systemctl|new-session/.test(l))).toEqual([]);
+    expect(h.reg(ID, 'uuid')).toBe(UUID);
+    expect(h.reg(ID, 'wrapper')).toBe('claude');
+  });
+
+  it('an unmeasured wrapper with a list standing refuses unplaced', () => {
+    claimed('claude-b'); lim('claude-b', 20); fs.rmSync(regPath('wrapper'));
+    // The live status is read through the wrapper's config directory, so the pane check is stubbed to reach the pick.
+    const r = fresh('_idle_for_keystroke() { return 0; };');
+    expect(r.rc).toBe(3);
+    expect(r.err).toContain(`ccd: session-busy: unplaced — the session's account on ${reg()}/${ID}.wrapper cannot be read`);
+    expect(has('hibernated')).toBe(false);
+  });
+
+  it('the same bytes give the same verdict under LC_ALL=C and en_US.UTF-8', () => {
+    claimed('claude-b'); fs.writeFileSync(path.join(reg(), 'claude-disabled'), ''); fs.writeFileSync(path.join(reg(), 'claude-b-disabled'), '');
+    const c = fresh('export LC_ALL=C;');
+    const u = fresh('export LC_ALL=en_US.UTF-8;');
+    expect(c.rc).toBe(3);
+    expect(u).toEqual(c);
+  });
+
+  it('caps advertises fresh-pick-v1', () => {
+    expect(h.sh('cmd_caps').split('\n')).toContain('fresh-pick-v1');
   });
 });

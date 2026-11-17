@@ -9319,6 +9319,7 @@ EOF
   echo hibernate-hold-ok   # D-6091: `cmd_hibernate --hold-ok <text>`; the server passes it only on this token (`capSupported`)
   echo hibernate-roll      # D-7458: `cmd_hibernate --roll`, the automatic roll's one act; the server sends it only on this token (`capSupported`)
   echo hibernate-fresh     # spec 2026-11-09 §3.3.11 H13: `cmd_hibernate --roll --fresh`, the roll whose wake starts a new conversation; sent only on this token
+  echo fresh-pick-v1       # the Overlord W1 ccd arms C2: that fresh start picks its account from the route's ordered list (`acctorder`); the designation refuses `capability-missing` without it
   # `lifecycle-v1` says THIS copy of ccd writes `$REG/.lifecycle/`. It gates a
   # SERVER DECISION — sweep at all — not a file: absent means the mirror never
   # sweeps and every surface says "this box's ccd does not write the lifecycle
@@ -32418,6 +32419,8 @@ cmd_stop() {   # [--surface <word>] <id>  |  [--surface <word>] <wrapper> <proje
 # closed set: busy, draft, marker, background, scheduled, held, opted-out,
 # recent-swap, attached.
 _hib_refuse() {   # reason detail — EXITS 3 with `ccd: session-busy: <reason> — <detail>` on stderr. Never returns.
+  # The reasons are a closed set: busy, draft, marker, background, scheduled, held, opted-out, recent-swap, attached, and
+  # `unplaced` (a fresh start whose pick finds no account, Overlord W1 ccd arms C2).
   echo "ccd: session-busy: $1 — $2; nothing was touched" >&2
   exit 3
 }
@@ -33030,7 +33033,8 @@ _hib_hold_ok() {   # id text -> 0 iff `$REG/<id>.hold` may be passed for the run
   cmp -s -- "$f" <(printf '%s' "$2")
 }
 
-# @ccd-lib:freshpick — the renewal's fresh start ends a set-side crossing once its start is proven (the Overlord's W1, C46): `_fresh_crossing_end` lives in ccd/lib/long-lived.sh
+# @ccd-lib:freshpick — the renewal's fresh start picks its account from the ordered list (`_fresh_pick_to`), records a proven move
+# (`_fresh_pick_settle`) and ends a set-side crossing once its start is proven (the Overlord's W1, C46, C56): in ccd/lib/long-lived.sh
 cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <text>] <id> — stop a long-idle session cleanly; `ccd ensure` wakes it.
   # ONE POSITIONAL, AND THAT IS `cmd_ensure`'s SECURITY BOUNDARY: the agent grants the bare `['hibernate']` prefix, after
   # which tokens are unconstrained, so the arity rule below is the only bound on what a caller can put here. The dec flags
@@ -33065,9 +33069,14 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   # exactly `ccd keep-awake`'s stamp (`_keep_awake_ours`), which designate and rebind set on the Overlord's body, whose renewal
   # is this verb. Every other `.no-roll` still refuses it, and a plain `--roll` refuses every one, keep-awake's included. The
   # line also tests `-L`, so a dangling `.no-roll` link refuses as `-e` alone did not (a stated tightening).
+  # THE PICK (the Overlord W1 ccd arms C2, plan Task 7): `--fresh` asks `_fresh_pick_to` LAST in the re-measure, after the
+  # attached check, so every cheaper refusal answers first; a row with no `acctorder` keeps its account (today). It refuses
+  # exit 3 `unplaced`, nothing touched. A move writes `wrapper` BEFORE `.fresh` and the uuid in one chain (a wake before the
+  # marker resumes the old uuid, writes no receipt and is caught by exit 7); exits 4 and 7 put the old `wrapper` back beside
+  # the old uuid, exit 5 keeps the account that names the uuid, and only a proven start records the move (`_fresh_pick_settle`).
   local usage="usage: ccd hibernate [--surface <word>] [--actor <text>] [--reason <text>] <id>"
   local lc_gh=0 lc_holdok=''   # `--hold-ok <text>` (D-6091)
-  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2='' lc_rcpt=''
+  local lc_roll=0 lc_fresh=0 lc_u1='' lc_u2='' lc_rcpt='' lc_cur='' lc_pick='' lc_mv=''
   while (( $# )); do
     case "$1" in
       --roll)      lc_roll=1; shift ;;
@@ -33157,6 +33166,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   att=$("${_TMX_ARGV[@]}" display-message -p -t "$(_tmux_t "$id")" '#{session_attached}' 2>/dev/null) || att=""
   [[ "$att" =~ ^[0-9]+$ ]] || _hib_refuse attached "tmux did not say whether a terminal is attached"
   [[ "$att" == 0 ]] || _hib_refuse attached "$att terminal(s) attached to the pane"
+  (( lc_fresh )) && { _reg_get_to lc_cur "$id" wrapper; _fresh_pick_to lc_pick "$id" "$lc_cur" || _hib_refuse unplaced "$FRESH_PICK_WHY"; [[ "$lc_pick" == "$lc_cur" ]] || lc_mv=", account $lc_cur -> $lc_pick"; }
   # The idle age, for the marker and the log: the latest main event the marker records.
   local k v latest=0 hours=0
   for k in turnAt stopAt restartAt; do
@@ -33198,8 +33208,8 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   if [[ -e "$REG/$id.woke" || -L "$REG/$id.woke" ]]; then lc_had_woke=1; IFS= read -r lc_woke < "$REG/$id.woke" 2>/dev/null || true; fi
   if (( lc_fresh )); then   # the marker first: a uuid written without it would still resume (`_spawn_mode`), never the reverse
     _reg_get_to lc_u1 "$id" uuid; lc_u2=$(_plat_uuid) && [[ -n "$lc_u2" ]] || wrc=1
-    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2" >> "$REG/swap.log"   # before the writes, so a kill keeps u1 named
-    (( wrc )) || { _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2"; } || wrc=$?
+    echo "$(date '+%F %T') hibernate $id: fresh start, uuid $lc_u1 -> $lc_u2$lc_mv" >> "$REG/swap.log"   # before the writes, so a kill keeps u1 named
+    (( wrc )) || { { [[ "$lc_pick" == "$lc_cur" ]] || _reg_set "$id" wrapper "$lc_pick"; } && _reg_set "$id" fresh "$lc_u2" && _reg_set "$id" uuid "$lc_u2"; } || wrc=$?
     echo "$(date '+%F %T') hibernate $id: fresh start writes rc $wrc" >> "$REG/swap.log"
   fi
   (( wrc )) || ( cmd_ensure "$id" ) || wrc=$?
@@ -33209,6 +33219,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
   if (( lc_fresh && ! wrc )); then
     _reg_get_to lc_rcpt "$id" fresh; rm -f -- "$REG/$id.fresh"
     if [[ "$lc_rcpt" != "used $lc_u2" ]]; then
+      [[ "$lc_pick" == "$lc_cur" ]] || _reg_set "$id" wrapper "$lc_cur" || true   # the account first, then the uuid it names
       [[ -n "$lc_u1" ]] && { _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: fresh start unproven (marker read ${lc_rcpt:-absent}), uuid back to $lc_u1" >> "$REG/swap.log"
       _lc_fail hibernate "$id" "" roll-fresh-unproven "the wake answered 0, but no spawn of $lc_u2 left its receipt"
@@ -33236,7 +33247,7 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
       if (( lc_had_woke )); then _reg_set "$id" woke "$lc_woke" || true; else rm -f -- "$REG/$id.woke"; fi
       # A fresh start that did not wake keeps the old conversation: its marker goes, the old uuid is back. Exit 4 only: on
       # exit 5 a pane may still run the new conversation, and the registry must keep naming it (plan review 1896 m-B6).
-      (( lc_fresh )) && { rm -f -- "$REG/$id.fresh"; [[ -z "$lc_u1" ]] || _reg_set "$id" uuid "$lc_u1" || true; }
+      (( lc_fresh )) && { rm -f -- "$REG/$id.fresh"; [[ "$lc_pick" == "$lc_cur" ]] || _reg_set "$id" wrapper "$lc_cur" || true; [[ -z "$lc_u1" ]] || _reg_set "$id" uuid "$lc_u1" || true; }
       echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), back to sleep" >> "$REG/swap.log"
       echo "ccd: roll-wake-failed — $id was hibernated and its wake exited $wrc; it was put back to sleep (hibernated, unit stopped), and mail, an open screen or ccd ensure wakes it" >&2
       exit 4
@@ -33245,11 +33256,13 @@ cmd_hibernate() {   # [--roll] [--surface <word>] [--actor <text>] [--reason <te
     # the sanctioned hibernated one. Its own exit (5) and its own phrase, never `roll-wake-failed`: a caller that reads
     # exit 4 as "stays hibernated" must not read this as that. `.woke` is left as the wake wrote it (a registry that
     # refused the marker is not trusted with a second write here).
+    # The account follows the uuid (plan Task 7): a uuid still reading the old one gets the old `wrapper` back, one attempt.
+    (( lc_fresh )) && [[ "$lc_pick" != "$lc_cur" ]] && _reg_get_to lc_rcpt "$id" uuid && [[ "$lc_rcpt" == "$lc_u1" ]] && { _reg_set "$id" wrapper "$lc_cur" || true; }
     echo "$(date '+%F %T') hibernate $id: roll wake failed (rc $wrc), NOT restored: $lc_unrestored" 2>/dev/null >> "$REG/swap.log" || true
     echo "ccd: roll-wake-unrestored — $id was hibernated and its wake exited $wrc, and $lc_unrestored: $id may be neither running nor hibernated; check it (ccd ensure $id)" >&2
     exit 5
   fi
-  (( lc_fresh )) && _fresh_crossing_end "$id"   # proven: the receipt was read above (Overlord W1, C46)
+  (( lc_fresh )) && { _fresh_pick_settle "$id" "$lc_cur" "$lc_pick" "$lc_u2" "$FRESH_PICK_STEP"; _fresh_crossing_end "$id"; }   # proven: the receipt was read above (Overlord W1, C46, C56)
   echo "rolled $id"
 }
 

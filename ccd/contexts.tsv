@@ -978,6 +978,8 @@ _role_long_lived	C3
 _route_holddown_holds	C1
 _route_holddown_settle	C1
 _fresh_crossing_end	C1
+_fresh_pick_settle	C1
 _fresh_pick_ok	C1
 _fresh_pick_field_to	C1
+_fresh_pick_least	C1
 _fresh_pick_to	C1
