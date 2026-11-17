@@ -221,6 +221,34 @@ describe('the body seed (rich-docs spec G6, M8.22)', () => {
     expect(r.files.file).not.toHaveBeenCalled();
   });
 
+  it('1b: a history read that is not a complete answer (a failure word, a client slot, a rejection) mounts the body with no commits and no filter', async () => {
+    const answers: Array<[string, DocsHistoryLoader['history']]> = [
+      ['failure word', async () => ({ s: 'failed', body: { ok: false, failure: 'unknown-commit' } as never })],
+      ['auth slot', async () => ({ s: 'auth' })],
+      ['unreachable slot', async () => ({ s: 'unreachable' })],
+      ['rejection', () => Promise.reject(new Error('boom'))],
+    ];
+    for (const [name, history] of answers) {
+      const r = rig({ history });
+      // The page stands on an entry whose filter is set: with no commits it is never kept.
+      render(frame(r, { opened: { pin: headPin(), page: leafAt('/docs/demo/specs/a.md'), only: C2 } }));
+      const input = await mounted(r);
+      expect(r.historyFn, name).toHaveBeenCalledTimes(1);
+      expect(input.version, name).toEqual({ sha: C1, draft: false, commits: null, only: null });
+      cleanup();
+    }
+  });
+
+  it('1c: startReaderHistory\'s seed resolves, never rejects, when the history loader rejects', async () => {
+    const body = startReaderHistory({
+      project: 'demo', show: committedShow('# Doc\n'), text: '# Doc\n', pin: headPin(),
+      page: () => leafAt('/docs/demo/specs/a.md'), only: C2,
+      history: { history: () => Promise.reject(new Error('boom')) }, loaders: null, queue: null,
+      signal: new AbortController().signal,
+    });
+    await expect(body.seed).resolves.toEqual({ sha: C1, draft: false, commits: null, only: null });
+  });
+
   it('11: the mount carries changes and openVersion only when opened is given, and version whenever the served hash is valid', async () => {
     const r1 = rig();
     render(frame(r1, { opened: null }));
