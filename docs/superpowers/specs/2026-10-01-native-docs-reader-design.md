@@ -3028,7 +3028,7 @@ export function mockupCsp(extra: readonly HttpsOrigin[]): string;   // extra is 
 
 - **The guard.** In scripted mode it keeps the frame alive and makes fragment links scroll. It is UX, not security: the parent's `frame-src 'none'` still blocks the navigation.
 - **Load watcher.** A second `load` event means a blocked navigation (E11). The viewer overlays "This mockup tried to navigate away; links inside mockups do not open." with Reload mockup, and never re-mounts on its own.
-- **Links list.** Each `a[href]`/`area[href]` goes through `resolveDocRef`:
+- **Links list** (amended 2026-11-17; C2, D-8712: the open fold draws at most `MOCKUP_CENSUS_ROW_CAP`, 500, rows, then one closed line saying how many more are not listed). Each `a[href]`/`area[href]` goes through `resolveDocRef`:
   - `doc` renders as an in-app route (same project and `ref`, `docsPageUrl`);
   - `external` http(s) opens through `openExternal` on tap;
   - anything else shows as text.
@@ -3041,7 +3041,7 @@ Top to bottom:
 2. **Badges:** "embeds N uncommitted assets" on draft pages, "scripts off" when the page has scripts and the frame is static, and "N not loaded".
 3. **Toolbar** (every button `min-height: var(--tap-min)`): Run/Stop scripts; Load external (N), shown when the plan lists at least one external origin (5.6.4); Full screen; New tab; Source; Download.
 4. **Frame:** `70dvh`, full width, background `var(--mockup-canvas)`. This is a new token that is white in both themes, because srcdoc is transparent and mockups are authored on white.
-5. **Census:** collapsed by default ("Assets and references · 12 loaded · 3 not loaded"), one row per reference showing:
+5. **Census:** collapsed by default ("Assets and references · 12 loaded · 3 not loaded"), one row per reference showing (amended 2026-11-17; C2, D-8712: the open fold draws at most `MOCKUP_CENSUS_ROW_CAP`, 500, rows, then one closed line saying how many more are not listed, and the summary still counts every reference):
    - the ref as text (cut to 120 chars, non-ASCII marked);
    - its target or origin;
    - `MOCKUP_VERDICT_SENTENCE[verdict]` (exhaustive by type);
@@ -3090,7 +3090,7 @@ flowchart TD
 *Figure 3. The mockup export pipeline: every layer the saved file carries, and where the draft banner and the links list sit.*
 
 **Steps** (`mockup/exportMockup.ts`):
-1. **Inputs.** It needs `parseMockup` ok and the plan done, with assets settled within `DOCS_EXPORT_IMAGE_WAIT_MS`. A missing asset becomes a row in the sheet and a placeholder. A page the pre-scan refuses, `too-many-formatting` included, exports its source as `<pre>` text with a note.
+1. **Inputs.** It needs `parseMockup` ok and the plan done, with assets settled within `DOCS_EXPORT_IMAGE_WAIT_MS`. A missing asset becomes a row in the sheet and a placeholder (amended 2026-11-17; C2, D-8712: the sheet and the saved file list at most `MOCKUP_CENSUS_ROW_CAP`, 500, of them, then one closed line for the rest, and every placeholder stays). A page the pre-scan refuses, `too-many-formatting` included, exports its source as `<pre>` text with a note.
 2. **Clone.** It clones the planned inert Document after its `data:` rewrites. `parse.ts` stays the only `new DOMParser(`.
 3. **Strip:**
    - drop `template`, so declarative shadow DOM never reaches the recipient (DOMParser leaves it unattached, and `querySelectorAll` never enters it);
