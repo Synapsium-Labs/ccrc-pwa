@@ -84,6 +84,12 @@ the deviation-refs scan reads definitions only there. This note keeps the full r
     initiatives are on there, so the initiative waits while projects, milestones and issues still sync.
   - A later `on` reading creates the initiative, links the projects and ends the episode. No item is raised, because the
     "Turn on initiatives" item stays tied to a measured `off`.
+  - Unread statuses are bounded the same way (the executor's ruling; the coordinator ruled only the probe). The wait
+    escalates on the backoff instead of retrying every 10 s. After three consecutive unread refills, the coordinator
+    is mailed once per workspace and episode. The pass keeps waiting, because nothing in that workspace can be built
+    without statuses. A refill that reads the statuses ends the episode.
+  - The refill count lives in process memory, so a restart restarts a streak. A long episode can then send a second
+    mail. The mails go once per programme, like the sync's other mails.
 
 ## The wave's rulings
 
@@ -112,9 +118,61 @@ Beyond those, the executor decided:
 | Unreadable store | An unreadable Linear store defers the pass with the backoff and keeps its due row. It is never read as "no Linear". |
 | Initiatives item | The item settles on the lane's beat, independent of any programme pass. Settling it marks the waiting programmes due. |
 
+## The review's fix round
+
+Review 2311 sent the wave back for one round. Each fix had a test written first and seen failing, unless noted.
+
+| Finding | What changed |
+|---|---|
+| F1 (D-8701) | Statuses never read are a directory miss, and an `unknown` probe defers the initiative step. Both waits are bounded and mail the coordinator once per episode. |
+| A3 | Ended by F1. A failed initiative keeps its projects' links, and no project is newly linked to it. |
+| F2 | The initiative's workspaces come from the programme's own bindings, plus the placements of epics that are unbound or bound there. A re-keyed project creates nothing in its new workspace. The old initiative is still updated and is closed at the end. |
+| F3, M2 | A bound ticket's team stays in its epic project's `teamIds` whatever its project key does, and inside one workspace until the move binds. |
+| F5 | The snapshot leaves out every epic, checkpoint and ticket whose `putBackAt` is set. |
+| F6 (D-8700) | An open checkpoint's milestone create and update leave `targetDate` out. |
+| A2 | A `workspace-mismatch` skip with no slot in the old workspace fails its binding and mails once. |
+| A7/A12 | A deferring failure's backoff holds against plan writes, run transitions, attaches and the dispatch's `ensureTicketBound`. An ordinary wait is still pulled to now. |
+| F4 (D-8699) | Measured, not changed: the fail path mails once per binding and word. Three requeues gave one mail. A test pins it. |
+| A5 | `item-act-mismatch` has its fixed sentence in `pwa/src/lib/refusalWords.ts`. |
+| A6, A10 | A create records its team key. An issue read that finds a move already made binds the issue's new identifier. |
+| M1, M5 | The directory's statuses mark is a required argument. `deferralOf` in L1 decides failure or wait and how long, and so do the episode decisions. |
+| A8 | This note's opening paragraph. |
+
+**A7/A12 changes the meaning of a column, with no migration.** `plan_sync_due.attempts` came with migration 59 and
+nothing read it. Now:
+- `deferSync(program, until, why)` takes `why`, which is `failure` or `wait`.
+- A `failure` adds one to `attempts`. A `wait` sets it to 0.
+- `attempts > 0` means the row is held by a failure. `markSyncDue` then keeps `dueAt` instead of taking the earlier time.
+
+The plan's interface text (`deferSync(db, program, until)`, "increments `attempts`") describes the old meaning. The
+plan is the coordinator's to edit, so this note records the change.
+
+**Failures that hold the backoff.** Besides unreachable, timeout, policy-unavailable and journal-unavailable, these also
+count as failures, because each is a backoff deferral in the plan's outcome table:
+- rate-limited;
+- malformed;
+- a refused key;
+- an unreadable store (C18);
+- an ok answer with no id.
+
+**F7: wiring that a test now guards.** Each test was shown red by mutating the line it guards, and the line was then
+restored.
+- The dispatch route's slug, in `server/test/plan-dispatch-route.test.ts`.
+  - Mutation: `if (ticketSlug !== undefined) body.slug = ticketSlug;` became `void ticketSlug;`.
+  - Result: the `ws-add` argv carried the caller's slug instead of `key-123-fix-the-thing`.
+- The watcher's lane, in `server/test/plan-sync-lane.test.ts`.
+  - Mutation: the `runLane('linearPlanSync', …)` line was deleted.
+  - Result: `expected [] to deeply equal [1786000000000]`.
+
+**Not red-first, by nature.** These pin behaviour that already held:
+- F4's measurement;
+- "an `unknown` probe keeps the links";
+- "no item is raised on `unknown`".
+
 ## Follow-ups
 
 Taken by the coordinator:
+- D-8699: prove ownership by id rather than by a by-name page, at the next capture of `ops.ts`'s documents.
 - Add `creator { id }` to `issueOwned` at the next capture. Issue adoption has no creator check today; it checks the
   planned team and that no other binding holds the issue.
 - Show a project's extra `teamIds` to the write policy, the same class of gap as D-8678.
@@ -134,7 +192,7 @@ From the final review's triage, fine to follow up:
   - The requeue sweep reads every programme's bindings each beat. A per-pass cache and one `failed` query are the fix
     if wave 7's adopted issues make this matter.
 - **Linear reads and writes:**
-  - The by-name read is unpaged. If ccrc's own object falls past the first page, recovery re-sends the create, and
+  - The by-name read is unpaged (D-8699). If ccrc's own object falls past the first page, recovery re-sends the create, and
     Linear refuses it as a `conflict`.
   - A re-dropped ticket reuses the cancel requestId, so its second comment is not sent.
   - The C12 read also runs on plain edits.
@@ -161,3 +219,11 @@ From the final review's triage, fine to follow up:
     milestones and issues wait up to 30 minutes per change. A give-up like D-8679's for that link is a candidate.
   - The malformed-answer counters are never cleared.
   - The give-up-or-defer choice lives in the executor's outcome table, which should move to L1 with that table later.
+- **From review 2311, wave 4:**
+  - A1: a ticket added on a team the epic's project lacks is created before the project gains that team.
+  - A4: a PR link is sent again when the PR's lookup answers nothing for one pass.
+  - A11: ccrc's own object made under an old team is stranded failed if the key changes between a lost create reply
+    and the recovery.
+  - M3: a failure in one workspace holds the whole programme for up to 30 minutes, including its other workspaces' work.
+    Holding per workspace is the fix.
+  - The episode counts live in memory: a restart restarts a streak, so a long episode can mail twice.
