@@ -73,7 +73,7 @@ const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'obj
 
 /** One reader of an account set from JSON: `{pools: string[], untagged: boolean}`, nothing else. The names are not
  *  checked against the pool-name pattern here: `poolSetSpelling` answers `unspellable` for a bad one, which the decider
- *  refuses as input. */
+ *  refuses as input. A name given twice is kept once, at its first place, so every door stores one spelling (review 2410 F3). */
 export function parseAccountPools(v: unknown): PoolSet | null {
   if (!isRecord(v)) return null;
   const keys = Object.keys(v);
@@ -81,7 +81,7 @@ export function parseAccountPools(v: unknown): PoolSet | null {
   const pools = v['pools'];
   const untagged = v['untagged'];
   if (!Array.isArray(pools) || !pools.every((p) => typeof p === 'string') || typeof untagged !== 'boolean') return null;
-  return { pools: pools as string[], untagged };
+  return { pools: [...new Set(pools as string[])], untagged };
 }
 
 /** One reader of a model class word. */

@@ -39,7 +39,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import {
-  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, retireVerdict,
+  accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, retireVerdict, routeOf,
   type AccountFacts,
 } from './overlordDesignation.js';
 import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
@@ -383,8 +383,10 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
 
   // ── the Settings doors (designation C, plan Tasks 8 and 9) ──────────────────────────────────────────────────────────
 
-  /** Each body the row names takes the write; one that fails is reported, never fatal: the row is the fact, and the next
-   *  renewal's write-set step (designation B) writes the route record again (C44: the change lands at the next renewal). */
+  /** Each body the row names takes the write; one that fails is reported (`route: 'failed'`), never fatal: the row is the fact.
+   *  Nothing on this tip rewrites the route record after a failed write. Designation B's write-set step (plan Task 10) is to
+   *  rewrite `class`, `poolset` and `acctorder` from the row before every renewal (C44: the change lands at the next renewal);
+   *  the Overlord cannot go Live before B lands, so the gap has no live window (review 2410 F1, carried to designation B). */
   async function writeEach(ids: readonly string[], write: (id: string) => Promise<{ ok: true } | { ok: false; detail: string }>) {
     const written: ({ sessionId: string; ok: true } | { sessionId: string; ok: false; detail: string })[] = [];
     for (const sessionId of ids) {
@@ -415,7 +417,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       if (!r.ok) return writerRefusal(reply, r);
       if (!r.changed) return { ok: true, changed: false, model };
       const written = await writeEach(v.bodies, (id) => body.writeClass(id, model));
-      return { ok: true, changed: true, model, journalled: r.journalled, written };
+      return { ok: true, changed: true, model, journalled: r.journalled, warnings: v.warnings, route: routeOf(written), written };
     });
   });
 
@@ -445,7 +447,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       if (!r.ok) return writerRefusal(reply, r);
       if (!r.changed) return { ok: true, changed: false, ...answer };
       const written = await writeEach(v.bodies, (id) => body.writeSet(id, { poolset: v.poolset, acctorder: v.acctorder }));
-      return { ok: true, changed: true, journalled: r.journalled, ...answer, written };
+      return { ok: true, changed: true, journalled: r.journalled, ...answer, route: routeOf(written), written };
     });
   });
 }

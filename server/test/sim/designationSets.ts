@@ -321,12 +321,12 @@ export function modelClassVerdictCases(m: DesignationModule): Record<string, Sui
       expect(m.modelStepUp('opus')).toBe(false);
     },
     'a change of class that two accounts serve is set, naming the bound body': () => {
-      expect(m.modelClassVerdict(BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x'] });
-      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts())).toEqual({ act: 'set', bodies: ['overlord-x'] });
+      expect(m.modelClassVerdict(BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [] });
+      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts())).toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [] });
     },
     'the bound body and a pending one both take the class; a pending-only row its pending body': () => {
-      expect(m.modelClassVerdict(PENDING_AND_BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x', 'overlord-z'] });
-      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-y'] });
+      expect(m.modelClassVerdict(PENDING_AND_BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x', 'overlord-z'], warnings: [] });
+      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-y'], warnings: [] });
     },
     'C56 re-counted under the new class: fewer than two refuses while bound (model-door-recounts-c56)': () => {
       expect(m.modelClassVerdict(BOUND, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
@@ -334,8 +334,16 @@ export function modelClassVerdictCases(m: DesignationModule): Record<string, Sui
     'C56 re-counted under the new class: fewer than two refuses while pending': () => {
       expect(m.modelClassVerdict(PENDING_ONLY, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
     },
-    'C56 re-counted under the new class: with no body the class is saved for the next Start': () => {
-      expect(m.modelClassVerdict(ROW_NO_BODY, 'fable', afacts())).toEqual({ act: 'set', bodies: [] });
+    'C56 re-counted under the new class: with no body the class is saved for the next Start, with the warning': () => {
+      expect(m.modelClassVerdict(ROW_NO_BODY, 'fable', afacts())).toEqual({ act: 'set', bodies: [],
+        warnings: [{ warning: 'overlord-single-account', count: 0 }] });
+    },
+    'a move to opus is a narrowing: fewer than two only warns, bound or pending, never refuses (review 2410 F2)': () => {
+      const warned = { warning: 'overlord-single-account', count: 0 };
+      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts(HEALTHY, { lanes: {} })))
+        .toEqual({ act: 'set', bodies: ['overlord-x'], warnings: [warned] });
+      expect(m.modelClassVerdict(atFable(PENDING_ONLY), 'opus', afacts(HEALTHY, { lanes: {} })))
+        .toEqual({ act: 'set', bodies: ['overlord-y'], warnings: [warned] });
     },
     'an unchanged class is none, and is never counted': () => { expect(m.modelClassVerdict(BOUND, 'opus', afacts(HEALTHY, { lanes: {} }))).toEqual({ act: 'none' }); },
     'no row is not-found; an unmeasured read is unmeasured': () => {
@@ -494,7 +502,9 @@ const RETIRE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: 
 const MODEL_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'M1 fable asks no step-up', old: "model === 'fable';", new: 'false;' },
     { id: 'M2 an unchanged class is set', old: "if (read.row.model === model) return { act: 'none' };", new: '' },
-    { id: 'M5 the model door does not re-count C56', old: 'if (bodies.length > 0 && serving.counted.length <= 1) {', new: 'if (false) {' },
+    { id: 'M5 the model door does not re-count C56', old: 'if (modelStepUp(model) && bodies.length > 0 && count <= 1) {', new: 'if (false) {' },
+    { id: 'M7 a move to opus refuses below two', old: 'if (modelStepUp(model) && bodies', new: 'if (bodies' },
+    { id: 'M8 below two never warns', old: "count <= 1 ? [{ warning: 'overlord-single-account', count }] : []", new: '[]' },
     { id: 'M6 the re-count is under the old class', old: 'overlordAccounts(read.row.accountPools, model, f)', new: 'overlordAccounts(read.row.accountPools, read.row.model, f)' },
     { id: 'M3 no row is set', old: "if (read.row === null) return { act: 'not-found' };", new: "if (read.row === null) return { act: 'set', bodies: [] };" },
     { id: 'M4 a pending body is not written', old: '[v.bound?.sessionId, v.pending?.sessionId]', new: '[v.bound?.sessionId]' },

@@ -353,6 +353,14 @@ describe('a create', () => {
     expect(res.json().warnings).toEqual([{ warning: 'unknown-pool', pool: 'pool-zz' }]);
   });
 
+  it('a pool named twice is stored once, in first-seen order, and warned once (review 2410 F3)', async () => {
+    const r = await rig();
+    const res = await post(r, { model: 'opus', accountPools: { pools: ['pool-a', 'pool-zz', 'pool-a', 'pool-b', 'pool-zz'], untagged: false } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().warnings).toEqual([{ warning: 'unknown-pool', pool: 'pool-zz' }]);
+    expect(view(r)?.accountPools).toEqual({ pools: ['pool-a', 'pool-zz', 'pool-b'], untagged: false });
+  });
+
   it('a first prompt that is not delivered answers prompted: false and keeps the attempt pending', async () => {
     for (const answer of [{ kind: 'refused', reason: 'draft-present' }, { kind: 'unreachable', detail: 'gone' }] as DeliverResult[]) {
       const r = await rig();

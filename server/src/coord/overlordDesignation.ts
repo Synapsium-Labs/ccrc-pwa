@@ -175,11 +175,13 @@ export const modelStepUp = (model: OverlordModelClass): boolean => model === 'fa
 export type ModelClassVerdict =
   | { readonly act: 'unmeasured'; readonly why: string } | { readonly act: 'not-found' } | { readonly act: 'none' }
   | { readonly act: 'refuse'; readonly word: 'overlord-single-account'; readonly detail: string; readonly count: number }
-  | { readonly act: 'set'; readonly bodies: readonly string[] };
+  | { readonly act: 'set'; readonly bodies: readonly string[]; readonly warnings: readonly SingleAccountWarning[] };
+export type SingleAccountWarning = { readonly warning: 'overlord-single-account'; readonly count: number };
 
 /** Task 8: `none` when the class is unchanged; otherwise C56 is counted again under the NEW class (slug
- *  `model-door-recounts-c56`, the coordinator's ruling): while a body is bound or pending, fewer than two accounts that serve it
- *  refuses, as the set door does, so a save never wedges every later set change; with no body it is saved for the next Start.
+ *  `model-door-recounts-c56`, the coordinator's ruling): a move to `fable` (a widening) with a body bound or pending and fewer
+ *  than two accounts that serve it refuses, as the set door does, so a save never wedges every later set change. A move to
+ *  `opus` narrows, and the operator can always narrow (review 2410 F2): below two it only warns, as a save with no body does.
  *  Else `set`, naming the bodies whose route record takes the class. */
 export function modelClassVerdict(read: DesignationRead, model: OverlordModelClass, f: AccountFacts): ModelClassVerdict {
   if (read.kind === 'unmeasured') return { act: 'unmeasured', why: read.why };
@@ -187,12 +189,18 @@ export function modelClassVerdict(read: DesignationRead, model: OverlordModelCla
   if (read.row.model === model) return { act: 'none' };
   const bodies = bodiesOf(read.row);
   const serving = overlordAccounts(read.row.accountPools, model, f);
-  if (bodies.length > 0 && serving.counted.length <= 1) {
-    return { act: 'refuse', word: 'overlord-single-account', count: serving.counted.length,
-      detail: `${serving.counted.length} account(s) serve ${model} in the set and ${serving.unmeasured.length} unmeasured; the Overlord needs at least two` };
+  const count = serving.counted.length;
+  if (modelStepUp(model) && bodies.length > 0 && count <= 1) {
+    return { act: 'refuse', word: 'overlord-single-account', count,
+      detail: `${count} account(s) serve ${model} in the set and ${serving.unmeasured.length} unmeasured; the Overlord needs at least two` };
   }
-  return { act: 'set', bodies };
+  return { act: 'set', bodies, warnings: count <= 1 ? [{ warning: 'overlord-single-account', count }] : [] };
 }
+
+/** Both Settings doors' top-level `route` (review 2410 F1): `failed` when any body's route write failed, so no reader has to
+ *  look inside `written` to learn a body was not rewritten; `written` otherwise, a row that binds nothing included. */
+export const routeOf = (written: readonly { readonly ok: boolean }[]): 'written' | 'failed' =>
+  (written.every((w) => w.ok) ? 'written' : 'failed');
 
 /** C46: `next` adds a pool or turns `untagged` on. A narrowing and a pure reorder are not widenings. */
 export function setWidens(old: PoolSet, next: PoolSet): boolean {
@@ -208,8 +216,7 @@ export function accountSetStepUp(read: DesignationRead, next: PoolSet): boolean 
 
 /** A warning the set door answers beside its save: never a refusal. */
 export type AccountSetWarning =
-  | { readonly warning: 'unknown-pool'; readonly pool: string }
-  | { readonly warning: 'overlord-single-account'; readonly count: number };
+  | { readonly warning: 'unknown-pool'; readonly pool: string } | SingleAccountWarning;
 
 export type AccountSetVerdict =
   | { readonly act: 'unmeasured'; readonly why: string } | { readonly act: 'not-found' }

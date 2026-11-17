@@ -223,7 +223,8 @@ describe('POST /api/overlord/model (C45)', () => {
     seed(r, { state: 'live' }); quiet(r);
     const res = await postModel(r, { model: 'fable' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, changed: true, model: 'fable', journalled: true, written: [{ sessionId: BOUND, ok: true }] });
+    expect(res.json()).toEqual({ ok: true, changed: true, model: 'fable', journalled: true, warnings: [], route: 'written',
+      written: [{ sessionId: BOUND, ok: true }] });
     expect(r.fake.seen).toHaveLength(1);
     expect(r.fake.seen[0]!.entry).toMatchObject({ kind: 'authority-model-class', from: 'opus', to: 'fable' });
     expect(r.fake.seen[0]!.rowModel).toBe('opus'); // the row was not yet written when the record was asked for
@@ -272,13 +273,13 @@ describe('POST /api/overlord/model (C45)', () => {
     expect(view(r).model).toBe('opus');
   });
 
-  it('a failed route write is reported in the answer; the row stands', async () => {
+  it('a failed route write is reported in the answer, route: failed at the top (review 2410 F1); the row stands', async () => {
     const r = await rig();
     seed(r, { state: 'live' }); quiet(r);
     r.body.answer = { ok: false, detail: 'route exited 1' };
     const res = await postModel(r, { model: 'fable' });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ changed: true, written: [{ sessionId: BOUND, ok: false, detail: 'route exited 1' }] });
+    expect(res.json()).toMatchObject({ changed: true, route: 'failed', written: [{ sessionId: BOUND, ok: false, detail: 'route exited 1' }] });
     expect(view(r).model).toBe('fable');
   });
 
@@ -288,7 +289,7 @@ describe('POST /api/overlord/model (C45)', () => {
     expect((await postModel(p, { model: 'fable' })).json()).toMatchObject({ changed: true, written: [{ sessionId: PENDING, ok: true }] });
     const u = await rig();
     seed(u, { state: 'unbound' }); quiet(u);
-    expect((await postModel(u, { model: 'fable' })).json()).toMatchObject({ changed: true, written: [] });
+    expect((await postModel(u, { model: 'fable' })).json()).toMatchObject({ changed: true, route: 'written', written: [] });
     expect(view(u).model).toBe('fable');
     expect(u.body.log).toEqual([]);
   });
@@ -306,11 +307,35 @@ describe('POST /api/overlord/model (C45)', () => {
     }
   });
 
-  it('C56 under the new class: with no body the class is saved for the next Start', async () => {
+  it('C56 under the new class: with no body the class is saved for the next Start, with the warning', async () => {
     const r = await rig({ fable: false });
     seed(r, { state: 'unbound' }); quiet(r);
-    expect((await postModel(r, { model: 'fable' })).json()).toMatchObject({ ok: true, changed: true, written: [] });
+    expect((await postModel(r, { model: 'fable' })).json()).toMatchObject({ ok: true, changed: true,
+      warnings: [{ warning: 'overlord-single-account', count: 0 }], written: [] });
     expect(view(r).model).toBe('fable');
+  });
+
+  it('a move to opus narrows: fewer than two serving only warns, bound or pending, and the class lands (review 2410 F2)', async () => {
+    for (const state of ['live', 'pending'] as const) {
+      const r = await rig();
+      seed(r, { state, model: 'fable', accountPools: SET_B }); quiet(r);
+      const res = await postModel(r, { model: 'opus' });
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, changed: true, model: 'opus', warnings: [{ warning: 'overlord-single-account', count: 1 }],
+        route: 'written', written: [{ sessionId: state === 'live' ? BOUND : PENDING, ok: true }] });
+      expect(view(r).model).toBe('opus');
+      expect(r.fake.seen).toHaveLength(1);
+    }
+  });
+
+  it('the writer called with the row\'s own class answers changed: false, appends nothing and writes no row (review 2410 F5)', async () => {
+    const r = await rig();
+    seed(r, { state: 'live' }); quiet(r);
+    const before = rowOf(r);
+    expect(r.coord.setModelClass(r.journal, { model: 'opus', actor: 'someone', at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.coord.setAccountSet(r.journal, { accountPools: SET_BA, actor: 'someone', at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.fake.seen).toEqual([]);
+    expect(rowOf(r)).toEqual(before);
   });
 
   it('the renewal path is never called: no prompt, no create, no stop, no keep-awake; only the class write', async () => {
@@ -416,6 +441,27 @@ describe('POST /api/overlord/account-set (C46, C56)', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'authority-rolled-back' });
     expect(view(r).accountPools).toEqual(SET_BA);
     expect(r.body.log).toEqual([]);
+  });
+
+  it('a failed route write answers route: failed at the top; a written one route: written (review 2410 F1)', async () => {
+    const r = await rig();
+    seed(r, { state: 'live' }); quiet(r);
+    expect((await postSet(r, { accountPools: SET_AB })).json()).toMatchObject({ ok: true, changed: true, route: 'written',
+      written: [{ sessionId: BOUND, ok: true }] });
+    r.body.answer = { ok: false, detail: 'route exited 1' };
+    const res = await postSet(r, { accountPools: SET_BA });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, changed: true, route: 'failed', written: [{ sessionId: BOUND, ok: false, detail: 'route exited 1' }] });
+    expect(view(r).accountPools).toEqual(SET_BA);
+  });
+
+  it('a pool named twice is stored once, in first-seen order (review 2410 F3)', async () => {
+    const r = await rig();
+    seed(r, { state: 'live' }); quiet(r);
+    const res = await postSet(r, { accountPools: { pools: ['pool-a', 'pool-b', 'pool-a'], untagged: false } });
+    expect(res.json()).toMatchObject({ ok: true, changed: true, accountPools: SET_AB });
+    expect(view(r).accountPools).toEqual(SET_AB);
+    expect(r.fake.seen[0]!.entry).toMatchObject({ to: SET_AB });
   });
 
   it('the same set re-sent answers changed: false and journals nothing', async () => {

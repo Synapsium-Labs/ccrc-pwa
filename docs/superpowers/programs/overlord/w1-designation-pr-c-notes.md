@@ -6,6 +6,12 @@ into the plan's ledger.
 
 ## Both doors
 
+- **`settings-doors-answer-route-failed`** (review 2410 F1, the coordinator's ruling): a failed route write keeps the 200, and
+  both doors answer a top-level `route: 'written' | 'failed'` beside `written`, so no reader has to look inside `written` to
+  learn a body was not rewritten. `routeOf` decides it. Nothing on this tip rewrites the route record after a failed write; the
+  healing is designation B's (carried below), and the Overlord cannot go Live before B lands, so no owed list here.
+- **`account-pools-dedupe-first-seen`** (review 2410 F3): `parseAccountPools` keeps a name given twice once, at its first
+  place, so the designate door and the set door store one spelling and warn an unknown name once.
 - **`settings-doors-write-every-body-the-row-names`**: the plan says the model door writes `class` for the bound id, and the
   set door writes the set for the bound id. Both write every body the row names: the live one, then a pending one. A pending
   body was created with the old class and set on its route record, and nothing else would rewrite them before it goes live.
@@ -45,12 +51,24 @@ into the plan's ledger.
 
 ## The model door
 
-- **`model-door-recounts-c56`** (the coordinator's ruling, replacing the open question `model-door-does-not-recount`): the
-  plan's `modelClassVerdict` answered only `none` or `set`, so a change to `fable` with fewer than two accounts that can serve
-  it was saved, and from then on the set door, which counts under the row's class, refused every change while bound. The
-  decider now counts C56 again under the NEW class: while a body is bound or pending, fewer than two refuses
-  `overlord-single-account` (the set door's word, with the count) and writes nothing; with no body the class is saved for
-  the next Start. C56 then holds at every door, not only at designate.
+- **`model-door-recounts-c56`** (the coordinator's ruling, replacing the open question `model-door-does-not-recount`, then
+  narrowed by review 2410 F2): the plan's `modelClassVerdict` answered only `none` or `set`, so a change to `fable` with fewer
+  than two accounts that can serve it was saved, and from then on the set door, which counts under the row's class, refused
+  every change while bound. The decider now counts C56 again under the NEW class. A move to `fable` (a widening) with a body
+  bound or pending and fewer than two refuses `overlord-single-account` (the set door's word, with the count) and writes
+  nothing. A move to `opus` narrows authority, and the operator can always narrow: below two it answers `set` with the
+  warning `{ warning: 'overlord-single-account', count }`, never a refusal. With no body either class is saved for the next
+  Start with the same warning. The set door keeps the plan's rule: a set that leaves fewer than two refuses while bound or
+  pending.
+
+## Carried to designation B
+
+- **The route record heals at each renewal** (review 2410 F1): B's write-set step (plan Task 10) rewrites `class`, `poolset`
+  and `acctorder` from the row before every renewal. The plan's Task 10 names only `poolset` and `acctorder`; `class` joins
+  them, since a failed `writeClass` here is otherwise never rewritten.
+- **Settle on the serialiser** (review 2410 F6): B's settle step (`goLive` on a rebind) runs on the coordination serialiser,
+  so the set door, which reads its bodies in the decider and writes after an `await`, can never rewrite a body that just
+  lost its binding.
 
 ## Growth
 
