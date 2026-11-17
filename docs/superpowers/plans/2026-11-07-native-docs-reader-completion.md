@@ -748,7 +748,7 @@ headroom table rounds 3.76 to 3.8x; D-8695's attribution to the operator's answe
   browser leg runs in CI (`CI=true` or `GITHUB_ACTIONS=true`, which GitHub Actions sets on every step), through one function,
   `browser/measure.ts`'s `printsGateMedians`; the 1 000 ms gate is unchanged. So every CI run of the browser leg, the
   coordinator's full run on this wave's tip included, carries the hosted medians in the browser shards' job logs; until that
-  run is read, the 2x hosted margin stays unmeasured. It was read at fix round 1, 2.7x at worst, and again at fix round 2, 2.8x at worst (Task 10's fix round bullets). A local run with `CI=true` printed the engine line, the eight gates and
+  run is read, the 2x hosted margin stays unmeasured. It was read at fix round 1, 2.7x at worst, and again at fix round 2, 2.8x at worst (Task 10's fix round bullets), and on the tip that merged, 2.9x at worst (recorded at D1). A local run with `CI=true` printed the engine line, the eight gates and
   the E13 control's line (`58bbbbccf`'s message says "all nine gates": the file has eight `gate()` calls, and the ninth line is the
   control's report; corrected here, review run 2361's M6) and passed 71/71 (Chromium 156.0.8078.4, `chromium-1248`, headless Linux, load 7.6; **local** medians, ms: reconstruction 107.1,
   text-heavy 140.5, formatting 31.6, worst property 31.2, adoption 22.4, tables 5.4, deep 2.9 and 2.9; the E13 control 12 774).
@@ -1217,6 +1217,13 @@ review fix round below.
     formatting 65.4, worst property 74.6, adoption 84.6, tables 24.4, deep 6.9 and 10.4; the E13 control 45 050.1, expected over
     the gate. All three wave browser files ran green there: `docs-mockup` in `browser (pwa) 1/3` (22 tests), `mockup-parse` (71)
     and `docs-mockup-export` (20) in 2/3.
+  - The hosted margin a third time (M5.B8; recorded at D1, review run 2378's fourth item), in the coordinator's full run
+    44085330692 on `0dc099d28`, this round's tip, merged as `62c1565d2` (`workflow_dispatch`, mode full, every leg green; read from
+    `browser (pwa) 2/3`'s own log, Chrome 157.0.8103.50 `build=usr`; hosted medians, ms, against the unchanged 1 000 ms gate):
+    reconstruction 213.6 (rounds 1 and 2: 278.0 and 321.6) and text-heavy 339.6 (371.1 and 356.1), so 4.7x and 2.9x;
+    formatting 51.9, worst property 68.5, adoption 39.3, tables 11.6, deep 5.8 and 7.5; the E13 control 21 855.4, expected over
+    the gate. All three wave browser files ran green there: `docs-mockup` in `browser (pwa) 1/3` (23 tests), `mockup-parse`
+    (71) and `docs-mockup-export` (20) in 2/3.
 
 ```json
 {"id": "NDR-C2-FR2-F1-WALK-LATCH", "pkg": "pwa", "file": "src/docs/ReaderFrame.tsx", "old": "      } else if (regained) {", "new": "      } else if (false) {", "tests": ["test/reader-frame.test.tsx"], "t": "while a queued image load is still pending", "status": "red", "red": "Tests  1 failed | 65 skipped (66): a sign-in that completes while a queued image load is still pending starts the new body once the walk ends, and its mount shows the image", "sha256": "8baf5f63de51086904c36c177c73b1fd362048796ffe1394220b366ed543f703", "restored": true}
@@ -1264,7 +1271,7 @@ that C2 does not change; Open names what blocks it.
 | M5.B3 | Measured (C2) | browser "M5.B3 / E5: the click guard" |
 | M5.B4 | Measured (C2) | browser "M5.B4 / E1: static mode" |
 | M5.B7 | Measured (C2) | browser "M5.B7 / E9: a listed origin" |
-| M5.B8 | Measured (C1); hosted medians read (C2) | `mockup-parse.browser.test.ts`'s gates; full run 44049862947: reconstruction 278.0 ms, text-heavy 371.1 ms, 2.7x at worst; full run 44066807476: 321.6 ms and 356.1 ms, 2.8x at worst |
+| M5.B8 | Measured (C1); hosted medians read (C2) | `mockup-parse.browser.test.ts`'s gates; full run 44049862947: reconstruction 278.0 ms, text-heavy 371.1 ms, 2.7x at worst; full run 44066807476: 321.6 ms and 356.1 ms, 2.8x at worst; full run 44085330692 (the merged tip, recorded at D1): 213.6 ms and 339.6 ms, 2.9x at worst |
 | M5.B10 | Measured (C2) | `docs-mockup-export.browser.test.ts`: the control and rows 1 to 3, each opened from both places |
 | M5.B11 | Measured (C2) | browser "M5.B11: a module import() from a listed origin" |
 | E1 | Measured (C2) | the M5.B2 and M5.B4 rows |
@@ -1320,6 +1327,9 @@ directory when this run opened (the review child had been reclaimed); it was rec
   so in place. The mutation is re-recorded on `now()`'s surviving line, as the review re-pointed it:
   `NDR-D1-FI2-AUTH-TO-MISSING` is red on the same test (`auth stays failed with its own word, never missing`, 1 failed, the
   count the review read). The guard itself was intact.
+- Fourth item: the coordinator's full run 44085330692 on C2's merged tip `0dc099d28` is recorded beside the two earlier
+  readings in C2's Results (fix round 2's hosted-margin bullets, minor 7's sentence and the row map's M5.B8 row), each figure
+  read from the job's own log: reconstruction 213.6 ms and text-heavy 339.6 ms, 4.7x and 2.9x under the 1 000 ms gate.
 
 ```json
 {"id": "NDR-D1-FI1-LATCH", "pkg": "pwa", "file": "src/docs/MockupView.tsx", "old": "        } else if (regained) {", "new": "        } else if (false) {", "tests": ["test/mockup-view.test.tsx"], "t": "review 2378 F1", "status": "red", "red": "Tests  1 failed | 3 passed | 83 skipped (87): a sign-in that completes while the load is still pending, after a read answered auth, reads again in ONE new attempt once the load ends (review 2378 F1)", "sha256": "73febe08fee12cd3626a45c23f0f1ce05cf3021ebc01ad55d7dc8e13cec96ba9", "restored": true}
