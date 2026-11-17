@@ -287,7 +287,7 @@ Spec §4.1 and §7, D10 and D11.
 - `evidence-unverified` joins `PLAN_REFUSALS` with its status; no `ticket-not-open` is added (F21).
 - The server advertises `plan-ticket-done-v1`; `ccrc-api plan ticket-done <slug> --json <f>` is refused locally without it.
 
-- [ ] **Step 1: Write the failing tests** — `plan-ticket-required.test.ts`: `in a phased plan, a run with no ticket into
+- [x] **Step 1: Write the failing tests** — `plan-ticket-required.test.ts`: `in a phased plan, a run with no ticket into
   an epic with an open declared ticket is refused ticket-required`, `a plan with no phases opens it as today`, `an
   epic with only auto tickets open admits it`, `a declared ticket a run holds does not count`, `an epic with no tickets
   admits it`, `a review run is never refused`. `plan-ticket-done.test.ts`: `a run closing done stores doneAt and its
@@ -299,11 +299,11 @@ Spec §4.1 and §7, D10 and D11.
   plan-runs-open`, `refuses a ticket not open with plan-bad-body`, `settles the epic`, `refuses a caller that is not the
   coordinator`, `refuses two evidence keys`, `refuses a body naming byId`; the census rows for the new route; and in `ccrc-api.test.ts`, `the
   ticket-done row is refused locally without plan-ticket-done-v1`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-ticket-required.test.ts test/plan-ticket-done.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every test named under Files.
-- [ ] **Step 5: Commit** — `feat(plan): done carries its evidence, and a work run in a phased plan names its ticket`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, then every test named under Files.
+- [x] **Step 5: Commit** — `feat(plan): done carries its evidence, and a work run in a phased plan names its ticket`.
 
 **Acceptance.** Each refusal and each verification has a case that reds when its check is deleted. **Rollback.** A plain
 revert. A ticket the verb marked done stays done, and its stored evidence stays, unread.
@@ -660,6 +660,27 @@ Task WM0 departs under its own number:
   L3-F1 (an ended plan shows no outstanding work: Table 6 reads row 5 before row 4 there). The task note
   (`docs/superpowers/programs/desktop-polish/wm0.md`) lists each amendment and the finding it answers, the migration
   slot, the rows and the mutants.
+
+Task WM1 departs under its own number:
+
+- **D-8727** — `work-map-wm1-build`: Task WM1 (desktop polish run 2416), issued on 2026-11-17. Its first commit carries
+  review 2412's three text minors on WM0: spec Figure 2 and two sentences of spec §4.1 now draw the ruled order (an ended
+  plan reads a ticket marked done whose evidence does not verify as left open; a live plan keeps "marked done, but …",
+  review 2382 L3-F1); WM0's note words its note-move basis truly; and `auth-gate.test.ts`'s gated count, measured as the
+  HTTP half less the exempt-HTTP count, is 161 (the comment said 160). The build departs from the plan's text in these
+  ways, each named by slug: `ticket-done-plan-closed`, `plan ticket-done` refuses `plan-closed` once the plan has ended,
+  as its siblings `plan ticket-move` and `plan phase-ref` do; `wm1-reads-reuse-owners`, `store.ts` gains no read: the
+  route reads the run through `CoordStore.run` and the landing line through `CoordStore.readLanding`, the one public
+  landing read behind its fence, and the plan store gains `ticketOfRun` and `doneFactsOf` beside `markTicketDone`;
+  `plan-facts-adapter`, `server/src/coord/planRunFacts.ts` (not in WM1's Files) gives `planGate` the two new facts,
+  `phased` and an epic's `tickets`; `pr-evidence-is-one-projects`, a `{ pr }` stored on another ticket refuses only when
+  that ticket's project is the same, since a pull request number names one project's pull request (F2 and F19 read
+  together); `unreadable-evidence-refuses`, a run or landing line that cannot be read refuses `evidence-unverified` with
+  the read's word in the detail, never a new word; `phased-counts-dropped`, a plan "declares a phase" while any phase row
+  is stored, dropped ones included; `landed-if-any-entry`, a pull request the landing line holds more than once reads
+  landed when any of its entries is `landed`; and the client refuses `capability-missing`, as WM0's row does. The task
+  note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
+  mutants.
 
 ## Where things stand
 
