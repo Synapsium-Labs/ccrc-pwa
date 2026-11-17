@@ -8,7 +8,7 @@ The first visibility release is designed in `docs/superpowers/specs/2026-11-02-d
 
 Separately, the operator authorized obtaining the exact previously refused test-launcher inspection request from retained evidence and preparing a precise safety-disposition request. That instruction does not authorize retrying the refused inspection, reading forbidden account/secret paths or weakening guards. The original nonzero test execution remains unresolved until causally explained and legitimately verified.
 
-Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed. Wave 5 landed in full by 2026-11-09. On 2026-11-10 the operator chose not to keep worktrees and dropped promotion (wave 5b), so the programme closes with wave 5. On 2026-11-16 the operator settled the items carried to the Rider: run 2237 fixes two, the console's general items went to the desktop polish programme, and the rest were dropped.
+Wave 4 has since landed in full: PR4 #1619 and PR3 #2191 merged on 2026-11-03, and the wave 4 ledger fold is #2233. The Wave 5 adoption/promotion plan, #2167, was approved by the operator on 2026-11-04 with every O5 recommendation; its implementation, and the ordinary lifecycle, review, CI and native-queue obligations, remain outstanding. Existing ownership and worker holds are not released by the scope decision. Elapsed-time soaks remain waived, not passed. Wave 5 landed in full by 2026-11-09. On 2026-11-10 the operator chose not to keep worktrees and dropped promotion (wave 5b), so the programme closes with wave 5. On 2026-11-16 the operator settled the items carried to the Rider: run 2237 fixes two, the console's general items went to the desktop polish programme, and the rest were dropped. Run 2237 landed on 2026-11-17 (#2947), and the programme closes again.
 
 ## Current operator amendment — 2026-10-28
 
@@ -2338,6 +2338,35 @@ departures found mid-wave (Tasks 4–6's rig fixes among them). Numbers not used
     turns keeping on again reopens them from this ledger.
   - Not this programme's, and recorded without a run: who acted on a switch door when its verb may have run is not
     attributed (review 1669 A5). A fix belongs to every switch door at once.
+- **2026-11-17 — The Rider landed (run 2237), and the programme closes again.** #2947 merged as `92e5f1344` at
+  `ea9401da3` after three review rounds (reviews 2313, 2321 and 2322) and one dequeue from the merge queue. The notes
+  `2026-11-16-delegation-broker-rider/notes.md`, beside the plan, have the census, the rows and the mutation tables.
+  - What landed: the installed entry starts `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`, `roll` and
+    `claude`, with any tail and matched without case, under `bash -p`, so an inherited `nocasematch` cannot fold a
+    case variant into one of them (D-8666). They are a tuple of their own, `PROTECTED_START_ONLY`, beside the existing
+    one (D-8668). The body's `entry-unprivileged` refusal is unchanged. The T1 census found no caller through the
+    entry that relies on startup state `-p` drops: the server composes `ws-archive`, `ws-restore` and `ws-reap` only
+    through the agent's exec op. README gained the card clause owed since PR8d and one sentence at the end of "Only
+    the launcher starts a reclaim.", both by co-edit consent from README's claim holder at the time (run 1850).
+  - D-8667: `roll` and `claude` are no verb of the body on `main`, so only their launcher rows can go red until those
+    verbs exist.
+  - Round 1 (review 2313) found that the new tuple was a hand-kept copy of `FORBIDDEN_CCD_VERBS` with no test linking
+    them (F1). Fix round 1 added a census in `server/test/single-definition/ask-digest.test.ts` that asks the entry's
+    own `is_protected` about every head of `FORBIDDEN_CCD_VERBS`, so a forbidden verb added later without protection
+    reds it, and tightened five rows that could not go red or said more than they checked. Round 2 (review 2321) found
+    nothing important.
+  - The merge queue's full run then dequeued the PR: `ccd-workspaces.test.ts`'s containment scan refused a bare `bash`
+    probe in the new test file, which ran with no `gh`, systemd or tmux containment. That scan reads every ccd test
+    file, and the PR's fast run had not selected it. Fix round 2 contained the probe, and round 3 (review 2322) found
+    nothing important.
+  - Carried, minor, with no run: the `ws-gc` listing row's title says it checks its own output, but it reads only the
+    exit status and stderr; the notes' T2/T3 table row predates fix round 1 (the fix-round sections below it are
+    accurate); the `roll` and `claude` real-body rows cannot go red until the body has those verbs; the census block's
+    comment cites a retired reason for appending (D-6928); its head-count check assumes one head per entry; and the
+    U+0130 fold row skips with the wrong reason when its probe itself fails, though it never passes untested. In
+    README, the new sentence names `roll` and `claude` without saying the body has no such verbs yet, and that
+    paragraph still omits other protected verbs, which predates this change; both sentences are consent-bound.
+  - Run 2237 closed `done`. The programme has no open run and closes again.
 
 ## Carried constraints
 
@@ -2483,8 +2512,8 @@ change the spec or convert O1–O5 into prior requirements.
 
 ## Next-wave brief
 
-**Run 2237, the Rider (2026-11-16).** Its plan is `docs/superpowers/plans/2026-11-16-delegation-broker-rider.md`; it is
-dispatched once its files are free to claim (decisions above). Wave 5b stays dropped. What follows is kept as history.
+**None (2026-11-17).** The Rider (run 2237) landed and the programme closes again; wave 5b stays dropped (decisions
+above). What follows is kept as history.
 
 **Wave 3's remaining follow-ups (2026-10-24).** Both runs of the operator's "Split: attempt fix first" have landed: run
 740 (follow-up 7, the attempt key and the collapse) as #1097, `bc231bbcb`, live since `v0.0.555`; and run 762 (follow-up

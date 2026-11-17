@@ -16,15 +16,16 @@ file is what the coordinator folds into the plan's ledger; the plan itself is no
   `renewalInputsOf`; `usageReading` is exported for the wiring's window.
 - `continuityStore.ts`: `closedSpotProbes` (graded `pass`/`fail` only, F6), `backstopRead`, `setBackstop` (the row's one
   writer); three `CoordStore` delegates and two `WatcherCoordPort` members.
-- Migration 85, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Measured on `origin/main` at
-  `92e5f1344`: the slot count printed 84. Other open pull requests hold 85 as well; the second to land renumbers on the
-  coordinator's word.
+- Migration 86, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Built as 85 on `92e5f1344`; overlaps A
+  (#2949) then landed 85, and on the coordinator's word this branch merged `main` once and renumbered to 86 (the slot count
+  on that `main` printed 85). Other open pull requests hold 86 as well; the second to land renumbers on the coordinator's
+  word.
 - `GET` and `POST /api/continuity/renewal-backstop`, session-gated, never EXEMPT, no box token, with their census rows:
   `auth/gate.ts`, `auth-gate.test.ts` (252 routes, 249 HTTP, gated 154), `box-token-census.test.ts`, `CLAUDE.md`,
   `secret-mask.test.ts`, `rings/fastify-l4.data.ts`, `coord-db.test.ts`, `run-close-switch.test.ts`,
   `writers-map.test.ts`, `time-ports.test.ts` (`shared/renewal-readings.ts` joins `TIME_PORT_FILES`).
 
-Growth-checked files, net: `schema.ts` +15, `store.ts` +3, `watch.ts` +2, `server.ts` 0, `shared/api.ts` 0,
+Growth-checked files, net: `schema.ts` +16, `store.ts` +3, `watch.ts` +2, `server.ts` 0, `shared/api.ts` 0,
 `coord/routes.ts` 0.
 
 ## Departures, by slug

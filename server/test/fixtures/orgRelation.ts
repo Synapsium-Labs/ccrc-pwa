@@ -35,6 +35,22 @@ export const ORG_RELATION_CASES: readonly OrgRelationCase[] = [
   { name: 'two unlabelled accounts (unknown is never same)', a: 'lane-d', b: 'lane-e', expect: 'unknown' },
 ];
 
+/** PR A's review F3: an empty label is no label, in both twins. Bash cannot tell `_ccrc_org` printing nothing from
+ *  printing an empty string, so TypeScript reads `''` as unlabelled too, never as a label two accounts can share. The
+ *  roster's gate refuses `''`, so these rows reach the relation only from a caller that did not parse. */
+export interface OrgLabelledCase {
+  readonly name: string;
+  readonly a: { readonly id: string; readonly org: string | null };
+  readonly b: { readonly id: string; readonly org: string | null };
+  readonly expect: OrgRelation;
+}
+export const ORG_EMPTY_LABEL_CASES: readonly OrgLabelledCase[] = [
+  { name: 'two accounts with an empty label each', a: { id: 'lane-x', org: '' }, b: { id: 'lane-y', org: '' }, expect: 'unknown' },
+  { name: 'an empty label against a label', a: { id: 'lane-x', org: '' }, b: { id: 'lane-a', org: 'org-a' }, expect: 'unknown' },
+  { name: 'a label against an empty label', a: { id: 'lane-a', org: 'org-a' }, b: { id: 'lane-y', org: '' }, expect: 'unknown' },
+  { name: 'one account with an empty label against itself', a: { id: 'lane-x', org: '' }, b: { id: 'lane-x', org: '' }, expect: 'same' },
+];
+
 export interface OrgSpreadCase {
   readonly name: string;
   readonly set: readonly (string | null)[] | 'unmeasured';
@@ -49,5 +65,6 @@ export const ORG_SPREAD_CASES: readonly OrgSpreadCase[] = [
   { name: 'one label among the labelled, some unlabelled', set: ['org-a', null, null], expect: { kind: 'partly', orgs: 1, unlabelled: 2 } },
   { name: 'none labelled', set: [null, null], expect: { kind: 'none', orgs: 0, unlabelled: 2 } },
   { name: 'no accounts', set: [], expect: { kind: 'none', orgs: 0, unlabelled: 0 } },
+  { name: 'an empty label counts as unlabelled (F3)', set: ['org-a', ''], expect: { kind: 'partly', orgs: 1, unlabelled: 1 } },
   { name: "C56's count unmeasured", set: 'unmeasured', expect: { kind: 'unmeasured', orgs: 0, unlabelled: 0 } },
 ];
