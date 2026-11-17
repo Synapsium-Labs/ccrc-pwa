@@ -4059,7 +4059,8 @@ comes first. Each claim is labelled measured or inferred in the task note, `docs
   too, and the budget's fail-closed arm red on its mutant (F4); ten more mutants, each red. The 128-row and 12-unit
   bounds stay as they are: a key past them shows in full with no mark and no notice, as on `main`, which for a key at the
   run ceiling is 66 columns or fewer after a five-column prefix with a two-column indent on its other rows, 64 or fewer
-  with the prefix and no indent, and 63 or fewer with neither (F3; measured in fix round 2, review 2370 F15).
+  with the prefix and no indent, 65 or fewer with the indent and no prefix, and 63 or fewer with neither (F3; measured in
+  fix round 2, review 2370 F15, and by review 2411 F14).
 - **Fix round 2** (review 2370, `c41.md` §12). Two holes in round 1's own mechanism, each less than `main` leaks. The
   drawer sent a key's held rows later with only 1 KiB of context, so a key whose hold began inside it drew its tail
   (F1): now a match's spans in held text carry to where that text is sent. At a chain longer than its 18 KiB window the
@@ -4067,8 +4068,14 @@ comes first. Each claim is labelled measured or inferred in the task note, `docs
   up to the whole key could show; pane history did the same past its 18 KiB overlap (F2, F3): now such a chain is read
   again over the whole text and withheld from its start, pane history's lookahead reads on while the same walk still
   reaches the cut and carries the match into the next slice, and past 256 KiB both send the chain's rows masked (the
-  coordinator's rulings). Eleven more cases (29 in all), eight red at e37701c43 for key bytes drawn; the F4 row, the F8
-  row and a key-free pane-history row pass there and red on their mutants or pin bytes. The secret-mask overlap pin
+  coordinator's rulings). Review 2411 measured three forms where those claims do not hold, none showing more than
+  `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (the whole key at every phase in small
+  chunks), pane history's cap arm reading no run in a blank indent (the whole key at 15 of 16 placements), and a key
+  coloured per character on one joined row (up to 7,539 bytes); and slices and pushes past the 25 ms bound on hostile
+  key-free panes (26 to 37 ms). All four are carried to Task C44 (D-8728, `mask-fail-open-forms`). Eleven more cases
+  (29 in all), eight red at e37701c43 for key bytes drawn (the drawer's cap row first on its marks count, review 2411
+  F8); of the three that pass there, the F8 row reds on its mutants (`r16`, `r18`) and the key-free pane-history row pins
+  bytes, but no recorded mutant reds the F4 row (`m-win2` survives by design, review 2411 F10). The secret-mask overlap pin
   stays at 18 KiB; the comment above it changed with its claim holder's consent. The task note moved to
   `docs/superpowers/programs/desktop-polish/c41.md` by the operator's ruling (coordinator mail 23009).
 
@@ -4138,6 +4145,24 @@ measurements, each row and what reds it, and the mutants.
 (296a56403) and green at the tip; every control stays hidden; every C38 and C40 row stays green; each mutant reds the
 rows `c42.md` names; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs, dtbd and
 topology-clean guards pass.
+**Rollback.** A plain revert.
+
+### Task C44: the masker closes the fail-open forms C41 left, and bounds the cost of its re-reads (D-8728) — now
+
+**Why.** Review 2411 read C41 (#2966) and measured three forms in which the masker's ruled fail-closed claims do not
+hold, none showing more than `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (F1), pane
+history's cap arm reading no run in a blank indent (F2), and a key coloured per character on one joined row (F3); and a
+cost past the 25 ms bound on hostile key-free panes (F4). This is secret masking, so fail-closed comes before a tidy
+screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
+
+**What was done.**
+- **Records first.** C41's records (`c41.md` §10 and §12, its section above, D-5995 items (3), (7) and (16), and the
+  2 MiB row-join cut) say what review 2411 measured, each residual marked `mask-fail-open-forms`.
+
+- **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
+  start fail closed, its cap arm masks a chain's rows whatever the read ends in, and its re-reads are bounded in cost
+  (review 2411 F1 to F4, F7). Further departures are named by slug in `c44.md`.
+
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
