@@ -4042,11 +4042,13 @@ comes first. Each claim is labelled measured or inferred in `c41.md`, with the m
   red on `main`; F5, the budget's figure; F6, C38's Rollback line restored.
 - **Fix round 1** (review 2352, `c41.md` §11). The drawer's window and pane history's slice overlap were one run's hold
   (about 9 KiB), narrower than the rows of a key near the 8,192-byte ceiling with a colour escape or a wide indent on
-  each, so such a key could show whole (F1, F2): the drawer reads twice that for a key's rows and pane history 16 KiB
-  (the bound `secret-mask.test.ts` pins), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
+  each, so such a key could show whole (F1, F2): the drawer reads twice that for a key's rows and pane history's slices
+  overlap by as much (18 KiB; `secret-mask.test.ts`'s overlap bound moved from 16 to 18 KiB, its one changed line, with
+  its claim holder's consent, by the coordinator's ruling), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
   it found in the hold: a colour tmux re-sends inside a row, a hold that expired inside the escape moving to the next
-  row, and a chunk cut inside a hyperlink's terminator. Eight more cases, seven red at a69085c93 and the budget's
-  fail-closed arm red on its mutant (F4); nine more mutants, each red. The 128-row and 12-unit bounds stay as they are:
+  row, and a chunk cut inside a hyperlink's terminator. Nine more cases: seven red at a69085c93, a 17,802-byte block
+  across a slice boundary red at 29219c442 (16 KiB of overlap), and the budget's fail-closed arm red on its mutant (F4);
+  ten more mutants, each red. The 128-row and 12-unit bounds stay as they are:
   a key past them shows in full with no mark and no notice, as on `main`, which for a key at the run ceiling is 66
   columns or fewer with a two-column indent, 64 or fewer without (F3).
 
