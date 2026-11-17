@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, directoryMissed, issueReadVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, type AdoptionKind, type AdoptionNode, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, directoryMissed, issueReadVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  requeueVerdict, requestIdOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
@@ -349,4 +349,25 @@ describe('fix round 1 (D-8182): put back', () => {
     expect(kept.epics[0]!.tickets.map((t) => t.id)).toEqual([1]);
     expect(plan.epics).toHaveLength(2);                                   // pure: the input is untouched
   });
+});
+
+describe('M5: what a deferral is (L1, D-8182)', () => {
+  // A `failure` holds its backoff against later marks (A7/A12); a `wait` is ordinary. `backoff` waits the escalating step,
+  // `directory` the short wait for a fill, `until` a time the cause carries (a refused key's block).
+  const ROWS: [DeferCause, Deferral][] = [
+    ['rate-limited', { why: 'failure', wait: 'backoff' }],
+    ['unreachable', { why: 'failure', wait: 'backoff' }],
+    ['timeout', { why: 'failure', wait: 'backoff' }],
+    ['policy-unavailable', { why: 'failure', wait: 'backoff' }],
+    ['journal-unavailable', { why: 'failure', wait: 'backoff' }],
+    ['malformed', { why: 'failure', wait: 'backoff' }],
+    ['linear-unauthorised', { why: 'failure', wait: 'backoff' }],
+    ['store-unreadable', { why: 'failure', wait: 'backoff' }],
+    ['created-without-id', { why: 'failure', wait: 'backoff' }],
+    ['workspace-blocked', { why: 'failure', wait: 'until' }],
+    ['directory-missing', { why: 'wait', wait: 'directory' }],
+    ['viewer-unknown', { why: 'wait', wait: 'directory' }],
+    ['initiatives-unknown', { why: 'wait', wait: 'backoff' }],
+  ];
+  it.each(ROWS)('deferralOf(%s)', (cause, d) => { expect(deferralOf(cause)).toEqual(d); });
 });

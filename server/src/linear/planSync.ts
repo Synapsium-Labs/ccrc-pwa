@@ -41,8 +41,8 @@ import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import {
-  adoptionVerdict, directoryMissed, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
-  withoutPutBack, type AdoptionAsk, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, directoryMissed, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
+  withoutPutBack, type AdoptionAsk, type DeferCause, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -325,7 +325,7 @@ export class PlanSync {
       let store: LinearStoreRead;
       try { store = await this.deps.readLinearStore(); } catch { store = { kind: 'unreadable', code: 'unreadable' }; }
       // C18: a store that cannot be read is not "no Linear": the pass waits on the backoff and its due row stays.
-      if (store.kind === 'unreadable') { this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug), 'failure'); return 'deferred'; }
+      if (store.kind === 'unreadable') { this.deferFor(slug, 'store-unreadable'); return 'deferred'; }
       // Everything from here to the decision is synchronous: a plan write cannot land between the snapshot and the
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
@@ -352,14 +352,14 @@ export class PlanSync {
           const waitsOn = waits.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
           if (waitsOn.length > 0) {
             for (const slot of waitsOn) this.deps.directoryMiss(slot.ref, slot.digest);
-            this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug), 'wait');
+            this.deferFor(slug, 'initiatives-unknown');
             return 'deferred';
           }
           plan.clearSyncDue(slug); this.attempts.delete(slug); return 'done';
         }
         const until = actionable.flatMap((s) => (s.workspaceId === null ? [] : [this.blockedUntil.get(s.workspaceId) ?? 0]));
-        if (actionable.some((s) => s.workspaceId !== null && waiting.has(s.workspaceId))) this.deferUntil(slug, this.deps.now() + DIRECTORY_WAIT_MS, 'wait');
-        else if (Math.max(0, ...until) > this.deps.now()) this.deferUntil(slug, Math.max(...until), 'failure');
+        if (actionable.some((s) => s.workspaceId !== null && waiting.has(s.workspaceId))) this.deferFor(slug, 'directory-missing');
+        else if (Math.max(0, ...until) > this.deps.now()) this.deferFor(slug, 'workspace-blocked', { until: Math.max(...until) });
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
       const flow = await this.execute(slug, runnable[0]!, built, deadlineAt);
@@ -478,7 +478,7 @@ export class PlanSync {
       const out = await this.deps.call(this.askOf(step, slot, b, 'plan-sync'));
       if (out.ok) {
         const id = out.created ?? (typeof out.value['id'] === 'string' ? out.value['id'] : null);
-        if (id === null) { this.deferUntil(slug, this.deps.now() + this.nextBackoff(slug), 'failure'); return 'defer'; }   // ok without an id: it may have been sent
+        if (id === null) { this.deferFor(slug, 'created-without-id'); return 'defer'; }   // ok without an id: it may have been sent
         // A6 (§5.5): a create records the team it was made in, also on a binding a skip made first with none.
         this.bind(b, id, this.identifierOf(out, b), step.fingerprint, step.teamKey);
         this.attempts.delete(slug);
@@ -568,7 +568,7 @@ export class PlanSync {
     let kind: AdoptionKind;
     let nodes: AdoptionNode[];
     if (step.recover === 'name-and-creator') {
-      if (this.viewerOf(built, step.workspaceId) === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS, 'wait'); return 'defer'; }
+      if (this.viewerOf(built, step.workspaceId) === null) { this.deferFor(s.slug, 'viewer-unknown'); return 'defer'; }
       const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: String(step.input['name']) }));
       if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
       kind = step.op === 'initiativeCreate' ? 'initiative' : 'project';
@@ -620,7 +620,7 @@ export class PlanSync {
       nodes = [issue];
       identifier = typeof issue.identifier === 'string' ? issue.identifier : null;
     } else {
-      if (this.viewerOf(built, step.workspaceId) === null) { this.deferUntil(s.slug, this.deps.now() + DIRECTORY_WAIT_MS, 'wait'); return 'defer'; }
+      if (this.viewerOf(built, step.workspaceId) === null) { this.deferFor(s.slug, 'viewer-unknown'); return 'defer'; }
       // Two reads: the object at ccrc's id (its own name, which a rename since the lost create may have left unlike the plan's),
       // then that name's by-name listing, which carries the creator the by-id read does not select.
       const isInit = step.op === 'initiativeCreate';
@@ -643,22 +643,20 @@ export class PlanSync {
   /** `failWith` is what a failing word does (by default the binding fails with it, C16's link gives the URL up instead). */
   private onFailure(out: Failure, s: Subject, failWith: (word: string) => void = (word) => this.fail(s, word)): Flow {
     switch (out.word) {
-      case 'rate-limited': this.deferUntil(s.slug, this.deps.now() + Math.max('retryAfterS' in out ? out.retryAfterS * 1000 : 0, this.nextBackoff(s.slug)), 'failure'); return 'defer';
+      case 'rate-limited': this.deferFor(s.slug, out.word, { floorMs: 'retryAfterS' in out ? out.retryAfterS * 1000 : 0 }); return 'defer';
       case 'unreachable': case 'timeout': case 'policy-unavailable': case 'journal-unavailable':
-        this.deferUntil(s.slug, this.deps.now() + this.nextBackoff(s.slug), 'failure'); return 'defer';
+        this.deferFor(s.slug, out.word); return 'defer';
       case 'malformed': {
         // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
         const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
         if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
         if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
-        this.deferUntil(s.slug, this.deps.now() + this.nextBackoff(s.slug), 'failure'); return 'defer';
+        this.deferFor(s.slug, 'malformed'); return 'defer';
       }
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
       case 'linear-unauthorised': {
-        const until = this.deps.now() + this.nextBackoff(s.slug);
-        this.blockedUntil.set(s.workspaceId, until);
+        this.blockedUntil.set(s.workspaceId, this.deferFor(s.slug, 'linear-unauthorised'));
         void this.deps.markSlotRejected(s.slot.ref, s.slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
-        this.deferUntil(s.slug, until, 'failure');
         return 'defer';
       }
       default: failWith(out.word); return 'next';
@@ -671,9 +669,20 @@ export class PlanSync {
     return PLAN_SYNC_BACKOFF_MS[Math.min(n, PLAN_SYNC_BACKOFF_MS.length - 1)]!;
   }
 
-  /** Defer the programme's due row to `until`. A `failure` (a deferring outcome, a refused key, an unreadable store) holds:
-   *  no later mark pulls it back to now (A7/A12). A `wait` (for a directory, a viewer, the probe) is ordinary: the next plan
-   *  write or run transition takes it at once. */
+  /** Defer the programme for `cause` as `deferralOf` says (M5): its kind, and its time (the backoff step, at least `floorMs`;
+   *  the short directory wait; or the `until` the cause carries). Answers the time deferred to. */
+  private deferFor(slug: string, cause: DeferCause, o: { floorMs?: number; until?: number } = {}): number {
+    const d = deferralOf(cause);
+    const now = this.deps.now();
+    const until = d.wait === 'directory' ? now + DIRECTORY_WAIT_MS
+      : d.wait === 'until' ? (o.until ?? now + this.nextBackoff(slug))
+      : now + Math.max(o.floorMs ?? 0, this.nextBackoff(slug));
+    this.deferUntil(slug, until, d.why);
+    return until;
+  }
+
+  /** Defer the programme's due row to `until`. A `failure` holds: no later mark pulls it back to now (A7/A12). A `wait` is
+   *  ordinary: the next plan write or run transition takes it at once. */
   private deferUntil(slug: string, until: number, why: SyncDeferral): void {
     this.deps.plan.markSyncDue(slug, until);      // a row is there to move even for a pass nobody queued (`ensureTicketBound`)
     this.deps.plan.deferSync(slug, until, why);

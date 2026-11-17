@@ -15,7 +15,7 @@ import { redactShapedCount } from '../coord/redact.js';
 import { publicTextVerdict, ticketRefOfBranch } from '../linking/policy.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
-import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../coord/planStore.js';
+import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, SyncDeferral, TicketRow } from '../coord/planStore.js';
 import { LINEAR_INITIATIVE_STATUSES, withCcrcProvenance, type CcrcOpInput, type CcrcOpName, type LinearInitiativeStatus } from './hierarchyOps.js';
 import { statusOfType, type LinearDirectoryEntries } from './ops.js';
 
@@ -470,6 +470,32 @@ export function planSyncSteps(s: SyncSnapshot): SyncDecision {
 }
 
 // ── The pass's ruled verdicts (final review I-4): what the L4 pass reads, it asks here; it never decides itself ──
+
+/** Why a pass defers (M5): an outcome word that defers it, or a condition it waits on. */
+export type DeferCause =
+  | 'rate-limited' | 'unreachable' | 'timeout' | 'policy-unavailable' | 'journal-unavailable' | 'malformed' | 'linear-unauthorised'
+  | 'store-unreadable' | 'created-without-id' | 'workspace-blocked'
+  | 'directory-missing' | 'viewer-unknown' | 'initiatives-unknown';
+/** What a deferral is: a `failure` holds its backoff against every later mark (A7/A12), a `wait` is ordinary; and how long it
+ *  waits: the escalating `backoff` step, the short `directory` wait for a fill, or `until` a time the cause carries. */
+export interface Deferral { why: SyncDeferral; wait: 'backoff' | 'directory' | 'until' }
+const DEFERRALS: Readonly<Record<DeferCause, Deferral>> = {
+  'rate-limited': { why: 'failure', wait: 'backoff' },          // the executor waits at least Linear's retryAfterS too
+  unreachable: { why: 'failure', wait: 'backoff' },
+  timeout: { why: 'failure', wait: 'backoff' },
+  'policy-unavailable': { why: 'failure', wait: 'backoff' },
+  'journal-unavailable': { why: 'failure', wait: 'backoff' },
+  malformed: { why: 'failure', wait: 'backoff' },
+  'linear-unauthorised': { why: 'failure', wait: 'backoff' },   // the workspace is blocked until the same time
+  'store-unreadable': { why: 'failure', wait: 'backoff' },      // C18
+  'created-without-id': { why: 'failure', wait: 'backoff' },    // an ok with no id may have been sent
+  'workspace-blocked': { why: 'failure', wait: 'until' },       // another programme's refused key blocks the workspace
+  'directory-missing': { why: 'wait', wait: 'directory' },
+  'viewer-unknown': { why: 'wait', wait: 'directory' },
+  'initiatives-unknown': { why: 'wait', wait: 'backoff' },
+};
+/** M5: the one table of what each deferral is; the executor asks it at every site that defers. */
+export function deferralOf(cause: DeferCause): Deferral { return DEFERRALS[cause]; }
 
 /**
  * D-8701 (statuses-unread-distinct): whether a workspace's directory is a miss for the sync, so the pass asks the refresher
