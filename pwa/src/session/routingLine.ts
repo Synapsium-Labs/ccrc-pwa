@@ -22,8 +22,8 @@
 // and the inspector's markup maps them (the two chooser doors, the pending style) without spelling a word itself, so
 // the sentence and the rail cannot drift and the plain-words census reads every word.
 import type { FleetSession } from '../../../shared/api';
-import type { LaneModelsRead } from '../../../shared/models';
-import { modelOptions } from '../lib/models';
+import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
+import { classWord, laneClassLabel } from '../lib/models';
 import type { MetaChipTone } from './chipTones';
 import type { RouteView } from './routeView';
 import { UNREAD_EFFORT } from './sessionHeaderView';
@@ -68,8 +68,8 @@ export interface RoutingLine {
   /** What the effort door says: the live level, 'ultracode', 'set by the lane' (ccd stamped effort inert), or
    *  'set effort' before the pane reports one. */
   readonly effort: string;
-  /** The asked class's label from this lane's own option list (`modelOptions(row.wrapper, lane, null)`, named from the
-   *  lane's model files, D-8406), only when `view.classPending`; else null. */
+  /** The asked class's label, named from the lane's model files (`laneClassLabel`, D-8406) or the class word where they
+   *  give none, only when `view.classPending`; else null. It does not depend on which option list the lane gets. */
   readonly askedClass: string | null;
   /** The asked effort word, only when `view.effortPending`; else null. */
   readonly askedEffort: string | null;
@@ -87,11 +87,12 @@ export function routingLine(
   const model = row.model;
   const effortUnread = !view.effortInert && !row.ultracode && row.effort === null;
   const effort = view.effortInert ? WORDS.inertEffort : row.ultracode ? WORDS.ultracode : (row.effort ?? WORDS.unreadEffort);
-  // Unreachable today: `classPending` already found this label on the same list. Kept so a miss shows the raw word
-  // rather than nothing, and the type stays total.
+  // A row's label is the lane's own label for the class, or the class word: the same on every list, so no roster row is
+  // needed here. A word that is not a class (a newer build's) shows raw rather than nothing.
   const askedClass = view.classPending && view.classIntended !== null
-    ? (modelOptions(row.wrapper, laneModels, null).find((o) => o.route.value === view.classIntended)?.label
-      ?? view.classIntended)
+    ? (CLASSES as readonly string[]).includes(view.classIntended)
+      ? (laneClassLabel(laneModels, view.classIntended as ModelClass) ?? classWord(view.classIntended as ModelClass))
+      : view.classIntended
     : null;
   const askedEffort = view.effortPending ? view.effortIntended : null;
   const unreadable = view.classUnreadable || view.effortUnreadable;

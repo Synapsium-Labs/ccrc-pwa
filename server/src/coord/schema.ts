@@ -3404,6 +3404,21 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
+  // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
+  // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
+  // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE response_settings (id INTEGER PRIMARY KEY CHECK (id = 1), retentionDays INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL);
+  INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
+  `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
   // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
   // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
   // reason, at the plan when `runId` is null or at that run's wave boundary); `programme_edges`, what the programme waits
@@ -3411,8 +3426,8 @@ export const MIGRATIONS: readonly string[] = [
   // (`shared/programmeFacts.ts#edgeTargetKey`), so the partial unique index sees two equal targets as one open edge. ONE
   // writer of both inserts, `programmeFactsStore.ts#insertRemaining`, in the statement's transaction; the edge's state
   // columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's edge arm's alone. NEW TABLES only:
-  // an older build at this `user_version` takes rule 3 and never names them. Portfolio B (#2904) landed 83, so this is 84
-  // by position (the coordinator's word, 2026-11-16); whoever of the open PRs holding 84 lands second renumbers at landing,
+  // an older build at this `user_version` takes rule 3 and never names them. Responses B (#2914) landed 84, so this is 85
+  // by position (the coordinator's word, 2026-11-17); whoever of the open PRs holding 85 lands second renumbers at landing,
   // on the coordinator's word. RE-MEASURE the slot:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

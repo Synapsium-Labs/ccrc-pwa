@@ -35,11 +35,11 @@ import type { FleetSession, ProjectRow } from '../../../shared/api';
 import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
 import { Button, ListRow, Select, Sheet, toast } from '@ccrc/ui';
 import type { ProjectAddBody } from '../../../shared/projectAdd';
-import { accountIsHomeAble, accountLabel, accountPool, accountPoolState } from '../lib/accounts';
+import { accountIsHomeAble, accountLabel, accountPool, accountPoolState, entryFor } from '../lib/accounts';
 import { api, apiErrorText, failedTo } from '../lib/api';
 import { navigate } from '../lib/router';
 import { sessionPath } from '../lib/routes';
-import { effortOptions, laneClassLabel } from '../lib/models';
+import { effortIsKnown, effortOptions, laneClassEfforts, laneClassLabel } from '../lib/models';
 import { useLaneModels } from '../lib/useLaneModels';
 import { poolSide } from '../lib/pools';
 import { declaredAccountPool } from '../../../shared/poolrule';
@@ -732,7 +732,18 @@ export function NewSessionSheet({
               is laid OVER that row (D-8142): choosing Class never costs the
               session its effort, subagent or workflow defaults. */}
           <div className="route-row">
-            <RouteField label="Class" value={routeClass} onChange={setRouteClass}>
+            {/* D-8686: the Class choice carries its effort with it — an Effort the newly picked class's model does not
+                list is cleared, so a start never posts one. (A model read that lands after the choice does not reset
+                the field: the stated residual.) */}
+            <RouteField
+              label="Class" value={routeClass}
+              onChange={(v) => {
+                setRouteClass(v);
+                if (routeEffort !== '' && !effortIsKnown(wrapper, entryFor(roster, wrapper), laneClassEfforts(laneModels, v), routeEffort)) {
+                  setRouteEffort('');
+                }
+              }}
+            >
               <option value="" title={AUTOMATIC_CLASS.title}>{AUTOMATIC_CLASS.word}</option>
               <option value="default">Default</option>
               {[...CLASSES].reverse().map((c) => (
@@ -741,7 +752,7 @@ export function NewSessionSheet({
             </RouteField>
             <RouteField label="Effort" value={routeEffort} onChange={setRouteEffort}>
               <option value="">Unset</option>
-              {effortOptions(wrapper, null, false).map((o) => (
+              {effortOptions(wrapper, entryFor(roster, wrapper), laneClassEfforts(laneModels, routeClass), null, false).map((o) => (
                 <option key={o.route.value} value={o.route.value}>{o.label}</option>
               ))}
             </RouteField>

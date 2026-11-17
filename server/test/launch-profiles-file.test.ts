@@ -15,10 +15,11 @@ const FILE = path.resolve(__dirname, '../../ccd/lib/launch-profiles.json');
 /** The projection is `launchRowOf` (Overlord W1 sandbox Task 2): the one function the file, ccd's digest, the route field
  *  `profiledigest` and the sandbox check all call (Review Focus 4). A row with no surface is W1a's five keys: `env`,
  *  `settings`, `autoMemory`, `compactionSettings` (`compaction.settings` or `{}`) and `compactText` (the role's compaction
- *  instructions, `compactInstructionsFor`); `aboveHardCapPts` stays server-side. A surfaced row adds what ccd renders. */
+ *  instructions, `compactInstructionsFor`), and `longLived` (`FLEET_ROLES`'s column); `aboveHardCapPts` stays server-side. A surfaced row adds what ccd renders. */
 const projection = (): unknown => Object.fromEntries([...FLEET_ROLE_NAMES].sort().map((r) => [r, launchRowOf(r)]));
 const expectedText = (): string => `${JSON.stringify(projection(), null, 2)}\n`;
-const FIVE = ['autoMemory', 'compactText', 'compactionSettings', 'env', 'settings'];
+/** W1a's five keys, and `longLived` (Overlord W1 ccd arms, Task 4): the column ccd's hold-down and `/model` skip read. */
+const FIVE = ['autoMemory', 'compactText', 'compactionSettings', 'env', 'longLived', 'settings'];
 const SURFACED = [...FIVE, 'flags', 'memory', 'remoteControl', 'stagedSkills', 'surfaceSettings'].sort();
 
 /** Every string and number in a JSON value, keys included. */

@@ -192,6 +192,7 @@ import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
 import { itemBoundOf, outboxSettledOf, senderFor, type SettledOf } from './pushSender.js';
+import { responsesLane } from './responses/lane.js';
 import type { ItemReachOf } from './coord/pushOutboxStore.js';
 import { mergedBody, mergedKey, mergedNoticeOf, type LandedMemory } from './coord/landed.js';
 import { landedPass } from './coord/landedLane.js';
@@ -1458,6 +1459,8 @@ export class FleetWatcher {
   readonly questions: Questions;
   /** The push outbox's view for asks and items (Overlord W1, Task 5): an ask's record and send go through `pushOne`. */
   private readonly outboxSettled: SettledOf;
+  /** The response lane (Overlord W1 responses B): its pass and the latch that logs each failing cause once. */
+  private readonly responses = responsesLane();
   private readonly askOutbox: QuestionOutbox;
   private readonly itemReach: ItemReachOf = (item) => itemBoundOf(this.deps, item, 'reach');
 
@@ -2823,6 +2826,7 @@ export class FleetWatcher {
       // NEVER awaited, the same reasons: the TIMERS lane (Overlord §3.3.12, W1a): cleanup, then each due timer fired with its one mail.
       void this.sweepTimers(records, registryRead.listedIds, listedAt, registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       void this.sweepPushOutbox().catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
       void this.sweepQuiz().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
@@ -6195,6 +6199,13 @@ export class FleetWatcher {
   async sweepPushOutbox(): Promise<void> {
     if (!this.deps.coord) return;
     await this.runLane('pushOutbox', () => senderFor(this.deps).drain(this.deps.time.clock.wall(), this.outboxSettled));
+  }
+
+  /** The response lane (Overlord §4.3, W1 responses B): each response row sealed once its window closes, then retention. */
+  async sweepResponses(): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord) return;
+    await this.runLane('responses', () => { this.responses.run(coord, this.deps.responseStamp, this.deps.time.clock.wall()); });
   }
 
   /** One pass of the dead-coordinator lane — `sweepDeadCoordinators`'s body, run only while no other pass runs. */
@@ -9822,7 +9833,11 @@ export class FleetWatcher {
         return;
       }
       const n = built.digest.totals.decisions;
-      const claimed = coord.claimDigestDay(day, now, n);
+      // The decision lines' response rows ride the claim's transaction, written only when it wins (W1 responses B); each
+      // line's window ends at the next digest, one window length after this one's end.
+      const stamp = this.deps.responseStamp?.();
+      const claimed = coord.claimDigestDay(day, now, n, stamp && (() => coord.insertDigestResponses(
+        { day, lines: built.digest.lines, stamp, at: now, windowCapAt: 2 * w.toMs - w.fromMs })));
       this.lastDigestDay = day;
       if (!claimed || n === 0) return;
       const copy = digestPushCopy(day, built.digest.totals, built.digest.drift?.lines.length, built.digest.closes?.line ?? null);

@@ -11,8 +11,9 @@ by slug, measurements and what is left for landing. The coordinator folds them i
   site of a new lane source; `ccrc-api programme remaining`; the wave-boundary reference paragraph.
 - **Live at merge.** The door needs the box token, attribution and ownership. Nothing reads the two tables yet but the
   tests. `EDGE_CLEARING_SHIPPED` is `false`.
-- **Migration slot.** It is entry 84 by position on this branch after one merge of `main` (the coordinator's word): portfolio
-  B (#2904) landed 83. Other open PRs hold 84 too; whoever lands second renumbers at landing, on the coordinator's word.
+- **Migration slot.** It is entry 85 by position on this branch after a second merge of `main` (the coordinator's word,
+  2026-11-17): portfolio B (#2904) landed 83 and responses B (#2914) landed 84. Other open PRs hold 85 too; whoever lands
+  second renumbers at landing, on the coordinator's word.
 
 ## Departures, by slug
 
@@ -28,7 +29,7 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 | `claude-md-names-file-lanes` | Drop the `CLAUDE.md` sentence: `box-token-census.test.ts` reds | No check tied a lane in a file of its own to the bullet, so one was added: the bullet must name every lane of the call record's and the remaining-work door's files. It reds when either sentence is dropped. |
 | `route-files-word-corrected` | `auth-gate.test.ts`: the count of files that register routes | Its header said THIRTEEN while `ROUTES` scans nineteen files; it now says TWENTY, the measured count with this door. |
 | `remaining-refusal-declared-in-l0` | The store answers `too-many-open-edges` | The word is declared once in `shared/programmeFacts.ts` (`RemainingRefusal`, `REMAINING_REFUSALS`, `isRemainingRefusal`), the edge predicates gain `isEdgePredicate`, and `mail-routes.test.ts`'s census of kebab tokens in `server/src/coord` admits both through those guards; the first full CI run found them undeclared. Dropping the census line reds it. |
-| `edge-unmeasurable-week-ruled-separate` | `EDGE_UNMEASURABLE_AFTER_MS` is 7 days | `token-shared.test.ts` holds every seven-day quantity to the token interval unless ruled separate; it joins as the seventeenth, citing the plan's ruled open question 3. The coordinator may overrule. |
+| `edge-unmeasurable-week-ruled-separate` | `EDGE_UNMEASURABLE_AFTER_MS` is 7 days | `token-shared.test.ts` holds every seven-day quantity to the token interval unless ruled separate; it joins as the eighteenth (behind responses B's seventeenth), citing the plan's ruled open question 3. The coordinator may overrule. |
 
 ## Measured
 
@@ -52,9 +53,10 @@ by slug, measurements and what is left for landing. The coordinator folds them i
 - **The landing-order holder's consent is narrow.** It covers exactly two hunks of `server/src/coord/routes.ts` (the
   import and the registration beside the call record's) and, in `README.md`, `eighty-five` to `eighty-six` at
   `b99bc6390`. A recount at landing (another lane landing first) needs that holder's fresh consent for the new words.
-- **Counts re-derived after the merge of `main`** (route 247 behind the ratify door's 246; HTTP 244, gated 148, exempt 95;
-  `user_version` 84; `run-close-switch.test.ts` replays thirty-one; the lane words and the `ccrc-api` rows unchanged, since
-  the ratify door is session-gated and adds no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
+- **Counts re-derived after the second merge of `main`** (route 251 behind responses B's 250; HTTP 248, gated 152, exempt
+  95; `user_version` 85; `run-close-switch.test.ts` replays thirty-two; `token-shared.test.ts`'s seven-day holders are
+  eighteen, this PR's the eighteenth behind responses B's seventeenth; the lane words and the `ccrc-api` rows unchanged,
+  since responses B's doors are session-gated and add no client row). **To re-derive again if another lands first:** the migration slot and `coord-db.test.ts`'s two pins, the undo step's
   count word in `run-close-switch.test.ts`, `ROUTES.length` and the HTTP, gated and exempt counts in `auth-gate.test.ts`,
   the route count in `gate.ts`'s header, the machine-lane words in `gate.ts`, `README.md` and `box-token-census.test.ts`,
   and the `ccrc-api` row count (three sites).

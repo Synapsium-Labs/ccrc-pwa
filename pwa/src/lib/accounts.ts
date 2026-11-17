@@ -32,8 +32,9 @@ import { isProviderId, type ProviderId } from '../../../shared/providers';
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
  *  live session's `wrapper`/`home` is never type-narrowed to the roster; see
  *  `shared/api.ts`'s `Wrapper` docstring). The one lookup every function below
- *  goes through, so "known to this roster" is answered in exactly one place. */
-function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | undefined {
+ *  goes through, so "known to this roster" is answered in exactly one place. The model and effort pickers take this
+ *  row for its lane kind (`lib/models.ts`'s `LaneKindFacts`, D-8686). */
+export function entryFor(roster: readonly RosterWire[], wrapper: string): RosterWire | undefined {
   return roster.find((a) => a.id === wrapper);
 }
 

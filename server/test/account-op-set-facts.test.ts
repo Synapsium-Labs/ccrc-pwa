@@ -97,3 +97,48 @@ describe('set-facts writes the two account facts and nothing else (F11)', () => 
     expect(readFileSync(file, 'utf8')).toBe(before);
   });
 });
+
+// The organization label (plan 2026-11-16-account-organization.md Task A3): `--org <label>` writes it, `--org none`
+// removes the key, and an id-shaped or off-shape value is refused before any write.
+describe('set-facts writes the organization label (account organization A3)', () => {
+  it('--org writes the label silently, and none removes the key, never a null', () => {
+    const file = rosterFile();
+    expect(op(file, 'lane-a', '--org', 'org-a')).toEqual({ code: 0, stdout: '' });
+    expect(entry(file, 'lane-a')['org']).toBe('org-a');
+    expect(entry(file, 'lane-b')).toEqual(ROSTER.accounts[1]);
+    expect(op(file, 'lane-a', '--org', 'org-b').code).toBe(0);
+    expect(entry(file, 'lane-a')['org']).toBe('org-b');
+    expect(op(file, 'lane-a', '--org', 'none')).toEqual({ code: 0, stdout: '' });
+    expect(Object.hasOwn(entry(file, 'lane-a'), 'org')).toBe(false);
+    expect(readFileSync(file, 'utf8')).not.toContain('null');
+  });
+
+  it('--org none on an unlabelled lane changes no byte', () => {
+    const file = rosterFile();
+    const bytes = readFileSync(file, 'utf8');
+    expect(op(file, 'lane-a', '--org', 'none')).toEqual({ code: 0, stdout: '' });
+    expect(readFileSync(file, 'utf8')).toBe(bytes);
+  });
+
+  it('an id-shaped value is refused org-looks-like-an-id before any write', () => {
+    const file = rosterFile();
+    const before = readFileSync(file, 'utf8');
+    for (const v of ['0f8e2c1a-1b2c-4d3e-8f90-123456789abc', 'abcdef0123456789abcdef0123456789']) {
+      const bad = op(file, 'lane-a', '--org', v);
+      expect(bad.code, v).toBe(2);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'org-looks-like-an-id' });
+    }
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('an off-shape value is refused bad-argv before any write', () => {
+    const file = rosterFile();
+    const before = readFileSync(file, 'utf8');
+    for (const v of ['Org-A', 'org a', `o${'x'.repeat(32)}`]) {
+      const bad = op(file, 'lane-a', '--org', v);
+      expect(bad.code, v).toBe(2);
+      expect(JSON.parse(bad.stdout)).toMatchObject({ ok: false, error: 'bad-argv' });
+    }
+    expect(readFileSync(file, 'utf8')).toBe(before);
+  });
+});

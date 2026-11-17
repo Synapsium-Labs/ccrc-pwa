@@ -1,6 +1,6 @@
 /** The response record's vocabulary (Overlord design spec §4.3, C66 and C67; plan
  *  `docs/superpowers/plans/2026-11-14-overlord-w1/w1-responses.md`, Task 1). Ring L0, context C6: pure vocabulary and
- *  one parser, no value import (the PWA bundles this file). PR B adds the outcomes, the windows and the retention bounds.
+ *  one parser, no value import (the PWA bundles this file). PR B added the outcomes, the windows and the retention bounds.
  *
  *  A message ccrc puts in front of the operator gets one row. A receipt says what the operator's device or console did
  *  with it: ids, kinds and times only, never text (Global Constraints). */
@@ -70,6 +70,49 @@ export const RECEIPTS_PER_PUSH_MAX = 8;                     // worker receipts o
  *  verdict lands (PR A); the seal reads it (PR B). */
 export const PUSH_WINDOW_MS = 24 * 3_600_000;
 
+/** What the operator did with a message, sealed once its window closes (§4.3 Table 4.3b). The order is the table's,
+ *  which is `responseOutcome`'s first match (PR B). */
+const RESPONSE_OUTCOME_MAP: Record<ResponseOutcome, true> = {
+  acted: true, 'settled-elsewhere': true, 'not-actionable': true, unmeasured: true, opened: true, 'not-opened': true,
+};
+export type ResponseOutcome = 'acted' | 'settled-elsewhere' | 'not-actionable' | 'unmeasured' | 'opened' | 'not-opened';
+export const RESPONSE_OUTCOMES = Object.keys(RESPONSE_OUTCOME_MAP) as ResponseOutcome[];
+
+/** How an act was recorded. `reply` and `push-action` have no writer in W1 (questions 4 and 10). */
+const ACTED_HOW_MAP: Record<ActedHow, true> = {
+  tick: true, answer: true, dismiss: true, act: true, decline: true, correct: true, reply: true, 'push-action': true,
+};
+export type ActedHow = 'tick' | 'answer' | 'dismiss' | 'act' | 'decline' | 'correct' | 'reply' | 'push-action';
+export const ACTED_HOWS = Object.keys(ACTED_HOW_MAP) as ActedHow[];
+
+/** Why a row sealed `unmeasured`: a push never delivered, a fact the lane could not read, an ask that ended `stale` or
+ *  `unknown`, or receipts that cannot prove an open or its absence. */
+const UNMEASURED_WHY_MAP: Record<UnmeasuredWhy, true> = { 'no-verdict': true, reader: true, 'ask-ended': true, receipts: true };
+export type UnmeasuredWhy = 'no-verdict' | 'reader' | 'ask-ended' | 'receipts';
+export const UNMEASURED_WHYS = Object.keys(UNMEASURED_WHY_MAP) as UnmeasuredWhy[];
+
+/** A Waiting on you row's longest window: seven days from its reach (§4.3 Table 4.3a), unrelated to token rotation. */
+export const WAITING_WINDOW_MS = 7 * 86_400_000;
+/** A failed reader defers a seal at most a day past the window's end, then the row seals `unmeasured`, `reader`. */
+export const SEAL_DEFER_MS = 86_400_000;
+/** The operator's retention of response rows, in whole days (§9.4 rule 10; question 16). The minimum covers the longest
+ *  seal path, a Waiting on you row's seven days plus the seal's one-day deferral, with room. Starting values. */
+export const RESPONSE_RETENTION_DEFAULT_DAYS = 180;
+export const RESPONSE_RETENTION_MIN_DAYS = 14;
+export const RESPONSE_RETENTION_MAX_DAYS = 3_650;
+
+/** One row of `GET /api/responses?ref=` (the console's "I handled this elsewhere", C69): ids, kinds, labels, states,
+ *  outcomes and handled times only. `handledAt` is null while the operator has not marked it. */
+export interface ResponseRowBrief {
+  readonly id: number; readonly kind: ResponseKind; readonly label: string; readonly state: ResponseRowState;
+  readonly outcome: ResponseOutcome | null; readonly handledAt: number | null;
+}
+/** `GET`/`POST /api/responses/retention`'s answer: the days, or `days: null` with `unreadable` when the setting cannot be
+ *  read, beside the default and the bounds. */
+export type ResponseRetentionView =
+  | { readonly ok: true; readonly days: number; readonly default: number; readonly min: number; readonly max: number }
+  | { readonly ok: true; readonly days: null; readonly unreadable: true; readonly default: number; readonly min: number; readonly max: number };
+
 /** The digest row kinds, spelled as a map typed by `DigestRowKind`, so a new kind is a compile error here; a test pins
  *  the list equal to `DIGEST_ROW_KINDS` (a value import of `api.ts` would make this file carry its weight). */
 const DIGEST_KEY_ROW_KIND_MAP: Record<DigestRowKind, true> = { ask: true, approval: true, call: true };
@@ -91,12 +134,20 @@ const DAY = /^\d{4}-\d{2}-\d{2}$/;
 const PUSH_ID = /^[0-9a-f]{32}$/;
 const ENDPOINT_HASH = /^[0-9a-f]{64}$/;
 
-function digestKeyOk(key: string): boolean {
+/** A digest line key's parts, or null for any string `digestLineKey` could not have produced (the one reader of a key). */
+export function parseDigestLineKey(key: string): { readonly day: string; readonly rowKind: DigestRowKind; readonly id: number } | null {
   const parts = key.split(':');
-  if (parts.length !== 3) return false;
+  if (parts.length !== 3) return null;
   const [day, rowKind, id] = parts as [string, string, string];
-  if (!DAY.test(day) || !(DIGEST_KEY_ROW_KINDS as readonly string[]).includes(rowKind) || !/^[1-9][0-9]*$/.test(id)) return false;
-  return key === digestLineKey(day, rowKind as DigestRowKind, Number(id));
+  if (!DAY.test(day) || !(DIGEST_KEY_ROW_KINDS as readonly string[]).includes(rowKind) || !/^[1-9][0-9]*$/.test(id)) return null;
+  const n = Number(id);
+  if (!Number.isSafeInteger(n) || key !== digestLineKey(day, rowKind as DigestRowKind, n)) return null;
+  return { day, rowKind: rowKind as DigestRowKind, id: n };
+}
+
+/** Whether `key` is a key `digestLineKey` could have produced. */
+export function isDigestLineKey(key: string): boolean {
+  return parseDigestLineKey(key) !== null;
 }
 
 function parseRef(x: unknown, at: string): Parsed<ResponseRef> {
@@ -118,7 +169,7 @@ function parseRef(x: unknown, at: string): Parsed<ResponseRef> {
     const s = strayKey(x, ['kind', 'key']);
     if (s !== null) return bad(`${at} holds a field a digest ref has not`);
     const key = x['key'];
-    return typeof key === 'string' && digestKeyOk(key) ? { ok: true, value: { kind, key } } : bad(`${at}.key is not a digest line key`);
+    return typeof key === 'string' && isDigestLineKey(key) ? { ok: true, value: { kind, key } } : bad(`${at}.key is not a digest line key`);
   }
   return bad(`${at}.kind is not a ref kind`);
 }

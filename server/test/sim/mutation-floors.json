@@ -114,6 +114,11 @@
   "server/src/operatorModel/privacyJournal.ts#privacyCoherence": 1,
   "server/src/operatorModel/privacyJournal.ts#privacyJournalEntry": 1,
   "server/src/responses.ts#receiptVerdict": 1,
+  "server/src/responses.ts#responseOutcome": 1,
+  "server/src/responses.ts#responseWindowEnd": 1,
+  "server/src/responses.ts#responseSealDue": 1,
+  "server/src/responses.ts#responsesFor": 1,
+  "server/src/responses.ts#retentionChangeGate": 1,
   "server/src/coord/answerMarks.ts#itemMarkable": 1,
   "server/src/coord/answerMarks.ts#markViewOf": 1,
   "shared/answerMarks.ts#parseAnswerMarkWrite": 1,
@@ -127,5 +132,7 @@
   "server/src/coord/overlordAuthorityCoherence.ts#authorityCoherence": 1,
   "server/src/coord/overlordAuthorityCoherence.ts#authorityTailHeal": 1,
   "server/src/coord/programmeRemaining.ts#remainingBodyOf": 1,
-  "server/src/coord/programmeRemaining.ts#edgeTargetVerdict": 1
+  "server/src/coord/programmeRemaining.ts#edgeTargetVerdict": 1,
+  "shared/private-names.mjs#hashEntry": 1,
+  "shared/private-names.mjs#privateNameHits": 1
 }

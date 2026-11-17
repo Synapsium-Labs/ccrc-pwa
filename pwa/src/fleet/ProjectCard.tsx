@@ -166,9 +166,11 @@ function WorktreeControls({ leaseId, worktree, controls, offer, nowMs, grouped =
       .finally(() => { inFlight.current = false; setBusy(false); });
   };
   const words = asking === null ? null : confirmFor(asking.control);
-  // F8: `title=""` keeps the row's tooltip off the controls; the box is a named group, focused by script only.
+  // F8: `title=""` keeps the row's tooltip off the controls; the box is a named group, focused by script only. It says
+  // `aria-busy` while its act is in flight and draws the page's focus ring after a keyboard action (Task C38, review 1624).
   return (
     <span className="proj-work-controls" ref={box} tabIndex={-1} role="group" aria-label={controlsName(worktree)} title=""
+      aria-busy={busy || undefined}
       onFocus={() => { focusIn.current = true; }}
       onBlur={(e) => {
         const to = e.relatedTarget;
