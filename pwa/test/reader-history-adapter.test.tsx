@@ -472,6 +472,28 @@ describe('the visit\'s own filter (history.state, rich-docs spec M8.22)', () => 
     expect(r.mountFn).toHaveBeenCalledTimes(4);
   });
 
+  it('8b: a pending filter is spent once: the same URL pushed again as a new entry answers none, and back answers the earlier entry\'s own', async () => {
+    realNavigate();
+    const r = rig();
+    render(<Host r={r} />);
+    const first = await mounted(r);
+    act(() => { first.openVersion!({ sha: C1, only: C2 }); });
+    const next = await mounted(r, 2);
+    expect(next.version?.only).toBe(C2);
+    const url = location.pathname + location.search;
+    // An ordinary link to the same page: a new entry with no state, then `popstate`, as the router fires it.
+    act(() => { history.pushState(null, '', url); window.dispatchEvent(new PopStateEvent('popstate')); });
+    await waitFor(() => expect(r.inputs.at(-1)?.version?.only).toBeNull());
+    expect(history.state).toBeNull();
+    const probed: Array<string | null> = [];
+    function Probe(): ReactNode { probed.push(useReaderOnly()); return null; }
+    render(<Probe />);
+    await settle();
+    expect(probed.at(-1)).toBeNull();
+    act(() => { history.back(); });
+    await waitFor(() => expect(r.inputs.at(-1)?.version?.only).toBe(C2));
+  });
+
   it('9: a reload on an entry whose state already holds a filter seeds the body with it', async () => {
     history.replaceState({ other: 1, [READER_ONLY_STATE_KEY]: C2 }, '', '/docs/demo/specs/a.md?at=' + C3);
     const r = rig();
