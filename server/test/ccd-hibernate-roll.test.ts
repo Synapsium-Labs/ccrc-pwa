@@ -932,7 +932,7 @@ describe('the Overlord W1 ccd arms, PR C2: the fresh start wakes on the account 
     const r = fresh();
     expect(r.rc, r.err).toBe(0);
     expect(h.reg(ID, 'wrapper')).toBe('claude-b');
-    expect(Number(h.reg(ID, 'typed').split(' ')[0]), 'the floor moved to now').toBeGreaterThan(1000);
+    expect(Number((h.reg(ID, 'typed') ?? '').split(' ')[0]), 'the floor moved to now').toBeGreaterThan(1000);
   });
 
   // A concurrent wake (the real `cmd_ensure`, as the W1a rows run it) planted right after the `wrapper` write, before `.fresh`.
