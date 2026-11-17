@@ -228,6 +228,19 @@ function MockupLive(p: MockupViewProps & {
     // The attempt's end for Export: resolved once, by whichever comes first (its result, its failure, its abort).
     let end!: (e: MockupLoadEnd) => void;
     const settled = new Promise<MockupLoadEnd>((resolve) => { end = resolve; });
+    // Sign-in is listened for from the attempt's start, not from its result: `clearAuthLost` announces once, to the
+    // listeners already subscribed, and a sign-in can complete while the load is still pending (review 2378 F1, as the
+    // reader's body does, review 2372 F1). The listener latches that sign-in; once the load has ended, a row `failed` with
+    // `auth` starts ONE new attempt over the current context at once. Nothing reads `isAuthLost` here, so a row whose
+    // read answered `auth` cannot loop: each new attempt waits for an announcement of its own.
+    let regained = false;
+    /** Set once the result has a row `failed` with `auth`: from then on a sign-in starts the new attempt itself. */
+    let watching = false;
+    // A new attempt's start runs this attempt's cleanup, which drops the listener.
+    const unwatch = onAuthRegained(() => {
+      if (watching) setAttemptNo((n) => n + 1);
+      else regained = true;
+    });
     const moved = (): void => {
       if (generation.current !== mine || host.current.historical) return;
       if (autoRelisted.current) {
@@ -237,6 +250,7 @@ function MockupLive(p: MockupViewProps & {
       autoRelisted.current = true;
       generation.current += 1;
       ctl.abort();
+      unwatch();
       end({ s: 'ended' });
       setLoaded(null);
       // Export waits for the next context: the header reads "Preparing…", and no file is offered over an attempt that was
@@ -264,6 +278,17 @@ function MockupLive(p: MockupViewProps & {
           end({ s: 'ended' });
           return;
         }
+        if (!result.plan.rows.some((r) => r.verdict.v === 'failed' && r.verdict.failure === 'auth')) {
+          unwatch();
+        } else if (regained) {
+          // A sign-in completed during the load, after a read answered `auth`: the new attempt reads again, so this one
+          // builds nothing.
+          end({ s: 'ended' });
+          setAttemptNo((n) => n + 1);
+          return;
+        } else {
+          watching = true;
+        }
         end({ s: 'loaded', result });
         // The frame's element follows the page this result builds (below, `framedFor`), not the publish.
         setLoaded({ extract, result });
@@ -275,6 +300,7 @@ function MockupLive(p: MockupViewProps & {
       },
     );
     return () => {
+      unwatch();
       ctl.abort();
       generation.current += 1;
       end({ s: 'ended' });
@@ -282,16 +308,6 @@ function MockupLive(p: MockupViewProps & {
     };
   }, [doc, context, pin.section, pin.path, p.reader, attemptNo]);
 
-  // Sign-in: a result with a row `failed` with `auth` waits for the session to come back, then reads again in ONE new
-  // attempt over the current context. It unsubscribes when it fires, when the result changes and on unmount.
-  useEffect(() => {
-    if (loaded === null || !loaded.result.plan.rows.some((r) => r.verdict.v === 'failed' && r.verdict.failure === 'auth')) return undefined;
-    const off = onAuthRegained(() => {
-      off();
-      setAttemptNo((n) => n + 1);
-    });
-    return off;
-  }, [loaded]);
   // Retry re-lists and nothing else: the context that re-list produces starts the attempt, so none runs over the stale listing
   // (review M5).
   const retry = (): void => host.current.relist();
