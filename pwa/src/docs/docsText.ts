@@ -15,6 +15,7 @@ import type { ImagePin } from './docsLinks';
 import type { ShareFields, ShareNote, ShareNoteLine, ShareRefusal } from './share';
 import type { ExportMissing, ExportPlain, ExportWait } from './export/policy';
 import type { MockupRefVerdict } from './mockup/ports';
+import type { MockupPrescan } from './mockup/prescan';
 import { MOCKUP_MAX_CSS_DEPTH } from './mockup/policy';
 
 /** One sentence per docs failure word (spec 4.7), at least 20 characters each (M4.F1). */
@@ -782,8 +783,9 @@ export const MOCKUP_TEXT = {
   retry: 'Retry',
 } as const;
 
-/** What the pre-scan's `why` says, after "Not rendered: " (base 5.6.2). */
-export const MOCKUP_REFUSAL_SENTENCE: Record<'too-deep' | 'too-many-tags' | 'too-many-formatting' | 'foreign-markup' | 'too-many-attributes', string> = {
+/** What the pre-scan's `why` says, after "Not rendered: " (base 5.6.2). Keyed over the pre-scan's own union, so a reason added
+ *  there is a compile error here. */
+export const MOCKUP_REFUSAL_SENTENCE: Record<Extract<MockupPrescan, { ok: false }>['why'], string> = {
   'too-deep': 'its elements nest too deeply',
   'too-many-tags': 'it has too many tags',
   'too-many-formatting': 'it keeps too many formatting elements open at once',
@@ -836,7 +838,7 @@ export function mockupVerdictSentence(v: MockupRefVerdict, offered: boolean): st
     case 'external':
       return offered ? MOCKUP_VERDICT_SENTENCE.external : MOCKUP_VERDICT_SENTENCE.refusedOrigin;
     case 'refused':
-      return Object.hasOwn(DOC_IMAGE_REFUSED_SENTENCE, v.why) ? DOC_IMAGE_REFUSED_SENTENCE[v.why as DocImageRefusal] : v.why;
+      return DOC_IMAGE_REFUSED_SENTENCE[v.why];
     case 'missing':
       return DOC_IMAGE_REFUSED_SENTENCE[v.why === 'absent-at-commit' ? 'absent' : v.why];
     case 'unsupported':

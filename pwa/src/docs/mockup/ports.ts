@@ -3,7 +3,7 @@
 // captured context; the loader (`load.ts`) reads admitted pins through `MockupAssetReader`, which the consumer declares
 // here and the screen's adapter implements over the existing Docs loaders and per-screen queue. No transport adapter
 // receives admission authority: it reads the pins it is given and nothing else.
-import type { DocPin, DocSectionSlug, DocsEntry, DocsPageLocation, DocsTreeOk } from '../../../../shared/docs';
+import type { DocPin, DocRefResolution, DocSectionSlug, DocsEntry, DocsPageLocation, DocsTreeOk } from '../../../../shared/docs';
 import type { MockupAssetKind } from './policy';
 
 /** Where a reference was written: the section and path of the page (depth 0) or of the stylesheet that holds it, as
@@ -31,14 +31,18 @@ export interface MockupRef {
   readonly depth: number;
 }
 
+/** Why the planner refuses a reference: `resolveDocRef`'s refused reasons, `repo` for a file outside the Docs sections, and
+ *  `scheme` for a non-web scheme (`scheme` is also one of `resolveDocRef`'s own). Derived from `resolveDocRef`'s answer, so the
+ *  viewer's sentences (`docsText.ts`) are keyed over exactly the reasons the planner can give. */
+export type MockupRefusedWhy = 'repo' | Extract<DocRefResolution, { kind: 'refused' }>['why'];
+
 /** Base spec 5.6.3's verdict union, every reason kept distinct. `inline.size` is the admission reservation (the row's
- *  `MockupSize.bytes`), not a measurement of the bytes. `refused.why` is `resolveDocRef`'s refused reason, `repo` for
- *  a file outside the Docs sections, or `scheme` for a non-web scheme. */
+ *  `MockupSize.bytes`), not a measurement of the bytes. */
 export type MockupRefVerdict =
   | { readonly v: 'inline'; readonly pin: DocPin; readonly kind: MockupAssetKind; readonly mime: string; readonly size: number; readonly draft: boolean }
   | { readonly v: 'kept'; readonly why: 'fragment' | 'self-contained' }
   | { readonly v: 'external'; readonly origin: string; readonly via: 'src' | 'script-text' }
-  | { readonly v: 'refused'; readonly why: string }
+  | { readonly v: 'refused'; readonly why: MockupRefusedWhy }
   | { readonly v: 'missing'; readonly why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' }
   | { readonly v: 'unsupported'; readonly why: 'kind' | 'element' | 'css-depth' }
   | { readonly v: 'skipped'; readonly why: 'too-large' | 'over-budget' }
