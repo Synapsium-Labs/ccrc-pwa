@@ -43,6 +43,10 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
   onto another account is unmeasured and the row is blind (the safe direction). Only the watcher passes it.
 - `own-account-unknown-is-unmeasured` and `org-of-absent-is-unlabelled` stand as recorded (the coordinator's rulings in
   fix round 1); Table 3 gains the own-account row in the programme's ledger PR, not here.
+- `decision-model-undo-shared-case`: after migration 87 sat behind decision model A's 86, `decision-model-records`' case
+  "a database one version back" re-ran 87 on a database that already had `prevLane` (red on CI). Under claim 4726's grant
+  (run 2329) this branch takes the shared text three branches converged on: the case finds its slot by its DDL and undoes
+  every later migration generically, so no branch adds a line for its own.
 - `org-read-at-the-lane-pass`: the relation uses the roster the server holds when the lane reads the row, as Table 3
   says. A label changed after a resume changes the reading on the next pass; the reading is never stored.
 
