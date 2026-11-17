@@ -15,8 +15,8 @@ import { Button, QC_ACTIONS, Sheet } from '@ccrc/ui';
 import { mib } from './DocMarkdown';
 import { EXPORT_TEXT, fillSentence, kib, pluralS } from './docsText';
 import type { ExportInput, ExportMockupFacts, ExportResult } from './export/buildExport';
-import { exportInputOf, exportWorktreeLabel, type ExportRequest } from './export/exportInput';
-import type { ExportFact } from './export/provenance';
+import { exportInputOf, type ExportRequest } from './export/exportInput';
+import { exportWorktreeLabel, type ExportFact } from './export/provenance';
 import { downloadExport } from './objectUrls';
 
 /** The builder's chunk, as the sheet calls it. A test injects one. */

@@ -8,7 +8,6 @@
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { contentClass, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../../shared/docs';
 import type { HighlightStore } from '../../lib/highlightStore';
-import { DOCS_HEAD_TEXT, closedWorktreeLabel } from '../docsText';
 import { leafName } from '../docsTree';
 import type { ExportBody, MockupExportAssets } from '../exportBody';
 import type { ExportBodyInput, ExportInput } from './buildExport';
@@ -71,12 +70,6 @@ export function firstHeading(tree: HastRoot): string | null {
     for (let k = n.children.length - 1; k >= 0; k -= 1) stack.push(n.children[k]!);
   }
   return null;
-}
-
-/** The closed label of the worktree whose drafts the page may carry, as the provenance writes it (`exportProvenance`'s
- *  `label`): the sheet's draft confirm says it too. */
-export function exportWorktreeLabel(tree: DocsTreeOk): string {
-  return tree.drafts.state === 'holder' ? closedWorktreeLabel(tree.drafts.worktree) : DOCS_HEAD_TEXT.worktreeOther;
 }
 
 function bodyOf(source: ExportSource, alt: string, page: Leaf, tree: DocsTreeOk): ExportBodyInput {

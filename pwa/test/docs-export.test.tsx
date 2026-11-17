@@ -36,7 +36,7 @@ import { exportFilename } from '../src/docs/export/filename';
 import {
   DOCS_EXPORT_CSP, DOCS_EXPORT_MAX_BYTES, EXPORT_FILENAME_MAX, EXPORT_PREFIX, type ExportMissing, type ExportPlain,
 } from '../src/docs/export/policy';
-import { colouringNotes, exportProvenance, missingNotes, type ExportProvenance } from '../src/docs/export/provenance';
+import { colouringNotes, exportProvenance, exportWorktreeLabel, missingNotes, type ExportProvenance } from '../src/docs/export/provenance';
 import { EXPORT_CSS, exportStylesheetPart } from '../src/docs/export/stylesheet';
 import { pinFor, type FileSlot } from '../src/docs/useDocsVisit';
 import type { Highlighter } from '../src/lib/highlightProtocol';
@@ -183,6 +183,36 @@ const DRAFT_STATES: [string, Partial<DocsEntry>][] = [
   ['typechange', { draft: draftOf('typechange', { kind: 'symlink', fp: null }) }],
   ['withheld', { draft: draftOf('modified', { fp: null }) }],
 ];
+
+describe('the export\'s worktree label has ONE owner, exportWorktreeLabel in provenance.ts (review minor 5)', () => {
+  it('is the label the draft banner, the Source fact and the ccrc:worktree meta carry, for every class of worktree', () => {
+    const cases: Array<[{ readonly path: string; readonly class: 'main' | 'workspace' | 'other' }, string]> = [
+      [{ path: '/repo/demo', class: 'main' }, 'main checkout'],
+      [{ path: '/repo/demo/.ws/ws-a/', class: 'workspace' }, 'workspace ws-a'],
+      [{ path: '/repo/elsewhere/wt-b', class: 'other' }, 'another worktree'],
+    ];
+    for (const [worktree, want] of cases) {
+      const tree = treeOk({ entries: [entry('specs', 'a.md', { draft: draftOf('modified') })], drafts: holderAt(worktree) });
+      const p = provenanceAt(tree, '/docs/demo/specs/a.md?ref=main');
+      expect(exportWorktreeLabel(tree)).toBe(want);
+      expect(metaOf(p, 'ccrc:worktree')).toBe(want);
+      expect(p.banner).toContain(`uncommitted changes from ${want} on main`);
+      expect(factOf(p, 'Source')).toContain(want);
+    }
+    expect(exportWorktreeLabel(treeOk())).toBe('another worktree');
+  });
+
+  it('no other file of Export builds the label: the choice between closedWorktreeLabel and the other-worktree words stands once, in provenance.ts', () => {
+    const dir = path.join(import.meta.dirname, '..', 'src', 'docs');
+    const files = [
+      ...readdirSync(path.join(dir, 'export')).filter((f) => /\.tsx?$/.test(f)).map((f) => path.join(dir, 'export', f)),
+      path.join(dir, 'ExportSheet.tsx'),
+    ];
+    const holders = files.filter((f) => /closedWorktreeLabel\(|worktreeOther/.test(readFileSync(f, 'utf8')));
+    expect(holders.map((f) => path.relative(dir, f))).toEqual([path.join('export', 'provenance.ts')]);
+    expect(readFileSync(path.join(dir, 'export', 'provenance.ts'), 'utf8').match(/closedWorktreeLabel\(/g)).toHaveLength(1);
+  });
+});
 
 describe('exportProvenance: what the file says it is (spec 4.17 "Provenance", "Drafts"; M4.T7, M4.EX5, M4.EX6)', () => {
   it('a committed leaf: project, repo path, served ref and how, the full commit, its permalink, its source, the time and the view', () => {
