@@ -267,6 +267,8 @@ describe('the closed route table', () => {
     [['plan', 'ticket-move', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/move'],
     [['plan', 'epic-drop', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/epics/drop'],
     [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
+    // `plan phase-ref` (programme work map WM0): like its siblings, the pane's identity in the query.
+    [['plan', 'phase-ref', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/phases/refs'],
     // The inbound path's two (D-8183): `take` by programme slug, `triage` by Linear team key; both carry the pane's identity in the query.
     [['plan', 'take', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/take'],
     [['plan', 'triage', 'AAA'], 'POST', '/api/teams/AAA/plan/triage'],
@@ -332,8 +334,8 @@ describe('the closed route table', () => {
     // the probes piece): `sessions.probe` and `probe.answer`.
     // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
-    // Eighty-seven since `plan.take` and `plan.triage` (D-8183).
-    expect(keys).toHaveLength(87);
+    // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
+    expect(keys).toHaveLength(88);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -348,7 +350,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -522,6 +524,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
+      ['plan', 'phase-ref', 'prog-a', '--json', '-'],
       ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
       ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
@@ -1967,6 +1970,26 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
       expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
     }
     expect(seen).toEqual([]);
+  });
+
+  it('plan phase-ref sends the pane\'s identity in the query and the body unchanged (programme work map WM0)', async () => {
+    plantPane('demo-ws');
+    const b = '{"op":"carry","from":"p1","to":"p2","ticket":"t1"}';
+    const r = await run(['plan', 'phase-ref', 'prog-a', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan/phases/refs?${ID}`, b]]);
+  });
+
+  it('the phase-ref row is refused locally without plan-phases-v1', async () => {
+    expect(SERVER_CAPS).toContain('plan-phases-v1');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-phases-v1'));
+    plantPane('demo-ws');
+    const r = await run(['plan', 'phase-ref', 'prog-a', '--json', '-'], '{"op":"add","phase":"p1","ref":{"kind":"epic","key":"e1"}}', { TMUX_PANE: '%7' });
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'capability-missing']);
+    expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain('plan-phases-v1');
+    // the other plan rows still send: the word gates phase-ref alone
+    await run(['plan', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
   });
 
   it('an absent or stale cap file sends', async () => {

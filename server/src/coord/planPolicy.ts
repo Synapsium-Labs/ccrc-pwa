@@ -3,13 +3,15 @@
 import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
-  CHECKPOINT_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
-  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPutBody,
-  type PlanRefusal, type PlanTicketBody, type TicketState, type TriageDecision,
+  CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
+  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseBody,
+  type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody, type TicketState,
+  type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
 import type {
-  Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewTicket, PlanChanges, StoredPlan, TicketPatch,
+  Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
+  PhaseChanges, PhasePatch, PhaseRefWrite, PhaseRow, PlanChanges, StoredPlan, TicketPatch,
 } from './planStore.js';
 
 /** An epic is done when no checkpoint is `open`, no ticket is `open` or `started`, and at least one checkpoint is `met` or
@@ -55,9 +57,13 @@ export function parsePlanPut(body: unknown, opts: PlanPutOpts = {}):
   let bytes: number;
   try { bytes = Buffer.byteLength(JSON.stringify(body), 'utf8'); } catch { return bad('the body is not JSON'); }
   if (bytes > PLAN_BOUNDS.bodyBytes) return tooLarge(`the body is over ${PLAN_BOUNDS.bodyBytes} bytes`);
-  const topExtra = closed(body, ['home', 'title', 'epics'], 'body');
+  const topExtra = closed(body, ['home', 'title', 'phases', 'epics'], 'body');
   if (topExtra) return bad(topExtra);
   const { home, title, epics } = body;
+  if (body.phases !== undefined) {
+    const ph = parsePhases(body.phases);
+    if (ph !== null) return ph;
+  }
   if (home !== undefined && !textOk(home, PLAN_BOUNDS.titleChars, true)) return bad('home is not a project name');
   if (title !== undefined && !textOk(title, PLAN_BOUNDS.titleChars, true)) return bad('title is not 1 to 255 characters');
   if (opts.home) {
@@ -119,6 +125,44 @@ export function parsePlanPut(body: unknown, opts: PlanPutOpts = {}):
     }
   }
   return { ok: true, put: body as unknown as PlanPutBody };
+}
+
+/** A put's `phases` (programme work map WM0, D14): at most 24, each a key, a title, a one-line summary, its references (a
+ *  whole epic or one ticket, by key) and an optional `droppedWhy`. Null when well formed. */
+function parsePhases(phases: unknown): Bad | null {
+  if (!Array.isArray(phases)) return bad('phases is not a list');
+  if (phases.length > PLAN_BOUNDS.phases) return tooLarge(`more than ${PLAN_BOUNDS.phases} phases`);
+  const keys = new Set<string>();
+  for (const p of phases) {
+    if (!isObj(p)) return bad('a phase is not an object');
+    const x = closed(p, ['key', 'title', 'summary', 'refs', 'droppedWhy'], 'phase');
+    if (x) return bad(x);
+    if (!isPlanKey(p.key)) return bad('a phase key is not a plan key');
+    if (keys.has(p.key)) return bad(`phase key ${p.key} is repeated`);
+    keys.add(p.key);
+    if (!textOk(p.title, PLAN_BOUNDS.titleChars, true)) return bad(`phase ${p.key}: title is not 1 to 255 characters`);
+    if (typeof p.summary !== 'string' || [...p.summary].length > PLAN_BOUNDS.summaryChars) return bad(`phase ${p.key}: summary is over ${PLAN_BOUNDS.summaryChars} characters`);
+    if (p.droppedWhy !== undefined && !textOk(p.droppedWhy, PLAN_BOUNDS.reasonChars, false)) return bad(`phase ${p.key}: droppedWhy is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
+    if (!Array.isArray(p.refs)) return bad(`phase ${p.key}: refs is not a list`);
+    if (p.refs.length > PLAN_BOUNDS.refsPerPhase) return tooLarge(`phase ${p.key}: more than ${PLAN_BOUNDS.refsPerPhase} references`);
+    const seen = new Set<string>();
+    for (const r of p.refs as unknown[]) {
+      const rb = refBody(r);
+      if (typeof rb === 'string') return bad(`phase ${p.key}: ${rb}`);
+      if (seen.has(`${rb.kind}:${rb.key}`)) return bad(`phase ${p.key}: reference ${rb.kind} ${rb.key} is repeated`);
+      seen.add(`${rb.kind}:${rb.key}`);
+    }
+  }
+  return null;
+}
+/** One reference's body, `{ kind, key }`, or why it is not one. */
+function refBody(r: unknown): PlanPhaseRefBody | string {
+  if (!isObj(r)) return 'a reference is not an object';
+  const x = closed(r, ['kind', 'key'], 'reference');
+  if (x) return x;
+  if (typeof r.kind !== 'string' || !(PHASE_REF_KINDS as readonly string[]).includes(r.kind)) return 'a reference kind is not epic or ticket';
+  if (!isPlanKey(r.key)) return 'a reference key is not a plan key';
+  return { kind: r.kind as PlanPhaseRefBody['kind'], key: r.key };
 }
 
 export function parsePlanClose(body: unknown):
@@ -214,6 +258,29 @@ export function parsePlanTicketMove(body: unknown):
     return verbBad('the body moves nothing and drops nothing');
   }
   return { ok: true, move: out };
+}
+
+/** `plan phase-ref`: `{ op: 'add' | 'remove', phase, ref: { kind, key } }` or `{ op: 'carry', from, to, ticket }` (D17). The
+ *  caller's identity rides the query, so a body naming `byId` or `byUuid` is refused as an unknown field. */
+export function parsePlanPhaseRef(body: unknown): { ok: true; move: PlanPhaseRefMoveBody } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  if (body.op === 'add' || body.op === 'remove') {
+    const x = closed(body, ['op', 'phase', 'ref'], 'body');
+    if (x) return verbBad(x);
+    if (!isPlanKey(body.phase)) return verbBad('phase is not a plan key');
+    const rb = refBody(body.ref);
+    if (typeof rb === 'string') return verbBad(rb);
+    return { ok: true, move: { op: body.op, phase: body.phase, ref: rb } };
+  }
+  if (body.op === 'carry') {
+    const x = closed(body, ['op', 'from', 'to', 'ticket'], 'body');
+    if (x) return verbBad(x);
+    if (!isPlanKey(body.from)) return verbBad('from is not a plan key');
+    if (!isPlanKey(body.to)) return verbBad('to is not a plan key');
+    if (!isPlanKey(body.ticket)) return verbBad('ticket is not a plan key');
+    return { ok: true, move: { op: 'carry', from: body.from, to: body.to, ticket: body.ticket } };
+  }
+  return verbBad('op is not add, remove or carry');
 }
 
 /** `plan epic-drop`: the epic's key and a reason. */
@@ -337,6 +404,159 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     }
   }
   return { ok: true, changes };
+}
+
+// ── Phases (programme work map WM0, D-8715) ────────────────────────────────────────────────────────────────────────────
+
+/** THE one derivation of a phase's number (review 2268 F6): its 1-based place, in the order given, among the phases that are
+ *  not dropped. The plan read's `PhaseView.number` and the work map's phase and carry numbers both take it from here. */
+export function phaseNumbers(phases: readonly { key: string; dropped: boolean }[]): ReadonlyMap<string, number> {
+  const out = new Map<string, number>();
+  for (const p of phases) if (!p.dropped) out.set(p.key, out.size + 1);
+  return out;
+}
+
+const findTicket = (stored: StoredPlan, key: string) => {
+  for (const e of stored.epics) { const t = e.tickets.find((x) => x.key === key); if (t !== undefined) return { epic: e, ticket: t }; }
+  return undefined;
+};
+
+/** The put's phases against the stored ones (D18): diffed by key like epics; a stored phase that is not dropped and is
+ *  absent from the put needs `droppedWhy` (`dropped-needs-reason`); a dropped phase is never revived. References are only
+ *  ADDED: one the phase already holds is left as it is (even to an object dropped since), and a new one must name an epic or
+ *  ticket that is not dropped once the put applies (`unknown-ref`), wherever it stands in the put: on a dropped phase and on a
+ *  phase the same put drops too (review 2375 F9). Other content on a dropped phase (title, summary, position, valid new
+ *  references) is ignored, as `diffPlan` ignores it on a dropped epic. A put whose order puts a recorded carry's target at or
+ *  before its source is refused `bad-carry` (review 2268 F12). An absent `phases` changes nothing. */
+export function diffPhases(stored: StoredPlan, phases: readonly PhaseRow[], put: PlanPutBody):
+  { ok: true; changes: PhaseChanges | undefined } | Refused {
+  if (put.phases === undefined) return { ok: true, changes: undefined };
+  const byKey = new Map(phases.map((p) => [p.key, p]));
+  const putKeys = new Set(put.phases.map((p) => p.key));
+  for (const p of phases) {
+    if (p.droppedWhy === null && !putKeys.has(p.key)) return refuse('dropped-needs-reason', `phase ${p.key} left the plan with no droppedWhy`);
+  }
+  // What is live once the put applies: an epic the put keeps (not dropped before, not dropped by it), and a ticket that is not
+  // dropped (an open ticket of an epic the put drops drops with it, `dropEpicInto`) or a new one in a live epic.
+  const putEpic = new Map(put.epics.map((e) => [e.key, e]));
+  const storedEpic = new Map(stored.epics.map((e) => [e.key, e]));
+  const epicLive = (key: string): boolean => {
+    const e = putEpic.get(key);
+    return e !== undefined && e.droppedWhy === undefined && storedEpic.get(key)?.state !== 'dropped';
+  };
+  const ticketLive = (key: string): boolean => {
+    const f = findTicket(stored, key);
+    if (f !== undefined) return f.ticket.state !== 'dropped' && !(f.ticket.state === 'open' && !epicLive(f.epic.key));
+    return put.epics.some((e) => epicLive(e.key) && (e.tickets ?? []).some((t) => t.key === key));
+  };
+  const idOf = (kind: 'epic' | 'ticket', key: string): number | undefined =>
+    kind === 'epic' ? storedEpic.get(key)?.id : findTicket(stored, key)?.ticket.id;
+
+  // The references a phase of the put adds: those it does not already hold, each to an object live once the put applies.
+  const newRefs = (p: PlanPhaseBody, was: PhaseRow | undefined): { ok: true; refs: PlanPhaseRefBody[] } | Refused => {
+    const refs: PlanPhaseRefBody[] = [];
+    for (const r of p.refs) {
+      const id = idOf(r.kind, r.key);
+      if (was !== undefined && id !== undefined && was.refs.some((x) => x.kind === r.kind && x.refId === id)) continue;
+      if (!(r.kind === 'epic' ? epicLive(r.key) : ticketLive(r.key))) {
+        return refuse('unknown-ref', `phase ${p.key}: no ${r.kind} ${r.key} that is not dropped`);
+      }
+      refs.push(r);
+    }
+    return { ok: true, refs };
+  };
+
+  const changes: PhaseChanges = { phases: { insert: [], update: [], drop: [] }, refs: [] };
+  const liveOrdinal = new Map<number, number>();
+  for (const [ordinal, p] of put.phases.entries()) {
+    const was = byKey.get(p.key);
+    if (p.droppedWhy !== undefined) {
+      if (was === undefined) return refuse('plan-bad-body', `phase ${p.key} is new and cannot carry droppedWhy`);
+      const adds = newRefs(p, was);
+      if (!adds.ok) return adds;
+      if (was.droppedWhy === null) changes.phases.drop.push({ id: was.id, why: p.droppedWhy });
+      continue;
+    }
+    const adds = newRefs(p, was);
+    if (!adds.ok) return adds;
+    if (was !== undefined && was.droppedWhy !== null) continue;
+    if (was === undefined) {
+      changes.phases.insert.push({ key: p.key, ordinal, title: p.title, summary: p.summary } satisfies NewPhase);
+    } else {
+      liveOrdinal.set(was.id, ordinal);
+      const patch: PhasePatch = {};
+      if (was.ordinal !== ordinal) patch.ordinal = ordinal;
+      if (was.title !== p.title) patch.title = p.title;
+      if (was.summary !== p.summary) patch.summary = p.summary;
+      if (Object.keys(patch).length > 0) changes.phases.update.push({ id: was.id, ...patch });
+    }
+    for (const r of adds.refs) changes.refs.push({ phaseKey: p.key, kind: r.kind, key: r.key } satisfies NewPhaseRef);
+  }
+  for (const p of phases) {
+    for (const r of p.refs) {
+      if (r.carriedTo === null) continue;
+      const from = liveOrdinal.get(p.id);
+      const to = liveOrdinal.get(r.carriedTo);
+      if (from !== undefined && to !== undefined && to <= from) {
+        const toKey = phases.find((x) => x.id === r.carriedTo)?.key ?? String(r.carriedTo);
+        return refuse('bad-carry', `phase ${toKey} holds a carry from phase ${p.key} and cannot come before it`);
+      }
+    }
+  }
+  return { ok: true, changes };
+}
+
+/** `plan phase-ref`'s one decision (D17, review 2268 F12). `add` and `remove` name a phase that is not dropped and an epic or
+ *  ticket by key (`unknown-ref` otherwise); adding a reference the phase holds changes nothing, and a new one must name an
+ *  object that is not dropped. A `remove` of either end of a recorded carry, the source's reference marked carried to a phase
+ *  that is not dropped or the reference in that carry's target, is refused `bad-carry`; every other remove is allowed.
+ *  `carry` is refused `bad-carry` when either phase is dropped, `to` is not later than `from`, the ticket is done, or the
+ *  ticket is not `from`'s own work: held there by a ticket or whole-epic reference, not dropped, and not already carried out
+ *  of it to a phase that is not dropped. */
+export function phaseRefVerdict(move: PlanPhaseRefMoveBody, stored: StoredPlan, phases: readonly PhaseRow[]):
+  { ok: true; write: PhaseRefWrite } | Refused {
+  const numbers = phaseNumbers(phases.map((p) => ({ key: p.key, dropped: p.droppedWhy !== null })));
+  const live = (id: number | null): boolean => id !== null && phases.some((p) => p.id === id && p.droppedWhy === null);
+  if (move.op === 'carry') {
+    const from = phases.find((p) => p.key === move.from);
+    const to = phases.find((p) => p.key === move.to);
+    if (from === undefined) return refuse('unknown-ref', `no phase ${move.from}`);
+    if (to === undefined) return refuse('unknown-ref', `no phase ${move.to}`);
+    const f = findTicket(stored, move.ticket);
+    if (f === undefined) return refuse('unknown-ref', `no ticket ${move.ticket}`);
+    const t = f.ticket;
+    if (from.droppedWhy !== null) return refuse('bad-carry', `phase ${from.key} was dropped`);
+    if (to.droppedWhy !== null) return refuse('bad-carry', `phase ${to.key} was dropped`);
+    if (!(numbers.get(to.key)! > numbers.get(from.key)!)) return refuse('bad-carry', `phase ${to.key} is not later than phase ${from.key}`);
+    if (t.state === 'done') return refuse('bad-carry', `ticket ${t.key} is done`);
+    const tref = from.refs.find((r) => r.kind === 'ticket' && r.refId === t.id);
+    const held = tref !== undefined || from.refs.some((r) => r.kind === 'epic' && r.refId === t.epicId);
+    const carriedOut = tref !== undefined && live(tref.carriedTo);
+    if (!held || carriedOut || t.state === 'dropped') return refuse('bad-carry', `ticket ${t.key} is not phase ${from.key}'s own work`);
+    return { ok: true, write: { kind: 'carry', fromPhaseId: from.id, toPhaseId: to.id, ticketId: t.id } };
+  }
+  const phase = phases.find((p) => p.key === move.phase);
+  if (phase === undefined || phase.droppedWhy !== null) {
+    return refuse('unknown-ref', phase === undefined ? `no phase ${move.phase}` : `phase ${move.phase} was dropped`);
+  }
+  const obj = move.ref.kind === 'epic'
+    ? stored.epics.find((e) => e.key === move.ref.key)
+    : findTicket(stored, move.ref.key)?.ticket;
+  if (obj === undefined) return refuse('unknown-ref', `no ${move.ref.kind} ${move.ref.key}`);
+  const held = phase.refs.find((r) => r.kind === move.ref.kind && r.refId === obj.id);
+  if (move.op === 'add') {
+    if (held !== undefined) return { ok: true, write: { kind: 'none' } };
+    if (obj.state === 'dropped') return refuse('unknown-ref', `${move.ref.kind} ${move.ref.key} was dropped`);
+    return { ok: true, write: { kind: 'insert', phaseId: phase.id, refKind: move.ref.kind, refId: obj.id } };
+  }
+  if (held === undefined) return refuse('unknown-ref', `phase ${phase.key} holds no reference to ${move.ref.kind} ${move.ref.key}`);
+  if (held.kind === 'ticket' && live(held.carriedTo)) {
+    return refuse('bad-carry', `phase ${phase.key} recorded a carry of ticket ${move.ref.key}: removing it would undo the carry`);
+  }
+  if (held.kind === 'ticket' && phases.some((p) => p.id !== phase.id && p.refs.some((r) => r.kind === 'ticket' && r.refId === obj.id && r.carriedTo === phase.id))) {
+    return refuse('bad-carry', `ticket ${move.ref.key} was carried into phase ${phase.key}: removing it would leave the carry pointing nowhere`);
+  }
+  return { ok: true, write: { kind: 'delete', refRowId: held.id } };
 }
 
 // ── States ─────────────────────────────────────────────────────────────────────────────────────────────────────────────

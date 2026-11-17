@@ -1,5 +1,6 @@
 // The plan tables' SQL (Linear hierarchy design 2026-11-10 §4.2, D-8181): epics, checkpoints, tickets, the Linear bindings,
-// the sync's due queue and the per-project hierarchy settings.
+// the sync's due queue and the per-project hierarchy settings; and the programme's phases and their references (programme
+// work map WM0, D-8715), whose one writer this is too.
 //
 // It sits beside `store.ts` in the same ring and context (Coordination), in `ledgersStore.ts`'s idiom: every function takes
 // the store's `DatabaseSync` and is synchronous. It holds the handle (`core-vocab.test.ts`'s `HANDLE_HOLDERS`); the plan
@@ -11,7 +12,7 @@ import type { RunState } from '../../../shared/api.js';
 import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
   type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
-  type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
+  type PhaseRefKind, type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { tx } from './tx.js';
@@ -43,6 +44,14 @@ export interface StoredPlan {
   program: string; planBy: string | null; required: boolean;
   epics: (EpicRow & { checkpoints: CheckpointRow[]; tickets: TicketRow[] })[];
 }
+/** A phase reference (programme work map WM0): `refId` is an epic's or a ticket's id by `kind`; `carriedTo` the phase id a
+ *  recorded carry took this ticket to. */
+export interface PhaseRefRow { id: number; phaseId: number; kind: PhaseRefKind; refId: number; carriedTo: number | null; carriedAt: number | null }
+/** A phase of the sequence, dropped when `droppedWhy` is set, with its references. */
+export interface PhaseRow {
+  id: number; program: string; key: string; ordinal: number; title: string; summary: string; droppedWhy: string | null;
+  refs: PhaseRefRow[];
+}
 
 // ── Changes (what `plan put` and the verbs write) ──────────────────────────────────────────────────────────────────────
 
@@ -66,7 +75,20 @@ export type TicketPatch = Partial<{
 export interface Changes<N, P> { insert: N[]; update: (P & { id: number })[]; drop: { id: number; why: string }[] }
 export interface PlanChanges {
   epics: Changes<NewEpic, EpicPatch>; checkpoints: Changes<NewCheckpoint, CheckpointPatch>; tickets: Changes<NewTicket, TicketPatch>;
+  /** The put's phases (`diffPhases`), applied after the tickets in the same transaction; absent: the phases are untouched. */
+  phases?: PhaseChanges;
 }
+/** A new phase, or a reference a put ADDS (by keys: a put may add the epic or ticket it references in the same write). */
+export interface NewPhase { key: string; ordinal: number; title: string; summary: string }
+export type PhasePatch = Partial<{ ordinal: number; title: string; summary: string }>;
+export interface NewPhaseRef { phaseKey: string; kind: PhaseRefKind; key: string }
+export interface PhaseChanges { phases: Changes<NewPhase, PhasePatch>; refs: NewPhaseRef[] }
+/** `plan phase-ref`'s one write (`phaseRefVerdict` decides it): add a reference, remove one, or record a carry. */
+export type PhaseRefWrite =
+  | { kind: 'insert'; phaseId: number; refKind: PhaseRefKind; refId: number }
+  | { kind: 'delete'; refRowId: number }
+  | { kind: 'carry'; fromPhaseId: number; toPhaseId: number; ticketId: number }
+  | { kind: 'none' };
 export const NO_PLAN_CHANGES = (): PlanChanges => ({
   epics: { insert: [], update: [], drop: [] }, checkpoints: { insert: [], update: [], drop: [] },
   tickets: { insert: [], update: [], drop: [] },
@@ -155,6 +177,18 @@ export function planOf(db: DatabaseSync, program: string): StoredPlan {
       tickets: tks.filter((t) => t.epicId === e.id).map(ticketOf),
     })),
   };
+}
+
+/** A programme's phases in order (dropped ones included), each with its references. */
+export function phasesOf(db: DatabaseSync, program: string): PhaseRow[] {
+  const phases = db.prepare('SELECT id, program, key, ordinal, title, summary, droppedWhy FROM plan_phases WHERE program = ? ORDER BY ordinal, id')
+    .all(program) as unknown as Omit<PhaseRow, 'refs'>[];
+  if (phases.length === 0) return [];
+  const refs = db.prepare(
+    'SELECT r.id, r.phaseId, r.kind, r.refId, r.carriedTo, r.carriedAt FROM plan_phase_refs r JOIN plan_phases p ON p.id = r.phaseId '
+    + 'WHERE p.program = ? ORDER BY r.id',
+  ).all(program) as unknown as PhaseRefRow[];
+  return phases.map((p) => ({ ...p, refs: refs.filter((r) => r.phaseId === p.id) }));
 }
 
 export function planEndOf(db: DatabaseSync, program: string): { outcome: PlanEndOutcome; why: string | null; at: number } | null {
@@ -327,9 +361,60 @@ export function applyPlanChanges(
       touchEpic(before.epicId);
     }
 
+    if (changes.phases !== undefined) applyPhaseChangesInTx(db, program, changes.phases);
+
     db.prepare('UPDATE programs SET planBy = ?, planAt = ? WHERE slug = ? AND planBy IS NULL').run(by, now, program);
     for (const epicId of touched) settleEpicInTx(db, epicId, now);
     markSyncDueInTx(db, program, now);
+  });
+}
+
+const PHASE_COLS = ['ordinal', 'title', 'summary'] as const;
+const phaseIdByKey = (db: DatabaseSync, program: string, key: string): number | null =>
+  (db.prepare('SELECT id FROM plan_phases WHERE program = ? AND key = ?').get(program, key) as Raw | undefined)?.id as number | undefined ?? null;
+
+/** Inside `applyPlanChanges`' transaction, after the tickets: the put's phases, then the references it ADDS, each resolved by
+ *  key (the epic or ticket may be the put's own) and inserted unless the phase already holds it (D18: a put never removes a
+ *  reference, so it never undoes a carry). `diffPhases` checked every key; one that does not resolve throws, which rolls the
+ *  whole put back. */
+function applyPhaseChangesInTx(db: DatabaseSync, program: string, c: PhaseChanges): void {
+  for (const p of c.phases.insert) {
+    db.prepare('INSERT INTO plan_phases (program, key, ordinal, title, summary) VALUES (?, ?, ?, ?, ?)').run(program, p.key, p.ordinal, p.title, p.summary);
+  }
+  for (const u of c.phases.update) {
+    const st = patchStatement('UPDATE plan_phases SET ', u, PHASE_COLS, u.id);
+    if (st !== null) db.prepare(st.sql).run(...(st.args as never[]));
+  }
+  for (const d of c.phases.drop) db.prepare('UPDATE plan_phases SET droppedWhy = ? WHERE id = ? AND droppedWhy IS NULL').run(d.why, d.id);
+  for (const r of c.refs) {
+    const phaseId = phaseIdByKey(db, program, r.phaseKey);
+    const row = (r.kind === 'epic'
+      ? db.prepare('SELECT id FROM plan_epics WHERE program = ? AND key = ?')
+      : db.prepare('SELECT id FROM plan_tickets WHERE program = ? AND key = ?')).get(program, r.key) as Raw | undefined;
+    if (phaseId === null || row === undefined) throw new Error(`plan store: phase ${r.phaseKey} cannot reference ${r.kind} ${r.key}`);
+    db.prepare('INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (?, ?, ?) ON CONFLICT(phaseId, kind, refId) DO NOTHING')
+      .run(phaseId, r.kind, row.id as number);
+  }
+}
+
+/** THE one writer of `plan phase-ref` (D17): one reference added or removed, or a carry, in one transaction. A carry marks
+ *  the `from` phase's ticket reference carried to `to` (inserting it when `from` held the ticket through a whole-epic
+ *  reference) and inserts a ticket reference in `to` unless it is there (review 2268 F12: both halves or neither). */
+export function writePhaseRef(db: DatabaseSync, w: PhaseRefWrite, now: number): void {
+  tx(db, () => {
+    if (w.kind === 'insert') {
+      db.prepare('INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (?, ?, ?) ON CONFLICT(phaseId, kind, refId) DO NOTHING')
+        .run(w.phaseId, w.refKind, w.refId);
+    } else if (w.kind === 'delete') {
+      db.prepare('DELETE FROM plan_phase_refs WHERE id = ?').run(w.refRowId);
+    } else if (w.kind === 'carry') {
+      db.prepare(
+        "INSERT INTO plan_phase_refs (phaseId, kind, refId, carriedTo, carriedAt) VALUES (?, 'ticket', ?, ?, ?) "
+        + 'ON CONFLICT(phaseId, kind, refId) DO UPDATE SET carriedTo = excluded.carriedTo, carriedAt = excluded.carriedAt',
+      ).run(w.fromPhaseId, w.ticketId, w.toPhaseId, now);
+      db.prepare("INSERT INTO plan_phase_refs (phaseId, kind, refId) VALUES (?, 'ticket', ?) ON CONFLICT(phaseId, kind, refId) DO NOTHING")
+        .run(w.toPhaseId, w.ticketId);
+    }
   });
 }
 
@@ -921,7 +1006,7 @@ export function takeUpkeepTicket(
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
-  planOf, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
+  planOf, phasesOf, writePhaseRef, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
