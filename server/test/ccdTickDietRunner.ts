@@ -64,6 +64,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _compact_text_to: 'Overlord W1a compaction, Task 2',
   _fresh_pick_field_to: 'Overlord W1 ccd arms C1, Task 6',
   _fresh_pick_to: 'Overlord W1 ccd arms C1, Task 6',
+  _fresh_pick_least_to: 'Overlord W1 ccd arms C2, Task 7 (review 2360 F5)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -78,14 +79,14 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
  *  (ccd/lib/delegation-lease.sh, its fingerprint's unmeasured reason kept in the caller's shell). The Overlord's W1a
  *  compaction piece landed `_compact_text_to` (the role's compaction text for `_auto_compact_check`) the same way, and its
  *  ccd arms C1 `_fresh_pick_to` (the fresh pick's decider) and `_fresh_pick_field_to` (its bounded field read), in
- *  ccd/lib/long-lived.sh. */
+ *  ccd/lib/long-lived.sh, and its C2 `_fresh_pick_least_to` (step 3's least loaded so far) the same way. */
 const LANDED: ReadonlySet<string> = new Set([
   '_now_s_to', '_now_s', '_cfg_dir_to', '_limit_text_to', '_limit_num_in_to', '_limit_json_num_to',
   '_limit_pick_to', '_limit_field_to', '_share_pct_to', '_file_read_to', '_reg_get_to', '_reg_read_to',
   '_route_peek_to', '_route_effort_for_to', '_route_applied_get_to', '_route_wanted_to', '_route_pending_word_to',
   '_home_measured_to', '_swap_lane_to', '_swap_pin_legacy_offset_to', '_swap_pin_expiry_to', '_limit_reset_to',
   '_roster_fp_to', '_dl_fingerprint_to', '_pane_limit_capture_to', '_limit_rescue_knob_to', '_watchdog_sign_to',
-  '_wd_operator_hold_to', '_compact_text_to', '_fresh_pick_field_to', '_fresh_pick_to',
+  '_wd_operator_hold_to', '_compact_text_to', '_fresh_pick_field_to', '_fresh_pick_to', '_fresh_pick_least_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

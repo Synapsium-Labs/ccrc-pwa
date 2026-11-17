@@ -23,7 +23,7 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
 
 | Task | What | Where |
 |---|---|---|
-| D1 | Migration 89: `ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT` | `server/src/coord/schema.ts` |
+| D1 | Migration 90: `ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT` | `server/src/coord/schema.ts` |
 | D1 | `GenRow.prevLane`, read by `genRowOf`; the mint writes the newest row's `lane`, as `prevModel` | `server/src/continuity/continuityStore.ts` |
 | D2 | `'resumed-other-org'` in the trigger vocabulary, after `resumed-other-class` | `shared/continuity.ts` |
 | D2 | `RenewalInputs.startOtherOrg`, its predicate, `TRIGGER_CLASS` hard, the Overlord's row after `resumed-other-class` | `server/src/continuity/renewalDue.ts` |
@@ -36,7 +36,8 @@ account's `id` (`AccountDef.id`). So the gate passes, and no deviation is record
   branch was cut, so this entry was 85. Overlaps (#2949) then landed 85, and in fix round 1 the coordinator ruled a merge
   of `main` and the next slot, 86. Decision model A (#2948) then landed 86, and under the coordinator's standing license
   this branch merged `main` again and took 87; row revisions (#2965) then landed 87, and it took 88 the same way;
-  renewal readings A (#2962) then landed 88, and it took 89 the same way.
+  renewal readings A (#2962) then landed 88, and it took 89 the same way; remaining work A (#2951) then landed 89, and
+  it took 90 the same way.
   Whoever lands second renumbers again at landing, on the coordinator's word.
 - `own-account-unknown-is-unmeasured`: Table 3 has no row for a resumed generation whose own `lane` is null (the
   registry's wrapper was unmeasured, or the start was not the newest). It reads unmeasured, `account unknown`, the same
