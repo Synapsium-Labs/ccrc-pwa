@@ -11,7 +11,10 @@ departures and measurements the build added, by slug. No D-number is minted here
   `runs.closePr` and the routing reference's paragraph.
 - **The close's characterization came first:** `close-run-characterization.test.ts` was green on `main`'s code before
   the close was touched, and stays green after, with the one additive column set aside.
-- **Nine departures,** each below; two follow the coordinator's rulings on review 2377 (F2, F7). None changes a rule the plan states; each makes a rule measurable on this tree.
+- **Nine departures,** each below. Four follow the coordinator's rulings: F2 and F7 on review 2377, F4's narrowing of
+  `census-admits-the-plan-sync-pr-link`, and `census-admits-the-edge-facts-until-remaining-work-b` (22890).
+  `pr-merged-reads-the-own-close-only` changes Table 3's rows 12 to 14 on that ruling; the others make a rule measurable
+  on this tree.
 
 ## Departures
 
@@ -59,16 +62,27 @@ departures and measurements the build added, by slug. No D-number is minted here
   - F9: `RunRow.closePr`'s comment names no slot; `DONE_TEST_REFUSALS` is pinned to the words `parseDoneTest` gives.
   - Mutation: `targetVerdict` 31 mutants (six rewritten for the new rows, one added for F6), `parseDoneTest` 10, all
     killed, floors 1.
+- **Second review (2381), its controls:** N4, `done-test-read` sends `review-passed` at a real `kind: 'review'` run and
+  reads `facts-mismatch`; the gatherer reporting `kind: 'work'` reds it. N3, `mail-routes` checks the scoped admission
+  on planted sources and pins that its guard chain asks `isDoneTestWordHere`; reverting either the helper or the chain
+  to the bare `isDoneTestKebab` reds it.
 
 ## For the index
 
 - **Residual (review 2377 F1), for the ledger:** `close.ts`'s `landOnClose` mark reads the same verified line's bound
   row and predates this PR; a PR-less later wave on an unmarked workspace still reads wave 1's merged row there. Left as
   it is, on the coordinator's word.
+- **Residual `close-pr-rests-on-the-claim` (review 2381 N2), for the ledger:** the close's record trusts the verified
+  claim's PR number. A PR-less later wave whose claim names an earlier wave's PR number (copied from `ccd pr-state`, where
+  a correct worker sends `null`) passes `verifyDone`, so the close records that PR as its own, and the stored `head` is
+  never compared to the verified tip. With a PR of its own bound, such a claim is refused `pr-regressed`. No code change,
+  on the coordinator's word (22970).
 - **Follow-up (review 2377 F4):** `linear/planSync.ts#prOfRunFrom` links `prLineage.at(-1)`, the newest REPLACED PR,
   often an earlier wave's; `runs.closePr` now offers the run's own PR as the source.
 - **Carried to remaining work B (review 2377 F3, the coordinator's ruling):** B's edge check asks `doneTestRead.ts`
-  through `readTarget`, and never reads a run's lineage or `closePr` itself.
+  through `readTarget`, and never reads a run's lineage or `closePr` itself. With it (review 2381 N1, the coordinator's
+  ruling 22970), B changes `edgeTargetVerdict`, the coordinator reference sentence and the Q2 table together: a
+  `pr-merged` edge clears only through the run's own `closePr`, and admission asks only that the run row exists.
 - **Residual (the coordinator's word, 22890), for the ledger:** the reader census admits
   `coord/programmeFactsStore.ts#edgeTargetFacts` (remaining work A, #2951) by function. Remaining work B removes that
   admission when it moves the edge check onto `readTarget`.

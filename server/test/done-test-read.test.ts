@@ -97,6 +97,15 @@ describe('readTarget: the one gatherer of a predicate\'s rows', () => {
     expect(word(readTarget(b.coord, target))).toBe('unmeasurable:verdict-not-recorded');
   });
 
+  it('review-passed naming a real review run is facts-mismatch: the gatherer carries the row\'s kind (review 2381 N4)', () => {
+    const b = build();
+    const work = b.working();
+    const review = b.working({ kind: 'review', reviews: work });
+    expect(word(readTarget(b.coord, { predicate: 'review-passed', runId: review }))).toBe('unmeasurable:facts-mismatch');
+    b.close(review, 'done', null, { viaClosing: false });
+    expect(word(readTarget(b.coord, { predicate: 'review-passed', runId: review }))).toBe('unmeasurable:facts-mismatch');
+  });
+
   it('an item in checking is pending, one in done passes, a dismissed one ends', () => {
     const b = build();
     const ctx = { programmeHasOpenRun: false };

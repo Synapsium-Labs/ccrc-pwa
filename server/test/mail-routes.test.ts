@@ -624,6 +624,19 @@ describe('the rejection table is total, in both directions', () => {
     for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
   });
 
+  it('CONTROL (review 2381 N3): a done-test word is admitted only while no other coordination file quotes it', () => {
+    // Planted sources, never the tree: the word alone, quoted in another file, quoted only unquoted, and a word that is not
+    // the done tests' at all.
+    expect(isDoneTestWordHere('lineage-unattributed', "export const x = 'not-this-word';")).toBe(true);
+    expect(isDoneTestWordHere('lineage-unattributed', "export const planted = 'lineage-unattributed';")).toBe(false);
+    expect(isDoneTestWordHere('lineage-unattributed', '// lineage-unattributed in a comment, unquoted')).toBe(true);
+    expect(isDoneTestWordHere('mail-nudge', '')).toBe(false);
+    // The scan asks the scoped check, never the bare guard: this file's own guard chain names it.
+    const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
+    expect(self).toContain('|| isDoneTestWordHere(tok, elsewhere)');
+    expect(self.includes('|| isDoneTestKebab' + '(tok)')).toBe(false);
+  });
+
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
     // Deliberately over-broad, then filtered by an explicit allowlist of
     // NON-code kebab literals, so a new code cannot slip in unnamed. A token
