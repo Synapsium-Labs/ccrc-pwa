@@ -49,6 +49,14 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   `CLAUDECODE` refusal reds `ccrc-quiz-record.test.ts` (2 cases), and without its `TMUX_PANE` refusal (1 case).
 - **Red first**: Task 7's store tests ran red against `main`'s sources (14 cases) and green on the branch; the doors' and the
   card's route tests were written before their code and ran red first.
+- **Migration slot**: 93. The designation (#2950) landed 91 and done tests A (#2964) 92, so this PR moved twice under the
+  standing renumber license; the shared `decision-model-records` case is untouched.
+- **Fix round 1** (first CI on 39b5420c0 red, all three my own): the pwa test stubbed `baseline: null` where the answer is
+  typed boolean; the record-door test's header cases needed a `Record<string, string>` type for the tests-inclusive
+  typecheck; and `mail-routes.test.ts`'s kebab-token scan refused the card's `'not-yet'`, now declared once in L0 as
+  `LANE_ARM_QUIZ_STATES` with its guard (the scan reds without it). The full tests-inclusive typecheck is killed by the
+  local test slice's memory cap, so the changed test files were typechecked through a narrow config extending
+  `test/tsconfig.tests.json`, which reds on the original header error.
 
 ## For PR 1's runbook
 

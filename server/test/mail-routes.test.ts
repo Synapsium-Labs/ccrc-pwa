@@ -63,7 +63,7 @@ import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
-import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
+import { isLaneArmImport, isLaneArmLane, isLaneArmQuizState, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -1173,8 +1173,8 @@ describe('the rejection table is total, in both directions', () => {
         // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
         // or a row key, never a `refused` or `reject.code`; its door's own refusal (`'lane-gated'`, review 2003 F3) is sent by
         // `refuseRoute`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS`, `LANE_ARM_LANES` and
-        // `LANE_ARM_REFUSALS`, never NOT_CODES.
-        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok)
+        // `LANE_ARM_REFUSALS`, never NOT_CODES; the quiz block's baseline state (`'not-yet'`) through `LANE_ARM_QUIZ_STATES`.
+        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok) || isLaneArmQuizState(tok)
         // THE ANSWER MARKS (Overlord W1, #2870): `coord/answerMarks.ts` names why a row carries no box and the ask detail as
         // literals, and `coord/answerMarkStore.ts` a mark's name. A reason rides `not-markable`'s `detail`, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from its own map and L0's, never NOT_CODES.
