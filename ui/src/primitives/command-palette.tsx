@@ -31,6 +31,7 @@
 import { useEffect, useId, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Drawer } from 'vaul';
 import { cn } from '../lib/cn';
+import { recordModalLayer } from '../lib/modal-layers';
 import { PALETTE_MOTION_VARS, VAUL_MOTION } from '../lib/motion';
 import { Icon } from './icon';
 import { KEYCAP } from './keycap';
@@ -113,6 +114,9 @@ export const PALETTE_ACTIVE =
  *  palette's own pace. 'command-layer.test.tsx' reads it off the open palette. */
 export const PALETTE_MOTION = VAUL_MOTION + ' ' + PALETTE_MOTION_VARS;
 
+/** The palette's panel, recorded as a modal layer as it mounts (`../lib/modal-layers.ts`). */
+const recordLayer = (el: HTMLDivElement | null): void => { if (el !== null) recordModalLayer(el); };
+
 export function CommandPalette({
   open,
   onClose,
@@ -175,6 +179,9 @@ export function CommandPalette({
             block screen (100), which nothing outranks. */}
         <Drawer.Overlay className={cn('fixed inset-0 z-toast bg-scrim', PALETTE_MOTION)} onClick={onClose} />
         <Drawer.Content
+          // The palette is a modal layer: as its panel mounts it records what the page hid itself, so a sheet it hands to
+          // never lifts an element the page hid that the palette's own hiding marked (`../lib/modal-layers.ts`, D-8698).
+          ref={recordLayer}
           aria-describedby={undefined}
           onEscapeKeyDown={(e) => { e.stopPropagation(); }}
           className={cn(
