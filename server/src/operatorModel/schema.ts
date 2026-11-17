@@ -43,6 +43,23 @@ export const OPERATOR_MODEL_MIGRATIONS: readonly string[] = [
     CHECK ((caller = 'operator') = (generationRead = 'not-a-session'))
   );
   CREATE INDEX read_ledger_door_at ON read_ledger (door, at);`,
+  // Migration 2 (Overlord W2, private names B, Task 4): the operator's uploaded private-name list, as keyed hashes only. One
+  // list row (`id = 1`): when it was uploaded, how many rows the operator sent, and its generation, which each upload raises
+  // (the reader's cache key). The entries are what `entriesOf` made under the server's key, in their order, the canary at
+  // `pos` 0. No name is ever stored. One writer, `OperatorModelStore.replacePrivateNames`.
+  `CREATE TABLE private_name_list (
+    id         INTEGER PRIMARY KEY CHECK (id = 1),
+    uploadedAt INTEGER NOT NULL,
+    rows       INTEGER NOT NULL CHECK (rows >= 0),
+    generation INTEGER NOT NULL CHECK (generation >= 1)
+  );
+  CREATE TABLE private_name_entries (
+    pos  INTEGER PRIMARY KEY CHECK (pos >= 0),
+    h    TEXT NOT NULL,
+    f    TEXT NOT NULL,
+    n    INTEGER NOT NULL CHECK (n >= 1),
+    mode TEXT NOT NULL
+  );`,
 ];
 
 /** Derived, never hand-edited beside the array. */
