@@ -1357,6 +1357,18 @@ describe('what the view publishes for Export (completion plan Task 9; M5.EX6)', 
     await waitFor(() => expect(m.current()?.kind).toBe('mockup'));
   });
 
+  it('a good context that changes to one that does not open the page withdraws the body: the attempt\'s cleanup does it (review minor 8)', async () => {
+    const html = '<p>a</p>';
+    const m = publishing({ html });
+    await waitFor(() => expect(m.current()?.kind).toBe('mockup'));
+    const stale: MockupContext = { ...ctxOf([]), tree: treeOk({ entries: [], drafts: holder() }) };
+    m.again({ html, context: stale });
+    await flush();
+    // The new context throws `MockupContextMismatch` and starts no attempt, so nothing publishes after the withdrawal.
+    expect(m.current()).toBeNull();
+    expect(m.bodies.filter((b) => b !== null)).toHaveLength(1);
+  });
+
   it('an attempt the view aborts for a re-list ends its settled, and the re-listed context publishes a body of its own', async () => {
     const relist = vi.fn<() => void>();
     const moved: MockupAssetReader = { read: async () => ({ kind: 'failed', failure: 'unknown-commit' }) };

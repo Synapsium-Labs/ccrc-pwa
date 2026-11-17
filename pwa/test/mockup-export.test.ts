@@ -152,6 +152,11 @@ describe('M5.EX1: every strip step, one planted element each (base 5.6.9 Step 3 
         expect(d.getElementById('a')?.hasAttribute('ping')).toBe(false);
         expect(attrsOf(d).filter((a) => a.name === 'ping')).toEqual([]);
       }],
+    ['an area ping', '<map><area id="ar" href="https://link.example/p" ping="https://x.example/ping" alt="p"></map>', '',
+      (d) => {
+        expect(d.getElementById('ar')).not.toBeNull();
+        expect(attrsOf(d).filter((a) => a.name === 'ping')).toEqual([]);
+      }],
     ['form action', '<form id="f" action="https://x.example/f" method="post"><input name="q"></form>', '',
       (d) => {
         expect(d.getElementById('f')).not.toBeNull();
@@ -309,6 +314,41 @@ describe('M5.EX1: every strip step, one planted element each (base 5.6.9 Step 3 
 // ---------------------------------------------------------------------------------------------------------------
 // The inner document, links, and the guarantee that no URL leaves
 // ---------------------------------------------------------------------------------------------------------------
+describe('the data: stylesheet guards (review minor 8)', () => {
+  it('a stylesheet link whose data: URL cannot be decoded is dropped, never kept as written: a bad base64 payload and a bad percent-encoding', async () => {
+    const { out } = await run(page('<p id="k">x</p>', [
+      '<link id="b64" rel="stylesheet" href="data:text/css;base64,@@@not-base64@@@">',
+      '<link id="pct" rel="stylesheet" href="data:text/css,%E0%A4%A">',
+      '<link id="ok" rel="stylesheet" href="data:text/css,p%7Bcolor%3Ared%7D">',
+    ].join('')));
+    const d = innerOf(out.html);
+    expect(d.getElementById('b64')).toBeNull();
+    expect(d.getElementById('pct')).toBeNull();
+    expect(d.getElementById('ok')).not.toBeNull();
+    expect(out.html).not.toContain('not-base64');
+  });
+
+  it('a chain of nested data: @imports nests only to MOCKUP_MAX_CSS_DEPTH: the import past it is dropped with the sheet it names', async () => {
+    // Six sheets, the innermost holding a marker. The link's own sheet is depth 0; each @import is one deeper.
+    let sheet = 'i{color:deepmarker}';
+    for (let level = 5; level >= 0; level -= 1) sheet = `@import url("data:text/css;base64,${b64(sheet)}"); /* level ${level} */`;
+    const { out } = await run(page('<p>x</p>', `<link rel="stylesheet" href="data:text/css;base64,${b64(sheet)}">`));
+    const levels: string[] = [];
+    let text = innerOf(out.html).querySelector('link')!.getAttribute('href')!;
+    for (;;) {
+      const css = decodeDataUrl(text);
+      levels.push(css);
+      const next = /data:text\/css;base64,[A-Za-z0-9+/=]+/.exec(css);
+      if (next === null) break;
+      text = next[0];
+    }
+    expect(levels).toHaveLength(MOCKUP_MAX_CSS_DEPTH + 1);
+    expect(levels[levels.length - 1]).not.toContain('@import');
+    expect(out.html).not.toContain('deepmarker');
+    expect(levels.join('')).not.toContain('deepmarker');
+  });
+});
+
 describe('the inner document and the links (base 5.6.9 Steps 5 and 6)', () => {
   it('starts with the one doctype and its first head child is the CSP meta, content exactly DOCS_EXPORT_CSP', async () => {
     const { out } = await run(page('<p>x</p>', '<title>t</title>'));

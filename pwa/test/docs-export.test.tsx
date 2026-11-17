@@ -1057,6 +1057,20 @@ describe('buildExport: the mockup arm (spec 5.6.9; completion plan Task 9; M5.EX
     for (const id of ['a', 'b', 'c']) expect(inner.getElementById(id)?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE['over-size']);
   }, 60_000);
 
+  it('an attempt whose settled REJECTS reads as ended: every asset is listed as did-not-load, and the build neither throws nor waits out the clock (review minor 8)', async () => {
+    const input = await mockupInput(mockupPage('<img id="a" src="a.png" alt="a">'), { 'a.png': BIG(100) });
+    if (input.body.kind !== 'mockup') throw new Error('not a mockup');
+    const rejecting: ExportInput = {
+      ...input, body: { ...input.body, assets: { plan: input.body.assets.plan, settled: Promise.reject(new Error('the load failed')) } },
+    };
+    const { result, inner } = await built(rejecting, { maxBytes: 1e9, imageWaitMs: 60_000 }).then((b) => ({
+      result: b.result, inner: new DOMParser().parseFromString(b.doc.querySelector('iframe')?.getAttribute('srcdoc') ?? '', 'text/html'),
+    }));
+    expect(inner.getElementById('a')?.getAttribute('alt')).toBe(EXPORT_MISSING_SENTENCE.failed);
+    expect(result.mockup?.inlined).toEqual([]);
+    expect(result.mockup?.omitted).toEqual([specsRepo('a.png')]);
+  }, 10_000);
+
   it('a stripped body that is over the limit on its own gives too-large; one with room for no asset lists every asset as left out', async () => {
     const html = mockupPage(`<p>${'x'.repeat(100_000)}</p><img src="a.png" alt="a">`);
     const input = await mockupInput(html, { 'a.png': BIG(3000) });
