@@ -30,6 +30,7 @@ import type { BindingRow, DriftWatermarks, PlanStorePort } from '../coord/planSt
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
+import { runPrMerged } from '../coord/doneTestRead.js';
 import { LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, type BindingKind } from '../../../shared/plan.js';
 import { OPEN_ITEM_STATES, type CoordinatorPresence } from '../../../shared/ledgers.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from './ccrcCall.js';
@@ -471,17 +472,12 @@ export function driftPassFor(o: {
   });
 }
 
-/** Whether a run's pull request is merged as the server knows it (§7.3: Linear's integration closes the issue on the merge): a
- *  `merged` phase in the run's folded `.prhistory` lineage, else its session's PR in the newest fleet listing when that session is
- *  on the run's own workspace branch. Synchronous; false when neither says so. */
+/** Whether a run's pull request is merged as the server knows it (§7.3: Linear's integration closes the issue on the merge). The
+ *  pass asks the done-test reader, the one reader of a run's lineage (#2964; the coordinator's ruling on review 2408's fix
+ *  round 3), handing it the session's PR from the newest fleet listing; `runPrMergedSeen` decides. Synchronous. */
 export function prMergedOfFrom(coord: CoordStore, fleet: () => readonly FleetSession[] | null): (runId: number) => boolean {
-  return (runId) => {
-    const read = coord.run(runId);
-    if (!read.ok || read.run === null) return false;
-    if (read.run.prLineage.some((e) => e.phase === 'merged')) return true;
-    const sid = read.run.sessionId;
-    const s = sid === null ? undefined : fleet()?.find((f) => f.id === sid);
-    const own = read.run.branch;
-    return s?.pr?.phase === 'merged' && own !== null && s.branch !== null && s.branch === own;
-  };
+  return (runId) => runPrMerged(coord, runId, (sid) => {
+    const s = fleet()?.find((f) => f.id === sid);
+    return s === undefined ? null : { phase: s.pr?.phase ?? null, branch: s.branch };
+  });
 }
