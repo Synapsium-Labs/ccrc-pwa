@@ -25,6 +25,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/hierarchyRoutes.ts': { reason: "the per-project hierarchy settings' HTTP routes (Linear hierarchy, D-8181): a project's settings, the owner for all, and the read", since: '2026-11-10' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
+  'server/src/operatorModel/nameListRoutes.ts': { reason: "the private-name list's upload door and status read (Overlord W2, private names B)", since: '2026-11-17' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },

@@ -23,11 +23,13 @@ file is what the coordinator folds into the plan's ledger; the plan itself is no
   renumbers on the coordinator's word.
   Moving off the end of the list redded decision model A's migration case (`decision-model-records.test.ts`), which rolled
   back to `COORD_SCHEMA_VERSION - 1` and so assumed its entry was the last. The case now finds its entry by its DDL, as
-  `coord-db.test.ts`'s `dead_claimants` case does, drops the tables any later entry creates with its own, and reds with a
-  named message on a later entry it cannot undo (an `ALTER TABLE` or an index); measured red before, green after, and red
-  again with the old `COORD_SCHEMA_VERSION - 1`.
+  `coord-db.test.ts`'s `dead_claimants` case does, and first undoes every later entry, newest first (an index on an older
+  table, an added column, a created table); any other `ALTER` reds by name. Measured red before, green after, and red again
+  with the old `COORD_SCHEMA_VERSION - 1`; green with a temporary later entry that adds a column and indexes, red by name with
+  one that renames a column. The same text is on the three other branches whose migration follows decision model A's (the
+  renewal hand-offs, done tests A, account organization D), so whichever lands later merges it cleanly.
 - `GET` and `POST /api/continuity/renewal-backstop`, session-gated, never EXEMPT, no box token, with their census rows:
-  `auth/gate.ts`, `auth-gate.test.ts` (253 routes, 250 HTTP, gated 155, after the hierarchy item route of #2941), `box-token-census.test.ts`, `CLAUDE.md`,
+  `auth/gate.ts`, `auth-gate.test.ts` (255 routes, 252 HTTP, gated 157, after #2941's hierarchy item route and #2961's private-name doors), `box-token-census.test.ts`, `CLAUDE.md`,
   `secret-mask.test.ts`, `rings/fastify-l4.data.ts`, `coord-db.test.ts`, `run-close-switch.test.ts`,
   `writers-map.test.ts`, `time-ports.test.ts` (`shared/renewal-readings.ts` joins `TIME_PORT_FILES`).
 

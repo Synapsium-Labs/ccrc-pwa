@@ -148,6 +148,7 @@
   "server/src/coord/overlaps.ts#blockingPairs": 1,
   "shared/private-names.mjs#hashEntry": 1,
   "shared/private-names.mjs#privateNameHits": 1,
+  "server/src/operatorModel/nameListState.ts#nameListState": 1,
   "server/src/continuity/renewalReadings.ts#fittedCeilingOf": 1,
   "server/src/continuity/renewalReadings.ts#backstopInstantBefore": 1,
   "server/src/continuity/renewalReadings.ts#backstopDueOf": 1
