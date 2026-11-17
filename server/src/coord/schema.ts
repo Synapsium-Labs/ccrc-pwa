@@ -3417,6 +3417,19 @@ export const MIGRATIONS: readonly string[] = [
     updatedAt INTEGER NOT NULL);
   INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
   `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 85`
+  // takes rule 3 and never names it. Numbered from main at 84; a later landing renumbers on the coordinator's word.
+  // RE-MEASURE the slot before the PR and before merge (it must print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -31,7 +31,7 @@ import {
 import { queueSystemMail } from './rundefsTx.js';
 import { readSessionRecord } from '../registry.js';
 import { childBirthOf, childSpent, childSpentLive, childSpentLiveFrom } from './childSpent.js';
-import { mergedFactsOf, type CcdPrLine } from '../prstate.js';
+import { closePrFactsOf, mergedFactsOf, type CcdPrLine } from '../prstate.js';
 import type { NoticeSink } from '../notice.js';
 import { closeLandingOf } from './landed.js';
 import { raiseLandedNotice } from './landedLane.js';
@@ -442,9 +442,11 @@ async function closeWorkRun(
   const fleet = await actOnFleet(deps, id, sessionId, act.plan.fleet);
   if (!fleet.ok) return fleet;
   // The transition, the handoff commit, the delivery cancellation and the program-retirement check, as ONE
-  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281).
+  // transaction (review finding 25). The ordinary close always takes the `closing` hop (D-281). The run's own bound PR,
+  // from the line `verifyDone` already measured, rides the same transaction (Overlord W2 done tests A, DT7); a close
+  // that measured no line records none, and nothing here reads the fleet again.
   const closed = coord.closeRun({ runId: id, finalState: state, causedBy, handoffCommit: recordedHandoff(plan, verified),
-    program: run.program, viaClosing: true });
+    program: run.program, viaClosing: true, closePr: line === null ? null : closePrFactsOf(line) });
   const committed = decideClose({ step: 'commit', closed, acted: true });
   if (committed.kind !== 'go') return stopped(deps, committed);
   noteGone(deps, id, causedBy, fleet);
