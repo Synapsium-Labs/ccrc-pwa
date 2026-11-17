@@ -3905,6 +3905,8 @@ row per item with the measurement, the cause, the fix or the reason not, and the
 **Acceptance.** pwa's whole suite and ui's typecheck pass at the PR's tip; the new rows are red on `main`; the browser
 leg passes, with `confirm-focus.browser.test.ts` red on `main`'s Sheet.
 
+**Rollback.** A plain revert.
+
 ### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
 
 **Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
@@ -3928,20 +3930,64 @@ options and the screenshots.
   width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
   parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
   unchanged. No `ccd`, tmux window size or PWA change.
-- **Tests.** Seven cases in `drawer-mask-screen.test.ts`, red on `main` (heads at 207 to 220 at the edge and 7 columns
+- **Tests.** Seven cases in `drawer-mask-screen.test.ts` (heads at 207 to 220 at the edge and 7 columns
   before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
   ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
   by digest from `main`, the sliced arm included; and, from review 2307's fix round, one mark per row a key touches for
-  keys of 11 to 8,192 characters, with no SGR beside a mark). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  keys of 11 to 8,192 characters, with no SGR beside a mark): six are red on `main`, and the seventh, one mark per row,
+  is red on review 2307's `o1c` and `o7` (review 2326 F4). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
   drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
 
 - **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
   (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
   never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
 
-**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its seven C39 cases are red on `main`'s masker;
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip, six of its seven C39 cases are red on `main`'s
+masker and the seventh on `o1c` and `o7`;
 `secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
 fixture.
+
+**Rollback.** A plain revert.
+
+### Task C41: a key across any number of rows is masked, in the terminal view and pane history (D-8710) — now
+
+**Why.** Review 2326 (F3) found an exact-bytes leak on `main` that C39 neither caused nor changed: the masker joined a
+run that ends its row with the next row's leading run only, so a fingerprinted key a program draws on three or more
+rows reached the drawer whole. The same review saw two related shapes (O1, O2). This is secret masking, so fail-closed
+comes first. Each claim is labelled measured or inferred in `c41.md`, with the measurements, the mutants and the costs.
+
+**What was done.**
+- **Measured on `main`** (synthetic keys; byte probes of the masker and the drawer; a private tmux 3.6 server with a
+  client at the drawer's 220 x 51). F3 at three to 70 rows under every separator tried, at 25 to 220 columns: no mark,
+  a whole row shown. Through a real tmux, a 500-character key a program drew on three rows arrived unmasked under each
+  of four program separators, and a two-row key's first row showed too, because the drawer held back only the last
+  row's run of a chunk. O1: a shape key longer than a drawer holds was masked for one chunk, then drawn (2,713 of
+  12,000 characters). O2: a move down then CR between rows split every key, but tmux re-renders it as a cursor
+  position, so no drawer receives it from tmux. And a long shape key's rows after any chunk cut showed once the 1 KiB
+  context lost its start. Every other egress joins no rows at all (`c41.md` §3).
+- **The change** (`server/src/accounts/mask.ts`, `shapes.ts`). One row break, LF then CR included, under every row
+  reader. The exact-bytes join walks every row a key fills, read once and searched by length, so it stays linear. The
+  drawer holds a run with every row it continues and reads what it sends with what it holds; a taint lasts as long as
+  its run, with one mark; and a masked run's rows are walked across a chunk boundary by the shapes' own walk. Bounded
+  by measured cost and the commits' security review (rows of 12 units or more, 128 rows, 2 MiB of row-join hashing a
+  frame, failing closed, and twice a drawer's hold). No `ccd`, tmux or PWA change; the drawer draws C39's mark only.
+- **Tests.** `drawer-mask-rows.test.ts` (new, nine cases) and two cases in `drawer-mask-screen.test.ts` on C36's
+  harness: three and four rows under seven separators on the screen, and a 500-character key at 220 columns whole and
+  cut. Ten of the eleven are red on `main`; the eleventh pins the lookahead. Nineteen mutants, each red.
+- **C39's carries** (review 2326): F1, case 7's samples are loops; F2, `c39.md`'s "only a wider row" scoped to a
+  segment that fits its row, with the terminal-wrap residual measured through a real tmux; F4, the count of C39 cases
+  red on `main`; F5, the budget's figure; F6, C38's Rollback line restored.
+
+- **D-8710** — `drawer-mask-row-join-n-rows`: Task C41, issued on 2026-11-17. The exact-bytes row join walks every row a
+  key fills, bounded by the longest held length, and the drawer holds, reads ahead and taints by the rows a key spans,
+  so a key across any number of rows is masked whatever the separator. Further departures are named by slug in
+  `c41.md` §9: the two-row hold (`drawer-mask-two-row-hold`), the long shape key across a cut
+  (`drawer-mask-long-shape-across-cut`), the bounds (`drawer-mask-row-join-bounds`), and three put to the coordinator
+  and not changed (`shape-walk-narrow-rows`, `egress-no-row-join`, `drawer-mark-terminal-wrap`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip; ten of the eleven new cases are red on `main`'s
+masker; each mutant in `c41.md` §6 reds; deviation-refs, dtbd, topology-clean, single-definition and the server test
+typecheck pass.
 
 **Rollback.** A plain revert.
 
