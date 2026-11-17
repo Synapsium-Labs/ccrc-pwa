@@ -174,8 +174,9 @@ describe("clause 1: no Docs file reads a draft's state (M4.T7, base form)", () =
 //   In `pwa/src/docs`: no `postMessage` call, no `MessageChannel` identifier, no `onmessage` member, no JSX `iframe`
 //   element or string holding `<iframe`, no `srcdoc` (any case) identifier, property name, JSX attribute or string, no
 //   `default-src 'none'` string (any case); except Export's two allowances, by exact path (A2b, M8.10): the `iframe`
-//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`. The
-//   allowance holds whether or not those files exist yet.
+//   and `srcDoc` forms in `docs/export/buildExport.tsx`, and `default-src 'none'` in `docs/export/policy.ts`, and the
+//   mockup viewer's one (M5.16's last bullet): `default-src 'none'` in `docs/mockup/policy.ts` (`MOCKUP_CSP`), by exact
+//   path, never the directory. The allowance holds whether or not those files exist yet.
 //   Across `pwa/src`: `addEventListener('message', …)` as a member call or a bare call, and an assignment to
 //   `window.onmessage`, `self.onmessage`, `globalThis.onmessage` or a bare `onmessage`, outside the parse workers'
 //   own entries.
@@ -321,7 +322,7 @@ function scanReaderFile(source: string, file: string): { hits: ReaderHit[]; uses
       if (text !== undefined) {
         if (/<iframe/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:iframe');
         if (/srcdoc/i.test(text) && !exportAllows('iframe', file)) hit(n, 'docs:srcDoc');
-        if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file)) hit(n, 'docs:default-src-none');
+        if (/default-src\s+'none'/i.test(text) && !exportAllows('policy', file) && file !== 'src/docs/mockup/policy.ts') hit(n, 'docs:default-src-none');
       }
     }
     if (inMessageScope(file)) {
@@ -451,6 +452,14 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     const { files, hits } = readerScan(dir);
     expect(files).toEqual(expect.arrayContaining(['src/docs/export/buildExport.tsx', 'src/docs/export/policy.ts']));
     expect(hits).toEqual([]);
+  });
+
+  it("M5.16: the mockup viewer's default-src none is allowed at src/docs/mockup/policy.ts only, and the same string in src/docs/mockup/origins.ts is red", () => {
+    const dir = treeCopy();
+    plant(dir, 'src/docs/mockup/policy.ts', "export const PLANTED_MOCKUP_POLICY = \"default-src 'none'\";\n");
+    expect(readerScan(dir).hits).toEqual([]);
+    plant(dir, 'src/docs/mockup/origins.ts', "export const PLANTED_ORIGIN_POLICY = \"default-src 'none'\";\n");
+    expect(names(readerScan(dir).hits, 'docs:')).toEqual(['src/docs/mockup/origins.ts docs:default-src-none']);
   });
 
   it('M8.21: a value import of readerRenderJob sits only in the worker entry', () => {
@@ -1008,7 +1017,8 @@ describe('clause W5 Share: one share door, and one clipboard writer under pwa/sr
 //     template piece that begins with `<` and a letter, `/` or `!`, except `EXPORT_PREFIX`'s own initialiser in
 //     `docs/export/policy.ts`;
 //   - M4.EX11: the name `imagePinFor` (a call, an import, any identifier) appears only in `docs/docsLinks.ts`, its
-//     definition, and `docs/DocImage.tsx`, whose `planImageRef` is the one way Export reaches it;
+//     definition, `docs/DocImage.tsx`, whose `planImageRef` is the one way Export reaches it, and, from W6 (completion
+//     plan Task 6, C1), `docs/mockup/plan.ts`, the mockup planner (base 4.11), and in no other mockup file;
 //   - M4.EX16: across `pwa/src`, a `react-dom/server` specifier (any subpath) and the name `renderToStaticMarkup` only in
 //     `docs/export/buildExport.tsx`, which exports `buildExport` and types only; `./export/buildExport` imported only by
 //     `docs/ExportSheet.tsx`, through a dynamic `import()`; `ExportSheet.tsx` calls `downloadExport`, reads no member
@@ -1216,6 +1226,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
       'src/docs/docsLinks.ts imagePinFor',
       'src/docs/export/buildExport.tsx react-dom/server',
       'src/docs/export/buildExport.tsx renderToStaticMarkup',
+      'src/docs/mockup/plan.ts imagePinFor',
       'src/docs/objectUrls.ts createObjectURL',
       'src/docs/objectUrls.ts new Blob',
     ]);
@@ -1234,6 +1245,7 @@ describe('clause W5 Export: inert by construction, confined, one pin rule, no hi
     ['a Blob in the builder', 'src/docs/export/buildExport.tsx', "\nexport const plantedBlob = () => new Blob(['x']);\n", 'src/docs/export/buildExport.tsx new Blob'],
     ['an iframe in the builder', 'src/docs/export/buildExport.tsx', '\nexport const PlantedFrame = () => <iframe srcDoc="x" />;\n', 'src/docs/export/buildExport.tsx iframe'],
     ['imagePinFor in Export', 'src/docs/export/exportMarkdown.tsx', "\nimport { imagePinFor as plantedPin } from '../docsLinks';\nexport const plantedP = plantedPin;\n", 'src/docs/export/exportMarkdown.tsx imagePinFor'],
+    ['imagePinFor in a mockup file other than the planner', 'src/docs/mockup/ports.ts', "\nimport { imagePinFor as plantedPin } from '../docsLinks';\nexport const plantedP = plantedPin;\n", 'src/docs/mockup/ports.ts imagePinFor'],
   ])('M4.EX16/M4.EX11 planted: %s is red', (_name, rel, text, use) => {
     expect(scanSrc(planted(rel, text), exportUses)).toContain(use);
   });
@@ -1385,5 +1397,262 @@ describe('clause W5h-b, M4.H23: what the retirement of part 1\'s highlight bound
     const control = stock.highlight(src, { language: 'xml', ignoreIllegals: true }).value;
     expect(control).toMatch(SUB);
     expect(control).toMatch(/class="language-javascript"/);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause C1 (native Docs reader, completion plan Task 5, C1; base spec 2026-10-01 5.6.2 and the DOMParser bullet of
+// M5.16 as ruled for this wave). The HTML parser's entry points sit in ONE file, `src/docs/mockup/parse.ts`, and
+// exactly once there: the native parse cannot be aborted, so the pre-scan is the only guard, and a second way into the
+// parser would be a way round it. Across every `.ts` and `.tsx` file under `pwa/src`, TypeScript's parser finds:
+//   (1) the identifier `DOMParser` in ANY position: `new DOMParser(`, a member name (`window.DOMParser`,
+//       `globalThis.DOMParser`, `self.DOMParser`), a value alias (`const P = DOMParser`), an argument
+//       (`Reflect.construct(DOMParser, [])`), a type reference, an import or a declaration. `Identifier.text` is the
+//       unescaped name, so `new DOMParser()` is the same hit;
+//   (2) a string or no-substitution template whose whole text is `DOMParser` (`globalThis['DOMParser']`,
+//       `Reflect.get(globalThis, 'DOMParser')`);
+//   (3) the member names `parseFromString`, `createHTMLDocument`, `createContextualFragment`, `parseHTMLUnsafe`,
+//       `setHTMLUnsafe` and the Sanitizer API's `parseHTML` and `setHTML`, as an identifier in any position (a
+//       property access, a property name, a method or a variable) or as a string key (`x['setHTMLUnsafe']`).
+// In `src/docs/mockup/parse.ts` the ONLY allowed hits are one `new DOMParser(` whose callee is the bare identifier and
+// one `.parseFromString(` member call; everything else, a second constructor, an alias, a string, is red, and the
+// allowance is that one file by exact path, never a directory (a parser in `src/docs/mockup/prescan.ts` is red).
+// NOT EXHAUSTIVE. Known evasions it does not see: a name built at run time (`'DOM' + 'Parser'`, a template with a
+// substitution); `eval` and `new Function`; a re-export through a file outside `pwa/src`; `Reflect.get` with a key held
+// in a variable; and the writes that parse without these names (`innerHTML`, `outerHTML`, `insertAdjacentHTML` and
+// `document.write`), which this census does not read: the W5h-a clause's note names the same, and its sink clause and
+// Export's M4.EX2 hold those; and an `XMLHttpRequest` with `responseType = 'document'`, which parses a response as HTML
+// through no name this census lists. Review lens 4 reads for them.
+// ---------------------------------------------------------------------------------------------------------------
+
+const PARSER_HOME = 'src/docs/mockup/parse.ts';
+const PARSER_MEMBERS: readonly string[] = [
+  'parseFromString', 'createHTMLDocument', 'createContextualFragment', 'parseHTMLUnsafe', 'setHTMLUnsafe', 'parseHTML', 'setHTML',
+];
+
+/** Every parser entry point in one module, as `<file> <label>`: `new DOMParser(` (a bare-identifier callee), `DOMParser`
+ *  (any other identifier), `'<name>'` (a string or template of exactly that name), `.<member>(` (a member call of one of
+ *  the five names) and `<member>` (the name in any other position). */
+function parserHits(source: string, file: string): string[] {
+  const hits: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n)) {
+      const p = n.parent;
+      if (n.text === 'DOMParser') hits.push(`${file} ${ts.isNewExpression(p) && p.expression === n ? 'new DOMParser(' : 'DOMParser'}`);
+      else if (PARSER_MEMBERS.includes(n.text)) {
+        const call = ts.isPropertyAccessExpression(p) && p.name === n && ts.isCallExpression(p.parent) && p.parent.expression === p;
+        hits.push(`${file} ${call ? `.${n.text}(` : n.text}`);
+      }
+    } else if (isPlainString(n) && (n.text === 'DOMParser' || PARSER_MEMBERS.includes(n.text))) hits.push(`${file} '${n.text}'`);
+    ts.forEachChild(n, visit);
+  };
+  visit(parse(source, file));
+  return hits;
+}
+
+/** The census over a set of sources (path relative to `pwa`, `/` separators): what is left after parse.ts's own
+ *  allowance (the first `new DOMParser(` and the first `.parseFromString(` there), and how much of it was found. */
+function parserCensus(sources: ReadonlyMap<string, string>): { hits: string[]; allowed: number } {
+  const hits: string[] = [];
+  let allowed = 0;
+  const spent = new Set<string>();
+  for (const [file, source] of [...sources].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const hit of parserHits(source, file)) {
+      const label = hit.slice(file.length + 1);
+      if (file === PARSER_HOME && (label === 'new DOMParser(' || label === '.parseFromString(') && !spent.has(label)) {
+        spent.add(label);
+        allowed += 1;
+      } else hits.push(hit);
+    }
+  }
+  return { hits, allowed };
+}
+
+/** Every `.ts` and `.tsx` source under `<base>/src`, by its path relative to `base`. */
+function treeSources(base: string): Map<string, string> {
+  return new Map(sourceFiles(path.join(base, 'src')).map((f) => [path.relative(base, f).split(path.sep).join('/'), readFileSync(f, 'utf8')] as const));
+}
+
+describe('clause C1: the HTML parser has one home, one constructor and one parse call (M5.16, the DOMParser bullet)', { timeout: 30_000 }, () => {
+  const real = treeSources(PWA);
+  /** The real tree with `text` appended to `rel` (created when it is absent). */
+  const planted = (rel: string, text: string): ReadonlyMap<string, string> => new Map([...real, [rel, `${real.get(rel) ?? ''}${text}`]]);
+  const copies: string[] = [];
+  afterAll(() => {
+    for (const dir of copies) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('the real tree has exactly the allowance and no other hit: parse.ts holds one constructor and one parse call', () => {
+    expect(real.size).toBeGreaterThan(100);
+    expect(real.has(PARSER_HOME)).toBe(true);
+    expect(parserCensus(real)).toEqual({ hits: [], allowed: 2 });
+  });
+
+  it('a planted file in a COPY of the tree on disk is found by the same read', () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'docs-scans-c1-'));
+    copies.push(dir);
+    cpSync(SRC_DIR, path.join(dir, 'src'), { recursive: true });
+    const file = path.join(dir, 'src', 'docs', 'DocsLeaf.tsx');
+    writeFileSync(file, `${readFileSync(file, 'utf8')}\nexport const plantedParser = () => new DOMParser();\n`);
+    expect(parserCensus(treeSources(dir)).hits).toEqual(['src/docs/DocsLeaf.tsx new DOMParser(']);
+  });
+
+  const LEAF = 'src/docs/DocsLeaf.tsx';
+  it.each([
+    ['new DOMParser() in another file', 'export const planted = () => new DOMParser();', 'new DOMParser('],
+    ['new window.DOMParser()', 'export const planted = () => new window.DOMParser();', 'DOMParser'],
+    ['new globalThis.DOMParser() and new self.DOMParser()', 'export const planted = () => [new globalThis.DOMParser(), new self.DOMParser()];', 'DOMParser|DOMParser'],
+    ["new globalThis['DOMParser']()", "export const planted = () => new globalThis['DOMParser']();", "'DOMParser'"],
+    ['a template-literal key', 'export const planted = () => new globalThis[`DOMParser`]();', "'DOMParser'"],
+    ['an alias: const P = DOMParser; new P()', 'const P = DOMParser;\nexport const planted = () => new P();', 'DOMParser'],
+    ['Reflect.construct(DOMParser, [])', 'export const planted = () => Reflect.construct(DOMParser, []);', 'DOMParser'],
+    ['the unicode-escaped new \\u0044OMParser()', 'export const planted = () => new \\u0044OMParser();', 'new DOMParser('],
+    ["Reflect.get(globalThis, 'DOMParser')", "export const planted = () => Reflect.get(globalThis, 'DOMParser');", "'DOMParser'"],
+    ['a type reference', 'export type PlantedParser = DOMParser;', 'DOMParser'],
+    ['parseFromString alone', "export const planted = (p: P) => p.parseFromString('', 'text/html');", '.parseFromString('],
+    ['createHTMLDocument alone', "export const planted = () => document.implementation.createHTMLDocument('');", '.createHTMLDocument('],
+    ['createContextualFragment alone', "export const planted = (r: Range) => r.createContextualFragment('');", '.createContextualFragment('],
+    ['parseHTMLUnsafe alone', "export const planted = () => (Document as D).parseHTMLUnsafe('');", '.parseHTMLUnsafe('],
+    ['setHTMLUnsafe alone', "export const planted = (e: Element) => (e as E).setHTMLUnsafe('');", '.setHTMLUnsafe('],
+    ['parseHTML alone (the Sanitizer API)', "export const planted = (e: E) => (e as S).parseHTML('');", '.parseHTML('],
+    ['setHTML alone (the Sanitizer API)', "export const planted = (e: Element) => (e as E).setHTML('');", '.setHTML('],
+    ["a member name as an element-access key: x['setHTMLUnsafe']", "export const planted = (e: E) => e['setHTMLUnsafe']('');", "'setHTMLUnsafe'"],
+    ['a member name as a property name', 'export const planted = { createHTMLDocument: 1 };', 'createHTMLDocument'],
+  ])('planted: %s is red, with its exact hit', (_name, text, labels) => {
+    const expected = labels.split('|').map((l) => `${LEAF} ${l}`).sort();
+    expect(parserCensus(planted(LEAF, `\n${text}\n`)).hits).toEqual(expected);
+  });
+
+  it('planted: the home file with the other extension (parse.tsx) is not the allowance', () => {
+    expect(parserCensus(planted('src/docs/mockup/parse.tsx', 'export const p = () => new DOMParser();\n')).hits)
+      .toEqual(['src/docs/mockup/parse.tsx new DOMParser(']);
+  });
+
+  it('planted: the allowance widened to a directory: a parser in src/docs/mockup/prescan.ts is red', () => {
+    expect(parserCensus(planted('src/docs/mockup/prescan.ts', '\nexport const planted = () => new DOMParser();\n')).hits)
+      .toEqual(['src/docs/mockup/prescan.ts new DOMParser(']);
+  });
+
+  it.each([
+    ['a second new DOMParser()', 'export const second = () => new DOMParser();', 'new DOMParser('],
+    ['an alias', 'const P = DOMParser;\nexport const second = () => new P();', 'DOMParser'],
+    ['a second parseFromString call', "export const second = (p: P) => p.parseFromString('', 'text/html');", '.parseFromString('],
+    ['a string', "export const second = 'DOMParser';", "'DOMParser'"],
+    ['Reflect.construct', 'export const second = () => Reflect.construct(DOMParser, []);', 'DOMParser'],
+    ['another entry point', "export const second = (r: Range) => r.createContextualFragment('');", '.createContextualFragment('],
+  ])('planted in parse.ts itself: %s is red beyond the allowance', (_name, text, label) => {
+    const answer = parserCensus(planted(PARSER_HOME, `\n${text}\n`));
+    expect(answer.hits).toEqual([`${PARSER_HOME} ${label}`]);
+    expect(answer.allowed).toBe(2);
+  });
+
+  it('the allowance is counted, not assumed: a parse.ts with no constructor and no parse call finds none of it', () => {
+    expect(parserCensus(new Map([...real, [PARSER_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 0 });
+  });
+
+  it.each([
+    ['a comment', '// new DOMParser() and parseFromString\nexport const x = 1;'],
+    ['a block comment', '/* DOMParser.parseFromString */\nexport const x = 1;'],
+    ['a string that only mentions it', "export const x = 'a DOMParser here';"],
+    ['a member of another name', "export const x = (p: P) => p.parseFromStrings('') + p.DOMParsers;"],
+    ['the lower-case name', 'export const x = (domParser: D) => domParser;'],
+  ])('does not count %s', (_name, source) => {
+    expect(parserHits(source, 'planted.ts')).toEqual([]);
+  });
+
+  it.each([
+    ['a name built by concatenation', "export const x = globalThis['DOM' + 'Parser'];"],
+    ['a template with a substitution', 'export const x = globalThis[`DOM${"Parser"}`];'],
+    ['eval', "export const x = () => eval('new DOMParser()');"],
+    ['new Function', "export const x = () => new Function('return new DOMParser()');"],
+  ])('known evasion, not seen (the header says not exhaustive): %s', (_name, source) => {
+    expect(parserHits(source, 'planted.ts')).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Clause C1 origins (native Docs reader, completion plan Task 7, C1 fix round 1, review run 2259's A4). An
+// `HttpsOrigin` is the only value `mockupCsp` appends to the frame's policy, and its type promises it was accepted by
+// `parseMockupOrigin` (https, the LDH host grammar, no IP literal, no `localhost`, not the console's own host). The
+// promise is a brand, so a cast anywhere else would put an unchecked origin into the CSP. Across every `.ts` and `.tsx`
+// file under `pwa/src`, TypeScript's parser finds each type assertion whose type names `HttpsOrigin` anywhere inside it
+// (`x as HttpsOrigin`, `<HttpsOrigin>x`, `x as unknown as HttpsOrigin`, and since fix round 2 (review run 2259 F2) the
+// array, readonly array, `Array<>`, `ReadonlyArray<>` and union forms, `xs as readonly HttpsOrigin[]`,
+// `x as HttpsOrigin | null`: the only sinks take arrays), and the only one allowed is a single assertion inside the function
+// `parseMockupOrigin` in `src/docs/mockup/origins.ts`.
+// NOT EXHAUSTIVE: an alias of the type (`type H = HttpsOrigin`), a structural object literal of the brand's shape, a
+// generic helper that casts to its type parameter, and `any` flowing into an `HttpsOrigin` slot are not seen.
+// ---------------------------------------------------------------------------------------------------------------
+
+const ORIGIN_HOME = 'src/docs/mockup/origins.ts';
+
+/** Every assertion to `HttpsOrigin` in one module, as `<file> <enclosing function or (top level)>`. */
+function originCasts(source: string, file: string): string[] {
+  const hits: string[] = [];
+  /** Whether the type node names `HttpsOrigin` anywhere inside it (an element type, a type argument, a union member). */
+  const named = (t: ts.Node): boolean =>
+    (ts.isTypeReferenceNode(t) && ts.isIdentifier(t.typeName) && t.typeName.text === 'HttpsOrigin')
+    || (ts.forEachChild(t, (c) => (named(c) ? true : undefined)) ?? false);
+  const enclosing = (n: ts.Node): string => {
+    for (let p: ts.Node | undefined = n.parent; p !== undefined; p = p.parent) {
+      if (ts.isFunctionDeclaration(p) && p.name !== undefined) return p.name.text;
+      if ((ts.isArrowFunction(p) || ts.isFunctionExpression(p)) && ts.isVariableDeclaration(p.parent) && ts.isIdentifier(p.parent.name)) {
+        return p.parent.name.text;
+      }
+      if (ts.isMethodDeclaration(p) && ts.isIdentifier(p.name)) return p.name.text;
+    }
+    return '(top level)';
+  };
+  const visit = (n: ts.Node): void => {
+    if ((ts.isAsExpression(n) || ts.isTypeAssertionExpression(n)) && named(n.type)) hits.push(`${file} ${enclosing(n)}`);
+    ts.forEachChild(n, visit);
+  };
+  visit(parse(source, file));
+  return hits;
+}
+
+/** What is left after the one allowed assertion (the first in `parseMockupOrigin` in origins.ts), and how much was. */
+function originCensus(sources: ReadonlyMap<string, string>): { hits: string[]; allowed: number } {
+  const hits: string[] = [];
+  let allowed = 0;
+  for (const [file, source] of [...sources].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
+    for (const hit of originCasts(source, file)) {
+      if (allowed === 0 && hit === `${ORIGIN_HOME} parseMockupOrigin`) allowed += 1;
+      else hits.push(hit);
+    }
+  }
+  return { hits, allowed };
+}
+
+describe('clause C1 origins: an HttpsOrigin is made only in parseMockupOrigin (M5.21, fix round 1 A4)', { timeout: 30_000 }, () => {
+  const real = treeSources(PWA);
+  const planted = (rel: string, text: string): ReadonlyMap<string, string> => new Map([...real, [rel, `${real.get(rel) ?? ''}${text}`]]);
+
+  it('the real tree has exactly the one assertion, inside parseMockupOrigin', () => {
+    expect(real.has(ORIGIN_HOME)).toBe(true);
+    expect(originCensus(real)).toEqual({ hits: [], allowed: 1 });
+  });
+
+  it.each([
+    ['a cast in policy.ts', 'src/docs/mockup/policy.ts', "export const planted = 'https://a.example' as HttpsOrigin;", 'src/docs/mockup/policy.ts (top level)'],
+    ['a double cast in load.ts', 'src/docs/mockup/load.ts', "export const planted = (s: string) => s as unknown as HttpsOrigin;", 'src/docs/mockup/load.ts planted'],
+    ['an angle-bracket assertion', 'src/docs/mockup/policy.ts', "export function planted(s: string) { return <HttpsOrigin>s; }", 'src/docs/mockup/policy.ts planted'],
+    ['a second cast in origins.ts outside the function', ORIGIN_HOME, "export const planted = (s: string) => s as HttpsOrigin;", `${ORIGIN_HOME} planted`],
+    ['a cast in another Docs file', 'src/docs/DocsLeaf.tsx', "export const planted = (s: string) => s as HttpsOrigin;", 'src/docs/DocsLeaf.tsx planted'],
+    ['a readonly array cast', 'src/docs/mockup/policy.ts', "export const planted = (xs: string[]) => xs as readonly HttpsOrigin[];", 'src/docs/mockup/policy.ts planted'],
+    ['a union cast', 'src/docs/mockup/policy.ts', "export const planted = (s: string) => s as HttpsOrigin | null;", 'src/docs/mockup/policy.ts planted'],
+    ['an array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
+    ['an Array<> cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as Array<HttpsOrigin>;", 'src/docs/mockup/load.ts planted'],
+    ['an as-unknown array cast', 'src/docs/mockup/load.ts', "export const planted = (xs: string[]) => xs as unknown as readonly HttpsOrigin[];", 'src/docs/mockup/load.ts planted'],
+  ])('planted: %s is red', (_name, rel, text, hit) => {
+    expect(originCensus(planted(rel, `\n${text}\n`))).toEqual({ hits: [hit], allowed: 1 });
+  });
+
+  it('the allowance is counted, not assumed: an origins.ts without the cast finds none', () => {
+    expect(originCensus(new Map([...real, [ORIGIN_HOME, 'export const nothing = 1;\n']]))).toEqual({ hits: [], allowed: 0 });
+  });
+
+  it('does not count a mention in a comment, a string or a type annotation', () => {
+    expect(originCasts("// x as HttpsOrigin\nexport const a = 'as HttpsOrigin';\nexport const f = (o: HttpsOrigin): HttpsOrigin => o;\n", 'p.ts')).toEqual([]);
   });
 });

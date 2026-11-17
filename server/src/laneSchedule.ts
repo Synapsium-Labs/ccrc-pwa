@@ -29,6 +29,8 @@ export const RESPONSES_LANE_PERIOD_MS = 10 * 60_000;
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
 
+/** The Linear plan sync's beat (D-8182, Linear hierarchy §5.2): a tick takes the programmes due past their debounce. */
+export const PLAN_SYNC_BEAT_MS = 5_000;
 /** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
  *  key (the ISO week), so a day only bounds how late in a week the item appears. */
 export const QUIZ_LANE_PERIOD_MS = 86_400_000;
@@ -198,8 +200,8 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -355,6 +357,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
     derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
   },
+  // The overlaps arm (Overlord spec §5.5 and §5.6, Table 11.1c; W2, plan w2-overlaps.md Task 4): one read-and-record pass at a
+  // time over the refused claims' record, the radar's map and the claims history. In PR A it records pairs and sends nothing.
+  {
+    name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+    warnKey: 'ccrc-server: the overlaps arm failed',
+    derivedFrom: { name: 'landingRadar', reason: 'the arm reads the radar\'s map, which changes no faster than the radar lane writes it' },
+  },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the
   // operator arms its group. Its pass catches its own failure, so no warnKey.
@@ -382,6 +391,9 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
   { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
+  // The Linear plan sync (D-8182): one tick at a time. A tick's deadline plus one call's timeout stays under `staleAfterMs`, and
+  // a tick restarted as stuck only joins the passes in flight (`planSync.ts`), so a restart never sends a second write.
+  { name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' },
 ];
 
 export function laneRow(name: string): LaneRow {

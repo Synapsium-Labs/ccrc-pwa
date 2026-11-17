@@ -43,6 +43,9 @@ export interface CcrcOpAsk {
   slot: LinearSlotRef;
   workspaceId: string;
   teamKey: string | null;
+  /** C15: the team an issue update moves the issue into, when it differs from `teamKey` (the current one, which the journal
+   *  keeps); the policy is asked about both. */
+  destinationTeamKey?: string | null;
   /** The object the write targets: a UUID for a hierarchy object, an identifier for an issue; null on a create. */
   target: string | null;
   /** The changed field names, from the op's closed list in the journal. */
@@ -58,6 +61,8 @@ export type CcrcOpOutcome =
     word: 'policy-denied' | 'policy-unavailable' | 'journal-unavailable' | 'not-configured' | 'timeout' | 'unreachable'
     | 'linear-unauthorised' | LinearAnswerRefusalWord;
     maybeSent: boolean;
+    /** C1: a create's retry-guard answer (`linear-invalid` with the object already there), told from a real refusal. */
+    detail?: 'conflict' | 'name-taken';
   };
 
 type ObjectKind = 'initiative' | 'project' | 'milestone' | 'issue';
@@ -127,7 +132,7 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
         verb: 'operate',
         route: `ccrc ${ask.op}`,
         resource: {
-          workspaceId: ask.workspaceId, teamKey: ask.teamKey, issue: issueOf(ask), parentTeamKey: null, op: row.journalOp,
+          workspaceId: ask.workspaceId, teamKey: ask.teamKey, destinationTeamKey: ask.destinationTeamKey ?? null, issue: issueOf(ask), parentTeamKey: null, op: row.journalOp,
           object: { kind: objectKindOf(ask.op), id: ask.target },
         },
       } satisfies LinearWriteAsk);
@@ -164,7 +169,9 @@ async function run(deps: CcrcCallDeps, ask: CcrcOpAsk): Promise<CcrcOpOutcome> {
       }
       const outcome = shaped.word === 'malformed' || shaped.word === 'unreachable' ? 'unknown' : 'failed';
       journalEnd(outcome, shaped.word, null, decisionId);
-      return { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown' };
+      return shaped.detail === undefined
+        ? { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown' }
+        : { ok: false, word: shaped.word, maybeSent: write && outcome === 'unknown', detail: shaped.detail };
     }
     // A session-grammar create is journaled by the issue's identifier; every other op by the created UUID.
     const identifier = shaped.value['identifier'];

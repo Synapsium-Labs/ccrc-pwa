@@ -266,6 +266,8 @@ export interface MaskOpts {
   readonly budget?: MaskBudget;
   /** A sliced mask (pane history): raw text that follows this text, matched with it and never emitted (D-5995). */
   readonly lookahead?: string;
+  /** The drawer: what each masked run reads as, in place of `SECRET_MASK` (`DRAWER_SECRET_MASK`, D-8694). */
+  readonly mark?: string;
 }
 
 /** A sliced mask's slice and the raw overlap read on each side of it (D-5995): one slice of pane history costs a few
@@ -828,7 +830,7 @@ export class SecretMasker {
     // A cut inside the lookahead is the next slice's: this text is whole (its budget is spent, so that one is cut).
     const cutAt = fp.cut !== null && fp.cut - off < text.length ? fp.cut : null;
     const limit = cutAt === null ? text.length : Math.max(0, cutAt - off);
-    const masked = spliceMasked(text, spans, limit);
+    const masked = spliceMasked(text, spans, limit, opts.mark);
     return { text: cutAt === null ? masked : masked + SECRET_MASK_TOO_LARGE, carry: cutAt === null && shapes.carry, cut: cutAt !== null };
   }
 
@@ -986,6 +988,19 @@ function runClosed(s: string): boolean | 'spaces' | 'row' {
   return j + (run === null ? 0 : run[0].length) < t.length;
 }
 
+/** What a masked run reads as in the drawer (D-8694, desktop polish Task C39): ONE COLUMN, whatever it replaces.
+ *  The drawer is a tmux client, and tmux places what follows a run where the run ended in its own picture, so a mark
+ *  wider than the text it replaces runs on past it. `SECRET_MASK` is 15 columns: drawn for a key's row segment narrower
+ *  than that in a row's last 14 columns (the head of a key a program broke across rows, or a whole short shape key), or
+ *  for a short tail that text follows to the row's end, it ran past the right edge, the terminal wrapped, and every later
+ *  relative move landed a row off, over the status row too (measured, `drawer-mask-screen.test.ts`). A mark as wide as
+ *  the text would show the key's length, and one never wider than 15 columns but narrower for short text would show a
+ *  bound on it, so the mark is one column for every run: never wider than any text, and the same whatever the key.
+ *  U+2327 X IN A RECTANGLE BOX, East Asian Width Neutral, so no terminal draws it in two columns, and no glyph Claude
+ *  Code's output uses. No SGR around it: a reset would clear the attributes of the text around it. Every other egress
+ *  keeps `SECRET_MASK`; a run split across rows is one mark per row it touches, as before. */
+export const DRAWER_SECRET_MASK = '\u2327';
+
 /** The drawer is a byte stream. A chunk whose tail could start a secret holds that tail back until the next chunk, or
  *  for `holdMs` from the FIRST hold, so a secret split across two chunks is masked whole; every other chunk goes at
  *  once. What was sent stays as context for the next chunk. An expired hold fails closed: a begun shape, an open Codex
@@ -1130,10 +1145,10 @@ export class DrawerMask {
 
   private out(text: string, failClosedTail: boolean): void {
     const r = this.masker.maskWithCarry(text, {
-      rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint,
+      rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint, mark: DRAWER_SECRET_MASK,
     });
     this.carry = r.carry;
-    this.taint = failClosedTail && r.text.endsWith(SECRET_MASK);
+    this.taint = failClosedTail && r.text.endsWith(DRAWER_SECRET_MASK);
     this.ctx = (this.ctx + text).slice(-DRAWER_CONTEXT);
     this.emit(r.text);
   }
