@@ -2,7 +2,8 @@
 // M5.21, M5.22). The real C1 modules run (pre-scan, parser, planner, loader, build); only the asset reader is a fake
 // whose answers each test controls, and `loadMockupAssets` is wrapped so a test can hold one attempt's result and
 // hand it back after the view has moved on. jsdom does not run a srcdoc, so a frame's `load` events are fired by hand.
-// Placeholders only (project `demo`, hosts `cdn.example`, `lib.example`, `ext.example`).
+// Completion plan Task 9 adds the last describe: what the view publishes for Export. Placeholders only (project `demo`,
+// hosts `cdn.example`, `lib.example`, `ext.example`).
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ReactNode } from 'react';
@@ -16,7 +17,8 @@ import { MockupView, type MockupViewProps } from '../src/docs/MockupView';
 import { censusRefText } from '../src/docs/MockupView';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
-import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE } from '../src/docs/docsText';
+import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE } from '../src/docs/docsText';
+import { ExportBodyContext, GATE_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
 import { buildMockupSrcdoc, loadMockupAssets } from '../src/docs/mockup/load';
 import {
   MOCKUP_AUTO_RENDER_BYTES, MOCKUP_CLICK_GUARD, MOCKUP_CSP, MOCKUP_MAX_ASSET_BYTES, MOCKUP_MAX_ATTRIBUTES, MOCKUP_MAX_DEPTH,
@@ -198,6 +200,34 @@ describe('the HTML leaf mounts the viewer (M5.13; the stand-in is gone)', () => 
     if (!url.includes('frame=full')) expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toBeInTheDocument();
     else expect(screen.getByRole('button', { name: MOCKUP_TEXT.close })).toBeInTheDocument();
     expect(frameIn(container).getAttribute('srcdoc')!.startsWith(metaFor(MOCKUP_CSP) + MOCKUP_CLICK_GUARD)).toBe(true);
+  });
+
+  it('Export is offered on the screen: disabled "Render the mockup first" over the gate, enabled once the view has a plan, and its sheet builds the snapshot (completion plan Task 9; M5.EX6)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'm.html')] });
+    navigate('/docs/demo/specs/m.html');
+    const gated = render(<Routed loaders={byPath(tree, { 'm.html': fileAs(`<p>${'x'.repeat(MOCKUP_AUTO_RENDER_BYTES)}</p>`) }).loaders} />);
+    const waiting = await screen.findByRole('button', { name: 'Export: Render the mockup first' });
+    expect(waiting).toBeDisabled();
+    fireEvent.click(button(/^Render mockup · /));
+    await waitFor(() => expect(gated.container.querySelector('.docs-export')).toBeEnabled());
+    gated.unmount();
+    const { container } = render(<Routed loaders={byPath(tree, { 'm.html': fileAs('<p>mock</p><script>x()</script>') }).loaders} />);
+    await waitFor(() => expect(container.querySelector('iframe.docs-mockup-frame')).not.toBeNull());
+    await waitFor(() => expect(container.querySelector('.docs-export')).toBeEnabled());
+    fireEvent.click(container.querySelector('.docs-export')!);
+    const save = await screen.findByRole('button', { name: new RegExp(`^Save demo_specs_m\\.html_${COMMIT_A.slice(0, 8)}\\.html \\(\\d+ KiB\\)$`) }, { timeout: 5000 });
+    expect(save).toBeInTheDocument();
+    expect(screen.getByText(EXPORT_TEXT.mockupCss)).toBeInTheDocument();
+  });
+
+  it('a page the pre-scan refuses still offers Export, which saves its source (the plain arm; M5.EX6)', async () => {
+    const tree = treeOk({ entries: [entry('specs', 'm.html')] });
+    navigate('/docs/demo/specs/m.html');
+    const { container } = render(<Routed loaders={byPath(tree, { 'm.html': fileAs('<div>'.repeat(MOCKUP_MAX_DEPTH + 1)) }).loaders} />);
+    expect(await screen.findByText(MOCKUP_TEXT.tooComplex)).toBeInTheDocument();
+    await waitFor(() => expect(container.querySelector('.docs-export')).toBeEnabled());
+    fireEvent.click(container.querySelector('.docs-export')!);
+    expect(await screen.findByRole('button', { name: /^Save demo_specs_m\.html_/ }, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it('a listed size over the class cap: the too-large sentence and Download, no viewer, no file request', async () => {
@@ -396,7 +426,8 @@ describe('draft and omitted assets tell the truth (M5.14)', () => {
     const html = '<img src="a.png"><img src="a.png"><img src="b.png">';
     const m = mount({ html, context: draftCtx([draftAsset('a.png'), draftAsset('b.png')]), page: DRAFT_PAGE });
     await waitFor(() => expect(screen.getByText('embeds 2 uncommitted assets')).toBeInTheDocument());
-    expect(m.onDraft.mock.calls.map((c) => c[0])).toEqual([2]);
+    // The badge is drawn in the commit; the effect that reports the count runs after it, so wait for the report too.
+    await waitFor(() => expect(m.onDraft.mock.calls.map((c) => c[0])).toEqual([2]));
     m.unmount();
     expect(m.onDraft.mock.calls.map((c) => c[0])).toEqual([2, -2]);
   });
@@ -1013,3 +1044,135 @@ class Deferred2 {
     this.promise = new Promise<void>((r) => { this.resolve = r; });
   }
 }
+
+describe('what the view publishes for Export (completion plan Task 9; M5.EX6)', () => {
+  /** A mount under an Export body holder that records every publish, `null` withdrawals included. */
+  function publishing(s: Setup) {
+    const bodies: Array<ExportBody | null> = [];
+    const publish = (b: ExportBody | null): void => { bodies.push(b); };
+    const onDraft = vi.fn<(n: number) => void>();
+    const wrap = (n: Setup): ReactNode => <ExportBodyContext value={publish}>{viewOf(n, onDraft)}</ExportBodyContext>;
+    const r = render(wrap(s));
+    return {
+      ...r, bodies, again: (n: Setup) => r.rerender(wrap(n)),
+      /** What stands now: the last publish, `null` once withdrawn or when nothing was published. */
+      current: (): ExportBody | null => bodies.at(-1) ?? null,
+      frame: (): HTMLIFrameElement | null => r.container.querySelector('iframe'),
+    };
+  }
+  const mockupOf = (b: ExportBody | null): Extract<ExportBody, { kind: 'mockup' }> => {
+    if (b === null || b.kind !== 'mockup') throw new Error(`not a mockup body: ${b === null ? 'null' : b.kind}`);
+    return b;
+  };
+  /** Whether `p` has settled yet, without waiting on it. */
+  const isSettled = async (p: Promise<MockupLoadEnd>): Promise<boolean> => {
+    const pending = Symbol('pending');
+    return (await Promise.race([p, flush().then(() => pending)])) !== pending;
+  };
+
+  it('the render gate publishes GATE_BODY; the tap withdraws it and the attempt publishes a mockup body', async () => {
+    const m = publishing({ html: '<p>a</p>', size: 1_048_577 });
+    expect(m.current()).toBe(GATE_BODY);
+    fireEvent.click(button(/^Render mockup · /));
+    await waitFor(() => expect(m.current()?.kind).toBe('mockup'));
+    expect(m.bodies.slice(0, 3).map((b) => (b === null ? null : b.kind))).toEqual(['gate', null, 'mockup']);
+  });
+
+  it('a page the pre-scan refuses publishes its source as a plain body with the refused-export note, over the gate or under it', async () => {
+    const html = '<div>'.repeat(MOCKUP_MAX_DEPTH + 1);
+    const under = publishing({ html });
+    expect(under.current()).toEqual({ kind: 'plain', text: html, note: EXPORT_TEXT.mockupRefused });
+    expect(under.frame()).toBeNull();
+    under.unmount();
+    const over = publishing({ html, size: 1_048_577 });
+    expect(over.current()).toEqual({ kind: 'plain', text: html, note: EXPORT_TEXT.mockupRefused });
+    expect(over.bodies.some((b) => b !== null && b.kind === 'gate')).toBe(false);
+  });
+
+  it('an attempt publishes a mockup body from the moment it has a plan; its settled resolves loaded with the attempt\'s result', async () => {
+    const gate = deferred();
+    const reads = fakeReader(new Map([['a.png', gate]]));
+    const html = '<img src="a.png">';
+    const m = publishing({ html, context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+    await waitFor(() => expect(reads.calls).toHaveLength(1));
+    const body = mockupOf(m.current());
+    expect(m.frame()).toBeNull();
+    expect(body.text).toBe(html);
+    expect(body.doc.querySelector('img')?.getAttribute('src')).toBe('a.png');
+    expect(body.assets.plan.rows.map((r) => r.verdict.v)).toEqual(['inline']);
+    expect(await isSettled(body.assets.settled)).toBe(false);
+    gate.resolve({ kind: 'ok', bytes: bytesOf(1, 2, 3) });
+    const end = await body.assets.settled;
+    if (end.s !== 'loaded') throw new Error('not loaded');
+    expect(end.result).toBe(await vi.mocked(loadMockupAssets).mock.results[0]!.value);
+    expect([...end.result.assets.values()].map((a) => [...a.bytes])).toEqual([[1, 2, 3]]);
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+  });
+
+  it('a new attempt publishes its own body, and the superseded attempt\'s settled ends', async () => {
+    const gate = deferred();
+    const reads = fakeReader(new Map([['a.png', gate]]));
+    const html = '<img src="a.png"><img src="b.png">';
+    const m = publishing({ html, context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+    await waitFor(() => expect(reads.calls).toHaveLength(1));
+    const first = mockupOf(m.current());
+    m.again({ html, context: ctxOf([entry('specs', 'b.png')]), reader: reads.reader });
+    await waitFor(() => expect(mockupOf(m.current())).not.toBe(first));
+    const second = mockupOf(m.current());
+    expect(second.assets).not.toBe(first.assets);
+    expect(second.assets.plan.context.tree).not.toBe(first.assets.plan.context.tree);
+    expect(await first.assets.settled).toEqual({ s: 'ended' });
+    gate.resolve({ kind: 'ok', bytes: bytesOf(9) });
+    expect((await second.assets.settled).s).toBe('loaded');
+    // The first attempt's end stays ended; a late answer never rewrites it.
+    expect(await first.assets.settled).toEqual({ s: 'ended' });
+  });
+
+  it('the body changes only with the attempt: a toggle or a re-render of the same props publishes nothing new', async () => {
+    const reads = fakeReader();
+    // One context and one reader for every render, as the screen's memoised ones are.
+    const setup: Setup = { html: '<p>a</p>', reader: reads.reader, context: ctxOf([]) };
+    const m = publishing(setup);
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    const count = m.bodies.length;
+    const body = m.current();
+    fireEvent.click(button('Source'));
+    m.again(setup);
+    await flush();
+    expect(m.bodies.length).toBe(count);
+    expect(m.current()).toBe(body);
+  });
+
+  it('unmounting withdraws the body and ends the attempt\'s settled', async () => {
+    const gate = deferred();
+    const reads = fakeReader(new Map([['a.png', gate]]));
+    const m = publishing({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+    await waitFor(() => expect(reads.calls).toHaveLength(1));
+    const body = mockupOf(m.current());
+    m.unmount();
+    expect(m.current()).toBeNull();
+    // The cleanup ends it synchronously; the bound only turns a missing end into an assertion, never a hung test.
+    const pending = new Promise<'pending'>((r) => { setTimeout(() => r('pending'), 2000); });
+    expect(await Promise.race([body.assets.settled, pending])).toEqual({ s: 'ended' });
+  });
+
+  it('a context that does not open the page (a mid-update leaf) publishes no body', async () => {
+    const stale: MockupContext = { ...ctxOf([]), tree: treeOk({ entries: [], drafts: holder() }) };
+    const m = publishing({ html: '<p>a</p>', context: stale });
+    await flush();
+    expect(m.bodies.filter((b) => b !== null)).toEqual([]);
+  });
+
+  it('an attempt the view aborts for a re-list ends its settled, and the re-listed context publishes a body of its own', async () => {
+    const relist = vi.fn<() => void>();
+    const moved: MockupAssetReader = { read: async () => ({ kind: 'failed', failure: 'unknown-commit' }) };
+    const html = '<img src="a.png">';
+    const m = publishing({ html, context: ctxOf([entry('specs', 'a.png')]), reader: moved, relist });
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    const first = m.bodies.find((b) => b !== null && b.kind === 'mockup') ?? null;
+    expect(await mockupOf(first).assets.settled).toEqual({ s: 'ended' });
+    m.again({ html, context: ctxOf([entry('specs', 'a.png')]), reader: fakeReader().reader, relist });
+    await waitFor(() => expect(mockupOf(m.current())).not.toBe(first));
+    expect((await mockupOf(m.current()).assets.settled).s).toBe('loaded');
+  });
+});

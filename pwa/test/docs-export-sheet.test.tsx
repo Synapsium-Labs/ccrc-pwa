@@ -1,7 +1,8 @@
 // Docs W5 Export, Task 7: the export sheet (spec 2026-10-01 4.17 "Save", "Failures and limits"; decision 7; M4.EX13;
 // refinements (e), (l), (u)). The sheet builds as soon as it opens, through an injected builder (or, in one case, the real
 // chunk), and its Save calls `downloadExport` inside the click. `setup.ts` stubs `URL.createObjectURL`; the anchor's
-// `click` is spied so jsdom never navigates. Task 9 appends the Export chrome's colour guard. Placeholders only:
+// `click` is spied so jsdom never navigates. Task 9 appends the Export chrome's colour guard. Completion plan Task 9
+// (C2) adds the mockup's draft confirm (M5.EX5, M4.EX13) and the lists the sheet shows. Placeholders only:
 // project `demo`, `specs/...`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
@@ -10,11 +11,12 @@ import path from 'node:path';
 import type { DocPin, DocsPageLocation } from '../../shared/docs';
 import { ExportSheet, type ExportBuilder } from '../src/docs/ExportSheet';
 import { EXPORT_FACT, EXPORT_TEXT, fillSentence } from '../src/docs/docsText';
-import type { ExportInput, ExportResult } from '../src/docs/export/buildExport';
-import { exportInputOf, firstHeading, type ExportRequest } from '../src/docs/export/exportInput';
+import type { ExportInput, ExportMockupFacts, ExportResult } from '../src/docs/export/buildExport';
+import { exportInputOf, exportWorktreeLabel, firstHeading, type ExportRequest } from '../src/docs/export/exportInput';
+import { createExportAssets } from '../src/docs/export/exportAssets';
 import { detachUrls } from '../src/docs/docsLinks';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { COMMIT_A, SERVED, fileResponse, pageAt, treeOk } from './docsFixtures';
+import { COMMIT_A, SERVED, draftOf, entry, fileResponse, holder, pageAt, treeOk } from './docsFixtures';
 import { syncTestStore } from './highlightTestStore';
 import { stripComments } from './cssRule';
 
@@ -35,7 +37,7 @@ function builder(answer?: (input: ExportInput) => ExportResult | Promise<ExportR
     buildExport: async (input) => {
       inputs.push(input);
       return answer === undefined
-        ? { ok: true, name: input.name, bytes: new TextEncoder().encode('x'), size: 2048, notes: ['a note', 'one more'], deferred: 0 }
+        ? { ok: true, name: input.name, bytes: new TextEncoder().encode('x'), size: 2048, notes: ['a note', 'one more'], deferred: 0, mockup: null }
         : answer(input);
     },
   };
@@ -99,7 +101,7 @@ describe('the export sheet: build on open, then Save (spec 4.17; M4.EX13)', () =
   });
 
   it("images waiting for Load image are named in the sheet", async () => {
-    sheet(async () => builder((input) => ({ ok: true, name: input.name, bytes: new Uint8Array(1), size: 1, notes: [], deferred: 2 })));
+    sheet(async () => builder((input) => ({ ok: true, name: input.name, bytes: new Uint8Array(1), size: 1, notes: [], deferred: 2, mockup: null })));
     expect(await screen.findByText('2 images not loaded; tap Load image first.')).toBeInTheDocument();
   });
 
@@ -114,6 +116,109 @@ describe('the export sheet: build on open, then Save (spec 4.17; M4.EX13)', () =
   it('loads the real builder chunk and saves what it built', async () => {
     render(<ExportSheet request={REQUEST} onClose={() => {}} />);
     expect(await screen.findByRole('button', { name: new RegExp(`^Save ${NAME.replace(/\./g, '\\.')} \\(\\d+ KiB\\)$`) })).toBeInTheDocument();
+  });
+});
+
+// ---- Completion plan Task 9: the draft confirm and the mockup's lists -------------------------------------------------
+
+describe('the export sheet: a mockup file that inlines uncommitted files asks before it saves (M5.EX5, M4.EX13)', () => {
+  const MOCKUP_NAME = 'demo_specs_m.html_aaaaaaaa.html';
+  const facts = (...inlined: ExportMockupFacts['inlined'][number][]): ExportMockupFacts => ({ inlined, omitted: ['specs/gone.png'] });
+  const answer = (mockup: ExportMockupFacts) => (input: ExportInput): ExportResult =>
+    ({ ok: true, name: MOCKUP_NAME, bytes: new TextEncoder().encode('x'), size: 2048, notes: [input.title], deferred: 0, mockup });
+  const SAVE = `Save ${MOCKUP_NAME} (2 KiB)`;
+  const DRAFTS = facts({ path: 'docs/superpowers/specs/a.png', size: 1500, draft: true }, { path: 'docs/superpowers/specs/b.png', size: 10, draft: true },
+    { path: 'docs/superpowers/specs/c.png', size: 10, draft: false });
+  const draftTree = treeOk({
+    entries: [entry('specs', 'a.md', { draft: draftOf('modified') })],
+    drafts: holder(),
+  });
+  const request = (tree = draftTree): ExportRequest => ({ ...REQUEST, tree });
+
+  it('the first Save tap saves nothing and shows the confirm sentence; the Save click after it calls the anchor inside its own synchronous turn', async () => {
+    const clicks: boolean[] = [];
+    let microtaskRan = false;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => { clicks.push(microtaskRan); });
+    sheet(async () => builder(answer(DRAFTS)), request());
+    const save = await screen.findByRole('button', { name: SAVE });
+    expect(screen.queryByText(/uncommitted file/)).toBeNull();
+    fireEvent.click(save);
+    expect(clicks).toEqual([]);
+    expect(screen.getByText('This file includes 2 uncommitted files from main checkout.')).toBeInTheDocument();
+    await Promise.resolve();
+    queueMicrotask(() => { microtaskRan = true; });
+    fireEvent.click(screen.getByRole('button', { name: SAVE }));
+    expect(clicks).toEqual([false]);
+  });
+
+  it('one draft file reads "1 uncommitted file" (the plural is the count\'s)', async () => {
+    sheet(async () => builder(answer(facts({ path: 'docs/superpowers/specs/a.png', size: 10, draft: true }))), request());
+    fireEvent.click(await screen.findByRole('button', { name: SAVE }));
+    expect(screen.getByText('This file includes 1 uncommitted file from main checkout.')).toBeInTheDocument();
+  });
+
+  it('with no draft file the first tap saves, and no confirm is shown', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    sheet(async () => builder(answer(facts({ path: 'docs/superpowers/specs/c.png', size: 10, draft: false }))), request());
+    fireEvent.click(await screen.findByRole('button', { name: SAVE }));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText(/uncommitted file/)).toBeNull();
+  });
+
+  it('a file that is not a mockup saves on the first tap', async () => {
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    sheet(async () => builder(), request());
+    fireEvent.click(await screen.findByRole('button', { name: `Save ${NAME} (2 KiB)` }));
+    expect(click).toHaveBeenCalledTimes(1);
+  });
+
+  it('lists each inlined file with its repo path, size and committed or draft, and each asset left out', async () => {
+    sheet(async () => builder(answer(DRAFTS)), request());
+    await screen.findByRole('button', { name: SAVE });
+    expect(screen.getByText(EXPORT_TEXT.mockupInlined)).toBeInTheDocument();
+    expect(screen.getByText('docs/superpowers/specs/a.png (2 KiB, uncommitted draft)')).toBeInTheDocument();
+    expect(screen.getByText('docs/superpowers/specs/c.png (1 KiB, committed)')).toBeInTheDocument();
+    expect(screen.getByText(EXPORT_TEXT.mockupOmitted)).toBeInTheDocument();
+    expect(screen.getByText('specs/gone.png')).toBeInTheDocument();
+  });
+
+  it('a new build (Retry after a chunk that did not load) starts with the confirm closed', async () => {
+    let tries = 0;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    sheet(async () => {
+      tries += 1;
+      if (tries === 1) throw new TypeError('x');
+      return builder(answer(DRAFTS));
+    }, request());
+    fireEvent.click(await screen.findByRole('button', { name: EXPORT_TEXT.retry }));
+    await screen.findByRole('button', { name: SAVE });
+    expect(screen.queryByText(/uncommitted file/)).toBeNull();
+  });
+});
+
+describe('exportInputOf for a mockup (completion plan Task 9)', () => {
+  it('builds the mockup body from the viewer\'s Document and plan, titles it by the file name and carries no Markdown registry', () => {
+    const doc = new DOMParser().parseFromString('<p>x</p>', 'text/html');
+    const plan = { context: { project: 'demo', pin: { ...PIN, path: 'm.html' }, tree: treeOk() }, rows: [], admitted: new Map(), reservedBytes: 0 } as never;
+    const assets = { plan, settled: Promise.resolve({ s: 'ended' } as const) };
+    const input = exportInputOf({
+      ...REQUEST, page: pageAt('/docs/demo/specs/m.html') as Leaf, assets: createExportAssets(),
+      source: { kind: 'mockup', pin: { ...PIN, path: 'm.html' }, show: fileResponse('<p>x</p>').show, doc, assets },
+    }, { exportedAt: 0, theme: null });
+    expect(input.title).toBe('m.html');
+    expect(input.name).toBe(`demo_specs_m.html_${COMMIT_A.slice(0, 8)}.html`);
+    expect(input.assets).toBeNull();
+    expect(input.body.kind).toBe('mockup');
+    if (input.body.kind !== 'mockup') throw new Error('unreachable');
+    expect(input.body.doc).toBe(doc);
+    expect(input.body.assets).toBe(assets);
+    expect(input.body.link).toMatchObject({ section: 'specs', path: 'm.html' });
+    expect(input.provenance.facts.find((f) => f.label === EXPORT_FACT.view)).toBeUndefined();
+  });
+
+  it('exportWorktreeLabel is the provenance\'s closed label: the main checkout, a workspace by its last segment, or the other-worktree words', () => {
+    expect(exportWorktreeLabel(treeOk({ drafts: holder() }))).toBe('main checkout');
+    expect(exportWorktreeLabel(treeOk())).toBe('another worktree');
   });
 });
 

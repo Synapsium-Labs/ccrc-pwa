@@ -8,8 +8,9 @@
 import type { Element as HastElement, Root as HastRoot, RootContent } from 'hast';
 import { contentClass, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../../shared/docs';
 import type { HighlightStore } from '../../lib/highlightStore';
+import { DOCS_HEAD_TEXT, closedWorktreeLabel } from '../docsText';
 import { leafName } from '../docsTree';
-import type { ExportBody } from '../exportBody';
+import type { ExportBody, MockupExportAssets } from '../exportBody';
 import type { ExportBodyInput, ExportInput } from './buildExport';
 import type { ExportAsset, ExportAssets } from './exportAssets';
 import { exportFilename } from './filename';
@@ -29,6 +30,10 @@ export type ExportSource =
     readonly body: Extract<ExportBody, { kind: 'text' }>; readonly store: HighlightStore | null;
   }
   | { readonly kind: 'svg'; readonly pin: DocPin; readonly show: DocsShowOk; readonly bytes: Uint8Array }
+  | {
+    readonly kind: 'mockup'; readonly pin: DocPin; readonly show: DocsShowOk; readonly doc: Document;
+    readonly assets: MockupExportAssets;
+  }
   | { readonly kind: 'raster'; readonly pin: DocPin; readonly asset: Extract<ExportAsset, { kind: 'raster' }> };
 
 /** What the header hands the sheet at the tap. */
@@ -68,7 +73,13 @@ export function firstHeading(tree: HastRoot): string | null {
   return null;
 }
 
-function bodyOf(source: ExportSource, alt: string): ExportBodyInput {
+/** The closed label of the worktree whose drafts the page may carry, as the provenance writes it (`exportProvenance`'s
+ *  `label`): the sheet's draft confirm says it too. */
+export function exportWorktreeLabel(tree: DocsTreeOk): string {
+  return tree.drafts.state === 'holder' ? closedWorktreeLabel(tree.drafts.worktree) : DOCS_HEAD_TEXT.worktreeOther;
+}
+
+function bodyOf(source: ExportSource, alt: string, page: Leaf, tree: DocsTreeOk): ExportBodyInput {
   switch (source.kind) {
     case 'tree':
       return { kind: 'tree', tree: source.body.tree, urls: source.body.urls, link: source.body.link, store: source.store };
@@ -76,6 +87,8 @@ function bodyOf(source: ExportSource, alt: string): ExportBodyInput {
       return { kind: 'plain', text: source.body.text, note: source.body.note };
     case 'text':
       return { kind: 'text', text: source.body.text, lang: source.body.lang, store: source.store };
+    case 'mockup':
+      return { kind: 'mockup', doc: source.doc, assets: source.assets, link: { section: page.section, path: page.path, tree } };
     case 'svg':
       return { kind: 'image', alt, draft: source.pin.kind === 'draft', image: { kind: 'svg', bytes: source.bytes } };
     case 'raster':
@@ -99,7 +112,7 @@ export function exportInputOf(r: ExportRequest, o: { readonly exportedAt: number
     theme: o.theme,
     commit: provenance.commit,
     provenance,
-    body: bodyOf(source, name),
+    body: bodyOf(source, name, page, tree),
     assets: source.kind === 'tree' ? r.assets : null,
   };
 }

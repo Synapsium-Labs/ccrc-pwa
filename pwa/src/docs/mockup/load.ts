@@ -54,7 +54,7 @@ interface SrcsetCandidate { readonly start: number; readonly end: number; readon
 /** The candidates of a `srcset` value (the HTML parsing rules, in one pass): each URL is a run of non-space characters
  *  (a comma inside it stays), trailing commas are stripped, and the descriptors after it run to the next comma outside
  *  parentheses. A candidate whose descriptors are not a width, a density or a height is dropped and listed. */
-function parseSrcset(text: string): { candidates: SrcsetCandidate[]; dropped: string[] } {
+export function parseSrcset(text: string): { candidates: SrcsetCandidate[]; dropped: string[] } {
   const candidates: SrcsetCandidate[] = [];
   const dropped: string[] = [];
   const n = text.length;
@@ -426,7 +426,7 @@ export function loadMockupAssets(plan: MockupAssetPlan, reader: MockupAssetReade
 // ---------------------------------------------------------------------------------------------------------------
 /** Bytes as base64, in chunks small enough to spread into `String.fromCharCode` (`DocImage` keeps its own private copy
  *  of this loop; it is not exported from there). */
-function base64Of(bytes: Uint8Array): string {
+export function base64Of(bytes: Uint8Array): string {
   let binary = '';
   for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
   return btoa(binary);

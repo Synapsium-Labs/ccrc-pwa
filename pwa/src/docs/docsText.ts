@@ -674,6 +674,23 @@ export const EXPORT_TEXT = {
   banner: 'Draft, not committed. This copy includes uncommitted changes from {label} on {branch}. Based on commit '
     + '{commit} ({served}). It is not on GitHub. Content fingerprint sha256:{fp}. Read {time}.',
   bannerImages: 'It embeds {k} uncommitted image{s}.',
+  // A mockup's export (spec 5.6.9; completion plan Task 9). `{k}`/`{s}` count; `{label}` is the closed worktree label.
+  /** The sheet's confirm before Save, when the file inlines uncommitted files. */
+  draftConfirm: 'This file includes {k} uncommitted file{s} from {label}.',
+  /** A page the pre-scan refused: the file holds its source as text, and says so. */
+  mockupRefused: 'This page was too complex to render, so this file holds its source as text.',
+  /** The title of the frame that holds the snapshot, `{name}` the file's name. */
+  mockupFrame: 'Snapshot of {name}',
+  mockupInlined: 'Files inlined in this copy',
+  mockupOmitted: 'Files not inlined in this copy',
+  mockupLinks: 'Links in this page',
+  /** One inlined file: `{path}` its repo path, `{size}` its size, `{source}` one of `fileCommitted` and `fileDraft`. */
+  inlinedFile: '{path} ({size}, {source})',
+  fileCommitted: 'committed',
+  fileDraft: 'uncommitted draft',
+  /** What rests on the file's content-security policy and is not rewritten by the snapshot (spec 5.6.9, M5.B10). */
+  mockupCss: 'Styles that use image-set() or escapes inside url() are not rewritten in this copy; the content-security '
+    + 'policy in this file stops them loading anything.',
 } as const;
 
 /** The provenance block's labels (spec 4.17 "Provenance"); the same facts are written as `ccrc:*` metas. */
@@ -717,6 +734,8 @@ export const EXPORT_WAIT_TEXT: Record<ExportWait, string> = {
   'highlighting': 'Highlighting…',
   'gate': 'Choose Format or Show as text first',
   'image-failed': 'Image not loaded',
+  'render-first': 'Render the mockup first',
+  'preparing': 'Preparing…',
 };
 
 // ===== Mockup viewer (spec 4.7, 5.6.7, 5.6.8; native Docs reader C2, Task 8) =====

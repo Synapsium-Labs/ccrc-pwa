@@ -1619,15 +1619,14 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
-  it('no Export for class other, nor for html in W5 (M4.SH8)', async () => {
+  it('no Export for class other; an html leaf offers it from W6 (M4.SH8; C2 Task 9, base 4.17)', async () => {
     const tree = treeOk({ entries: [entry('specs', 'o.pdf'), entry('specs', 'm.html')] });
     open('/docs/demo/specs/o.pdf', fakeLoaders({ tree: okTree(tree) }));
     await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     open('/docs/demo/specs/m.html', byPath(tree, { 'm.html': fileAs('m.html', '<p>a</p>', 'html') }));
-    await waitFor(() => expect(screen.getByRole('button', { name: DOCS_HEAD_TEXT.share })).toBeEnabled());
-    expect(document.querySelector('.docs-export')).toBeNull();
+    await waitFor(() => expect(exportButton()).toBeEnabled());
   });
 
   it("a new draft: Export is enabled and Share's refusal carries Export's clause; a withheld new file: no Export, no clause (M4.SH3)", async () => {

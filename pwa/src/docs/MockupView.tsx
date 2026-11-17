@@ -10,6 +10,10 @@
 //      generation first, so a late result never publishes into a later attempt;
 //   6. the frame (`MockupFrame`), keyed by mode and a nonce, never by author text, so Stop, Run, Reload and Load
 //      external each make a NEW element, and the toolbar, the badges, the census and the links list.
+// Export reads what the view publishes (`usePublishExportBody`; completion plan Task 9): the render gate publishes
+// `GATE_BODY`, a page the pre-scan refuses publishes its source as a `plain` body with the refused-export note, and an
+// attempt publishes a `mockup` body (its parsed Document, its plan and the promise of its load's end) from the moment it
+// has a plan; parsing and planning publish nothing. A superseded attempt's promise ends `{ s: 'ended' }`.
 // The choices (Run scripts, Load external) live in this view's state only: no storage, no URL key. The view is keyed by
 // the caller (`DocsLeaf`) by the document's identity and the mode, so a new document or mode starts them over.
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
@@ -25,10 +29,11 @@ import { navigate } from '../lib/router';
 import { DocsAssetContext } from './DocImage';
 import { DOC_NOT_UTF8_NOTE, docMarkdownSource, mib } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
+import { GATE_BODY, usePublishExportBody, type ExportBody, type MockupExportAssets, type MockupLoadEnd } from './exportBody';
 import { DocsPageLink } from './DocsTreeView';
 import { docsLocation } from './docsLinks';
 import {
-  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence,
+  DOCS_RELIST_WORDS, DOCS_SHOW_NO_BYTES, DOCS_VIEW_TEXT, DOC_IMAGE_TEXT, EXPORT_TEXT, MOCKUP_REFUSAL_SENTENCE, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence,
   kib, mockupVerdictSentence, pluralS,
 } from './docsText';
 import { leafName } from './docsTree';
@@ -297,6 +302,8 @@ function MockupLive(p: MockupViewProps & {
   const [source, setSource] = useState(false);
   const [sheet, setSheet] = useState(false);
   const [loaded, setLoaded] = useState<Loaded | null>(null);
+  // The current attempt's plan and the end of its load, for Export; `null` between attempts.
+  const [exported, setExported] = useState<MockupExportAssets | null>(null);
   const [fatal, setFatal] = useState<{ readonly error: unknown } | null>(null);
   // The attempt number: a new value starts a new attempt over the same context (a retry, a sign-in).
   const [attemptNo, setAttemptNo] = useState(0);
@@ -346,6 +353,10 @@ function MockupLive(p: MockupViewProps & {
       return undefined;
     }
     setChanging(false);
+    // The attempt's end for Export: resolved once, by whichever comes first (its result, its failure, its abort).
+    let end!: (e: MockupLoadEnd) => void;
+    const settled = new Promise<MockupLoadEnd>((resolve) => { end = resolve; });
+    setExported({ plan, settled });
     const moved = (): void => {
       if (generation.current !== mine || host.current.historical) return;
       if (autoRelisted.current) {
@@ -355,6 +366,7 @@ function MockupLive(p: MockupViewProps & {
       autoRelisted.current = true;
       generation.current += 1;
       ctl.abort();
+      end({ s: 'ended' });
       setLoaded(null);
       host.current.relist();
     };
@@ -367,10 +379,15 @@ function MockupLive(p: MockupViewProps & {
     };
     loadMockupAssets(plan, observing, ctl.signal).then(
       (result) => {
-        if (generation.current !== mine) return;
+        if (generation.current !== mine) {
+          end({ s: 'ended' });
+          return;
+        }
+        end({ s: 'loaded', result });
         setLoaded({ extract, result });
       },
       (error: unknown) => {
+        end({ s: 'ended' });
         if (generation.current !== mine || ctl.signal.aborted) return;
         setFatal({ error });
       },
@@ -378,6 +395,8 @@ function MockupLive(p: MockupViewProps & {
     return () => {
       ctl.abort();
       generation.current += 1;
+      end({ s: 'ended' });
+      setExported(null);
     };
   }, [doc, context, pin.section, pin.path, p.reader, attemptNo]);
 
@@ -395,6 +414,13 @@ function MockupLive(p: MockupViewProps & {
     host.current.relist();
     setAttemptNo((n) => n + 1);
   };
+
+  // The attempt's Export body, from the moment it has a plan; it changes only with the attempt.
+  const exportBody = useMemo<ExportBody | null>(
+    () => (exported === null ? null : { kind: 'mockup', text: p.text, doc, assets: exported }),
+    [exported, p.text, doc],
+  );
+  usePublishExportBody(exportBody);
 
   if (fatal !== null) throw fatal.error;
 
@@ -632,9 +658,14 @@ function LinkRow(p: { readonly link: PageLink }): ReactNode {
   }
 }
 
+/** What a page the pre-scan refuses publishes for Export: its source as plain text, with the refused-export note (base
+ *  5.6.9 step 1). */
+const refusedBody = (text: string): ExportBody => ({ kind: 'plain', text, note: EXPORT_TEXT.mockupRefused });
+
 /** Parses the page once (after the gate) and hands the document to the live view, or shows the refusal. */
 function MockupRun(p: MockupViewProps & { readonly text: string; readonly chip: ReactNode }): ReactNode {
   const parsed = useMemo(() => parseMockup(p.text), [p.text]);
+  usePublishExportBody(useMemo(() => (parsed.ok ? null : refusedBody(p.text)), [parsed.ok, p.text]));
   if (!parsed.ok) return <Refusal prescan={parsed.prescan as Extract<MockupPrescan, { ok: false }>} text={p.text} download={p.download} chip={p.chip} />;
   return <MockupLive {...p} doc={parsed.doc} />;
 }
@@ -648,6 +679,11 @@ export function MockupView(p: MockupViewProps): ReactNode {
   const gated = show.size > MOCKUP_AUTO_RENDER_BYTES && !tapped;
   // Over the gate the pre-scan still runs (it is linear and builds no parser), so a page it refuses says so before a tap.
   const pre = useMemo(() => (gated && src.kind !== 'no-bytes' ? prescanMockup(text) : null), [gated, src.kind, text]);
+  // The gate and a refusal over it publish here; a page under the gate publishes from `MockupRun` and `MockupLive`.
+  usePublishExportBody(useMemo<ExportBody | null>(() => {
+    if (!gated || src.kind === 'no-bytes') return null;
+    return pre !== null && !pre.ok ? refusedBody(text) : GATE_BODY;
+  }, [gated, src.kind, pre, text]));
   if (src.kind === 'no-bytes') {
     return <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'malformed-answer', why: DOCS_SHOW_NO_BYTES } }} />;
   }
