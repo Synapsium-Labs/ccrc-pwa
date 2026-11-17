@@ -4085,12 +4085,15 @@ holds each changed place, each row and what reds it, the mutants and the open-PR
   `layout`, with the path and the shape it should take, on every branch and with no trailer escape; `enforce`, `warn`
   and the fail-closed exit are kept. 13 rows were red before the arm (measured); 16 mutants are each killed (measured).
 - [x] CLAUDE.md: one bullet under "Conventions that shape every change" says we follow the judge's standard, names its
-  check, and points at the guard's layout arm.
+  check, and points at the guard's layout arm. The judge's name leaves the committed hashed private-name list (the
+  operator's ruling of 2026-11-17: "yeah remove it from private names").
 - [x] The open-PR measure: 8 of 20 open PRs add a file the arm refuses (read-only, listed in `c43.md`).
 
 **Files.** `.github/ci/ledger-guard.mjs`, `.github/workflows/ci.yml` (the job's comment), `server/test/ci-ledger-guard.test.ts`,
 `ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15), `server/test/coordinator-skill.test.ts` (its
-pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
+pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `shared/private-names.mjs` and
+`server/test/private-names-characterization.test.ts` (the judge's row removed on the operator's ruling of 2026-11-17,
+and the digest re-pinned), this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
 
 **Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, single-definition,
 deviation-refs, dtbd and topology-clean pass; the guard passes on this branch against `origin/main`.
