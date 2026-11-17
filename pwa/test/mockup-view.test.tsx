@@ -1342,6 +1342,21 @@ describe('what the view publishes for Export (completion plan Task 9; M5.EX6)', 
     expect(m.bodies.filter((b) => b !== null)).toEqual([]);
   });
 
+  it('Export waits while the view re-lists: after the first movement and before a new context no body stands, and the new context publishes one (review minor 3)', async () => {
+    const relist = vi.fn<() => void>();
+    const moved: MockupAssetReader = { read: async () => ({ kind: 'failed', failure: 'unknown-commit' }) };
+    const html = '<img src="a.png">';
+    const m = publishing({ html, context: ctxOf([entry('specs', 'a.png')]), reader: moved, relist });
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    await flush();
+    // A body was published for the attempt, and the movement withdrew it: the header reads "Preparing…", not a file whose
+    // every asset is a placeholder for an attempt that was aborted.
+    expect(m.bodies.some((b) => b !== null && b.kind === 'mockup')).toBe(true);
+    expect(m.current()).toBeNull();
+    m.again({ html, context: ctxOf([entry('specs', 'a.png')]), reader: fakeReader().reader, relist });
+    await waitFor(() => expect(m.current()?.kind).toBe('mockup'));
+  });
+
   it('an attempt the view aborts for a re-list ends its settled, and the re-listed context publishes a body of its own', async () => {
     const relist = vi.fn<() => void>();
     const moved: MockupAssetReader = { read: async () => ({ kind: 'failed', failure: 'unknown-commit' }) };
