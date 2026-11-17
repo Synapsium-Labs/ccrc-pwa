@@ -86,8 +86,8 @@ describe('Task D1: the generation row keeps the previous generation\'s account (
 
 // ------------------------------------------------------------------------------------------------- Task D2: the reading
 
-const LABELS: Readonly<Record<string, string>> = { 'lane-a': 'org-a', 'lane-b': 'org-a', 'lane-c': 'org-b' };
-const orgOf = (account: string): string | null => LABELS[account] ?? null;
+const ORG_LABEL_OF: Readonly<Record<string, string>> = { 'lane-a': 'org-a', 'lane-b': 'org-a', 'lane-c': 'org-b' };
+const orgOf = (account: string): string | null => ORG_LABEL_OF[account] ?? null;
 const inputsOf = (g: GenRow, of: (account: string) => string | null = orgOf): RenewalInputs =>
   renewalInputsOf(g, undefined, { kind: 'unmeasured', why: 'not a coordinator' }, NOW, { kind: 'measured', value: false }, of);
 const unmeasured = (why: string): Reading<boolean> => ({ kind: 'unmeasured', why });
