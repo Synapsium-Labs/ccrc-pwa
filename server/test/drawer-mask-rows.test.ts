@@ -186,13 +186,14 @@ describe('D-8710 — the exact-bytes row join walks every row a key spans', () =
   });
 
   it('the rows the drawer sends before a hold are read with the rows it holds', () => {
-    // The hold stops once the rows it walks back over hold the most a held key and its trims can (here 45 + 32 bytes):
-    // a 70-character row and the 10-character row before it. The key's head, 35 characters ending the row before, is
-    // sent ahead of the hold, and is masked only because it is read with the held rows after it (the lookahead).
+    // The chunk ends after a 50-character row. The drawer holds it with the rows a key could still run on from: back to
+    // the 10-character row before it, which is narrower than any row a key runs through, so the walk stops there. The
+    // key's head, 35 characters ending the row before that, is sent ahead of the hold, and is masked only because it is
+    // read with the held rows after it (the lookahead).
     const key = keyOf(45, 61);
     const m = fingerprinted(key);
     try {
-      const filler = keyOf(70, 62).replace(/-/g, 'z');
+      const filler = keyOf(50, 62).replace(/-/g, 'z');
       for (const s of [SEPS[3]!, SEPS[0]!]) {
         const text = `${at(10, 1)}key: ${key.slice(0, 35)}${s.sep(11)}${key.slice(35)}${s.sep(12)}${filler}${s.sep(13)}`;
         for (const quietMs of [0, 40]) {
