@@ -3442,11 +3442,30 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
+  // The decision-model records and day counts (Overlord spec §3.7 H6, Table 11.1a; W2, plan `w2-decision-model.md` Task 4):
+  // `decision_records`, one answer per key ("never asked twice"; the key holds the host kind and origin and the line the row
+  // was gathered under, review 2262 F20), refs and non-private inline fields only, never an operator message's text
+  // (question 7); `decision_days`, each row's HTTP attempts per UTC day by serve and maintain, the calls reserved by requests
+  // in flight, and M19's time unavailable. Writers in `decisionModelStore.ts` alone: `recordDecision`, and
+  // `reserveDecisionCalls` and `settleDecisionCalls` (the anchor columns are PR B's `recordAnchorRun`). NEW TABLES, nothing
+  // on an existing table: an older build ignores them (Table 11.1a). Nothing reads or writes them until PR B wires the caller.
+  // The slot is positional: overlaps A (#2949) took 85, so this is 86 (the coordinator's word, 2026-11-17, mail 22345).
+  `
+  CREATE TABLE decision_records (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, modelId TEXT NOT NULL,
+    hostKind TEXT NOT NULL, origin TEXT NOT NULL, stateHash TEXT NOT NULL, lineGen INTEGER NOT NULL, verdict TEXT NOT NULL,
+    p REAL NOT NULL, band TEXT NOT NULL, ms INTEGER NOT NULL, refs TEXT NOT NULL, inline TEXT, at INTEGER NOT NULL,
+    UNIQUE (row, revision, modelId, hostKind, origin, stateHash, lineGen));
+  CREATE TABLE decision_days (row TEXT NOT NULL, day TEXT NOT NULL, serve INTEGER NOT NULL DEFAULT 0,
+    maintain INTEGER NOT NULL DEFAULT 0, reserved INTEGER NOT NULL DEFAULT 0, unavailableMs INTEGER NOT NULL DEFAULT 0,
+    anchorBands TEXT, anchorDrift INTEGER, PRIMARY KEY (row, day));
+  `,
+
+  // ── 87: user_version 86 -> 87 ─────────────────────────────────────────────
   // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
   // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
   // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
-  // The next slot on the main this merged (overlaps A landed 85), on the coordinator's word. Other open PRs hold 86 too:
-  // whoever lands second renumbers at landing, on the coordinator's word, never on its own.
+  // The next slot on the main this merged (decision model A landed 86), on the coordinator's word. Other open PRs hold 87
+  // too: whoever lands second renumbers at landing, on the coordinator's word.
   `
   ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;

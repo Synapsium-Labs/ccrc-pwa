@@ -10,7 +10,7 @@ ledger pull request; this file edits no ledger and no existing plan.
   with a missed-guard case for each guarded writer.
 - **Task 2:** the closed census, `server/test/single-definition/row-revisions.test.ts`, with Table R1 as `REVISION_CLASSES`
   and ten in-memory controls; each behaviour case reads the revision; `asks-store.test.ts`' column pin gains `revision`.
-- **Task 3:** one migration (86, the next slot after overlaps A's 85) adds `revision INTEGER NOT NULL DEFAULT 0` to both tables; six
+- **Task 3:** one migration (87, the next slot after decision model A's 86) adds `revision INTEGER NOT NULL DEFAULT 0` to both tables; six
   UPDATE statements raise it; the version pins and the run-close rollback move.
 - **Task 4:** `GET /api/asks` and every `ItemView` carry it, the item one optional on the wire.
 
@@ -25,8 +25,9 @@ ledger pull request; this file edits no ledger and no existing plan.
   revision check rides each case's own test rather than a second pass of every case, for the same reason.
 - **`migration-renumbers-at-landing`**: portfolio B (#2904) landed 83 while this was built, so the branch merged `main`
   (on the coordinator's word) and took 84; responses B (#2914) and overlaps A (#2949) then landed 84 and 85, so it merged
-  `main` a second time (on the coordinator's word again) and the migration took the next slot, 86. Other open pull
-  requests hold 86 too; whoever lands second renumbers at landing, on the coordinator's word, never on its own.
+  `main` a second time (on the coordinator's word again) and took 86; decision model A (#2948) then landed 86, so in fix
+  round 1 it merged `main` a third time (on the coordinator's word, 22474 and 22512) and the migration took the next
+  slot, 87. Other open pull requests hold 87 too; whoever lands second renumbers at landing, on the coordinator's word.
 
 ## Fix round 1 (review run 2348, the coordinator's rulings)
 

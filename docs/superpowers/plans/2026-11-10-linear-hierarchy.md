@@ -177,6 +177,30 @@ number from `POST /api/ledger/deviations`.
   `Canceled`. Task 3.1 uses a canceled status for it only if FX2 found one, and FX2's answer 2 found `Canceled`, so
   Task 3.3's row "initiative `Completed` with 'Abandoned on <date>: <why>'" sets `Canceled` with that line instead. A
   programme ended `done` still reads `Completed`. `LINEAR_INITIATIVE_STATUSES` holds the five values FX2 recorded.
+- **D-8675 (2026-11-16)** — conflict-detail: a repeated create's "conflict on insert" and "name not unique" answers are
+  recognised in `hierarchyOps.ts`'s shapers (`ops.ts` is frozen), carried as `detail` through `runCcrcOp`. Record:
+  `2026-11-10-linear-hierarchy/w3-plan-sync.md`.
+- **D-8676 (2026-11-16)** — recovery-by-request-id: recovery adopts only ccrc's own object, at `id === requestId` (and
+  made by the viewer, for an initiative or project); a name-only match is sent again. Record: the wave 3 note.
+- **D-8677 (2026-11-16)** — link-by-fingerprint: a project's link to its initiative is tracked by its fingerprint, with
+  no link row. Record: the wave 3 note.
+- **D-8678 (2026-11-16)** — write-ask-destination-team: `LinearWriteAsk.resource` gains `destinationTeamKey`, so a
+  cross-team issue move asks the write policy about both teams. Record: the wave 3 note.
+- **D-8679 (2026-11-16)** — pr-link-rule: the dispatch's PR link is sent whenever the run's branch lacks the issue
+  identifier, and a refused link is given up for that URL with one mail. Record: the wave 3 note.
+- **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
+  updates and never creates. Record: the wave 3 note.
+- **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
+  (wave 4's open point). Record: the wave 3 note.
+- **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
+  by-name listing of 10, so with ten or more same-named objects ownership can fail; it fails once, mails once and retries
+  on the 30-minute backoff. Carried to the next capture (`creator { id }` on the by-id reads). Record: the wave 3 note.
+- **D-8700 (2026-11-17)** — milestone-target-date-once-met: a milestone's `targetDate` is ccrc's only from the day its
+  checkpoint is met; an open checkpoint's create and update leave it out of the input and the journal fields. Record:
+  the wave 3 note.
+- **D-8701 (2026-11-17)** — statuses-unread-distinct: project statuses never read are a directory miss, not "no status
+  of that type", and an `unknown` initiatives probe defers the initiative step, with a bounded exit after three unknown
+  refills. Record: the wave 3 note.
 
 ## Global Constraints
 

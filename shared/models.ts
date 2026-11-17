@@ -210,7 +210,7 @@ export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
  *  registry exists and could not be read or parsed, or a fleet that would not answer. A reader shows class names
  *  for both, and never a model name this tree spells. */
 export type LaneModelsRead =
-  | { readonly kind: 'read'; readonly classes: LaneClassModels }
+  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead }
   | { readonly kind: 'absent' }
   | { readonly kind: 'unreadable' };
 
@@ -267,3 +267,40 @@ export {
   type ModelsPushRefusal,
   type ModelsPushRoster,
 } from './models.mjs';
+
+// ── the lane's advance state, as `show` reports it (plan W4a Task 18 as re-planned, D-8686, D-5228, D-8693) ──
+// `LaneModelsRead`'s `read` arm carries it only on the `models` op's path; ABSENT `advance` is "read from the files
+// under the grant, the advance file not read", never folded into `unreported`. Its one reader is
+// `server/src/laneModels.ts`. The four shapes are `shared/model-advance.mjs`'s own (`.d.mts`), never restated: they are
+// named through type-only `import()` expressions, erased at compile time, so the PWA bundles nothing from that file, and
+// this file's one `from` specifier stays `./models.mjs` (`server/test/models.test.ts` pins it; D-8709).
+type HistoryEntry = import('./model-advance.mjs').HistoryEntry;
+type Hold = import('./model-advance.mjs').Hold;
+type Pending = import('./model-advance.mjs').Pending;
+type Previous = import('./model-advance.mjs').Previous;
+
+/** D-8686, D-5228: how `show` reported the lane's advance file, five states never folded. `unreported`: the answer
+ *  carried no `advance` key, or an `ok` one without `pending` (only a `ccrc` older than this reader sends either).
+ *  The literal is NOT exported, `CatalogueVerbosity`'s pattern above: a value declared here and not in
+ *  `shared/models.mjs` would be `undefined` to an extension-less import at runtime (`server/test/models.test.ts`),
+ *  and its one reader, `server/src/laneModels.ts`, switches on the type (D-8709). */
+const LANE_ADVANCE_STATES = ['ok', 'absent', 'unreadable', 'invalid', 'unreported'] as const;
+export type LaneAdvanceState = (typeof LANE_ADVANCE_STATES)[number];
+export interface LaneClassAdvance {
+  readonly family: string | null;
+  readonly hold: Hold | null;
+  readonly previous: Previous | null;
+  /** True only when the file was read and holds a `previous` for the class: a Revert has somewhere to go. */
+  readonly revertable: boolean;
+  /** The newest SUCCESSFUL move (`lastMoveOf`), or null. */
+  readonly lastMove: HistoryEntry | null;
+}
+export interface LaneAdvanceRead {
+  readonly state: LaneAdvanceState;
+  /** The reason an `unreadable` or `invalid` file gave; null in every other state. */
+  readonly detail: string | null;
+  /** The file's pending intent (D-5188); null for none, and in every state but `ok`. */
+  readonly pending: Pending | null;
+  /** Every class, only when `state` is `ok`; null otherwise. */
+  readonly classes: Readonly<Record<ModelClass, LaneClassAdvance>> | null;
+}

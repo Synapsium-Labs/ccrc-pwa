@@ -86,6 +86,15 @@ export interface LeastLoadedCase {
   why: string;
 }
 
+/** The organization labels EVERY case runs with (account organization plan §3, slug `placement-ignores-org`).
+ *  Placement puts a new session on an account, or re-seeds `.home`, so no conversation moves and no thinking is at
+ *  stake: both sides ignore organization. The labels are mixed, and `gpt` is left unlabelled, so a later change that
+ *  reads organization on one side only reds the parity test until the other side matches. The runner projects them
+ *  into BOTH rosters, as it does `pools`. */
+export const LEAST_LOADED_ORGS: Readonly<Record<string, string>> = {
+  claude: 'org-a', 'claude-a': 'org-b', 'claude-b': 'org-a', 'claude-d': 'org-b',
+};
+
 /** Compact, the way statusline-command.sh's printf writes the Anthropic accounts. */
 const c = (o: Record<string, number | null>): string => JSON.stringify(o);
 
