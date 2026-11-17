@@ -3917,30 +3917,46 @@ announced for good. The two shapes are a sheet opened while the previous one is 
 measurements, the search of the app for F2, the mutants and the browser run.
 
 **What was done.**
-- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`). As the sheet opens, before its
-  Radix marks anything, it reads every node already hidden, marked or not, and it never lifts one of them. Only marks its
-  own open added are lifted. C38's topmost-dialog rule, the re-hide on a reopen during the exit and the focus guards are
-  unchanged. A single sheet with no overlapping exit behaves as before.
-- **Tests.** `sheet-trap-hide.test.tsx` gains two rows, both red on `main`: F2 (a sheet opened while the previous one
-  closes) and F1 (a confirm opened while another closes, over a sheet with a live region). Each is asserted as the
-  sheet closes and again after every dialog has unmounted. The three-deep row is now also asserted after the confirm
-  unmounts (F3). `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds two rows. One is the stacked swap
-  flow: Session actions, Swap account, its confirm, then Cancel (F4). The other is the session menu's hand-off to the
-  swap sheet over a chat with a live region, red on `main`'s Sheet.
-- **F2 in the app.** Five callers close one modal and open another in one handler; the session menu's rows are the
-  common one. In Chrome, with a code block in the chat, the menu marked none of the elements the page hid itself, so F2
-  is not reached by that page today. The browser row plants such an element to hold the fix in the real flow.
-- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (F6).
+- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`). As its panel mounts, before its
+  Radix marks anything, the sheet reads every node already hidden, marked or not, and it never lifts one of them. Only
+  marks its own open added are lifted. C38's topmost-dialog rule, the re-hide on a reopen during the exit and the focus
+  guards are unchanged. A single sheet with no overlapping exit behaves as before.
+- **The read is in the panel's callback ref, not the `open` effect** (fix round 1, review 2323 F1). On the session
+  screen the follow-up sheets are rendered before the menu sheet. Read in the effect, a follow-up took the menu's marks
+  for already hidden and kept the page hidden through its own exit. The ref runs after a closing sheet's lift, in
+  either tree order, and before Radix marks anything. It is measured in jsdom and in Chrome.
+- **Tests.** `sheet-trap-hide.test.tsx` gains five rows and two extensions:
+  - F2 (a sheet opened while the previous one closes) and F1 (a confirm opened while another closes, over a sheet with a
+    live region). Both are red on `main`, asserted as the sheet closes and after every dialog has unmounted.
+  - The same hand-off with the opening sheet earlier in the tree, red on the first build.
+  - The focus guards staying hidden while a sheet closes.
+  - Section 1's first row closing its reopened sheet again.
+  - The three-deep row asserted after the confirm unmounts (review 2310 F3).
+
+  `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds the stacked swap flow (Session actions, Swap account,
+  its confirm, Cancel; review 2310 F4) and the session menu's hand-off to the swap sheet over a chat with and without a
+  live region. The hand-off rows are red on `main`'s Sheet and on the first build's.
+- **F2 in the app.** Seven handlers in five places close one modal and open another in one commit (found by a code
+  search); the session menu's rows are the common one. In Chrome, on one transcript with a code block, the menu marked
+  none of the elements the page hid itself, so F2 is not reached on that page with that transcript. The browser rows
+  plant such an element to hold the fix in the real flow.
+- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (review 2310 F6).
 
 - **D-8698** — `c40-lift-only-own-marks`: Task C40, issued on 2026-11-16. The Sheet lifts only the marks its own open
-  added; any node already `aria-hidden` as it opens is left as it was, whoever hid it (the review's measured direction).
-  What this gives up is inferred, not measured. Suppose another modal that is closing has not yet lifted its own marks
-  when this sheet opens: a sheet earlier in the tree, or the command palette, which is not a `Sheet`. This sheet then
-  leaves the page hidden through its own exit, as `main` did before C38. Nothing stays hidden for good.
+  added: any node already `aria-hidden` as its panel mounts is left as it was, whoever hid it (the review's measured
+  direction). The read is in the panel's callback ref, after a sheet closing in the same commit has lifted its marks,
+  whichever comes first in the tree. The session menu's hand-off therefore announces the page as the follow-up closes,
+  as `main` does (fix round 1, review 2323 F1).
 
-**Acceptance.** The two new jsdom rows are red on `main` and green at the tip; every C38 row stays green. The new
-browser file passes in Chrome, and its menu row is red on `main`'s Sheet. Every pwa test file that renders a Sheet or a
-QuickConfirm caller passes, as do ui's typecheck and the deviation-refs, dtbd and topology-clean guards.
+  What this still gives up: a dialog that still hides the page at this sheet's mount keeps it hidden through this
+  sheet's exit, as `main` did before C38. Nothing stays hidden for good. Two cases are known:
+  - **A dialog open under this one that closes before it.** This is measured in jsdom (review 2323 F5).
+  - **The command palette**, which is not a `Sheet` and never lifts during its exit. This is inferred.
+
+**Acceptance.** The new jsdom rows are red on `main` (F2, F1) or on the first build (the reversed tree order) and
+green at the tip, and every C38 row stays green. The new browser file passes in Chrome, and its hand-off rows are red on
+`main`'s Sheet and on the first build's. Every pwa test file that renders a Sheet or a QuickConfirm caller passes, as do
+ui's typecheck and the deviation-refs, dtbd and topology-clean guards.
 **Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
