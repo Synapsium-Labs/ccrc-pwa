@@ -48,7 +48,7 @@ interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
   asks: CcrcOpAsk[]; presence: Record<string, CoordinatorPresence>; presenceFn: { current: (id: string) => CoordinatorPresence };
   viaCalls: string[][]; fleet: { ids: Set<string> };
-  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string> };
+  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
 }
 let counter = 3000;
