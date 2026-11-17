@@ -273,7 +273,7 @@ export {
 // under the grant, the advance file not read", never folded into `unreported`. Its one reader is
 // `server/src/laneModels.ts`. The four shapes are `shared/model-advance.mjs`'s own (`.d.mts`), never restated: they are
 // named through type-only `import()` expressions, erased at compile time, so the PWA bundles nothing from that file, and
-// this file's one `from` specifier stays `./models.mjs` (`server/test/models.test.ts` pins it; D-TBD-models-ts-pins).
+// this file's one `from` specifier stays `./models.mjs` (`server/test/models.test.ts` pins it; D-8709).
 type HistoryEntry = import('./model-advance.mjs').HistoryEntry;
 type Hold = import('./model-advance.mjs').Hold;
 type Pending = import('./model-advance.mjs').Pending;
@@ -283,7 +283,7 @@ type Previous = import('./model-advance.mjs').Previous;
  *  carried no `advance` key, or an `ok` one without `pending` (only a `ccrc` older than this reader sends either).
  *  The literal is NOT exported, `CatalogueVerbosity`'s pattern above: a value declared here and not in
  *  `shared/models.mjs` would be `undefined` to an extension-less import at runtime (`server/test/models.test.ts`),
- *  and its one reader, `server/src/laneModels.ts`, switches on the type (D-TBD-models-ts-pins). */
+ *  and its one reader, `server/src/laneModels.ts`, switches on the type (D-8709). */
 const LANE_ADVANCE_STATES = ['ok', 'absent', 'unreadable', 'invalid', 'unreported'] as const;
 export type LaneAdvanceState = (typeof LANE_ADVANCE_STATES)[number];
 export interface LaneClassAdvance {

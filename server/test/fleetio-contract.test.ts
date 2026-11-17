@@ -41,6 +41,8 @@ describe('FleetIO — every member states its failure contract (D-5969)', () => 
       'testboxMeasured', 'testboxToolsSync',
       // The test box connect op (plan TC12, D-8166).
       'testboxAdmin',
+      // The `models` op (auto-advance W4, D-8687).
+      'models',
     ]);
   });
 

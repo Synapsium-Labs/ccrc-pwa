@@ -1232,7 +1232,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/fleet/health': "the mirror's counters, and the delegation lane's would-keep list (each tree's project, worktree name and parent session, D-8114): no session text",
     '/api/fleet/overrides': "the switchboard's override names with a marker state word each, and the approvals topology's two words and file name: no session text (D-8382)",
     '/api/push/key': 'the VAPID public key',
-    '/api/models/:lane': "a lane's classes, each with its model id, catalogue label and effort levels, read from the lane's own model files: no session text (D-8406)",
+    '/api/models/:lane': "a lane's classes, each with its model id, catalogue label and effort levels, and, on the `models` op's path, the lane's advance state (each class's family, hold, previous model and last move, the pending intent, and the file's state), all read from the lane's own model files; an `unreadable` or `invalid` state's `detail` is a file path and an error message: no session text (D-8406, D-8686)",
     '/api/accounts': 'the account roster (lane names and states the operator set; no secret)',
     '/api/sessions/:id/commands': "the session's command files' names",
     '/api/projects': 'project names and paths',
