@@ -39,6 +39,7 @@ They decide every question the plan leaves open.
 | 2 | the plan model and the per-project Linear owner, server half (migration landed as **59**, not 57) | D-8181 | #2661 | **merged** 2026-11-11 as `ec5e1f513` (no run) |
 | FX2 | Linear's real answers recorded as fixtures | D-8407 | #2746 | **merged** 2026-11-13 as `591fa065a` (no run) |
 | 3 | the plan sync: open, move and close of the Linear objects; the initiatives-off item; the item act route; dispatch waits for its ticket's issue | D-8182 | #2941 | **merged** 2026-11-17 as `806246f55` (head `77d1b427d`, by the merge queue; run 2243 closed done): run 2243 (ticket `w3-plan-sync`), branch `ws/linear-hier-w3`, wave-done at `35bb54112` (5/5 items); review run 2311 found 7 important (F1-F7), sent back for fix round 1; fix round 1 done at `a1fb568bf` 2026-11-17; review round 2 (run 2332) found 1 important (plan text only) and 9 advisories: **accepted**, enqueued at `a1fb568bf`; dequeued 2026-11-17 on a conflict with main in `laneSchedule.ts` and `lane-schedule.test.ts`, sent back as an ejection (base `f4905e009`) for one merge of main; merged at `77d1b427d`, review round 3 (run 2346, the held-out panel) clean, re-enqueued at `77d1b427d` |
+| 3 fix | Linear's 255-character description cap; the cancel comment's journal field | D-8708 | #2973 | **merged** 2026-11-17 as `d3f357f24` (head `640458837`; run 2358 closed done; reviews 2364 and 2368; dequeued once on a collector test's load timeout and re-enqueued) |
 | 4 | drift, inbound and public text: migration (next free slot), the drift pass, persistent drift, `plan triage`/`plan take`, the Upkeep epic, the Linear owner item, `plan-owned` | D-8183 | — | **dispatched** 2026-11-17: run 2337 (ticket `w4-drift`), a fresh child from `main`; Tasks 4.1–4.4 plus Task 4.5, wave 3's carried findings |
 | 5 | the console: the project row's hierarchy settings, the programme page's Plan section, the epic and Upkeep pages, the five hierarchy items' controls | D-8184 | — | not started |
 | 6 | the coordinator, worker and Linear skills | D-8185 | — | not started |
@@ -156,6 +157,23 @@ They decide every question the plan leaves open.
   create; adopt and move an object stranded by a team-key change; extra `teamIds` to the write policy), then six that the
   worker may ask to defer. Desktop-polish's WM6 has not started, so wave 4 changes `planPolicy.ts` first; whichever
   lands second merges the other once. Its coordinator was told at dispatch.
+
+- **2026-11-17 — wave 3's first live run, and a fix (the coordinator).** Once wave 3 deployed, the sync failed the
+  programme's initiative and five of its six epics with `linear-invalid`. Measured from the plan: the one epic created
+  had a 248-character description, and the five that failed had 338 to 474. Linear refuses a description over 255
+  characters, and FX2 had measured only the 80-character name cap. Fix run 2358 (#2973, D-8708) fits initiative,
+  project and milestone descriptions to 255 and puts the status notes first. The public-text check reads both the full
+  and the cut text (review 2364's F1). Wave 4's worker found a second live defect, and the same PR fixes it: the
+  cancel comment journalled its field as `comment`, which the journal refuses, so a programme with a dropped ticket was
+  held on its backoff for ever. Review 2368's advisories are ruled: D-8708's wording is corrected on this ledger PR (a
+  fitting body ending in whitespace also moves once; only the first note is never cut). The idempotence, noted-current
+  and astral-character tests, and placing spec 7.2's dated Restored lines before the cut, go to wave 4. Spec 6.1 is
+  amended for the cap. Sending the full text in `content` waits for a capture, on the operator's go. Spec
+  modification 39 cannot be marked merged, because it was recorded before its ledger PR existed: from now on the ledger
+  PR is opened before `goals modify`.
+- **2026-11-17 — the work map's WM0 starts before wave 4 lands (the coordinator, with desktop-polish's coordinator).**
+  Wave 4 grants WM0 a co-edit on the plan files. Whichever lands second takes the next migration slot, merges the
+  other's store changes once and re-measures the count pins.
 
 ## Carried constraints
 
