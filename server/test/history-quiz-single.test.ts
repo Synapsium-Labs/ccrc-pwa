@@ -1,0 +1,694 @@
+// deploy/history-quiz-single.mjs: the replay quiz's single-arm mode (Overlord W1a; plan 2026-11-17-overlord-quiz-record.md,
+// Tasks 3 to 6). Listed in ci.yml's node-floor leg, as every history-*.test.ts is.
+//
+// ISOLATION: every case runs on a mkTmp fixture HOME: a roster with one upstream account whose launcher is a recording
+// stub, a limits row, a release stamp and a createStore store. The store's reads that need real transcripts (the re-check
+// and the payloads) are stood in through each handler's deps, as the driver's own tests stand them in. Child processes are
+// spawned with an argv array on process.execPath and historyHelpers' scrubbedEnv. Nothing reads the live HOME, no case
+// runs a writing form of `ccrc history`, and no fixture names a real account, host or path.
+import { describe, expect, it, vi } from 'vitest';
+import { spawn, spawnSync } from 'node:child_process';
+import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+import * as qsMod from '../../deploy/history-quiz-single.mjs';
+import * as drvMod from '../../deploy/history-replay.mjs';
+import * as gateMod from '../../deploy/history-gate.mjs';
+import * as libMod from '../../ccd/history/lib.mjs';
+import { createStore } from '../../ccd/history/store.mjs';
+import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { REPO, scrubbedEnv } from './historyHelpers.js';
+
+type R = Record<string, any>;
+const QS = qsMod as unknown as R;
+const D = drvMod as unknown as R;
+const G = gateMod as unknown as R;
+const L = libMod as unknown as R;
+
+removeTmpFixturesEachTest();
+
+const SCRIPT = join(REPO, 'deploy', 'history-quiz-single.mjs');
+const STORE = '00000000-0000-4000-8000-0000000005a1';
+const OPUS = 'claude-opus-9-1';
+const ARM_MODEL = 'claude-arm-9-1';
+const STAMP = 'v9.9.8';
+const LANG = 'fixture.UTF-8';
+const CARD = 'fixture card line for the single-arm quiz';
+const STUB_DIR = 'stub-qs';
+const STUB_LOG = 'stub-log.jsonl';
+const STUB_VERSION = 'stub-version';
+const SEED = L.sha256Hex('quiz-single fixture seed') as string;
+const TREATMENT = D.TREATMENT_ARM as string;
+const CONTROL = D.CONTROL_ARM as string;
+const gen = (n: number): string => `0189abcd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+/** The recording stub: logs every run (argv, the recall arm, stdin); `--version` prints STUB_VERSION's first line. A
+ *  print-mode run is keyed by sha256(settings mode, a newline, its stdin) and prints `<STUB_DIR>/<key>.jsonl` (else a
+ *  plain answered stream), exits `<key>.exit` (else 0), and with `<key>.sleep` writes its pid to `<key>.pid` and sleeps. */
+const STUB = `#!/usr/bin/env node
+(async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const crypto = await import('node:crypto');
+  const home = path.resolve(path.dirname(process.argv[1]), '..', '..');
+  const at = (f) => path.join(home, f);
+  const opt = (f) => { try { return fs.readFileSync(at(f), 'utf8'); } catch { return null; } };
+  const argv = process.argv.slice(2);
+  if (argv[0] === '--version') { process.stdout.write(opt(${JSON.stringify(STUB_VERSION)}) ?? ''); return; }
+  const stdin = fs.readFileSync(0, 'utf8');
+  const mode = argv.includes('--restricted') ? 'restricted' : 'fallback';
+  const key = crypto.createHash('sha256').update(mode + '\\n' + stdin).digest('hex');
+  const dir = ${JSON.stringify(STUB_DIR)};
+  fs.appendFileSync(at(${JSON.stringify(STUB_LOG)}), JSON.stringify({ argv, arm: process.env.CCRC_RECALL_ARM ?? null, stdin, key }) + '\\n');
+  const sleep = opt(dir + '/' + key + '.sleep');
+  if (sleep !== null) {
+    fs.writeFileSync(at(dir + '/' + key + '.pid'), String(process.pid));
+    await new Promise((r) => setTimeout(r, Number(sleep)));
+  }
+  process.stdout.write(opt(dir + '/' + key + '.jsonl') ?? ${JSON.stringify('')});
+  process.exitCode = Number(opt(dir + '/' + key + '.exit') ?? '0');
+})();
+`;
+
+/** A stream-json: init (tools, no MCP server, no plugin, the ccrc-history skill unless `skills` says otherwise), one tool
+ *  pair per call, `main` more main-thread messages and `sub` subagent ones, and a result with `text` and `subtype` whose
+ *  usage sums to 65 (none when `result` is false). */
+function stream(o: { text?: string; skills?: string[]; calls?: Array<{ command?: string; name?: string; denied?: boolean; parent?: string | null }>;
+  main?: number; sub?: number; subtype?: string; result?: boolean; session?: string } = {}): string {
+  const ev: R[] = [{ type: 'system', subtype: 'init', session_id: o.session ?? 'fixture-qs-session', model: ARM_MODEL, tools: ['Bash', 'Agent'],
+    mcp_servers: [], plugins: [], skills: o.skills ?? ['ccrc-history'], slash_commands: [] }];
+  const usage = { input_tokens: 1, output_tokens: 1 };
+  const denials: R[] = [];
+  (o.calls ?? []).forEach((c, i) => {
+    const id = `toolu_qs_${i}`;
+    const name = c.name ?? 'Bash';
+    const input = name === 'Bash' ? { command: c.command ?? '' } : { prompt: 'fixture subagent task' };
+    ev.push({ type: 'assistant', parent_tool_use_id: c.parent ?? null, message: { id: `msg-qs-${i}`, usage, content: [{ type: 'tool_use', id, name, input }] } });
+    ev.push({ type: 'user', parent_tool_use_id: c.parent ?? null, message: { content: [{ type: 'tool_result', tool_use_id: id,
+      content: c.denied === true ? 'permission denied' : 'ok', is_error: c.denied === true }] } });
+    if (c.denied === true) denials.push({ tool_name: name, tool_use_id: id, tool_input: input });
+  });
+  for (let i = 0; i < (o.main ?? 0); i += 1) ev.push({ type: 'assistant', parent_tool_use_id: null, message: { id: `msg-qs-main-${i}`, usage, content: [{ type: 'text', text: 'DONE' }] } });
+  for (let i = 0; i < (o.sub ?? 0); i += 1) ev.push({ type: 'assistant', parent_tool_use_id: 'toolu_qs_agent', message: { id: `msg-qs-sub-${i}`, usage, content: [{ type: 'text', text: 'sub' }] } });
+  if (o.result !== false) {
+    const subtype = o.subtype ?? 'success';
+    ev.push({ type: 'result', subtype, is_error: subtype !== 'success', num_turns: (o.main ?? 0) + (o.calls ?? []).length, result: o.text ?? 'DONE',
+      permission_denials: denials, usage: { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 30, output_tokens: 5 } });
+  }
+  return ev.map((e) => JSON.stringify(e)).join('\n') + '\n';
+}
+const keyOf = (mode: string, stdin: string): string => L.sha256Hex(`${mode}\n${stdin}`) as string;
+function put(home: string, mode: string, stdin: string, ext: string, text: string): void {
+  mkdirSync(join(home, STUB_DIR), { recursive: true });
+  writeFileSync(join(home, STUB_DIR, `${keyOf(mode, stdin)}${ext}`), text);
+}
+/** Every step 0b run's passing stream for `mode` (W2-D57, W2-D58): the box run at the turn bound, each taught spelling made,
+ *  each denial denied, the Agent call with its subagent's Bash call. `over` replaces one by its probe name. */
+function plantStep0b(home: string, mode: string, over: Record<string, string> = {}): void {
+  put(home, mode, D.TURN_PROBE_PROMPT as string, '.jsonl', over['turn-bound'] ?? stream({ main: 12, sub: 2, subtype: D.MAX_TURNS_STOP_SUBTYPE as string, session: 'fixture-qs-turn' }));
+  for (const p of D.step0bProbesOf(home, D.STEP0B_SYNTHETIC_TRANSCRIPT) as R[]) {
+    const session = `fixture-qs-${p.probe as string}`;
+    const pass = p.expect === 'admitted' ? stream({ session, calls: [{ command: p.command }] })
+      : p.expect === 'denied' ? stream({ session, calls: [{ command: p.command, denied: true }] })
+        : stream({ session, calls: [{ name: 'Agent' }, { command: p.command, parent: 'toolu_qs_0' }] });
+    put(home, mode, D.step0bStdinOf(CARD, p) as string, '.jsonl', over[p.probe as string] ?? pass);
+  }
+}
+/** The treatment payload the stand-in reads answer for a question, which is its arm run's stdin. */
+const payloadOf = (qid: string): string => `${CARD}\n\nfixture payload ${qid}\n`;
+/** The store reads stood in (the driver's tests' shapes): every question re-checks clean, and its payloads carry CARD. */
+const FAKE: R = {
+  recheck: async (_rs: unknown, es: R[]): Promise<Map<string, R>> => new Map(es.map((e) => [e.qid as string, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs: unknown, _id: number, _q: string, cut: R): R => ({ state: 'payloads', plain: `fixture payload ${cut.qid as string}\n`,
+    carded: payloadOf(cut.qid as string), card: { state: 'card', line: CARD } }),
+};
+
+/** A fixture node: up-a (upstream) with the stub, the stub's version, a fresh limits row at 10%, a tagged release stamp,
+ *  and a store of id STORE. */
+function node(): string {
+  const home = mkTmp('ccrc-qs-home-');
+  mkdirSync(join(home, '.ccrc'), { recursive: true, mode: 0o700 });
+  writeFileSync(join(home, '.ccrc', 'accounts.json'), `${JSON.stringify({ version: 1, accounts: [{ id: 'up-a', label: 'up-a', configDirSuffix: '.claude',
+    exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' }] }, null, 2)}\n`);
+  mkdirSync(join(home, '.local', 'bin'), { recursive: true });
+  writeFileSync(join(home, '.local', 'bin', 'up-a'), STUB, { mode: 0o700 });
+  writeFileSync(join(home, STUB_VERSION), '2.9.1 (Claude Code)\n');
+  mkdirSync(join(home, '.cc-limits'), { recursive: true });
+  const nowS = Math.floor(Date.now() / 1000);
+  writeFileSync(join(home, '.cc-limits', 'up-a.json'), JSON.stringify({ five: 10, seven: 10, ts: nowS - 60, fiveResetAt: nowS + 3600, sevenResetAt: nowS + 86400 }));
+  writeFileSync(join(home, '.ccrc', 'build.json'), JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-11-17T00:00:00Z', dirty: false, version: STAMP }));
+  createStore(home, { storeId: STORE });
+  return home;
+}
+const setRelease = (home: string, tag: string): void => writeFileSync(join(home, '.ccrc', 'build.json'),
+  JSON.stringify({ sha: 'fixture', ref: 'main', builtAt: '2026-11-17T00:00:00Z', dirty: false, version: tag }));
+const freshOut = (name = 'out'): string => join(mkTmp('ccrc-qs-out-'), name);
+const json = (p: string): R => JSON.parse(readFileSync(p, 'utf8')) as R;
+const shaOfFile = (p: string): string => L.sha256Hex(readFileSync(p)) as string;
+const runs = (home: string): R[] => (existsSync(join(home, STUB_LOG)) ? readFileSync(join(home, STUB_LOG), 'utf8').split('\n').filter((l) => l !== '').map((l) => JSON.parse(l) as R) : []);
+/** The arm runs of the frozen questions (their stdin is a question payload), as against step 0b's probe runs. */
+const questionRuns = (home: string): R[] => runs(home).filter((r) => typeof r.stdin === 'string' && r.stdin.startsWith(`${CARD}\n\nfixture payload `));
+
+type Ref = { store_id: string; ccrc_id: string; generation: string };
+const FAM_A: Ref = { store_id: STORE, ccrc_id: 'quiz-a', generation: gen(410) };
+const FAM_B: Ref = { store_id: STORE, ccrc_id: 'quiz-b', generation: gen(420) };
+/** One frozen entry on `f` (W2-D73's eleven fields, its qid by the driver's qidOf): a sha fact of 7 hex digits. */
+function entry(f: Ref, n: number): R {
+  const fact = (0xbd40000 + n).toString(16);
+  const e = { ...f, boundary_uuid: gen(8400 + n), kind: 'sha', fact, fact_raw: fact, question: `Which commit did fixture step ${n} record?`,
+    source_entry_uuid: gen(9400 + n), repo_roots: ['/home/u/tree'] };
+  return { ...e, qid: D.qidOf(e) as string };
+}
+/** headless-on as the operator writes it from `marker`: lib's formatHeadlessList. */
+function marker(home: string, refs: Ref[]): void {
+  const p = L.historyPaths(home).headlessOn as string;
+  mkdirSync(join(p, '..'), { recursive: true, mode: 0o700 });
+  writeFileSync(p, L.formatHeadlessList({ storeId: STORE, pairs: refs.map((r) => ({ ccrcId: r.ccrc_id, generation: r.generation })) }) as string, { mode: 0o600 });
+}
+type Saved = { path: string; sha: string };
+function saveFrozen(entries: R[]): Saved & { entries: R[] } {
+  const text = D.frozenListText('quiz', { writer_model: OPUS, labeller: { ...G.LABELLER, sha_min_prefix: 7 } }, entries) as string;
+  const p = join(mkTmp('ccrc-qs-in-'), 'frozen.json');
+  writeFileSync(p, text, { mode: 0o600 });
+  return { path: p, sha: L.sha256Hex(text) as string, entries: (JSON.parse(text) as R).entries as R[] };
+}
+const inp = (name: string, s: Saved): string[] => [`--${name}`, s.path, `--${name}-sha256`, s.sha];
+
+type Result = { code: unknown; stdout: string; stderr: string; refusal: { word: string; detail: string } | null };
+/** One subcommand in-process, as main runs it (the grammar, then the handler with `deps`): stdout and stderr captured, a
+ *  refusal answered as {word, detail}; any other throw is the case's failure. */
+async function run(home: string, argv: string[], deps?: R): Promise<Result> {
+  const err: string[] = [];
+  const out: string[] = [];
+  const e1 = vi.spyOn(process.stderr, 'write').mockImplementation(((s: string | Uint8Array) => { err.push(String(s)); return true; }) as typeof process.stderr.write);
+  const o1 = vi.spyOn(process.stdout, 'write').mockImplementation(((s: string | Uint8Array) => { out.push(String(s)); return true; }) as typeof process.stdout.write);
+  try {
+    const { sub, flags } = D.parseArgs(argv, { specs: QS.FLAG_SPECS, subs: QS.SUBCOMMANDS }) as { sub: string; flags: R };
+    const code = await QS.HANDLERS[sub](flags, { HOME: home, TMUX_PANE: undefined, LANG }, deps);
+    return { code, stdout: out.join(''), stderr: err.join(''), refusal: null };
+  } catch (e) {
+    if (e instanceof D.DriverRefusal || e instanceof QS.QuizSingleRefusal) return { code: null, stdout: out.join(''), stderr: err.join(''), refusal: { word: (e as R).word, detail: (e as R).detail } };
+    throw e;
+  } finally {
+    e1.mockRestore();
+    o1.mockRestore();
+  }
+}
+const shaLine = (r: Result): string => /sha256 ([0-9a-f]{64})\n$/.exec(r.stderr)?.[1] ?? `no sha line in ${JSON.stringify(r.stderr)}`;
+
+/** `setup` on `home`, its seed fixed: the setup file under a fresh --out, and its sha. */
+async function setup(home: string, extra: string[] = [], mode = 'restricted'): Promise<Saved & { out: string; value: R }> {
+  const out = freshOut('setup');
+  const r = await run(home, ['setup', '--out', out, '--account', 'up-a', '--budget', '5000000', '--settings-mode', mode,
+    '--writer-model', OPUS, '--judge-model', OPUS, '--arm-model', ARM_MODEL, ...extra], { seed: () => SEED });
+  if (r.code !== 0) throw new Error(`fixture: setup failed: ${JSON.stringify(r)}`);
+  const p = join(out, 'setup.json');
+  return { path: p, sha: shaOfFile(p), out, value: json(p) };
+}
+
+/** A fixture week: a node, its setup, four questions over two listed families (q[0] answers correctly, q[1] wrongly, q[2]
+ *  gives no ANSWER line, q[3] fails to run twice), step 0b's passing streams, and the arms' argv. */
+async function week(o: { budget?: string; mode?: string } = {}) {
+  const home = node();
+  const s = await setup(home, o.budget === undefined ? [] : [], o.mode ?? 'restricted');
+  if (o.budget !== undefined) {
+    const v = { ...s.value, budget: Number(o.budget) };
+    writeFileSync(s.path, `${L.canonicalJson(v) as string}\n`, { mode: 0o600 });
+    s.sha = shaOfFile(s.path);
+    s.value = v;
+  }
+  const made = [entry(FAM_A, 1), entry(FAM_A, 2), entry(FAM_B, 3), entry(FAM_B, 4)];
+  const fz = saveFrozen(made);
+  const q = fz.entries;
+  marker(home, [FAM_A, FAM_B]);
+  const mode = s.value.settings_mode as string;
+  plantStep0b(home, mode);
+  const byFact = (e: R): string => e.fact as string;
+  put(home, mode, payloadOf(q[0]!.qid), '.jsonl', stream({ text: `It was that one.\nANSWER: ${byFact(q[0]!)}` }));
+  put(home, mode, payloadOf(q[1]!.qid), '.jsonl', stream({ text: 'ANSWER: 0000000' }));
+  put(home, mode, payloadOf(q[2]!.qid), '.jsonl', stream({ text: 'I cannot tell.' }));
+  put(home, mode, payloadOf(q[3]!.qid), '.jsonl', stream({ result: false }));
+  put(home, mode, payloadOf(q[3]!.qid), '.exit', '1');
+  const out = freshOut('week');
+  return { home, s, fz, q, out, mode, argv: (extra: string[] = []): string[] => ['arms', '--out', out, ...inp('setup', s), ...inp('frozen', fz), ...extra] };
+}
+
+// ── Task 3: the module's first acts, setup, source, freeze and marker ───────────────────────────────────────────────
+describe('Task 3: the module refuses inside a pane and inside a session before it reads anything', () => {
+  const child = (env: Record<string, string>, args: string[]): ReturnType<typeof spawnSync> => {
+    const home = mkTmp('ccrc-qs-refuse-');
+    return spawnSync(process.execPath, ['--no-warnings', SCRIPT, ...args], { cwd: home, encoding: 'utf8', timeout: 60_000,
+      env: { ...scrubbedEnv(process.env), HOME: home, ...env } });
+  };
+  it('TMUX_PANE refuses in-pane and CLAUDECODE refuses in-session, exit 2, with no --out made and no input read', () => {
+    const out = freshOut();
+    const args = ['setup', '--out', out, '--account', 'up-a', '--budget', '10', '--settings-mode', 'restricted', '--writer-model', OPUS,
+      '--judge-model', OPUS, '--arm-model', ARM_MODEL];
+    const pane = child({ TMUX_PANE: '%1' }, args);
+    expect([pane.status, pane.stdout]).toEqual([2, '']);
+    expect(pane.stderr).toMatch(/^ccrc history-quiz-single: in-pane: /);
+    const sess = child({ CLAUDECODE: '1' }, args);
+    expect([sess.status, sess.stdout]).toEqual([2, '']);
+    expect(sess.stderr).toMatch(/^ccrc history-quiz-single: in-session: /);
+    const empty = child({ CLAUDECODE: '' }, ['report', '--out', out, '--setup', '/nonexistent/setup.json', '--setup-sha256', '0'.repeat(64)]);
+    expect([empty.status, String(empty.stderr).split(':')[1]], 'an empty CLAUDECODE is set too').toEqual([2, ' in-session']);
+    expect(existsSync(out), 'nothing was made').toBe(false);
+    const bare = child({}, []);
+    expect([bare.status, bare.stderr], 'CONTROL: outside both, the grammar answers').toEqual([2, 'ccrc history-quiz-single: args-invalid: no subcommand\n']);
+  });
+
+  it('its words: the driver\'s, plus its own two, and only those', () => {
+    expect([...QS.QUIZ_SINGLE_REASONS]).toEqual(['in-session', 'release-moved']);
+    for (const w of QS.QUIZ_SINGLE_REASONS as string[]) expect(D.DRIVER_REASONS, w).not.toContain(w);
+    expect(() => new QS.QuizSingleRefusal('in-pane', 'x')).toThrow(TypeError);
+  });
+});
+
+describe('Task 3: setup', () => {
+  it('refuses without --settings-mode (no default) and with a mode outside SETTINGS_MODES, before --out', async () => {
+    const home = node();
+    const out = freshOut();
+    const base = ['setup', '--out', out, '--account', 'up-a', '--budget', '10', '--writer-model', OPUS, '--judge-model', OPUS, '--arm-model', ARM_MODEL];
+    expect((await run(home, base)).refusal).toEqual({ word: 'args-invalid', detail: 'settings-mode-required' });
+    expect((await run(home, [...base, '--settings-mode', 'loose'])).refusal?.word).toBe('args-invalid');
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('refuses a judge or writer model that is not an exact Opus id and a Fable arm model, before --out', async () => {
+    const home = node();
+    const out = freshOut();
+    const argv = (w: string, j: string, a: string): string[] => ['setup', '--out', out, '--account', 'up-a', '--budget', '10', '--settings-mode', 'restricted',
+      '--writer-model', w, '--judge-model', j, '--arm-model', a];
+    expect((await run(home, argv(OPUS, 'claude-sonnet-9-1', ARM_MODEL))).refusal).toMatchObject({ word: 'args-invalid', detail: expect.stringMatching(/^judge-model /) });
+    expect((await run(home, argv('claude-sonnet-9-1', OPUS, ARM_MODEL))).refusal).toMatchObject({ word: 'args-invalid', detail: expect.stringMatching(/^writer-model /) });
+    expect((await run(home, argv(OPUS, OPUS, 'claude-fable-9-1'))).refusal).toMatchObject({ word: 'args-invalid', detail: expect.stringMatching(/^arm-model .* is forbidden for an arm$/) });
+    expect(existsSync(out)).toBe(false);
+  });
+
+  it('writes setup.json: its own kind, the fields sourcing and the batches read, the drawn seed, and what it measured, for information only', async () => {
+    const home = node();
+    const s = await setup(home, ['--target', '40']);
+    const v = s.value;
+    expect(v.kind).toBe('ccrc-history-quiz-single-setup');
+    expect(Object.keys(v).sort()).toEqual(['account', 'arm_model', 'budget', 'judge_model', 'kind', 'labeller', 'limits', 'measured', 'quiz', 'rubric_id',
+      'seed', 'settings_mode', 'v', 'writer_model']);
+    expect(v).toMatchObject({ account: 'up-a', budget: 5_000_000, settings_mode: 'restricted', seed: SEED, rubric_id: 'v1',
+      quiz: { target: 40, caps: { family: 5, boundary: 3, kind_per_family: 2 }, writer_input: 'excerpt' }, limits: D.LIMITS_DEFAULTS });
+    expect(v.labeller.sha_min_prefix).toBe(7);
+    expect(v.measured.release).toEqual({ state: 'value', tag: STAMP });
+    expect(v.measured.claude_code).toEqual({ state: 'value', version: '2.9.1 (Claude Code)' });
+    expect(readFileSync(join(s.out, '.ccrc-history-quiz-single'), 'utf8')).toBe('ccrc-history-quiz-single-out\n');
+    expect(existsSync(join(s.out, D.OUT_MARKER as string)), 'beside the driver\'s own marker').toBe(true);
+    expect(statSync(s.out).mode & 0o777).toBe(0o700);
+  });
+});
+
+describe('Task 3: source, freeze and marker', () => {
+  it('source walks every admitted family through sourceQuiz (no exclusion), and freeze gives a frozen list loadFrozenList reads by its sha', async () => {
+    const home = node();
+    const s = await setup(home);
+    const made = [entry(FAM_A, 7), entry(FAM_B, 8), entry(FAM_A, 9)];
+    const seen: R[] = [];
+    const sourceQuiz = async (o: R): Promise<R> => {
+      seen.push({ mode: o.mode, seedHex: o.seedHex, exclude: o.exclude, plan: o.plan, shaMinPrefix: o.shaMinPrefix, store: o.rs.storeId });
+      return { entries: made.map((e, i) => ({ ...e, rank: ['k', i] })), fidelity: [], counts: { writer: { questions: 3, failed_runs: 0 } }, asof_same_ms_hits: {} };
+    };
+    const src = await run(home, ['source', '--out', s.out, ...inp('setup', s)], { sourceQuiz });
+    expect(src.refusal).toBeNull();
+    expect(seen).toEqual([{ mode: 'quiz', seedHex: SEED, exclude: { pilotFamilies: [], assignment: [] }, plan: { target: 100, caps: s.value.quiz.caps },
+      shaMinPrefix: 7, store: STORE }]);
+    const sourcedPath = join(s.out, 'quiz', 'sourced.json');
+    expect(shaLine(src)).toBe(shaOfFile(sourcedPath));
+    expect(json(sourcedPath)).toMatchObject({ kind: D.SOURCED_KIND, record_sha256: s.sha, store_id: STORE });
+    const fr = await run(home, ['freeze', '--out', s.out, ...inp('setup', s), '--sourced', sourcedPath, '--sourced-sha256', shaLine(src)]);
+    expect(fr.refusal).toBeNull();
+    const frozenPath = join(s.out, 'quiz', 'frozen.json');
+    const doc = D.loadFrozenList(frozenPath, shaLine(fr), 'quiz') as R;
+    expect(doc.entries.map((e: R) => e.qid).sort()).toEqual(made.map((e) => e.qid).sort());
+    expect(json(join(s.out, D.QUIZ_META_FILE as string))).toMatchObject({ record_sha256: s.sha, n_questions: 3, n_families: 2 });
+  });
+
+  it('freeze refuses a sourced list another setup wrote', async () => {
+    const home = node();
+    const s = await setup(home);
+    const p = join(mkTmp('ccrc-qs-in-'), 'sourced.json');
+    const text = `${L.canonicalJson({ kind: D.SOURCED_KIND, v: 1, record_sha256: 'f'.repeat(64), store_id: STORE, assignment_sha256: 'a'.repeat(64), inputs: [], entries: [], counts: {}, asof_same_ms_hits: {}, spend: 0 }) as string}\n`;
+    writeFileSync(p, text);
+    expect((await run(home, ['freeze', '--out', s.out, ...inp('setup', s), '--sourced', p, '--sourced-sha256', L.sha256Hex(text)])).refusal)
+      .toMatchObject({ word: 'input-invalid', detail: expect.stringMatching(/^sourced names f{64}, not this setup/) });
+  });
+
+  it('marker prints the headless-on text the frozen families need, its sha on stderr, and writes nothing', async () => {
+    const home = node();
+    const fz = saveFrozen([entry(FAM_A, 1), entry(FAM_B, 2)]);
+    const r = await run(home, ['marker', ...inp('frozen', fz)]);
+    const want = L.formatHeadlessList({ storeId: STORE, pairs: [FAM_A, FAM_B].map((f) => ({ ccrcId: f.ccrc_id, generation: f.generation })) }) as string;
+    expect(r.stdout).toBe(want);
+    expect(shaLine(r)).toBe(L.sha256Hex(want));
+    expect(existsSync(L.historyPaths(home).headlessOn as string), 'the marker is the operator\'s to write').toBe(false);
+  });
+
+  it('the module spells no node:sqlite load, imports the driver and the gate, and is no gate code file', () => {
+    const text = readFileSync(SCRIPT, 'utf8');
+    expect(text.split('\n').filter((l) => /(['"`])node:sqlite\1/.test(l))).toEqual([]);
+    expect(text).toContain("from './history-replay.mjs'");
+    expect(text).toContain("from './history-gate.mjs'");
+    expect(G.GATE_CODE_FILES).not.toContain('deploy/history-quiz-single.mjs');
+  });
+});
+
+// ── Task 4: step 0b's probes, one arm, its judge, and the stop ──────────────────────────────────────────────────────
+describe('Task 4: arms runs step 0b\'s probes first, then the treatment arm alone', () => {
+  it('a failing probe (the skill missing from every init) refuses pilot-failed before any arm spawns, and the result is written', async () => {
+    const w = await week();
+    const noSkill = stream({ skills: [], session: 'fixture-qs-noskill', calls: [{ command: 'x' }] });
+    plantStep0b(w.home, w.mode, Object.fromEntries((D.STEP0B_PROBES as string[]).map((p) => [p, noSkill])));
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal?.word).toBe('pilot-failed');
+    expect(r.refusal?.detail).toMatch(/failed .*skill/);
+    expect(questionRuns(w.home), 'no question was spawned').toEqual([]);
+    const res = json(join(w.out, 'quiz', 'step0b', `${w.mode}.json`));
+    expect(res).toMatchObject({ kind: 'ccrc-history-quiz-single-step0b', setup_sha256: w.s.sha, passed: false });
+    expect(existsSync(join(w.out, 'quiz', 'arms-summary.json'))).toBe(false);
+  });
+
+  it('a failing deny probe refuses the same way', async () => {
+    const w = await week();
+    const p = (D.step0bProbesOf(w.home, D.STEP0B_SYNTHETIC_TRANSCRIPT) as R[]).find((x) => x.probe === 'deny-rg')!;
+    plantStep0b(w.home, w.mode, { 'deny-rg': stream({ session: 'fixture-qs-deny-rg', calls: [{ command: p.command }] }) });
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toMatchObject({ word: 'pilot-failed', detail: expect.stringMatching(/failed .*deny-rg/) });
+    expect(questionRuns(w.home)).toEqual([]);
+  });
+
+  it('only the treatment arm spawns, at most ARM_ATTEMPTS_MAX times a question, and the summary counts the one arm', async () => {
+    const w = await week();
+    writeFileSync(join(w.home, STUB_VERSION), '2.9.2 (Claude Code)\n');   // F5: moved since setup, and still runs
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal).toBeNull();
+    const qr = questionRuns(w.home);
+    expect(new Set(qr.map((x) => x.arm))).toEqual(new Set([TREATMENT]));
+    expect(qr.some((x) => x.arm === CONTROL)).toBe(false);
+    const per = (qid: string): number => qr.filter((x) => x.stdin === payloadOf(qid)).length;
+    expect(w.q.map((e) => per(e.qid as string))).toEqual([1, 1, 1, D.ARM_ATTEMPTS_MAX]);
+    const sum = json(join(w.out, 'quiz', 'arms-summary.json'));
+    expect(shaLine(r)).toBe(shaOfFile(join(w.out, 'quiz', 'arms-summary.json')));
+    expect(sum).toMatchObject({ kind: 'ccrc-history-quiz-single-arms-summary', setup_sha256: w.s.sha, frozen_sha256: w.fz.sha, arm: TREATMENT,
+      settings_mode: 'restricted', stop: null, ccrc_release: STAMP, claude_code_versions: ['2.9.2 (Claude Code)'], steer_armed: 'no', agents_on_armed: 'no',
+      counts: { questions: 4, answered: 3, run_failed: 1, rerun_owed: 0, not_run: 0 }, answers: { value: 2, unknown: 0, absent: 1, correct: 1 } });
+    expect(sum.answers.value + sum.answers.absent + sum.answers.unknown, 'the answered questions').toBe(3);
+    expect(sum.finished_ms).toBeGreaterThanOrEqual(sum.started_ms);
+    expect(readdirSync(join(w.out, 'quiz', 'answers')).sort()).toEqual(w.q.map((e) => `${e.qid as string}.${TREATMENT}.json`).sort());
+  });
+
+  it('a family not listed in headless-on refuses family-unlisted before --out', async () => {
+    const w = await week();
+    marker(w.home, [FAM_A]);
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal?.word).toBe('family-unlisted');
+    expect(existsSync(w.out)).toBe(false);
+  });
+
+  it('the run stops at the budget, with the stop in the summary, and nothing is retried', async () => {
+    const w = await week({ budget: '600' });
+    const r = await run(w.home, w.argv(), FAKE);
+    expect(r.refusal?.word).toBe('budget-exhausted');
+    expect(json(join(w.out, 'quiz', 'arms-summary.json')).stop).toMatchObject({ word: 'budget-exhausted', kind: 'stop' });
+    expect(r.stderr).toMatch(/arms stop budget-exhausted: \d+ question\(s\) not run/);
+  });
+
+  it('a resumed arms on another release refuses release-moved: one week runs on one release', async () => {
+    const w = await week({ budget: '600' });
+    await run(w.home, w.argv(), FAKE);
+    setRelease(w.home, 'v9.9.9');
+    const again = await run(w.home, w.argv(), FAKE);
+    expect(again.refusal).toMatchObject({ word: 'release-moved' });
+  });
+
+  it('judge writes its own kind over the one arm: the non-correct answered questions, the run-failed one excluded', async () => {
+    const w = await week();
+    await run(w.home, w.argv(), FAKE);
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    const r = await run(w.home, ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)], FAKE);
+    expect(r.refusal).toBeNull();
+    const j = json(join(w.out, 'quiz', 'judged.json'));
+    expect(shaLine(r)).toBe(shaOfFile(join(w.out, 'quiz', 'judged.json')));
+    expect(j).toMatchObject({ kind: 'ccrc-history-quiz-single-judged', arm: TREATMENT, judge_model: OPUS, ccrc_release: STAMP,
+      counts: { excluded_correct: 1, excluded_run_failed_questions: 1 } });
+    expect(j.items).toHaveLength(2);
+    const map = json(join(w.out, 'quiz', 'judge.map.json'));
+    expect(new Set((map.items as R[]).map((m) => m.arm))).toEqual(new Set([TREATMENT]));
+  });
+
+  it('nothing is written under HOME but the stub\'s own log and controls', async () => {
+    const w = await week();
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name)]));
+    const before = new Set(walk(w.home));
+    await run(w.home, w.argv(), FAKE);
+    const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+    await run(w.home, ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), '--arms-summary', sumPath, '--arms-summary-sha256', shaOfFile(sumPath)], FAKE);
+    const added = walk(w.home).filter((p) => !before.has(p)).map((p) => p.slice(w.home.length + 1));
+    // SQLite's own -shm and -wal beside the WAL store: a read-only open (openReplayStore's openReader) makes them, as any reader does.
+    const sidecar = (p: string): boolean => /^\.ccrc\/history\/db\/history\.db-(shm|wal)$/.test(p);
+    expect(added.filter((p) => p !== STUB_LOG && !p.startsWith(`${STUB_DIR}/`) && !sidecar(p))).toEqual([]);
+  });
+});
+
+/** The stop (waiver condition 3): the module in a child process, as the operator runs it, its store reads stood in through
+ *  main's deps by a wrapper this case writes; one question's arm run sleeps, so a SIGINT lands while it is live. */
+async function stopRun(): Promise<{ status: number | null; signal: string | null; stderr: string; childAlive: boolean; spawnedAfter: number; summary: boolean }> {
+  const w = await week();
+  const sleeper = w.q[0]!;
+  put(w.home, w.mode, payloadOf(sleeper.qid), '.sleep', '20000');
+  const wrapper = join(mkTmp('ccrc-qs-wrap-'), 'run.mjs');
+  writeFileSync(wrapper, `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
+const deps = {
+  recheck: async (_rs, es) => new Map(es.map((e) => [e.qid, { ok: true, boundaryEntryId: 0, cut: { qid: e.qid } }])),
+  payloads: (_rs, _id, _q, cut) => ({ state: 'payloads', plain: 'fixture payload ' + cut.qid + '\\n', carded: ${JSON.stringify(`${CARD}\n\nfixture payload `)} + cut.qid + '\\n', card: { state: 'card', line: ${JSON.stringify(CARD)} } }),
+};
+process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME, TMUX_PANE: process.env.TMUX_PANE, LANG: process.env.LANG, CLAUDECODE: process.env.CLAUDECODE }, deps);
+`);
+  try {
+    const env = { ...scrubbedEnv(process.env), HOME: w.home } as NodeJS.ProcessEnv;
+    const child = spawn(process.execPath, ['--no-warnings', wrapper, ...w.argv()], { cwd: w.home, env, stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); });
+    const pidFile = join(w.home, STUB_DIR, `${keyOf(w.mode, payloadOf(sleeper.qid))}.pid`);
+    const deadline = Date.now() + 30_000;
+    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    if (!existsSync(pidFile)) { child.kill('SIGKILL'); throw new Error(`fixture: the sleeping arm run never started: ${stderr}`); }
+    const stubPid = Number(readFileSync(pidFile, 'utf8'));
+    const before = runs(w.home).length;
+    child.kill('SIGINT');
+    const done = await new Promise<{ status: number | null; signal: string | null }>((resolve) => child.on('close', (status, signal) => resolve({ status, signal })));
+    const alive = (): boolean => { try { process.kill(stubPid, 0); return true; } catch { return false; } };
+    const until = Date.now() + 8_000;
+    while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    const childAlive = alive();
+    if (childAlive) { try { process.kill(-stubPid, 'SIGKILL'); } catch { /* gone */ } }
+    return { ...done, stderr, childAlive, spawnedAfter: runs(w.home).length - before, summary: existsSync(join(w.out, 'quiz', 'arms-summary.json')) };
+  } finally {
+    // the wrapper and the week's directories go with the case's mkTmp fixtures
+  }
+}
+
+describe('Task 4: the stop (waiver condition 3)', () => {
+  it('a SIGINT while an arm run is live signals that run\'s group; nothing further is spawned or written, and it refuses interrupted', async () => {
+    const r = await stopRun();
+    expect([r.status, r.signal]).toEqual([2, null]);
+    expect(r.stderr).toMatch(/ccrc history-quiz-single: interrupted: SIGINT received/);
+    expect(r.childAlive, 'the live arm run was stopped').toBe(false);
+    expect(r.spawnedAfter, 'no run after the signal').toBe(0);
+    expect(r.summary, 'no summary after interrupted').toBe(false);
+  }, 60_000);
+});
+
+describe('Task 4: the judge masks under two readings and refuses when they disagree (re-spelled; K26)', () => {
+  it('two readings that mask a reply alike agree; a pair learned between them refuses masking-snapshots-disagree judge, never the newer mask', () => {
+    const secret = ['zq', 'qs', 'secret', 'value01'].join('');
+    const e = entry(FAM_A, 1);
+    const items = [{ qid: e.qid, arm: TREATMENT, entry: e, reply: `ANSWER: 0000000 and ${secret}` }];
+    const map = D.judgeMapOf(SEED, [e], [TREATMENT]) as R[];
+    const none = L.makePairIndex([]);
+    const learned = L.makePairIndex([{ len: secret.length, sha256: L.sha256Hex(secret) }]);
+    expect(L.redactField(secret, learned), 'fixture: the learned pair masks the value').not.toContain(secret);
+    expect(QS.judgeJobsAgreed({ items, map, idx: none, freshIdx: L.makePairIndex([]) }), 'CONTROL: alike').toHaveLength(1);
+    expect(() => QS.judgeJobsAgreed({ items, map, idx: none, freshIdx: learned })).toThrow(/input-invalid: masking-snapshots-disagree judge/);
+  });
+});
+
+// ── Task 5: the single-arm report ───────────────────────────────────────────────────────────────────────────────────
+async function reportFixture() {
+  const w = await week();
+  expect((await run(w.home, w.argv(), FAKE)).refusal).toBeNull();
+  const sumPath = join(w.out, 'quiz', 'arms-summary.json');
+  const sum = { path: sumPath, sha: shaOfFile(sumPath) };
+  expect((await run(w.home, ['judge', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), ...inp('arms-summary', sum)], FAKE)).refusal).toBeNull();
+  const jPath = join(w.out, 'quiz', 'judged.json');
+  const judged = { path: jPath, sha: shaOfFile(jPath) };
+  return { ...w, sum, judged, reportArgv: (j: Saved = judged): string[] => ['report', '--out', w.out, ...inp('setup', w.s), ...inp('frozen', w.fz), ...inp('arms-summary', sum), ...inp('judged', j)] };
+}
+
+describe('Task 5: the single-arm report, with no comparison figure', () => {
+  it('carries exactly §4\'s fields, as canonical JSON and one newline, its sha on stderr over those bytes', async () => {
+    const f = await reportFixture();
+    const r = await run(f.home, f.reportArgv());
+    expect(r.refusal).toBeNull();
+    const p = join(f.out, 'single-report.json');
+    const text = readFileSync(p, 'utf8');
+    const rep = JSON.parse(text) as R;
+    expect(text).toBe(`${L.canonicalJson(rep) as string}\n`);
+    expect(shaLine(r)).toBe(L.sha256Hex(text));
+    expect(Object.keys(rep).sort()).toEqual([...QS.REPORT_FIELDS].sort());
+    const sum = json(f.sum.path);
+    expect(rep).toMatchObject({ kind: 'ccrc-history-quiz-single-report', v: 1, arm: TREATMENT, pilot: 'skipped-by-ruling', settings_mode: 'restricted',
+      frozen_sha256: f.fz.sha, n_questions: 4, n_families: 2, measured_ms: sum.finished_ms, judge_model: OPUS, ccrc_release: STAMP,
+      steer_armed: 'no', agents_on_armed: 'no',
+      inputs: { setup_sha256: f.s.sha, frozen_sha256: f.fz.sha, arms_summary_sha256: f.sum.sha, judged_sha256: f.judged.sha } });
+    expect(rep.counts).toEqual({ questions: 4, answered: 2, correct: 1, run_failed: 1, absent: 1 });
+    expect(rep.counts.questions).toBe(rep.counts.answered + rep.counts.run_failed + rep.counts.absent);
+    expect(rep.share).toEqual({ num: 1, den: 2 });
+    const famA = G.familyKey(FAM_A.store_id, FAM_A.ccrc_id, FAM_A.generation);
+    const famB = G.familyKey(FAM_B.store_id, FAM_B.ccrc_id, FAM_B.generation);
+    const clusters = new Map<string, R>([[famA, { num: 0, den: 0 }], [famB, { num: 0, den: 0 }]]);
+    const answered = { [f.q[0]!.qid]: true, [f.q[1]!.qid]: false } as Record<string, boolean>;
+    for (const e of f.q) if (e.qid in answered) { const c = clusters.get(G.familyKey(e.store_id, e.ccrc_id, e.generation))!; c.den += 1; if (answered[e.qid]) c.num += 1; }
+    const ci = G.clusterBootstrap({ clusters: [...clusters.values()], rng: QS.intervalStreamOf(SEED), mode: 'share' }) as R;
+    expect(rep.interval).toEqual({ lower: { ...ci.lower }, upper: { ...ci.upper }, ci: 95, method: 'percentile', B: 10000 });
+    expect(rep.claude_code_versions).toEqual(['2.9.1 (Claude Code)']);
+  });
+
+  it('no forbidden key at any depth and no PASS in the text; the guard throws on each planted key and on PASS', async () => {
+    const f = await reportFixture();
+    await run(f.home, f.reportArgv());
+    const text = readFileSync(join(f.out, 'single-report.json'), 'utf8');
+    const keys: string[] = [];
+    const walk = (v: unknown): void => { if (Array.isArray(v)) v.forEach(walk); else if (v !== null && typeof v === 'object') for (const [k, x] of Object.entries(v)) { keys.push(k); walk(x); } };
+    walk(JSON.parse(text));
+    for (const k of ['verdict', 'gate', 'criteria', 'lift', 'delta', 'pass']) expect(keys, k).not.toContain(k);
+    expect(text).not.toContain('PASS');
+    const rep = JSON.parse(text) as R;
+    expect(() => QS.assertNoComparison(rep), 'CONTROL: the report itself passes').not.toThrow();
+    for (const k of QS.REPORT_FORBIDDEN_KEYS as string[]) {
+      expect(() => QS.assertNoComparison({ ...rep, [k]: 0 }), k).toThrow(TypeError);
+      expect(() => QS.assertNoComparison({ ...rep, counts: { ...rep.counts, [k.toUpperCase()]: 0 } }), `nested ${k}`).toThrow(TypeError);
+    }
+    expect(() => QS.assertNoComparison({ ...rep, inputs: [{ lift: 1 }] }), 'inside a list').toThrow(TypeError);
+    expect(() => QS.assertNoComparison({ ...rep, judge_model: 'PASS' })).toThrow(TypeError);
+  });
+
+  it('mixed releases refuse release-moved: the arms on one release, the judge on another', async () => {
+    const f = await reportFixture();
+    const j = json(f.judged.path);
+    const p = join(mkTmp('ccrc-qs-in-'), 'judged.json');
+    writeFileSync(p, `${L.canonicalJson({ ...j, ccrc_release: 'v9.9.9' }) as string}\n`);
+    const r = await run(f.home, f.reportArgv({ path: p, sha: shaOfFile(p) }));
+    expect(r.refusal).toMatchObject({ word: 'release-moved', detail: `the arms ran on ${STAMP}, the judge on v9.9.9` });
+  });
+
+  it('a report whose answered count is zero refuses: no share without a denominator', () => {
+    const e = entry(FAM_A, 1);
+    const answers = new Map([[e.qid as string, { question_state: 'run-failed' }]]);
+    expect(() => QS.singleReportOf({ setup: { seed: SEED, settings_mode: 'restricted', judge_model: OPUS }, setupSha256: 'a'.repeat(64), frozen: { entries: [e] },
+      frozenSha256: 'b'.repeat(64), summary: { finished_ms: 1, ccrc_release: STAMP, claude_code_versions: [], steer_armed: 'no', agents_on_armed: 'no' },
+      summarySha256: 'c'.repeat(64), judged: { claude_code_version: 'x' }, judgedSha256: 'd'.repeat(64), answers })).toThrow(/no question was answered/);
+  });
+
+  it('the armed words: steer yes, no, partial and unmeasured, agents-on yes, no and unmeasured, a failed lstat never read as no', () => {
+    expect(QS.steerWordOf({ off: 'absent', steerOff: 'absent', families: ['present', 'present'] })).toBe('yes');
+    expect(QS.steerWordOf({ off: 'absent', steerOff: 'absent', families: ['present', 'absent'] })).toBe('partial');
+    expect(QS.steerWordOf({ off: 'absent', steerOff: 'absent', families: ['absent', 'absent'] })).toBe('no');
+    expect(QS.steerWordOf({ off: 'present', steerOff: 'absent', families: ['present'] }), 'history-off stops steering').toBe('no');
+    expect(QS.steerWordOf({ off: 'absent', steerOff: 'present', families: ['present'] }), 'steer-off too').toBe('no');
+    expect(QS.steerWordOf({ off: 'absent', steerOff: 'absent', families: ['present', 'unmeasured'] })).toBe('unmeasured');
+    expect(QS.agentsWordOf({ state: 'absent' })).toBe('no');
+    expect(QS.agentsWordOf({ state: 'unmeasured' })).toBe('unmeasured');
+    expect(QS.agentsWordOf({ state: 'present', isFile: true, isSymbolicLink: false })).toBe('yes');
+    expect(QS.agentsWordOf({ state: 'present', isFile: false, isSymbolicLink: true })).toBe('no');
+    const home = mkTmp('ccrc-qs-armed-');
+    expect(QS.armedWordsOf(home, ['quiz-a', 'quiz-b'])).toEqual({ steer: 'no', agents: 'no' });
+    const steerDir = join(home, L.SWITCHES.steerOnDir as string);
+    mkdirSync(steerDir, { recursive: true });
+    writeFileSync(join(steerDir, 'quiz-a'), '');
+    writeFileSync(join(home, L.SWITCHES.agentsOn as string), '');
+    expect(QS.armedWordsOf(home, ['quiz-a', 'quiz-b'])).toEqual({ steer: 'partial', agents: 'yes' });
+    writeFileSync(join(steerDir, 'quiz-b'), '');
+    expect(QS.armedWordsOf(home, ['quiz-a', 'quiz-b']).steer).toBe('yes');
+    if ((process.getuid?.() ?? 1) !== 0) {
+      chmodSync(join(home, '.ccrc', 'history'), 0o000);
+      try {
+        expect(QS.armedWordsOf(home, ['quiz-a']), 'a failed lstat is unmeasured').toEqual({ steer: 'unmeasured', agents: 'unmeasured' });
+      } finally {
+        chmodSync(join(home, '.ccrc', 'history'), 0o700);
+      }
+    }
+  });
+});
+
+// ── Task 6: W2's readers refuse every file the module writes (the history coordinator's skip condition 1) ─────────
+/** Whether every one of W2's record readers refuses this file: loadFinalRecord and loadArmRun (both sections) refuse it
+ *  as a record, and validateOpenRecord's draft and final checks fail it. */
+function refusedByW2(p: string, fz: Saved): { ok: boolean; accepted: string[] } {
+  const sha = shaOfFile(p);
+  const flags = { record: p, 'record-sha256': sha, part1: p, 'part1-sha256': sha, frozen: fz.path, 'frozen-sha256': fz.sha };
+  const accepted: string[] = [];
+  const refuses = (name: string, fn: () => unknown): void => {
+    try { fn(); accepted.push(name); } catch (e) { if (!(e instanceof D.DriverRefusal)) throw e; }
+  };
+  refuses('loadFinalRecord', () => D.loadFinalRecord(flags, { nowMs: Date.now() }));
+  refuses('loadArmRun quiz', () => D.loadArmRun(flags, 'quiz', { nowMs: Date.now() }));
+  refuses('loadArmRun pilot', () => D.loadArmRun(flags, 'pilot', { nowMs: Date.now() }));
+  let value: unknown = null;
+  try { value = JSON.parse(readFileSync(p, 'utf8')); } catch { value = null; }
+  if (value !== null) {
+    const asDraft = { ...(value as R), part: 'draft' };
+    const asFinal = { ...(value as R), part: 'final' };
+    if ((G.validateOpenRecord(value, { draft: null, predecessor: null, frozen: null }) as R).ok === true) accepted.push('validateOpenRecord');
+    if ((G.validateOpenRecord(asDraft, { draft: null, predecessor: null, frozen: null }) as R).ok === true) accepted.push('validateOpenRecord draft');
+    if ((G.validateOpenRecord(asFinal, { draft: asDraft, predecessor: null, frozen: { families: [], n_questions: 0 } }) as R).ok === true) accepted.push('validateOpenRecord final');
+  }
+  return { ok: accepted.length === 0, accepted };
+}
+
+describe('Task 6: W2\'s readers refuse every file the module writes (skip condition 1)', () => {
+  it('every file under the setup --out and the week --out, each one, is refused by loadFinalRecord, loadArmRun and validateOpenRecord', async () => {
+    const f = await reportFixture();
+    await run(f.home, f.reportArgv());
+    const made = [entry(FAM_A, 7)];
+    await run(f.home, ['source', '--out', f.s.out, ...inp('setup', f.s)], { sourceQuiz: async () => ({ entries: made.map((e, i) => ({ ...e, rank: ['k', i] })), fidelity: [], counts: {}, asof_same_ms_hits: {} }) });
+    const sourcedPath = join(f.s.out, 'quiz', 'sourced.json');
+    await run(f.home, ['freeze', '--out', f.s.out, ...inp('setup', f.s), '--sourced', sourcedPath, '--sourced-sha256', shaOfFile(sourcedPath)]);
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) => (d.isDirectory() ? walk(join(dir, d.name)) : [join(dir, d.name)]));
+    const files = [...walk(f.s.out), ...walk(f.out)].filter((p) => !p.endsWith('.lock'));
+    const kinds = new Set(files.map((p) => { try { return (json(p).kind as string | undefined) ?? '-'; } catch { return '-'; } }));
+    for (const k of ['ccrc-history-quiz-single-setup', 'ccrc-history-quiz-single-step0b', 'ccrc-history-quiz-single-arms-summary', 'ccrc-history-quiz-single-judged',
+      'ccrc-history-quiz-single-report', 'ccrc-history-w2-answer', 'ccrc-history-w2-arm-batch', 'ccrc-history-w2-judge-map', D.SOURCED_KIND as string, 'ccrc-history-w2-quiz']) {
+      expect(kinds, `the walk reaches a ${k} file`).toContain(k);
+    }
+    const accepted = files.map((p) => ({ p: p.slice(f.home.length), r: refusedByW2(p, f.fz) })).filter((x) => !x.r.ok);
+    expect(accepted).toEqual([]);
+  });
+
+  it('CONTROL: the check reports a reader that accepts: a genuine W2 part 1 draft, built by the driver\'s buildDraft, is accepted by validateOpenRecord', () => {
+    const shas = (D.codeShas(REPO) as R).files as Record<string, string>;
+    const s0 = { kind: D.STEP0A_KIND, v: 1, measured_ms: 1_700_000_000_000, account: 'up-a', settings_mode: 'restricted', claude_code_version: '2.9.1',
+      wrapper_sha256: null, flags_accepted: Object.fromEntries((D.contractFlags('restricted') as string[]).map((x) => [x, true])),
+      writer_init: { tools: [] }, judge_init: { tools: [] }, box_init: { tools: ['Bash', 'Agent'] }, code_shas: shas, release_stamp: STAMP, budget: 100_000, spend: 600 };
+    const pilot = { kind: D.PILOT_SOURCE_KIND, v: 1, store_id: STORE, seed: SEED, n_fidelity: 5, n_usage: 5, families: [FAM_A], fidelity: [],
+      frozen_sha256: 'e'.repeat(64), writer_model: OPUS,
+      used: { labeller: { ...G.LABELLER, path_forms: [...G.LABELLER.path_forms] }, sha_min_prefix: 7, writer_input: 'excerpt', baseline_files: 'v1',
+        writer_prompt_sha256: G.WRITER_PROMPT_SHA256, answer_protocol_sha256: G.ANSWER_PROTOCOL_SHA256 },
+      code_shas: shas, release_stamp: STAMP, budget: 3_000_000, spend: 900_000, counts: {} };
+    const draft = D.buildDraft({ nodes: [{ label: 'node-0', store_id: STORE }], step0a: [{ ...s0, label: 'node-0', store_id: STORE }], pilot, account: 'up-a',
+      models: { arm: ARM_MODEL, writer: OPUS, judge: OPUS }, gateCode: { release_tag: STAMP, files: shas }, seedHex: SEED, nowMs: 1_700_000_100_000,
+      overrides: {}, supersedes: null }) as R;
+    expect((G.validateOpenRecord(draft, { draft: null, predecessor: null, frozen: null }) as R).ok, 'fixture: the draft validates').toBe(true);
+    const p = join(mkTmp('ccrc-qs-ctl-'), 'part1.json');
+    writeFileSync(p, `${L.canonicalJson(draft) as string}\n`);
+    const fz = saveFrozen([entry(FAM_A, 1)]);
+    expect(refusedByW2(p, fz)).toMatchObject({ ok: false, accepted: expect.arrayContaining(['validateOpenRecord']) });
+    const empty = join(mkTmp('ccrc-qs-ctl-'), 'x.json');
+    writeFileSync(empty, '{}\n');
+    expect(refusedByW2(empty, fz).ok, 'CONTROL: an empty object is refused by every reader').toBe(true);
+  });
+});
