@@ -3404,11 +3404,49 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 84: user_version 83 -> 84 ─────────────────────────────────────────────
+  // The response record's retention (Overlord spec §9.4 rule 10; W1, plan `w1-responses.md` Task 7, question 16): one row,
+  // the operator's retention of response rows in whole days, seeded with the default (180). ONE writer, the retention door's
+  // `responsesStore.ts#setResponseRetention`; the response lane reads it and deletes nothing when it cannot. A NEW TABLE,
+  // nothing on an existing table: an older build at `user_version 84` takes rule 3, never names it, and keeps no response
+  // rows. Portfolio B (#2904) landed 83, so this is 84 (the coordinator's word, 2026-11-16).
+  // RE-MEASURE the slot before the PR and before merge (it must print 83 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE response_settings (id INTEGER PRIMARY KEY CHECK (id = 1), retentionDays INTEGER NOT NULL,
+    updatedAt INTEGER NOT NULL);
+  INSERT INTO response_settings (id, retentionDays, updatedAt) VALUES (1, 180, 0);
+  `,
+
+  // ── 85: user_version 84 -> 85 ─────────────────────────────────────────────
+  // Overlaps and goal conflicts (Overlord spec §5.5 H23, §5.6 H38, Table 11.1a; W2, plan `w2-overlaps.md` Task 3, questions
+  // 4 and 8). `claim_collisions`: one row per conflicting path and holder of a REFUSED claim, written only by
+  // `claimCollisions.ts#recordCollisions` after the claim's own transaction committed, in a transaction of its own, and pruned
+  // there after 48 hours. `programme_pairs`: one row per EPISODE of a pair key (`<kind>:<a>:<b>`), at most one standing
+  // (closedAt NULL), written by `programmePairsStore.ts`. Every column PR B writes (mailedAt, ruled, ruledAt, ruledBy) is here.
+  // NEW TABLES, nothing on an existing table: an older build opening a file at `user_version 85` takes rule 3, never names
+  // them. The next slot on the main this branch merged (84 there, responses B's); other open PRs hold 85 too, so the second
+  // to land renumbers at landing, on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must
+  // print 84 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE claim_collisions (id INTEGER PRIMARY KEY, at INTEGER NOT NULL, project TEXT NOT NULL, path TEXT NOT NULL,
+    claimedPath TEXT NOT NULL, requesterId TEXT NOT NULL, requesterRun INTEGER, holderClaimId INTEGER NOT NULL);
+  CREATE INDEX claim_collisions_at ON claim_collisions (at);
+  CREATE TABLE programme_pairs (id INTEGER PRIMARY KEY, pairKey TEXT NOT NULL, kind TEXT NOT NULL, progA TEXT NOT NULL,
+    progB TEXT NOT NULL, episode INTEGER NOT NULL, firstSeenAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL,
+    evidence TEXT NOT NULL, goalsA TEXT, goalsB TEXT, closedAt INTEGER, closedWhy TEXT, mailedAt INTEGER, ruled TEXT,
+    ruledAt INTEGER, ruledBy TEXT, UNIQUE (pairKey, episode));
+  CREATE UNIQUE INDEX programme_pairs_standing ON programme_pairs (pairKey) WHERE closedAt IS NULL;
+  `,
+
+  // ── 86: user_version 85 -> 86 ─────────────────────────────────────────────
   // Row revisions on asks and operator items (Overlord W2, plan `w2-revisions.md` Task 3; spec §6.7): a counter each write
   // that changes what an answer acts on raises by one in its own SET; bookkeeping writes leave it (the closed census,
   // `single-definition/row-revisions.test.ts`). Inserts leave it 0. An older build ignores the column (Table 11.1a, rule 3).
-  // The next slot on the main this merged (portfolio B landed 83). Other open PRs hold 84 too: whoever lands second
-  // renumbers at landing, on the coordinator's word, never on its own.
+  // The next slot on the main this merged (overlaps A landed 85), on the coordinator's word. Other open PRs hold 86 too:
+  // whoever lands second renumbers at landing, on the coordinator's word, never on its own.
   `
   ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;

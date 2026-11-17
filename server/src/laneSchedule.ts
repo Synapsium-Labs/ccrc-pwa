@@ -19,6 +19,8 @@ import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 
 /** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
 export const OUTBOX_LANE_PERIOD_MS = 30_000;
+/** The response lane's beat (Table 11.5's ten-minute `responses` cadence): it seals and deletes, and nothing waits on it. */
+export const RESPONSES_LANE_PERIOD_MS = 10 * 60_000;
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -196,8 +198,8 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -281,6 +283,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // One pass at a time; a pass older than two send deadlines is abandoned, since each send has its own deadline timer.
   { name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
     staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed' },
+  // The response lane (Overlord §4.3, Table 11.1c, Table 11.5; W1 responses B): seals each response row once its window
+  // closes and deletes rows past the operator's retention. One pass at a time; it holds no deadline timer, so a pass older
+  // than two periods is abandoned.
+  { name: 'responses', cadenceMs: RESPONSES_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 2 * RESPONSES_LANE_PERIOD_MS, warnKey: 'ccrc-server: the responses lane failed' },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
   // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
   // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
@@ -347,6 +354,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   {
     name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
     derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
+  },
+  // The overlaps arm (Overlord spec §5.5 and §5.6, Table 11.1c; W2, plan w2-overlaps.md Task 4): one read-and-record pass at a
+  // time over the refused claims' record, the radar's map and the claims history. In PR A it records pairs and sends nothing.
+  {
+    name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+    warnKey: 'ccrc-server: the overlaps arm failed',
+    derivedFrom: { name: 'landingRadar', reason: 'the arm reads the radar\'s map, which changes no faster than the radar lane writes it' },
   },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the

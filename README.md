@@ -1667,7 +1667,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_org`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1677,7 +1677,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool, fableBilling, continuity}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity, org}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -1769,6 +1769,7 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
 | `fableBilling` | `FABLE_BILLINGS` (included or credits), optional; a written `null` is refused; emitted into accounts.sh | `FABLE_BILLINGS` | “a fableBilling outside the set” |
 | `continuity` | an object whose one key is `recordedAt`, non-negative integer epoch seconds, optional; a written `null` is refused; emitted into accounts.sh | `recordedAt` | “a continuity with an extra key” |
+| `org` | `orgLabelVerdict`: `POOL_NAME_RE`'s shape, never `ORG_CLEAR_WORD` or one of `ORG_ID_SHAPES` (an organization id), optional; a written `null` is refused; emitted into accounts.sh | `orgLabelVerdict` | “an org shaped like an organization id” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
@@ -1982,7 +1983,7 @@ ccrc account seed --id <id>                # the first-run seed on its own: onbo
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
-ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off]   # a token lane's stated account; placement; its billing and continuity facts
+ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off] [--org <label>|none]   # a token lane's stated account; placement; its billing and continuity facts; its organization label
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
     [--keep-codex-auth | --delete-codex-auth]
 ```
@@ -4971,7 +4972,9 @@ functions, inherited shell options) stripped, and the body refuses them
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
-`ws-audit --session <id> --collect` are decided the same way.
+`ws-audit --session <id> --collect` are decided the same way. `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`,
+`roll` and `claude` start under `bash -p` too, so an inherited `nocasematch` cannot fold a case variant into one of them;
+the body does not refuse them when it was started another way.
 
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
 directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
@@ -8892,7 +8895,9 @@ arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by ha
 The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
 after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
 (the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
-only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+only recording, paused, or not read) with every count (but for the would-keep figure after a pass that could not read
+everything it needs, where it says the card cannot say how many until the next pass), whether the fleet box's keep switch
+and its change check are available,
 missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
 each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.

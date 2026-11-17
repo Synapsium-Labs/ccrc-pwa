@@ -109,7 +109,9 @@ function harness(over: Partial<{
   };
 }
 
-function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: string | null; show?: DocsShowOk } = {}): ReactNode {
+function frame(h: Harness, over: {
+  text?: string; bodyKey?: string; pending?: string | null; show?: DocsShowOk; link?: Partial<Omit<DocLinkContextValue, 'urls'>>;
+} = {}): ReactNode {
   const assets: DocsAssetContextValue = {
     loaders: fakeLoaders().loaders, queue: createFetchQueue(), onDraftAsset: h.onDraftAsset,
   };
@@ -117,7 +119,7 @@ function frame(h: Harness, over: { text?: string; bodyKey?: string; pending?: st
     <DocsAssetContext value={assets}>
       <ReaderFrame
         key={over.bodyKey ?? 'k1'}
-        show={over.show ?? showOf(over.text ?? '# A')} bodyKey={over.bodyKey ?? 'k1'} link={{ ...LINK, onFragment: h.onFragment }}
+        show={over.show ?? showOf(over.text ?? '# A')} bodyKey={over.bodyKey ?? 'k1'} link={{ ...LINK, ...over.link, onFragment: h.onFragment }}
         parser={h.parser} reader={h.reader} pendingFragment={over.pending ?? null} onFragmentConsumed={h.consumed}
       />
     </DocsAssetContext>
@@ -360,6 +362,19 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(navigate).toHaveBeenCalledTimes(1);
     const href = vi.mocked(navigate).mock.calls[0]?.[0] as string;
     expect(href).toContain('/docs/demo/specs/b.md');
+    expect(h.onFragment).toHaveBeenCalledWith('sec', href);
+  });
+
+  it("a doc link on a version page keeps the page's at and ref through onLink and routeReaderLink (refinement (o), D-8654)", async () => {
+    // Review run 2208's F2: the version context reaches the frame's navigate only through ReaderFrame's link context.
+    const at = 'a'.repeat(40);
+    const h = harness();
+    render(frame(h, { link: { pageRef: { kind: 'bare', name: 'ws/a' }, pageAt: at } }));
+    const input = await ready(h);
+    act(() => { input.onLink({ kind: 'relative', path: 'b.md', fragment: 'sec' }); });
+    expect(navigate).toHaveBeenCalledTimes(1);
+    const href = vi.mocked(navigate).mock.calls[0]?.[0] as string;
+    expect(href).toBe(`/docs/demo/specs/b.md?ref=ws/a&at=${at}`);
     expect(h.onFragment).toHaveBeenCalledWith('sec', href);
   });
 

@@ -20,6 +20,7 @@ import {
   HistorySection, InspectorSections, LaneSection, MailSection, PrSection, RoutingSection, TasksSection,
 } from '../src/inspector/InspectorSections';
 import { navigate } from '../src/lib/router';
+import { clearScreenCache, laneModelsKey, put } from '../src/lib/screenCache';
 import { routeView } from '../src/session/routeView';
 import { routingLine } from '../src/session/routingLine';
 import { SessionScreen } from '../src/screens/SessionScreen';
@@ -88,6 +89,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  clearScreenCache(); // a seeded lane read never leaks into the next case, whichever way this one ended
   vi.unstubAllGlobals();
   window.history.replaceState(null, '', '/');
 });
@@ -329,6 +331,34 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
     expect(el.querySelector('.route-queued')?.textContent).toBe('asked Opus class');
   });
 
+  it('the routing section passes the roster row on: a managed Codex lane asks its class by its own list (D-8686)', () => {
+    stubWidth(1920);
+    goTo(`/s/${ID}`);
+    // `lane-b` is a neutral second Codex lane; the lane's read is seeded where `useLaneModels` finds it at once.
+    put(laneModelsKey('lane-b'), {
+      ok: true, lane: 'lane-b',
+      models: { kind: 'read', classes: {
+        fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+        opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: null },
+        sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: null },
+        haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: null },
+      } },
+    }, Date.now());
+    const row: FleetSession = {
+      ...ROW, wrapper: 'lane-b', model: 'model-6-beta',
+      route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+    };
+    act(() => useFleetStore.setState({
+      sessions: [row],
+      roster: [{
+        id: 'lane-b', label: 'Lane B', hue: 'acct-1', homeAble: true, provider: 'openai', kind: 'codex', managed: true,
+        telemetry: 'codex',
+      } as never],
+    }));
+    const { container } = render(<RoutingSection />);
+    expect(container.querySelector('.route-queued')?.textContent).toBe('asked Gamma 6.1');
+  });
+
   it('the routing line reads exactly the sentence, whichever parts it carries', () => {
     stubWidth(1920);
     goTo(`/s/${ID}`);
@@ -352,7 +382,7 @@ describe('a section with nothing to show renders nothing (desktop polish T3d, D-
       act(() => useFleetStore.setState({ sessions: [row] }));
       const { container, unmount } = render(<RoutingSection />);
       const el = container.querySelector<HTMLElement>('.insp-routing-row')!;
-      const sentence = routingLine(row, routeView(row, row.wrapper, 'anthropic', null), 'Lane A', null).sentence;
+      const sentence = routingLine(row, routeView(row, row.wrapper, undefined, 'anthropic', null), 'Lane A', null).sentence;
       // The shape really carries its part, and the component prints the sentence and nothing else.
       expect(sentence, name).toContain(expected);
       expect(el.textContent, name).toBe(sentence);

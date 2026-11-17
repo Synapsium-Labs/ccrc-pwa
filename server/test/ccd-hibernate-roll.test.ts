@@ -708,3 +708,119 @@ describe('the Overlord W1 ccd arms: the fresh start passes keep-awake\'s own .no
     expect(has('hibernated')).toBe(false);
   });
 });
+
+// A PROVEN RENEWAL ENDS A SET-SIDE CROSSING (Overlord W1 ccd arms, Task 5; spec §3.4 C46, "Every renewal clears the
+// crossing marker"; slug crossing-ends-after-the-receipt). Only after the consuming spawn's receipt proved the fresh start,
+// and only for a session whose side reads `set <spelling>`: every other exit keeps the operator's crossing, an unreadable
+// or malformed set keeps it, and a project side's crossing is the tick's, as today. On `main` before the arm, `--roll
+// --fresh` left every marker (Step 1's characterization, now its exit-0 case flipped).
+describe('the Overlord W1 ccd arms: a proven fresh start ends a set-side crossing, and nothing else does', () => {
+  const REAL = STUBS.replace(/^\s*cmd_ensure\(\).*$/m, '');
+  const SPAWNS = '_have_systemctl() { return 1; }; _spawn_settle() { return 0; };';
+  const claimed = (): void => { idle(); h.sh(`_reg_claim ${ID}`); };
+  const fresh = (extra = '', stubs = REAL): { rc: number; err: string; out: string } =>
+    run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, `${SPAWNS} ${extra}`, stubs);
+  const CROSS = '1700000000 pool-b lane-b';
+  const cross = (): void => { fs.writeFileSync(regPath('crosspool'), `${CROSS}\n`); };
+  const ended = (): string[] => (fs.existsSync(path.join(reg(), 'swap.log')) ? fs.readFileSync(path.join(reg(), 'swap.log'), 'utf8') : '')
+    .split('\n').filter((l) => l.includes(`crosspool-ended ${ID}:`));
+  const side = (): string => h.sh(`_session_pool_side ${ID}`);
+  const kept = (): void => {
+    expect(fs.readFileSync(regPath('crosspool'), 'utf8')).toBe(`${CROSS}\n`);
+    expect(ended()).toEqual([]);
+  };
+
+  it('a proven start (exit 0) with a set side ends the marker, with the tick\'s own line and the reason renewal', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a,pool-b');
+    expect(side()).toBe('set pool-a,pool-b');
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    expect(has('crosspool')).toBe(false);
+    expect(ended()).toHaveLength(1);
+    expect(ended()[0]).toMatch(new RegExp(`crosspool-ended ${ID}: renewal$`));
+  });
+
+  it('a plain --roll (no --fresh) with a set side keeps the marker', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const r = run(`--roll --surface agent --actor 'sweep:roll' ${ID}`, SPAWNS, REAL);
+    expect(r.rc, r.err).toBe(0);
+    kept();
+  });
+
+  it('exit 3 (refused before the act) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    fs.writeFileSync(regPath('hold'), 'keep');
+    expect(fresh().rc).toBe(3);
+    kept();
+  });
+
+  it('exit 4 (the wake failed, back to sleep) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    fs.writeFileSync(path.join(h.home, 'wake-fails'), '');
+    const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`);
+    expect(r.rc, r.err).toBe(4);
+    kept();
+  });
+
+  it('exit 5 (not restored) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const unwritable = 'cmd_ensure() { echo "ensure $*" >> "$HOME/ccd-calls"; rm -f -- "$REG/$1.hibernated"; '
+      + 'mkdir -p -- "$REG/$1.hibernated"; echo "ccd: spawn failed" >&2; return 5; };';
+    const r = run(`--roll --fresh --surface agent --actor 'sweep:renew' ${ID}`, unwritable);
+    expect(r.rc, r.err).toBe(5);
+    kept();
+  });
+
+  it('exit 6 (the pane could not be killed) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const stuck = 'eval "$(declare -f tmux | sed \'1s/^tmux/_tmux_stub/\')"; '
+      + 'tmux() { [[ "${1:-}" == kill-session ]] && { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; }; _tmux_stub "$@"; }; '
+      + '_alive() { return 0; };';
+    const r = fresh(stuck);
+    expect(r.rc, r.err).toBe(6);
+    kept();
+  });
+
+  it('exit 7 (the start was not proven) keeps it', () => {
+    claimed(); cross(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    const moved = '_wake_ceiling_move() { echo "move $1" >> "$HOME/ccd-calls"; WAKE_MOVE_TARGET=lane-b; return 0; };';
+    const r = fresh(moved);
+    expect(r.rc, r.err).toBe(7);
+    kept();
+  });
+
+  it.each([
+    ['set-unreadable (a directory)', () => { fs.mkdirSync(regPath('poolset')); }],
+    ['set-unreadable (a dangling link)', () => { fs.symlinkSync(path.join(h.home, 'nowhere'), regPath('poolset')); }],
+    ['set-malformed', () => { fs.writeFileSync(regPath('poolset'), 'Pool A'); }],
+  ])('a proven start with a %s side keeps it', (_what, set) => {
+    claimed(); cross(); set();
+    expect(side()).toMatch(/^set-(unreadable|malformed)$/);
+    const r = fresh();
+    expect(r.rc, r.err).toBe(0);
+    kept();
+  });
+
+  it('a proven start with a named project side keeps it (the tick ends a project crossing)', () => {
+    claimed(); cross();
+    fs.mkdirSync(path.join(reg(), 'pools'), { recursive: true });
+    fs.writeFileSync(path.join(reg(), 'pools', 'project-a'), 'pool-a\n');
+    expect(side()).toMatch(/^named /);
+    expect(fresh().rc).toBe(0);
+    kept();
+  });
+
+  it('a proven start with an untagged project side keeps it', () => {
+    claimed(); cross();
+    expect(side()).toBe('untagged');
+    expect(fresh().rc).toBe(0);
+    kept();
+  });
+
+  it('a proven start with a set side and no marker says nothing', () => {
+    claimed(); fs.writeFileSync(regPath('poolset'), 'pool-a');
+    expect(fresh().rc).toBe(0);
+    expect(has('crosspool')).toBe(false);
+    expect(ended()).toEqual([]);
+  });
+});

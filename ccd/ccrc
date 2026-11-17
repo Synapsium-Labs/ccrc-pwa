@@ -8582,7 +8582,7 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity="" org=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -8604,7 +8604,9 @@ _acct_set() {
       --continuity=on|--continuity=off) continuity="${1#*=}" ;;
       --continuity) { [ "${2:-}" = on ] || [ "${2:-}" = off ]; } || _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written."; continuity="$2"; shift ;;
       --continuity=*) _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written." ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off and --method setup-token|login|openai-login --attempt <attemptId>" ;;
+      --org=?*) org="${1#*=}" ;;   # the organization label, or none; its shape is the op's to refuse (account organization A3)
+      --org) [ -n "${2:-}" ] || _acct_refuse 2 missing-value "the flag --org takes a label or none. Nothing was written."; org="$2"; shift ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off, --org <label>|none and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -8612,13 +8614,16 @@ _acct_set() {
   if [ -n "$method" ] || [ -n "$attempt" ]; then
     { [ -n "$method" ] && [ -n "$attempt" ]; } \
       || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
-    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity" ]; } \
-      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing or --continuity beside it. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity$org" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing, --continuity or --org beside it. Nothing was written."
     _acct_set_method "$id" "$method" "$attempt"
     return 0
   fi
-  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity" ] \
-    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits or --continuity on|off. Nothing was written."
+  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity$org" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off or --org <label>|none. Nothing was written."
+  # The label's shape is refused before the stated account or the placement is written (PR A's review, F2): the op owns
+  # the gate, so the verb asks it, read-only, and holds no copy of the id shapes.
+  [ -z "$org" ] || _acct_write_op "Nothing was written." org-check --org "$org"
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8649,11 +8654,18 @@ _acct_set() {
     done_note="${done_note}The placement was recorded. "
     _acct_projection "The roster records lane $id's placement as $placement."
   fi
-  if [ -n "$billing$continuity" ]; then   # the serviceability facts (H16), under the same marker lock as the placement write
+  if [ -n "$billing$continuity$org" ]; then   # the serviceability facts (H16) and the organization label, under the placement's marker lock
     [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
     _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
-      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} --recorded-at now
-    _acct_projection "The roster records lane $id's ${billing:+billing }${billing:+${continuity:+and }}${continuity:+continuity }fact${billing:+${continuity:+s}}."
+      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} ${org:+--org "$org"} --recorded-at now
+    local -a facts_named=()   # its own name: shellcheck reads one name across functions, and `w` is a string elsewhere
+    [ -z "$billing" ] || facts_named+=("billing fact"); [ -z "$continuity" ] || facts_named+=("continuity record")
+    [ -z "$org" ] || facts_named+=("organization label")
+    case ${#facts_named[@]} in
+      1) v=${facts_named[0]} ;; 2) v="${facts_named[0]} and ${facts_named[1]}" ;;
+      *) v="${facts_named[0]}, ${facts_named[1]} and ${facts_named[2]}" ;;
+    esac
+    _acct_projection "The roster records lane $id's $v."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"

@@ -733,13 +733,14 @@ export function classOfModel(reg, modelId) {
  *  `model` is the registry's slot as it stands (`null`: the class is unavailable on this lane by nature); `label` is
  *  the catalogue row's `label` for that id (`parseCatalogue` fills it with the id when the probe gave none), or `null`
  *  when there is no catalogue, no row for the id, or no model. Never a name this file spells: a model advance changes
- *  the registry, and the label follows it with no code change. Pure. */
+ *  the registry, and the label follows it with no code change. `efforts` (D-8686) is that row's effort levels as
+ *  `parseCatalogue` kept them, `null` where `label` is. Pure. */
 export function laneClassModels(reg, catalogue) {
   const out = {};
   for (const c of CLASSES) {
     const model = reg.classes[c];
     const row = model === null || catalogue === null ? undefined : catalogue.models.find((m) => m.id === model);
-    out[c] = { model, label: row === undefined ? null : row.label };
+    out[c] = { model, label: row === undefined ? null : row.label, efforts: row === undefined ? null : [...row.efforts] };
   }
   return out;
 }
