@@ -9,7 +9,8 @@
 //      own generation number: an unmount or a new attempt aborts the old one, and every async continuation checks its
 //      generation first, so a late result never publishes into a later attempt;
 //   6. the frame (`MockupFrame`), keyed by mode and a nonce, never by author text, so Stop, Run, Reload and Load
-//      external each make a NEW element, and the toolbar, the badges, the census and the links list.
+//      external each make a NEW element, and so does a build whose page differs from the shown one (a re-list whose page
+//      is byte-identical keeps the element), and the toolbar, the badges, the census and the links list.
 // Export reads what the view publishes (`usePublishExportBody`; completion plan Task 9): the render gate publishes
 // `GATE_BODY`, a page the pre-scan refuses publishes its source as a `plain` body with the refused-export note, and an
 // attempt publishes a `mockup` body (its parsed Document, its plan and the promise of its load's end) from the moment it
@@ -36,7 +37,7 @@ import {
 } from './docsText';
 import { leafName } from './docsTree';
 import { MockupFrame, mockupFrameProps } from './MockupFrame';
-import { buildMockupSrcdoc, extractMockupRefs, startMockupLoad, type MockupExtract } from './mockup/load';
+import { buildMockupSrcdoc, extractMockupRefs, startMockupLoad, type MockupBuild, type MockupExtract } from './mockup/load';
 import {
   capRows, censusCounts, censusOf, draftPinsOf, hasConservativeAdmission, linksOf, originsOf, pageHasScripts, type PageLink, type RouteOf,
 } from './mockup/census';
@@ -263,10 +264,8 @@ function MockupLive(p: MockupViewProps & {
           return;
         }
         end({ s: 'loaded', result });
-        // Each published build gets its own frame element: a new srcdoc on a showing iframe is reloaded in place by a
-        // browser, and its second `load` would read as the document navigating away (review I1).
+        // The frame's element follows the page this result builds (below, `framedFor`), not the publish.
         setLoaded({ extract, result });
-        setNonce((n) => n + 1);
       },
       (error: unknown) => {
         end({ s: 'ended' });
@@ -322,6 +321,17 @@ function MockupLive(p: MockupViewProps & {
     () => (loaded === null ? null : buildMockupSrcdoc(doc, loaded.result, extra, scripted)),
     [doc, loaded, extra, scripted],
   );
+  // A NEW frame element for every build whose page differs from the page shown: a new srcdoc on a showing iframe is
+  // reloaded in place by a browser, and its second `load` would read as the document navigating away (review I1). A re-list
+  // whose build is byte-identical keeps the element, so a scripted frame keeps its state (review 2361 M2). Adjusted while
+  // rendering (React's pattern for state that follows a value): the render that brings a new page brings the new key with
+  // it, so no commit writes a new srcdoc into a showing frame. A new build object is compared once, by its page.
+  const [framedFor, setFramedFor] = useState<{ readonly build: MockupBuild | null; readonly page: string | null }>({ build: null, page: null });
+  if (build !== framedFor.build) {
+    const shown = build !== null && build.ok ? build.page : null;
+    if (shown !== framedFor.page) setNonce((n) => n + 1);
+    setFramedFor({ build, page: shown });
+  }
 
   // Counted only for a page that renders: a build over the size cap keeps its inline draft rows, but shows no embed (review M3).
   const draftPins = useMemo(() => (build === null || !build.ok ? 0 : draftPinsOf(build.plan.rows, context.project)), [build, context.project]);

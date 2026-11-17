@@ -434,6 +434,31 @@ describe('a second load tears the frame down (M5.15; base 5.6.6)', () => {
     expect(m.frame()).toBe(second);
   });
 
+  it.each([['static', false], ['scripted', true]])(
+    'a re-list whose build is byte-identical keeps the same %s element, so a running frame keeps its state (review 2361 M2)', async (_mode, run) => {
+      const reads = fakeReader();
+      // A re-list hands the view a NEW context object over the same files: the attempt runs again and builds the same page.
+      const setup = (): Setup => ({ html: '<script>document.title = "t"</script><img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+      const m = mount(setup());
+      await waitFor(() => expect(m.frame()).not.toBeNull());
+      await flush();
+      if (run) {
+        fireEvent.click(button(MOCKUP_TEXT.runScripts));
+        await flush();
+        expect(m.frame()!.getAttribute('sandbox')).toBe('allow-scripts');
+      }
+      const first = m.frame()!;
+      const firstDoc = first.getAttribute('srcdoc');
+      m.again(setup());
+      await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
+      await flush();
+      expect(reads.calls).toHaveLength(2);
+      expect(m.frame()).toBe(first);
+      expect(first.isConnected).toBe(true);
+      expect(first.getAttribute('srcdoc')).toBe(firstDoc);
+    },
+  );
+
   it('a new context whose assets changed also publishes into a NEW element (review I1)', async () => {
     const reads = fakeReader();
     const gate = (entries: DocsEntry[]): Setup => ({ html: '<img src="a.png"><img src="b.png">', context: ctxOf(entries), reader: reads.reader });
