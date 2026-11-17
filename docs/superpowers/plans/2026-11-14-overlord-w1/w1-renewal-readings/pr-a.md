@@ -16,11 +16,10 @@ file is what the coordinator folds into the plan's ledger; the plan itself is no
   `renewalInputsOf`; `usageReading` is exported for the wiring's window.
 - `continuityStore.ts`: `closedSpotProbes` (graded `pass`/`fail` only, F6), `backstopRead`, `setBackstop` (the row's one
   writer); three `CoordStore` delegates and two `WatcherCoordPort` members.
-- Migration 87, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Built as 85 on `92e5f1344`; overlaps A
-  (#2949) then landed 85, and on the coordinator's word this branch merged `main` once and renumbered to 86; decision model A
-  (#2948) then landed 86, and on the coordinator's word (and its standing license) this branch merged `main` once more and
-  renumbered to 87 (the slot count on that `main` printed 86). Other open pull requests hold 87 as well; the second to land
-  renumbers on the coordinator's word.
+- Migration 88, `renewal_backstop_settings`, seeded 04:00 `UTC`, `isDefault = 1`. Built as 85 on `92e5f1344`; overlaps A
+  (#2949) then landed 85, decision model A (#2948) 86 and row revisions (#2965) 87, and on the coordinator's word (and its
+  standing license) this branch merged `main` and renumbered each time, to 88 last (the slot count on that `main` printed
+  87). Other open pull requests hold 88 as well; the second to land renumbers on the coordinator's word.
   Moving off the end of the list redded decision model A's migration case (`decision-model-records.test.ts`), which rolled
   back to `COORD_SCHEMA_VERSION - 1` and so assumed its entry was the last. The case now finds its entry by its DDL, as
   `coord-db.test.ts`'s `dead_claimants` case does, and first undoes every later entry, newest first (an index on an older
