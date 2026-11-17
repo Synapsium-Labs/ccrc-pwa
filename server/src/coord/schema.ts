@@ -3560,6 +3560,21 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
+  // A run's own bound pull request, as its close measured it (Overlord W2 done tests A, plan `w2-done-tests.md` DT7):
+  // `{ pr, merged, head }` JSON from `prstate.ts#closePrFactsOf`, written ONLY by `CoordStore.closeRun` in the close's
+  // transaction; NULL is a close that measured no bound row (an abandon, a failed close) or a row closed before this
+  // column, which the done-test reader answers `unmeasurable`. ONE NULLABLE COLUMN: an older build at `user_version 92`
+  // takes rule 3 and never names it. Overlaps A (#2949) took 85, decision model A (#2948) 86, row revisions (#2965) 87,
+  // renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this
+  // is 92 (the coordinator's word, 2026-11-17).
+  // RE-MEASURE the slot before the PR and before merge (it must print 91 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
   // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
   // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
   // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
@@ -3570,9 +3585,9 @@ export const MIGRATIONS: readonly string[] = [
   // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
   // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
   // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
-  // opening a file at `user_version 92` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
-  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90 and designation A (#2950) 91, so this is 92 (the coordinator's word, 2026-11-17, mail 23096); others may hold 92 too, and the second to land renumbers on the coordinator's word.
-  // RE-MEASURE the slot before merge (it must print 91 before this entry is counted):
+  // opening a file at `user_version 93` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92, so this is 93 (the coordinator's word, 2026-11-17, mail 23372); others may hold 93 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 92 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
