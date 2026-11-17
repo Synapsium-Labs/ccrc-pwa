@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { DocPin, DocsLogEntry, DocsLogOk } from '../../shared/docs';
 import {
   READER_SEED_DATE_MAX_UNITS, READER_SEED_MAX_COMMITS, READER_SEED_MAX_PARENTS, READER_SEED_SUBJECT_MAX_UNITS,
-  readerChangesBase, readerServedHash, readerVersionMove, readerVersionSeed,
+  readerChangesBase, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed,
 } from '../src/docs/reader/history';
 
 const SHA40 = 'a'.repeat(40);
@@ -284,5 +284,28 @@ describe('readerServedHash', () => {
     expect(readerServedHash({ source: 'committed', commit: 'abc' })).toBe('abc');
     expect(readerServedHash({ source: 'committed', commit: '' })).toBe('');
     expect(readerVersionSeed(readerServedHash({ source: 'committed', commit: 'abc' }) ?? '', false, null, null)).toBeNull();
+  });
+});
+
+describe('readerLogAsk', () => {
+  const committed: DocPin = { kind: 'committed', commit: SHA64, servedRef: 'origin/main', section: 'specs', path: 'a/b.md' };
+  const draftPin: DocPin = { kind: 'draft', branch: 'ws/demo', head: SHA40, section: 'specs', path: 'a/b.md', fp: 'f'.repeat(16) };
+
+  it('a committed body at a full served hash asks for the opened pin\'s commit, section and path, and nothing else', () => {
+    expect(readerLogAsk(committed, false, SHA40)).toEqual({ commit: SHA64, section: 'specs', path: 'a/b.md' });
+    expect(readerLogAsk(committed, false, SHA64)).toEqual({ commit: SHA64, section: 'specs', path: 'a/b.md' });
+  });
+
+  it('a draft body asks for nothing, whatever the pin and the hash', () => {
+    expect(readerLogAsk(committed, true, SHA40)).toBeNull();
+    expect(readerLogAsk(draftPin, true, SHA40)).toBeNull();
+  });
+
+  it('a draft pin asks for nothing, even for a body not flagged as a draft', () => {
+    expect(readerLogAsk(draftPin, false, SHA40)).toBeNull();
+  });
+
+  it('a served hash that is not a full commit asks for nothing', () => {
+    for (const served of ['', 'abc1234', 'A'.repeat(40), `${SHA40} `, 'a'.repeat(39)]) expect(readerLogAsk(committed, false, served)).toBeNull();
   });
 });

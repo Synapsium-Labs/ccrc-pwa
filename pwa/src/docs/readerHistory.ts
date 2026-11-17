@@ -14,14 +14,14 @@
 // the filter it wants for the URL it opens; the page that mounts on that URL turns it into a mark in the entry it stands
 // on, as the mockup viewer does for its full-frame entry (`MockupView.tsx`'s `pendingFullFrom`). A page load clears it.
 import { useEffect, useState } from 'react';
-import { docsPageUrl, isDocsCommit, type DocPin, type DocsLogOk, type DocsPageLocation, type DocsShowOk } from '../../../shared/docs';
+import { docsPageUrl, type DocPin, type DocsLogOk, type DocsPageLocation, type DocsShowOk } from '../../../shared/docs';
 import { navigate } from '../lib/router';
 import { docMarkdownSource } from './DocMarkdown';
 import { docsLocation } from './docsLinks';
 import type { DocsHistoryLoader, DocsLoaders } from './failures';
 import type { FetchQueue } from './fetchQueue';
 import { readerDiff } from './reader/diff';
-import { readerChangesBase, readerServedHash, readerVersionMove, readerVersionSeed, type ReaderVersionSeed } from './reader/history';
+import { readerChangesBase, readerLogAsk, readerServedHash, readerVersionMove, readerVersionSeed, type ReaderVersionSeed } from './reader/history';
 
 /** The key of the day filter in a history entry's state. */
 export const READER_ONLY_STATE_KEY = 'ccrcReaderOnly';
@@ -110,9 +110,10 @@ export function startReaderHistory(i: ReaderHistoryInput): ReaderHistoryBody {
 
   /** The committed log at the opened pin: `null` for anything that is not a complete answer. */
   const readLog = async (): Promise<DocsLogOk | null> => {
-    if (draft || i.history === null || pin.kind !== 'committed' || !isDocsCommit(served)) return null;
+    const ask = readerLogAsk(pin, draft, served);
+    if (i.history === null || ask === null) return null;
     try {
-      const a = await i.history.history(i.project, { commit: pin.commit, section: pin.section, path: pin.path });
+      const a = await i.history.history(i.project, ask);
       return a.s === 'ok' ? a.value.log : null;
     } catch {
       return null;
