@@ -74,6 +74,7 @@ const STOP_DONE_HOLD_MAP = {
   background: 'background work is running',
   roster: 'subagents are running',
   'no-verb': 'this box\'s ccd does not list `hibernate` in its caps',
+  overlord: 'it is the Overlord\'s bound or pending body, which no sleep takes',
   'opted-out': 'the operator opted it out (`$REG/<id>.no-hibernate`)',
   pane: 'no live pane to stop',
   'live-word': 'its live word is not `idle`',
@@ -188,6 +189,8 @@ export interface StopDoneInput {
   readonly viewerOpenTtlMs: number;
   /** `verbSupported` for `CCD_ARGV.hibernate`: the box's ccd lists `hibernate` in its caps. */
   readonly verb: boolean;
+  /** X6: the Overlord's bound or pending body; `null`: the designation was not read (holds `unmeasured`). */
+  readonly overlord: boolean | null;
   /** `$REG/<id>.no-hibernate` is listed. */
   readonly optedOut: boolean;
   readonly live: StopDoneLive;
@@ -227,7 +230,7 @@ export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
   return {
     row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
     heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
-    optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
+    overlord: i.overlord, optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
     viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
   };
 }

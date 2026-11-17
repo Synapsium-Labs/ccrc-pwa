@@ -3537,15 +3537,36 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE continuity_generations ADD COLUMN prevLane TEXT;   -- the previous generation's account; NULL is unknown
   `,
+
   // ── 91: user_version 90 -> 91 ─────────────────────────────────────────────
+  // The Overlord's designation (spec §3.1, §3.2 C2, §3.4 C45, C46; W1, plan `w1-designation.md` Task 1): `overlord_designation`,
+  // the one row of who the Overlord is, what is pending, its term, model class and account set. One writer each, named in
+  // `overlordDesignationStore.ts`. NEW TABLE, nothing on an existing table: an older build opening a file at `user_version 91`
+  // takes rule 3, never names it. Renewal readings A (#2962) landed 88, remaining work A (#2951) 89 and account organization D (#2958) 90, so this is 91; sibling W1 pieces add migrations too, so
+  // this number is renumbered at landing on the coordinator's word. RE-MEASURE the slot before the PR and before merge (it must print 90 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_designation (id INTEGER PRIMARY KEY CHECK (id = 1), sessionId TEXT, generation TEXT,
+    pendingId TEXT, pendingGeneration TEXT, pendingKind TEXT CHECK (pendingKind IN ('designate','rebind')),
+    pendingSince INTEGER, pendingDeadlineAt INTEGER, pendingActor TEXT,
+    term INTEGER NOT NULL CHECK (term >= 0), designatedTerm INTEGER NOT NULL CHECK (designatedTerm >= 0),
+    model TEXT NOT NULL CHECK (model IN ('fable','opus')), accountPools TEXT NOT NULL,
+    pastIds TEXT NOT NULL DEFAULT '[]', actor TEXT NOT NULL, attemptId TEXT, attemptOutcome TEXT, attemptAt INTEGER,
+    stopsOwed TEXT NOT NULL DEFAULT '[]', updatedAt INTEGER NOT NULL,
+    CHECK ((sessionId IS NULL) = (generation IS NULL)), CHECK ((pendingId IS NULL) = (pendingKind IS NULL)),
+    CHECK (pendingId IS NULL OR (pendingDeadlineAt IS NOT NULL AND pendingSince IS NOT NULL AND pendingActor IS NOT NULL)),
+    CHECK (pendingKind IS NOT 'rebind' OR sessionId IS NOT NULL));
+  `,
+  // ── 92: user_version 91 -> 92 ─────────────────────────────────────────────
   // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
   // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
   // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
   // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
-  // nothing on an existing table: an older build opening a file at `user_version 91` takes rule 3, never names them. This
-  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89 and account organization D
-  // (#2958) 90 first, so WM0 took the next slot each time (the coordinator's terms: the second to land takes it).
-  // RE-MEASURE the slot before merge (it must print 90 before this entry is counted):
+  // nothing on an existing table: an older build opening a file at `user_version 92` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
+  // (#2958) 90 and designation A (#2950) 91 first, so WM0 took the next slot each time (the coordinator's terms: the
+  // second to land takes it). RE-MEASURE the slot before merge (it must print 91 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

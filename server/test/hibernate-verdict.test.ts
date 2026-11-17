@@ -32,7 +32,7 @@ const live = (over: { word?: string; mark?: Partial<HibernateMark> | HibernateMa
   mark: { ...MARK, ...(over.mark ?? {}) } as HibernateMark,
 });
 const base = (over: Partial<HibernateInput> = {}): HibernateInput => ({
-  row: row(), optedOut: false, store: STORE, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, live: live(),
+  row: row(), overlord: false, optedOut: false, store: STORE, viewer: false, sinceStartMs: VIEWER_OPEN_TTL_MS + 1, live: live(),
   ...over,
 });
 const verdict = (over: Partial<HibernateInput> = {}) => hibernateVerdict(base(over), NOW, HIBERNATE_AFTER_MS_DEFAULT);
@@ -82,6 +82,8 @@ const CASES: readonly (readonly [HibernateHold, Partial<HibernateInput>, string]
   ['swap-blocked', { row: row({ swapBlocked: { at: NOW - HOUR, reason: 'fixture' } }) }, 'swap-blocked'],
   ['substrate', { row: row({ substrate: { at: NOW - HOUR, text: 'fixture' } }) }, 'substrate'],
   ['archived', { row: row({ archivedAt: 1_700_000_000 }) }, 'archived'],
+  ['overlord', { overlord: true }, 'the Overlord\'s bound or pending body (X6)'],
+  ['unmeasured', { overlord: null }, 'the designation not read (X6)'],
   ['opted-out', { optedOut: true }, 'no-hibernate'],
   ['unmeasured', { row: row({ statusUnmeasured: true }) }, 'status unmeasured'],
   ['unmeasured', { row: row({ unmeasured: ['uuid'] }) }, 'identity unmeasured'],
@@ -97,6 +99,13 @@ describe('hibernateVerdict: every hold, one case each', () => {
 
   it('the cases cover HIBERNATE_HOLDS exactly: a hold with no case, or a case with no hold, is red', () => {
     expect([...new Set(CASES.map(([r]) => r))].sort()).toEqual([...HIBERNATE_HOLDS].sort());
+  });
+});
+
+describe('hibernateVerdict: the Overlord hold (X6)', () => {
+  it('holds overlord before opted-out, and another session\'s verdict is the base case', () => {
+    expect(verdict({ overlord: true, optedOut: true })).toEqual(held('overlord'));
+    expect(verdict({ overlord: false })).toEqual({ act: 'hibernate', idleMs: 7 * HOUR });
   });
 });
 

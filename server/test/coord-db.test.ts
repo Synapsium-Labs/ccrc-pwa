@@ -745,9 +745,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[87] (renewal_backstop_settings, the daily backstop's setting, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, what a programme says is left, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, the previous generation's account, account organization D),
-    // and MIGRATIONS[90] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
-    expect(COORD_SCHEMA_VERSION).toBe(91);
-    expect(MIGRATIONS.length).toBe(91);
+    // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1),
+    // and MIGRATIONS[91] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0).
+    expect(COORD_SCHEMA_VERSION).toBe(92);
+    expect(MIGRATIONS.length).toBe(92);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -863,8 +864,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
     // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
-    // and MIGRATIONS[90] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(91);
+    // and MIGRATIONS[90] (overlord_designation, Overlord W1),
+    // and MIGRATIONS[91] (plan_phases and plan_phase_refs, programme work map WM0); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(92);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -3045,7 +3047,7 @@ describe('coord.db: the programme\'s phases (programme work map WM0, D-8715; spe
 
   it('TWO NEW TABLES and nothing on an existing table, after the plan tables', () => {
     expect(SLOT).toBeGreaterThan(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE plan_tickets (')) + 1);
-    expect(SLOT).toBe(91);
+    expect(SLOT).toBe(92);
     const statements = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').split(';').map((x) => x.trim()).filter(Boolean);
     expect(statements.map((x) => x.split('(')[0]!.trim())).toEqual(['CREATE TABLE plan_phases', 'CREATE TABLE plan_phase_refs']);
   });

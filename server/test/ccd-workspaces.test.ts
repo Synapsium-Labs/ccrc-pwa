@@ -1569,6 +1569,8 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'named workspaces S5: a stubbed ccd stderr carrying the die sentence — one in the 409 `slug-taken` case (with the registry residue after the em-dash, which the route must not forward) and one in the transport-failure case that must NOT read as a refusal; the server classifies the sentence, it never emits it' },
     { file: 'workspace-create-plan.test.ts', grammar: 'slug-in-use', count: 1,
       what: 'named workspaces S5: `classifyAddFailure`\'s own unit case, a refusal sentence beside a wrapper refusal proving the wrapper arm is read first; a stubbed stderr, not an assertion on ccd\'s message' },
+    { file: 'overlord-body.test.ts', grammar: 'slug-in-use', count: 1,
+      what: 'the Overlord body adapter (designation, X5): a stubbed ccd answer carrying the die sentence, proving a `ws-add` that ccd refused for a slug collision made nothing (`created: no`); a stubbed stderr, not an assertion on ccd\'s message' },
     { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
