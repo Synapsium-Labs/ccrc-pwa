@@ -307,26 +307,40 @@ const PENDING_AND_BOUND: DesignationRead = { kind: 'designated', sessionId: 'ove
   bound: { sessionId: 'overlord-x', generation: 'g1' },
   pending: { sessionId: 'overlord-z', kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null } }) };
 
+/** lane-a, lane-b and lane-c can serve `fable` set-side: billing included and a fresh share reading under the ceiling. */
+const FABLE_ROSTER: AFacts['roster'] = { ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, fableBilling: 'included' as const })) };
+const fableFacts = (): AFacts => afacts(HEALTHY, { roster: FABLE_ROSTER,
+  shares: Object.fromEntries(['lane-a', 'lane-b', 'lane-c'].map((id) => [id, { finishedAtS: NOW_S, estimatePct: 5 }])) });
+const atFable = (r: DesignationRead): DesignationRead =>
+  (r.kind === 'unmeasured' || r.row === null ? r : { ...r, row: { ...r.row, model: 'fable' } }) as DesignationRead;
+
 export function modelClassVerdictCases(m: DesignationModule): Record<string, SuiteCase> {
   return {
     'fable asks the step-up and opus does not (C45, §11.2)': () => {
       expect(m.modelStepUp('fable')).toBe(true);
       expect(m.modelStepUp('opus')).toBe(false);
     },
-    'a change of class is set, naming the bound body': () => {
-      expect(m.modelClassVerdict(BOUND, 'fable')).toEqual({ act: 'set', bodies: ['overlord-x'] });
+    'a change of class that two accounts serve is set, naming the bound body': () => {
+      expect(m.modelClassVerdict(BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x'] });
+      expect(m.modelClassVerdict(atFable(BOUND), 'opus', afacts())).toEqual({ act: 'set', bodies: ['overlord-x'] });
     },
     'the bound body and a pending one both take the class; a pending-only row its pending body': () => {
-      expect(m.modelClassVerdict(PENDING_AND_BOUND, 'fable')).toEqual({ act: 'set', bodies: ['overlord-x', 'overlord-z'] });
-      expect(m.modelClassVerdict(PENDING_ONLY, 'fable')).toEqual({ act: 'set', bodies: ['overlord-y'] });
+      expect(m.modelClassVerdict(PENDING_AND_BOUND, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-x', 'overlord-z'] });
+      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', fableFacts())).toEqual({ act: 'set', bodies: ['overlord-y'] });
     },
-    'an unchanged class is none': () => { expect(m.modelClassVerdict(BOUND, 'opus')).toEqual({ act: 'none' }); },
-    'a row that binds nothing is set with no body to write': () => {
-      expect(m.modelClassVerdict(ROW_NO_BODY, 'fable')).toEqual({ act: 'set', bodies: [] });
+    'C56 re-counted under the new class: fewer than two refuses while bound (model-door-recounts-c56)': () => {
+      expect(m.modelClassVerdict(BOUND, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
     },
+    'C56 re-counted under the new class: fewer than two refuses while pending': () => {
+      expect(m.modelClassVerdict(PENDING_ONLY, 'fable', afacts())).toMatchObject({ act: 'refuse', word: 'overlord-single-account', count: 0 });
+    },
+    'C56 re-counted under the new class: with no body the class is saved for the next Start': () => {
+      expect(m.modelClassVerdict(ROW_NO_BODY, 'fable', afacts())).toEqual({ act: 'set', bodies: [] });
+    },
+    'an unchanged class is none, and is never counted': () => { expect(m.modelClassVerdict(BOUND, 'opus', afacts(HEALTHY, { lanes: {} }))).toEqual({ act: 'none' }); },
     'no row is not-found; an unmeasured read is unmeasured': () => {
-      expect(m.modelClassVerdict(NONE, 'fable')).toEqual({ act: 'not-found' });
-      expect(m.modelClassVerdict(UNMEASURED, 'fable')).toMatchObject({ act: 'unmeasured' });
+      expect(m.modelClassVerdict(NONE, 'fable', fableFacts())).toEqual({ act: 'not-found' });
+      expect(m.modelClassVerdict(UNMEASURED, 'fable', fableFacts())).toMatchObject({ act: 'unmeasured' });
     },
   };
 }
@@ -479,7 +493,9 @@ const RETIRE_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: 
 
 const MODEL_SET: MutantSet<DesignationModule> = { modulePath: MODULE, mutants: [
     { id: 'M1 fable asks no step-up', old: "model === 'fable';", new: 'false;' },
-    { id: 'M2 an unchanged class is set', old: 'read.row.model === model ?', new: 'false ?' },
+    { id: 'M2 an unchanged class is set', old: "if (read.row.model === model) return { act: 'none' };", new: '' },
+    { id: 'M5 the model door does not re-count C56', old: 'if (bodies.length > 0 && serving.counted.length <= 1) {', new: 'if (false) {' },
+    { id: 'M6 the re-count is under the old class', old: 'overlordAccounts(read.row.accountPools, model, f)', new: 'overlordAccounts(read.row.accountPools, read.row.model, f)' },
     { id: 'M3 no row is set', old: "if (read.row === null) return { act: 'not-found' };", new: "if (read.row === null) return { act: 'set', bodies: [] };" },
     { id: 'M4 a pending body is not written', old: '[v.bound?.sessionId, v.pending?.sessionId]', new: '[v.bound?.sessionId]' },
   ], suite: modelClassVerdictCases };

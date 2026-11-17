@@ -402,9 +402,14 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (model === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
     const actor = g.actor.toString();
     return deps.serial(async () => {
-      const v = modelClassVerdict(coord.designationRead(), model);
+      let f: AccountFacts;
+      try { f = await accountFactsOf(); } catch (err) {
+        return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
+      }
+      const v = modelClassVerdict(coord.designationRead(), model, f);
       if (v.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
       if (v.act === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord designation row' });
+      if (v.act === 'refuse') return refuseRoute(reply, v.word, { detail: v.detail, count: v.count });
       if (v.act === 'none') return { ok: true, changed: false, model };
       const r = coord.setModelClass(deps.journal, { model, actor, at: deps.clock.wall(), opKey: opKeyOf('model') });
       if (!r.ok) return writerRefusal(reply, r);

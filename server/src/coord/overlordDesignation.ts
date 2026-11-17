@@ -174,13 +174,24 @@ export const modelStepUp = (model: OverlordModelClass): boolean => model === 'fa
 
 export type ModelClassVerdict =
   | { readonly act: 'unmeasured'; readonly why: string } | { readonly act: 'not-found' } | { readonly act: 'none' }
+  | { readonly act: 'refuse'; readonly word: 'overlord-single-account'; readonly detail: string; readonly count: number }
   | { readonly act: 'set'; readonly bodies: readonly string[] };
 
-/** Task 8: `none` when the class is unchanged, `set` otherwise, naming the bodies whose route record takes the class. */
-export function modelClassVerdict(read: DesignationRead, model: OverlordModelClass): ModelClassVerdict {
+/** Task 8: `none` when the class is unchanged; otherwise C56 is counted again under the NEW class (slug
+ *  `model-door-recounts-c56`, the coordinator's ruling): while a body is bound or pending, fewer than two accounts that serve it
+ *  refuses, as the set door does, so a save never wedges every later set change; with no body it is saved for the next Start.
+ *  Else `set`, naming the bodies whose route record takes the class. */
+export function modelClassVerdict(read: DesignationRead, model: OverlordModelClass, f: AccountFacts): ModelClassVerdict {
   if (read.kind === 'unmeasured') return { act: 'unmeasured', why: read.why };
   if (read.row === null) return { act: 'not-found' };
-  return read.row.model === model ? { act: 'none' } : { act: 'set', bodies: bodiesOf(read.row) };
+  if (read.row.model === model) return { act: 'none' };
+  const bodies = bodiesOf(read.row);
+  const serving = overlordAccounts(read.row.accountPools, model, f);
+  if (bodies.length > 0 && serving.counted.length <= 1) {
+    return { act: 'refuse', word: 'overlord-single-account', count: serving.counted.length,
+      detail: `${serving.counted.length} account(s) serve ${model} in the set and ${serving.unmeasured.length} unmeasured; the Overlord needs at least two` };
+  }
+  return { act: 'set', bodies };
 }
 
 /** C46: `next` adds a pool or turns `untagged` on. A narrowing and a pure reorder are not widenings. */

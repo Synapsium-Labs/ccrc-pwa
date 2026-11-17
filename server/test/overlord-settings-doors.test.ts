@@ -57,6 +57,7 @@ const SET_AB: PoolSet = { pools: ['pool-a', 'pool-b'], untagged: false };
 const SET_A: PoolSet = { pools: ['pool-a'], untagged: false };
 const SET_B: PoolSet = { pools: ['pool-b'], untagged: false };
 const GEN = '11111111-2222-3333-4444-555555555555';
+const FABLE_ROSTER = { ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, fableBilling: 'included' as const })) };
 const BOUND = 'overlord-aaaaaaaa';
 const PENDING = 'overlord-bbbbbbbb';
 
@@ -112,7 +113,8 @@ interface Rig {
 }
 
 /** `journal: 'real'` builds the authority journal on its own file beside the db, its guard told the boot verdict. */
-async function rig(opts: { journal?: 'fake' | 'real' } = {}): Promise<Rig> {
+/** `fable: false` gives the roster no account that can serve `fable` (billing unset); by default lane-a, lane-b and lane-c can. */
+async function rig(opts: { journal?: 'fake' | 'real'; fable?: boolean } = {}): Promise<Rig> {
   const dir = path.join(mkTmp('ccrc-overlord-settings-'), '.ccrc');
   mkdirSync(dir, { recursive: true });
   copyFileSync(template, path.join(dir, 'coord.db'));
@@ -139,8 +141,10 @@ async function rig(opts: { journal?: 'fake' | 'real' } = {}): Promise<Rig> {
     gate, serial, coord, journal, body, host: { deliver: async () => { throw new Error('no prompt from a Settings door'); } },
     clock: time.ports.clock, entropy: time.ports.entropy, dec: () => null,
     facts: {
-      ccdWords: () => [], serverWords: [], builds: () => 'agreed', roster: () => ROSTER,
-      limits: async () => HEALTHY, shares: async () => ({ kind: 'absent' }),
+      ccdWords: () => [], serverWords: [], builds: () => 'agreed', roster: () => (opts.fable === false ? ROSTER : FABLE_ROSTER),
+      limits: async () => HEALTHY,
+      shares: async () => ({ kind: 'reading', finishedAtS: Math.floor(time.ports.clock.wall() / 1000),
+        byAccount: { 'lane-a': 5, 'lane-b': 5, 'lane-c': 5 } }),
     },
   });
   await app.ready();
@@ -289,6 +293,26 @@ describe('POST /api/overlord/model (C45)', () => {
     expect(u.body.log).toEqual([]);
   });
 
+  it('C56 under the new class (model-door-recounts-c56): fewer than two serving refuses while bound and while pending, writing nothing', async () => {
+    for (const state of ['live', 'pending'] as const) {
+      const r = await rig({ fable: false });
+      seed(r, { state }); quiet(r);
+      const res = await postModel(r, { model: 'fable' });
+      expect(res.statusCode).toBe(409);
+      expect(res.json()).toMatchObject({ ok: false, error: 'overlord-single-account', count: 0 });
+      expect(view(r).model).toBe('opus');
+      expect(r.fake.seen).toEqual([]);
+      expect(r.body.log).toEqual([]);
+    }
+  });
+
+  it('C56 under the new class: with no body the class is saved for the next Start', async () => {
+    const r = await rig({ fable: false });
+    seed(r, { state: 'unbound' }); quiet(r);
+    expect((await postModel(r, { model: 'fable' })).json()).toMatchObject({ ok: true, changed: true, written: [] });
+    expect(view(r).model).toBe('fable');
+  });
+
   it('the renewal path is never called: no prompt, no create, no stop, no keep-awake; only the class write', async () => {
     const r = await rig();
     seed(r, { state: 'live' }); quiet(r);
@@ -409,7 +433,6 @@ describe('over the real authority journal', () => {
   it('coherent: a class change and a pure reorder each append, from the row\'s own value', async () => {
     const r = await rig({ journal: 'real' });
     seed(r, { state: 'live' });
-    // The reorder first: the fixture's lanes serve no `fable`, so under it the set door counts none.
     expect((await postSet(r, { accountPools: SET_AB })).json()).toMatchObject({ changed: true, journalled: true });
     expect(view(r).accountPools).toEqual(SET_AB);
     expect((await postModel(r, { model: 'fable' })).json()).toMatchObject({ changed: true, journalled: true });

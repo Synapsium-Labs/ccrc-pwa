@@ -43,15 +43,14 @@ into the plan's ledger.
 - **`set-door-answers-the-list-and-spread`**: the answer carries `accountPools`, the C56 `accounts` (list, counted,
   unmeasured), `warnings`, `orgSpread` and, on a change, `journalled` and `written`.
 
-## Open, for the coordinator
+## The model door
 
-- **`model-door-does-not-recount`** (observed, not built): the plan's `modelClassVerdict` answers only `none` or `set`, so the
-  model door never asks C56's count under the NEW class. A change to `fable` while fewer than two accounts can serve `fable`
-  is saved and written to the route record, and the Overlord's next renewal meets a class no two accounts serve. The account
-  set door, by contrast, counts under the row's class, so after such a change it refuses every set change while bound
-  (measured in this PR's tests: the fixture's lanes serve no `fable`, and the set door then counts zero). Refusing it with the
-  existing `overlord-single-account`, while bound or pending, would be a few lines in `modelClassVerdict`. It needs a ruling
-  because the plan does not ask for it.
+- **`model-door-recounts-c56`** (the coordinator's ruling, replacing the open question `model-door-does-not-recount`): the
+  plan's `modelClassVerdict` answered only `none` or `set`, so a change to `fable` with fewer than two accounts that can serve
+  it was saved, and from then on the set door, which counts under the row's class, refused every change while bound. The
+  decider now counts C56 again under the NEW class: while a body is bound or pending, fewer than two refuses
+  `overlord-single-account` (the set door's word, with the count) and writes nothing; with no body the class is saved for
+  the next Start. C56 then holds at every door, not only at designate.
 
 ## Growth
 
