@@ -219,6 +219,15 @@ the designation plainly (`designationOfCoord`; the mail sweep's read raises the 
 is not told, as the mail sweep delivers nothing then (`stall-restarted-watch.test.ts`). The roll lane's fail-closed read is pinned in
 `roll-lane.test.ts` (an unmeasured designation holds a plain session `role-unknown`). Each case reds when its guard is mutated.
 
+### fixture-forwards-designation-read
+
+After the merge of designation A, the F6 case's hand-built coord in `roll-sweep-handoff.test.ts` (see
+`roll-act-rereads-continuity`) no longer met `IdleHoursCoordPort`, which now carries `designationRead`. CI on the merge
+tip read it twice: the test typecheck failed (TS2322), and at run time `designationOfCoord` read the missing method as
+unmeasured, so the pass stopped before its second release read and the flip never ran. The fake now forwards
+`designationRead` to the real store, as `roll-lane.test.ts`'s fake does. No source change; the coordinator's word, mail
+23481.
+
 ## Stable exports for W1's consumers
 
 Designation B (Restart) and private store B read these:
