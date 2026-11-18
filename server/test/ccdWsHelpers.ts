@@ -522,6 +522,33 @@ function containedBridgeBase(env: NodeJS.ProcessEnv): { CCGPT_BRIDGE_UPSTREAM_BA
   return { CCGPT_BRIDGE_UPSTREAM_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
 }
 
+/** The model probe's release lookup for every contained env (model-class-advance wave 2, D-8743): the caller's own
+ *  CCRC_MODELS_PROBE_RELEASE_FIXTURE when it names one, else a file under HOME that does not exist, which the probe
+ *  reads as a failed lookup (it then asks as its cache, else its floor). By `containedAuthBase`'s rule: unset or EMPTY,
+ *  the probe asks npm's registry over the network, so an empty caller value names none. A case that drives the real
+ *  lookup removes the key from the env this returns, and plants its own `curl`. */
+function containedReleaseAnswer(env: NodeJS.ProcessEnv, home: string): { CCRC_MODELS_PROBE_RELEASE_FIXTURE: string } {
+  const named = env['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+  return { CCRC_MODELS_PROBE_RELEASE_FIXTURE: typeof named === 'string' && named !== '' ? named : path.join(home, 'no-codex-release-answer') };
+}
+
+/** The CCRC_ names a contained env sets as CONTAINMENT rather than as a knob (D-8743): a test that strips the ccrc knobs
+ *  from a contained env keeps these, or the containment they carry is gone with the knobs. Both values `ghContainedEnv`
+ *  sets, the probe's release seam (`containedReleaseAnswer`) and the codex auth library's endpoint (`containedAuthBase`,
+ *  fix round 2); `ccd-harness-integrity.test.ts` checks this list against what `ghContainedEnv` sets. */
+export const CONTAINED_CCRC_SEAMS: readonly string[] = ['CCRC_MODELS_PROBE_RELEASE_FIXTURE', 'CCRC_CODEX_AUTH_BASE'];
+
+/** Deletes every CCRC_ name from `env`, in place, except the containment seams (`CONTAINED_CCRC_SEAMS`) and the names in
+ *  `keep`, and returns it. THE ONE STRIP: `ccd-harness-integrity.test.ts` refuses a hand-written one-line `CCRC_` delete
+ *  loop anywhere else under server/test (a one-line-shape guard: its comment names what it misses), because each such loop dropped the probe's release seam until fix round 1 of
+ *  model-class-advance wave 2 (review A9). */
+export function stripCcrcKnobs(env: NodeJS.ProcessEnv, keep: readonly string[] = []): NodeJS.ProcessEnv {
+  for (const k of Object.keys(env)) {
+    if (k.startsWith('CCRC_') && !CONTAINED_CCRC_SEAMS.includes(k) && !keep.includes(k)) delete env[k];
+  }
+  return env;
+}
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {
@@ -544,7 +571,7 @@ export function ghContainedEnv(
     XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   };
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -607,7 +634,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent

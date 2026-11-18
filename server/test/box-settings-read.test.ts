@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { mkTmp } from './tmpHelpers.js';
 import { spawnSyncGroup } from './spawnGroup.js';
+import { stripCcrcKnobs } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { ccrcSettingsNames } from './ccrcSettingsLine.js';
@@ -998,7 +999,7 @@ describe('version 2: the vocabularies and the envelope', () => {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
     writeFileSync(join(home, '.ccrc', 'ccrc.env'), '');
     const env = ccrcContainedEnv(home, process.env, { managers: false, curl: 'poison' });
-    for (const k of Object.keys(env)) if (k.startsWith('CCRC_') && k !== 'CCRC_HERE') delete env[k];
+    stripCcrcKnobs(env, ['CCRC_HERE']);
     env['TMPDIR'] = join(home, 'tmp');
     mkdirSync(env['TMPDIR'], { recursive: true });
     env['LIST'] = ENVELOPE_CORPUS.map((e) => `${e.key}|${BOX_SETTING_SPECS[e.key].cls}|${e.value}`).join('\n');

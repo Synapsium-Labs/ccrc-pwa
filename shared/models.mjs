@@ -313,6 +313,12 @@ function requestShapeOf(raw) {
   return out;
 }
 
+/** D-8743: a plain `X.Y.Z` of decimal numbers, no leading zero, each at most six digits: the one shape a catalogue's
+ *  `clientVersion` takes. The probe's Codex arm applies the same bound in its own language (`_codex_release_lookup_program`,
+ *  the request program and the normaliser, ccd/ccrc-models-probe). */
+const PLAIN_VERSION_RE = /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
+const isPlainVersion = (v) => typeof v === 'string' && PLAIN_VERSION_RE.test(v);
+
 /** `(json: unknown) => Catalogue`. Validates a catalogue read off disk and
  *  fills its optional fields. Refuses the WHOLE file on a model with no `id`
  *  (§11): a partial catalogue would retire every model the probe happened to
@@ -353,6 +359,9 @@ export function parseCatalogue(json) {
   });
   const out = { probe, fetchedAt, stale: json['stale'] === true, models };
   if (typeof json['lastError'] === 'string') out.lastError = json['lastError'];
+  // D-8743: kept on a Codex catalogue only, as a plain X.Y.Z, and otherwise ABSENT: a catalogue fetched before the
+  // field, or through the probe's test seam, has none.
+  if (probe === 'codex' && isPlainVersion(json['clientVersion'])) out.clientVersion = json['clientVersion'];
   return out;
 }
 
