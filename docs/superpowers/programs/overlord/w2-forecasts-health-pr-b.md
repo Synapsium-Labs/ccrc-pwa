@@ -80,7 +80,7 @@ numbers. No D-number is defined here.
   (`spend-turns.test.ts`, run from `programmeHealthSets.ts`, and a `usage-sweep-lane` case for the watcher's spend read
   with no turn read), with the review's mutants (a) and (b) measured red by hand, each restored from a saved copy, and
   then added to the floors as ST-1 and SR-1. Mutant (b) now sits in `spendReadingOf`, where the watcher's default
-  moved, so a mutant can reach it. F2-b, background work is not fresh (above, RS-17 and RS-18). F3-a, the conversation
+  moved, so a mutant can reach it. F2-b, background work is not fresh (above, RS-17 and RS-18). With the background test in place an `unread` turn already failed on its missing count, so RS-13 (dropping the kind check) survived; `fresh` now spells the `unread` arm as its own `false`, and RS-13 flips that arm. F3-a, the conversation
   reader's docstring counts the reads' own latency. F3-b, the carried check covers any id-keeping `--resume`.
   F2-c and F5-n: no change.
 

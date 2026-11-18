@@ -823,12 +823,12 @@ export const RUN_SPEND_VERDICT_SET: MutantSet<MeasuresModule> = {
     { id: 'RS-10', old: 'run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt', new: 'reading.readAt >= (run.dispatchedAt ?? 0)' },
     { id: 'RS-11', old: "return { state: 'measured', cost: reading.cost, ...evidence };", new: "return { state: 'measured', cost: null, ...evidence };" },
     { id: 'RS-12', old: 'reading.turn.turnAt <= reading.readAt', new: 'reading.turn.turnAt <= reading.readAt + 60_000' },
-    { id: 'RS-13', old: "reading.turn.kind === 'read' && (", new: '(reading.turn.kind !== \'read\' || ' },
+    { id: 'RS-13', old: "&& reading.turn.background === 0\n    : false;", new: "&& reading.turn.background === 0\n    : true;" },
     { id: 'RS-14', old: '\n    && reading.sidecarUuid === run.conversation;', new: ';' },
     { id: 'RS-15', old: '&& sameConversation && cleared)', new: '&& sameConversation)' },
     { id: 'RS-16', old: 'const cleared = !run.resumed || run.clearedAt !== null;', new: 'const cleared = true;' },
     // Fix round 2, F2-b: background work live after the render is not fresh.
-    { id: 'RS-17', old: '\n    && reading.turn.background === 0;', new: ';' },
+    { id: 'RS-17', old: ' && reading.turn.background === 0', new: '' },
     { id: 'RS-18', old: 'reading.turn.background === 0', new: 'reading.turn.background <= 0' },
   ],
 };

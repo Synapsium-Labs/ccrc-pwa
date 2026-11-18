@@ -190,5 +190,7 @@
   "server/src/coord/programmeMeasures.ts#waveSpend": 1,
   "server/src/coord/programmeMeasures.ts#wavesOf": 1,
   "server/src/coord/programmeMeasures.ts#doneCycles": 1,
-  "server/src/coord/programmeMeasures.ts#runSpendVerdict": 1
+  "server/src/coord/programmeMeasures.ts#runSpendVerdict": 1,
+  "server/src/usage.ts#readSpendTurns": 1,
+  "server/src/coord/forecastLane.ts#spendReadingOf": 1
 }

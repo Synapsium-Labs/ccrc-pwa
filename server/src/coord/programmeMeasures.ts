@@ -117,8 +117,9 @@ export function runSpendVerdict(
   const evidence = { class: reading.class, readAt: reading.readAt };
   if (reading.cost === null) return { state: 'absent', cost: null, ...evidence };
   const inWindow = run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt && reading.readAt <= run.closedAt + GRACE_MS;
-  const fresh = reading.turn.kind === 'read' && (reading.turn.turnAt === null || reading.turn.turnAt <= reading.readAt)
-    && reading.turn.background === 0;
+  const fresh = reading.turn.kind === 'read'
+    ? (reading.turn.turnAt === null || reading.turn.turnAt <= reading.readAt) && reading.turn.background === 0
+    : false;   // an `unread` marker never vouches
   const sameConversation = reading.sidecarUuid !== null && reading.sidecarUuid === reading.conversationUuid
     && reading.sidecarUuid === run.conversation;
   const cleared = !run.resumed || run.clearedAt !== null;
