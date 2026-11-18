@@ -9,24 +9,20 @@
 // HONESTY RULES (Review Focus 2): a measure with no data is `null` with `n: 0`, never 0; a done wave with no dispatch is
 // counted in `cycleUnmeasured`; an item whose events this build cannot fold is counted in `itemsUnmeasured`; an ask that
 // reached the operator and whose end no live signal shows is counted in `asksUnmeasured`, never as an ever-growing wait.
-import { ASK_OPERATOR_PRINCIPAL, TERMINAL_RUN_STATES, isRunState } from '../../../shared/api.js';
+import { ASK_OPERATOR_PRINCIPAL } from '../../../shared/api.js';
 import { ITEM_TRANSITIONS, isItemNonMove, operatorShownAt, type ItemAct } from '../../../shared/ledgers.js';
 import {
   PORTFOLIO_WINDOW_DAYS, SERVICE_CLASSES, UNRANKED_CLASS,
   type Measure, type PortfolioAsk, type PortfolioEntry, type PortfolioFacts, type PortfolioItem, type PortfolioProgramme,
   type PortfolioRun, type PortfolioView, type RankRow, type ServiceClass,
 } from '../../../shared/portfolio.js';
-import { NEVER_STARTED_DETAIL, WAVE_BUCKET, countsAsWave, waveRepresentative, type WaveBucket } from '../../../shared/programmes.js';
+import { NEVER_STARTED_DETAIL } from '../../../shared/programmes.js';
 import { percentile } from '../perf/stats.js';
+import { doneCycles, earliestDispatch, isOpenRun, rebuiltWave, wavesOf, type Wave } from './programmeMeasures.js';
 
 const DAY_MS = 24 * 3_600_000;
 const WINDOW_MS = PORTFOLIO_WINDOW_DAYS * DAY_MS;
 const WEEK_MS = 7 * DAY_MS;
-
-const TERMINAL: readonly string[] = TERMINAL_RUN_STATES;
-const isOpenRun = (r: PortfolioRun): boolean => !TERMINAL.includes(r.state);
-/** A state outside `RUN_STATES` buckets as `working`, as `WAVE_BUCKET`'s other readers do. */
-const bucketOf = (state: string): WaveBucket => (isRunState(state) ? WAVE_BUCKET[state] : 'working');
 
 /** The rank row a programme reads by, when its class word is one this build knows. */
 function readableRank(row: RankRow | undefined): (RankRow & { cls: ServiceClass }) | null {
@@ -106,28 +102,6 @@ const measureOf = (series: readonly number[]): Measure =>
   series.length === 0 ? { n: 0, medianMs: null, p85Ms: null }
     : { n: series.length, medianMs: percentile(series, 50), p85Ms: percentile(series, 85) };
 
-interface Wave { wave: number; rep: PortfolioRun; runs: PortfolioRun[]; bucket: WaveBucket }
-
-/** The programme's waves: its work runs grouped by `wave`, each standing as `waveRepresentative`'s run, bucketed through
- *  `WAVE_BUCKET`, exactly as `GET /api/programmes` buckets it. */
-function wavesOf(runs: readonly PortfolioRun[]): Wave[] {
-  const byWave = new Map<number, PortfolioRun[]>();
-  for (const r of runs) {
-    if (!countsAsWave(r.kind)) continue;
-    const list = byWave.get(r.wave) ?? [];
-    list.push(r);
-    byWave.set(r.wave, list);
-  }
-  return [...byWave].map(([wave, list]) => {
-    const rep = waveRepresentative(list.map((r) => ({ id: r.id, open: isOpenRun(r), r })))!.r;
-    return { wave, rep, runs: list, bucket: bucketOf(rep.state) };
-  });
-}
-
-const earliestDispatch = (w: Wave): number | null =>
-  w.runs.reduce<number | null>((m, r) => (r.dispatchedAt === null ? m : m === null ? r.dispatchedAt : Math.min(m, r.dispatchedAt)), null);
-/** A wave a rebuild stood in for: its `dispatchedAt` is the rebuild's time, never measured from (review 2130 F10). */
-const rebuiltWave = (w: Wave): boolean => w.runs.some((r) => r.rebuilt === true);
 
 /** Question 7: a programme with an open run of any kind, and a ranked programme that closed a run in the window. */
 function listed(p: PortfolioProgramme, runs: readonly PortfolioRun[], ranked: boolean, now: number): boolean {
@@ -145,13 +119,7 @@ function entryOf(
   const closedSince = (w: Wave, t: number): boolean => w.rep.closedAt !== null && w.rep.closedAt >= t;
   const ended = waves.filter((w) => (w.bucket === 'done' || w.bucket === 'failed') && closedSince(w, from));
 
-  const cycles: number[] = [];
-  let cycleUnmeasured = 0;
-  for (const w of done) {
-    const d = earliestDispatch(w);
-    if (d === null || w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured += 1;
-    else cycles.push(Math.max(0, w.rep.closedAt - d));   // F10: never negative under clock skew
-  }
+  const { cycles, unmeasured: cycleUnmeasured } = doneCycles(done);
 
   const open = waves.filter((w) => w.bucket === 'working' || w.bucket === 'waiting');
   const started = open.filter((w) => !rebuiltWave(w)).map(earliestDispatch).filter((d): d is number => d !== null);

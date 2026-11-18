@@ -175,5 +175,12 @@
   "server/src/coord/forecast.ts#forecastOutcome": 1,
   "server/src/coord/forecast.ts#forecastCalibration": 1,
   "server/src/coord/forecast.ts#sealBoundary": 1,
-  "server/src/coord/forecast.ts#leadHistoryFrom": 1
+  "server/src/coord/forecast.ts#leadHistoryFrom": 1,
+  "server/src/coord/programmeHealth.ts#programmeHealth": 1,
+  "server/src/coord/programmeHealth.ts#healthFactsOf": 1,
+  "server/src/coord/programmeHealth.ts#criticalPath": 1,
+  "server/src/coord/programmeHealth.ts#healthChangeVerdict": 1,
+  "server/src/coord/programmeMeasures.ts#waveSpend": 1,
+  "server/src/coord/programmeMeasures.ts#wavesOf": 1,
+  "server/src/coord/programmeMeasures.ts#doneCycles": 1
 }

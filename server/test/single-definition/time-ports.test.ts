@@ -66,6 +66,9 @@ const TIME_PORT_FILES: readonly string[] = [
   // `now` and the `Entropy` port, never the ambient clock or `Math.random`.
   'server/src/coord/forecast.ts',
   'server/src/coord/forecastLane.ts',
+  // Overlord W2, forecasts B: the health decider and the shared measures take `now` and every range as arguments.
+  'server/src/coord/programmeHealth.ts',
+  'server/src/coord/programmeMeasures.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

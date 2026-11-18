@@ -332,3 +332,34 @@ export const HEALTH_BURN_FACTOR = 2;
 export const HEALTH_BURN_MIN_WAVES = 3;
 /** The window churn, scope and spend read over; spend compares it with the window before it. */
 export const HEALTH_WINDOW_DAYS = 28;
+
+/** A `run_spend` row's state: `measured` (a cost was read), `absent` (the run left no spend record) or `outside` (the run's
+ *  spend is not this fleet's to read). */
+export const RUN_SPEND_STATE_MAP = { measured: true, absent: true, outside: true } as const satisfies Record<string, true>;
+export type RunSpendState = keyof typeof RUN_SPEND_STATE_MAP;
+export const RUN_SPEND_STATES = Object.keys(RUN_SPEND_STATE_MAP) as readonly RunSpendState[];
+export const isRunSpendState = (v: unknown): v is RunSpendState =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(RUN_SPEND_STATE_MAP, v);
+
+/** One run_spend row as read; a state word this build cannot read is 'unreadable', read as unmeasured, never 0. */
+export interface RunSpendRow {
+  readonly runId: number; readonly at: number; readonly state: RunSpendState | 'unreadable';
+  readonly cost: number | null; readonly class: string | null; readonly readAt: number | null;
+}
+
+/** What a health word was decided from: the matched arm's name (`<word>:<arm>`, null for `steady`), its inputs by name,
+ *  and every input the facts could not measure. */
+export interface HealthEvidence {
+  readonly matched: string | null;
+  readonly values: Readonly<Record<string, number | string | boolean | null>>;
+  readonly unmeasured: readonly string[];
+}
+export interface HealthVerdict { readonly word: ProgrammeHealthWord; readonly evidence: HealthEvidence }
+
+/** One programme_health row as read: a word or evidence this build cannot read is 'unreadable', carried, never dropped. */
+export interface HealthRow {
+  readonly id: number; readonly program: string; readonly at: number;
+  readonly word: ProgrammeHealthWord | 'unreadable'; readonly evidence: HealthEvidence | 'unreadable';
+}
+/** The spend arm counts a reading taken up to this many minutes after its run's close (the worker's last render). */
+export const SPEND_READ_GRACE_MINUTES = 10;
