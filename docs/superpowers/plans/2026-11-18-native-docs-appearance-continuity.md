@@ -274,7 +274,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
-  - Extend `frame-cost` with the srcdoc-growth budget (at most 224 504 characters over BASE) and the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
+  - Extend `frame-cost` with the srcdoc-growth budget: at most 191 736 characters over BASE, the two faces (187 640) and the seed (4 096). BASE is taken at Task 1's pin, so it already holds the library's own growth, which Task 1 Step 2a measures against 1.1.0. Together they keep spec §9's 224 504 over the same document at the 1.1.0 pin. Also extend it with the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
 - [ ] **Step 3: Run each file through `ccrc test`**, with `CCRC_CHROME` from the brief. Expected: PASS. Record each figure line beside BASE.
 - [ ] **Step 4: Measure the mutation rows** below, one at a time, from saved copies, restoring and hash-checking after each.
 - [ ] **Step 5: Commit** the four browser files: `test(docs): the appearance matrix and per-skin budgets`.
