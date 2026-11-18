@@ -330,24 +330,24 @@ three readers read from one read.*
 dispatch line in `ccd/ccrc`'s `case "$VERB"` reaches it, as `ccrc-test` and `ccrc-testbox-admin` are reached.
 - It refuses `in-session` when `CLAUDECODE` is set and `in-pane` when `TMUX_PANE` is set (exit 2, nothing posted).
 - It reads the report: a regular file (`[ -f ]`) of at most 64 KiB (`wc -c`).
-- It reads the server's address and the box token as `ccd-update-sync` reads them.
+- It reads no server address and no box token (the coordinator's ruling C, 2026-11-17; slug
+  quiz-record-posts-through-the-client): it posts through `ccrc-api`, which reads both.
 - It builds the body with `jq --rawfile`, so the text travels as UTF-8 JSON:
   `{"report": "<the file's text>", "sha256": "<hex>", "recordedBy": "<trace>"}`. The trace is
   `quiz-record <user> <role> <ISO time>`, from `id -un`, the box's recorded `CCRC_ROLE` and `date -u`.
-- It posts the body as an argv value, never `-d @file`, with curl's `--max-time` as the deadline. It uses no `stat -c`,
-  no `sha256sum` and no bare `timeout`, and has zero shellcheck findings.
+- It hands the body on stdin to `ccrc-api quiz record --json -`, a row of that client's closed table, and runs no `curl`.
+  It uses no `stat -c`, no `sha256sum` and no bare `timeout`, and has zero shellcheck findings.
 - It prints `recorded run <id>, pending: confirm it on the Shadow lanes card`, or `already recorded as run <id>
   (<state>)`, or the refusal's word and detail.
-- It has no `ccd/ccrc-api` row. That client is the sessions' closed table, and its ungated-doors paragraph sets the
-  precedent that an operator need is an operator tool. The verb's own transport is "legitimately different" for that
-  security boundary.
+- `ccd/ccrc-api` gains the one row `quiz.record` (ruling C, reversing this plan's first "no client row" line): CLAUDE.md's
+  consolidate rule allows no fifth hand copy of the address-and-token read, and since the door records `pending` only, a
+  session posting through the row records nothing that counts.
 
 **Deny lists** (F8). Neither the module nor the verb is on any session deny list (`FORBIDDEN_CCD_VERBS`,
 `FORBIDDEN_PATTERNS`, `childDenyRules`, the hook's deny arms, `ACCOUNT_DENY_RULES`). Neither are `history-replay.mjs`,
 `ccrc history` or `ccrc test`. Their refusals inside a session and a pane are speed bumps, and the shared box token lets
 a session post anyway, so a deny entry would only be an accident guard. F3's confirmation is what stops a posted run
-from counting. `ccrc-api-closed.test.ts` pins that no client row names `/api/continuity/quiz-runs`, so a row cannot
-appear unnoticed.
+from counting. `ccrc-api-closed.test.ts` counts the client's rows, `quiz.record` among them (ruling C).
 
 **The record door.** `server/src/continuity/quizRoutes.ts` registers `POST /api/continuity/quiz-runs` from `server.ts`,
 beside `registerContinuityRoutes`.
@@ -534,7 +534,8 @@ its commands, in short form, into the weekly item's `how` steps.
   - **`CLAUDE.md`'s box-token bullet:** one sentence naming the rule door with the other session-gated operator doors
     (the census reads that class), and the record door as a box-token door whose caller is the operator's shell. Its
     number words are scanned.
-  - **`server/test/ccrc-api-closed.test.ts`:** no client row names `/api/continuity/quiz-runs` (F8).
+  - **`server/test/ccrc-api.test.ts` and `ccrc-api-closed.test.ts`:** the client's row count moves by one for `quiz.record`
+    (ruling C, replacing F8's "no client row").
   - **`server/test/ccrc-cli.test.ts`:** the usage line gains `quiz-record`, plus one help row. New usage text goes in a
     helper below `ccd/ccrc`'s corpus cut, as `_usage_test_paragraph` does.
 - **Refusal words.** None is new: `bad-request`, `unauthenticated`, `not-configured`, `write-failed`, and the account
@@ -787,8 +788,8 @@ TMPDIR, stub writer through `sourceQuiz`'s deps).
 4. **The record door.** `quizRecordVerdict` refuses inconsistent, mostly unanswered and stale reports. A recorded run
    stays pending until the operator confirms it behind a session and a step-up, and only a confirmed run can be the
    baseline.
-5. **The censuses.** Every census moves as §8 says, re-derived from the merged tree. `ccrc-api` gains no row, and
-   `ccrc-api-closed` pins that.
+5. **The censuses.** Every census moves as §8 says, re-derived from the merged tree. `ccrc-api` gains the one row
+   `quiz.record` (ruling C).
 
 ## 12. Deviations found
 
@@ -815,7 +816,8 @@ None has a D-number; the coordinator folds them into the ledger.
   session and a step-up. Only a confirmed run can be the baseline (F3). This needs a migration the replay quiz plan did
   not have.
 - **quiz-record-refuses-any-pane:** the verb refuses in any pane, as the driver does, not only in a `cc-*` one.
-- **quiz-record-has-no-ccrc-api-row:** the verb has its own transport, and `ccrc-api-closed` pins that no row appears.
+- **quiz-record-posts-through-the-client** (ruling C, replacing quiz-record-has-no-ccrc-api-row): the verb reads no
+  credential and no address, and posts through `ccrc-api`'s one new row, `quiz.record`.
 - **recorded-by-is-a-verb-trace:** the door stores the verb's trace (user, role, time), because its caller has no
   session.
 - **baseline-read-carries-its-date:** `quizBaselineRead` gains the baseline's `recordedAt` for the card, and stays

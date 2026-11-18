@@ -123,7 +123,7 @@ describe('observeCensus: the one writer, once per sighting', () => {
     expect(censusRows(c)).toEqual([]);
     expect(q.pushSourceOf('lane-a-project-a')).toBe(`approval:${id}`);
   });
-  it('an erased envelope over a permission menu is one row per sighting; a recent row makes it none; a clear ends the sighting', () => {
+  it('an erased envelope over a permission menu is one row per sighting; a clear ends the sighting', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     const doneHs: HookState = { ...hs(null), state: 'done', event: 'Stop' };
@@ -133,6 +133,9 @@ describe('observeCensus: the one writer, once per sighting', () => {
     q.settleCleared('lane-a-project-a', PERMISSION.id);
     q.observeCensus(child('lane-a-project-a'), PERMISSION, doneHs, 2_000_000);
     expect(censusRows(c)).toHaveLength(2);
+  });
+  it('an erased envelope with a recent approvals row for the child writes none (that row is this prompt\'s)', () => {
+    const doneHs: HookState = { ...hs(null), state: 'done', event: 'Stop' };
     const c2 = store();
     c2.insertApproval({ childId: 'lane-a-project-a', parentId: 'lane-a-coord', runId: null, digest: 'a'.repeat(64), nonce: 'b'.repeat(32),
       agentId: 'agent-1', tool: 'Bash', inputRedacted: 'rm -rf build', truncated: false, class: 'escalate', askAt: 900_000, notifyAt: 1_080_000 });

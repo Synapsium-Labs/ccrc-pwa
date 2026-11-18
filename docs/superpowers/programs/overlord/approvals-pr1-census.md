@@ -13,7 +13,7 @@ Departures are listed by slug. The coordinator mints the numbers.
   is patched to `request-refused:<word>` (`http-<code>` when the answer has no kebab word) and a lost answer to
   `request-failed`. The vocabulary is `shared/approval-census.ts`, and `session-hook-approval-route.test.ts` holds the
   hook's words equal to it. `hookstate.ts` carries the word and the hook's `waitBy`.
-- **Task 1.3.** Migration 100 by position (renumbered at the landing merge): the `approval_census` table, two
+- **Task 1.3.** Migration 101 by position (quiz PR 2 took 100; renumbered again at the landing merge if needed): the `approval_census` table, two
   approvals columns kept from mint (`commandWords`, `literalInRoot`) and `push_outbox.pushSource`. The one writer is
   `approvalCensusStore.ts#insertCensusRow`, reached only through the questions owner's `observeCensus`, which the
   watcher calls on every tick a dialog is painted. Its retention is the approvals' (the summary is cleared, the row
@@ -25,7 +25,7 @@ Departures are listed by slug. The coordinator mints the numbers.
   outbox row: `approval:<row>` or `census:<row>`.
 - **Task 1.5.** The M38 card, `pwa/src/fleet/ApprovalCensusSection.tsx`, in Settings › Security after the approvals
   line. A failed read says "unmeasured", never 0.
-- **Censuses.** The census read joins `auth-gate.test.ts` (280 scanned routes), `box-token-census.test.ts`
+- **Censuses.** The census read joins `auth-gate.test.ts` (282 scanned routes after the quiz record), `box-token-census.test.ts`
   (`APPROVAL_CENSUS_DOORS`), CLAUDE.md's census sentence, `rings/fastify-l4.data.ts`; the table joins
   `writers-map.test.ts` and the store file joins `core-vocab.test.ts`'s handle holders.
 - **Mutations.** Sixteen hand mutations over the hook (a gate's word dropped, the patch's same-bytes guard removed,

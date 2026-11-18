@@ -85,8 +85,52 @@ export interface LaneArmRowView {
   marker: string | null;
 }
 
-/** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order. */
-export interface LaneArmView { lanes: LaneArmRowView[] }
+/** The replay quiz's bootstrap as the server checks a single-arm report's interval against it (plan
+ *  `2026-11-17-overlord-quiz-record.md` §5 rule 6): a frozen copy of three of `deploy/history-gate.mjs#BOOTSTRAP`'s values,
+ *  which `continuity-quiz-route.test.ts` compares with the driver's own. L0 because the server may not import the driver. */
+export const QUIZ_BOOTSTRAP = Object.freeze({ ci: 95, method: 'percentile', B: 10000 } as const);
+
+/** How many hex characters of a pending run's report sha the card shows, and `ccrc quiz-record` prints (review 2442 F1). */
+export const QUIZ_SHA_PREFIX = 12;
+/** One pending replay quiz run, as the card shows it (plan §6): which run (its id, when it was recorded, the start of its
+ *  report's sha and the verb's trace), when the arms ran, the score and its interval, the questions, families and counts. The
+ *  operator matches the sha prefix with what `report` and `ccrc quiz-record` printed, then confirms or discards it there. */
+export interface LaneArmQuizPending {
+  id: number;
+  recordedAt: number;
+  reportShaPrefix: string;
+  recordedBy: string;
+  measuredAt: number;
+  score: number;
+  lo: number;
+  hi: number;
+  questions: number;
+  families: number;
+  answered: number;
+  runFailed: number;
+  absent: number;
+}
+
+/** The quiz baseline's three states on the card, a view word each, never a refusal. */
+export const LANE_ARM_QUIZ_STATES = ['recorded', 'not-yet', 'unreadable'] as const;
+export type LaneArmQuizState = (typeof LANE_ARM_QUIZ_STATES)[number];
+export function isLaneArmQuizState(v: unknown): v is LaneArmQuizState {
+  return typeof v === 'string' && (LANE_ARM_QUIZ_STATES as readonly string[]).includes(v);
+}
+
+/** The card's quiz block: the baseline (recorded with its date, not yet, or a read that failed, never folded into "not yet")
+ *  and the pending runs, oldest first (or why they could not be read). */
+export interface LaneArmQuizView {
+  baseline:
+    | { state: Extract<LaneArmQuizState, 'recorded'>; at: number }
+    | { state: Extract<LaneArmQuizState, 'not-yet'> }
+    | { state: Extract<LaneArmQuizState, 'unreadable'>; detail: string };
+  pending: { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
+}
+
+/** `GET /api/coord/lane-arm`'s answer (and a POST's, read after the write): every row, in `LANE_ARM_LANES` order, and the
+ *  replay quiz's block. `quizBaseline` is additive: an older server sends none, and the card then shows no block. */
+export interface LaneArmView { lanes: LaneArmRowView[]; quizBaseline?: LaneArmQuizView }
 
 /** `POST /api/coord/lane-arm`'s body: one row's choice, plus `confirm` only as the key a 409 `confirm-required` answered
  *  with. Shadow never needs one. */
@@ -191,4 +235,19 @@ export const LANE_ARM_TEXT = {
   baselineMissing: 'This lane goes live only after the replay quiz\'s baseline is recorded, so a later change can be compared '
     + 'with it; the baseline is the first quiz run recorded while every one of these lanes is in shadow.',
   baselineUnreadable: 'The server could not read whether the replay quiz\'s baseline is recorded',
+  quizBaseline: {
+    recorded: (date: string): string => `Replay quiz baseline: recorded ${date}`,
+    notYet: 'Replay quiz baseline: not yet',
+    unreadable: 'Replay quiz baseline: could not be read',
+  },
+  quizPending: (measured: string, recorded: string, r: LaneArmQuizPending): string => `Replay quiz run ${r.id}, report sha `
+    + `${r.reportShaPrefix}, recorded ${recorded} by ${r.recordedBy}; the arms ran ${measured}: score ${r.score.toFixed(2)} `
+    + `(${r.lo.toFixed(2)} to ${r.hi.toFixed(2)}), ${r.questions} questions over ${r.families} families, ${r.answered} answered, `
+    + `${r.runFailed} failed to run, ${r.absent} absent`,
+  quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
+  quizConfirm: 'Confirm',
+  quizDiscard: 'Discard',
+  quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
+    + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
+    + 'becomes the baseline. Discard keeps the row and never counts it.',
 } as const;

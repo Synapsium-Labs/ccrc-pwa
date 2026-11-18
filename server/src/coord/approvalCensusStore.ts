@@ -1,5 +1,5 @@
 // The approval census's rows and their one writer (approvals plan 2026-11-18, §3.1, Tasks 1.3 and 1.4). Ring L3, context
-// C6 (operator questions). ONE table (migration 100), `approval_census`: one row per permission prompt that leaves no
+// C6 (operator questions). ONE table (migration 101), `approval_census`: one row per permission prompt that leaves no
 // approvals row (Table 2a's paths 1, 2, 6 and 7). Its ONLY writer is `insertCensusRow`, reached only through the questions
 // owner (`coord/questions.ts`, `observeCensus`), and its summary is cleared by `pruneCensusSummaries` at the approvals'
 // retention. The readers answer what the census read counts (`censusRowsIn`, `approvalRowsForCensus`, `approvalPushSources`):
