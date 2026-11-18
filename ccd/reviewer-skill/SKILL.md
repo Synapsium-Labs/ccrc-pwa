@@ -13,7 +13,7 @@ before you report.
 
 ## The contract
 
-These ten clauses are the boundary between "a wave reviewer" and "an agent
+These eleven clauses are the boundary between "a wave reviewer" and "an agent
 with a shell on the fleet host and someone else's branch". They are not advice.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
@@ -26,10 +26,11 @@ with a shell on the fleet host and someone else's branch". They are not advice.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
 9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
+11. Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full. Claude Code prompts for every other shape of removal even with permissions bypassed, and the operator answers that prompt: the shapes are listed in `../ccrc-coordinator/references/approval-prompts.md`, and every lens and subagent brief you write carries the sentence above word for word. The approval surface's deny matches names in plain prose, not only commands, so a note, a heredoc or a mail never names the approval files (the verifier script, the signing keys, the approval client verb or the approvals route): describe them in words.
 
 ## Notes on the contract
 
-**Editing note (D-104):** these ten lines are pinned verbatim by
+**Editing note (D-104):** these eleven lines are pinned verbatim by
 `server/test/reviewer-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT and keep double-quote characters out of a
 clause except the JSON shape in clause 7 and the `rm -rf "$X"` shape in
@@ -49,7 +50,7 @@ tip are one pair"; neither is a judgement of your work.
 **Clause 4 is what makes you safe to run beside a live worker.** Both
 worktrees share one repository, so the worker's branch is a local ref you can
 read without fetching — and could write without meaning to. Detaching onto the
-sha is the whole of what you do to git.
+sha is all you do to git.
 
 ## What you are
 
