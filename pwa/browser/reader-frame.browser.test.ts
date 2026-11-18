@@ -1636,6 +1636,9 @@ describe('W8a reader frame in Chrome', () => {
       expect(await settle(s.page), 'the reader came up').toBe('ready');
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       expect(await activeOf(s.page), 'back still holds the focus at ready (nothing focused after the mount)').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      // And a moment later, as M8.1 live checks the positive side: a focus the frame took after ready would show here.
+      await sleep(800);
+      expect(await activeOf(s.page), 'and a moment later').toMatchObject({ onFrame: false, cls: 'docs-back' });
       await s.page.keyboard.press('Tab');
       const first = await s.page.evaluate(() => {
         const a = document.activeElement as HTMLElement;
@@ -1666,6 +1669,8 @@ describe('W8a reader frame in Chrome', () => {
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       const door = await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR);
       expect(door, 'the door still holds the focus at ready (nothing focused after the mount)').toBe(true);
+      await sleep(800);
+      expect(await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR), 'and a moment later').toBe(true);
       const next = await nextStopAfter(s.page, ':focus');
       expect(next, 'the host has a stop after the door, and it is not the frame').toMatch(/^button\./);
       await s.page.keyboard.press('Tab');
@@ -1689,8 +1694,10 @@ describe('W8a reader frame in Chrome', () => {
       await bridge.arrival();
       expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
       expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'held: the compact row').toBe(false);
+      // The tree is in: the compact ROW (the shell), not the tree-less head, whose back is another element.
+      await s.page.locator('.docs-compact .docs-compact-bar').waitFor({ timeout: 30_000 });
       // By KEYBOARD: Tab from the top of the page to the compact head's back, and keep a handle to that element.
-      await tabTo(s.page, '.docs-compact .docs-back', 'Tab');
+      await tabTo(s.page, '.docs-compact .docs-compact-bar .docs-back', 'Tab');
       const handle = await s.page.evaluateHandle(() => document.activeElement);
       await bridge.release();
       expect(await settle(s.page), 'the reader came up').toBe('ready');
@@ -1702,6 +1709,8 @@ describe('W8a reader frame in Chrome', () => {
         back: el instanceof Element && el.matches('.docs-one-bar .docs-compact-bar > .docs-back'),
       }), handle);
       expect(kept, 'the very same element holds the focus, and it is the one bar\'s back').toEqual({ same: true, connected: true, back: true });
+      await sleep(800);
+      expect(await s.page.evaluate((el) => document.activeElement === el, handle), 'and a moment later').toBe(true);
       // The next stop in the one bar's DOM order, computed before the press.
       const next = await nextStopAfter(s.page, ':focus');
       expect(next, 'the one bar has a stop after back, and it is the title').toBe('button.docs-title');
