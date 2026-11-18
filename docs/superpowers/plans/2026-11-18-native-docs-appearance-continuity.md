@@ -18,7 +18,7 @@
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
 - Two terms (spec §7): a *mode-only mount* is a library without a supported contract, which gets `prefs.theme` only; a *hosted mount without colours* carries an `appearance` whose colour group the validator dropped.
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
-- Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
+- Contrast floors: 4.5:1 for every text colour on every ground the stylesheet paints, plain or tint, and for code tokens and figure labels; 3:1 for the focus ring on every ground and for figure lines; no floor for decorative edges. A coloured tint holds at most 4% of its colour, mixed over `bg` or `surface`. Inline code sits on the opaque `surface2`, never on a tint (spec §5, §10).
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters, the library's frame-asset growth at most 32 768 over 1.1.0's 781 099, the appearance seed at most 4 096, so at most 224 504 in all; hosted open-to-`ready` median of 9 opens at most 1.10 x the BASE median of 9; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
@@ -149,7 +149,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
   4. **No stylesheet crosses:**
      - at run time, no string in any value `readerAppearanceOf` builds in part 2 contains `;`, `{`, `}`, `url(` or `var(` (except `popShadow`'s own bounded `rgba(`), and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label`;
      - in source, `appearance.ts` holds no such literal.
-  5. **Contrast (spec §5):** for each palette and each skin, every `APPEARANCE_PAIRS` entry over the mapped values meets its floor, the derived pairs on the ground each tint is mixed over included. The number of palettes checked equals `THEMES.length`, read at run time, never a typed 12.
+  5. **Contrast (spec §5):** for each palette and each skin, every `APPEARANCE_PAIRS` entry over the mapped values meets its floor. The pairs are the library's product of text colours and grounds, so the cross pairs are in it: a link on the `chg` tint, inline code on `surface2` inside a link, `text-faint` on a row tint, and the summary box's `chg` tint over `surface`. Each tint is computed as the library's stated mix, rounded to 8 bits per channel as a browser paints it. The number of palettes checked equals `THEMES.length`, read at run time, never a typed 12. The case title names the palette, the pair and the measured ratio.
 - [ ] **Step 3: Run both to red.** `ccrc test -- ./node_modules/.bin/vitest run test/reader-appearance.test.ts test/reader-appearance-source.test.ts` from `pwa/`. Expected: FAIL, the module is missing.
 - [ ] **Step 4: Implement `appearance.ts` and the helper.** `appearance.ts` is pure (ring L1): no `document`, no `getComputedStyle`. `readerAppearanceOf` takes `mode` from `colourScheme`, trimmed: `'light'` or `'dark'`. Anything else is `'auto'` with the colour group dropped. Every palette block declares `color-scheme` (measured 2026-11-18), and part 2 pins that per palette.
 - [ ] **Step 5: Run to green**, same command. Expected: PASS.
@@ -415,12 +415,34 @@ Measured 2026-11-18 with a script over `ui/src/styles/tokens.css` (both default 
 | `term` (`--acct-cyan`) on `surface2` | 5.00 | Solarized Dark | 4.5 |
 | `info` and `path` (`--ink-secondary`) on `surface2` | 5.54 | Catppuccin Mocha | 4.5 |
 | `code-ink` on `code-block-bg` | 6.49 | Solarized Dark | 4.5 |
-| `text` on `th-bg` (6% accent over `bg`) | 7.04 | Catppuccin Latte | 4.5 |
-| coloured text on its own 6% tint over `bg` | 4.56 | Phosphor Daylight (accent) | 4.5 |
-| coloured text on its own 8% tint over `bg` | 4.43 | Phosphor Daylight (accent) | fails, so tints hold at most 6% |
 | `border` (`--edge-strong`) on `bg` | 1.54 | Phosphor Daylight | none: decorative |
 
 Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on the well, is higher. The review's measurement of the earlier fill mapping (`--diff-add` 1.69:1, `--status-dead` 3.85:1) is why the semantic slots moved to text variants.
+
+**Cross pairs (fix round 2, review 2657 F1).** Remeasured over the product spec §5 defines: 14 text colours (`accent-hover` as `color-mix(in srgb, accent 80%, text)`) on `bg`, `surface`, `surface2`, and the `chg`, `wait`, `no` and `accent` tints at 4% over `bg` and over `surface`, each tint rounded to 8 bits; plus the code, accent-ink, focus and Mermaid pairs. 67 worst-case rows, 0 below their floor. The lowest per kind:
+
+| Pair | Worst | Palette | Floor |
+|---|---|---|---|
+| `text-faint` on any 4% tint | 4.57 | Catppuccin Latte | 4.5 |
+| `accent` (links, and inline code inside a link) on `surface2`, inline code's ground | 4.57 | Phosphor Daylight | 4.5 |
+| `accent` on any 4% tint (a link in a changed block) | 4.64 | Phosphor Daylight | 4.5 |
+| `chg` on any 4% tint | 4.83 | Catppuccin Latte | 4.5 |
+| `accent-hover` on `surface2` | 5.13 | Solarized Dark | 4.5 |
+| `text-muted`, `info`, `path` on any 4% tint (table heads on `th-bg`) | 5.74 | Catppuccin Latte | 4.5 |
+| `text` on any 4% tint | 7.15 | Catppuccin Latte | 4.5 |
+| `focus` on `surface2` (the Aa checked row) | 4.57 | Phosphor Daylight | 3 |
+| `focus` on any 4% tint | 4.64 | Phosphor Daylight | 3 |
+
+What the review measured at the old rules, and what changed:
+
+| Review 2657 F1 pair | At the old rule | Now |
+|---|---|---|
+| (a) `accent` on the 6% `chg` tint over `bg` | 4.48 | 4% tint: 4.64 |
+| (b) inline code in a link: `accent` on the 6% `text` tint over `bg` | 4.39 | inline code on `surface2`: 4.57 |
+| (c) `text-faint` on the 6% `no` tint over `bg` | 4.44 | 4% tint: 4.57 |
+| (d) `:719`'s `chg` at 7% over `short-bg`, ground unstated | unstated | `short-bg` is `surface`; `chg` at 4% over it is in the product |
+
+Why 4% and an opaque inline-code ground: the worst text-on-tint pair over all four coloured tints and all 14 text colours is 4.73 at 2%, 4.65 at 3%, 4.58 at 4%, 4.51 at 5% and 4.44 at 6% (unrounded; 5% rounds to 4.50, too close). Inline code on a text tint over a coloured tint fails at every cap from 3% to 6% for either tint (4.44 at the lowest), so it takes an opaque ground.
 
 ### Commands
 

@@ -78,7 +78,7 @@ flowchart LR
 - `label` is optional text for Aa's hosted line (§6): 1 to 64 UTF-16 code units. It is refused if it holds a control character (U+0000 to U+001F, U+007F to U+009F) or a bidi or format character (U+200B to U+200F, U+202A to U+202E, U+2060 to U+2069, U+FEFF). An empty label is refused. The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
-**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
+**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A coloured tint holds at most 4% of its colour, mixed over `bg` or `surface`, so every text colour keeps 4.5:1 on every tint, links and faint text included. Inline code never sits on a tint: its ground is the opaque `surface2` (§5, §10). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
 - surfaces: `bg`, `surface`, `surface2`;
 - ink: `text`, `text-muted`, `text-faint`;
 - edges: `border`, `rule`;
@@ -244,12 +244,14 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 | Reference text | `--term`, `--id`, `--violet`, `--path`, hard-coded per mode | ccrc's lane hues `--acct-cyan`, `--acct-blue`, `--acct-violet`, and `--ink-secondary` for paths |
 | Semantic colours | `--ok`, `--wait`, `--no`, `--info`, `--chg` | ccrc's text variants `--status-done-text`, `--status-attention-text`, `--status-dead-text`, then `--ink-secondary`, and `--acct-magenta` for "changed since". Fills, dots and tints derive from them |
 
-**The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of slots its stylesheet puts in front of one another, with a floor.
-- **4.5:1:** body text, links, every semantic text colour, table text, code tokens and Mermaid labels. Each is measured on all three grounds (`bg`, `surface`, `surface2`), or on the well for code, and on the derived tints it is drawn on.
-- **3:1:** the focus ring against `bg`, and Mermaid lines against the figure ground.
+**The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of colours its stylesheet puts in front of one another, with a floor. The list is not a sample of pairs someone found. It is a product: every text colour on every ground the stylesheet paints, so a link inside a changed block or faint text on a row tint is in it by construction.
+- **The text colours:** `text`, `text-muted`, `text-faint`, `accent`, `accent-hover` and the nine semantic and reference slots (`ok`, `wait`, `no`, `info`, `chg`, `term`, `id`, `violet`, `path`).
+- **The grounds:** `bg`, `surface`, `surface2`, and every coloured tint: `chg`, `wait`, `no` and `accent` at 4% over `bg`, and `chg` at 4% over `surface` (the summary box's changed items). The table head and the row hover are accent tints over `bg`, and inline code is drawn on `surface2`. The library ships a test that its stylesheet paints no other ground under text while hosted (§10).
+- **4.5:1:** every text colour on every ground; `code-ink` and each `syn-*` on `code-block-bg`; `accent-ink` on `accent`; Mermaid labels (`text`) on `surface` and `surface2`.
+- **3:1:** the focus ring (`focus`) on every ground, and Mermaid lines (`text-muted`) on `surface` and `surface2`, the figure's grounds while hosted.
 - **No floor: edges.** `border` and `rule` are decorative, as ccrc's own gate treats its edges (`pwa/design/contrast-check.mjs` holds that no edge token clears 3:1 in every palette). Measured: `border` on `bg` is 1.54:1 at worst. A frame control is identified by its label, at 4.5:1, and by the focus ring, never by its border alone.
 
-ccrc's test computes the mapped values for every palette through `pwa/test/helpers/paletteTokens.ts` (§3) and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes: every 4.5:1 pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark) and `accent` on `surface2` at 4.57 (Phosphor Daylight). The focus ring is 4.92:1 at worst, and coloured text on its own 6% tint over `bg` is 4.56:1 at worst. At an 8% tint that last pair falls to 4.43:1 (Phosphor Daylight), which is why tints hold at most 6%.
+ccrc's test computes the mapped values for every palette through `pwa/test/helpers/paletteTokens.ts` (§3) and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes, with each tint rounded to 8 bits as a browser paints it: every pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark), `text-faint` on a tint at 4.57 (Catppuccin Latte), `accent` on `surface2` at 4.57 and `accent` on a tint at 4.64 (Phosphor Daylight). The focus ring is 4.57:1 at worst, on `surface2`. Why 4%, and why inline code is not a tint: at 6%, `text-faint` on the `no` tint falls to 4.44 and `accent` on the `chg` tint to 4.48. Inline code inside a link inside a changed block would put `accent` on a text tint over a coloured tint. That pair falls below 4.5 at every pair of caps from 3% to 6% (4.44 at 3% and 3%, Phosphor Daylight), so inline code takes an opaque ground the gate already checks.
 
 ## 6. Aa while hosted
 
@@ -318,7 +320,7 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | Open to `ready` | hosted median of 9 opens at most 1.10 x the BASE median of 9, desktop Chromium, same runner | `frame-cost` browser row |
 | Change while open | frame root shows the new values within 100 ms. Same iframe and nonce. Scroll within 1 px | `reader-appearance` browser row |
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
-| Contrast | 4.5:1 text, links, semantic text, code, table and figure labels, on every ground and tint they are drawn on. 3:1 focus ring and figure lines. Edges have no floor | unit gate, every palette, both skins |
+| Contrast | 4.5:1 for every text colour on every ground and tint, code on the well and figure labels. 3:1 for the focus ring on every ground, and figure lines. Edges have no floor. Tints at most 4% | unit gate, every palette, both skins |
 
 ## 10. The library's part
 
@@ -347,15 +349,19 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 - An appearance is applied before first paint, from the seed, and in place from the op.
 - With an appearance, the frame ignores stored theme, hides Aa's theme row, shows the one line §6 gives (plain text, not focusable), and never writes `theme`. Without one, Aa is exactly 1.1.0's.
 - `.hljs-*` rules move onto the `syn-*` slots, with today's hex as their defaults, so a host that passes nothing sees no change.
-- Every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, and `APPEARANCE_PAIRS` lists each derived pair:
-  - `accent-hover` and `accent-soft` derive from `accent`;
-  - `wait-soft` and `wait-tint` from `wait`, and `no-tint` from `no`;
-  - `chg-tint`, `chg-soft` and `chg-bg` from `chg`;
-  - `short-bg`, `paper`, `plate` and `topbar-bg` from the surfaces;
-  - `th-bg` from `accent` over `bg`, and `code-inline-bg` from `text` over `bg`;
+- Every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, each by one stated rule. Every tint is an opaque mix, `color-mix(in srgb, <slot> 4%, <ground>)`:
+  - `accent-hover` is `color-mix(in srgb, accent 80%, text)`, a text colour, gated like `accent`;
+  - `accent-soft` (row hover, the flash, the index and quick-jump selection) and `th-bg` are `accent` at 4% over `bg`;
+  - `wait-soft` and `wait-tint` are `wait` at 4% over `bg`, and `no-tint` is `no` at 4% over `bg`;
+  - `chg-tint` is `chg` at 4% over `bg`, and `chg-soft` is `chg` at 4% over `surface`;
+  - `chg-bg` is `chg-tint`, except inside the summary box (`.short`) and a waiting callout, where it is `chg` at 4% over `short-bg`. 1.1.0 mixes 7% there; this design lowers it to the same 4%;
+  - `short-bg` is `surface`, so the summary box's ground is a gated ground and its changed items are a tint over `surface`;
+  - `paper` and `topbar-bg` are `bg`, and `plate` is `surface` (§5: no white plate while hosted);
+  - `code-inline-bg` is `surface2`, opaque. It is never a tint, because inline code sits inside links and tinted blocks, and a tint over a tint misses 4.5:1 (§5);
   - `code-comment` is `syn-comment`.
 
-  Every derived tint holds at most 6% of its colour, mixed over `bg` or `surface`, the ground it is drawn on. Coloured text on its own tint is never drawn over `surface2`: measured, the accent over a tint on `surface2` is 4.23:1 at 6% and still 4.40:1 at 3% (Phosphor Daylight). On raised surfaces and in popovers, coloured text sits on the plain ground, never on a tint. `chg-x` is a length, not a colour, and stays the library's.
+  `paper` and `chg-soft` are declared in 1.1.0 but drawn by no frame rule. They derive anyway, so a later rule finds them gated. No tint is mixed over `surface2`: measured, the accent over a tint on `surface2` is 4.23:1 at 6% and still 4.40:1 at 3% (Phosphor Daylight). On raised surfaces and in popovers, coloured text sits on the plain ground or on a tint mixed over `bg`, never on a tint mixed over `surface2`. `chg-x` is a length, not a colour, and stays the library's.
+- **The grounds are closed.** While hosted, every background the stylesheet paints under text is one of §5's grounds. The library ships a test that walks the corpus's rendered elements and fails on any other computed background under text (test 4).
 - An appearance with no colour group removes every host colour and leaves the hosted state as it was.
 - Skin slots style the popovers and their headings, the radii of controls, cards and code, and nothing else. `controlRow` applies under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters, title block) never take a skin value.
 - `popShadow` replaces `--pop-shadow` on every popover, the quick jump, keys and contents drawer shadows included.
@@ -384,7 +390,8 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - Aa has no theme row with an appearance.
 4. Conformance:
    - with no appearance, the rendered output and computed styles equal 1.1.0's for the corpus;
-   - the default palette passes `APPEARANCE_PAIRS`.
+   - the default palette passes `APPEARANCE_PAIRS`;
+   - **closed grounds:** with an appearance, every element of the corpus that holds text has a computed background, its own or the nearest painted one behind it, equal to one of §5's grounds.
 5. Mermaid:
    - `mermaidThemeOf` output passes the pairs for both default modes;
    - a document's init directive still cannot set `themeVariables`, `themeCSS` or `darkMode`;
