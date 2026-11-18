@@ -510,7 +510,7 @@ These close the gaps found against the standalone docs server (research B). Each
 | Read marks, last visit, reader settings | Agreed, G7 | W8 |
 | Rich layout (G8) | Agreed, the library plus W8 | |
 | Figures: Play, Animate edges, Full screen, Copy Mermaid | Agreed, W8 | |
-| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount, unless an element outside it already holds focus (§4.1) (amended 2026-11-18; D2, D-8729) |
+| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount, unless an element outside it already holds focus (§4.1); the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729) |
 | Front matter strip | Agreed, §3.4 | |
 | Footnotes | Agreed, L2 adds styles | They have no styles today |
 | Fonts | Yes, same as today | Latin subsets only; other scripts fall back to system fonts |
@@ -562,7 +562,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 
 | # | Guard | Test | Mutation that goes red |
 |---|---|---|---|
-| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount when no element outside it holds focus, and an element outside it that holds focus keeps it (amended 2026-11-18; D2, D-8729). | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox`; focus the frame on every mount, or on none (amended 2026-11-18; D2, D-8729) |
+| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount when no element outside it holds focus, and an element outside it that holds focus keeps it; the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729). | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox`; focus the frame on every mount, or on none (amended 2026-11-18; D2, D-8729) |
 | M8.2 | `READER_CSP` | Re-tokenised: only the listed directives; `script-src` holds `sha256-` sources only; no host, `'self'`, `connect-src` or `frame-src`; `base-uri` and `form-action` are `'none'`; `mockupCsp(origins)` never changes it | Add a CDN host, `'self'`, `connect-src` or `'unsafe-eval'`; derive it from `MOCKUP_CSP` |
 | M8.3 | Srcdoc prefix | Starts with the CSP meta, then the click guard, the seed and the bridge bootstrap, in that order, each once, before any content. The seed is the element immediately before the bootstrap's script. | Append the meta; omit the guard; put the seed after the content; put any element between the seed and the bootstrap |
 | M8.4 | No URL in the srcdoc | Outside the inlined script and seed bodies, no `src`, `href`, `srcset`, `@import` or `url()` holds an `http(s)` or `//` value. No `modulepreload` or `preconnect` link. Script bodies are covered by M8.B1. | Keep the library's CDN default in a `src`; emit preloads |
