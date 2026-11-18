@@ -30,3 +30,6 @@ Departures are listed by slug. The coordinator mints the numbers.
 - `coordinator-pins-new-file`: the coordinator skill's pin file is claimed by another run, which has not consented
   to an append. The coordinator-side pins live in the new `server/test/coordinator-approval-prompts.test.ts`
   instead. Folding them back into the existing pin file is a ledger carry, not this branch's work.
+- `installer-required-refs`: a new file under the coordinator skill's references must also be named in the installer's
+  required-references list (`REQUIRED_REFS` in `ccd/install-coordinator-skill.sh`), which a test compares with the
+  directory. The plan did not name that file; one word is added to the list, so the new reference reaches every home.
