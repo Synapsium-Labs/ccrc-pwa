@@ -9,11 +9,12 @@
 // secret, and no actor: every W1 kind is an operator door's (`goLive` completes the operator's designate or rebind act), and the
 // rows keep actors (§7.4).
 //
-// The vocabularies the grammar checks: the rung words are the spec's four (§7.5, H25) until the ladder's L0 owner merges and
-// re-points them; a pool name is `shared/roster.ts#POOL_NAME_RE`; a model class is the two of `shared/models.ts#CLASSES` the
-// designate door may choose. A latch's CAUSE is checked by shape only, never against a closed list: a latch row whose cause this
-// build does not know still caps the rung (the ladder plan, question 16), so a record a newer build wrote must still read here
-// (`latch-cause-checked-by-shape`).
+// The vocabularies the grammar checks: the rung words are the ladder's L0 owner's (`shared/overlord-ladder.ts#RUNGS`), re-pointed in
+// the ladder's pull request; a pool name is `shared/roster.ts#POOL_NAME_RE`; a model class is the two of `shared/models.ts#CLASSES`
+// the designate door may choose. A latch's CAUSE is checked by shape only (the ladder's `LADDER_CAUSE_KEY_RE`), never against a
+// closed list: a latch row whose cause this build does not know still caps the rung (the ladder plan, question 16), so a record a
+// newer build wrote must still read here (`latch-cause-checked-by-shape`).
+import { LADDER_CAUSE_MAX, LADDER_CAUSE_KEY_RE, RUNGS, type Rung } from '../../../shared/overlord-ladder.js';
 import { POOL_NAME_RE } from '../../../shared/roster.js';
 import type { ModelClass } from '../../../shared/models.js';
 import {
@@ -32,15 +33,15 @@ export const OVERLORD_AUTHORITY_TORN_DIR = 'overlord-authority-torn';
 
 // ── The vocabularies ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The ladder's rungs, lowest first (§7.5, H25). The ladder's L0 owner re-points this in its own pull request. */
-export const OVERLORD_AUTHORITY_RUNGS = ['off', 'chat', 'advise', 'full'] as const;
-export type OverlordRungWord = (typeof OVERLORD_AUTHORITY_RUNGS)[number];
+/** The ladder's rungs, lowest first (§7.5, H25): the ladder's own list, re-pointed here in its pull request. */
+export const OVERLORD_AUTHORITY_RUNGS: readonly Rung[] = RUNGS;
+export type OverlordRungWord = Rung;
+/** A latch cause's shape: the ladder's (`LADDER_CAUSE_KEY_RE`, at most `LADDER_CAUSE_MAX` bytes). */
+const CAUSE_RE = LADDER_CAUSE_KEY_RE;
+const CAUSE_MAX = LADDER_CAUSE_MAX;
 /** The model classes an Overlord body may run on (C46): `opus` is the stricter. */
 export const OVERLORD_AUTHORITY_MODEL_CLASSES = ['opus', 'fable'] as const satisfies readonly ModelClass[];
 export type OverlordAuthorityModelClass = (typeof OVERLORD_AUTHORITY_MODEL_CLASSES)[number];
-/** A latch cause's shape: a kebab word. */
-const CAUSE_RE = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
-const CAUSE_MAX = 64;
 /** An opaque token (an operation key, a session id, a generation): printable ASCII with no space, at most 128 bytes. */
 const TOKEN_RE = /^[\x21-\x7e]{1,128}$/;
 
