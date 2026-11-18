@@ -45,14 +45,16 @@ is taken here.
   back to C1's `_reg_id_ok` and `_reg_purge_unremoved`).
 - **`readme-hunks-under-item-436`**: under the same ruling, README carries this PR's own facts in five hunks, and
   nothing else in README is edited by this PR:
-  1. the auth paragraph's machine-lane count word, eighty-nine to ninety;
+  1. the auth paragraph's machine-lane count word, ninety to ninety-one (eighty-nine before the quiz record's door and this one);
   2. the continuity doors sentence names the act-key claim (`POST /api/sessions/:id/act-key`);
   3. the ccd library list names `lib/door.sh` (the door process: its registry directory's purge and its program's pin
      check);
   4. one restore-list line for the backup's `ccd-lib-door.sh`, beside the other libraries' lines;
   5. the loader paragraph names `ccd/lib/door.sh` the sixth library and `__CCD_LIB_DOOR_SHA256`, and reads "all six".
-- **`migration-100-by-position`**: the ladder (#2994) landed migration 99 first, so this PR's migration is 100, renumbered
-  at the absorption of `main` (positional, the brief's rule).
+- **`migration-101-by-position`**: the ladder (#2994) landed migration 99 and the quiz record (#2991) 100 first, so this
+  PR's migration is 101, renumbered at the absorptions of `main` (positional, the brief's rule). The same absorption
+  recounted the lanes this PR and the quiz record each added: ninety rows in `ccrc-api`, eighty-eight box-token machine
+  lanes and ninety-one with the three fleet-host lanes, 282 routes (279 HTTP, 100 exempt).
 - **`door-prog-ok-names-no-tool`**: `_door_prog_ok` reads the program with a bounded `cat` and pipes the bytes into the
   loader's hashing command, so it names no GNU-only tool (`macos-platform.test.ts`). A read cut short fails the pipe
   (`pipefail`) or hashes short, and either refuses.
