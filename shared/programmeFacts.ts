@@ -120,8 +120,9 @@ export const EDGE_EVIDENCE_MAX = 300;
  *  shares the number (`token-shared.test.ts` names it in a row of its own). This block's one millisecond count. */
 export const EDGE_UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
 /** Whether the edge arm that clears edges has shipped. Remaining work B shipped it (the forecast lane's edge arm,
- *  `forecastLane.ts`), so the forecast counts edges in `blocking` and health; while it was false it counted none and
- *  listed edges as "clearing not shipped" (review 2265, F1). Typed `boolean` so a reader's other branch still compiles. */
+ *  `forecastLane.ts`). No forecast code reads it yet: forecasts B is the reader to come, which counts edges in
+ *  `blocking` and health only while it is true, and lists them as "clearing not shipped" while it is false (review
+ *  2265, F1). Typed `boolean` so that reader's other branch still compiles. */
 export const EDGE_CLEARING_SHIPPED = true as boolean;
 
 export type EdgeKind = 'needs-landed' | 'needs-decision';

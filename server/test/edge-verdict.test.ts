@@ -6,7 +6,8 @@ import { describe, it, expect } from 'vitest';
 import { EDGE_VERDICT_WORDS, edgeVerdict, type EdgeVerdictEdge } from '../src/coord/edgeVerdict.js';
 import { EDGE_EVIDENCE_MAX, EDGE_STATES, EDGE_UNMEASURABLE_AFTER_MS } from '../../shared/programmeFacts.js';
 import type { TargetAnswer } from '../../shared/doneTests.js';
-import { ANSWERS, EVIDENCE_MAX, NOW, UNMEASURABLE_AFTER_MS, edgeVerdictCases, settleOf } from './sim/programmeFactsSets.js';
+import { ANSWERS, EVIDENCE_MAX, NOW, PERMANENT_WHYS, UNMEASURABLE_AFTER_MS, edgeVerdictCases, settleOf } from './sim/programmeFactsSets.js';
+import { isPermanentTargetWhy } from '../src/coord/doneTests.js';
 
 describe('edgeVerdict: the rows', () => {
   for (const [name, run] of Object.entries(edgeVerdictCases({ edgeVerdict }))) it(name, run);
@@ -15,6 +16,12 @@ describe('edgeVerdict: the rows', () => {
 describe('edgeVerdict: the domain', () => {
   it('the written-out bounds the cases use are the shipped constants', () => {
     expect([EDGE_EVIDENCE_MAX, EDGE_UNMEASURABLE_AFTER_MS]).toEqual([EVIDENCE_MAX, UNMEASURABLE_AFTER_MS]);
+  });
+
+  it('done tests names exactly the whys that can never change, and no other (review 2439 F1)', () => {
+    for (const w of PERMANENT_WHYS) expect(isPermanentTargetWhy(w)).toBe(true);
+    for (const w of ['state-unknown', 'close-record-unreadable', 'lineage-unreadable', 'no-such-row', 'run-unreadable',
+      'facts-mismatch', 'reviews-unread', 'verdict-not-recorded', 'Error', '']) expect(isPermanentTargetWhy(w)).toBe(false);
   });
 
   // Every edge state, read or unreadable, times every answer kind, times a clock that is null or at any age.
@@ -37,7 +44,8 @@ describe('edgeVerdict: the domain', () => {
   /** The table, written out over the domain: the expected word and the state or clock it hands the writer. */
   const expected = (e: EdgeVerdictEdge, a: TargetAnswer): [string, string] => {
     if (!settled(e)) return ['none', '-'];
-    if (a.kind === 'unmeasured') return old(e) ? ['unmeasurable', 'target-unmeasurable'] : ['unmeasured', `clock ${e.unmeasuredSince ?? NOW}`];
+    const transient = a.kind === 'unmeasured' || (a.kind === 'unmeasurable' && !(PERMANENT_WHYS as readonly string[]).includes(a.why));
+    if (transient) return old(e) ? ['unmeasurable', 'target-unmeasurable'] : ['unmeasured', `clock ${e.unmeasuredSince ?? NOW}`];
     if (a.kind === 'unmeasurable') return ['unmeasurable', 'target-unmeasurable'];
     if (a.kind === 'passed') return ['met', 'met'];
     if (a.kind === 'ended') return ['ended', 'target-ended'];

@@ -184,7 +184,12 @@ export const A_ENDED: Answer = { kind: 'ended', evidence: 'pr-7-not-merged' };
 export const A_PENDING: Answer = { kind: 'pending', evidence: 'run-41-working' };
 export const A_UNMEASURED: Answer = { kind: 'unmeasured', why: 'Error' };
 export const A_UNMEASURABLE: Answer = { kind: 'unmeasurable', why: 'lineage-unattributed' };
-export const ANSWERS: readonly Answer[] = [A_PASSED, A_ENDED, A_PENDING, A_UNMEASURED, A_UNMEASURABLE];
+/** An unmeasurable why a later build could answer (an item in a state word this build does not know): it reads as
+ *  unmeasured, so the clock runs and the edge is never ended at once for it (review 2439 F1). */
+export const A_UNKNOWN_WORD: Answer = { kind: 'unmeasurable', why: 'state-unknown' };
+/** Done tests' whys that can never change, written out (review 2439 F1). */
+export const PERMANENT_WHYS = ['lineage-unattributed', 'not-this-runs-pr', 'no-close-record'] as const;
+export const ANSWERS: readonly Answer[] = [A_PASSED, A_ENDED, A_PENDING, A_UNMEASURED, A_UNMEASURABLE, A_UNKNOWN_WORD];
 
 /** The verdict word and what the writer is handed, as one comparable value. */
 export const settleOf = (v: ReturnType<EdgeVerdictDecider['edgeVerdict']>): unknown => (v.verdict === 'none' ? 'none' : [v.verdict, v.settle]);
@@ -223,10 +228,22 @@ export function edgeVerdictCases(m: Pick<EdgeVerdictDecider, 'edgeVerdict'>): Re
     'row 3: the first unmeasured answer starts the clock at now': () => {
       expect(v(OPEN_EDGE, A_UNMEASURED)).toEqual(['unmeasured', { kind: 'clock', unmeasuredSince: NOW }]);
     },
-    'row 4: an unmeasurable answer ends the block at once, whatever the clock (review 2381 N1)': () => {
-      for (const since of [null, NOW, NOW - UNMEASURABLE_AFTER_MS]) {
-        expect(v({ state: 'open', unmeasuredSince: since }, A_UNMEASURABLE)).toEqual(
-          ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: 'unmeasurable: lineage-unattributed' }]);
+    'row 4: an unmeasurable answer for a why that can never change ends the block at once, whatever the clock (review 2381 N1)': () => {
+      for (const why of PERMANENT_WHYS) {
+        for (const since of [null, NOW, NOW - UNMEASURABLE_AFTER_MS]) {
+          expect(v({ state: 'open', unmeasuredSince: since }, { kind: 'unmeasurable', why })).toEqual(
+            ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: `unmeasurable: ${why}` }]);
+        }
+      }
+    },
+    'rows 2 and 3: an unmeasurable why a later build could answer runs the clock like unmeasured (review 2439 F1)': () => {
+      for (const why of ['state-unknown', 'close-record-unreadable', 'lineage-unreadable', 'no-such-row', 'run-unreadable', 'facts-mismatch']) {
+        const a = { kind: 'unmeasurable', why } as const;
+        expect(v(OPEN_EDGE, a)).toEqual(['unmeasured', { kind: 'clock', unmeasuredSince: NOW }]);
+        expect(v({ state: 'open', unmeasuredSince: NOW - 5 }, a)).toEqual(['unmeasured', { kind: 'clock', unmeasuredSince: NOW - 5 }]);
+        const since = NOW - UNMEASURABLE_AFTER_MS;
+        expect(v({ state: 'open', unmeasuredSince: since }, a)).toEqual(
+          ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: `unmeasured since ${since}: ${why}` }]);
       }
     },
     'row 5: a passed target is met, with the reader\'s evidence': () => {
@@ -290,7 +307,7 @@ const EDGE_VERDICT_SET: MutantSet<EdgeVerdictDecider> = {
   modulePath: EDGE_VERDICT_TS,
   suite: (mod) => edgeVerdictCases(mod),
   mutants: [
-    { id: 'EV-1 unmeasured read as met', old: "if (answer.kind === 'unmeasured') {", new: "if (answer.kind === 'unmeasured') { return end('met', 'met', answer.why);" },
+    { id: 'EV-1 unmeasured read as met', old: "if (answer.kind === 'unmeasured' || (answer.kind === 'unmeasurable'", new: "if (answer.kind === 'unmeasured') return end('met', 'met', answer.why); if ((answer.kind === 'unmeasurable'" },
     { id: 'EV-2 not-open guard skipped', old: "if (edge.state !== 'open' || edge.stateUnreadable", new: "if (false || edge.stateUnreadable" },
     { id: 'EV-3 met and ended swapped', old: "if (answer.kind === 'passed') return end('met', 'met', answer.evidence);", new: "if (answer.kind === 'passed') return end('ended', 'target-ended', answer.evidence);" },
     { id: 'EV-4 row 2 age check dropped', old: 'since !== null && now - since >= EDGE_UNMEASURABLE_AFTER_MS', new: 'since !== null' },
@@ -302,6 +319,7 @@ const EDGE_VERDICT_SET: MutantSet<EdgeVerdictDecider> = {
     { id: 'EV-8 unmeasurable read as transient', old: "if (answer.kind === 'unmeasurable') return end(", new: "if (answer.kind === 'unmeasurable') return { verdict: 'unmeasured', settle: { kind: 'clock', unmeasuredSince: edge.unmeasuredSince ?? now } }; if (false) return end(" },
     { id: 'EV-9 clock restarted on every unmeasured answer', old: 'unmeasuredSince: since ?? now', new: 'unmeasuredSince: now' },
     { id: 'EV-10 evidence not masked', old: 'cutWhole(redactCommand(text), EDGE_EVIDENCE_MAX)', new: 'cutWhole(text, EDGE_EVIDENCE_MAX)' },
+    { id: 'EV-14 ends at once on any unmeasurable why', old: "(answer.kind === 'unmeasurable' && !isPermanentTargetWhy(answer.why))", new: 'false' },
     { id: 'EV-11 evidence not cut', old: 'cutWhole(redactCommand(text), EDGE_EVIDENCE_MAX)', new: 'redactCommand(text)' },
   ],
 };

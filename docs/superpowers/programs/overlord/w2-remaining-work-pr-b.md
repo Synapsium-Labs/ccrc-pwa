@@ -26,7 +26,7 @@ numbers. No D-number is defined here.
 
 | Slug | What the plan says | What this PR does, and why |
 |---|---|---|
-| `edge-unmeasurable-answer-ends-at-once` | Task 4's rows 2 and 3 read "any unmeasured answer of the reader" | The reader has two failure words, and the brief's carried ruling (review 2381 N1) maps them apart. `unmeasured` (a read that failed now, such as a locked database) starts or keeps the clock, and seven days of it end the block. `unmeasurable` (a fact no row of this build can answer: `lineage-unattributed`, `not-this-runs-pr`, `no-close-record`) can never change, so the edge moves to `target-unmeasurable` at once, with `unmeasurable: <why>` as its evidence. Neither is ever read as met. |
+| `edge-unmeasurable-answer-ends-at-once` | Task 4's rows 2 and 3 read "any unmeasured answer of the reader" | The reader has two failure words, and the brief's carried ruling (review 2381 N1) maps them apart. `unmeasured` (a read that failed now, such as a locked database) starts or keeps the clock, and seven days of it end the block. An `unmeasurable` answer ends the edge as `target-unmeasurable` at once only for a why done tests names permanent (`doneTests.ts#isPermanentTargetWhy`: `lineage-unattributed`, `not-this-runs-pr`, `no-close-record`), with `unmeasurable: <why>` as its evidence. Narrowed in fix round 1 (review 2439 F1, ruled): every other unmeasurable why (`state-unknown`, a target state word a newer build wrote, above all) reads like `unmeasured`, so the clock runs and this build never ends an edge for a word it does not know. Neither word is ever read as met. |
 | `unknown-edge-state-guarded-in-the-writer` | Review 2347 F2: an unknown stored state counts as open in the keep lookup, the cap count and the partial unique index | Ruled on ask 543 (no migration). One SQL spelling, `OPEN_EDGE_SQL` (every state but this build's three closed words, derived from `EDGE_STATES`), serves the keep lookup, the cap count and the arm's read, inside the writer's one transaction. An unknown-state row is kept, never duplicated, and counts toward the cap. The partial unique index `programme_edges_one_open` stays `WHERE state = 'open'`; widening it waits for the next migration that touches `programme_edges` (the coordinator carries it to the ledger PR). |
 | `edge-unreadable-rows-never-settled` | Row 1: "the edge's state is not `open`" | Row 1 also answers `none` for an edge whose state, kind or target this build cannot read (each flagged by the store's read), and for a target that could not be asked. A word or shape a newer build wrote is never ended by this one, so the block stays visible, flagged, until a build that can read it measures it. |
 | `edge-verdict-hands-the-settle` | `settleEdge(db, id, verdict, evidence, now)` sets the state on an end and `unmeasuredSince` otherwise | `edgeVerdict` decides what is written: an `end` (the state and the masked evidence) or a `clock` (the value of `unmeasuredSince`: the first unmeasured time kept, or null). `settleEdge(db, id, settle, now)` writes it, `WHERE id = ? AND state = 'open'`, and a clock write changes nothing when the value is unchanged, so a second pass writes nothing. Decide in L1, act in L3. |
@@ -42,7 +42,7 @@ numbers. No D-number is defined here.
 - **Characterization first:** `programme-remaining.test.ts` pins `EDGE_PREDICATES`, their order, their kinds and their
   guard, committed green on the old literal before the move commit, which changes `shared/programmeFacts.ts` alone.
 - **Task 4 mutants** (`server/test/sim/programmeFactsSets.ts`, key `server/src/coord/edgeVerdict.ts#edgeVerdict`, floor
-  1): thirteen, every one killed: unmeasured read as met, the not-open guard skipped, met and ended swapped, row 2's age
+  1): fourteen, every one killed (the fourteenth, "ends at once on any unmeasurable why", added in fix round 1): unmeasured read as met, the not-open guard skipped, met and ended swapped, row 2's age
   check dropped, pending keeping the clock, an unreadable state, kind or target settled, seven days by more than rather
   than at least, unmeasurable read as transient, the clock restarted on every unmeasured answer, the evidence not masked,
   the evidence not cut. `edgeTargetVerdict`'s set keeps six mutants; ET-4 is now "a pull request on this programme's run
@@ -66,6 +66,21 @@ for byte afterwards):
 | The edge arm removed | `forecast-lane` (eight cases) |
 | The edge states undeclared in the kebab census | `mail-routes` |
 | `EDGE_CLEARING_SHIPPED` back to `false` | `programme-remaining` |
+
+## 3a. Fix round 1 (review 2439), as ruled
+
+| Finding | Ruling | What changed |
+|---|---|---|
+| F1 | End at once only on a why that can never change | `doneTests.ts` exports `isPermanentTargetWhy` over three of its whys (a co-edit agreed with the file's holder); `edgeVerdict` ends an edge at once only on those, and every other unmeasurable why runs the clock. New cases: the permanent whys end at once; six other whys run the clock and end only after seven days; `isPermanentTargetWhy` names exactly the three; an `operator-confirms` item in an unknown state word keeps its edge open through the lane, clock running, and met once the item is done. New mutant EV-14 (ends on any why) is killed. |
+| F2 | Fix | The plan's lines on a target the reader cannot measure (question 6, the failure contracts, Task 4's table, Task 5's test list) and Task 2's and Task 3's test lists now say what the code does, under the head commit's `Ledger-Edit`. |
+| F3 | Fix | The wave-boundary reference gains two sentences: a `pr-merged` edge on a pull request the run does not close with ends the block when the run closes; a `run-closed` edge is met only by a run whose close records a merged pull request, so one on a review run, an abandoned run or a close with no verified pull request ends at once. |
+| F4 | No change | Per-commit history only; the tip is green. |
+| F5 | Fix the comment | `EDGE_CLEARING_SHIPPED`'s comment says forecasts B is the reader to come. |
+
+The two test files the repo's review judge marks `test-weakened` (`programme-facts-store.test.ts`,
+`programme-remaining-route.test.ts`) hold the lineage cases inverted on purpose under review 2381 N1: a `pr-merged` edge
+is now admitted whatever the lineage lists, and a lineage that does not parse is never read. Its `rules-mixed` reason
+(the reference file beside code) stands by the coordinator's ruling to keep the three changes together.
 
 ## 4. For landing
 

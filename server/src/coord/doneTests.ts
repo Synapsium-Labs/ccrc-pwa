@@ -75,6 +75,14 @@ const TARGET_WHY_MAP = {
   'facts-mismatch': true, 'no-such-row': true, 'run-unreadable': true,
 } as const satisfies Record<string, true>;
 type TargetWhy = keyof typeof TARGET_WHY_MAP;
+/** The whys that can never change for the row they answer: a pull request only the run's lineage names, or one the run
+ *  never closed with, and a run closed with no close record. Every other why may be answered by a later build or a later
+ *  read (`state-unknown` is a word a newer build wrote), so a caller that ends something on an `unmeasurable` answer ends
+ *  it only on these (remaining work B's edge arm, review 2439 F1). */
+const PERMANENT_TARGET_WHY_MAP = {
+  'lineage-unattributed': true, 'not-this-runs-pr': true, 'no-close-record': true,
+} as const satisfies Partial<Record<TargetWhy, true>>;
+export const isPermanentTargetWhy = (why: string): boolean => Object.hasOwn(PERMANENT_TARGET_WHY_MAP, why);
 
 /** Every kebab word this context spells, for `mail-routes.test.ts`'s code scan: a predicate, a done test's refusal and why
  *  a target is unmeasurable. None is a mail rejection or a run refusal: a refusal is `bad-request` at its door (DT9). */

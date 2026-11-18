@@ -238,6 +238,20 @@ describe('the edge arm', () => {
     expect(edgeRow(coord, e)).toMatchObject({ state: 'met', evidence: `item-${item}-done` });
   });
 
+  it('an item in a state word this build does not know keeps its edge open with the clock running, never ended at once (review 2439 F1)', () => {
+    const item = coord.raiseItem({ program: 'prog-a', runId: null, raisedBy: 'lane-a-project-a', kind: 'do', title: 't', why: 'w',
+      how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, T0 - DAY);
+    const e = edgeOn(coord, { predicate: 'operator-confirms', itemId: item }, 'needs-decision');
+    coord.db.prepare("UPDATE operator_items SET state = 'deferred' WHERE id = ?").run(item);
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 1, failed: [] });
+    expect(edgeRow(coord, e)).toEqual({ state: 'open', endedAt: null, evidence: null, unmeasuredSince: T0 });
+    runForecastLane(coord, T0 + WEEK - 1, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'open', unmeasuredSince: T0 });
+    coord.db.prepare("UPDATE operator_items SET state = 'done' WHERE id = ?").run(item);
+    runForecastLane(coord, T0 + WEEK - 1, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'met', evidence: `item-${item}-done` });
+  });
+
   it('an unmeasured target leaves the edge open with its clock; seven days of unmeasured passes later it is target-unmeasurable', () => {
     const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
     const e = edgeOn(coord, { predicate: 'run-closed', runId: rb });

@@ -180,7 +180,10 @@ every recommendation unless the coordinator rules otherwise.
    closes unmerged, or an item is dismissed. The edge can then never be met.
    - **Recommendation:** the edge arm moves it to `target-ended`, with the measured end in its evidence (bounded and
      masked, question 2's sibling rules in Task 1). It no longer counts as a block. It shows on the portfolio entry until the coordinator's next statement, which may add a new
-     edge. A target the reader cannot measure leaves the edge `open`, read as unmeasured, never cleared.
+     edge. A target the reader cannot measure now (`unmeasured`, or an `unmeasurable` why a later build could answer,
+     such as `state-unknown`) leaves the edge `open`, read as unmeasured, never cleared. A target no row can ever answer
+     (`lineage-unattributed`, `not-this-runs-pr`, `no-close-record`) ends the edge as `target-unmeasurable` at once
+     (review 2381 N1; review 2439 F1, ruled in remaining work B).
 
 ## 3. What exists today
 
@@ -263,9 +266,9 @@ Measured on `main` at `9cf263d44` (2026-11-16).
   tests' one reader, never a second predicate check.
 - **Failure contracts.** An unread fact never reads as zero or as met.
   - A store throw at the door is 503 `run-unreadable`, and nothing is written.
-  - An edge whose target the reader cannot measure stays `open`, and the read carries `unmeasured: true`. After 7 days
-    of unmeasured answers it moves to `target-unmeasurable` (question 3), which stops it blocking without calling it
-    met.
+  - An edge whose target the reader cannot measure now stays `open`, and the read carries `unmeasured: true`. After 7
+    days of unmeasured answers it moves to `target-unmeasurable` (question 3), which stops it blocking without calling it
+    met. A target no row can ever answer (an `unmeasurable` why done tests names permanent) moves it there at once.
   - A state word outside the vocabulary, read from a newer build's row, reads as `open` with `stateUnreadable: true`,
     so a block is never hidden by a word this build does not know.
 - **Wire: additive.** The answer and the reads are new types in `shared/programmeFacts.ts`. `FLEET_PROTO` is not
@@ -476,8 +479,8 @@ as `open` with `stateUnreadable: true`. Both mask `reason`, `why` and `evidence`
   canonical target form makes `{pr, runId, predicate}` and `{predicate, runId, pr}` one edge; a `reason`, a `why` and
   an `evidence` written by hand with a token-shaped string read back masked; a statement that would take the
   programme past `OPEN_EDGES_PER_PROGRAMME_MAX` open edges writes nothing, while one that keeps an equal edge is not
-  counted twice; `edgeTargetCheck` refuses a `pr-merged` pull request the run's lineage does not list, a run with no
-  lineage, a `run-closed` run of this programme, and an item of another programme.
+  counted twice; `edgeTargetCheck` refuses a `pr-merged` target on a run that does not exist (any run that exists is
+  admitted: review 2381 N1), a `run-closed` run of this programme, and an item of another programme.
 - [ ] **Step 2: Run.** Red.
 - [ ] **Step 3: Implement** the migration, the store file and the delegates.
 - [ ] **Step 4: Run** this suite, `test/coord-db.test.ts`, `test/run-close-switch.test.ts`,
@@ -539,8 +542,8 @@ notice and no bus event (question 20).
 - [ ] **Step 1: Failing tests** (`test/programme-remaining-route.test.ts`, the call record route test's harness): one
   case per refusal row, each writing nothing; the coordinator holding an open run of the programme writes one statement
   and its edges; a worker's pair of the same programme is refused; a second statement keeps an equal edge; a `run-closed`
-  target naming one of the programme's own runs is refused; a `pr-merged` target whose run's lineage does not list the
-  pull request is refused; an `operator-confirms` target naming another programme's open item is refused (F6); a
+  target naming one of the programme's own runs is refused; a `pr-merged` target on a run that does not exist is
+  refused (any run that exists is admitted: review 2381 N1); an `operator-confirms` target naming another programme's open item is refused (F6); a
   store throw at step 10 answers 503 and leaves no row. In `test/ccrc-api.test.ts` and `test/ccrc-api-closed.test.ts`:
   the new row maps to the path; the client appends `byId` and `byUuid` from the pane after the body's own fields, so a
   body-supplied `byId` does not win; the reference's example parses as a call of the row.
@@ -580,9 +583,10 @@ answer for its target, and answers first match:
 
 | # | Reader's answer | Verdict | Edge after |
 |---|---|---|---|
-| 1 | The edge's state is not `open` | `none` | unchanged |
-| 2 | Unmeasured, and `unmeasuredSince` is at least `EDGE_UNMEASURABLE_AFTER_MS` before `now` | `unmeasurable` | `target-unmeasurable`, with the first unmeasured time as evidence |
-| 3 | Unmeasured (any unmeasured answer of the reader) | `unmeasured` | `open`; `unmeasuredSince` set if it was null |
+| 1 | The edge's state is not `open`, or its state, kind or target is unreadable, or its target was not asked | `none` | unchanged |
+| 2 | Unmeasured, or unmeasurable for a why that can change (`state-unknown` and every why done tests does not name permanent), and `unmeasuredSince` is at least `EDGE_UNMEASURABLE_AFTER_MS` before `now` | `unmeasurable` | `target-unmeasurable`, with the first unmeasured time as evidence |
+| 3 | The same answers as row 2, the clock younger or null | `unmeasured` | `open`; `unmeasuredSince` set if it was null |
+| 3a | Unmeasurable for a why that can never change (`lineage-unattributed`, `not-this-runs-pr`, `no-close-record`; review 2381 N1, review 2439 F1) | `unmeasurable` | `target-unmeasurable` at once, with the why as evidence |
 | 4 | The target passed (the run closed and merged; the PR merged; the item answered) | `met` | `met`, with the evidence |
 | 5 | The target ended other than as needed (the run failed; the PR closed unmerged; the item dismissed) | `ended` | `target-ended`, with the evidence |
 | 6 | The target is still pending | `pending` | `open`; `unmeasuredSince` cleared |
@@ -621,10 +625,11 @@ reader about the target, asks `edgeVerdict`, and on any verdict but `none` calls
 on one edge is that edge's `unmeasured`, never the pass's failure. The arm writes nothing else and sends no mail.
 
 - [ ] **Step 1: Failing tests:** an edge whose run closed and merged is `met` after one pass; one whose PR closed
-  unmerged is `target-ended`; one the reader cannot measure stays `open` with `unmeasuredSince` set, and seven days of
-  unmeasured passes later is `target-unmeasurable`; a measured pending answer in between resets the clock; a second
-  pass changes nothing; an edge already `met` by a concurrent pass is not written again (the `WHERE state = 'open'`
-  guard).
+  unmerged is `target-ended`; one whose PR is not the run's own is `target-unmeasurable` at once; one the reader cannot
+  measure now (a thrown read, or an item in a state word this build does not know) stays `open` with `unmeasuredSince`
+  set, and seven days of unmeasured passes later is `target-unmeasurable`; a measured pending answer in between resets
+  the clock; a second pass changes nothing; an edge already `met` by a concurrent pass is not written again (the
+  `WHERE state = 'open'` guard).
 - [ ] **Step 2: Run.** Red. **Step 3: Implement.** **Step 4: Run** the suite, `writers-map.test.ts`,
   `lane-schedule.test.ts` and both typechecks. Green.
 - [ ] **Step 5: Red check.** Call `settleEdge` from the door: the caller census reds. Drop the `state = 'open'` guard:
