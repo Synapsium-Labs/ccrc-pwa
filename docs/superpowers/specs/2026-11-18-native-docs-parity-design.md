@@ -1,0 +1,575 @@
+# Native Docs reader: full parity with the standalone reader
+
+**Spec** · 2026-11-18 · Status: Draft, for review (X2, run 2632) · Owner: the operator · Linear: none · Related: docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md, docs/superpowers/specs/2026-11-07-native-docs-reader-completion-design.md, docs/superpowers/specs/2026-10-01-native-docs-reader-design.md, docs/superpowers/plans/2026-11-18-native-docs-parity.md, #1418
+
+## In short
+
+- **What this is.** The side-by-side inventory of everything the standalone reader does, checked against ccrc's native Docs reader at `main` (`6f5421139`), and a design for every gap. You ruled on 2026-10-25 that retiring the standalone reader drops no feature (#1418); this spec turns that ruling into rows that F can execute one by one.
+- **What the inventory found.** 55 capability rows, folding 104 finer fact-check rows. 28 are already native (some stricter or richer), 22 are required gaps, 3 conflict with the reader's walls or recorded caps, and 2 belong to the sibling waves (appearance, X1; draft review, X3). Four conflicts, C1 to C4, cover the three conflict rows and parts of six gap rows (§2, §3). The gaps go beyond #1418's five examples: Back that returns from an in-page jump, the rules index, the index's newest docs, readable file titles and HTML pages that load sibling files are on the list too.
+- **What is decided here.** Outside folders are read only in their six section directories, with containment checked on the fleet box by file descriptors, and never without a signed-in session (§4.1). Files above 2 MiB are read in bounded 512 KiB frames, never by raising a cap (§4.3). PDFs open in their own isolated frame with a self-hosted viewer (§4.4). Variants, tracker links, Back-to-close, drawn figures in print and the other reading-layer gaps need one library release, designed here and released only by you (§4.2, §4.5 to §4.7, §6). Print works from ccrc's own window, without `allow-modals` (§4.6).
+- **What stays fixed.** The reader frame stays `allow-scripts` only, the shell CSP stays `frame-src 'none'`, no frame touches the console's DOM, the library stays at 1.1.0 in this wave, and every current cap stays. Nothing here touches the standalone reader or any live service.
+- **What you must check.** Two choices in "Waiting on you": the reading state left on the old origin (C1), and HTML pages that need more than today's walls allow (C3). Each has a recommendation, and nothing in the leaf plan waits on either. The coordinator ruled the other two: figures print drawn, in two stages (C2), and the ceilings are 64 MiB for large files and 4 MiB for inline PDFs (C4).
+
+## 1. Context
+
+This section says what the inventory rests on, and which boundaries no design here may move.
+
+### 1.1 The rulings this spec carries out
+
+| Ruling | What it says | Footing |
+|---|---|---|
+| Retirement drops no feature (2026-10-25, #1418 and #1420) | Full parity is required, not Later or Dropped. Outside non-repo folders, layout variants, large files, PDFs and configured tracker links are kept. Outside folders need not become Git repositories. | Sourced: programme ledger, Carried constraints |
+| Parity inventory reconciliation | The promise is not limited to the five examples. Print, figure-overlay Back-to-close and old-origin state are reconciled explicitly. Older Later or Dropped labels are not waivers. A genuine conflict goes to you. | Sourced: programme ledger, Carried constraints; completion plan Task 16 |
+| Caps and walls stay until a reviewed design replaces them | No unsafe cap lift, no unauthenticated live working-tree read, no sandbox or CSP widening, no `allow-modals`. | Sourced: completion plan, Global Constraints |
+| Files over 2 MiB | "A bounded larger read, such as the reserved `docs-show-range` verb, becomes required, not Later; the current caps are not relaxed in its place." | Sourced: rich-docs spec §6 parity table (amended 2026-11-11) |
+
+### 1.2 How the inventory was built
+
+- **The standalone reader** was read from its source on this box, behaviour only: its request handler, its page script (the default layout, AB, in 27 numbered parts), its four other layouts, its stylesheet and its theme script. Its configuration was not read. Its location, labels and configured values never appear here.
+- **The native reader** was read at `main`: `shared/docs.ts`, `server/src/docs/**`, the docs verbs of `ccd/ccd`, `pwa/src/docs/**`, and the installed library `@synapsium-labs/docserver` 1.1.0 (`dist/`, `README.md`).
+- **Measured on the fleet box, 2026-11-18,** over the six section directories of the projects under the projects root, only the figures the ceilings need: the largest file is 52 030 856 bytes (a 3D model); 143 files are above 2 MiB (3D models, PNG images, one Markdown file of 3.4 MiB, one HTML page of 2.6 MiB) and 99 above 4 MiB; no PDF is present. §4.8 adds counts of HTML pages by the wall they need, as the coordinator asked. Roots outside the projects root were not measured, because that would read the standalone reader's configuration.
+- Each native status names the source that proves it. "Present" needs a citation; a capability found only by reading, not by running, says so.
+
+### 1.3 Boundaries that do not move
+
+| Boundary | Value | Where it is pinned |
+|---|---|---|
+| Reader frame sandbox | Exactly `allow-scripts` | rich-docs §4.1 |
+| Shell CSP | `frame-src 'none'` | completion plan, Global Constraints |
+| Frame and console | No parent-DOM access, no extra message channel, no window `message` listener in `pwa/src` | rich-docs §4.4, §5.1 |
+| Library | `@synapsium-labs/docserver` exactly 1.1.0 in this wave. A library change is designed here and released by you. | brief; completion plan Tech Stack |
+| Phone | Both 2026-11-06 phone blocks byte for byte; the tap, one-bar and desktop-fit budgets stand | completion plan, Global Constraints |
+| Caps | Class caps 2 MiB, ccd ceiling 4 MiB, HTML tap-to-render above 1 MiB, mockup assets 64 and 5 MiB | `shared/docs.ts` (B), `pwa/src/docs/mockup/policy.ts` |
+| The standalone reader | Not touched, not reconfigured, not retired by any wave here | ledger, Carried constraints |
+
+## 2. The inventory
+
+This section is the side-by-side table. Each row gives the action, what the standalone reader does, what native `main` does with its proof, and a disposition: **Native** (already native, perhaps stricter or richer), **Gap** (a required gap, designed in §4 or §5), or **Conflict** (needs your ruling, §3). F runs every row on the installed release (Task 17's "Complete parity inventory").
+
+### 2.1 Pages, listings and refs
+
+| # | Action | Standalone result | Native at `main` (proof) | Disposition |
+|---|---|---|---|---|
+| I1 | Open the docs index | One card per root, each section with its newest five docs and "N more" | Partial: a project chooser with per-section counts (`DocsIndexView.tsx#IndexRow`, `shared/docs.ts#DocsIndexOk`); no doc names | Gap, §5.1 |
+| I2 | Open a project | Every section with all its docs, served-ref note | Native: section rows with counts (`DocsTreeView.tsx`, `docsTree.ts#listDir`) | Native |
+| I3 | Open a section | All file types, humanized titles, date label, draft badge, newest first | Partial: folders-first tree, all types, sizes, class glyphs, filter (`DocsTreeView.tsx#ListingPage`); raw file names, no date label | Gap, §5.2 |
+| I4 | Deep paths | Any depth | Native, bounded at 16 levels and 5000 entries, unlisted counted by reason (`DocsTreeOk.unlisted`) | Native |
+| I5 | `?ref=<branch>` | Local, then `origin/` | Native, newer of local and origin wins (`ccd` `resolve_bare`) | Native |
+| I6 | `?ref=origin/<b>` | Reads the remote-tracking branch | Partial: fails `unresolved-ref` with a one-tap suggestion (`DocsFailureView.tsx`) | Gap, §5.3 |
+| I7 | `?ref=<tag>` or a short commit | Resolves | Missing: tags and short commits refused; full commits open through `at=` (rich-docs G6) | Gap, §5.3 |
+| I8 | Fetch on miss | Fetches the branch, 60 s cooldown | Native: `docs-fetch`, auto-refresh on stale, the chip (`useDocsVisit.ts`) | Native |
+| I9 | Served-ref note | "Serving <ref>." on project and section pages | Native and richer: requested, served, commit, relation, freshness (`DocsTreeOk.ref`) | Native |
+| I10 | Uncommitted draft | Working-tree file of the root's checkout, badged, banner | Native: drafts from the branch's holder, fingerprint-pinned (`entryView`, `docs-show --fingerprint`) | Native |
+| I11 | Per-root default branch | Configured per root | Partial: derived from origin HEAD, then main, then master (`DocsTreeOk.ref.via`); no override | Gap, §5.4 |
+| I12 | Honest errors | 404 with the `?ref=` hint | Native, different words, richer (`docsText.ts`) | Native |
+| I13 | GitHub link | Blob link at the served commit | Native, with the reason when off (`githubBlobUrl`) | Native |
+| I14 | Six sections | Six | Native (rich-docs G1) | Native |
+| I15 | Per-doc history | 100 commits | Native and redacted (rich-docs G4) | Native |
+| I16 | Changes since, only this day, Back to the latest | Server diff | Native, client diff (rich-docs G5, G6; D1) | Native |
+| I17 | Hidden files | Working tree skips dot paths | Native lists committed dotfiles as `other`, download only (`contentClass`) | Native |
+| I18 | A worktree served as its own root | A configured label per worktree | Native: `?ref=<its branch>` on the parent project, drafts from the holder | Native |
+| I19 | Adding a root without restart | Config file re-read | Native for projects (a new project directory is listed at once); outside folders are F1 | Native |
+| I20 | Draft review by link | Hand-added folders that never expire | Missing: Share sends only the committed permalink (rich-docs G11) | Owned by X3 (draft review) |
+
+### 2.2 Files and formats
+
+| # | Action | Standalone result | Native at `main` (proof) | Disposition |
+|---|---|---|---|---|
+| F1 | Outside folder | A non-git root served from its working tree, "not a git repository" | Missing: only the projects root; a non-git project is listed and refused `not-a-git-repo` (`ccd/ccd`, `docsText.ts`) | Gap, §4.1 |
+| F2 | Markdown | Rendered in full, any size | Native up to 2 MiB, render gate at 512 KiB (`markdownLimits.ts`) | Native |
+| F3 | Markdown above 2 MiB | Rendered | Missing: the `too-large` sentence (`DocsLeaf.tsx`) | Gap, §4.3 |
+| F4 | Image above 2 MiB | Shown | Missing: "Image not loaded" and a Download that fails at the same cap | Gap, §4.3 |
+| F5 | Any file above 2 MiB, download | Served | Missing: Download uses the capped file route (`objectUrls.ts#downloadDocFile`) | Gap, §4.3 |
+| F6 | PDF | Browser's inline viewer, any size | Missing: class `other`, "No preview", Download up to 2 MiB (`DOC_CONTENT_CLASS_BY_EXT`) | Gap, §4.4 |
+| F7 | Text and JSON | Raw text | Native: highlighted text leaf with Source and Download | Native |
+| F8 | Images up to 2 MiB, SVG | Raw | Native, magic-checked, SVG never runs script (`sniffRaster`, `SvgBody`) | Native |
+| F9 | `.ico` | Shown | Class `other`, Download | Gap, §5.5 |
+| F10 | HTML page, static | Raw in an opaque origin | Native: mockup frame, stricter (rich-docs G9) | Native |
+| F11 | HTML page with its scripts | Runs, with popups, modals and downloads allowed | Partial: Run scripts, `allow-scripts` only; `alert`, `window.open` and download links do nothing (`mockup/policy.ts#MOCKUP_SANDBOX_SCRIPTED`) | Conflict C3, §3 |
+| F12 | HTML page loading sibling modules, models, WebAssembly or JSON | Served raw with CORS, any size | Partial: direct siblings inlined as `data:` (64 assets, 5 MiB); relative module imports, `fetch`, workers, `.glb`, `.gltf`, `.wasm`, `.json` do not load (`mockup/load.ts`, `MOCKUP_ASSET_MIME`) | Gap within the walls, §4.8; beyond them Conflict C3 |
+| F13 | HTML page above 2 MiB | Runs | Missing: `too-large` | Conflict C3, §3 |
+
+### 2.3 The reading layer (the library inside the frame)
+
+| # | Action | Standalone result | Native at `main` (proof) | Disposition |
+|---|---|---|---|---|
+| R1 | Rich layout, In short and Where things stand boxes, numbered sections | AB | Native (library 1.1.0) | Native |
+| R2 | Quick jump, keys sheet, `j` `k` `w` `i` `n` `p` `m` `o`, Esc | Yes | Native (`dist/enhance/jump.js`, `keysheet.js`, `position.js`, `keys.js`) | Native |
+| R3 | Contents rail, phone drawer, scroll-spy, progress, running head, skip link | Yes | Native (`rail.js`, `scroll.js`, `bar.js`); ccrc's bar owns the compact buttons | Native |
+| R4 | Index of IDs, ID previews, glossary hover | Yes | Native (`dist/enhance/*`) | Native |
+| R5 | Review strip, attention marks | `you` or `operator`; ID qualifiers skipped | Partial: `addressees` default `['you']`, `qualifiers` `[]` (`vocab.js`); ccrc passes no vocabulary | Gap, §5.6 |
+| R6 | Rules index and rule paragraphs | Yes | Missing: library flag `rules` off, ccrc never passes it (`options.js`, `seed.js` accepts it) | Gap, §5.6 |
+| R7 | In short "Headlines / Full" switch | Yes | Missing: removed from the library (`editorial.js` header) | Gap, §5.6 |
+| R8 | Read marks, last visit, folds, outline, reading position | Per doc | Native under `ccrc:reader:v1:` (`dist/host/store.js`, `DOC_FIELDS`) | Native |
+| R9 | A comparison kept across reload | Session storage | Missing: no `changes` field (`DOC_FIELDS`) | Gap, §5.6 |
+| R10 | Theme, width, serif or sans, lens | Aa menu, per device | Partial: theme seeded from the app's theme at each mount | Owned by X1 (appearance) |
+| R11 | Figures: Play, Animate edges, Full screen, Copy Mermaid | Yes | Native (`diagram-tools.js`) | Native |
+| R12 | Diagrams draw on open | Yes | Partial: on request while E17's `mermaid` line does not hold (`reader/policy.ts#docsDrawFor`); you ruled draw on open behind that reading (rich-docs §5.2) | Gap, waiting on lab E17; no design here, F evidences it |
+| R13 | Figure overlay: Back closes it | `pushState`, `popstate` closes | Missing: no history entry; Back leaves the page (`diagram-tools.js`, README) | Gap, §4.7 |
+| R14 | In-page jump: Back returns | `pushState` per jump | Missing: `hash` replaces the entry (`ReaderFrame.tsx` `onHash`, `lib/router.ts`) | Gap, §4.7 |
+| R15 | Code copy, table filter, sticky headers, status labels, GitHub alerts, footnotes, front matter | Yes | Native | Native |
+| R16 | Links to sibling docs keep `?ref=` and `?variant=` | Rewritten in the page | Native for the pin (ccrc carries it, `routeReaderLink`); variant is §4.2 | Native, variant in §4.2 |
+| R17 | External links | Open directly | Native, through the external-link sheet (stricter) | Native |
+| R18 | Fonts and Mermaid | Mermaid from a CDN | Native, self-hosted (stricter) | Native |
+| R19 | Layout variants `classic`, `A`, `B`, `C` | `?variant=` per URL | Missing: the library ships one layout (§3.3); ccrc passes no layout | Gap, §4.2 |
+| R20 | Tracker item link | One item per doc, from the byline fact, the promise-delta `item:` line or a header line, to one hardcoded workspace | Missing: the library needs a host `itemLink`; the frame wire has none | Gap, §4.5 |
+| R21 | Print | Ctrl+P prints the whole doc through a print stylesheet | Partial: the frame scrolls inside a viewport-sized box and the host has no print rules, so at most the visible part prints (inferred from source, not run) | Gap, §4.6; figures Conflict C2 |
+| R22 | Reading state on the old origin | Kept on that origin | Starts fresh: different origin and key formats (rich-docs G7, §5.2) | Conflict C1, §3 |
+
+### 2.4 Summary
+
+| Disposition | Count | Rows |
+|---|---|---|
+| Native | 28 | I2, I4, I5, I8 to I10, I12 to I19, F2, F7, F8, F10, R1 to R4, R8, R11, R15 to R18 |
+| Gap | 22 | I1, I3, I6, I7, I11, F1, F3 to F6, F9, F12 (within the walls), R5 to R7, R9, R12, R13, R14, R19 to R21 |
+| Conflict | 3 | F11, F13, R22 |
+| Owned elsewhere | 2 | R10 (X1, appearance), I20 (X3, draft review) |
+
+The four conflicts and their rows: C1 is R22; C2 the figures of R21; C3 is F11, F13 and the part of F12 beyond the walls; C4 the ceilings of F3 to F6. So C1 and C3 settle the three conflict rows, and C2, C3 and C4 also settle parts of six gap rows. The finer rows (70 client rows and 34 server rows) are the fact-check record in the leaf plan's Results; each maps to one row above.
+
+```mermaid
+flowchart LR
+  S["Standalone capability"] --> Q{"Native at main?"}
+  Q -- "present" --> N["Native<br/>F re-runs it"]
+  Q -- "partial or missing" --> W{"Within the walls<br/>and caps?"}
+  W -- "yes" --> G["Gap<br/>designed in §4 or §5"]
+  W -- "no" --> C["Conflict<br/>your ruling, §3"]
+  G --> F["F acceptance row"]
+  C --> F
+  N --> F
+```
+*Figure 1. How each row got its disposition. Every row, whatever its disposition, becomes an acceptance row that F runs on the installed release.*
+
+## 3. Conflicts that need your ruling
+
+A conflict is a row that cannot reach full parity without moving a boundary of §1.3, or that turns on a product choice. Each went to the coordinator as one ask (asks 596 to 599, 2026-11-18); two came back ruled and two wait for you. Nothing here is waived by this spec.
+
+| # | Conflict | Options | Status |
+|---|---|---|---|
+| C1 | Reading state kept on the old origin (marks, last visit, folds, settings) cannot move by itself: it lives in another origin's storage under other keys | (a) Capability parity, data starts fresh. (b) A one-time, opt-in import, as its own follow-on design. | Waiting on you; recommendation (a). §4.9 prices (b). |
+| C2 | Print with figures drawn. They are drawn inside the frame, and nothing drawn there reaches the console today | (a) Figures print as their Mermaid source. (b) Also hand each drawn figure to the console as a checked PNG for print. | Ruled (b), staged (coordinator, ask 597): stage 1 prints figures as source; stage 2 adds drawn figures; parity needs stage 2 (§4.6). |
+| C3 | HTML pages that need more than today's walls: dialogs, popups and page downloads (each needs a sandbox token the walls forbid), WebAssembly and workers (each needs a mockup CSP change), sibling assets above the 5 MiB budget, and pages above 2 MiB | (a) Keep the walls: run what fits with the in-walls loader of §4.8, Download and Source for the rest, with a sentence saying why. (b) Commission a wider evidence-page surface as its own reviewed security design. | Waiting on you; recommendation (a). §4.8 counts what stays standalone-only and prices (b). |
+| C4 | The large-file ceilings | Range reads up to 32, 64 or 128 MiB; PDFs inline up to 4 or 8 MiB | Ruled 64 MiB and 4 MiB as the design default (coordinator, ask 599); you approve it with the spec (§4.3). The 4 MiB PDF figure is confirmed by lab PDF-L2, not yet measured. |
+
+## 4. Designs for the named gaps
+
+Each subsection gives the design, its alternatives with the choice and why, where it runs (ring and context), and its test strategy. Mutation rows are numbered M11.x so they never collide with the rich-docs spec's M8, M9 and M10 rows.
+
+### 4.1 Outside folders
+
+**The idea.** An outside folder is a root with no commit. Native already reads one kind of file with no commit safely: a draft, by fingerprint, after leaf checks for kind, hard links, foreign owners and other devices. An outside folder reuses those leaf checks and the fingerprinted read, and adds what a draft never needed: a directory walker (drafts are listed through `git status`, which a folder does not have) and an admission check for the folder itself. It has no ref, no history and no commit. Its reads require a signed-in session: on a box where sign-in is dark, every folder read refuses `auth-off`, so a live working tree is never read without one.
+
+```mermaid
+flowchart TB
+  O["You, in Settings · Docs"] -- "add label and path" --> D["Session-gated door<br/>account step-up"]
+  D --> AG["Agent · ccd docs-folder --add"]
+  AG --> V{"Path admitted?"}
+  V -- "no" --> R["Refused, with the reason"]
+  V -- "yes" --> REG["Registry on the fleet box<br/>one file per label"]
+  P["Reader opens ~label"] --> T["ccd docs-folder-read<br/>--label, --op tree"]
+  T --> REG
+  T --> W["Walk with leaf checks<br/>no symlink followed"]
+  W --> A["Answer: entries, sizes,<br/>modified times, fingerprints"]
+```
+*Figure 2. Adding a folder and reading it. The fleet box keeps the registry and re-checks the path on every call; the server never sends a path to read.*
+
+**Settings.** A "Docs folders" section lists each folder by label, with its path, and offers Add and Remove. Add takes a label (the project grammar, `DOCS_PROJECT_RE_BODY`) and an absolute path on the fleet box.
+
+**The primary wall: only the six section directories.** Whatever folder is added, `ccd` reads nothing but the six section directories below it (`docs/superpowers/specs` and the other five), leaf-checked. A folder added at a high level exposes only those six paths under it, never its other files.
+
+**Admission, decided by `ccd` (the fleet box) at Add and again at every read, by file descriptors, not by path strings.** `ccd` opens the path from `/` one component at a time with `O_DIRECTORY | O_NOFOLLOW`, so a symlink anywhere in it refuses, holds the folder's directory descriptor, and reads everything below it relative to that descriptor, again with `O_NOFOLLOW` at every step. A component swapped for a symlink between Add and a read therefore refuses at the read. The folder must be a directory owned by the session user. As defence in depth, it must neither contain nor sit inside a protected directory, compared by device and inode of each ancestor and each protected directory, not by path prefix: the projects root, the worktrees root, the session registry, `~/.cc-secrets`, `~/.cc-limits`, `~/.ccrc`, `~/ccrc-backups`, every wrapper home and Claude config directory, `~/.config`, `~/.ssh`, `~/.gnupg`, `~/.local/share` and the home directory itself. A refusal names its reason; the answer never echoes a path it refused. The server checks only the shape of a path (absolute, no `.` or `..`, bounded length) before it composes the verb: that is a second decider of the same fact, legitimately different because `ccd` re-checks beside the files on another host.
+
+**The registry.** `~/.cc-sessions/docs-folders/<label>`, one file per label holding the path, a dotless registry subdirectory like the pool markers. Its one writer is `ccd docs-folder --add|--remove`, under the registry's lock. Only `ccd` reads it. The server lists it through `ccd docs-folder --list`, which answers labels and paths for Settings only. Remove also purges the label's range snapshots (§4.3). A folder belongs to the node whose `ccd` holds it, today the one primary node; `~<label>` names a folder on that node, and a future node prefix would come first (`@node/~label`).
+
+**Reading.** One new read verb, `docs-folder-read --label <label> --op tree|show|prepare|range …`, under the new cap token `docs-folders-v1`, with its own agent grant and `REQUIRED_VERB_FLAG` row (`--label`). The existing verbs' argv and grants never change (`REQUIRED_VERB_FLAG` keeps one flag per verb), and a new server never sends a folder read to an older fleet. `ccd` resolves the label from the registry, never from the wire, re-runs admission, and walks the six section directories with the new walker: bounded by the existing listing caps (5000 entries, 16 levels, 1 MiB wire) and the helper's deadline, never following a symlink, listing a symlink, FIFO, socket or device with its mark and never opening it, and refusing a read through a symlinked directory with `symlink-in-path`, as today. Dot components are skipped, as the standalone reader skips them in a working tree. Each entry carries its size, its modified time and, within the existing 32 MiB draft hash budget, its fingerprint; an entry past that budget, or above the 4 MiB hash ceiling, has none and is pinned at open (§4.3).
+
+**What the page shows.** Folder pages live at `/docs/~<label>/…`: `~` is a character the project grammar never admits, so a folder can never be read as a project. The truth line reads "Not in a repository" with the file's modified time from the same read that produced the bytes. History, Changes since, version pages, GitHub and Share are off, each with its reason ("A folder outside a repository keeps no history"). The index lists folders in their own group, after projects.
+
+**Redaction.** The folder's absolute path never leaves Settings: no tree, file or range answer, error body or log line carries it, and log lines name the label only. Any free text a folder answer carries (an errno detail) goes through the shared redactor. Dot components never list, so `.env` files and key directories inside a folder stay unlisted.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| How a folder is read | (a) A new walker plus the draft leaf checks and fingerprinted read; (b) a wholly new reader; (c) a snapshot copy into a repository | (a): the leaf checks and the fingerprinted read are the one live working-tree read already reviewed. (c) fakes a history the folder does not have. |
+| Where the registry lives | (a) On the fleet box, written by `ccd`; (b) in `coord.db` on the server, sent with each read | (a): containment is decided beside the files, by the one component that names the disk layout. (b) would put a path on the wire, which `ccd` never trusts. |
+| How a folder is named in URLs | (a) `/docs/~<label>`; (b) a `folder:` query; (c) folders as projects | (a): a reserved mark keeps the two namespaces apart, as the reserved `@` does for a future node. (c) collides with project names. |
+| Reads while sign-in is dark | (a) Refused `auth-off`; (b) answered, like committed docs | (a): a folder is a live working tree, and the walls forbid reading one without a session. |
+| What a symlink does | (a) Listed, never followed; (b) followed inside the folder | (a): the native rule for every working tree. The standalone reader's prefix check let a symlink reach another root's sections; that leak is not copied. |
+
+**Test strategy.** ccd fixture HOMEs only: admission refusals one by one (a symlinked component, a path inside the projects root, a parent of the session registry, a protected directory reached by a second path such as a bind or a hard-linked parent, a file, a foreign owner); a component swapped for a symlink between Add and a read refuses at the read; an escaping symlink inside a folder listed and never read; a FIFO and a directory loop met by the walker; a file outside the six section directories never listed; a dot directory never listed; the registry's one writer (a single-definition scan); no absolute path in any answer or log line (a scan of every answer shape). Server: every folder read refuses `auth-off` on a dark box and answers when armed and signed in; Add refuses dark and asks the step-up; a request without the docs marker header gets 403. PWA: the folder truth line, the five actions off with their reasons, `~` routing. Mutation rows M11.1 to M11.6 (leaf plan).
+
+### 4.2 Layout variants
+
+**The idea.** The standalone reader has five layouts: the default (AB), `classic` (the layout before AB), `A` (editorial), `B` (a review workbench with ID chips, a Contents and Index rail and its own keys) and `C` (guided layers: folded sections with reading time, a hero, tables as cards on a phone). Each differs in code, not only style (the smallest pair differs by 694 lines of script). They are ported into the library as layouts, and the host picks one per device or per visit.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Where variants live | (a) In the library as layouts, each its own enhance bundle; (b) host CSS over the default; (c) the standalone reader's files inside the frame | (a): the variants differ in code. (c) loads Mermaid from a CDN, reads storage directly and rewrites links itself, all of which the frame forbids. |
+| How the frame loads one | (a) Only the chosen layout's bundle is inlined, allowed by its own hash; (b) every layout inlined | (a): the srcdoc stays the size it is today. |
+| Persistence | (a) A per-device reading pref, plus `?variant=` for one visit; (b) URL only, as in the standalone; (c) server-side | (a): the standalone reader keeps the choice in the URL only; a per-device pref keeps that link behaviour and adds a lasting choice. |
+| The control | (a) A Layout row in ccrc's Page details sheet; (b) in the library's Aa menu | (a): the Aa menu's ownership is X1's, and a layout change remounts the frame, which the host does. |
+
+- **Names.** `default` (AB), `classic`, `editorial` (A), `review` (B), `guided` (C). `?variant=` accepts the standalone reader's names (`AB`, `A`, `B`, `C`, `classic`) and maps them; an unknown name opens the default, as in the standalone reader.
+- **State.** Each layout's own state (B's and C's per-doc keys) goes through the bridge's `store.set` under the reader prefix, as per-doc fields named per layout; the 1 MiB budget and eviction are unchanged.
+- **Phone, laptop, wide.** Every layout must keep ccrc's one-bar, tap and desktop-fit budgets at 412×915, 1280×800 and 1920×1080. A layout that cannot is fixed in the library before it ships; none is shipped as "desktop only".
+- **Departure.** Rich-docs §3.3 says the library ships only the default layout. That sentence predates your #1418 ruling (2026-10-25, layout variants kept), which the amended §6 row carries ("every kept variant"); the leaf plan defines the reconciliation as D-8762. §3.3 is superseded by it once wave P5 implements it, and P5 amends §3.3's text then.
+
+**Test strategy.** Library: each layout passes the conformance corpus and the frame CSP hash check. ccrc: the pref round trip; `?variant=` mapping and its carry on doc links; one browser row per layout per width (one bar, no horizontal scroll, contents reachable). Mutation rows M11.7 to M11.9.
+
+### 4.3 Files above 2 MiB
+
+**The idea.** The base spec's reserved seam: a new verb, `docs-show-range`, under its own cap token `docs-range-v1`, returns a file in frames of at most 512 KiB, each from the same pinned content. The class caps and the 4 MiB ceiling are not touched. The PWA reassembles frames up to the range ceiling.
+
+**The ceilings (C4, the coordinator's design default).** Each is one named constant in `shared/docs.ts`, its single source of truth, with ccd holding a parity copy where ccd enforces it:
+
+| Constant | Value | Governs |
+|---|---|---|
+| `DOCS_RANGE_FRAME_BYTES` | 524 288 (512 KiB) | The raw bytes in one frame |
+| `DOCS_RANGE_MAX_BYTES` | 67 108 864 (64 MiB) | The largest file read by range: download, and the reassembled bytes behind any view |
+| `DOCS_PDF_INLINE_MAX_BYTES` | 4 194 304 (4 MiB) | The largest PDF opened in the PDF frame; above it, download only |
+| `DOCS_IMAGE_VIEW_MAX_PIXELS` | 67 108 864 (64 megapixels, at most 16 384 a side, read from the image header) | The largest image shown on its own page; above it, download only, so a small file that decodes huge is never decoded |
+
+Opening, viewing the source and downloading differ. Download reaches the range ceiling for every class. A rich view never goes past what the existing budgets allow: Markdown renders in parts of at most 2 MiB, each under today's render gate and parse budgets, and a text file is shown as source in parts of the same size, under the highlight budgets. A part those budgets refuse is shown as plain text with the budget's own sentence, never half-rendered.
+
+```mermaid
+sequenceDiagram
+  participant P as PWA
+  participant S as Server
+  participant C as ccd on the fleet box
+  P->>S: prepare, doc and pin
+  S->>C: docs-show-range --prepare
+  C->>C: check the pin, copy and hash once
+  C-->>S: snapshot id, size, digest
+  S-->>P: snapshot id
+  P->>S: frame 0, naming the snapshot and the doc
+  S->>C: docs-show-range, same tuple
+  C-->>S: frame bytes and their digest
+  S-->>P: frame 0
+  P->>P: check the frame's digest
+  P->>S: frames 1 to n, one at a time
+  P->>P: every frame checked, sizes add up
+```
+*Figure 3. One range read. The prepare snapshots the pinned bytes; every frame comes from that snapshot, is bound to the same doc and carries its own digest; nothing is shown or saved until every frame has arrived and checked.*
+
+- **The pin.** A committed file is pinned by its blob. A draft or folder file with a fingerprint is pinned by it. A draft or folder file without one (above the 4 MiB hash ceiling or past the listing's hash budget) is pinned by the identity the listing measured, its size and modified time, and the open checks the file it opened (`fstat` of the open descriptor) against them, refusing `draft-changed` on any difference; its truth line then says "as read at <time>".
+- **The snapshot, a separate first step.** Before any frame, `docs-show-range --prepare` copies the pinned bytes once into a private snapshot, hashing as it copies, and answers only the snapshot's id, size and digest, no file bytes. A copy whose hash differs from a fingerprint refuses, as a draft read does today. The snapshot's id is bound to the whole request (project or folder label, section, path and pin), and every frame names that id and is checked against the same tuple; a folder frame also re-runs admission. So all frames come from one set of bytes, from the doc that was asked for, and each frame carries the sha256 of its own bytes, which the PWA checks. What this proves is that frames are not mixed and not damaged; what the bytes were at open is proved by the pin.
+- **The snapshot cache.** A ccd-owned directory under ccd's own state, never inside the session registry, mode 0700, guarded by one `flock`. A prepare reserves its size against the 512 MiB bound before it copies, at most 2 prepares run at once and at most 6 start a minute, entries live one hour and go least recently used first, and `docs-folder --remove` purges its label's entries. A frame whose snapshot is gone answers `snapshot-gone`, and the PWA starts again from prepare, once. The prepare's copy-and-hash time has its own constant, `DOCS_RANGE_PREPARE_BUDGET_MS`, a budget apart from the draft hash budget, set from lab RANGE-L1's measurement of a 64 MiB copy on the fleet box.
+- **The lane.** One frame per exec, through the existing read lane, so no frame puts more than 512 KiB of file bytes on the socket; the prepare puts none. The cost is about 100 to 150 ms a frame (base spec §6.7), plus the prepare: a 52 MB file takes 15 to 20 seconds.
+- **Departure.** Base spec §6.9 says each frame is "re-verified against the same blob or `fp`". Here each frame is verified against a snapshot taken under that check, which is defined as D-8764 in the leaf plan.
+- **Progress, Cancel and memory.** The read shows progress and a Cancel, and runs off the console's main work: each frame is one request, so the console keeps answering between frames. Cancel, leaving the page or opening another doc aborts the read and drops every frame held. The PWA holds the frames as a list of byte arrays and builds the file once, at the end, as a `Blob`. Peak bytes held by the page while reassembling, at the ceiling: about 65 MiB, the 64 MiB of frames plus one frame being decoded (judgement from the data path; F's Large files row measures it on a phone). No whole-file copy is made for hashing, because each frame is checked on its own.
+- **What each class does above 2 MiB.** Download: always, up to the ceiling. Images: shown on their own page from the reassembled bytes, after the magic check and the pixel check; inside a document, an image past the reader's budget keeps its "not loaded" chip, which now opens that page. Markdown: rendered in parts (below). HTML: C3. PDF: §4.4. Everything else: Download.
+- **Markdown in parts.** A line scanner, outside code fences, cuts the text at top-level headings into parts of at most 2 MiB each (a single section above 2 MiB is cut at a blank line, marked "continued"). Each part renders under every current cap and budget, as its own mount. ccrc's bar shows "Part 2 of 3" with Previous and Next. Before part 1 shows, the worker renders every part once, under the parse budget, and records each part's heading ids, so a fragment link into any part opens it; a part the budget refuses keeps its ids unknown, and a link into it opens part 1 with a note. Ids are de-duplicated within each part, so a heading text repeated in another part gets the same id there; a link names the first part that holds it, as the whole document would. The contents list, Print, Export and Changes since (with its 20 000-line cap) each act on the current part, and say so.
+- **Over the ceiling.** "This file is 80 MB; Docs reads files up to 64 MB." No partial file is ever saved or shown, and nothing is offered that would read past the ceiling.
+- **The overlay cap.** Today a draft above the 4 MiB hash ceiling is withheld `too-large` (`entryView`, `fp: null`). With range reads, a draft or folder file up to the range ceiling opens through its snapshot, whose digest is taken on open; above the ceiling it stays withheld, and the sentence names the ceiling.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Transport | (a) `docs-show-range` frames; (b) raise the class caps; (c) a streaming agent protocol | (a): the recorded seam, and the rich-docs row forbids (b). (c) changes the agent protocol, which one frame per request avoids. |
+| Re-verification | (a) Snapshot once, frames from the snapshot, each frame's own digest checked by the PWA; (b) re-hash the whole file for every frame; (c) a whole-file digest in the PWA | (a): (b) costs the whole file per frame (128 hashes of 64 MiB for one read), and (c) needs a whole-file copy in the page's memory, doubling the peak. The snapshot is named by its digest, so each frame is still tied to the pinned bytes. |
+| Markdown above 2 MiB | (a) Parts, each under today's caps; (b) render whole behind the render gate; (c) text only | (a): (b) relaxes the 2 MiB document cap, which the rich-docs row keeps. (c) loses the layout. |
+| Overlay cap | (a) Open through the snapshot up to the ceiling; (b) keep withheld above 4 MiB | (a): (b) loses big drafts and almost every big file in a folder. |
+
+**Test strategy.** Real fixtures below, at and above each boundary: 2 MiB (class cap), 4 MiB (ccd ceiling and hash ceiling), 64 MiB (`DOCS_RANGE_MAX_BYTES`), 4 MiB for a PDF and 64 megapixels for an image. A snapshot from a changed draft refuses; a file above 4 MiB changed between the listing and the open refuses `draft-changed`; a frame whose bytes do not match its digest fails the read; a frame naming another snapshot, or the same snapshot for another path, fails the read; a folder frame after Remove refuses; Cancel and navigation save nothing and drop the frames; the cache stays under its bound with two concurrent 64 MiB prepares, refuses a third and a seventh in a minute, and answers `snapshot-gone` after eviction, which the PWA retries once. Markdown parts: a cut never falls inside a fence; a cross-part link opens the right part. Real files are measured in F (Task 17's Large files row). Mutation rows M11.10 to M11.15.
+
+### 4.4 PDFs
+
+**The idea.** A PDF opens in a frame of its own, the PDF frame, with a self-hosted viewer (pdf.js, `pdfjs-dist`, Apache-2.0, an exact pin). It is a separate surface: its sandbox is `allow-scripts`, it is a `srcdoc` frame, so the shell's `frame-src 'none'` still blocks every navigation, and it has no message channel and no parent listener at all, like the static mockup frame. The reader frame is not changed.
+
+```mermaid
+flowchart LR
+  L["PDF row"] --> B{"Size"}
+  B -- "up to 2 MiB" --> SH["docs-show"]
+  B -- "2 MiB to 4 MiB" --> RG["docs-show-range"]
+  B -- "above 4 MiB" --> DL["Download only<br/>with the reason"]
+  SH --> PF["PDF frame<br/>srcdoc · allow-scripts<br/>no channel"]
+  RG --> PF
+  PF --> V["Pages drawn inside the frame"]
+  L --> D2["Download from ccrc's bar"]
+```
+*Figure 4. Opening a PDF. The bytes reach the frame inside its srcdoc; the frame sends nothing back. Download is always ccrc's, never the frame's.*
+
+- **Class.** `pdf` joins the content classes: `DOC_CONTENT_CLASS_MAP`, `DOC_CONTENT_CLASS_BY_EXT` and `DOCS_CLASS_CAP` (its show cap stays the 2 MiB class cap; above it, range reads), with a magic check (`%PDF-` at offset 0) under `nosniff`, as rasters have. The bytes travel as JSON, like every other docs file, so `DOCS_ALLOWED_CONTENT_TYPES` is unchanged.
+- **The frame's policy.** `default-src 'none'; script-src 'sha256-…' (the viewer and its bootstrap only); style-src 'unsafe-inline'; img-src data: blob:; font-src data:; worker-src blob:; base-uri 'none'; form-action 'none'`, as a meta and as the `csp` attribute, with no `'unsafe-eval'` and no `'wasm-unsafe-eval'`. It shares nothing with the reader's `frameCsp()` or `MOCKUP_CSP`. Order, as the mockup frames: the CSP meta first, the click guard second.
+- **Why `worker-src blob:` opens nothing.** The worker is made from a `blob:` URL created inside the frame's opaque origin, so it inherits the frame's policy: `default-src 'none'` leaves it no network, and it can reach neither the console nor any other frame. It only moves parsing off the frame's thread. Lab PDF-L1 measures both the inheritance and whether each engine allows the worker; where one does not, the frame parses on its own thread.
+- **What goes in.** The viewer, its worker source, its standard fonts and CMaps, and the PDF bytes, all inline in the srcdoc (the PDF as base64 in a JSON seed, `<` escaped). Nothing is fetched by the frame. The inline ceiling is C4's 4 MiB, a default that lab PDF-L2 must confirm on desktop and phone engines with the viewer, worker, fonts and CMaps in the srcdoc; if it cannot, the ceiling is lowered to what PDF-L2 proves, never raised.
+- **Links and navigation.** pdf.js runs with a link service that never navigates, and a click guard stops any other link; the viewer shows a link's target as text on hover or tap, so you can copy it. Opening it would need a channel, which this design does not add. A second `load` of the frame tears it down and shows the failure; it never reloads in a loop.
+- **The dependency decision.** `pdfjs-dist` at one exact version, chosen in wave P3 as the newest release at that time, with npm provenance, `npm audit signatures` and an import list, as for the library (rich-docs §3.6, §4.7); its Apache-2.0 notice joins the shipped third-party notices. Its WebAssembly image decoders stay off (no `'wasm-unsafe-eval'`): where pdf.js has a script fallback it is used, and an image it cannot decode without WebAssembly shows as "not shown" with the reason (lab PDF-L3 measures which images that hits). A pdf.js security release is adopted as its own scoped change with the same checks.
+- **Phone and desktop.** Pinch and the viewer's zoom inside the frame; one page column on a phone. ccrc's bar keeps Download and Back.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Viewer | (a) pdf.js in its own sandboxed frame; (b) the browser's PDF viewer through a URL; (c) render pages to images on the fleet box | (a): (b) needs a frame `src`, which `frame-src 'none'` blocks, and Android Chrome has no inline viewer. (c) parses untrusted PDFs natively on the fleet box. |
+| Where pdf.js runs | (a) An opaque-origin frame; (b) a worker of the console | (a): a pdf.js flaw that runs script (one such flaw was fixed in 2024) would, in (b), run with the console's origin and session. |
+| Links | (a) Shown, not followed; (b) a navigate-only port | (a): (b) is an extra message channel, which is a stop for this spec. |
+
+**Test strategy.** The frame's sandbox and CSP pinned token by token, `'unsafe-eval'` and `'wasm-unsafe-eval'` absent; the meta-then-guard order; no `MessageChannel`, `postMessage` or listener in the PDF frame's host code (a source scan and the M8.B5 run-time check); a PDF with JavaScript and a `/Launch` action does nothing; a tapped link annotation shows its target and does not navigate; a forced navigation tears the frame down once; the ceiling below, at and above; the magic check. Lab PDF-L1 (the worker in an opaque origin, and that it has no network), PDF-L2 (srcdoc size at the ceiling) and PDF-L3 (images that need WebAssembly) on desktop Chromium, Firefox and the phone engines (E18). Mutation rows M11.16 to M11.19.
+
+### 4.5 Tracker links
+
+**The idea.** You configure rules in Settings: a name, a pattern and a URL template. The library turns a doc's item reference into a link when a rule's pattern matches it, and leaves it as text otherwise. Nothing names a tracker in code; Settings starts empty.
+
+- **Where the item comes from.** The standalone reader's three sources, no more: the byline's item fact, a promise-delta `item:` line, and the legacy item header line. Body text is not scanned.
+- **A rule.** A pattern of at most 200 characters, matched in full against the item value (`^(?:pattern)$`, flag `u`), which must not match the empty string. A template that is an absolute `https://` URL with `{0}` (the whole match) and `{1}` to `{9}` (captures), each inserted percent-encoded. A placeholder may appear only after the first `/` of the path, or in the query or fragment: the checker parses the template with every placeholder replaced by a sentinel and refuses it unless the scheme and host are unchanged and every sentinel sits in the path, query or fragment, so no capture (such as `.attacker.example`) can extend the host. At most 20 rules; the first match wins. The checker is a pure function in `shared/` (L0).
+- **Where it runs.** In the parse worker, not in the frame. The library exposes the doc's item values to the render step (library 1.2, §6); the worker matches them against the rules, under the parse budget, and the seed carries only the resulting links (value, href). A pattern that backtracks without end (anchoring does not prevent that) therefore hangs only the worker, which the budget terminates and respawns, and the doc then shows its items as text. Item values are at most 100 characters, at most 50 per doc. A click is a `navigate`, so the link opens only through the external-link sheet, which names the host.
+- **Storage.** The server keeps the rules in a new `coord.db` table, `docs_settings`, whose one writer is `CoordStore`. Rules are per console, not per device, so a phone and a laptop agree. A rule can name the projects it applies to; with none, it applies everywhere. Adding a rule or changing its host is a widening (it decides where links lead): it takes the account gate's step-up and is refused while sign-in is dark. Removing a rule works dark.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Matching | (a) Anchored regex on the item value; (b) regex across all body text; (c) prefix lists only | (a): it is what the standalone reader links, and anchoring bounds the work. (b) adds noise and a larger regex surface. |
+| Where it is stored | (a) Server table; (b) reader prefs per device; (c) a file in each repository | (a): one answer on every device, and backups carry it. (c) puts private tracker hosts into repositories, some of them public. |
+| Who matches | (a) The parse worker, links in the seed; (b) the library in the frame, rules in the seed; (c) the host, through a new op | (a): the worker can be terminated, while the frame shares the console's thread on the phone (lab E17), so (b) lets a bad pattern freeze the console. (c) adds an op. |
+
+**Test strategy.** The rule checker: a placeholder right after the host, a template with a variable host, an `http:` template, a pattern matching empty, an over-long pattern, more than 20 rules, each refused. Matching: match, non-match left as text, the 100-character and 50-value bounds, percent-encoding of a capture holding `/` and `?`; a catastrophic pattern (`(a+)+` against 100 `a` and a `b`) ends in the worker's budget with the items as text and the console responsive. No tracker host anywhere in `pwa/src`, `server/src`, `shared` or the library's defaults (a scan). Mutation rows M11.20 to M11.23.
+
+### 4.6 Print
+
+**The idea.** Print runs in ccrc's own window, which may call `window.print()` without any sandbox token. When you choose Print in Page details, or press Ctrl+P on a Docs page, ccrc mounts a print view of the same document and its print stylesheet hides the console and the frame. The print view is drawn by the plain pipeline that Export uses (`exportBody.ts`, `export/buildExport.tsx`), from a tree parsed in the worker from the same bytes, so no frame content enters the console.
+
+**The tree is parsed ahead.** While the reader frame shows a document, no plain tree exists (the reader body publishes none, and `DocsHead.tsx#exportStateFor` answers `plain-view`), and a parse in the worker cannot finish inside a `beforeprint` handler. So once the reader reports `ready`, the console parses the print tree in the worker in the background, under the usual parse budgets, and keeps it for the visit. Print in Page details waits for it, for at most 10 s, then prints. Ctrl+P with no tree ready prints one line, "Docs is preparing this page for print; print again in a moment." Ctrl+P pressed while the frame has focus is lab PRINT-L2: whether each engine prints the console's window or tries the frame, which has no `allow-modals`.
+
+**What differs from the standalone reader's print.** The content is the same, block for block; the typography is the export stylesheet's rather than the library's print sheet (both force the light palette, unfold sections and hide every control). F compares the two printouts side by side, and a missing block is a failure.
+
+It ships in two stages (C2, ruled by the coordinator). Parity needs stage 2.
+
+**Stage 1, no library change.**
+
+- **What prints.** The whole document: headings, text, lists, tables unclamped, code wrapped, front matter, callouts, images. Each figure prints as its Mermaid source in a figure box with its caption.
+- **How.** A `beforeprint` listener mounts the view synchronously from the prepared tree and `afterprint` removes it, so the browser's own Print menu works too. The print stylesheet forces the light palette and 11 pt text and keeps figures and table rows from breaking across pages, as the standalone reader's does.
+- **What is not changed.** No `allow-modals`, no frame resize, no new op.
+
+**Stage 2, drawn figures (library 1.2, §6).** Print in Page details first asks the frame for its figures as pictures, then prints.
+
+```mermaid
+sequenceDiagram
+  participant H as ccrc console
+  participant F as Reader frame
+  H->>F: command print-figures
+  F->>F: draw each figure for print, then rasterise it to PNG
+  F-->>H: print-figure, index i of n, PNG bytes
+  H->>H: check the PNG, decode it, re-encode it from pixels
+  Note over H: 10 s after the command, stop waiting
+  H->>H: mount the print view, each figure drawn or source with a note
+  H->>H: window.print
+```
+*Figure 5. Stage 2 of Print. The frame sends pictures only; the console decodes and re-encodes each one, and a figure that does not arrive in time prints as its source.*
+
+- **On the port.** One command name, `print-figures`, and one frame-to-console op, `print-figure {i, n, png}`, where `png` is base64. They ride the existing port, parser and rate limits. No new channel, no parent-DOM access by the frame, no CSP change.
+- **In the frame.** The library draws each figure for print with HTML labels off (a figure drawn with HTML labels cannot be read back from a canvas), rasterises it to a canvas of at most 2048 px a side at the print scale, and sends it as PNG. A figure that cannot be drawn or read back is skipped; the console prints its source.
+- **Caps.** At most 64 figures a document, at most 1 MiB of PNG each, at most 16 MiB in total, enforced by the parser before any decode. A message over a cap is refused and counts toward the refusal limit.
+- **In the console.** Each PNG must start with the PNG signature; it is decoded with `createImageBitmap`, its size checked against 2048 px a side, drawn onto a console canvas and re-encoded, so only pixels reach the print view, through a `blob:` image. Never SVG, HTML or a URL from the frame.
+- **The deadline.** Print waits at most 10 s after `print-figures`; whatever has not arrived prints as source with a plain note ("This figure is shown as its source"). The browser's own Print menu (Ctrl+P) cannot wait, so it prints figures already fetched in this visit, and source for the rest.
+
+**The threat: frame-made bytes entering the console.** A hostile document controls what the frame draws, so it controls the PNG bytes. The walls: only PNG, by signature; decoding in the browser's image decoder, which the console already uses for every raster in a doc; the size checks before decode, so a decompression bomb is refused by its header; re-encoding, so no chunk of the original file reaches the print view; and the bytes only ever become pixels, never markup or a URL. The frame cannot address any other part of the console. What remains: a document can make a figure print a misleading picture, which it can already do by drawing one.
+
+**Cost of stage 2 (bounded).** One command, one op and their parser rows in the library; a print-mode draw per figure, unmeasured until lab PRINT-L1 measures a 30-figure document on the phone. If PRINT-L1 finds the cost out of line, the leaf plan stops and says so with the numbers, and you may waive stage 2.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Path | (a) A print view in ccrc's window; (b) `allow-modals` on the frame; (c) grow the frame to its content for print; (d) Export, then print the file | (a): (b) is forbidden. (c) needs a height op and depends on engines splitting an iframe across pages, which is unmeasured. (d) stays as a fallback, two steps. |
+| Drawn figures | (a) PNG pictures over the port, re-encoded by the console; (b) SVG markup; (c) none | (a), as ruled: (b) is markup made by the frame, which must never enter the console's DOM. (c) is the partial loss only you can waive. |
+
+**Test strategy.** Under print media the console chrome and frame are hidden and the print view holds every block of a fixture document; `beforeprint` and `afterprint` mount and unmount; no `allow-modals` anywhere (the existing token scans). Stage 2: a PNG over each cap refused before decode; a non-PNG refused; a PNG of 4096 px a side refused; the deadline prints source for a missing figure; the print view's figure images are `blob:` URLs of re-encoded bytes, never the frame's. Stage 1: the print tree is parsed only after `ready` and never on the main thread; Ctrl+P before it is ready prints the one-line page. Browser rows print to PDF on desktop Chromium (the harness's `page.pdf()` runs on Chromium only); Firefox and the phones are rows of F's device item, as is lab PRINT-L2. Mutation rows M11.24 to M11.26 (stage 1) and M11.42 to M11.45 (stage 2).
+
+### 4.7 Back closes the figure overlay, and Back returns from a jump
+
+**The idea.** The frame keeps no history entries of its own, so the console keeps them for it. When the library opens the figure overlay, or makes a jump it marks as a place to return to, it says so on the port; the console pushes one history entry tagged for that mount. Back pops it, and the console tells the frame to close the overlay or return to the place.
+
+```mermaid
+sequenceDiagram
+  participant F as Reader frame
+  participant H as ccrc console
+  participant B as Browser history
+  F->>H: place, kind overlay
+  H->>B: push entry tagged with the mount id and a sequence number
+  Note over B: You press Back
+  B->>H: popstate to the entry before
+  H->>F: command close-overlay
+  F->>F: overlay closes
+  Note over F: Or Esc or Close in the frame
+  F->>H: place, kind overlay-closed
+  H->>B: back, expecting the entry before
+  B->>H: popstate, consumed only if it lands there
+```
+*Figure 6. Back-to-close. The console holds the entries; the frame only reports places and obeys commands. The same pattern returns from an in-page jump with `command goto`.*
+
+- **On the port.** One new frame-to-console op, `place {kind: 'overlay' | 'overlay-closed' | 'jump', id?}`, and two command names, `close-overlay` and `goto` with an `id` in the fragment grammar. The existing `hash` op keeps replacing the entry for scroll-spy; only a `place` pushes. All of it rides the existing port, under the existing parser and rate limits.
+- **The tag.** Each pushed entry keeps the current `history.state` (so the `only` base of a version visit survives) and adds `docsPlace: {mount, seq, kind, id?}`. `mount` is a fresh random id per mount, separate from the port's nonce, which stays a secret of the port alone; `seq` counts places within the mount.
+- **Deciding a Back.** A pure decider (L1) reads only the popped entry's own state and the mount's current place list: an entry of this mount with a lower `seq` closes the overlay or returns to the jump's place; an entry of another mount, or none, is the router's. When the frame closes the overlay itself, the console calls `history.back()` and records which `seq` it expects to land on; the decider consumes the `popstate` only if it lands there. Nothing counts "ignore the next popstate", so the router's own synthetic `popstate` events are never swallowed.
+- **Bounds.** At most 50 pushed entries per mount; a remount (another doc) leaves earlier entries to the router, because their `mount` no longer matches.
+- **User activation.** Chromium skips, on Back, an entry pushed without user activation. The console pushes in answer to a port message, so this works only if the tap in the frame gives the console activation; under the HTML standard's user activation model an activation in a frame also activates its ancestors, but it is unmeasured here (rich-docs E16). E16 per engine is a precondition of wave P5; where it fails, Back leaves the page as today, Esc and Close still work, and F records the row as failed on that engine.
+- **Departure.** Rich-docs §4.4 says the `hash` op calls `replaceState`, closes the command list at `jump`, `settings`, `contents` and `outline`, and sends a command only "from a tap on ccrc's own bar". Here a `place` pushes an entry, and `close-overlay` and `goto` are sent on a Back. The leaf plan defines this as D-8763; §4.4 is superseded by it once wave P5 implements it, and P5 amends §4.4's text then.
+- **The threat.** A frame can only report places, bounded per mount and rate-limited by the existing parser; it never chooses a URL, and the console builds every entry. A hostile frame can at worst fill 50 Back steps with its own places, each of which closes on Back, and a remount ends them.
+
+| Decision | Options | Chosen, and why |
+|---|---|---|
+| Who keeps the entries | (a) The console, tagged per mount; (b) the frame's own `pushState` | (b) does not work: the frame is `about:srcdoc`, and its history is not the tab's Back. |
+| Payload | (a) Kinds and fragment ids only; (b) URLs | (a): an id in the fragment grammar is all a place needs, and the frame never sends a URL. |
+
+**Test strategy.** Overlay open, Back closes it and the page stays; Esc closes it and exactly one Back is consumed; a jump, Back returns; 51 places push 50 entries; an entry of an earlier mount goes to the router; the router's synthetic `popstate` during a pending back is not consumed; a pushed entry keeps `only`; a `place` with a URL or an unknown kind is refused by the parser; the decider is a pure function with a table of cases. Browser rows on desktop; Android Back and iOS swipe in F's device item. Mutation rows M11.27 to M11.30.
+
+### 4.8 HTML pages that load sibling files, within the walls
+
+**The idea.** Evidence pages import sibling modules, use import maps, and fetch a JSON or a 3D model. Within today's walls (`allow-scripts`, no channel, the 64-asset and 5 MiB budget, no CSP change), the mockup loader can supply them: it gathers the page's sibling files, as the asset planner already does, and a small shim injected before the page's scripts answers relative `fetch` and `import` from that set. This ships whatever you answer on C3.
+
+- **Imports.** Relative module specifiers are resolved by the planner from a bounded scan of each module and rewritten to inline modules, bottom up; a cycle or a dynamic specifier the scan cannot read is reported as "not loaded".
+- **Import maps.** Today a page with an import map is refused (`mockup/load.ts`). The planner reads the map: an entry naming a sibling is inlined like any module, and an entry naming an `https` origin goes through the existing Load external confirmation for that origin, exactly as a CDN script does today. A map naming anything else is refused as now.
+- **`fetch` of a sibling.** Answered from the set as a `Response`; any other URL fails as it does today. A sibling above 2 MiB is read by range (§4.3) and still counts in full against the 5 MiB budget.
+- **Not within the walls.** Dialogs, popups and page downloads need sandbox tokens; WebAssembly and workers need `wasm-unsafe-eval` and `worker-src blob:` in the mockup policy; budgets above 5 MiB and pages above 2 MiB need cap changes. All are C3.
+
+**What stays standalone-only under C3's recommendation (measured on this box, 2026-11-18, the 16 HTML pages in the six section directories of every project).** A page can fall under several rows.
+
+| Wall a page needs past | Pages | Under the recommendation |
+|---|---|---|
+| ES modules (sibling or CDN) | 11 | Run, with the loader and Load external |
+| Import maps | 5 | Run, with the loader |
+| CDN script or style | 8 | Run after Load external, as today |
+| A 3D model reference | 7 | Run when its assets fit the 5 MiB budget |
+| A runtime `fetch` or loader | 4 | Run when what it fetches is a planned sibling |
+| A single sibling above 2 MiB | 5 | Run when the total fits 5 MiB, through range reads |
+| Sibling assets above 5 MiB in total | 3 | Standalone-only: Download and Source |
+| Dialogs (`alert`, `confirm`, `prompt`) | 2 | The page runs; a dialog does nothing |
+| Popups (`window.open`, `target="_blank"`) | 1 | The page runs; a popup does nothing |
+| WebAssembly | 1 | Standalone-only for the part that needs it |
+| A page above 2 MiB | 1 | Standalone-only: Download and Source |
+
+**The widening, priced, not designed (C3's alternative).** Its likely shape is a separate isolated origin for such pages: a second registrable domain, with no cookie and no session of its own, serving one page's files by an unguessable, expiring capability URL that the console mints, and the page opened in a new tab rather than a frame. What it opens: arbitrary repository JavaScript running with network access on a real origin (so it could send what it is shown to anyone), popups and downloads from it, and a second public endpoint with its own certificate, routing and auth. What it would take: a design wave with a security review, new infrastructure on the server box (a domain, a certificate, a route), a capability store with expiry, and its own lab rows. This spec proposes no token, CSP or budget change.
+
+**Test strategy.** A page with a two-module graph, an import map, a JSON fetch and a GLB under the budget renders; a page over the budget shows Download and Source with the reason; the shim answers nothing outside the set; an import map naming a `data:` URL is refused; no change to `MOCKUP_SANDBOX_SCRIPTED`, `MOCKUP_CSP` or the click guard. Mutation rows M11.31 to M11.33.
+
+### 4.9 Old-origin state
+
+The rich-docs state contract starts state fresh on ccrc's origin (G7, §5.2). Every kind of reading state the standalone reader keeps exists natively (R8): read marks, last visit, folds, the outline, the reading position and the reading settings. Only the data already written on the old origin stays behind. Whether that is acceptable is C1, waiting on you. Nothing here authorises a migration, and nothing in the leaf plan depends on the answer.
+
+**The recommendation: a fresh start.** Capability parity holds. The old data is per device and convenience only, and its keys are built from the standalone reader's configured labels, not from projects, so any mapping would need your hand anyway.
+
+**The alternative, priced, not designed: a one-time, opt-in import.**
+
+- **How the old data would be read.** Only on the old origin, by you: the standalone reader serves no page that exports its storage, and nothing here may change it, so the export would be a short read-only script you run yourself in that origin's browser console, on each device whose state you want, producing a JSON file of the known keys.
+- **Consent.** You choose the file in ccrc's Settings, see what it holds (how many docs, which kinds of state), and confirm. You also confirm a table from each old label to a project or folder; a label you do not map is dropped.
+- **What it would add.** A parser in Settings for the old key formats, the label-to-project table, a bounded write through the reader store's own budget (1 MiB, eviction unchanged), and its tests. Its own design wave, not part of this spec.
+
+## 5. Designs for the smaller gaps
+
+| # | Gap | Design | Where | Tests |
+|---|---|---|---|---|
+| 5.1 | I1: the index's newest docs | `docs-index --all` adds, per project and section, the newest five names (names sort newest first, as the standalone does). The field is optional and additive: its argv is unchanged, so no cap token, and one reader in the PWA tolerates its absence (an older ccd). At the listing wire cap, names are dropped from the last project backwards, counts are kept, and `newestTruncated: true` says so | `ccd/ccd`, `shared/docs.ts`, `DocsIndexView.tsx` | Five or fewer per section; an index that would pass 1 MiB drops names, keeps counts and sets the flag; an older answer without the field renders; M11.34 |
+| 5.2 | I3: readable titles and a date label | One pure `docTitle(name)`: strip a leading `YYYY-MM-DD-`, the extension, turn `-` and `_` into spaces; the date shown as its own label; the raw name stays in the row's details | `docsTree.ts` (L1) | Table of names; M11.35 |
+| 5.3 | I6, I7: old ref spellings | `?ref=origin/<b>` reads as `refs/remotes/origin/<b>` (already accepted) unless a local branch of that name exists; `?ref=refs/tags/<t>` and a 7-to-64-hex commit resolve through `ccd`'s resolver and open as `at=<full commit>` | `ccd/ccd`, `shared/docs.ts` (`parseDocsPage`) | Each spelling; an ambiguous short commit refuses; M11.36 |
+| 5.4 | I11: per-project default branch | A Settings row per project, stored in `docs_settings`; listing links carry `?ref=<branch>` when set | `docs_settings`, Settings, `docsLinks.ts` | Set, unset, a branch that no longer exists falls back with a note; M11.37 |
+| 5.5 | F9: `.ico` | `ico` joins the raster table (`DOCS_RASTER_TYPES`, `DOCS_RASTER_EXT`, its MIME in `DOCS_ALLOWED_CONTENT_TYPES` by derivation). Its four-byte magic (`00 00 01 00`) is weak, so the check also reads the icon count (1 to 64) and the first entry's data offset and size, which must lie inside the file | `shared/docs.ts` | Magic match; a file with the magic but a bad count or offset refused as a mismatch; M11.38 |
+| 5.6 | R5, R6, R7, R9: reading-layer flags | ccrc passes `features.rules` (for every section) and the vocabulary (`addressees: ['you', 'operator']`, the ID qualifiers), which the 1.1.0 seed already accepts, and two library 1.2 options: the In short switch, and a seeded comparison base kept in `history.state` for the visit | `reader/bridge.ts`, `reader/policy.ts`; library 1.2 | Each flag's presence in the seed; reload keeps the comparison; M11.39 to M11.41 |
+| 5.7 | R12: diagrams on open | No design: you ruled draw on open behind lab E17's `mermaid` reading (rich-docs §5.2); the switch is one constant (`READER_E17_MERMAID`) once E17 holds | E17, then F | F's row; no mutation row here |
+
+## 6. Library side: what the shared renderer library must add (designed, not made)
+
+This section is the parity request to the shared renderer library, the public library ccrc's reader embeds. Library 1.1.0 stays pinned in this wave. The coordinator folds this request and the appearance wave's (X1) into one library wave and one release; the two are independent of each other, and nothing below depends on X1's interface. The release and its signed tag are yours.
+
+| Change | Rows | Compatibility |
+|---|---|---|
+| Layouts `classic`, `editorial`, `review`, `guided` beside `default`, each its own enhance bundle and script hash; the frame policy built for the chosen layout | R19 | Additive; a host that names no layout gets `default` |
+| The render step returns the doc's item values (from the byline item fact, a promise-delta `item:` line and the legacy item header), at most 50 of at most 100 characters; the seed accepts resolved item links (value and href) and draws them; the library carries no default tracker | R20 | Additive; no links seeded means items stay text |
+| Frame-to-host op `place {kind, id?}`; host commands `close-overlay` and `goto {id}` | R13, R14 | Additive; the frame sends `place` only when the seed says the host accepts it, so a 1.1 host never counts it as a refused op |
+| Host command `print-figures`; frame-to-host op `print-figure {i, n, png}`: each figure drawn for print with HTML labels off, rasterised at most 2048 px a side, at most 64 figures, 1 MiB each, 16 MiB in all, enforced by the host parser before any decode | R21 (stage 2) | Additive; sent only when the seed says the host accepts it |
+| An option for the In short "Headlines / Full" switch; a seed field for the comparison base | R7, R9 | Additive |
+
+Every addition rides the existing port, the existing host parser and `BRIDGE_LIMITS` (with the per-op caps above), and the bridge's version stays 1, as when `mermaid`, `command` and `progress` were added. None adds a channel, a window listener, parent-DOM access or a CSP source. ccrc adopts the release with the existing exact-pin, provenance and import-list checks (rich-docs §4.7), in wave P5.
+
+## 7. New server surfaces, their gates and rings
+
+Every new door is named here under the box-token census rules of the project's CLAUDE.md. None carries the box token. Every new route registers inside the one encapsulated docs plugin, so the docs marker header check (`foreign-request`) and the response headers of base §5.3 apply to it, as to the four reads today.
+
+| Surface | Kind | Gate | Census | Ring and context |
+|---|---|---|---|---|
+| `GET /api/docs/:project/range` (prepare and frame) | Read | Session when armed, like the four docs reads | Registered in `server/src/docs/routes.ts`; docs reads are not a census lane | L4 route; L1 `policy.ts` plan; L2 port `DocsRangeRead`; L3 `ccdsource.ts`; docs context |
+| `GET /api/docs-folders/:label/tree`, `/file`, `/range` | Reads of a live working tree | Session, and refused `auth-off` while sign-in is dark | Same file as the reads | Same rings; the dark refusal decided in L1 |
+| `GET /api/docs-folders` | Read (Settings and index) | Session, refused `auth-off` while sign-in is dark | New lane source `server/src/docs/folderRoutes.ts` | L4 |
+| `POST /api/docs-folders` (Add) | Write, a widening | Session; the account gate's step-up; refused `auth-off` while sign-in is dark | Hand-kept `DOCS_FOLDER_DOORS` in `box-token-census.test.ts`, checked against the file both ways; the CLAUDE.md session-gated sentence names it | L4 door; L1 path-shape check; `ccd` decides containment, legitimately a second decider on another host |
+| `DELETE /api/docs-folders/:label` (Remove) | Write, a narrowing | Session; works while sign-in is dark | Same set | L4 |
+| `GET /api/docs/settings` | Read | Session when armed | New lane source `server/src/docs/settingsRoutes.ts`, hand-kept `DOCS_SETTINGS_DOORS`; the CLAUDE.md sentence names both doors | L4 |
+| `PUT /api/docs/settings` | Write | Session; a change that adds a rule, changes a rule's host or sets a default branch takes the step-up and is refused `auth-off` while sign-in is dark; one that only removes works dark | Same set | L4; the rule checker in `shared/` (L0); the widening decision in L1; `CoordStore` the one writer |
+| `ccd docs-show-range` (`--prepare` and frames) | Read verb | Cap token `docs-range-v1`; agent grant `['docs-show-range','--project']` and its `REQUIRED_VERB_FLAG` row | `agent/src/whitelist.ts` | ccd docs helper |
+| `ccd docs-folder-read`, `ccd docs-folder --list` | Read verbs | Cap token `docs-folders-v1`; grants `['docs-folder-read','--label']` and `['docs-folder','--list']`; the existing verbs' argv and grants never change | `agent/src/whitelist.ts` | ccd docs helper |
+| `ccd docs-folder --add`, `--remove` | Registry writes, grants `['docs-folder','--add']` and `['docs-folder','--remove']` | Cap token `docs-folders-v1`; server-composed only | Forbidden to sessions: the classifier's forbidden row, the child deny file and the hook's deny arm, an accident guard as for `delegation-adopt`; the CLAUDE.md SAFETY list names it | ccd; one writer of the registry |
+
+New storage owners: the folder registry (fleet box, `ccd`, under the registry lock), the range snapshot cache (fleet box, `ccd`, bounded, under its own `flock`), and the `docs_settings` table (server, a new `coord.db` migration, `CoordStore` its one writer). Each has one writer.
+
+## 8. Security
+
+| Surface | Threat | Wall | Footing |
+|---|---|---|---|
+| Outside folders | A folder that reaches secrets; a symlink out; a path on the wire | Only the six section directories are read; admission by file descriptors from `/` with `O_NOFOLLOW`, at Add and every read; protected directories compared by device and inode; symlinks never followed; dot components skipped; the server never sends a path | Judgement, pinned by M11.1 to M11.6 |
+| Outside folders | A component swapped for a symlink after Add | Every read re-opens the chain with `O_NOFOLLOW` and walks below the held descriptor | Judgement, M11.2 |
+| Outside folders | A live working tree read without a session | Every folder read refuses `auth-off` while sign-in is dark, and needs a session when armed | Judgement, M11.6 |
+| Range reads | Mixed bytes from a file changing mid-read | One snapshot per prepare, bound to the doc and pin; each frame's digest checked | Judgement, M11.11 |
+| Range reads | A file changed between listing and open | The fingerprint, or the listed size and modified time against `fstat` of the opened file | Judgement, M11.11 |
+| Range reads | Frames outliving a removed folder | Every folder frame re-runs admission; Remove purges the label's snapshots | Judgement, M11.12 |
+| Range reads | The fleet box's disk, or a client forcing copies | Cache bounded at 512 MiB with reserve-then-copy, 2 prepares at once, 6 a minute, one-hour entries | Judgement, M11.14 |
+| PDF frame | A hostile PDF running script | Opaque origin, `connect-src` none, no channel; pdf.js with document scripting off and `isEvalSupported: false`, and no `'unsafe-eval'` in the frame's policy | Judgement; lab PDF-L1 |
+| PDF frame | The frame navigating or opening windows | `srcdoc` under the shell's `frame-src 'none'`; no popup or top-navigation token; a link service that never navigates and a click guard; a second load tears down | Measured for the reader frame (E1, E11); PDF frame UNMEASURED until PDF-L1 |
+| PDF frame | The parser's worker reaching the network | The worker inherits the frame's `default-src 'none'` | Judgement; lab PDF-L1 |
+| Tracker links | A regex that hangs | Matching in the parse worker under its budget, terminated and respawned on overrun; at most 50 values of 100 characters | Judgement, M11.21 |
+| Tracker links | A capture that changes the host | Placeholders only in the path, query or fragment, checked by sentinel parse | Judgement, M11.22 |
+| Tracker links | A link to a look-alike host | Every link through the external-link sheet, which names the host | Sourced: rich-docs §4.4 |
+| Back-to-close | A frame pushing history without limit | 50 entries per mount; the existing rate limits; the console builds every entry | Judgement, M11.29 |
+| Print, stage 1 | Frame content in the console | The print view is drawn from a tree the worker parsed from the doc's bytes, not from the frame | Sourced: `exportBody.ts`, `export/buildExport.tsx` |
+| Print, stage 2 | Frame-made bytes in the console | PNG only, capped before decode, decoded by the browser, re-encoded from pixels, shown as `blob:` images; never markup or a URL | Judgement, M11.42 to M11.45 |
+| Evidence pages | A page reading beyond its planned files | `MOCKUP_CSP`'s `connect-src` fallback to `'none'`; the shim is a convenience, not a wall, since page script can reach the original `fetch` | Sourced: `mockup/policy.ts#MOCKUP_CSP` |
+
+## 9. Waves
+
+The leaf plan names the waves, their files and their rows. Their order:
+
+```mermaid
+flowchart LR
+  P1["P1 range reads<br/>and large files"] --> P2["P2 outside folders"]
+  P1 --> P3["P3 PDF frame"]
+  P2 --> P3
+  P2 --> P4["P4 listings, refs,<br/>docs settings store"]
+  X1["X1 appearance host wave"] --> P6["P6 print stage 1<br/>and the page loader"]
+  P4 --> P6
+  L["Library 1.2.0<br/>its own programme"] --> P5["P5 reading layer:<br/>layouts, tracker links,<br/>Back, flags, print stage 2"]
+  P6 --> P5
+```
+*Figure 7. Wave order. P1 to P4 touch no reader host file and need nothing from the library. P6 waits for X1's host wave, because both edit the reader host files. P5 waits for library 1.2.0 and comes last.*
+
+## 10. Testing and proof
+
+Each named capability maps to Task 17's matrix:
+
+| Task 17 row | This spec | Leaf plan acceptance row |
+|---|---|---|
+| Outside folders | §4.1 | AR-1 |
+| Layout variants | §4.2 | AR-2 |
+| Large files | §4.3 | AR-3 |
+| PDFs | §4.4 | AR-4 |
+| Tracker links | §4.5 | AR-5 |
+| Complete parity inventory | §2 (every row), §4.6, §4.7, §4.9 | AR-6 |
+| Appearance | R10 | Owned by X1's spec and plan |
+| Draft review | I20 | Owned by X3's spec and plan |
+
+## Where things stand
+
+### Agreed
+
+- The inventory of §2: 55 rows, each with its disposition and its proof (this spec; X2's fact checks and adversarial review of 2026-11-18).
+- Outside folders are read only in their six section directories, with containment decided on the fleet box by file descriptors, and never without a signed-in session (§4.1).
+- Files above 2 MiB are read in 512 KiB frames from one snapshot; no cap is raised (§4.3).
+- The ceilings, the coordinator's design default (ask 599): 64 MiB for range reads, 4 MiB for inline PDFs (confirmed by lab PDF-L2), 64 megapixels for an image view.
+- PDFs open in their own isolated frame with a self-hosted viewer; the reader frame and the shell CSP are unchanged (§4.4).
+- Print works from ccrc's own window without `allow-modals`, in two stages; drawn figures (stage 2) arrive as checked PNG pictures through one new library op, as the coordinator ruled (ask 597) (§4.6).
+- Back-to-close, Back from a jump and the tracker links work within today's walls (§4.5, §4.7).
+- Three departures, defined in the leaf plan: D-8762 (layout variants in the library, carrying your #1418 ruling), D-8763 (history places and Back commands on the port), D-8764 (range frames verified against one snapshot). Rich-docs §3.3 and §4.4 are superseded by D-8762 and D-8763 once implemented, and the wave that implements each amends their text (ask 601).
+
+### Waiting on you
+
+- **C1, reading state on the old origin.** Recommended: a fresh start; every kind of state exists natively, and only the old data stays behind. The alternative, an opt-in import, is priced in §4.9. Nothing in the leaf plan waits on this.
+- **C3, HTML pages beyond today's walls** (dialogs, popups, page downloads, WebAssembly, assets above 5 MiB, pages above 2 MiB). Recommended: keep the walls; run what fits with the in-walls loader; Download and Source for the rest. The pages that stay standalone-only in part are counted in §4.8. The alternative, a separately isolated origin, is priced there too. Nothing in the leaf plan waits on this.
+
+### Later
+
+- The library release: the coordinator's one library wave for this request and X1's, then your release and signed tag.
+- Implementation: waves P1 to P6 of the leaf plan, each dispatched by the coordinator.
+- The side-by-side check on the installed release: F, Task 17.
+
+---
+
+*Written by Claude for the operator. Diagrams are Mermaid text; Copy Mermaid on a figure card copies the source.*
