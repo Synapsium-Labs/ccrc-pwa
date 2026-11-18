@@ -1343,8 +1343,13 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
-  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
-  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. One pass, left to right: whichever
+   *  opens first wins, a comment or a string, so a `/*` inside a line comment or inside a string opens nothing, and a string
+   *  is kept whole. Blanking block comments first read a `/*` written in a line comment as a comment running to the next
+   *  `*\/`, which once hid eight lines of routes.ts from this scan (rows RLB-T4-M3 and RLB-T4-M4, review 2480). A `//` right
+   *  after a colon, a quote, a backtick or a backslash is not a comment, as before (a URL, a regex). */
+  const LAB_LEXEMES = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:'"`\\])\/\/[^\n]*/g;
+  const labCode = (s: string): string => s.replace(LAB_LEXEMES, (m) => (m.startsWith('/') ? '' : m));
   /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
   const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
   const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
@@ -1364,6 +1369,15 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
       expect(labKeeps('x', src), src).toEqual([]);
     }
+  });
+
+  it('a `/*` inside a line comment or inside a string opens no comment: the code after it is still read', () => {
+    // CONTROL: each planted file holds a later `*/`, so a scan that blanked block comments first would read from the `/*`
+    // to it as one comment and miss the guarded call between.
+    const inLineComment = "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;";
+    const inString = 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;';
+    expect(labKeeps('x', inLineComment), inLineComment).toEqual(['x writes a log line']);
+    expect(labKeeps('x', inString), inString).toEqual(['x loads fs']);
   });
 
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
