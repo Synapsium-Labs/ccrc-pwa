@@ -1,6 +1,8 @@
 // Programme facts (Overlord W2, spec §5.6 H38): the L0 vocabulary and wire of what the server keeps about a programme as a
-// whole. Ring L0, context Coordination (C5): it imports nothing, and each literal union carries its `Record<X, true>` map
+// whole. Ring L0, context Coordination (C5): it imports only a `shared/` sibling's vocabulary (the edge predicates are
+// done tests', `./doneTests.js`), never `node:*`, and each literal union carries its `Record<X, true>` map
 // (`rings/wire-totality.test.ts`). Each W2 piece keeps its own headed block below; one piece never edits another's.
+import { DONE_PREDICATES, type DonePredicate, type DoneTarget } from './doneTests.js';
 
 // Overlord W2, overlaps (spec 2026-11-09 §5.5-5.6; plan docs/superpowers/plans/2026-11-16-overlord-w2/w2-overlaps.md, Task 1):
 // the pair vocabulary, the goal-conflict choice table and the wire a standing pair travels on. Ring: L0, context
@@ -117,28 +119,31 @@ export const EDGE_EVIDENCE_MAX = 300;
  *  that a target nothing can read stops holding the forecast within a week. Its own fact, not any other week: it only
  *  shares the number (`token-shared.test.ts` names it in a row of its own). This block's one millisecond count. */
 export const EDGE_UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
-/** Whether the edge arm that clears edges has shipped. Remaining work B sets it true; until then the forecast counts no
- *  edge in `blocking` or health, and lists edges as "clearing not shipped" (review 2265, F1). */
-export const EDGE_CLEARING_SHIPPED = false as boolean;
+/** Whether the edge arm that clears edges has shipped. Remaining work B shipped it (the forecast lane's edge arm,
+ *  `forecastLane.ts`). No forecast code reads it yet: forecasts B is the reader to come, which counts edges in
+ *  `blocking` and health only while it is true, and lists them as "clearing not shipped" while it is false (review
+ *  2265, F1). Typed `boolean` so that reader's other branch still compiles. */
+export const EDGE_CLEARING_SHIPPED = true as boolean;
 
 export type EdgeKind = 'needs-landed' | 'needs-decision';
 const EDGE_KIND_MAP: Record<EdgeKind, true> = { 'needs-landed': true, 'needs-decision': true };
 export const EDGE_KINDS = Object.keys(EDGE_KIND_MAP) as readonly EdgeKind[];
 
-/** Table 5.5a's words an edge can name (question 2). Done tests' vocabulary owns them; remaining work B derives this
- *  list from it, in a move commit. */
-export type EdgePredicate = 'run-closed' | 'pr-merged' | 'operator-confirms';
-const EDGE_PREDICATE_MAP: Record<EdgePredicate, true> = { 'run-closed': true, 'pr-merged': true, 'operator-confirms': true };
-export const EDGE_PREDICATES = Object.keys(EDGE_PREDICATE_MAP) as readonly EdgePredicate[];
+/** Table 5.5a's words an edge can name (question 2): a pick from done tests' vocabulary (`doneTests.ts`, its one owner),
+ *  so a word that is not a `DonePredicate` does not compile, and the list keeps that vocabulary's order. `review-passed`
+ *  and `goals-modified` name what a request asks for, not what a programme waits on, so no edge takes them. */
+const EDGE_PREDICATE_MAP = {
+  'run-closed': true, 'pr-merged': true, 'operator-confirms': true,
+} as const satisfies Partial<Record<DonePredicate, true>>;
+export type EdgePredicate = keyof typeof EDGE_PREDICATE_MAP;
+export const EDGE_PREDICATES: readonly EdgePredicate[] =
+  DONE_PREDICATES.filter((p): p is EdgePredicate => Object.prototype.hasOwnProperty.call(EDGE_PREDICATE_MAP, p));
 export const isEdgePredicate = (w: string): w is EdgePredicate => (EDGE_PREDICATES as readonly string[]).includes(w);
 
-/** What an edge waits on, each shape tied to a row of this tree: a run of another programme; a pull request that run's
- *  recorded lineage lists (the lineage records no repository, so the run's project names it); an item of this
- *  programme that still waits. */
-export type EdgeTarget =
-  | { readonly predicate: 'run-closed'; readonly runId: number }
-  | { readonly predicate: 'pr-merged'; readonly runId: number; readonly pr: number }
-  | { readonly predicate: 'operator-confirms'; readonly itemId: number };
+/** What an edge waits on: done tests' bare target for one of the edge's predicates, each shape tied to a row of this
+ *  tree: a run of another programme; a run's own pull request (the run names the repository); an item of this programme
+ *  that still waits. */
+export type EdgeTarget = Extract<DoneTarget, { readonly predicate: EdgePredicate }>;
 
 /** The kind of edge each target takes. */
 export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> = {
@@ -148,6 +153,7 @@ export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> =
 export type EdgeState = 'open' | 'met' | 'target-ended' | 'target-unmeasurable';
 const EDGE_STATE_MAP: Record<EdgeState, true> = { open: true, met: true, 'target-ended': true, 'target-unmeasurable': true };
 export const EDGE_STATES = Object.keys(EDGE_STATE_MAP) as readonly EdgeState[];
+export const isEdgeState = (w: string): w is EdgeState => Object.prototype.hasOwnProperty.call(EDGE_STATE_MAP, w);
 
 /** Why the store refused a statement whose body was good: it would take the programme past `OPEN_EDGES_PER_PROGRAMME_MAX`
  *  open edges. It rides the door's 400 `detail`, never a `refused` or `reject.code`. */

@@ -5,25 +5,33 @@
 //      seal; to seal, it draws a seed from the `Entropy` port, reads the lead history as of the boundary, asks
 //      `forecastProgramme` and writes the answer (`sealForecast`);
 //   2. the SCORE arm: for each open seal whose 85% date has passed, it reads the measured closes since its boundary, asks
-//      `forecastOutcome` and writes `met` or `missed` (`scoreForecast`).
-//   3. the SPEND arm (forecasts B): while the usage sweep has not completed a pass in this process it does nothing (the
+//      `forecastOutcome` and writes `met` or `missed` (`scoreForecast`);
+//   3. the EDGE arm (remaining work B, plan `w2-remaining-work.md` Task 5): for each edge that counts as open
+//      (`openEdgesToMeasure`), it asks the done-test vocabulary's one reader about the target (`doneTestRead.ts#readTarget`,
+//      which answers a throw as `unmeasured`), asks `edgeVerdict`, and hands any verdict but `none` to the one writer of
+//      an edge's state (`settleEdge`);
+//   4. the SPEND arm (forecasts B): while the usage sweep has not completed a pass in this process it does nothing (the
 //      boot guard); then, for each run closed since its first pass (or since the newest `run_spend` row, whichever is
 //      earlier) with no row, `programmeMeasures.ts#runSpendVerdict` judges the session's reading and `recordRunSpend`
 //      writes it;
-//   4. the HEALTH arm (forecasts B): for each listed programme, `programmeHealth` over the portfolio's facts, a row on a
+//   5. the HEALTH arm (forecasts B): for each listed programme, `programmeHealth` over the portfolio's facts, a row on a
 //      change, and a record-only notice when the word is worse (at most one per programme and word a day).
 // It DECIDES NOTHING: every verdict is an L1 decider's. It is the only caller of the writers of `programme_forecasts`,
-// `run_spend` and `programme_health` (`single-definition/writers-map.test.ts`). It sends no mail and pushes nothing. A
-// throw on one close, seal, run or programme is caught and recorded on the pass record, and the pass goes on.
+// `run_spend` and `programme_health` and of `settleEdge` (`single-definition/writers-map.test.ts`). It sends no mail and
+// pushes nothing. A throw on one close, seal, edge, run or programme is caught and recorded on the pass record, and the
+// pass goes on.
 import type { Entropy } from '../time/ports.js';
 import type { SessionUsage } from '../../../shared/api.js';
-import type { SealedForecast } from '../../../shared/programmeFacts.js';
+import {
+  EDGE_CLEARING_SHIPPED, type HealthRow, type HealthVerdict, type ProgrammeEdge, type SealedForecast,
+} from '../../../shared/programmeFacts.js';
 import {
   forecastOutcome, forecastProgramme, sealBoundary, type ForecastHistory, type OutcomeFacts, type UnsealedClose,
 } from './forecast.js';
-import type { NewRunSpend, NewSeal, UnspentClose } from './programmeFactsStore.js';
+import type { EdgeSettle, NewRunSpend, NewSeal, UnspentClose } from './programmeFactsStore.js';
+import { readTarget, type TargetReadPort } from './doneTestRead.js';
+import { edgeVerdict } from './edgeVerdict.js';
 import { runSpendVerdict, type SpendReading } from './programmeMeasures.js';
-import { EDGE_CLEARING_SHIPPED, type HealthRow, type HealthVerdict } from '../../../shared/programmeFacts.js';
 import type { PortfolioFacts } from '../../../shared/portfolio.js';
 import type { LiveAskRead } from './ports.js';
 import type { SpendUsageRead } from './portfolioStore.js';
@@ -32,7 +40,7 @@ import { healthChangeVerdict, healthExtrasFrom, healthFactsOf, programmeHealth }
 
 /** What the lane reads and writes, declared here by its consumer. `CoordStore` serves it with its delegates of the same
  *  names (`programmeFactsStore.ts`). A read that throws is caught by the pass, per close or per seal. */
-export interface ForecastLanePort {
+export interface ForecastLanePort extends TargetReadPort {
   unsealedClosesOf(now: number): { closes: UnsealedClose[]; missed: number };
   leadHistoryOf(program: string, asOf: number): ForecastHistory;
   sealForecast(seal: NewSeal, now: number): { written: boolean };
@@ -44,6 +52,8 @@ export interface ForecastLanePort {
   portfolioFacts(now: number, liveAsk: LiveAskRead, usage: SpendUsageRead): PortfolioFacts;
   appendHealth(program: string, verdict: HealthVerdict, noticed: boolean, now: number): { id: number };
   healthNoticedSince(program: string, word: string, since: number): boolean;
+  openEdgesToMeasure(): ProgrammeEdge[];
+  settleEdge(id: number, settle: EdgeSettle, now: number): { written: boolean };
 }
 
 /** The usage sweep's readings, declared here by their consumer and served by `FleetWatcher#currentUsage`: `ready` is
@@ -78,7 +88,8 @@ export interface ForecastLive {
 }
 
 /** One pass's record: seals written, closes still waiting for their statement, seals scored, closes missed in a gap
- *  (never sealed), and each failure as `<programme>: <message>`. */
+ *  (never sealed), each failure as `<programme>: <message>`, edges ended (met, target-ended or target-unmeasurable), and
+ *  open edges whose target answered unmeasured. */
 export interface ForecastPass {
   readonly sealed: number; readonly waiting: number; readonly scored: number; readonly missed: number;
   readonly failed: readonly string[];
@@ -86,6 +97,7 @@ export interface ForecastPass {
   readonly spent: number; readonly spendWaiting: boolean;
   /** `programme_health` rows appended, and the record-only notices recorded with them. */
   readonly healthChanged: number; readonly notices: number;
+  readonly edgesEnded: number; readonly edgesUnmeasured: number;
 }
 
 const SEED_BOUND = 2 ** 32;
@@ -123,9 +135,25 @@ export function runForecastLane(
       failed.push(`${s.program}: ${message(err)}`);
     }
   }
+  let edgesEnded = 0;
+  let edgesUnmeasured = 0;
+  try {
+    for (const e of port.openEdgesToMeasure()) {
+      try {
+        const v = edgeVerdict(e, e.target === null ? null : readTarget(port, e.target), now);
+        if (v.verdict === 'none') continue;
+        if (v.verdict === 'unmeasured') edgesUnmeasured += 1;
+        if (port.settleEdge(e.id, v.settle, now).written && v.settle.kind === 'end') edgesEnded += 1;
+      } catch (err) {
+        failed.push(`${e.program}: ${message(err)}`);
+      }
+    }
+  } catch (err) {
+    failed.push(`edges: ${message(err)}`);
+  }
   const spend = live === undefined ? { spent: 0, spendWaiting: false } : spendArm(port, live, now, failed);
   const health = live === undefined ? { healthChanged: 0, notices: 0 } : healthArm(port, live, now, failed);
-  return { sealed, waiting, scored, missed, failed, ...spend, ...health };
+  return { sealed, waiting, scored, missed, failed, edgesEnded, edgesUnmeasured, ...spend, ...health };
 }
 
 const NOTICE_SPAN_MS = 24 * 3_600_000;

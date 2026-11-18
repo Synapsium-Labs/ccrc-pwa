@@ -152,15 +152,16 @@ describe('POST /api/coord/programmes/:slug/remaining', () => {
     expect(rows(r)).toEqual([0, 0]);
   });
 
-  it('a pr-merged target whose run\'s lineage does not list the pull request is refused 400', async () => {
+  it('a pr-merged target is admitted on any run that exists, whatever its lineage lists; on no run it is refused 400 (review 2381 N1)', async () => {
     const r = await rig();
     r.coord.foldPrLineage(r.runB, [{ pr: 6, branch: 'ws/b', phase: 'open', recordedAt: NOW }]);
     const edge = { kind: 'needs-landed', target: { predicate: 'pr-merged', runId: r.runB, pr: 7 }, why: 'the store PR' };
-    const res = await post(r, URL_A, { ...as(), ...STATEMENT, edges: [edge] });
-    expect(res.statusCode).toBe(400);
-    expect((res.json() as { detail: string }).detail).toMatch(/does not list pull request 7/);
-    const ok = await post(r, URL_A, { ...as(), ...STATEMENT, edges: [{ ...edge, target: { ...edge.target, pr: 6 } }] });
+    const ok = await post(r, URL_A, { ...as(), ...STATEMENT, edges: [edge] });
     expect(ok.statusCode, ok.body).toBe(200);
+    const none = await post(r, URL_A, { ...as(), ...STATEMENT, edges: [{ ...edge, target: { ...edge.target, runId: 99_999 } }] });
+    expect(none.statusCode).toBe(400);
+    expect((none.json() as { detail: string }).detail).toMatch(/^edge 0: run 99999 does not exist/);
+    expect(rows(r)).toEqual([1, 1]);
   });
 
   it('an operator-confirms target naming another programme\'s open item is refused 400 (F6)', async () => {
@@ -200,12 +201,21 @@ describe('POST /api/coord/programmes/:slug/remaining', () => {
     expect(rows(r)).toEqual([0, 0]);
   });
 
-  it('an unreadable lineage at the target check answers 503 run-unreadable and writes nothing', async () => {
+  it('a lineage that does not parse is never read at the target check: the edge is admitted (review 2377 F3)', async () => {
     const r = await rig();
     r.coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?').run('{"not":"a list"}', r.runB);
     const res = await post(r, URL_A, { ...as(), ...STATEMENT,
       edges: [{ kind: 'needs-landed', target: { predicate: 'pr-merged', runId: r.runB, pr: 7 }, why: 'w' }] });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(rows(r)).toEqual([1, 1]);
+  });
+
+  it('a store throw at the target check answers 503 run-unreadable and writes nothing', async () => {
+    const r = await rig();
+    r.coord.edgeTargetCheck = () => { throw new Error('database is locked'); };
+    const res = await post(r, URL_A, { ...as(), ...STATEMENT, edges: [landedOn(r.runB)] });
     expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'run-unreadable' });
     expect(rows(r)).toEqual([0, 0]);
   });
 });

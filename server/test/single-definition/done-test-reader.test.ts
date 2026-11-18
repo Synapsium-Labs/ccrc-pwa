@@ -11,9 +11,9 @@
 //     The Linear plan sync reads `prLineage` too, for a run's PR NUMBER to link, never whether it merged: it is admitted
 //     as ONE function, `linear/planSync.ts#prOfRunFrom` (#2941), whose body is cut out and must not say `merged`, and the
 //     rest of that file reads neither column (slug `census-admits-the-plan-sync-pr-link`, narrowed by review 2377 F4).
-//     Remaining work A's edge check (`coord/programmeFactsStore.ts#edgeTargetFacts`, #2951) reads a run's lineage for the
-//     PR numbers it lists, and is admitted the same way until remaining work B moves that check onto `readTarget` (review
-//     2377 F3) and deletes its row here (slug `census-admits-the-edge-facts-until-remaining-work-b`).
+//     Remaining work A's edge check (`coord/programmeFactsStore.ts#edgeTargetFacts`, #2951) was admitted the same way until
+//     remaining work B moved the edge's measurement onto `readTarget` (review 2377 F3): its admission asks only that the
+//     run row exists, so its row here is gone and `programmeFactsStore.ts` reads neither column.
 // A read is a member access, an index by name, a destructuring (plain, typed, or of a parameter) or a one-line `SELECT`
 // naming the column (review 2377 F5). Comment lines are not code. KNOWN WIDTH: a read through a computed key or an alias
 // of the row object, and a `SELECT` whose column list spans lines, are not seen.
@@ -59,7 +59,6 @@ const bodyOfFn = (src: string, head: RegExp): string => {
 /** The functions outside the store and the gatherer admitted to read a run's lineage, each for PR numbers, never merged. */
 const ADMITTED = [
   { file: 'server/src/linear/planSync.ts', head: /^export function prOfRunFrom\(/ },
-  { file: 'server/src/coord/programmeFactsStore.ts', head: /^export function edgeTargetFacts\(/ },
 ] as const;
 const PR_OF_RUN = ADMITTED[0].head;
 /** One admission, by text: the one function cut out, what the rest of the file reads, and what the body says. */

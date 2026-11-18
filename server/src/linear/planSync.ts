@@ -9,8 +9,15 @@
  * with a pass in flight JOINS it and never starts a second, and `withFlight` runs another writer's work (the drift
  * restore, the migration's adopted issues) after the pass in flight, never between two of its steps. Every write to a
  * bound object, whoever asked for it, updates that binding's fingerprint in the same flight, so a restore of an older
- * planned value can never be read as drift of a newer sync write. Do NOT call `passFor` for a key from inside its own
- * `withFlight` function: the flight waits for itself.
+ * planned value can never be read as drift of a newer sync write: the drift restore (`restore`, D-8183) re-reads the plan
+ * INSIDE its flight, and a target whose fingerprint moved since the drift pass read it (a sync write landed first, carrying the
+ * newer plan) is `moot`: nothing is sent for it. Do NOT call `passFor` for a key from inside its own `withFlight` function:
+ * the flight waits for itself.
+ *
+ * A STEP'S FAILURE HOLDS ITS WORKSPACE, NOT THE PROGRAMME (D-8183, D-8702). A deferring answer holds the step's workspace for its programme
+ * (`hold`, on that workspace's own backoff step) and the pass goes on with the runnable steps in other workspaces; the programme's
+ * row is deferred, as a failure, to the earliest hold only when nothing else is runnable. The holds are in process memory (the row's
+ * own hold is persisted); the probe's settled marks and the episodes' streaks are the store's, so a restart keeps them.
  *
  * WHAT IS WRITTEN BEFORE A CALL. The binding row is `pending` before a create is sent (`ensurePending`) and `bound` after;
  * a row found `pending` at the start of a step is a create a previous pass may have sent (a crash, a timeout), so the
@@ -24,11 +31,12 @@
  */
 import type { CoordStore } from '../coord/store.js';
 import { planViewOf } from '../coord/planRoutes.js';
-import { programmeEnd } from '../coord/planPolicy.js';
-import type { BindingRow, PlanStorePort, StoredPlan, SyncDeferral, TicketRow } from '../coord/planStore.js';
+import { linearOwnerOfProject, programmeEnd } from '../coord/planPolicy.js';
+import type { CoordinatorPresence } from '../../../shared/ledgers.js';
+import { ADOPTED_FINGERPRINT, type BindingRow, type PlanStorePort, type StoredPlan, type SyncDeferral, type TicketRow } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { LINEAR_SYNC_PROGRAMME, type BindingKind } from '../../../shared/plan.js';
+import { LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, type BindingKind } from '../../../shared/plan.js';
 import type { FleetSession } from '../../../shared/api.js';
 import { slugForTicket } from '../linking/policy.js';
 import { markLinearRejected } from './connection.js';
@@ -40,9 +48,10 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
+import { restoredDescription } from './driftPolicy.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, nextDirectoryStreak, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict,
-  withoutPutBack, type AdoptionAsk, type DeferCause, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
+  withoutPutBack, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -61,10 +70,26 @@ export const PLAN_SYNC_DISPATCH_WAIT_MS = 12_000;
 const DIRECTORY_WAIT_MS = 10_000;
 /** A runaway guard: one pass never takes more steps than this. */
 const MAX_STEPS_PER_PASS = 500;
-/** The fingerprint of an adopted object (recovery, conflict): it was never sent the current inputs, so it matches no planned
- *  one and the next re-read emits one absolute update (or link) that writes the real fingerprint. */
-const ADOPTED = 'adopted';
 const LAST_BACKOFF_MS = PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]!;
+
+/** One binding the drift pass asks to have put back (D-8183): `seen` is the binding's fingerprint when the pass read Linear, `tag`
+ *  names the restore (the forced link's request id), `comment` is the drift comment to send once it is restored, `restoredLine` a
+ *  milestone's own record of it. */
+export interface RestoreTarget {
+  bindingId: number; seen: string | null; tag: string;
+  /** The drift is in the project's link to its initiative (or the initiative's to it): the link is made again under the restore's own
+   *  request id. Absent: the update alone (an update keeps the stored link mark, D-8183, so the sync sends no second link). */
+  link?: boolean;
+  comment?: { body: string; requestId: string };
+  restoredLine?: { line: string; linearDescription: string | null };
+  /** An issue's grace stands (§7.3, `graceVerdict`): its update goes without its state, as C12's `state-held` sends it, so a
+   *  restore of another field in the same pass never ends the grace (review 2386 A5). */
+  holdState?: boolean;
+}
+/** `restored`: the planned fields are back and the binding holds the plan's fingerprint. `moot`: a sync write landed first, or the
+ *  binding is gone: nothing was sent. `refused`: Linear refused the write and the binding is failed (`word`). `deferred`: nothing
+ *  was written yet (a deferring answer, an unreadable store, no step to send). `commented`: the drift comment was sent or found made. */
+export interface RestoreOutcome { bindingId: number; outcome: 'restored' | 'moot' | 'refused' | 'deferred'; word?: string; commented: boolean }
 
 export interface PlanSyncDeps {
   /** For the mail and for `goalsFor`, `linkingOf` and `programs()` only: every plan read and write goes through `plan`. */
@@ -87,17 +112,25 @@ export interface PlanSyncDeps {
   prOfRun?: (runId: number) => { number: number; branch: string | null } | null;
   /** A test's shorter tick budget. */
   tickDeadlineMs?: number;
+  /** The Linear owner of a project (D-8183): who an Upkeep epic's failure mails, since it has no coordinator. None: no mail. */
+  upkeepOwnerOf?: (project: string) => string | null;
 }
 
-interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
+export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: string; key: string }[] }
 /** The drift pass's restore pass, taken from the list (never spelled beside `'plan-sync'`: the list is policy.ts's alone). */
-type RestorePass = Extract<CcrcPass, `${string}restore`>;
-type Flow = 'next' | 'defer';
+export type RestorePass = Extract<CcrcPass, `${string}restore`>;
+/** Which of ccrc's passes a send belongs to: the sync's own, or the restore's (D-8183: a restore's calls are journaled `drift-restore`). */
+type SendPass = 'plan-sync' | RestorePass;
+/** `next`: go on; `defer`: the pass ends and its programme row is deferred; `held`: the step's workspace is held for this
+ *  programme (D-8183) and the pass goes on with the steps in other workspaces. */
+type Flow = 'next' | 'defer' | 'held';
+/** The steps a restore sends: an absolute update and, for a project under a live initiative, its link (never a create). */
+type Restorable = Extract<SyncStep, { kind: 'update' | 'link' }>;
 type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
 /** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
 interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan }
 /** What a failed outcome needs to know about the object it was for. */
-interface Subject extends Told { slot: SlotInfo }
+interface Subject extends Told { slot: SlotInfo; /** The pass every call of this step is journaled under (`readAsk` reads it). */ pass: SendPass }
 
 const OBJECT_WORD: Record<BindingKind, string> = { programme: 'programme', epic: 'epic', checkpoint: 'checkpoint', ticket: 'ticket' };
 
@@ -112,15 +145,14 @@ export class PlanSync {
   private readonly malformed = new Map<number, number>();
   /** Workspaces whose key is not configured, for this tick: no call is made for them again until the next. */
   private readonly notConfigured = new Set<string>();
-  /** Workspaces whose key Linear refused (401): no call until the time. */
+  /** Workspaces whose key Linear refused (401): no call until the time. ONE OWNER for both lanes that write (review 2394 A-3): the
+   *  plan sync's own 401 and an inbound close's go through `keyRefused`, and the inbound lane reads `keyBlockedUntil`. */
   private readonly blockedUntil = new Map<string, number>();
-  /** D-8701's episodes (the bounded waits): each workspace's streak of fills reading `unknown` initiatives (`probe|<ws>`) or
-   *  project statuses never read (`statuses|<ws>`). In process memory: a restart starts the streak again. */
-  private readonly streaks = new Map<string, DirectoryStreak>();
-  /** The programmes settled without their initiative at a probe episode's bound, by workspace: marked due again when that
-   *  workspace's directory is next refilled (the ruling's re-check "on the next refill"). */
-  private readonly probeSettled = new Map<string, Set<string>>();
-
+  /** D-8183 (carried M3/A9): a step's failure holds that step's WORKSPACE for its programme (`<slug>|<workspaceId>`), not the
+   *  whole programme: the pass goes on with its runnable steps in other workspaces, and its row is deferred, as a failure, to the
+   *  earliest hold only when nothing else is runnable. Each hold escalates on its own step counter (`attempts` under the same key). In
+   *  process memory: a restart forgets them (the row's own hold is persisted). */
+  private readonly wsHolds = new Map<string, { until: number; why: SyncDeferral }>();
   constructor(private readonly deps: PlanSyncDeps) {}
 
   // ── The tick ──
@@ -156,28 +188,29 @@ export class PlanSync {
   private async requeueSweep(now: number): Promise<void> {
     const slots = slotsOf(await this.deps.readLinearStore());
     this.recheckSettledProbes(slots, now);
-    for (const p of this.deps.coord.programs()) {
+    const keys = [...this.deps.coord.programs().map((p) => p.slug), ...this.deps.plan.upkeepProjectsOf().map((project) => `${UPKEEP_DUE_PREFIX}${project}`)];
+    for (const key of keys) {
       let requeued = false;
-      for (const b of this.deps.plan.bindingsOf(p.slug)) {
+      for (const b of this.deps.plan.bindingsOf(key)) {
         if (b.state !== 'failed') continue;
         const slot = slots.get(b.workspaceId);
         const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
         requeued = this.requeue(b, requeueVerdict(b, { kind: 'time', filledAt, olderThan: now - LAST_BACKOFF_MS })) || requeued;
       }
-      if (requeued) this.deps.plan.markSyncDue(p.slug, now - PLAN_SYNC_DEBOUNCE_MS);
+      if (requeued) this.deps.plan.markSyncDue(key, now - PLAN_SYNC_DEBOUNCE_MS);
     }
   }
 
   /** A programme settled without its initiative at a probe episode's bound is due again once its workspace's directory was
    *  refilled since (or the episode ended): the next pass reads the probe again, creating and linking the initiative on `on`. */
   private recheckSettledProbes(slots: Map<string, SlotInfo>, now: number): void {
-    for (const [ws, slugs] of this.probeSettled) {
+    // The settled marks are the store's (D-8183): a restart keeps them, so a refill reading `on` still finds the programme due.
+    for (const [ws, slugs] of this.deps.plan.settledProbes()) {
       const slot = slots.get(ws);
       const filledAt = slot === undefined ? null : this.deps.directory.filledAt(slot.ref, slot.digest);
-      const streak = this.streaks.get(`probe|${ws}`);
-      if (streak !== undefined && (filledAt === null || filledAt === streak.lastFilledAt)) continue;
+      if (!probeRecheckDue(this.streakOf(`probe|${ws}`), filledAt)) continue;
       for (const slug of slugs) this.deps.plan.markSyncDue(slug, now - PLAN_SYNC_DEBOUNCE_MS);
-      this.probeSettled.delete(ws);
+      this.deps.plan.clearSettledProbes(ws);
     }
   }
 
@@ -262,25 +295,84 @@ export class PlanSync {
     return run;
   }
 
-  /** The drift pass's restore (Task 4.2): its steps sent as the pass `drift-restore`, in the key's flight, each write
-   *  updating its binding's fingerprint. Stops at the first outcome that is not ok and answers what it sent. */
-  restore(key: string, steps: readonly SyncStep[], pass: RestorePass): Promise<CcrcOpOutcome[]> {
+  /** What the plan says each bound object's owned fields are (D-8183, §6.2), from the very deciders the sync sends by
+   *  (`planSyncSteps`' `owned`): one computation, never a second copy of the rules. Read-only: it reads the stores, writes none,
+   *  calls nothing in Linear and joins no flight; its snapshot neither advances the D-8701 episode streaks nor asks the refresher
+   *  for a fill (`readOnly`, review 2386 A2). Null when the key has no programme (or, for `upkeep:<project>`, no Upkeep epic yet). */
+  async plannedOwned(key: string): Promise<{ bindings: BindingRow[]; owned: PlannedOwned[] } | null> {
+    const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    const built = this.snapshot(key, store, true);
+    return built === null ? null : { bindings: built.snap.bindings, owned: planSyncSteps(built.snap).owned };
+  }
+
+  /** The drift pass's restore (D-8183, §7.2): it puts the named bindings' planned fields back, in the key's flight, so it runs
+   *  after any pass in flight and never between two of its steps. It RE-READS THE PLAN INSIDE THE FLIGHT: a target whose
+   *  binding is gone, no longer `bound`, or whose fingerprint is no longer the one the drift pass read (`seen`) is `moot`,
+   *  because a sync write landed first and wrote the newer plan (a restore of the older value would undo it, and the drift read
+   *  was a catch-up). Its steps are the sync's own (`planSyncSteps` with the targets forced), each sent through `execute`, so
+   *  C12's issue read, the outcome table, the binding writes and the coordinator's mails apply as for any sync step, under the
+   *  pass `drift-restore`. A refusal that fails the binding (`linear-forbidden`, `linear-invalid`) is `refused` with its word; a
+   *  deferring answer is `deferred`. The comment follows a restored target: a failed comment never fails the binding. */
+  restore(key: string, targets: readonly RestoreTarget[], pass: RestorePass): Promise<RestoreOutcome[]> {
     return this.withFlight(key, async () => {
+      const outcome = (t: RestoreTarget, o: RestoreOutcome['outcome'], word?: string, commented = false): RestoreOutcome =>
+        ({ bindingId: t.bindingId, outcome: o, ...(word === undefined ? {} : { word }), commented });
       const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
-      const slots = slotsOf(store);
-      const out: CcrcOpOutcome[] = [];
-      for (const step of steps) {
-        if (step.kind === 'skip') continue;
-        const slot = slots.get(step.workspaceId);
-        if (slot === undefined) { out.push({ ok: false, word: 'not-configured', maybeSent: false }); break; }
-        const b = step.bindingId === null ? null : this.bindingById(key, step.bindingId);
-        const result = await this.deps.call(this.askOf(step, slot, b, pass));
-        out.push(result);
-        if (!result.ok) break;
-        if (b !== null && b.linearId !== null) this.bind(b, b.linearId, this.identifierOf(result, b), step.fingerprint);
+      if (store.kind === 'unreadable') return targets.map((t) => outcome(t, 'deferred'));
+      const built = this.snapshot(key, store);
+      if (built === null) return targets.map((t) => outcome(t, 'moot'));
+      const live = targets.filter((t) => {
+        const b = built.snap.bindings.find((x) => x.id === t.bindingId);
+        return b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen;
+      });
+      const force = new Map(live.map((t) => [t.bindingId, t.tag] as const));
+      const steps = planSyncSteps(built.snap, { force }).steps;
+      const deadlineAt = this.deps.now() + PLAN_SYNC_TICK_DEADLINE_MS;
+      const out: RestoreOutcome[] = [];
+      for (const t of targets) {
+        if (!force.has(t.bindingId)) { out.push(outcome(t, 'moot')); continue; }
+        const mine = steps.filter((x): x is Restorable => (x.kind === 'update' || (x.kind === 'link' && t.link === true)) && x.bindingId === t.bindingId);
+        if (mine.length === 0) { out.push(outcome(t, 'deferred')); continue; }          // nothing to send (a skip): the sync's own pass says why
+        let flow: Flow = 'next';
+        for (const step of mine) {
+          flow = await this.execute(key, this.withRestoredLine(t.holdState === true && step.kind === 'update' && step.op === 'issueUpdate' ? withoutState(step) : step, t), built, deadlineAt, pass);
+          if (flow !== 'next') break;
+        }
+        const b = this.bindingById(key, t.bindingId);
+        const final = mine[mine.length - 1]!.fingerprint;
+        if (flow !== 'next') { out.push(outcome(t, 'deferred')); continue; }
+        if (b?.state === 'failed') { out.push(outcome(t, 'refused', b.failedWord ?? 'unknown')); continue; }
+        if (b === null || b.state !== 'bound' || b.fingerprint !== final) { out.push(outcome(t, 'deferred')); continue; }
+        const commented = t.comment === undefined ? false : await this.restoreComment(b, t.comment, built, pass);
+        out.push(outcome(t, 'restored', undefined, commented));
       }
       return out;
     });
+  }
+
+  /** A milestone's restore replaces its update's description with `restoredDescription`: this Restored line and the two newest
+   *  Linear holds, first, then the planned text, fitted to Linear's cap (a milestone takes no comment in Linear, D-8407; D-8708);
+   *  the step's fingerprint stays the plan's, the lines are not plan text. */
+  private withRestoredLine(step: Restorable, t: RestoreTarget): Restorable {
+    if (t.restoredLine === undefined || step.kind !== 'update' || step.op !== 'projectMilestoneUpdate') return step;
+    const description = restoredDescription(String(step.input['description'] ?? ''), t.restoredLine.linearDescription, t.restoredLine.line);
+    return { ...step, input: { ...step.input, description } };
+  }
+
+  /** The drift comment on a restored object: an initiative, a project or an issue (never a milestone). A `conflict` answer is a
+   *  comment made already (the same request id). Answers whether it was sent or found made. */
+  private async restoreComment(b: BindingRow, c: { body: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
+    const slot = built.slots.get(b.workspaceId);
+    if (slot === undefined || b.linearId === null) return false;
+    const [op, key, target, teamKey] = b.localKind === 'programme' ? ['initiativeComment', 'initiativeId', b.linearId, null] as const
+      : b.localKind === 'epic' ? ['projectComment', 'projectId', b.linearId, b.teamKey] as const
+      : b.localKind === 'ticket' ? ['issueComment', 'issueId', b.identifier ?? b.linearId, b.teamKey] as const : [null, null, null, null] as const;
+    if (op === null) return false;
+    const out = await this.deps.call({
+      op, pass, lane: 'sync', slot: slot.ref, workspaceId: b.workspaceId, teamKey, target, fields: ['body'],
+      input: { requestId: c.requestId, [key]: b.linearId, body: c.body },
+    });
+    return out.ok || (out.word === 'linear-invalid' && out.detail === 'conflict');
   }
 
   // ── The dispatch (§5.6) ──
@@ -310,18 +402,42 @@ export class PlanSync {
     const { plan } = this.deps;
     const slug = found.run.program;
     const boundNow = (): string | null => plan.bindingsOf(slug).find((x) => x.localKind === 'ticket' && x.localId === found.ticket.id && x.state === 'bound' && x.identifier !== null)?.identifier ?? null;
-    const already = boundNow();
-    if (already !== null) return { identifier: already };          // M-5: bound already, so the wait is for nothing
-    // A7/A12: a programme held by a failure's backoff (Linear unreachable, a refused key) starts no pass from a dispatch: the
-    // dispatch goes as it would without the sync, and the PR is linked once the issue appears.
-    if (plan.heldSyncUntil(slug, this.deps.now()) !== null) return { identifier: null };
-    plan.markSyncDue(slug, this.deps.now() - PLAN_SYNC_DEBOUNCE_MS);
+    // M-5: bound already, so the wait is for nothing. A7/A12: a programme held by a failure's backoff (Linear unreachable, a refused key)
+    // starts no pass from a dispatch: the dispatch goes as it would without the sync, and the PR is linked once the issue appears.
+    const first = dispatchWaitVerdict({ identifier: boundNow(), programmeHeldUntil: plan.heldSyncUntil(slug, this.deps.now()), workspaceHeld: false, now: this.deps.now() });
+    if (first !== 'wait') return { identifier: boundNow() };
     let timer: ReturnType<typeof setTimeout> | undefined;
     const waited = new Promise<void>((resolve) => { timer = setTimeout(resolve, budgetMs); });
     try {
-      await Promise.race([this.passFor(slug, this.deps.now() + budgetMs).then(() => undefined, () => undefined), waited]);
+      await Promise.race([this.startFor(slug, found.ticket, budgetMs).then(() => undefined, () => undefined), waited]);
     } finally { clearTimeout(timer); }
     return { identifier: boundNow() };
+  }
+
+  /** The workspace a ticket's issue is (or would be) in: where its binding is, else where its project's team routes. Null: none. */
+  private async workspaceOfTicket(slug: string, t: TicketRow): Promise<string | null> {
+    const bound = this.deps.plan.bindingsOf(slug).find((b) => b.localKind === 'ticket' && b.localId === t.id);
+    if (bound !== undefined) return bound.workspaceId;
+    const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    return this.workspaceOfProject(t.project, store.kind === 'listed' ? routableSlots(store) : []);
+  }
+
+  /** The workspace a project's linked team routes to (`routeLinear`), null when it has no team or no slot serves it. */
+  private workspaceOfProject(project: string, listed: ReturnType<typeof routableSlots>): string | null {
+    const l = this.deps.coord.linkingOf(project);
+    const route = l.teamKey === null ? null : routeLinear(listed, { kind: 'team', team: l.teamKey, workspace: null });
+    return route !== null && route.kind === 'slot' ? route.slot.workspaceId : null;
+  }
+
+  /** Mark the programme due and join or start its pass, unless the ticket's workspace is held by a failure of this programme's steps
+   *  there (D-8183: the row itself may be due again when another workspace's shorter hold has passed): then the dispatch goes as it
+   *  would without the sync. The timer is the caller's and is already running, so this may read the store. */
+  private async startFor(slug: string, t: TicketRow, budgetMs: number): Promise<void> {
+    const ws = await this.workspaceOfTicket(slug, t);
+    const held = dispatchWaitVerdict({ identifier: null, programmeHeldUntil: null, workspaceHeld: ws !== null && this.releaseOf(slug, ws) > this.deps.now(), now: this.deps.now() });
+    if (held !== 'wait') return;
+    this.deps.plan.markSyncDue(slug, this.deps.now() - PLAN_SYNC_DEBOUNCE_MS);
+    await this.passFor(slug, this.deps.now() + budgetMs);
   }
 
   private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
@@ -335,11 +451,6 @@ export class PlanSync {
 
   private async runPass(slug: string, deadlineAt: number): Promise<'done' | 'deferred'> {
     const { plan } = this.deps;
-    if (slug.startsWith('upkeep:')) {
-      // C9: an Upkeep epic can exist only once wave 4's `plan triage` does; until then there is nothing to send.
-      plan.clearSyncDue(slug);
-      return 'done';
-    }
     for (let taken = 0; ; taken += 1) {
       if (this.deps.now() >= deadlineAt || taken >= MAX_STEPS_PER_PASS) return 'deferred';
       let store: LinearStoreRead;
@@ -350,7 +461,7 @@ export class PlanSync {
       // `clearSyncDue` below, so a put is either in this snapshot or leaves its due row to the next pass.
       const built = this.snapshot(slug, store);
       if (built === null) { plan.clearSyncDue(slug); return 'done'; }
-      try { this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
+      try { if (built.snap.program !== null) this.reconcileInitiativesItems(built.snap); } catch { console.warn('ccrc-server: linear plan sync initiatives item failed'); }
       const { steps, failedInputs, notices, waits } = planSyncSteps(built.snap);
       for (const n of notices) this.mailOpenIssuesLeft(slug, n.count);
       let requeued = false;
@@ -362,7 +473,7 @@ export class PlanSync {
 
       const actionable = steps.filter((s) => this.actionable(s, built.snap.bindings));
       const waiting = new Set(built.waiting);
-      const blocked = (ws: string | null): boolean => ws !== null && (waiting.has(ws) || this.notConfigured.has(ws) || (this.blockedUntil.get(ws) ?? 0) > this.deps.now());
+      const blocked = (ws: string | null): boolean => ws !== null && (waiting.has(ws) || this.notConfigured.has(ws) || this.releaseOf(slug, ws) > this.deps.now());
       const runnable = actionable.filter((s) => !blocked(s.workspaceId));
       if (runnable.length === 0) {
         if (actionable.length === 0) {
@@ -371,11 +482,10 @@ export class PlanSync {
           // bounds what the asks cost.
           // Past the episode's bound (D-8701, ruling of mail 22220) it is settled without the initiative, its coordinator told
           // once, and no refill is asked for it: the next refill or plan change looks again.
-          const probe = probeWaitsVerdict(waits, (ws) => this.streaks.get(`probe|${ws}`));
+          const probe = probeWaitsVerdict(waits, (ws) => this.streakOf(`probe|${ws}`));
           for (const ws of probe.bounded) {
-            this.mailEpisode(slug, ws, 'probe');
-            const settled = this.probeSettled.get(ws) ?? new Set<string>();
-            this.probeSettled.set(ws, settled.add(slug));
+            this.mailEpisode(slug, ws, 'probe', built.snap);
+            plan.addSettledProbe(ws, slug);
           }
           const waitsOn = probe.waitOn.flatMap((ws) => { const slot = built.slots.get(ws); return slot === undefined ? [] : [slot]; });
           if (waitsOn.length > 0) {
@@ -383,21 +493,23 @@ export class PlanSync {
             this.deferFor(slug, 'initiatives-unknown');
             return 'deferred';
           }
-          plan.clearSyncDue(slug); this.attempts.delete(slug); return 'done';
+          plan.clearSyncDue(slug); this.attempts.delete(slug); this.clearHolds(slug); return 'done';
         }
-        const until = actionable.flatMap((s) => (s.workspaceId === null ? [] : [this.blockedUntil.get(s.workspaceId) ?? 0]));
+        const held = [...new Set(actionable.flatMap((s) => (s.workspaceId === null ? [] : [s.workspaceId])))]
+          .flatMap((ws) => { const until = this.releaseOf(slug, ws); return until > this.deps.now() ? [{ until, why: this.wsHolds.get(`${slug}|${ws}`)?.why ?? deferralOf('workspace-blocked').why }] : []; })
+          .sort((a, b) => a.until - b.until);
         const waitedOn = [...new Set(actionable.flatMap((s) => (s.workspaceId !== null && waiting.has(s.workspaceId) ? [s.workspaceId] : [])))];
         if (waitedOn.length > 0) {
           // I1: statuses never read wait on the backoff, and past the bound the coordinator is told once per episode.
           const unread = new Set(built.unread);
-          const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streaks.get(`statuses|${ws}`) })));
+          const w = directoryWaitVerdict(waitedOn.map((ws) => ({ workspaceId: ws, missing: unread.has(ws) ? 'statuses' as const : 'directory' as const, streak: this.streakOf(`statuses|${ws}`) })));
           for (const ws of w.tell) this.mailEpisode(slug, ws, 'statuses');
           this.deferFor(slug, w.cause);
-        } else if (Math.max(0, ...until) > this.deps.now()) this.deferFor(slug, 'workspace-blocked', { until: Math.max(...until) });
+        } else if (held.length > 0) this.deferUntil(slug, held[0]!.until, held[0]!.why);   // the earliest workspace hold (D-8702)
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
-      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt);
-      if (flow === 'defer') return 'deferred';
+      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt, 'plan-sync');
+      if (flow === 'defer') return 'deferred';          // `held`: that workspace is out of this pass, the others go on
     }
   }
 
@@ -409,18 +521,24 @@ export class PlanSync {
     return s.bindingId === null || bindings.find((b) => b.id === s.bindingId)?.state !== 'failed';
   }
 
-  /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). */
-  private snapshot(slug: string, store: LinearStoreRead): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
+  /** The programme as `planSyncSteps` reads it, from the stores, synchronously (the store listing is read first). A key
+   *  `upkeep:<project>` reads that project's Upkeep epic instead (D-8183): `program` is null, there is no programme row, and a
+   *  project with no Upkeep epic has no snapshot. `readOnly` (the drift pass's `plannedOwned`): no episode is observed and no fill
+   *  is asked for, so a read changes nothing. */
+  private snapshot(slug: string, store: LinearStoreRead, readOnly = false): { snap: SyncSnapshot; slots: Map<string, SlotInfo>; waiting: string[]; unread: string[] } | null {
     const { plan, coord } = this.deps;
-    const rowid = plan.programmeRowId(slug);
-    const prog = coord.programs().find((p) => p.slug === slug);
-    if (rowid === null || prog === undefined) return null;
-    const stored = withoutPutBack(plan.planOf(slug));            // Task 3.1: a record Put back dropped is never in the snapshot
+    const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
+    const rowid = upkeep ? null : plan.programmeRowId(slug);
+    const found = upkeep ? undefined : coord.programs().find((p) => p.slug === slug);
+    const prog = rowid === null || found === undefined ? null : { rowid, row: found };
+    if (!upkeep && prog === null) return null;
+    const stored = withoutPutBack(upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug));   // Task 3.1: a record Put back dropped is never in the snapshot
+    if (upkeep && stored.epics.length === 0) return null;
     const bindings = plan.bindingsOf(slug);
-    const planEnd = plan.planEndOf(slug);
+    const planEnd = upkeep ? null : plan.planEndOf(slug);
     const tickets = stored.epics.flatMap((e) => e.tickets);
-    const outcome = programmeEnd({
-      planEnd: planEnd?.outcome ?? null, programState: prog.state, epics: stored.epics,
+    const outcome = prog === null ? null : programmeEnd({
+      planEnd: planEnd?.outcome ?? null, programState: prog.row.state, epics: stored.epics,
       openTickets: tickets.filter((t) => t.state === 'open' || t.state === 'started').length,
     });
     const slots = slotsOf(store);
@@ -428,9 +546,8 @@ export class PlanSync {
     const projectNames = [...new Set(stored.epics.flatMap((e) => [e.project, ...e.tickets.map((t) => t.project)]))];
     const projects: SyncSnapshot['projects'] = projectNames.map((project) => {
       const l = coord.linkingOf(project);
-      const route = l.teamKey === null ? null : routeLinear(listed, { kind: 'team', team: l.teamKey, workspace: null });
       return {
-        project, teamKey: l.teamKey, workspaceId: route !== null && route.kind === 'slot' ? route.slot.workspaceId : null,
+        project, teamKey: l.teamKey, workspaceId: this.workspaceOfProject(project, listed),
         mode: l.mode, initiatives: plan.hierarchySettingsOf(project).initiatives,
       };
     });
@@ -439,7 +556,7 @@ export class PlanSync {
     const workspaces: SyncSnapshot['workspaces'] = [];
     // The workspaces the projects resolve to, and those the programme's initiative is bound in (F2: an old workspace's
     // initiative is still updated and closed after a team key moved away).
-    const initiativeWs = bindings.flatMap((b) => (b.localKind === 'programme' && b.localId === rowid ? [b.workspaceId] : []));
+    const initiativeWs = bindings.flatMap((b) => (rowid !== null && b.localKind === 'programme' && b.localId === rowid ? [b.workspaceId] : []));
     for (const workspaceId of new Set([...projects.flatMap((p) => (p.workspaceId === null ? [] : [p.workspaceId])), ...initiativeWs])) {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
@@ -447,23 +564,26 @@ export class PlanSync {
       const statuses = this.deps.directory.projectStatusesRead(slot.ref, slot.digest);
       // D-8701: statuses never read wait for a refill as a missing directory does; they are never "no status of that type".
       if (directoryMissed(directory, statuses)) {
-        waiting.push(workspaceId); this.deps.directoryMiss(slot.ref, slot.digest);
+        waiting.push(workspaceId);
+        if (!readOnly) this.deps.directoryMiss(slot.ref, slot.digest);
         if (directory !== null) unread.push(workspaceId);
       }
       // The episodes' streaks see each fill once, whichever programme's pass reads it first.
       const filledAt = this.deps.directory.filledAt(slot.ref, slot.digest);
       const look = (unsettled: boolean): FillLook => ({ keyDigest: slot.digest, filledAt, reading: directory === null ? 'none' : unsettled ? 'unsettled' : 'settled' });
-      this.observe(`probe|${workspaceId}`, look(directory?.initiatives === 'unknown'));
-      this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
+      if (!readOnly) {
+        this.observe(`probe|${workspaceId}`, look(directory?.initiatives === 'unknown'));
+        this.observe(`statuses|${workspaceId}`, look(statuses !== 'read'));
+      }
       workspaces.push({ workspaceId, initiatives: directory?.initiatives ?? 'unknown', directory, teams: slot.teams });
     }
-    const goals = coord.goalsFor(slug);
+    const goals = prog === null ? null : coord.goalsFor(slug);
     const ticketPrs = this.ticketPrsOf(tickets, bindings);
     const snap: SyncSnapshot = {
-      program: {
-        slug, rowid, title: prog.title, inShort: goals.inShort,
+      program: prog === null || goals === null ? null : {
+        slug, rowid: prog.rowid, title: prog.row.title, inShort: goals.inShort,
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
-        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.state === 'paused',
+        doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.row.state === 'paused',
       },
       plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
     };
@@ -489,7 +609,7 @@ export class PlanSync {
 
   // ── One step ──
 
-  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number): Promise<Flow> {
+  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number, pass: SendPass = 'plan-sync'): Promise<Flow> {
     const { plan } = this.deps;
     if (step.kind === 'skip') {
       // `status-missing`, `text-public`, `workspace-mismatch`: the object's binding is failed with the reason.
@@ -506,7 +626,7 @@ export class PlanSync {
     const slot = built.slots.get(step.workspaceId);
     if (slot === undefined) { this.notConfigured.add(step.workspaceId); return 'next'; }
     let b = step.bindingId === null ? null : built.snap.bindings.find((x) => x.id === step.bindingId) ?? null;
-    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan });
+    const subject = (bindingId: number | null): Subject => ({ slug, local: step.local, workspaceId: step.workspaceId, bindingId, inputs: step.inputs, slot, plan: built.snap.plan, pass });
 
     if (step.kind === 'create') {
       const existed = b !== null;
@@ -514,16 +634,16 @@ export class PlanSync {
       if (existed && step.recover !== 'request-id') {
         const r = await this.recover(step, b, subject(b.id), built);
         if (r === 'bound' || r === 'next') return 'next';
-        if (r === 'defer') return 'defer';
+        if (r === 'defer' || r === 'held') return r;
         if (this.deps.now() >= deadlineAt) return 'defer';
       }
-      const out = await this.deps.call(this.askOf(step, slot, b, 'plan-sync'));
+      const out = await this.deps.call(this.askOf(step, slot, b, pass));
       if (out.ok) {
         const id = out.created ?? (typeof out.value['id'] === 'string' ? out.value['id'] : null);
-        if (id === null) { this.deferFor(slug, 'created-without-id'); return 'defer'; }   // ok without an id: it may have been sent
+        if (id === null) return this.hold(subject(b.id), 'created-without-id');   // ok without an id: it may have been sent
         // A6 (§5.5): a create records the team it was made in, also on a binding a skip made first with none.
         this.bind(b, id, this.identifierOf(out, b), step.fingerprint, step.teamKey);
-        this.attempts.delete(slug);
+        this.progressed(slug, step.workspaceId);
         return 'next';
       }
       if (out.word === 'linear-invalid' && out.detail !== undefined) {
@@ -543,31 +663,31 @@ export class PlanSync {
       const held = await this.readIssue(step, b, subject(b.id), deadlineAt);
       if (typeof held === 'object') currentTeam = held.team ?? currentTeam;
       const verdict = typeof held === 'object' ? held.verdict : held;
-      if (verdict === 'defer') return 'defer';
+      if (verdict === 'defer' || verdict === 'held') return verdict;
       if (verdict === 'next') return 'next';
       // A10 (§5.5): the read's identifier is the issue's now (a move whose reply was lost has a new one).
       if (verdict === 'same') {
         this.bind(b, b.linearId, typeof held === 'object' && held.identifier !== null ? held.identifier : b.identifier, step.fingerprint, step.teamKey);
-        this.attempts.delete(slug); return 'next';
+        this.progressed(slug, step.workspaceId); return 'next';
       }
       send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
-          op: 'issueComment', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
+          op: 'issueComment', pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
           target: b.identifier ?? b.linearId, fields: ['body'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
         if (!c.ok && !(c.word === 'linear-invalid' && c.detail === 'conflict')) return this.onFailure(c, subject(b.id));
       }
     }
-    const ask = this.askOf(send, slot, b, 'plan-sync');
+    const ask = this.askOf(send, slot, b, pass);
     // C15: a move writes into the destination team, so the policy is asked about it too (the journal keeps the current one).
     const moves = step.kind === 'update' && step.op === 'issueUpdate' && step.teamKey !== null && currentTeam !== null && currentTeam.toUpperCase() !== step.teamKey.toUpperCase();
     const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate'
       ? { ...ask, teamKey: currentTeam, ...(moves ? { destinationTeamKey: step.teamKey } : {}) } : ask);
     if (out.ok) {
       this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && step.op === 'issueUpdate' ? step.teamKey : undefined);
-      this.attempts.delete(slug);
+      this.progressed(slug, step.workspaceId);
       return 'next';
     }
     // C4: a link answered "conflict" is a link that exists already: the same write as an ok.
@@ -592,11 +712,11 @@ export class PlanSync {
    *  `issueReadVerdict` what to send (`same`: the fingerprint only; `state-held`: the update without its state; `send`: as
    *  planned, a move's state with it); a read that cannot tell (`not-found`) sends the update as planned and lets its own
    *  answer rule. */
-  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | { verdict: 'send' | 'state-held' | 'same'; team: string | null; identifier: string | null }> {
+  private async readIssue(step: Extract<SyncStep, { kind: 'update' }>, b: BindingRow, s: Subject, deadlineAt: number): Promise<'send' | 'next' | 'defer' | 'held' | { verdict: 'send' | 'state-held' | 'same'; team: string | null; identifier: string | null }> {
     if (step.op !== 'issueUpdate') return 'send';
     if (this.deps.now() >= deadlineAt) return 'defer';
     const out = await this.deps.call(this.readAsk('issueOwned', s, step.teamKey, { id: b.linearId! }));
-    if (!out.ok) return out.word === 'not-found' ? 'send' : (this.onFailure(out, s) === 'defer' ? 'defer' : 'next');
+    if (!out.ok) return out.word === 'not-found' ? 'send' : this.onFailure(out, s);
     const issue = out.value['issue'] as IssueRead & { identifier?: unknown };
     return {
       verdict: issueReadVerdict(issue, step), team: typeof issue.teamKey === 'string' ? issue.teamKey : null,
@@ -606,25 +726,25 @@ export class PlanSync {
 
   /** C2': a create whose binding was `pending` at the start of the step may have been sent. Read what Linear holds and adopt
    *  only ccrc's own object (`adoptionVerdict`); anything else sends the create, whose id makes a lost race a `conflict`. */
-  private async recover(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<'bound' | 'send' | 'next' | 'defer'> {
+  private async recover(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<'bound' | 'send' | 'next' | 'defer' | 'held'> {
     let kind: AdoptionKind;
     let nodes: AdoptionNode[];
     if (step.recover === 'name-and-creator') {
-      if (this.viewerOf(built, step.workspaceId) === null) { this.deferFor(s.slug, 'viewer-unknown'); return 'defer'; }
+      if (this.viewerOf(built, step.workspaceId) === null) return this.hold(s, 'viewer-unknown');
       const out = await this.deps.call(this.readAsk(step.op === 'initiativeCreate' ? 'initiativesByName' : 'projectsByName', s, step.teamKey, { name: String(step.input['name']) }));
-      if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
+      if (!out.ok) return this.onFailure(out, s);
       kind = step.op === 'initiativeCreate' ? 'initiative' : 'project';
       nodes = out.value['nodes'] as AdoptionNode[];
     } else {
       // name-in-project: read inside ccrc's own bound project (a milestone has no creator, R3)
       const out = await this.deps.call(this.readAsk('projectById', s, step.teamKey, { id: String(step.input['projectId']) }));
-      if (!out.ok) return this.onFailure(out, s) === 'defer' ? 'defer' : 'next';
+      if (!out.ok) return this.onFailure(out, s);
       kind = 'milestone';
       nodes = (out.value['project'] as { milestones?: AdoptionNode[] }).milestones ?? [];
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') return 'send';
-    this.bind(b, v.id, null, ADOPTED, step.teamKey);
+    this.bind(b, v.id, null, ADOPTED_FINGERPRINT, v.teamKey ?? step.teamKey);
     return 'bound';
   }
 
@@ -632,18 +752,18 @@ export class PlanSync {
     return built.snap.workspaces.find((w) => w.workspaceId === workspaceId)?.directory?.viewerId ?? null;
   }
 
-  /** What `adoptionVerdict` is asked with: the create's id, the directory's viewer, the planned team, and every Linear id
+  /** What `adoptionVerdict` is asked with: the create's id, the directory's viewer, and every Linear id
    *  another binding of this programme holds. */
   private adoptionAsk(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, built: NonNullable<ReturnType<PlanSync['snapshot']>>): AdoptionAsk {
     const held = new Set(built.snap.bindings.flatMap((x) => (x.id === b.id || x.linearId === null ? [] : [x.linearId])));
-    return { requestId: step.requestId, viewer: this.viewerOf(built, step.workspaceId), teamKey: step.teamKey, held };
+    return { requestId: step.requestId, viewer: this.viewerOf(built, step.workspaceId), held };
   }
 
-  /** R2 and C11: a create answered "conflict on insert" (or a milestone "name not unique"): an object exists at ccrc's id. Ids
-   *  are deterministic, so id alone adopts nothing: an initiative or project is adopted only when the by-name read (name as
-   *  sent, team-narrowed) shows that id made by this key's viewer; an issue only when it is in the planned team and no other
-   *  binding holds it; a milestone only inside ccrc's own bound project (R2). Anything else fails the binding
-   *  `linear-invalid`, mailed once, and never sends a second create. Adopted bindings carry the `adopted` fingerprint. */
+  /** R2, C11 and D-8183: a create answered "conflict on insert" (or a milestone "name not unique"): an object exists at ccrc's id. An
+   *  initiative or project is adopted only when the by-name read shows that id made by this key's viewer, an issue when no other
+   *  binding holds it, a milestone only inside ccrc's own bound project (R2): the team it sits in does not matter (the key may have
+   *  changed since a lost create), and an issue is bound with the team it is actually in, so the next update moves it. Anything else
+   *  fails the binding `linear-invalid`, mailed once, and never sends a second create. Adopted bindings carry the `adopted` fingerprint. */
   private async bindExisting(step: Extract<SyncStep, { kind: 'create' }>, b: BindingRow, s: Subject, built: NonNullable<ReturnType<PlanSync['snapshot']>>): Promise<Flow> {
     const id = step.requestId;
     let kind: AdoptionKind;
@@ -662,7 +782,7 @@ export class PlanSync {
       nodes = [issue];
       identifier = typeof issue.identifier === 'string' ? issue.identifier : null;
     } else {
-      if (this.viewerOf(built, step.workspaceId) === null) { this.deferFor(s.slug, 'viewer-unknown'); return 'defer'; }
+      if (this.viewerOf(built, step.workspaceId) === null) return this.hold(s, 'viewer-unknown');
       // Two reads: the object at ccrc's id (its own name, which a rename since the lost create may have left unlike the plan's),
       // then that name's by-name listing, which carries the creator the by-id read does not select.
       const isInit = step.op === 'initiativeCreate';
@@ -676,7 +796,7 @@ export class PlanSync {
     }
     const v = adoptionVerdict(kind, nodes, this.adoptionAsk(step, b, built));
     if (v.verdict === 'none') { this.fail(s, 'linear-invalid'); return 'next'; }
-    this.bind(b, v.id, identifier, ADOPTED, step.teamKey);
+    this.bind(b, v.id, identifier, ADOPTED_FINGERPRINT, v.teamKey ?? step.teamKey);
     return 'next';
   }
 
@@ -685,42 +805,73 @@ export class PlanSync {
   /** `failWith` is what a failing word does (by default the binding fails with it, C16's link gives the URL up instead). */
   private onFailure(out: Failure, s: Subject, failWith: (word: string) => void = (word) => this.fail(s, word)): Flow {
     switch (out.word) {
-      case 'rate-limited': this.deferFor(s.slug, out.word, { floorMs: 'retryAfterS' in out ? out.retryAfterS * 1000 : 0 }); return 'defer';
+      case 'rate-limited': return this.hold(s, out.word, { floorMs: 'retryAfterS' in out ? out.retryAfterS * 1000 : 0 });
       case 'unreachable': case 'timeout': case 'policy-unavailable': case 'journal-unavailable':
-        this.deferFor(s.slug, out.word); return 'defer';
+        return this.hold(s, out.word);
       case 'malformed': {
         // Sent and answered outside the grammar: as `maybeSent`, and failed after the last backoff step.
         const n = (this.malformed.get(s.bindingId ?? -1) ?? 0) + 1;
         if (s.bindingId !== null) this.malformed.set(s.bindingId, n);
         if (s.bindingId !== null && n > PLAN_SYNC_BACKOFF_MS.length) { failWith('malformed'); return 'next'; }
-        this.deferFor(s.slug, 'malformed'); return 'defer';
+        return this.hold(s, 'malformed');
       }
       case 'not-configured': this.notConfigured.add(s.workspaceId); return 'next';
       case 'linear-unauthorised': {
-        this.blockedUntil.set(s.workspaceId, this.deferFor(s.slug, 'linear-unauthorised'));
-        void this.deps.markSlotRejected(s.slot.ref, s.slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
-        return 'defer';
+        this.hold(s, 'linear-unauthorised');
+        this.keyRefused(s.workspaceId, s.slot, this.wsHolds.get(`${s.slug}|${s.workspaceId}`)!.until);
+        return 'held';
       }
       default: failWith(out.word); return 'next';
     }
   }
 
-  private nextBackoff(slug: string): number {
-    const n = this.attempts.get(slug) ?? 0;
-    this.attempts.set(slug, n + 1);
-    return PLAN_SYNC_BACKOFF_MS[Math.min(n, PLAN_SYNC_BACKOFF_MS.length - 1)]!;
+  /** The time a deferral waits to, by the step counter kept under `key`: a programme's slug, or a
+   *  workspace hold's `<slug>|<workspaceId>`. The counter moves only when the deferral used a backoff step. */
+  private deferTime(key: string, d: Deferral, o: { floorMs?: number; until?: number }): number {
+    const step = this.attempts.get(key) ?? 0;
+    if (deferralUsesBackoff(d)) this.attempts.set(key, step + 1);
+    return deferralUntil(d, { now: this.deps.now(), backoffMs: PLAN_SYNC_BACKOFF_MS[Math.min(step, PLAN_SYNC_BACKOFF_MS.length - 1)]!, ...o, directoryWaitMs: DIRECTORY_WAIT_MS });
   }
 
-  /** Defer the programme for `cause` as `deferralOf` says (M5): its kind, and its time (the backoff step, at least `floorMs`;
-   *  the short directory wait; or the `until` the cause carries). Answers the time deferred to. */
+  /** Defer the programme for `cause` as `deferralOf` says (M5): its kind, and its time. Answers the time deferred to. For the
+   *  causes that are not one workspace's (`store-unreadable`, the pass's own waits); a step's own failure is {@link hold}. */
   private deferFor(slug: string, cause: DeferCause, o: { floorMs?: number; until?: number } = {}): number {
     const d = deferralOf(cause);
-    const now = this.deps.now();
-    const until = d.wait === 'directory' ? now + DIRECTORY_WAIT_MS
-      : d.wait === 'until' ? (o.until ?? now + this.nextBackoff(slug))
-      : now + Math.max(o.floorMs ?? 0, this.nextBackoff(slug));
+    const until = this.deferTime(slug, d, o);
     this.deferUntil(slug, until, d.why);
     return until;
+  }
+
+  /** D-8183: a step's failure holds the step's workspace for its programme, on that workspace's own backoff step, and the pass goes
+   *  on (`held`); the programme's row is deferred only when nothing else is runnable (`runPass`). */
+  private hold(s: { slug: string; workspaceId: string }, cause: DeferCause, o: { floorMs?: number } = {}): Flow {
+    const d = deferralOf(cause);
+    this.wsHolds.set(`${s.slug}|${s.workspaceId}`, { until: this.deferTime(`${s.slug}|${s.workspaceId}`, d, o), why: d.why });
+    return 'held';
+  }
+
+  /** A workspace's key was refused (a 401), by the plan sync's own call or an inbound close's (D-8183, review 2394 A-3): no call
+   *  in that workspace until `until` (the later of any standing refusal and this one), for every programme and the inbound lane
+   *  alike, and the slot is marked rejected through its one owner (`markSlotRejected`), so the key card shows it. */
+  keyRefused(workspaceId: string, slot: Pick<SlotInfo, 'ref' | 'digest'>, until: number): void {
+    this.blockedUntil.set(workspaceId, Math.max(this.blockedUntil.get(workspaceId) ?? 0, until));
+    void this.deps.markSlotRejected(slot.ref, slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
+  }
+  /** Until when a workspace's refused key holds every write lane there (0: not held). */
+  keyBlockedUntil(workspaceId: string): number { return this.blockedUntil.get(workspaceId) ?? 0; }
+
+  /** When a workspace is free for this programme again: the later of its key's refusal and its step failure's hold (0: free). */
+  private releaseOf(slug: string, ws: string): number {
+    return Math.max(this.blockedUntil.get(ws) ?? 0, this.wsHolds.get(`${slug}|${ws}`)?.until ?? 0);
+  }
+
+  /** A step made progress in `ws`: the programme's and the workspace's backoff steps start again and the hold is gone. */
+  private progressed(slug: string, ws: string): void {
+    this.attempts.delete(slug); this.attempts.delete(`${slug}|${ws}`); this.wsHolds.delete(`${slug}|${ws}`);
+  }
+
+  private clearHolds(slug: string): void {
+    for (const key of [...this.wsHolds.keys()]) if (key.startsWith(`${slug}|`)) { this.wsHolds.delete(key); this.attempts.delete(key); }
   }
 
   /** Defer the programme's due row to `until`. A `failure` holds: no later mark pulls it back to now (A7/A12). A `wait` is
@@ -745,15 +896,16 @@ export class PlanSync {
     return this.deps.plan.bindingsOf(slug).find((b) => b.id === id) ?? null;
   }
 
-  private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: 'plan-sync' | RestorePass): CcrcOpAsk {
+  private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: SendPass): CcrcOpAsk {
     const target = step.kind === 'create' ? null : step.op === 'issueUpdate' || step.op === 'issueLink' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
     return {
       op: step.op, pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
+      ...(step.teamKeys === undefined ? {} : { teamKeys: step.teamKeys }),
     };
   }
 
   private readAsk(op: CcrcOpAsk['op'], s: Subject, teamKey: string | null, input: CcrcOpAsk['input']): CcrcOpAsk {
-    return { op, pass: 'plan-sync', lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
+    return { op, pass: s.pass, lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
   }
 
   /** The binding is failed with the word, and the coordinator is told once per object and word. */
@@ -763,19 +915,28 @@ export class PlanSync {
     this.mailFailed(s, word);
   }
 
-  /** One look at a workspace's fill, written into its streak (L1's `nextDirectoryStreak` decides). */
+  /** D-8701's episodes (the bounded waits): each workspace's streak of fills reading `unknown` initiatives (`probe|<ws>`) or project
+   *  statuses never read (`statuses|<ws>`). The store's (D-8183): a restart keeps the streak, so an episode's bound and its one mail
+   *  stand across it. */
+  private streakOf(key: string): DirectoryStreak | undefined { return this.deps.plan.streaksOf().get(key); }
+
+  /** One look at a workspace's fill, written into its streak when it changed (L1's `nextDirectoryStreak` decides). */
   private observe(key: string, look: FillLook): void {
-    const next = nextDirectoryStreak(this.streaks.get(key), look);
-    if (next === undefined) this.streaks.delete(key); else this.streaks.set(key, next);
+    const prev = this.streakOf(key);
+    const next = nextDirectoryStreak(prev, look);
+    if (next !== prev) this.deps.plan.setStreak(key, next ?? null);
   }
 
   /** D-8701's episode mail: once per programme, workspace and episode (its first fill names it), in a fixed sentence. */
-  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses'): void {
-    const streak = this.streaks.get(`${kind}|${workspaceId}`);
+  private mailEpisode(slug: string, workspaceId: string, kind: 'probe' | 'statuses', snap?: SyncSnapshot): void {
+    const streak = this.streakOf(`${kind}|${workspaceId}`);
     if (streak === undefined) return;
     if (kind === 'probe') {
+      // The facts the sentence is built from (L1's `probeEpisodeText`): is the programme's initiative bound in this workspace, and has the
+      // programme ended (so the initiative's close waits too).
+      const bound = snap?.program != null && snap.bindings.some((b) => b.localKind === 'programme' && b.localId === snap.program!.rowid && b.workspaceId === workspaceId && b.state === 'bound' && b.linearId !== null);
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} initiatives-unknown since ${streak.since} (${slug})`,
-        `ccrc cannot tell whether initiatives are on in the Linear workspace ${workspaceId}, so the initiative of ${slug} there is waiting. Its projects, milestones and issues still sync, not linked to an initiative; ccrc looks again at the next directory refill or plan change.`);
+        probeEpisodeText({ slug, workspaceId, initiativeBound: bound, endWaiting: snap?.program?.end != null }));
     } else {
       this.mailOnce(slug, `Linear sync: workspace ${workspaceId} statuses-unread since ${streak.since} (${slug})`,
         `ccrc could not read the project statuses of the Linear workspace ${workspaceId}, so nothing of ${slug} in that workspace syncs until they read. The sync retries on its backoff.`);
@@ -784,13 +945,18 @@ export class PlanSync {
 
   /** §5.4: a programme ended `done` with open issues: the coordinator is told once, in a fixed sentence (no Linear text). */
   private mailOpenIssuesLeft(slug: string, count: number): void {
-    const owner = this.deps.plan.planOwnerOf(slug);
+    const owner = this.ownerOf(slug);
     if (owner === null) return;
     const subject = `Linear sync: programme ${slug} open-issues-left`;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
     const body = `The programme ${slug} has ended as done with ${count} open ${count === 1 ? 'issue' : 'issues'} in Linear. The sync left ${count === 1 ? 'it' : 'them'} open: close or re-plan ${count === 1 ? 'it' : 'them'}.`;
     tx(coord.db, () => { insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); });
+  }
+
+  /** Who is told about a key: a programme's coordinator, or an Upkeep epic's project's Linear owner (D-8183); none: nobody. */
+  private ownerOf(slug: string): string | null {
+    return slug.startsWith(UPKEEP_DUE_PREFIX) ? this.deps.upkeepOwnerOf?.(slug.slice(UPKEEP_DUE_PREFIX.length)) ?? null : this.deps.plan.planOwnerOf(slug);
   }
 
   private mailFailed(s: Told, word: string): void {
@@ -807,7 +973,7 @@ export class PlanSync {
   }
 
   private mailOnce(slug: string, subject: string, body: string): void {
-    const owner = this.deps.plan.planOwnerOf(slug);
+    const owner = this.ownerOf(slug);
     if (owner === null) return;
     const { coord } = this.deps;
     if (coord.hasMailWithSubject('operator', null, owner, subject)) return;
@@ -832,7 +998,7 @@ function withoutState(step: Extract<SyncStep, { kind: 'update' }>): Extract<Sync
 
 /** Each workspace's slot, the digest of the key in it and the teams its record learned for that key: what the sync reads
  *  of the Linear store. A slot whose key is gone or whose record describes another key is not here (C3). */
-function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
+export function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
   const out = new Map<string, SlotInfo>();
   if (store.kind !== 'listed') return out;
   for (const s of store.slots) {
@@ -851,6 +1017,8 @@ function slotsOf(store: LinearStoreRead): Map<string, SlotInfo> {
 export function planSyncFor(o: {
   coord: CoordStore; plan: PlanStorePort; ccrcDir: string; rate: LinearRateService; journal: LinearJournal; policy: LinearWritePolicy;
   refresher: LinearRefresher; privateTrackerKeys: readonly string[]; readLinearStore: PlanSyncDeps['readLinearStore'];
+  /** A coordinator's standing, for the Linear owner an Upkeep epic's failure mail goes to (D-8183). */
+  presenceOf: (id: string) => CoordinatorPresence;
   /** The watcher's newest fleet listing: where a run's open PR is read before its close folds the lineage. */
   currentFleet?: () => readonly FleetSession[] | null;
 }): PlanSync {
@@ -863,6 +1031,9 @@ export function planSyncFor(o: {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
     now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
+    upkeepOwnerOf: (project) => linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
+      latestProgrammeCoordinator: (p) => o.plan.latestProgrammeCoordinator(p), presence: o.presenceOf,
+    }).id,
   });
 }
 
