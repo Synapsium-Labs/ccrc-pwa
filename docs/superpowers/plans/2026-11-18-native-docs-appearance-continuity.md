@@ -205,6 +205,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **an outcome of kind `appearance`** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
   - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
+  - **the faces are ccrc's files:** the base64 `loadReaderFonts` answers decodes to bytes whose sha256 equals the sha256 of `ui/src/fonts/Geist-Variable.woff2` and `ui/src/fonts/GeistMono-Variable.woff2`, read from disk in the test;
   - **an older library:** with `deps.libraryContract` answering `'none'`, and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds as a mode-only mount (`prefs.theme`, no `appearance`, no `fonts`). With `deps.libraryContract` answering `2`, the same. This seam is the only way to reach the case: with the exact pin it is a build error;
   - **while open, hosted:** `setAppearance` calls `DocFrame.setAppearance` once, including for a dropped colour group, and never `setPrefs`;
   - **while open, mode only:** `setAppearance` calls `DocFrame.setPrefs({theme})` once;
