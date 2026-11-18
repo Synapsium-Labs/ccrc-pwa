@@ -514,6 +514,89 @@ describe('it engages only where it can act, and asks for nothing otherwise', () 
   });
 });
 
+// Overlord approvals PR 0 (plan 2026-11-18-overlord-approvals.md §3.2.1, Task 0.3): a child spawned under an older deny
+// file is routed, not skipped, when the installer's digest history (`child-deny.digests`, its one writer the install
+// spine) names its digest. The request then carries `denyDigest`, and the server holds it with its allow capped.
+describe('a stale deny digest the history names is routed with denyDigest (approvals PR 0)', () => {
+  const OLD = 'c'.repeat(64);
+  const history = (...ds: string[]): void => put('.cc-sessions/child-deny.digests', ds.map((d, i) => `${d} ${1700000000000 + i}\n`).join(''));
+  const stale = (): void => put(`.cc-sessions/${ID}.deny-settings`, OLD);
+  const noRequest = (r: Run): void => {
+    expect(r.stdout).toBe('');
+    expect(r.calls, 'ccrc-api was never called').toEqual([]);
+  };
+  it('a digest the history names: the request is sent, with denyDigest set to that digest', () => {
+    stale();
+    history(OLD, sha(DENY_FILE));
+    const r = fire(payloadFor(MAIN));
+    expect(r.body).not.toBeNull();
+    const b = r.body as Record<string, unknown>;
+    expect(Object.keys(b).sort()).toEqual(['canonical', 'denyDigest', 'digest', 'nonce', 'sessionId', 'sessionUuid', 'v']);
+    expect(b['denyDigest']).toBe(OLD);
+    expect(b['sessionId']).toBe(ID);
+  });
+  it('a truncated request from a history digest carries denyDigest too', () => {
+    stale();
+    history(OLD);
+    const r = fire(payloadFor(MAIN, { tool_input: { command: `echo ${'x'.repeat(70_000)}`, description: 'a long one' } }));
+    const b = r.body as Record<string, unknown>;
+    expect(b['truncated']).toBe(true);
+    expect(b['denyDigest']).toBe(OLD);
+  });
+  it('a history child\'s ruling is verified and printed as any other: a signed deny prints the deny', () => {
+    stale();
+    history(OLD);
+    put('stub/record.json', JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(stub, 'record.json'), 'utf8')), verdict: 'deny', class: 'escalate', reason: 'not under older rules' }));
+    put('stub/sign.json', '{"state":"denied"}');
+    const d = decision(fire(payloadFor(MAIN)));
+    expect(d?.hookSpecificOutput.decision).toEqual({ behavior: 'deny', message: 'denied by your coordinator: not under older rules' });
+  });
+  // MUTATION (Task 0.3): send a digest in neither, and this reds.
+  it('a digest in neither the managed file nor the history: no request, as today', () => {
+    stale();
+    history('d'.repeat(64), sha(DENY_FILE));
+    noRequest(fire(payloadFor(MAIN)));
+  });
+  it('no history file, an empty one, or a line not of the shape: no request', () => {
+    stale();
+    noRequest(fire(payloadFor(MAIN)));
+    put('.cc-sessions/child-deny.digests', '');
+    noRequest(fire(payloadFor(MAIN)));
+    for (const bad of [`${OLD}\n`, `${OLD}  1700000000000\n`, ` ${OLD} 1700000000000\n`, `${OLD} 1700000000000 x\n`, `${OLD.toUpperCase()} 1700000000000\n`]) {
+      put('.cc-sessions/child-deny.digests', bad);
+      put(`.cc-sessions/${ID}.deny-settings`, bad.startsWith(OLD.toUpperCase()) ? OLD.toUpperCase() : OLD);
+      noRequest(fire(payloadFor(MAIN)));
+    }
+  });
+  it('a symlink at the history\'s name is never read: no request', () => {
+    stale();
+    const target = path.join(home, 'elsewhere.digests');
+    fs.writeFileSync(target, `${OLD} 1700000000000\n`);
+    fs.symlinkSync(target, reg('child-deny.digests'));
+    noRequest(fire(payloadFor(MAIN)));
+  });
+  it('a current digest sends no denyDigest, and never reads the history: an unreadable one changes nothing', () => {
+    history(OLD);
+    fs.chmodSync(reg('child-deny.digests'), 0o000);
+    try {
+      const r = fire(payloadFor(MAIN));
+      expect(r.body).not.toBeNull();
+      expect(Object.keys(r.body as object)).not.toContain('denyDigest');
+      expect(decision(r)?.hookSpecificOutput.decision).toEqual({ behavior: 'allow' });
+    } finally { fs.chmodSync(reg('child-deny.digests'), 0o644); }
+  });
+  it('an older server refuses the history digest (409 deny-not-engaged): nothing printed, no wait', () => {
+    stale();
+    history(OLD);
+    put('stub/request.out', '{"ok":false,"error":"deny-not-engaged"}');
+    put('stub/request.code', '409');
+    const r = fire(payloadFor(MAIN));
+    expect(r.body?.['denyDigest']).toBe(OLD);
+    expect(r.stdout).toBe('');
+    expect(r.rulings).toBe(0);
+  });
+});
+
 describe('the request carries the canonical array, and the digest is its sha256', () => {
   it('the body is the v1 request: session, uuid, canonical, digest, nonce', () => {
     const r = fire(payloadFor(MAIN));

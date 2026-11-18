@@ -6292,7 +6292,10 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
 #      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
-#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      deny rules never gets rulings) or named by the installer's digest history `$REG/child-deny.digests` (approvals
+#      PR 0: a child spawned under an older deny file, which a running Claude Code never re-reads; the request then
+#      carries `denyDigest`, and the server holds it with its allow capped at `escalate`), and only when it can VERIFY a
+#      ruling: `node` on PATH, the verifier beside this
 #      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
 #      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
 #   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
@@ -6399,14 +6402,25 @@ _apr_scan() {   # -> rc 0 when the transcript shows this request resolved
   [[ "$ids" == *R* ]]
 }
 _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
+# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
+# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
+# the current-digest path gains no fork and no read. A symlink at the name is never read.
+_apr_deny_history() {   # <digest>
+  local f="$REG/child-deny.digests" l
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
+  done < "$f"
+  return 1
+}
 _hook_approval_wait() {
-  local sum managed uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
+  local sum managed dd="" uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
   [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
   _ct_read "$REG/$id.deny-settings" || return 0
   sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
   [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
   managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
-  [[ "$managed" == "$sum" ]] || return 0
+  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || return 0; dd="$sum"; fi
   command -v node >/dev/null 2>&1 || return 0
   [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
   apr_api="$HOME/.local/bin/ccrc-api"
@@ -6421,11 +6435,11 @@ _hook_approval_wait() {
   nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
   nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
   if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
-    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || return 0
+    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
   else
-    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || return 0
+    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
   fi
   apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
   # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
