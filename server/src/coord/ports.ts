@@ -60,9 +60,9 @@ export interface FleetWatcherView {
  *  ruling of 2026-10-30, the plan's Rejected list): one port, one member list. */
 export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet' | 'advanceObserved'
-  | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalsForChild' | 'approvalsInState' | 'askById'
+  | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalPushSources' | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
-  | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
+  | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'censusRowsIn' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'

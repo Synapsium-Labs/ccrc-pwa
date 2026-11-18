@@ -86,6 +86,16 @@ export type ApprovalCensusAuthority = 'coordinator' | 'operator' | 'none';
 export const APPROVAL_CENSUS_AUTHORITY_MAP: Readonly<Record<ApprovalCensusAuthority, true>> = { coordinator: true, operator: true, none: true };
 export const APPROVAL_CENSUS_AUTHORITIES = Object.keys(APPROVAL_CENSUS_AUTHORITY_MAP) as ApprovalCensusAuthority[];
 
+/** A minted row's deny currency as the read counts it (`byDenyCurrent`): PR 0's fact, `unmeasured` until it is read. */
+export type ApprovalCensusDenyCurrency = 'current' | 'not-current' | 'unmeasured';
+export const APPROVAL_CENSUS_DENY_CURRENCY_MAP: Readonly<Record<ApprovalCensusDenyCurrency, true>> = { current: true, 'not-current': true, unmeasured: true };
+
+/** A word the census's coordination files quote: a path or a deny currency. These ride the read's counts and a census
+ *  row's `path`, never a mail rejection or a run refusal (the mail-routes token census admits them through this guard). */
+export function isApprovalCensusWord(tok: string): boolean {
+  return isApprovalCensusPath(tok) || Object.prototype.hasOwnProperty.call(APPROVAL_CENSUS_DENY_CURRENCY_MAP, tok);
+}
+
 /** The six read commands PR 6's gate counts (§3.6): each argument a path, no write. */
 export const READ_PROMPT_COMMANDS = ['cat', 'head', 'tail', 'wc', 'ls', 'stat'] as const;
 

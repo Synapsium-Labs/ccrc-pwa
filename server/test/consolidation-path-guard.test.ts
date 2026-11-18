@@ -163,12 +163,15 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
 // W1a guard above is, and measured from the same base. Its `pwa/` arm is gone (slug path-guard-w3-releases-pwa, Overlord
 // W1 answer marks B): it stood because W3 was the server halves only and the PWA halves were W7's, and consolidation W7
 // has landed (C7a to C7p, the last of them #1948 and #1952), so a later stream may edit a W3 file beside the PWA.
+// The session hook left the signing arm the same way (slug path-guard-w3-releases-hook, approvals plan 2026-11-18 PR 1):
+// W3 has landed (Q3a to Q3g), and the approvals plan edits the hook's approval wait beside the questions owner by design
+// (Task 1.2 the envelope's route word, Task 1.3 the census the owner writes). The verifier and the signer stay on it.
 
 /** The files W3 creates (Q3b, Q3c, Q3g). */
 const W3_OWNED: readonly string[] = ['server/src/coord/questions.ts', 'server/src/coord/questionPolicy.ts', 'server/src/pane/askPairing.ts'];
 
 /** The approval signing path: no diff that touches a W3-owned file may touch one of these. */
-const SIGNING_PATH: readonly string[] = ['ccd/approval-verify.mjs', 'server/src/coord/approvalsign.ts', 'ccd/session-hook.sh'];
+const SIGNING_PATH: readonly string[] = ['ccd/approval-verify.mjs', 'server/src/coord/approvalsign.ts'];
 
 /** The W3 guard's verdict over one diff's file names. */
 function w3Guard(files: readonly string[]): { owned: string[]; signing: string[]; red: boolean } {
@@ -178,17 +181,19 @@ function w3Guard(files: readonly string[]): { owned: string[]; signing: string[]
 }
 
 describe('W3: no signing-path file beside a W3-owned file (slug question-census)', () => {
-  it('CONTROL (fixture): a W3-owned file with the verifier, the signer or the hook is red; with a pwa/ path, alone, or either side alone, passes', () => {
+  it('CONTROL (fixture): a W3-owned file with the verifier or the signer is red; with the hook, a pwa/ path, alone, or either side alone, passes', () => {
     for (const s of SIGNING_PATH) expect(w3Guard(['server/src/coord/questionPolicy.ts', s]).red, s).toBe(true);
-    expect(w3Guard(['server/src/pane/askPairing.ts', 'ccd/session-hook.sh', 'pwa/src/app.tsx'])).toEqual(
-      { owned: ['server/src/pane/askPairing.ts'], signing: ['ccd/session-hook.sh'], red: true });
+    expect(w3Guard(['server/src/pane/askPairing.ts', 'server/src/coord/approvalsign.ts', 'pwa/src/app.tsx'])).toEqual(
+      { owned: ['server/src/pane/askPairing.ts'], signing: ['server/src/coord/approvalsign.ts'], red: true });
+    // W3 has landed, so a W3-owned file beside the session hook is green (slug path-guard-w3-releases-hook).
+    expect(w3Guard(['server/src/coord/questions.ts', 'ccd/session-hook.sh']).red).toBe(false);
     // W7 has landed, so a W3-owned file beside a pwa/ path is green (slug path-guard-w3-releases-pwa).
     expect(w3Guard(['server/src/coord/questions.ts', 'pwa/src/session/askLive.ts']).red).toBe(false);
     expect(w3Guard(['server/src/coord/questions.ts', 'server/src/watch.ts', 'server/test/questions-pin.test.ts']).red).toBe(false);
     // Round 2 edits the signing path beside the routes, never beside a W3-owned file: green.
     expect(w3Guard(['ccd/approval-verify.mjs', 'server/src/coord/routes.ts', 'pwa/src/app.tsx']).red).toBe(false);
     // A path that merely starts like an owned one is not it.
-    expect(w3Guard(['server/src/coord/questions.ts.orig', 'ccd/session-hook.sh']).red).toBe(false);
+    expect(w3Guard(['server/src/coord/questions.ts.orig', 'server/src/coord/approvalsign.ts']).red).toBe(false);
   });
 
   it('this diff does not touch the signing path beside a W3-owned file', () => {

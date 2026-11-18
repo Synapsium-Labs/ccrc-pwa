@@ -143,9 +143,11 @@ const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc
 const NOW = Date.UTC(2026, 10, 18, 18);
 
 describe('GET of the census: session-gated, counts only', () => {
+  // The door reads through the questions owner, as `server.ts` wires it (W3's census keeps question-table reads there).
   const app = async (coord: CoordStore | undefined): Promise<ReturnType<typeof Fastify>> => {
     const a = Fastify({ logger: false });
-    registerApprovalCensusRoutes(a, { coord: () => coord, wall: () => NOW });
+    const q = createQuestions({ coord });
+    registerApprovalCensusRoutes(a, { sources: (f, t) => q.censusSources(f, t), wall: () => NOW });
     await a.ready();
     return a;
   };
@@ -176,7 +178,8 @@ describe('GET of the census: session-gated, counts only', () => {
   it('a store that cannot be read is unavailable, never an empty census', async () => {
     const broken = { censusRowsIn: () => { throw new Error('disk I/O error'); }, approvalRowsForCensus: () => ({ ok: true, rows: [] }), approvalPushSources: () => ({}) };
     const a = Fastify({ logger: false });
-    registerApprovalCensusRoutes(a, { coord: () => broken as never, wall: () => NOW });
+    const q = createQuestions({ coord: broken as never });
+    registerApprovalCensusRoutes(a, { sources: (f, t) => q.censusSources(f, t), wall: () => NOW });
     const res = await a.inject({ method: 'GET', url: '/api/approvals/census' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });

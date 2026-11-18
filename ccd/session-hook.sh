@@ -6205,8 +6205,7 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   command -v node >/dev/null 2>&1 || { apr_route=no-node; return 0; }
   [[ -f "$REG/approval-verify.mjs" ]] || { apr_route=no-verifier; return 0; }
   [[ -f "$HOME/.ccrc/approval-signing.pub" ]] || { apr_route=no-key; return 0; }
-  apr_api="$HOME/.local/bin/ccrc-api"
-  [[ -x "$apr_api" ]] || { apr_route=no-client; return 0; }
+  apr_api="$HOME/.local/bin/ccrc-api"; [[ -x "$apr_api" ]] || { apr_route=no-client; return 0; }
   _ct_read "$REG/$id.uuid" || { apr_route=no-uuid; return 0; }
   uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || { apr_route=no-uuid; return 0; }
   # A forbidden match that could not run reads as a match (fail closed): nothing is sent either way.
@@ -6215,15 +6214,13 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
   [[ "$canon" == '['* ]] || { apr_route=canonical-failed; return 0; }
   apr_digest=$(printf '%s' "$canon" | _apr_sha256) || { apr_route=canonical-failed; return 0; }
-  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || { apr_route=nonce-failed; return 0; }
-  apr_nonce="${apr_nonce//[^0-9a-f]/}"; [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route=nonce-failed; return 0; }
-  if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
-    apr_body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || { apr_route=canonical-failed; return 0; }
-  else
-    apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || { apr_route=canonical-failed; return 0; }
-  fi
+  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" \
+    && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
+  # Past `APPROVAL_REQUEST_MAX_BYTES` the body carries `truncated` in place of the canonical form (`-a` keeps it ASCII,
+  # so jq's length is its byte count).
+  apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
+    '{v: 1, sessionId: $s, sessionUuid: $u} + (if length > $max then {truncated: true} else {canonical: .} end) + {digest: $d, nonce: $n}' 2>/dev/null) \
+    || { apr_route=canonical-failed; return 0; }
   apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
   apr_route=sent
 }
@@ -6464,14 +6461,10 @@ _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
 _hook_approval_route_patch() {   # <word> -> rc 0 always
   local cur="" new="" tmp
   [[ -z "$hs_skip" && -n "${out:-}" && -f "$f" && ! -L "$f" ]] || return 0
-  { IFS= read -r -d '' cur < "$f"; } 2>/dev/null
-  [[ "$cur" == "$out"$'\n' ]] || return 0
-  new=$(jq -c --arg r "$1" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r else empty end' <<<"$out" 2>/dev/null) || return 0
-  [[ -n "$new" ]] || return 0
-  tmp="$REG/.$id.$$.hookstate.tmp"
-  { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
-  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"
-  return 0
+  { IFS= read -r -d '' cur < "$f"; } 2>/dev/null; [[ "$cur" == "$out"$'\n' ]] || return 0
+  new=$(jq -c --arg r "$1" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r else empty end' <<<"$out" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
 }
 _hook_approval_wait() {
   local rid waits ceil deadline now tick=0 st verdict reason state j t w
@@ -6485,12 +6478,8 @@ _hook_approval_wait() {
   [[ "${CCRC_APPROVAL_CEILING_S:-}" =~ ^[0-9]{1,3}$ ]] && (( CCRC_APPROVAL_CEILING_S < ceil )) && ceil=$CCRC_APPROVAL_CEILING_S
   trap 'exit 0' TERM INT HUP
   _apr_call approvals request --json - <<<"$apr_body" || { _hook_approval_route_patch request-failed; return 0; }
-  if [[ "$APR_CODE" != 201 ]]; then
-    w=$(jq -r '.error // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || w=""
-    [[ "$w" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || w="http-$APR_CODE"
-    _hook_approval_route_patch "request-refused:$w"
-    return 0
-  fi
+  [[ "$APR_CODE" == 201 ]] || { w=$(jq -r '.error // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || w=""
+    [[ "$w" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || w="http-$APR_CODE"; _hook_approval_route_patch "request-refused:$w"; return 0; }
   { read -r rid; read -r waits; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end)' <<<"$APR_BODY" 2>/dev/null)
   [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || { _hook_approval_route_patch request-failed; return 0; }
   (( waits < ceil )) && ceil=$waits

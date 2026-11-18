@@ -9,11 +9,11 @@
  * fixture HOME. Never the live HOME.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { APPROVAL_ROUTE_SKIP_WORDS, parseApprovalRoute } from '../../shared/approval-census.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -91,7 +91,7 @@ const payloadFor = (p: Payload, over: Record<string, unknown> = {}): Payload =>
 
 interface Run { stdout: string; sent: boolean; state: Record<string, unknown> | null }
 const fire = (p: Payload): Run => {
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: ENV(), timeout: 30_000 });
+  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(p), encoding: 'utf8', env: ENV(), timeout: 30_000 });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const calls = fs.existsSync(path.join(home, 'stub/calls')) ? fs.readFileSync(path.join(home, 'stub/calls'), 'utf8') : '';
@@ -105,7 +105,7 @@ describe('the hook\'s skip words are shared/approval-census.ts\'s, in both direc
     const text = fs.readFileSync(HOOK, 'utf8');
     const body = /^_hook_approval_gate\(\) \{[^\n]*\n([\s\S]*?)\n\}\n/m.exec(text)?.[1];
     expect(body, 'the gate function').toBeDefined();
-    const assigned = new Set([...body!.matchAll(/apr_route=([a-z-]+)/g)].map((m) => m[1]));
+    const assigned = new Set([...body!.matchAll(/apr_route='?([a-z-]+)/g)].map((m) => m[1]));
     expect([...assigned].sort()).toEqual([...APPROVAL_ROUTE_SKIP_WORDS, 'sent'].sort());
   });
   it('each word parses as the route it is', () => {

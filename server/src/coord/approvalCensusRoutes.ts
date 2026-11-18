@@ -3,7 +3,7 @@ import { noStoreRoute } from '../accounts/gate.js';
 import { refuseRoute } from '../refuse.js';
 import { APPROVAL_CENSUS_DEFAULT_DAYS, APPROVAL_CENSUS_MAX_DAYS } from '../../../shared/approval-census.js';
 import { approvalCensusOf } from './approvalCensus.js';
-import type { CoordStore } from './store.js';
+import type { ApprovalCensusSources } from './questions.js';
 
 /**
  * THE APPROVAL CENSUS'S READ (approvals plan 2026-11-18, §3.1 and Task 1.4): `GET /api/approvals/census?days=N`, the
@@ -18,11 +18,13 @@ import type { CoordStore } from './store.js';
  *    envelope's 200 characters); the unredacted input the questions owner holds for a row's window is never read here.
  *  - A STORE THAT CANNOT BE READ IS SAID SO (`unavailable`), never an empty census: the M38 card shows "unmeasured".
  *
- * L4: it reads the query and the store and answers on the reply. Every decision is `approvalCensus.ts` (L1, pure). Not
- * registered here: `server.ts` calls `registerApprovalCensusRoutes`.
+ * L4: it reads the query and the questions owner's sources (`questions.ts#censusSources`: that owner holds the approvals
+ * and census rows, so no question-table read happens here) and answers on the reply. Every decision is
+ * `approvalCensus.ts` (L1, pure). Not registered here: `server.ts` calls `registerApprovalCensusRoutes`.
  */
 export interface ApprovalCensusRouteDeps {
-  readonly coord: () => Pick<CoordStore, 'censusRowsIn' | 'approvalRowsForCensus' | 'approvalPushSources'> | undefined;
+  /** `[fromMs, toMs)`'s sources; undefined when the server has no coordination store. */
+  readonly sources: (fromMs: number, toMs: number) => ApprovalCensusSources | undefined;
   readonly wall: () => number;
 }
 
@@ -37,20 +39,16 @@ export function registerApprovalCensusRoutes(app: FastifyInstance, deps: Approva
       if (!(n >= 1 && n <= APPROVAL_CENSUS_MAX_DAYS)) return refuseRoute(reply, 'bad-request', { why: `days is 1 to ${APPROVAL_CENSUS_MAX_DAYS}` });
       days = n;
     }
-    const coord = deps.coord();
-    if (coord === undefined) return refuseRoute(reply, 'not-configured', { detail: 'this server has no coordination store' });
     const toMs = deps.wall();
     const fromMs = toMs - days * DAY_MS;
-    let approvals: ReturnType<typeof coord.approvalRowsForCensus>;
-    let census: ReturnType<typeof coord.censusRowsIn>;
-    let pushes: ReturnType<typeof coord.approvalPushSources>;
+    let read: ApprovalCensusSources | undefined;
     try {
-      approvals = coord.approvalRowsForCensus(fromMs, toMs + 1);
-      census = coord.censusRowsIn(fromMs, toMs + 1);
-      pushes = coord.approvalPushSources(fromMs, toMs + 1);
+      read = deps.sources(fromMs, toMs + 1);
     } catch (e) {
       return refuseRoute(reply, 'unavailable', { detail: `the approval census cannot be read (${e instanceof Error ? e.message : String(e)})` });
     }
+    if (read === undefined) return refuseRoute(reply, 'not-configured', { detail: 'this server has no coordination store' });
+    const { approvals, census, pushes } = read;
     if (!approvals.ok) return refuseRoute(reply, 'unavailable', { detail: `the approvals rows cannot be read (${approvals.detail})` });
     if (!census.ok) return refuseRoute(reply, 'unavailable', { detail: `the census rows cannot be read (${census.detail})` });
     return approvalCensusOf({

@@ -12,7 +12,7 @@ import type { Dialog, HookAsk } from '../../../shared/api.js';
 import {
   READ_PROMPT_COMMANDS, parseApprovalRoute,
   type ApprovalCensusAuthority, type ApprovalCensusPath, type ApprovalCensusRowPath, type ApprovalCensusRowWire,
-  type ApprovalCensusWire,
+  type ApprovalCensusDenyCurrency, type ApprovalCensusWire,
 } from '../../../shared/approval-census.js';
 
 /** The summary's cut, the hook's own (`ask.approval.summary` is `.[0:200]`). */
@@ -166,7 +166,8 @@ export function approvalCensusOf(x: CensusReadInput): ApprovalCensusWire {
     if (r.releaseReason !== null) bump(byReleaseReason, r.releaseReason);
     if (r.class !== null) bump(byClass, r.class);
     bump(byThread, r.thread ?? 'unknown');
-    bump(byDenyCurrent, r.denyCurrent === null ? 'unmeasured' : r.denyCurrent ? 'current' : 'not-current');
+    const deny: ApprovalCensusDenyCurrency = r.denyCurrent === null ? 'unmeasured' : r.denyCurrent ? 'current' : 'not-current';
+    bump(byDenyCurrent, deny);
     bump(byProgramme, r.programme ?? '(none)');
     bump(byAuthority, r.authority);
     if (r.route !== null) bump(byRoute, r.route);

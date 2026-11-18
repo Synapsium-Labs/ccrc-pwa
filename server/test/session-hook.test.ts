@@ -441,7 +441,9 @@ describe('event → state mapping', () => {
     run({ hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'ls -la' } });
     const s = readState();
     expect(s.state).toBe('waiting');
-    expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
+    // The route word (approvals plan Task 1.2): this fixture session carries no `.child` mark, so the prompt is a root
+    // session's, path 7.
+    expect(s.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la', route: 'not-a-child' } });
     expect(s.ask.questions).toBeUndefined();
   });
   // F1 (build4 dogfood, docs/superpowers/programs/build4.md): a virgin

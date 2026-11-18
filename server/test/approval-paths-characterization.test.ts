@@ -18,6 +18,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { heldFor } from '../src/coord/heldFor.js';
@@ -95,7 +96,7 @@ const ENV = (): NodeJS.ProcessEnv => ({
 });
 const fire = (over: Record<string, unknown> = {}, env: NodeJS.ProcessEnv = ENV()): { stdout: string; calls: string[] } => {
   const payload = { ...MAIN, transcript_path: transcript, ...over };
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 30_000 });
+  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env, timeout: 30_000 });
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
   const calls = path.join(home, 'stub', 'calls');

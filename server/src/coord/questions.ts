@@ -475,6 +475,13 @@ export type ClaimantRule =
 /** The claimant's hand-over, once a door's front ladder has passed. */
 export interface ClaimantRelease { readonly kind: 'ask' | 'approval'; readonly id: number; readonly fromId: string }
 
+/** The approval census read's sources (Task 1.4): the minted rows, the census rows and the approval pushes by source. */
+export interface ApprovalCensusSources {
+  readonly approvals: ReturnType<WatcherCoordPort['approvalRowsForCensus']>;
+  readonly census: ReturnType<WatcherCoordPort['censusRowsIn']>;
+  readonly pushes: ReturnType<WatcherCoordPort['approvalPushSources']>;
+}
+
 /** One composition's owner of question state. Q3e: the raise and the approval inputs it holds. Q3d: the hold carrier
  *  and every act on it, as closure locals of `createQuestions` too. */
 export interface Questions {
@@ -508,6 +515,10 @@ export interface Questions {
   observeCensus(r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void;
   /** The source the push for the prompt `childId`'s pane paints now carries (`approval:<n>` or `census:<n>`). */
   pushSourceOf(childId: string): string | undefined;
+  /** The census read's three sources over `[fromMs, toMs)` (Task 1.4), read here because this owner holds the approvals
+   *  and census rows (plan C31; W3's census keeps question-table reads in this file). Undefined with no store; a store
+   *  read that throws throws. */
+  censusSources(fromMs: number, toMs: number): ApprovalCensusSources | undefined;
   /** `POST /api/questions/ask-<n>/release`'s door in: the held ask's snapshot to push now, or null. */
   released(childId: string): QuestionPush | null;
   /** The push outbox's re-read of an ask before each attempt (Overlord W1): settled unless it is still released or
@@ -1527,6 +1538,12 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   /** The push's source for the prompt `childId`'s pane paints now (`approval:<row>` or `census:<row>`), or undefined. */
   const pushSourceOf = (childId: string): string | undefined => censusSightings.get(childId)?.source ?? undefined;
 
+  const censusSources = (fromMs: number, toMs: number): ApprovalCensusSources | undefined => {
+    const coord = deps.coord;
+    if (coord === undefined) return undefined;
+    return { approvals: coord.approvalRowsForCensus(fromMs, toMs), census: coord.censusRowsIn(fromMs, toMs), pushes: coord.approvalPushSources(fromMs, toMs) };
+  };
+
   // ── the door-ins: each answers what to push; the caller pushes ─────────────────────────────────────────────────
 
   /** The lapse's release failure, logged once per cause (Overlord W1; a `changeLatch`, where it once warned every sweep). */
@@ -1943,7 +1960,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     raise, loadReseed, reseed, reseedGone, settleReplaced, settleCleared, restamp,
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
     lapseAsks, lapseApprovals, prune, released, askSettled, answeredLate, approvalReleased, approvalRuled, currentAskOf,
-    observeCensus, pushSourceOf,
+    observeCensus, pushSourceOf, censusSources,
     answer, rule, release,
     [TEST_VIEW]: testView,
   };
