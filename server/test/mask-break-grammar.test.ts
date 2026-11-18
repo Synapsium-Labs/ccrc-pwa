@@ -16,9 +16,9 @@
 // each caller passes an index just after a LF or a CR and reads forward from the start it is given, or steps further
 // back (review 2585 F8).
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
 import { ROW_BREAK } from '../src/accounts/shapes.js';
 import { breakStartAt } from '../src/accounts/mask.js';
+import { parsedFile } from './scan/symbols.js';
 
 const ALPHABET = ['x', '\n', '\r', ' ', '\0', '\t'] as const;
 /** Every string of `n` bytes over `ALPHABET`. */
@@ -96,9 +96,9 @@ describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK r
   it('the slice lookahead\'s BREAK_REST is built from the grammar\'s LF_BREAK_REST, never a copy of it (review 2585 F3)', () => {
     // A hand-written copy (the 20775879e lookahead, or one without the tab) leaves every row green: this source pin is what
     // reds it. `mask.ts` holds no other expression for the rest of a LF, blanks, CR break.
-    const src = readFileSync(new URL('../src/accounts/mask.ts', import.meta.url), 'utf8');
-    expect(src).toContain('const BREAK_REST = new RegExp(`^(?:${LF_BREAK_REST})`);');
-    expect(src.match(/\[ \\t\\0\]\*\\r/g) ?? []).toEqual([]);
+    const mask = parsedFile('server/src/accounts/mask.ts');
+    expect(mask.bindings.filter((b) => b.name === 'BREAK_REST').map((b) => b.init)).toEqual(['new RegExp(`^(?:${LF_BREAK_REST})`)']);
+    expect(mask.text.match(/\[ \\t\\0\]\*\\r/g) ?? []).toEqual([]);
   });
 
   it('no row break ends at a byte that is not a LF or a CR', () => {
