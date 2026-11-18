@@ -19,13 +19,18 @@ import type { RecordedActor } from '../src/auth/callerIdentity.js';
 import { ACTOR_ISSUER_MAP, ACTOR_KIND_MAP, CALLER_STRENGTH_MAP } from '../../shared/overlord-identity.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
-// The writers' kind and strength checks sit behind the brand, and the adapter mints no actor that fails exactly one of them
-// (a session's actor fails both). So each is pinned on its own through a test-only brand: an object put in TRUSTED passes
-// `isRecordedActor` here, and nothing else changes (the real brand still answers for every other object).
+// The shared predicate's kind and strength checks sit behind provenance. A test-only brand admits TRUSTED objects
+// at its WeakSet lookup, while the real shared predicate still checks every authority term and all other provenance.
 const { TRUSTED } = vi.hoisted(() => ({ TRUSTED: new WeakSet<object>() }));
 vi.mock('../src/auth/attributionIdentity.js', async (importOriginal) => {
   const m = await importOriginal<typeof import('../src/auth/attributionIdentity.js')>();
-  return { ...m, isRecordedActor: (a: unknown): boolean => m.isRecordedActor(a) || (typeof a === 'object' && a !== null && TRUSTED.has(a)) };
+  return { ...m, isAccountGateOperator: (a: unknown): boolean => {
+    const original = WeakSet.prototype.has;
+    const lookup = vi.spyOn(WeakSet.prototype, 'has').mockImplementation(function (this: WeakSet<object>, value: object) {
+      return (value === a && original.call(TRUSTED, value)) || original.call(this, value);
+    });
+    try { return m.isAccountGateOperator(a); } finally { lookup.mockRestore(); }
+  } };
 });
 
 let template = '';

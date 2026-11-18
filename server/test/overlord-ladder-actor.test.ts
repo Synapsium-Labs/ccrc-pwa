@@ -187,11 +187,14 @@ describe('independent widening terms', () => {
     ['issuer', { kind: 'operator', issuer: 'session-cookie', strength: 'operator' }],
     ['strength', { kind: 'operator', issuer: 'account-gate', strength: 'attributed' }],
   ])('rejects the wrong %s even if provenance is measured', async (_term, values) => {
-    vi.resetModules();
-    vi.doMock('../src/auth/attributionIdentity.js', () => ({ isRecordedActor: () => true }));
+    const candidate = { ...values, subject: 'fixture' };
+    const original = WeakSet.prototype.has;
+    const provenance = vi.spyOn(WeakSet.prototype, 'has').mockImplementation(function (this: WeakSet<object>, value: object) {
+      return value === candidate || original.call(this, value);
+    });
     try {
       const { ladderActor } = await import('../src/coord/overlordLadderStore.js');
-      expect(ladderActor({ ...values, subject: 'fixture' }, 'widen')).toEqual({ ok: false, reason: 'actor' });
-    } finally { vi.doUnmock('../src/auth/attributionIdentity.js'); vi.resetModules(); }
+      expect(ladderActor(candidate, 'widen')).toEqual({ ok: false, reason: 'actor' });
+    } finally { provenance.mockRestore(); }
   });
 });
