@@ -20,6 +20,27 @@ describe('the reader lab vocabulary (reader lab plan, Task 1)', () => {
     ]);
   });
 
+  it('the fixed probes are these 40 names, in this order', () => {
+    // Pinned one by one, not by count: a renamed or swapped probe keeps the count, while the lab page's frames still send
+    // the old name, which the door then counts as ignored. The run's view (`LAB_PROBE_NAMES`) enumerates this list.
+    expect(LAB_FIXED_PROBES).toEqual([
+      'cookie-console', 'cookie-fetch', 'cookie-fetch-marker', 'cookie-xhr', 'cookie-beacon', 'cookie-websocket',
+      'cookie-image', 'cookie-ran',
+      'ambient-parent-held', 'ambient-parent-broke', 'ambient-origin-held', 'ambient-origin-broke',
+      'ambient-cookie-held', 'ambient-cookie-broke', 'ambient-local-held', 'ambient-local-broke',
+      'ambient-session-held', 'ambient-session-broke', 'ambient-idb-held', 'ambient-idb-broke',
+      'ambient-caches-held', 'ambient-caches-broke',
+      'csp-canary',
+      'popup-open', 'popup-blank', 'top-nav', 'popup-null', 'popup-window', 'top-read-held', 'top-read-broke',
+      'top-write-threw', 'top-write-returned', 'popup-ran',
+      'self-nav-tried', 'self-nav',
+      'busy-start', 'busy-end',
+      'strays-sent',
+      'hostile-img', 'hostile-click',
+    ]);
+    expect(LAB_FIXED_PROBES).toHaveLength(40);
+  });
+
   it('the probe names are the 40 fixed probes, then a wall and a control name per channel, each once', () => {
     expect(LAB_FIXED_PROBES).toHaveLength(40);
     expect(LAB_PROBE_NAMES).toEqual([

@@ -5,20 +5,25 @@
 // run and is handed a nonce minted here, reads the run's counts, and closes it. A run is bound to the session that opened
 // it through a one-way digest of its cookie (`labOwnerOf`), never the cookie itself: any other session's read or close
 // answers exactly as an unknown nonce's does. The door is present on every box and inert until a session opens a run.
-// The probe pair is `EXEMPT` (gate.ts
-// reason 8): its callers are the lab's sandboxed frames, whose requests carry no session cookie by design. Every answer
-// the probe route itself gives is one `204` with no body and `no-store`, whatever the nonce, the run or the name, by GET
-// or POST, a refused body included. No answer to a request that reaches no probe handler depends on whether a run exists:
-// Fastify answers a malformed percent-escape 400 before any hook, on every box and by every method, and an over-long name
-// 414 before any hook on a POST (and on a GET where no catch-all route matches); anything else (a HEAD, a wrong-shaped
-// path) gets a 404 from the server's not-found handler where the built bundle's catch-all matches it (a GET or a HEAD on a
-// box serving the PWA), and where none matches (an API-only box, and a POST on any box), since every onRequest hook still
-// runs for it, a 404 on a dark box and the gate's 401 `no-session` on an armed one for a caller with no session. A
-// WebSocket upgrade past the gate is completed, then closed. So a probe learns nothing. The counter is an `onRequest` hook
-// the composition root adds immediately
-// BEFORE the gate's, so a probe the gate refuses (a frame's WebSocket upgrade, `Origin: null`, on an armed box) is still
-// counted. It never answers, reads no body and awaits nothing; the gate still decides every request. The door logs
-// nothing of its own; on an armed box the gate's foreign-origin line for a frame's WebSocket upgrade is the gate's.
+// The probe pair is `EXEMPT` (gate.ts reason 8): its callers are the lab's sandboxed frames, whose requests carry no
+// session cookie by design. Every answer the probe route itself gives is one `204` with no body and `no-store`,
+// whatever the nonce, the run or the name, by GET or POST, a refused body included. No answer to a request that reaches
+// no probe handler depends on whether a run exists. Fastify answers a malformed percent-escape 400 before any hook, on
+// every box and by every method, and an over-long name 414 before any hook on a POST (and on a GET where no catch-all
+// route matches). Anything else (a HEAD, a wrong-shaped path) runs every `onRequest` hook and is answered by what the
+// box has at that route:
+//  - a GET or a HEAD on a box serving the built PWA bundle matches its catch-all GET route (which `exemptKey` also keys
+//    a HEAD to, and which is `EXEMPT`), so the gate lets it by and the server's not-found handler answers 404;
+//  - any other request matches no route (an API-only box has no catch-all, and a box serving the bundle has one for
+//    GET and HEAD only, so a POST or any other method reaches none), so the gate decides: a 404 on a dark box; on an
+//    armed one, a write (any method but GET, HEAD and OPTIONS) from a foreign `Origin`, such as a frame's `null`, is
+//    answered `403 foreign-origin` before the session check, with or without a session (`needsOriginCheck`,
+//    `originVerdict`); any other caller with no session gets the gate's `401 no-session`, and one with a session the 404.
+// A WebSocket upgrade past the gate is completed, then closed. So a probe learns nothing. The counter is an `onRequest`
+// hook the composition root adds immediately BEFORE the gate's, so a probe the gate refuses (a frame's WebSocket upgrade,
+// `Origin: null`, on an armed box) is still counted. It never answers, reads no body and awaits nothing; the gate still
+// decides every request. The door logs nothing of its own; on an armed box the gate's foreign-origin line for a frame's
+// WebSocket upgrade is the gate's.
 import { createHash, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { SESSION_COOKIE, parseCookies } from '../auth/cookie.js';

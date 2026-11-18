@@ -550,6 +550,16 @@ describe('clause W8a: the reader library has its homes (M8.10 amended, M8.21)', 
     expect(planted(ROUTER, '\nself.onmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
   });
 
+  // The onmessage arm reads its owner from a list (`window`, `self`, `globalThis`); each owner has its own planted control,
+  // so dropping one from the list reds its case (W8a review 1318's residue; D2 Task 13).
+  it('M8.10 planted: a window.onmessage assignment in lib/router is red', () => {
+    expect(planted(ROUTER, '\nwindow.onmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
+  });
+
+  it('M8.10 planted: a globalThis.onmessage assignment in lib/router is red', () => {
+    expect(planted(ROUTER, '\nglobalThis.onmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
+  });
+
   it('M8.10 planted: a bare onmessage assignment in lib/router is red', () => {
     expect(planted(ROUTER, '\nonmessage = () => undefined;\n')).toEqual([`${ROUTER} message:onmessage`]);
   });
