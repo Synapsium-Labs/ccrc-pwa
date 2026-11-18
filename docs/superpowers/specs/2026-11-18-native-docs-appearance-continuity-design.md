@@ -197,9 +197,11 @@ This section covers an ordinary open, a lazy open (the reader chunk still loadin
 
 **Reading at the last moment.** The bridge reads the appearance synchronously, immediately before the synchronous `mountDocFrame`, after its last asset and Mermaid await. This is the point where D2 samples focus (D-8729), with no await in between. A change during the lazy chunk load or the asset wait is therefore already in the seed. The read happens once per library mount: since #3026, a same-page link's `openAt` builds the adapters again, and it reads again, beside the focus sample.
 
-**After the mount resolves.** The bridge's synchronous read returns the values and the stamp it read them under, and the mount hands that stamp back. `ReaderFrame` compares it with the current stamp, as it does today for the mode (`seededPrefs`), and sends `setAppearance` once only if they differ. A change during the hold is already in the seed, so it sends nothing.
+**After the mount resolves.** The mount reports whether it is hosted, as an explicit fact: hosted means the library's contract is supported and ccrc gave the bridge its root. A hosted mount also reports the stamp its seed was read under. `ReaderFrame` compares that stamp with the current one, as it does today for the mode (`seededPrefs`), and asks the mount to follow once, only if they differ. A change during the hold is already in the seed, so it sends nothing. A mount that is not hosted never reads the root.
 
-**While open.** On a stamp change, `ReaderFrame` reads the values again and calls `setAppearance`. Calls coalesce to one per animation frame, and the latest wins. The frame applies the values in place: no remount, the same iframe and nonce, and the reading position kept.
+**Who reads.** The bridge reads the root, both at mount and when asked to follow. The bridge is the lazily loaded module that carries the library, so `ReaderFrame`, in the main bundle, imports nothing of the library's. It holds only the stamp hook.
+
+**While open.** On a stamp change, `ReaderFrame` asks the mount to follow. The bridge reads the values again and calls the library's `setAppearance`. Calls coalesce to one per animation frame, and the latest wins. The frame applies the values in place: no remount, the same iframe and nonce, and the reading position kept.
 
 **A mode-only mount keeps today's trigger.** On a mode-only mount (§7), `ReaderFrame` keeps its existing effect on the derived mode (`readerPrefsOf`). The stamp alone would miss a change: on a dark device, Follow the system and Phosphor both leave `data-theme` unset, so the stamp does not move while the mode goes from `auto` to `dark`. A hosted mount needs no such trigger, because both choices then apply the same values.
 
