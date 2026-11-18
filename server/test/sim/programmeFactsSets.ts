@@ -9,11 +9,14 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const DECIDER_TS = path.join(ROOT, 'server/src/coord/programmeRemaining.ts');
+const EDGE_VERDICT_TS = path.join(ROOT, 'server/src/coord/edgeVerdict.ts');
 
 export type RemainingDeciders = typeof import('../../src/coord/programmeRemaining.js');
+export type EdgeVerdictDecider = typeof import('../../src/coord/edgeVerdict.js');
 
 export const REMAINING_BODY_KEY = 'server/src/coord/programmeRemaining.ts#remainingBodyOf';
 export const EDGE_TARGET_KEY = 'server/src/coord/programmeRemaining.ts#edgeTargetVerdict';
+export const EDGE_VERDICT_KEY = 'server/src/coord/edgeVerdict.ts#edgeVerdict';
 
 export const NOW = 1_790_000_000_000;
 /** The bounds, written out: `shared/programmeFacts.ts`' constants, so a mutant of a bound cannot move the expectation. */
@@ -21,6 +24,9 @@ export const WAVES_MAX = 99;
 export const REASON_MAX = 300;
 export const WHY_MAX = 200;
 export const EDGES_MAX = 10;
+/** Remaining work B's bounds, written out: `EDGE_EVIDENCE_MAX` and `EDGE_UNMEASURABLE_AFTER_MS`. */
+export const EVIDENCE_MAX = 300;
+export const UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
 
 export const LANDED = { kind: 'needs-landed', target: { predicate: 'run-closed', runId: 41 }, why: 'prog-b lands the schema first' };
 export const MERGED = { kind: 'needs-landed', target: { predicate: 'pr-merged', runId: 41, pr: 7 }, why: 'the store PR merges first' };
@@ -170,6 +176,80 @@ export function edgeTargetCases(m: Pick<RemainingDeciders, 'edgeTargetVerdict'>)
   };
 }
 
+// ── Remaining work B: an edge's verdict (Task 4) ─────────────────────────────────────────────────────────────────────
+
+type Answer = Parameters<EdgeVerdictDecider['edgeVerdict']>[1];
+type VEdge = Parameters<EdgeVerdictDecider['edgeVerdict']>[0];
+export const OPEN_EDGE: VEdge = { state: 'open', unmeasuredSince: null };
+export const A_PASSED: Answer = { kind: 'passed', evidence: 'pr-7' };
+export const A_ENDED: Answer = { kind: 'ended', evidence: 'pr-7-not-merged' };
+export const A_PENDING: Answer = { kind: 'pending', evidence: 'run-41-working' };
+export const A_UNMEASURED: Answer = { kind: 'unmeasured', why: 'Error' };
+export const A_UNMEASURABLE: Answer = { kind: 'unmeasurable', why: 'lineage-unattributed' };
+export const ANSWERS: readonly Answer[] = [A_PASSED, A_ENDED, A_PENDING, A_UNMEASURED, A_UNMEASURABLE];
+
+/** The verdict word and what the writer is handed, as one comparable value. */
+export const settleOf = (v: ReturnType<EdgeVerdictDecider['edgeVerdict']>): unknown => (v.verdict === 'none' ? 'none' : [v.verdict, v.settle]);
+
+export function edgeVerdictCases(m: Pick<EdgeVerdictDecider, 'edgeVerdict'>): Record<string, SuiteCase> {
+  const v = (e: VEdge, a: Answer, now = NOW) => settleOf(m.edgeVerdict(e, a, now));
+  return {
+    'row 1: an edge that is not open, or whose state is unreadable, is none for every answer': () => {
+      for (const state of ['met', 'target-ended', 'target-unmeasurable'] as const) {
+        for (const a of ANSWERS) expect(v({ state, unmeasuredSince: null }, a)).toBe('none');
+      }
+      for (const a of ANSWERS) {
+        expect(v({ state: 'open', stateUnreadable: true, unmeasuredSince: null }, a)).toBe('none');
+        expect(v({ state: 'open', stateUnreadable: true, unmeasuredSince: NOW - UNMEASURABLE_AFTER_MS }, a)).toBe('none');
+      }
+    },
+    'row 2: unmeasured for exactly seven days ends the block as target-unmeasurable, naming the first time': () => {
+      const since = NOW - UNMEASURABLE_AFTER_MS;
+      expect(v({ state: 'open', unmeasuredSince: since }, A_UNMEASURED)).toEqual(
+        ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: `unmeasured since ${since}: Error` }]);
+      expect(v({ state: 'open', unmeasuredSince: since - 1 }, A_UNMEASURED)).toEqual(
+        ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: `unmeasured since ${since - 1}: Error` }]);
+    },
+    'row 3: unmeasured one millisecond short of seven days keeps the edge open and its first time': () => {
+      const since = NOW - UNMEASURABLE_AFTER_MS + 1;
+      expect(v({ state: 'open', unmeasuredSince: since }, A_UNMEASURED)).toEqual(['unmeasured', { kind: 'clock', unmeasuredSince: since }]);
+    },
+    'row 3: the first unmeasured answer starts the clock at now': () => {
+      expect(v(OPEN_EDGE, A_UNMEASURED)).toEqual(['unmeasured', { kind: 'clock', unmeasuredSince: NOW }]);
+    },
+    'row 4: an unmeasurable answer ends the block at once, whatever the clock (review 2381 N1)': () => {
+      for (const since of [null, NOW, NOW - UNMEASURABLE_AFTER_MS]) {
+        expect(v({ state: 'open', unmeasuredSince: since }, A_UNMEASURABLE)).toEqual(
+          ['unmeasurable', { kind: 'end', state: 'target-unmeasurable', evidence: 'unmeasurable: lineage-unattributed' }]);
+      }
+    },
+    'row 5: a passed target is met, with the reader\'s evidence': () => {
+      expect(v(OPEN_EDGE, A_PASSED)).toEqual(['met', { kind: 'end', state: 'met', evidence: 'pr-7' }]);
+      expect(v({ state: 'open', unmeasuredSince: NOW - UNMEASURABLE_AFTER_MS }, A_PASSED)).toEqual(['met', { kind: 'end', state: 'met', evidence: 'pr-7' }]);
+    },
+    'row 6: an ended target is target-ended, with the reader\'s evidence': () => {
+      expect(v(OPEN_EDGE, A_ENDED)).toEqual(['ended', { kind: 'end', state: 'target-ended', evidence: 'pr-7-not-merged' }]);
+    },
+    'row 7: a pending target keeps the edge open and clears its clock': () => {
+      expect(v({ state: 'open', unmeasuredSince: NOW - 5 }, A_PENDING)).toEqual(['pending', { kind: 'clock', unmeasuredSince: null }]);
+      expect(v({ state: 'open', unmeasuredSince: NOW - UNMEASURABLE_AFTER_MS }, A_PENDING)).toEqual(['pending', { kind: 'clock', unmeasuredSince: null }]);
+      expect(v(OPEN_EDGE, A_PENDING)).toEqual(['pending', { kind: 'clock', unmeasuredSince: null }]);
+    },
+    'evidence over the bound comes back cut whole, and a key in it masked': () => {
+      const secret = 'sk-' + 'Zq9'.repeat(10);
+      const long = `${'word '.repeat(70)}${secret}`;
+      const r = m.edgeVerdict(OPEN_EDGE, { kind: 'passed', evidence: long }, NOW);
+      if (r.verdict === 'none' || r.settle.kind !== 'end') throw new Error('not an end');
+      expect(r.settle.evidence.length).toBeLessThanOrEqual(EVIDENCE_MAX);
+      expect(r.settle.evidence.endsWith('word')).toBe(true);
+      const short = m.edgeVerdict(OPEN_EDGE, { kind: 'ended', evidence: `closed ${secret}` }, NOW);
+      if (short.verdict === 'none' || short.settle.kind !== 'end') throw new Error('not an end');
+      for (let i = 0; i + 8 <= secret.length; i++) expect(short.settle.evidence.includes(secret.slice(i, i + 8))).toBe(false);
+      expect(short.settle.evidence.startsWith('closed')).toBe(true);
+    },
+  };
+}
+
 const REMAINING_BODY_SET: MutantSet<RemainingDeciders> = {
   modulePath: DECIDER_TS,
   suite: (mod) => remainingBodyCases(mod),
@@ -200,7 +280,26 @@ const EDGE_TARGET_SET: MutantSet<RemainingDeciders> = {
   ],
 };
 
+const EDGE_VERDICT_SET: MutantSet<EdgeVerdictDecider> = {
+  modulePath: EDGE_VERDICT_TS,
+  suite: (mod) => edgeVerdictCases(mod),
+  mutants: [
+    { id: 'EV-1 unmeasured read as met', old: "if (answer.kind === 'unmeasured') {", new: "if (answer.kind === 'unmeasured') { return end('met', 'met', answer.why);" },
+    { id: 'EV-2 not-open guard skipped', old: "if (edge.state !== 'open' || edge.stateUnreadable === true) return { verdict: 'none' };", new: '' },
+    { id: 'EV-3 met and ended swapped', old: "if (answer.kind === 'passed') return end('met', 'met', answer.evidence);", new: "if (answer.kind === 'passed') return end('ended', 'target-ended', answer.evidence);" },
+    { id: 'EV-4 row 2 age check dropped', old: 'since !== null && now - since >= EDGE_UNMEASURABLE_AFTER_MS', new: 'since !== null' },
+    { id: 'EV-5 pending keeps the clock', old: "return { verdict: 'pending', settle: { kind: 'clock', unmeasuredSince: null } };", new: "return { verdict: 'pending', settle: { kind: 'clock', unmeasuredSince: edge.unmeasuredSince } };" },
+    { id: 'EV-6 unreadable state settled', old: " || edge.stateUnreadable === true) return { verdict: 'none' };", new: ") return { verdict: 'none' };" },
+    { id: 'EV-7 seven days by more than, not at least', old: 'now - since >= EDGE_UNMEASURABLE_AFTER_MS', new: 'now - since > EDGE_UNMEASURABLE_AFTER_MS' },
+    { id: 'EV-8 unmeasurable read as transient', old: "if (answer.kind === 'unmeasurable') return end(", new: "if (answer.kind === 'unmeasurable') return { verdict: 'unmeasured', settle: { kind: 'clock', unmeasuredSince: edge.unmeasuredSince ?? now } }; if (false) return end(" },
+    { id: 'EV-9 clock restarted on every unmeasured answer', old: 'unmeasuredSince: since ?? now', new: 'unmeasuredSince: now' },
+    { id: 'EV-10 evidence not masked', old: 'cutWhole(redactCommand(text), EDGE_EVIDENCE_MAX)', new: 'cutWhole(text, EDGE_EVIDENCE_MAX)' },
+    { id: 'EV-11 evidence not cut', old: 'cutWhole(redactCommand(text), EDGE_EVIDENCE_MAX)', new: 'redactCommand(text)' },
+  ],
+};
+
 export const PROGRAMME_FACTS_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [REMAINING_BODY_KEY]: REMAINING_BODY_SET as MutantSet<never>,
   [EDGE_TARGET_KEY]: EDGE_TARGET_SET as MutantSet<never>,
+  [EDGE_VERDICT_KEY]: EDGE_VERDICT_SET as MutantSet<never>,
 };
