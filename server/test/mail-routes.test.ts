@@ -63,6 +63,7 @@ import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
+import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
@@ -919,7 +920,7 @@ describe('the rejection table is total, in both directions', () => {
     ]);
     const elsewhere = outsideDoneTests();
     const outsideDoors = outsideIdentityHome('overlordDoors.ts');
-    const outsideIssuers = outsideIdentityHome('schema.ts', 'overlordDesignationStore.ts');
+    const outsideIssuers = outsideIdentityHome('schema.ts');
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
@@ -1236,6 +1237,8 @@ describe('the rejection table is total, in both directions', () => {
         || isOverlordRefusal(tok)
         // ...and its acts, its store's answers and the read words it takes, through that decider's own exported guard.
         || isDesignationKebab(tok)
+        // THE LADDER: its effect, narrowing and local decision words come from their owning runtime maps.
+        || isLadderKebab(tok)
         // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
         // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
         // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
@@ -1252,7 +1255,7 @@ describe('the rejection table is total, in both directions', () => {
         || isUnforecastableReason(tok)
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
-        // Actor issuers are stored in schema.ts and checked in overlordDesignationStore.ts, not mail or run refusal codes.
+        // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
         || isActorIssuerWordHere(tok, outsideIssuers),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, Overlord refusal, designation word or unforecastable reason`).toBe(true);
     }
