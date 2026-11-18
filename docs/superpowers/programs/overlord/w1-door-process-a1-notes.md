@@ -36,17 +36,21 @@ is taken here.
   loader's variable. The census of `__CCD_LAYOUT` readers admits `_door_prog_ok`'s one read, in the docs front's form.
 - **`installer-stages-a-sixth-slot`**: the entry installer's staging pattern admitted slots 1 to 4; the sixth library
   stages in slot 5, so the pattern admits `[12345]`.
-- **`door-functions-unmapped-until-landing`** (the coordinator's ruling (a)): the context map reads the ccd libraries
-  through `CCD_LIB_FILES` in `server/test/consolidationCensus.ts`, a file another run holds, which declined this PR's one
-  entry for `ccd/lib/door.sh`. So the map carries no rows for `_door_prog_ok` and `_door_purge` and none of their three
-  edges, and the map does not guard `door.sh`'s functions until landing. The rows were built and measured: both in C10, the
-  session host (the door process is a process the session hosts), with `_reg_purge -> _door_purge` and the helper's calls
-  back to C1's `_reg_id_ok` and `_reg_purge_unremoved` as cross-context edges. At landing, the `CCD_LIB_FILES` entry, the
-  two rows and the three edges go back together, as one inseparable group, in the exact proposal to that file's holder
-  beside the README hunks.
-- **`readme-hunks-at-landing`** (the coordinator's ruling): README's auth paragraph (the machine-lane count word and the
-  act-key door's name), its library paragraphs and its restore-list line are not in this PR. README is held by another run,
-  which declined them. `box-token-census.test.ts`' "README states the DERIVED lane counts" is red until they land.
+- **`door-functions-mapped-under-item-436`**: the context map reads the ccd libraries through `CCD_LIB_FILES` in
+  `server/test/consolidationCensus.ts`, a file another run holds. The coordinator first deferred this PR's entry there
+  (ruling (a)); the operator's ruling on item 436 (Overlord PRs edit the files that run holds now, and that run merges
+  later) puts it back. So this PR carries, as one inseparable group: the `CCD_LIB_FILES` entry `'ccd/lib/door.sh'`, the two
+  rows `_door_prog_ok` and `_door_purge` in `ccd/contexts.tsv` (both C10, the session host: the door process is a process
+  the session hosts) with that file's header comment naming the library, and the three edges in `ccd/contexts-edges.tsv` (`_reg_purge -> _door_purge`, and the helper's calls
+  back to C1's `_reg_id_ok` and `_reg_purge_unremoved`).
+- **`readme-hunks-under-item-436`**: under the same ruling, README carries this PR's own facts in five hunks, and
+  nothing else in README is edited by this PR:
+  1. the auth paragraph's machine-lane count word, eighty-nine to ninety;
+  2. the continuity doors sentence names the act-key claim (`POST /api/sessions/:id/act-key`);
+  3. the ccd library list names `lib/door.sh` (the door process: its registry directory's purge and its program's pin
+     check);
+  4. one restore-list line for the backup's `ccd-lib-door.sh`, beside the other libraries' lines;
+  5. the loader paragraph names `ccd/lib/door.sh` the sixth library and `__CCD_LIB_DOOR_SHA256`, and reads "all six".
 - **`migration-100-by-position`**: the ladder (#2994) landed migration 99 first, so this PR's migration is 100, renumbered
   at the absorption of `main` (positional, the brief's rule).
 - **`door-prog-ok-names-no-tool`**: `_door_prog_ok` reads the program with a bounded `cat` and pipes the bytes into the
