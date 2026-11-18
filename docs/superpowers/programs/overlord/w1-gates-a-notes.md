@@ -314,4 +314,5 @@ caller characterization 13/13, other-lanes routes 35/35, combined mutation floor
 file 12/12 all passed. No resource kill was reported in these runs. No full local suite is claimed; the original
 full-run signal remains red/shallow. The new-head required checks and actual CodeQL are still the post-push gate.
 Documentation guards passed 34/34, 9/9 and 4/4, and the full staged merge diff passed whitespace checking. The
-complete branch-delta scan against the pinned base found zero private hits before committing the merge.
+complete branch-delta scan against the pinned base found zero private hits before committing the merge. Armed
+growth passed 96/96 against committed merge `bdc9941dc`, with no waiver, before the round's single push.
