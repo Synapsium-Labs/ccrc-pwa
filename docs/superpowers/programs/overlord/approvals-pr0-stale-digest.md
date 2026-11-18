@@ -79,6 +79,11 @@ touch credentials. The finding above rests on reading the build's code.
   plan gives. A guard to skip the history on a failed write was not added: no fixture can fail the deny file's write
   while leaving the history writable, so no test could turn it red.
 
+- `path-guard-w3-releases-hook` (PR 1's slug, #3043, the coordinator's ruling): the consolidation path guard's W3
+  arm refused this diff, which edits the session hook beside the questions owner. The release is taken from #3043
+  byte for byte (the same test file blob), so whichever PR lands second merges it cleanly. The hook leaves the arm's
+  signing path, and the verifier and the signer stay on it, with a red control for each.
+
 ## Accepted costs and residuals
 
 - **Children already stale before the first install of this build are not recovered** (ruling F1). Their digest
