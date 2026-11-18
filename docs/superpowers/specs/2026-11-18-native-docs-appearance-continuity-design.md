@@ -363,6 +363,14 @@ Each decision is a technical call within the operator's requirement, made and ar
 - **D-8759, the bridge's parent op set.** Rich-docs §4.4 and M8.6 list exactly `prefs`, `changes.result`, `mermaid` and `command`. This design adds `appearance`, and §4.3's font row grows by ccrc's two faces.
 - **D-8760, the hosted theme is not a reader preference.** Rich-docs §3.2's `prefs`, `chrome` row and G7 make theme a reader pref stored under the reader prefix. While hosted, it is ccrc's.
 
+## 13. Promise delta
+
+This design changes no Promise. It specifies required scope that the programme ledger already records, the operator's appearance requirement of 2026-11-10, and adds no capability or scenario.
+
+```promise-delta
+none - design of a recorded required follow-on of the native Docs reader programme; no Promise capability or scenario changes
+```
+
 ## Where things stand
 
 ### Agreed

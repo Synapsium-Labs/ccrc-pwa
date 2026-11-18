@@ -410,6 +410,10 @@ It returned 1 critical, 8 important and 10 minor findings. Each was fixed, or re
 | Minor: server suites | Fixed. Task 7 runs them from `server/` |
 | Minor: the one-bar budget had no row | Fixed: AP-7 and spec §9 |
 
+### The repo's review judge
+
+At `41d3ade8d`, every required check and CodeQL passed. The repo's review judge, which is not a required check, was red on one blocking reason, `promise-delta-missing`: the new spec had no `promise-delta` fence. Fixed by spec §13, which uses the template's "none - <reason>" form.
+
 ### Carried
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
