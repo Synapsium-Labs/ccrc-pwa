@@ -83,9 +83,9 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Interfaces:**
 - Produces: `ccd docs-show-range --project P --commit C --section S --path X --pin <blob:sha|fp:sha|stat:size:mtimeNs> --prepare` answering `DocsRangePrepared`; `… --snapshot ID --offset O --length L` answering `DocsRangeFrame`.
-- Cache: ccd-owned directory under ccd's own state (never inside `$REG`), mode 0700, one `flock`; reserve-then-copy against 536870912 bytes; at most 2 prepares at once, 6 a minute; entries one hour, least recently used first; snapshot id bound to (project or label, section, path, pin).
+- Cache: ccd-owned directory under ccd's own state (never inside `$REG`), mode 0700, one `flock`; reserve-then-copy against 536870912 bytes, or a lower bound read from the cache directory's bound file (only ever lower); at most 2 prepares at once, 6 a minute; entries one hour, least recently used first; snapshot id bound to (project or label, section, path, pin).
 
-- [ ] **Step 1: Failing tests** (each one `it`): `range: frames reassemble to the blob`; `range: a file changed since the listing refuses` (stat pin, then `touch`; expect `draft-changed`); `range: fp pin of a changed draft refuses`; `range: a frame naming another path's snapshot refuses`; `range: a frame of 524289 bytes refuses`; `range: a 64 MiB plus one byte file refuses range-too-large`; `range: a third concurrent prepare answers prepare-busy`; `range: a seventh prepare in a minute answers prepare-busy`; `range: an evicted snapshot answers snapshot-gone`; `range: cache never exceeds its bound`.
+- [ ] **Step 1: Failing tests** (each one `it`): `range: frames reassemble to the blob`; `range: a file changed since the listing refuses` (stat pin, then `touch`; expect `draft-changed`); `range: fp pin of a changed draft refuses`; `range: a frame naming another path's snapshot refuses`; `range: a frame of 524289 bytes refuses`; `range: a 64 MiB plus one byte file refuses range-too-large`; `range: a third concurrent prepare answers prepare-busy`; `range: a seventh prepare in a minute answers prepare-busy`; `range: an evicted snapshot answers snapshot-gone`; `range: cache never exceeds its bound` (the fixture HOME lowers the bound to 8 MiB with the bound file; two concurrent 5 MiB prepares; a hook pauses the first between reserve and copy; the second refuses `prepare-busy` and the directory never holds more than 8 MiB); `range: a bound file above the constant changes nothing`.
 - [ ] **Step 2: Run** from `server/`; expect FAIL (`unknown verb`).
 - [ ] **Step 3: Implement** the verb in `_docs_py`; the prepare reads a committed blob through the existing blob path, a draft through the existing fingerprinted read, and checks a `stat` pin against `os.fstat` of the opened descriptor.
 - [ ] **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(ccd): docs-show-range with a bounded snapshot cache (X2 P1, D-8764)`.
@@ -137,7 +137,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Interfaces:** Produces `ccd docs-folder-read --label L --op tree` → `DocsFolderTreeOk { label; entries: { section; path; kind; size; mtimeNs: string; fp: Sha | null }[]; unlisted }` (the same `mtimeNs` as the docs-tree draft entry); `--op show --section S --path X --fingerprint F --max-bytes N`; `--op prepare|range` as P1.2 with the label in the bound tuple. Reads only the six section directories below the held folder descriptor, `O_NOFOLLOW` at every step.
 
-- [ ] **Step 1: Failing tests:** `folder read: only the six sections list`; `folder read: a component swapped for a symlink after add refuses`; `folder read: an escaping symlink is listed, never read`; `folder read: a FIFO is listed, never opened`; `folder read: a directory loop ends`; `folder read: dot components skipped`; `folder read: no absolute path in any answer` (scan of every answer shape); `folder range: a frame after remove refuses`.
+- [ ] **Step 1: Failing tests:** `folder read: only the six sections list`; `folder read: a component swapped for a symlink after add refuses`; `folder read: docs/superpowers below the folder swapped for a symlink after add refuses`; `folder read: an escaping symlink is listed, never read`; `folder read: a FIFO is listed, never opened`; `folder read: a directory loop ends`; `folder read: dot components skipped`; `folder read: no absolute path in any answer` (scan of every answer shape); `folder range: a frame after remove refuses`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(ccd): docs-folder-read (X2 P2)`.
 
 ### Task P2.3: Server doors, dark refusal and census
@@ -224,7 +224,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 - [ ] **Step 0: The parser dependency.** Choose one HTML-to-tree parser that runs in a worker without a DOM (`hast-util-from-html`, parse5-based, is the default choice); record version, integrity, provenance, `npm audit signatures` and its import list in Results; exact pin, no caret.
 
-- [ ] **Step 1: Failing tests:** `print tree: the allow-list drops style, handlers and foreign URLs` (a fixture holding `style`, `onclick`, an `href` to another origin, `srcset` and an `svg` element: each gone, its text kept); `print tree: details open, sup, sub, kbd and comment anchors are elements` (the PR2 blocks, from the render output); `print view: no dangerouslySetInnerHTML in pwa/src/docs/print` (source scan); `print: tree parsed only after ready, never on the main thread`; `print: beforeprint mounts from the prepared tree, afterprint unmounts`; `print: Ctrl+P before the tree is ready prints the one-line page`; `print: figures print as source with caption`; `print: no allow-modals anywhere` (existing token scans stay green); browser: `print: page.pdf holds every PR1 and PR2 block of the fixture` (Chromium).
+- [ ] **Step 1: Failing tests:** `print tree: the allow-list drops style, handlers and foreign URLs` (a fixture holding `style`, `onclick`, an `href` to another origin, `srcset` and an `svg` element: each gone, its text kept); `print tree: details open, sup, sub, kbd and comment anchors are elements` (the PR2 blocks, from the render output); `print view: no dangerouslySetInnerHTML in pwa/src/docs/print` (source scan); `print: tree parsed only after ready, never on the main thread`; `print: beforeprint mounts from the prepared tree, afterprint unmounts`; `print: Ctrl+P before the tree is ready prints the one-line page`; `print: figures print as source with caption`; `print: no allow-modals anywhere` (existing token scans stay green); browser: `print: page.pdf holds every PR1 and PR2 block of the fixture` (Chromium); `print: under print media the frame and console chrome are not rendered` (print media emulated; the frame, the bar and the rail each have computed `display: none`, and the page's PDF has no frame box).
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): Print from ccrc's window (X2 P6)`.
 
 ### Task P6.2: Sibling modules, import maps and fetch within the walls
@@ -264,7 +264,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 **Interfaces:** Produces `decideBack(popped: unknown, visit: { id: string; places: Place[]; pendingSeq: number | null }): { kind: 'close-overlay' } | { kind: 'goto'; id: string } | { kind: 'consume' } | { kind: 'skip' } | { kind: 'router' }`, consulted before the router on every `popstate`; `skip` calls `history.back()` again, at most `PLACES_MAX` times in a row; `PLACES_MAX = 50` per doc visit; a pushed entry's URL is `location.href` unchanged.
 
 - [ ] **Step 0: Precondition, lab E16 per engine** (desktop Chromium and Firefox in the harness; phones in F): does a tap in the frame give the console activation for `pushState`? Record; where it fails, the row is recorded failed for that engine, and Esc and Close still work.
-- [ ] **Step 1: Failing tests:** the spec §4.7 list (`places: overlay Back closes it`, `places: Esc then exactly one Back consumed`, `places: jump then Back returns`, `places: 51 places push 50`, `places: a remount of the same doc keeps the visit's budget`, `places: stale places after navigating away cost no extra Back`, `places: the pushed entry's URL is the doc's current URL`, `places: an entry with no docsPlace goes to the router`, `places: router synthetic popstate not consumed`, `places: pushed entry keeps only`, `places: place with a URL refused by the parser`).
+- [ ] **Step 1: Failing tests:** the spec §4.7 list (`places: overlay Back closes it`, `places: Esc then exactly one Back consumed`, `places: jump then Back returns`, `places: 51 places push 50`, `places: a remount of the same doc keeps the visit's budget`, `places: stale places after navigating away cost no extra Back`, `places: the pushed entry's URL is the doc's current URL`, `places: an entry with no docsPlace goes to the router`, `places: router synthetic popstate not consumed`, `places: pushed entry keeps only`, `places: the port nonce never reaches history.state`, `places: place with a URL refused by the parser`).
 - [ ] **Step 2 to 4:** run, implement, run.
 - [ ] **Step 5: Amend rich-docs §4.4.** In the `hash` row, after "The parent calls `replaceState` with the fragment", add "; a `place` pushes an entry instead (amended <date>; X2 P5, D-8763)"; in the `command` row, after "Sent only from a tap on ccrc's own bar", add ", or on a Back that pops a place, for `close-overlay` and `goto` (amended <date>; X2 P5, D-8763)"; add rows for `place`, `close-overlay`, `goto`.
 - [ ] **Step 6: Commit** `feat(docs): Back closes the overlay and returns from a jump (X2 P5, D-8763)`.
@@ -293,7 +293,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | Row | Task | Mutation | Red test |
 |---|---|---|---|
 | M11.1 | P2.1 | Drop `O_NOFOLLOW` from one admission component | folder add: symlinked component refused |
-| M11.2 | P2.2 | Walk by path string instead of the held descriptor | folder read: component swapped after add refuses |
+| M11.2 | P2.2 | Walk by path string instead of the held descriptor | folder read: docs/superpowers below the folder swapped for a symlink after add refuses |
 | M11.3 | P2.1 | Compare protected directories by path prefix | folder add: protected directory by a second path refused |
 | M11.4 | P2.2 | Stop skipping dot components | folder read: dot components skipped |
 | M11.5 | P2.2 | Put the root path in the tree answer | folder read: no absolute path in any answer |
@@ -316,10 +316,10 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.22 | P4.3 | Skip the sentinel host check | tracker: placeholder beside the host refused |
 | M11.23 | P4.4 | Add a tracker host to a default | no tracker host in the shipped code |
 | M11.24 | P6.1 | Parse the print tree in `beforeprint` | print: tree parsed only after ready |
-| M11.25 | P6.1 | Leave the frame visible under print media | print: page.pdf holds every block |
+| M11.25 | P6.1 | Leave the frame visible under print media | print: under print media the frame and console chrome are not rendered |
 | M11.26 | P6.1 | Unmount skipped on afterprint | print: beforeprint mounts, afterprint unmounts |
 | M11.27 | P5.3 | Count "ignore next popstate" | places: router synthetic popstate not consumed |
-| M11.28 | P5.3 | Tag entries with the port nonce | places: an entry of an earlier mount goes to the router |
+| M11.28 | P5.3 | Write the port nonce into the pushed entry's state | places: the port nonce never reaches history.state |
 | M11.29 | P5.3 | Raise `PLACES_MAX` to unbounded | places: 51 places push 50 |
 | M11.30 | P5.3 | Drop `only` from pushed entries | places: pushed entry keeps only |
 | M11.31 | P6.2 | Resolve a `data:` import map entry | loader: an import map naming data: is refused |
