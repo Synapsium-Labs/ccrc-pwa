@@ -3,8 +3,8 @@
 // MEASURED (review 2445 F2; `docs/superpowers/programs/desktop-polish/c45.md`): `breakStartAt` reads a row break back
 // from its last byte, and its docstring said it reads every break as `ROW_BREAK` reads it forward; nothing pinned that.
 // A brute force over every string of 1 to 8 bytes over x, LF, CR, space and NUL agreed on every forward break but one
-// family: a CR LF, blanks (or none), then a CR. Forward, the CR LF is one break, the blanks a blank row, the CR another
-// break; back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. It is kept: every reader
+// family: a CR LF (or CR CR LF), blanks (or none), then a CR. Forward, the CR LF is one break, the blanks a blank row,
+// the CR another break; back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. Kept: a reader
 // that walks back over breaks steps further back, onto the row before, which can only join more rows to a key's chain
 // (fail closed), and the readers that stop there read the LF's CR as text before the run, as forward. This row pins the
 // agreement everywhere else and the one difference exactly, so a change to either side is a red suite.
@@ -63,6 +63,13 @@ describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK r
     // and nowhere else: a LF, blanks, then a CR with no CR before the LF is one break forward too.
     expect(breakStartAt('x\n \rx', 4)).toBe(1);
     expect(breakStartAt('x\r\rx', 3)).toBe(2);
+    // A CR CR LF is one break, forward and back (review 2445 F4); a LF, blanks, CR is not one when a CR LF follows it.
+    const crcrlf = new RegExp(ROW_BREAK, 'g');
+    expect([...'x\r\r\nx'.matchAll(crcrlf)].map((m) => [m.index, m[0]])).toEqual([[1, '\r\r\n']]);
+    expect([...'\n \r\r\nx'.matchAll(crcrlf)].map((m) => [m.index, m[0]])).toEqual([[0, '\n'], [2, '\r\r\n']]);
+    expect(breakStartAt('x\r\r\nx', 4)).toBe(1);
+    expect(breakStartAt('\n \r\r\nx', 5)).toBe(2);
+    expect(breakStartAt('x\r\r\r\nx', 5)).toBe(2);
   });
 
   it('no row break ends at a byte that is not a LF or a CR', () => {

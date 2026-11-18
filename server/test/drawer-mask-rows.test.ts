@@ -1273,14 +1273,16 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
     }
     return `$ show\r\n${rows.join(sep)}\r\n$ `;
   };
-  /** The phases of `text` in chunks of 4 and 16 KiB (eight each) that draw a key byte. */
+  /** The phases of `text` in chunks of 4 and 16 KiB (eight each) that draw a key byte, or no mark: a drawer that sent
+   *  nothing would show no key byte either (C45, review 2445 F6). */
   const shownPhases = (m: SecretMasker, key: string, text: string): string[] => {
     const shown = shownOf(key);
     const bad: string[] = [];
     for (const size of [4_096, 16_384]) {
       for (let p = 0; p < size; p += size / 8) {
-        const n = shown(throughDrawer(m, chunked(text, size, p, 0)));
-        if (n > 0) bad.push(`${size} B chunks, phase ${p}: ${n} key bytes`);
+        const sent = throughDrawer(m, chunked(text, size, p, 0));
+        const n = shown(sent);
+        if (n > 0 || !sent.includes(DRAWER_SECRET_MASK)) bad.push(`${size} B chunks, phase ${p}: ${n} key bytes, ${count(sent, DRAWER_SECRET_MASK)} marks`);
       }
     }
     return bad;
@@ -1323,6 +1325,7 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         for (let k = 0; k < 8; k++) {
           const out = await m.maskTextSliced(`${ordinary(1_000 + k * 7_000)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
           expect(shown(out), `${name}, 200 rows before, placement ${k}`).toBe(0);
+          expect(count(out, SECRET_MASK), `${name}, 200 rows before, placement ${k}: marks`).toBeGreaterThan(0);
         }
       } finally {
         m.close();
@@ -1336,6 +1339,7 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
           for (let k = 0; k < 6; k++) {
             const out = await m2.maskTextSliced(`${ordinary(1_000 + k * 9_000)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
             expect(shown(out), `${name}, ${preLen} bytes of escapes a row, placement ${k}`).toBe(0);
+            expect(count(out, SECRET_MASK), `${name}, ${preLen} bytes of escapes a row, placement ${k}: marks`).toBeGreaterThan(0);
           }
         }
       } finally {
@@ -1357,8 +1361,9 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         for (const b of breaks) {
           if (b < 60_000) continue;
           for (const c of inside.map((d) => b + d)) {
-            const n = shown(throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]));
-            if (n > 0 && bad.length < 5) bad.push(`cut at ${c}: ${n} key bytes`);
+            const sent = throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]);
+            const n = shown(sent);
+            if ((n > 0 || !sent.includes(DRAWER_SECRET_MASK)) && bad.length < 5) bad.push(`cut at ${c}: ${n} key bytes, ${count(sent, DRAWER_SECRET_MASK)} marks`);
           }
         }
         expect(bad, name).toEqual([]);
@@ -1397,6 +1402,7 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         for (let k = 0; k < 8; k++) {
           const out = await m.maskTextSliced(`${ordinary(1_000 + k * 7_000)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
           expect(shown(out), `${name}, 1,800 bytes of escapes a row, placement ${k}`).toBe(0);
+          expect(count(out, SECRET_MASK), `${name}, 1,800 bytes of escapes a row, placement ${k}: marks`).toBeGreaterThan(0);
         }
       }
     } finally {
@@ -1410,6 +1416,7 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         for (let k = 0; k < 8; k++) {
           const out = await m2.maskTextSliced(`${ordinary(1_000 + k * 8_000)}key:\n${perCharOf(k2, cols, esc, '\r\n')}\n${'tail line\n'.repeat(30)}`, { rows: true });
           expect(shown(out), `${n} characters coloured per character, placement ${k}`).toBe(0);
+          expect(count(out, SECRET_MASK), `${n} characters coloured per character, placement ${k}: marks`).toBeGreaterThan(0);
         }
       } finally {
         m2.close();
@@ -1439,8 +1446,9 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
       text += '\r\n$ ';
       const bad: string[] = [];
       for (const c of cuts) {
-        const n = shown(throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]));
-        if (n > 0) bad.push(`cut at ${c}: ${n} key bytes`);
+        const sent = throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]);
+        const n = shown(sent);
+        if (n > 0 || !sent.includes(DRAWER_SECRET_MASK)) bad.push(`cut at ${c}: ${n} key bytes, ${count(sent, DRAWER_SECRET_MASK)} marks`);
       }
       expect(cuts.length).toBeGreaterThan(10);
       expect(bad).toEqual([]);
@@ -1465,10 +1473,11 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         for (const b of breaks) {
           if (b < 70_000) continue;
           for (const gap of [0, 100]) {
-            const n = shown(throughDrawer(m, [
+            const sent = throughDrawer(m, [
               { text: text.slice(0, 66_000), quietMs: 0 }, { text: text.slice(66_000, b + d), quietMs: gap }, { text: text.slice(b + d), quietMs: 40 },
-            ]));
-            if (n > 0 && bad.length < 5) bad.push(`cut at ${b + d}, ${gap} ms after it: ${n} key bytes`);
+            ]);
+            const n = shown(sent);
+            if ((n > 0 || !sent.includes(DRAWER_SECRET_MASK)) && bad.length < 5) bad.push(`cut at ${b + d}, ${gap} ms after it: ${n} key bytes, ${count(sent, DRAWER_SECRET_MASK)} marks`);
           }
         }
         expect(bad, name).toEqual([]);
@@ -1477,4 +1486,91 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
       m.close();
     }
   }, 300_000);
+
+  // D-8749 (desktop polish Task C45, review 2445): the forms C44 left, on the same helpers. `c45.md` has the sizes.
+  describe('D-8749 — the masker follow-up to C44 (review 2445)', () => {
+    it('pane history: a key whose rows a LF, 64 blanks or more or an escape, then a CR breaks is masked across a slice cut (F1)', async () => {
+      // Review 2445 F1 (`pane-cut-long-break`): a slice cut after the LF of such a break (past `BREAK_CUT_MAX`, or an
+      // escape the cut read as text) began the next slice's lookahead with the blanks and the CR, read as an empty row that
+      // ended the key's rows, and the key went out raw: at `main`, the whole 2,000 bytes at 3 of 4 placements and 360 at
+      // the other for 64 and 65 blanks, 64 NULs, LF SGR CR and LF CUF CR, and at 4 of 4 for 200 blanks (482,448 to 516,810
+      // bytes a form). 62 and 63 blanks stay masked, as at `main`.
+      const key = keyOf(2_000, 2461);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const forms: [string, string][] = [62, 63, 64, 65, 200].map((n) => [`LF, ${n} blanks, CR`, `\n${' '.repeat(n)}\r`]);
+        forms.push(['LF, 64 NULs, CR', `\n${'\0'.repeat(64)}\r`], ['LF, SGR, CR', '\n\x1b[0m\r'], ['LF, CUF, CR', '\n\x1b[2C\r']);
+        for (const [name, sep] of forms) {
+          const { text } = rowsOf(key, 40, 1_800, sep, 200);
+          for (let k = 0; k < 4; k++) {
+            const out = await m.maskTextSliced(`${ordinary(1_000 + k * 14_000)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
+            expect(shown(out), `${name}, placement ${k}`).toBe(0);
+            expect(count(out, SECRET_MASK), `${name}, placement ${k}: marks`).toBeGreaterThan(0);
+          }
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
+    it('a slice of pane history ends after a LF, 63 blanks and a CR, and after the LF of 64 blanks or more (F3: BREAK_CUT_MAX)', async () => {
+      // `BREAK_CUT_MAX` (64) decides where a slice ends, not what is masked (the F1 row): within it the slice ends after
+      // the break's CR, past it after the LF. Pinned on the first slice's own text, so 63 and 65 each red a row (review 2445
+      // F3: both passed C44's describe). An escape between the LF and the CR is read through the escape view, as part of
+      // the break.
+      const m = fingerprinted(keyOf(300, 2462));
+      const texts: string[] = [];
+      const inner = m.maskWithCarry.bind(m);
+      (m as unknown as { maskWithCarry: typeof inner }).maskWithCarry = (t, o) => { texts.push(t); return inner(t, o); };
+      try {
+        const LF_AT = 65_000;
+        let pre = '';
+        for (let i = 0; pre.length < LF_AT - 100; i++) pre += `line ${i} of ordinary output\n`;
+        pre += 'w'.repeat(LF_AT - pre.length);
+        const forms: [string, string, number][] = [
+          ['63 blanks', `\n${' '.repeat(63)}\r`, 65], ['64 blanks', `\n${' '.repeat(64)}\r`, 1], ['65 blanks', `\n${' '.repeat(65)}\r`, 1],
+          ['62 NULs', `\n${'\0'.repeat(62)}\r`, 64], ['an SGR', '\n\x1b[0m\r', 6], ['a CUF', '\n\x1b[2C\r', 6], ['a LF alone', '\n  more', 1],
+        ];
+        for (const [name, brk, cut] of forms) {
+          texts.length = 0;
+          await m.maskTextSliced(`${pre}${brk}${'more words '.repeat(60)}\n${ordinary(10_000)}`, { rows: true });
+          expect(texts[0]!.length, `LF, ${name}`).toBe(LF_AT + cut);
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
+    it('a key whose rows a CR CR LF breaks (a CR LF doubled) is masked, through the drawer and in pane history (F4)', async () => {
+      // Review 2445 F4 (`drawer-consecutive-breaks`): `ROW_BREAK` read CR CR LF as a CR, then a CR LF, an empty row between
+      // that ended the key's rows, so the whole key showed at `main`: in one drawer push, at every phase in chunks, and at
+      // every placement in pane history, plain rows or 600 bytes of escapes a row past the hold. It is one row down now.
+      // The other consecutive-break forms review 2445 measured stay as at `main` (`c45.md`).
+      const key = keyOf(2_000, 2463);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const { text } = rowsOf(key, 64, 0, '\r\r\n');
+        const one = throughDrawer(m, [{ text, quietMs: 40 }]);
+        expect(shown(one), 'one push').toBe(0);
+        expect(count(one, DRAWER_SECRET_MASK), 'one push: marks').toBeGreaterThan(0);
+        expect(shownPhases(m, key, text)).toEqual([]);
+        for (let k = 0; k < 4; k++) {
+          const out = await m.maskTextSliced(`${ordinary(60_000 + k * 1_500)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
+          expect(shown(out), `pane history, placement ${k}`).toBe(0);
+          expect(count(out, SECRET_MASK), `pane history, placement ${k}: marks`).toBeGreaterThan(0);
+        }
+      } finally {
+        m.close();
+      }
+      const key2 = keyOf(8_192, 2464);
+      const m2 = fingerprinted(key2);
+      try {
+        expect(shownPhases(m2, key2, rowsOf(key2, 64, 600, '\r\r\n').text), '8,192 bytes, 600 bytes of escapes a row').toEqual([]);
+      } finally {
+        m2.close();
+      }
+    }, 300_000);
+  });
 });
