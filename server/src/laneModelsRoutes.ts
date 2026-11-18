@@ -15,13 +15,19 @@ import { refuseRoute } from './refuse.js';
  *
  *  - SESSION-GATED, NO BOX TOKEN. The global auth gate takes it like every PWA-surface write (it is in no EXEMPT table);
  *    a session's own hand never reaches it, the operator's device does. The box-token census lists it as `MODELS_DOORS`.
- *  - NON-OPTIMISTIC. The sheet moves only on the answer: a 200 carries the FRESH read of the lane (`readLaneModels`, asked
- *    after the act and only on a done), so what the screen shows is what the box now holds, never what the tap hoped.
+ *  - NON-OPTIMISTIC. The sheet moves only on the answer: a 200 carries the FRESH read of the lane (`readLaneModels` with
+ *    `{ fresh: true }`, asked after the act and only on a done), so what the screen shows is what the box now holds, never
+ *    what the tap hoped. "Fresh" is a guarantee about WHEN the read began: it starts a `show` of its own after the act
+ *    ended and never joins one a `GET /api/models/:lane` had already in flight, which on the local arm (no gate, and `show`
+ *    takes no lane lock) may have read the lane before the act wrote. On the agent arm a `show` during an act is `busy`.
  *  - A REFUSAL IS A WORD, NEVER THE VERB'S SENTENCE. The verb's `detail` can carry paths and commands, so only its kebab
  *    code crosses, as `verbCode` on `lane-act-refused`; the accounts routes' rule (`accounts/routes.ts`).
  *  - AN UNKNOWN OUTCOME IS SAID SO. A timeout, an output past its cap, a lost answer and a stdout off the grammar answer
  *    `outcome-unknown` with a cause: the verb may have run. Nothing is retried, and the sheet re-reads before it says more.
- *  - THE LANE IS THE ROSTER'S, ASKED BEFORE THE BODY: an unknown lane is `not-found` before any body is read or op sent.
+ *  - THE LANE IS THE ROSTER'S, ASKED BEFORE THE PARSED BODY IS READ: an unknown lane is `not-found` before the handler
+ *    looks at the body or sends an op. Fastify parses the JSON body BEFORE the handler runs, so a body that is not JSON
+ *    gets Fastify's own 400 and a non-JSON content type its own 415, for any lane, known or not; the handler's `bad-body`
+ *    is for JSON of the wrong shape.
  *  - AUDIT BY DEVICE. One `console.warn` line per op that was asked, naming the device the gate measured (`device:<label>`,
  *    D-5229), never a session id or cookie: `ccrc-server: models: <action> <lane> <class> by <actor> -> <outcome>`.
  *
@@ -53,7 +59,7 @@ export function registerLaneModelsRoutes(app: FastifyInstance, deps: LaneModelsR
     reply.header('cache-control', 'no-store');
     return {
       ok: true, lane, action, class: cls, changed: verdict.changed, partial: verdict.partial,
-      models: await readLaneModels(deps.io, deps.ccrcDir, lane),
+      models: await readLaneModels(deps.io, deps.ccrcDir, lane, { fresh: true }),
     };
   });
 }

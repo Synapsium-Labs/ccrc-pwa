@@ -5,6 +5,9 @@
 // `models` op, or the local arm in local mode), and `readShowAnswer` reads its one JSON object: the class labels
 // (`describe`'s `labels`, which `laneClassModels` built on that box) and the lane's advance state (`LaneAdvanceRead`).
 // Concurrent reads of one lane on one io share one op; there is no cache, so `no-store` still means "as the files are".
+// The ONE exception is the read that follows an act (`{ fresh: true }`, the POST's): it starts a `show` of its own and
+// never joins one already running, because a joined show may have read the lane before the act wrote (the local arm has no
+// gate, and `show` takes no lane lock). Same op, same `readShowAnswer`, no second reader.
 //
 // THE FILES UNDER THE GRANT AS THE FALLBACK (D-8688, retired by R3b). When nothing ran (`unsupported`: an agent that
 // predates the op; `refused`, `not-started`, `busy`), and when `show` failed on something the files path never reads
@@ -49,9 +52,14 @@ function showOnce(io: FleetIO, lane: string): Promise<ModelsAsked> {
   return asked;
 }
 
-export async function readLaneModels(io: FleetIO, ccrcDir: string, lane: string): Promise<LaneModelsRead> {
+/** `fresh`: begin a `show` of this read's own, never joining one in flight (the read an act asks for after it ends, F2).
+ *  A fresh `show` is not entered in the in-flight map either: a plain read that began after the act could share it, but
+ *  the map stays the plain reads' alone. */
+export interface LaneModelsReadOpts { readonly fresh?: boolean }
+
+export async function readLaneModels(io: FleetIO, ccrcDir: string, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {
   let asked: ModelsAsked;
-  try { asked = await showOnce(io, lane); } catch { asked = { kind: 'lost' }; }
+  try { asked = await (opts.fresh === true ? io.models(lane, 'show') : showOnce(io, lane)); } catch { asked = { kind: 'lost' }; }
   switch (asked.kind) {
     case 'unsupported': case 'refused': case 'not-started': case 'busy':
       return readLaneModelFiles(io, ccrcDir, lane);

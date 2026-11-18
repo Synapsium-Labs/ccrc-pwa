@@ -3,12 +3,13 @@
 // (`laneModelsAct.ts`). No file, no agent, no real `ccrc`: the real verb behind the real local arm is
 // `lane-models-hold-race.test.ts`'s. Every lane and model id here is a stand-in.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerLaneModelsRoutes } from '../src/laneModelsRoutes.js';
 import { MODELS_ACT_BODY_REFUSALS, modelsActAuditWord, modelsActVerdict, parseModelsActBody } from '../src/laneModelsAct.js';
-import type { FleetIO } from '../src/io.js';
+import { localIOFor, type FleetIO } from '../src/io.js';
+import { readLaneModels } from '../src/laneModels.js';
 import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import { CLASSES, laneClassModels, parseCatalogue, parseRegistry, type ModelClass } from '../../shared/models.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -211,12 +212,25 @@ describe('POST /api/models/:lane', () => {
   });
 
   describe('nothing is asked of the op, and nothing audited, for a refused door', () => {
-    it('a lane the roster does not hold is not-found, before the body is read', async () => {
+    it('a lane the roster does not hold is not-found, before the handler reads the parsed body', async () => {
       const r = await rig(holdDone(true));
       // the body is bad too: the lane is asked first, so the answer is not-found and not bad-request
       const res = await post(r, { action: 'nope', class: 'nope', extra: 1 }, 'lane-z');
       expect(res.statusCode).toBe(404);
       expect(res.json()).toEqual({ ok: false, error: 'not-found' });
+      expect(r.events).toEqual([]);
+      expect(auditLines()).toEqual([]);
+    });
+
+    it('a body Fastify cannot parse never reaches the handler, for any lane: its own 400 for bad JSON, its own 415 for another content type', async () => {
+      const r = await rig(holdDone(true));
+      for (const lane of ['lane-a', 'lane-z']) {
+        const bad = await r.app.inject({ method: 'POST', url: `/api/models/${lane}`, headers: { 'content-type': 'application/json' }, payload: '{"action":' });
+        expect(bad.statusCode, `${lane}: ${bad.body}`).toBe(400);
+        expect(bad.json(), 'Fastify\'s own error, not this door\'s refusal word').toMatchObject({ code: 'FST_ERR_CTP_INVALID_JSON_BODY' });
+        const plain = await r.app.inject({ method: 'POST', url: `/api/models/${lane}`, headers: { 'content-type': 'application/octet-stream' }, payload: 'hold' });
+        expect(plain.statusCode, `${lane}: ${plain.body}`).toBe(415);
+      }
       expect(r.events).toEqual([]);
       expect(auditLines()).toEqual([]);
     });
@@ -252,6 +266,121 @@ describe('POST /api/models/:lane', () => {
       expect(r.events).toEqual([]);
     });
   });
+});
+
+describe('the fresh read after the act never joins a show already in flight (F2, the local arm has no gate)', () => {
+  const apps: FastifyInstance[] = [];
+  let warn: ReturnType<typeof spyWarn>;
+  beforeEach(() => { warn = spyWarn(); });
+  afterEach(async () => { warn.mockRestore(); while (apps.length) await apps.pop()!.close(); });
+
+  /** The show a GET began BEFORE the act wrote: it names the old pin. The fresh one names the pin the act left. */
+  const STALE_REG = { ...REG, classes: { ...REG.classes, [C1]: 'model-6.1-delta' } };
+  const showOf = (reg: typeof REG): string => `${JSON.stringify({
+    ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: reg, labels: laneClassModels(parseRegistry(reg), parseCatalogue(CAT)),
+    windowNotices: [],
+  })}\n`;
+  const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  /** An io whose `show` answers only when this test says so, one deferred per call, in the order asked. */
+  function handRig() {
+    const base = testDeps(mkTmp('ccrc-lanemodels-fresh-'));
+    const events: string[] = [];
+    const shows: Array<(a: ModelsAsked) => void> = [];
+    const io: FleetIO = {
+      ...base.io,
+      models: (_lane, action) => {
+        events.push(action);
+        if (action !== 'show') return Promise.resolve(holdDone(true));
+        return new Promise<ModelsAsked>((resolve) => { shows.push(resolve); });
+      },
+    };
+    const app = Fastify();
+    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    apps.push(app);
+    return { app, io, ccrcDir: base.cfg.ccrcDir, events, shows };
+  }
+
+  it('a show begun before the act is still running when the act settles: the POST\'s models come from a show begun AFTER the act', async () => {
+    const t = handRig();
+    // the GET's show, in flight and unresolved: it reads the old state
+    const get = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    expect(t.events).toEqual(['show']);
+    const posted = t.app.inject({
+      method: 'POST', url: '/api/models/lane-a', headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ action: 'hold', class: C1 }),
+    });
+    // the act settles at once; give the route its ticks to start its own read
+    await sleep(25);
+    expect(t.events.slice(0, 2), 'the act ran').toEqual(['show', 'hold']);
+    // the old show now finishes with the old state
+    t.shows[0]!(exited(showOf(STALE_REG)));
+    await sleep(25);
+    // the POST's read, if it is its own, is the second show; answer it with the state the act left
+    if (t.shows.length > 1) t.shows[1]!(exited(SHOW));
+    const res = await posted;
+    expect(res.statusCode, res.body).toBe(200);
+    expect(t.events, 'a second show begun after the act').toEqual(['show', 'hold', 'show']);
+    expect(res.json().models).toEqual({
+      kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null },
+    });
+    // the GET still got the old state it asked for: it is not made to wait on the POST's
+    expect(await get).toMatchObject({ kind: 'read', classes: { [C1]: { model: 'model-6.1-delta' } } });
+  });
+
+  it('CONTROL: two plain reads still share one show (the GET keeps coalescing)', async () => {
+    const t = handRig();
+    const a = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    const b = readLaneModels(t.io, t.ccrcDir, 'lane-a');
+    expect(t.events).toEqual(['show']);
+    t.shows[0]!(exited(SHOW));
+    expect(await a).toEqual(await b);
+  });
+
+  it('through the real local arm: a fake launcher whose show reads its state at its START, held until released', async () => {
+    const home = mkTmp('ccrc-lanemodels-fresh-local-');
+    const bin = path.join(home, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    const state = path.join(home, 'state');
+    const seq = path.join(home, 'shows');
+    writeFileSync(state, 'old\n');
+    writeFileSync(path.join(home, 'show-old.json'), showOf(STALE_REG));
+    writeFileSync(path.join(home, 'show-new.json'), SHOW);
+    // `show` snapshots the state, then waits for `go.<n>` (n = its place in the order begun); `hold` writes the state.
+    writeFileSync(path.join(bin, 'ccrc'), [
+      '#!/bin/sh',
+      'case "$3" in',
+      '  show)',
+      `    echo x >> "${seq}"; n=$(wc -l < "${seq}" | tr -d ' ')`,
+      `    snap=$(cat "${state}")`,
+      `    while [ ! -e "${home}/go.$n" ]; do sleep 0.02; done`,
+      `    cat "${home}/show-$snap.json" ;;`,
+      `  hold) echo new > "${state}"; echo '{"ok":true,"op":"hold","class":"${C1}","changed":true,"id":"lane-a"}' ;;`,
+      'esac', '',
+    ].join('\n'), { mode: 0o755 });
+    const base = testDeps(home);
+    const io = localIOFor(home);
+    const app = Fastify();
+    registerLaneModelsRoutes(app, { io, ccrcDir: base.cfg.ccrcDir, hasLane: (l) => l === 'lane-a', actorOf: () => 'device:phone-a' });
+    apps.push(app);
+    const get = readLaneModels(io, base.cfg.ccrcDir, 'lane-a');
+    await sleep(300);
+    expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the GET\'s show began').toHaveLength(1);
+    const posted = app.inject({
+      method: 'POST', url: '/api/models/lane-a', headers: { 'content-type': 'application/json' },
+      payload: JSON.stringify({ action: 'hold', class: C1 }),
+    });
+    await sleep(500);
+    writeFileSync(path.join(home, 'go.1'), '');     // the old show finishes, having read `old`
+    await sleep(300);
+    writeFileSync(path.join(home, 'go.2'), '');     // the POST's own show, if it began one, reads `new`
+    const res = await posted;
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the POST began its own show').toHaveLength(2);
+    expect(res.json().models.classes[C1].model, 'the POST answered with the state read before the act').toBe('model-6.1-gamma');
+    expect((await get).kind).toBe('read');
+  }, 30_000);
 });
 
 describe('laneModelsAct (pure)', () => {
