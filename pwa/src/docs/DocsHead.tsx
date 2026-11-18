@@ -15,7 +15,7 @@
 // words giving way first, and the dense truth line below. A desktop-born reader keeps its frame bar on narrowing.
 import {
   useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type CSSProperties, type KeyboardEvent, type ReactNode,
+  type CSSProperties, type KeyboardEvent, type ReactNode, type RefObject,
 } from 'react';
 import { flushSync } from 'react-dom';
 import {
@@ -691,9 +691,15 @@ function ShareAction(p: {
  *  it is resolved from this visit's tree. Export (spec 4.17) follows Share on a leaf. The full head draws them in its
  *  row (desk-nav Part B, D-8101): GitHub, Share, Export and Open committed version each an icon beside its words. */
 function Actions(p: ActionInputs & { readonly form: FullHeadForm }): ReactNode {
+  const head = useHeadActions(p);
+  return <ActionsRow {...p} head={head} />;
+}
+
+/** `Actions` over actions worked out by the caller: the phone head works them out once for its row and its panel. */
+function ActionsRow(p: ActionInputs & { readonly form: FullHeadForm; readonly head: HeadActions }): ReactNode {
   const { page, tree, file } = p;
   const row = p.form === 'row';
-  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions(p);
+  const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
   if (target === null && committedHref === null) return null;
   return (
     <div className="docs-actions">
@@ -823,26 +829,21 @@ export function DocsHead(p: {
     const head = document.querySelector('.docs-head');
     (head?.querySelector<HTMLElement>('[data-plain-note]') ?? head?.querySelector<HTMLElement>('.docs-more'))?.focus();
   });
-  // The take-up plan, refinement (f): a leaf whose frame takes commands draws the one bar once the tree is `ok` (its
-  // panel needs the tree); while it is not, the width-based head stands in (compact only at a compact width). Keyed by the page.
-  if (oneBarUp && page.kind === 'path' && tree !== null && bar !== null) {
+  // The take-up plan, refinement (f), and phone-header refinement (a): a leaf page at the compact width draws one row, and a
+  // leaf whose frame takes commands draws the one bar once the tree is `ok` (its panel needs the tree). Both are `PhoneHead`
+  // at the same place under the same key, so the swap at ready keeps the shell and back; `bar` null is the row. Keyed by
+  // the page, so a navigation closes its panel. While the tree is not `ok`, the compact width draws back and the crumbs.
+  if (page.kind === 'path' && tree !== null && (oneBarUp || layout === 'compact')) {
     return (
-      <OneBar
-        key={docsPageUrl(page)} page={page} visit={visit} tree={tree} bar={bar} receivedAt={receivedAt} now={now} crumbs={crumbs}
-        leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
-        exportAssets={p.exportAssets ?? null} onPlainView={onPlainView}
-      />
-    );
-  }
-  // Phone-header refinement (a): a leaf page at the compact width draws one row. Keyed by the page, so a navigation closes its panel.
-  if (layout === 'compact' && page.kind === 'path') {
-    return (
-      <CompactHead
-        key={docsPageUrl(page)} page={page} visit={visit} tree={tree} receivedAt={receivedAt} now={now} crumbs={crumbs}
-        leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
+      <PhoneHead
+        key={docsPageUrl(page)} page={page} visit={visit} tree={tree} bar={oneBarUp ? bar : null} receivedAt={receivedAt} now={now}
+        crumbs={crumbs} leafImage={p.leafImage ?? null} exportBody={p.exportBody ?? null} pageStore={p.pageStore ?? null}
         exportAssets={p.exportAssets ?? null} plainView={p.plainView === true} onPlainView={onPlainView}
       />
     );
+  }
+  if (layout === 'compact' && page.kind === 'path') {
+    return <CompactHead key={docsPageUrl(page)} page={page} visit={visit} crumbs={crumbs} plainView={p.plainView === true} />;
   }
   // The full head (desk-nav Part B, D-8101): one row of back, the crumbs and the actions, then the truth line as one dense
   // line, then the plain-view note and "Updated to". `docs-full` scopes docs.css's row and dense-line rules to this head,
@@ -1079,24 +1080,17 @@ interface CompactProps {
   readonly onPlainView: (() => void) | null;
 }
 
-/** The compact head (phone-header refinements (a) to (h)): a leaf page under DOCS_COMPACT_QUERY. While the tree slot is
- *  not `ok` (loading, or failed) the head is back and the crumbs, as the full header's is (spec 4.7: a tree failure keeps
- *  the crumbs); the row and its panel need the tree. The two notes that answer a tap or a re-list (the plain view shown,
- *  Updated to) stay under the row, outside the panel, where the full header draws them. */
-function CompactHead(p: CompactProps & { readonly tree: DocsTreeOk | null }): ReactNode {
-  const { page, visit, tree } = p;
-  const where = p.crumbs.at(-2)?.label ?? '';
-  const name = p.crumbs.at(-1)?.label ?? '';
+/** The compact head while the tree slot is not `ok` (loading, or failed): back and the crumbs, as the full header's is (spec
+ *  4.7: a tree failure keeps the crumbs). The row and its panel need the tree, so they are `PhoneHead`'s. The two notes that
+ *  answer a tap or a re-list (the plain view shown, Updated to) stay under it, where the full header draws them. */
+function CompactHead(p: Pick<CompactProps, 'page' | 'visit' | 'crumbs' | 'plainView'>): ReactNode {
+  const { page, visit } = p;
   return (
     <header className="docs-head docs-compact">
-      {tree === null
-        ? (
-          <div className="docs-compact-crumbs">
-            <BackButton page={page} />
-            <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
-          </div>
-        )
-        : <CompactRow {...p} tree={tree} where={where} name={name} />}
+      <div className="docs-compact-crumbs">
+        <BackButton page={page} />
+        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} />
+      </div>
       {p.plainView && <PlainViewNote />}
       {visit.updatedTo !== null && (
         <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
@@ -1105,53 +1099,64 @@ function CompactHead(p: CompactProps & { readonly tree: DocsTreeOk | null }): Re
   );
 }
 
-/** The compact row once the tree is `ok`, and its panel (phone-header refinements (c) to (g)). Page details is a disclosure: a button
- *  whose `aria-expanded` and `aria-controls` name the panel, a region drawn in the page's flow under the row and `hidden`
- *  while closed. Escape inside either closes it and puts focus back on the button. */
-function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly where: string; readonly name: string }): ReactNode {
-  const { page, visit, tree } = p;
+/** What the phone head's disclosure hands the control that opens it: whether the panel is open, the panel's id, the ref the
+ *  shell returns focus to on Escape (the control puts it on its button), and the tap and key handlers. */
+interface PhoneToggle {
+  readonly open: boolean;
+  readonly panelId: string;
+  readonly button: RefObject<HTMLButtonElement | null>;
+  readonly onToggle: () => void;
+  readonly onKeyDown: (e: KeyboardEvent) => void;
+}
+
+/** The phone head once the tree is `ok` (phone-header refinements (a) to (h); the library 1.1 take-up plan, refinements (f) to
+ *  (l)): ONE component for both of its states, so the swap at ready replaces only what differs. While the reader is not up on
+ *  ccrc's bar (`bar` null) it draws the compact row: back, the label, Share and Export as icons, and Page details. Once the
+ *  reader frame is ready on the bar it draws the one bar: back, the title, the reader's tools and the reading line.
+ *  This shell owns what both states draw: the `header` (its class names per state), the row `div.docs-compact-bar` with back as
+ *  its first child, the details panel (`div.docs-more-panel`, its id, its Escape handler, the crumbs and the truth line in it)
+ *  and its open state. Back is therefore the SAME DOM element across the swap, so a reader of the page who had moved focus to
+ *  it while the reader's chunk was loading keeps it: nothing here calls `focus()` on back, and a head that returned a
+ *  different component for each state would unmount it. The panel is a disclosure: its button's `aria-expanded` and
+ *  `aria-controls` name the panel, a region in the page's flow under the row, `hidden` while closed. Escape inside the
+ *  button or the panel closes it and puts focus back on the button (Page details in the row, the title in the bar); in the
+ *  bar a key pressed in a sheet the panel's Share or Export opened is the sheet's own (it is portalled out of the panel but
+ *  bubbles here through React's tree), so only a key pressed in the panel's or the title's own DOM closes it. The swap closes
+ *  the panel, as the two components it replaces did. "Updated to", which answers a re-list, stays under the row, outside the
+ *  panel; the plain-view note follows the row only (choosing Export's plain view unmounts the reader, which withdraws the
+ *  bar, so that note is under the row's form). The hooks run once whichever state is drawn. */
+function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: ReaderBar | null }): ReactNode {
+  const { page, visit, tree, bar } = p;
   const file = visit.file;
+  const oneBar = bar !== null;
   const [open, setOpen] = useState(false);
-  const toggle = useRef<HTMLButtonElement>(null);
+  const [wasOneBar, setWasOneBar] = useState(oneBar);
+  if (wasOneBar !== oneBar) {
+    setWasOneBar(oneBar);
+    setOpen(false);
+  }
+  const button = useRef<HTMLButtonElement>(null);
   const panelId = useId();
-  const { target, showsDraft, onVersion, share, exported, committedHref } = useHeadActions({
+  const head = useHeadActions({
     page, tree, file, leafImage: p.leafImage, exportBody: p.exportBody, pageStore: p.pageStore,
     exportAssets: p.exportAssets, onPlainView: p.onPlainView,
   });
   const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
-  const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
-    : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
-      : null;
   const onKeyDown = (e: KeyboardEvent): void => {
     if (e.key !== 'Escape' || !open) return;
+    if (oneBar && (!(e.target instanceof Node) || !e.currentTarget.contains(e.target))) return;
     e.stopPropagation();
     setOpen(false);
-    toggle.current?.focus();
+    button.current?.focus();
   };
+  const toggle: PhoneToggle = { open, panelId, button, onToggle: () => setOpen((o) => !o), onKeyDown };
   return (
-    <>
+    <header className={oneBar ? 'docs-head docs-compact docs-one-bar' : 'docs-head docs-compact'}>
       <div className="docs-compact-bar">
         <BackButton page={page} />
-        <CompactLabel
-          where={p.where} name={p.name} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}
-        />
-        {share.s !== 'absent' && (
-          <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} glyph />
-        )}
-        {exported.s !== 'absent' && (
-          <ExportAction
-            key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
-            readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
-          />
-        )}
-        <button
-          ref={toggle} type="button" className="docs-more" aria-expanded={open} aria-controls={panelId}
-          aria-label={moreName(dot)}
-          onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}
-        >
-          <Icon name="ellipsis" size={20} />
-          {dot !== null && <span className="docs-more-dot" data-tone={dot} aria-hidden="true" />}
-        </button>
+        {bar === null
+          ? <CompactControls {...p} head={head} dot={dot} toggle={toggle} />
+          : <OneBarControls page={page} visit={visit} tree={tree} crumbs={p.crumbs} bar={bar} dot={dot} toggle={toggle} />}
       </div>
       <div
         id={panelId} className="docs-more-panel" role="region" aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}
@@ -1159,15 +1164,75 @@ function CompactRow(p: CompactProps & { readonly tree: DocsTreeOk; readonly wher
       >
         <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />
         <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
-        {(target !== null || committedHref !== null) && (
-          <div className="docs-actions">
-            {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
-            {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
-          </div>
-        )}
-        {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}
-        {exportNote !== null && <p className="docs-note">{exportNote}</p>}
+        {bar === null
+          ? <CompactPanelTail tree={tree} head={head} />
+          : (
+            <ActionsRow
+              page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}
+              exportAssets={p.exportAssets} onPlainView={p.onPlainView} form="stacked" head={head}
+            />
+          )}
       </div>
+      {bar === null && p.plainView && <PlainViewNote />}
+      {visit.updatedTo !== null && (
+        <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
+      )}
+    </header>
+  );
+}
+
+/** The compact row's controls after back (phone-header refinements (c) to (g)): the label, Share and Export as icons, and the
+ *  Page details button, which opens the shell's panel. */
+function CompactControls(p: CompactProps & {
+  readonly tree: DocsTreeOk; readonly head: HeadActions; readonly dot: FreshDot; readonly toggle: PhoneToggle;
+}): ReactNode {
+  const { page, visit, tree, head, toggle } = p;
+  const file = visit.file;
+  const { share, exported } = head;
+  return (
+    <>
+      <CompactLabel
+        where={p.crumbs.at(-2)?.label ?? ''} name={p.crumbs.at(-1)?.label ?? ''} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)}
+      />
+      {share.s !== 'absent' && (
+        <ShareAction key={shareKeyOf(page, tree, share)} page={page} tree={tree} share={share} exportOffered={exported.s !== 'absent'} glyph />
+      )}
+      {exported.s !== 'absent' && (
+        <ExportAction
+          key={exportKeyOf(page, tree, exported)} page={page} tree={tree} state={exported} assets={p.exportAssets}
+          readAt={file.s === 'ok' ? file.receivedAt : null} onPlainView={p.onPlainView} glyph
+        />
+      )}
+      <button
+        ref={toggle.button} type="button" className="docs-more" aria-expanded={toggle.open} aria-controls={toggle.panelId}
+        aria-label={moreName(p.dot)}
+        onClick={toggle.onToggle} onKeyDown={toggle.onKeyDown}
+      >
+        <Icon name="ellipsis" size={20} />
+        {p.dot !== null && <span className="docs-more-dot" data-tone={p.dot} aria-hidden="true" />}
+      </button>
+    </>
+  );
+}
+
+/** The compact panel's tail, after the crumbs and the truth line: the two links, and the notes that say why Share or Export
+ *  waits (the row's icons say nothing). */
+function CompactPanelTail(p: { readonly tree: DocsTreeOk; readonly head: HeadActions }): ReactNode {
+  const { tree } = p;
+  const { target, showsDraft, onVersion, share, exported, committedHref } = p.head;
+  const exportNote = exported.s === 'plain-view' ? DOCS_HEAD_TEXT.exportPlainHint
+    : exported.s === 'updating' || exported.s === 'waiting' ? fillSentence(DOCS_HEAD_TEXT.exportBusy, { state: exportWords(exported) })
+      : null;
+  return (
+    <>
+      {(target !== null || committedHref !== null) && (
+        <div className="docs-actions">
+          {target !== null && <GithubAction tree={tree} target={target} showsDraft={showsDraft} onVersion={onVersion} />}
+          {committedHref !== null && <DocsPageLink className="docs-action" href={committedHref}>{DOCS_HEAD_TEXT.openCommitted}</DocsPageLink>}
+        </div>
+      )}
+      {share.s === 'updating' && <p className="docs-note">{fillSentence(DOCS_HEAD_TEXT.shareBusy, { state: shareWords(share) })}</p>}
+      {exportNote !== null && <p className="docs-note">{exportNote}</p>}
     </>
   );
 }
@@ -1196,67 +1261,37 @@ function PlainViewNote(): ReactNode {
  *  it, and the command's own `iframe.focus()` brings it back from wherever on ccrc's page it was. */
 const keepFrameFocus = (e: { preventDefault(): void }): void => e.preventDefault();
 
-/** The one bar (the library 1.1 take-up plan, refinements (f) to (l)): a leaf whose reader frame is ready on ccrc's bar.
- *  Back; the title (the label's first line above the document's own title, the freshness dot before it), which opens the
- *  details panel, a disclosure as the row's Page details is; the reader's tools, each running its command in the tap
- *  itself; the reading line. The panel holds the crumbs, the truth line and the full header's actions, in §4.5's order.
- *  "Updated to", which answers a re-list, stays under the bar, outside the panel. No plain-view note: choosing Export's
- *  plain view unmounts the reader, which withdraws the bar, so that note is under option 1's row (refinement (f)). */
-function OneBar(p: Omit<CompactProps, 'plainView'> & { readonly tree: DocsTreeOk; readonly bar: ReaderBar }): ReactNode {
-  const { page, visit, tree, bar } = p;
-  const file = visit.file;
-  const [open, setOpen] = useState(false);
-  const title = useRef<HTMLButtonElement>(null);
-  const panelId = useId();
-  const dot = freshDot(freshnessChip(tree, p.receivedAt, visit.freshness, p.now).state);
-  const onKeyDown = (e: KeyboardEvent): void => {
-    if (e.key !== 'Escape' || !open) return;
-    // A sheet the panel's Share or Export opens is portalled out of the panel but still bubbles here through React's
-    // tree: its Escape is the sheet's own, so only a key pressed in the panel's (or the title's) own DOM closes the panel.
-    if (!(e.target instanceof Node) || !e.currentTarget.contains(e.target)) return;
-    e.stopPropagation();
-    setOpen(false);
-    title.current?.focus();
-  };
+/** The one bar's controls after back (the library 1.1 take-up plan, refinements (f) to (l)): the title (the label's first line
+ *  above the document's own title, the freshness dot before it), which opens the shell's panel; the reader's tools, each
+ *  running its command in the tap itself; the reading line. The panel holds the crumbs, the truth line and the full header's
+ *  actions, in §4.5's order (`PhoneHead`). */
+function OneBarControls(p: {
+  readonly page: Leaf; readonly visit: DocsVisit; readonly tree: DocsTreeOk; readonly crumbs: readonly DocsCrumb[];
+  readonly bar: ReaderBar; readonly dot: FreshDot; readonly toggle: PhoneToggle;
+}): ReactNode {
+  const { page, visit, tree, bar, toggle } = p;
   return (
-    <header className="docs-head docs-compact docs-one-bar">
-      <div className="docs-compact-bar">
-        <BackButton page={page} />
-        <button
-          ref={title} type="button" className="docs-title" aria-expanded={open} aria-controls={panelId}
-          onClick={() => setOpen((o) => !o)} onKeyDown={onKeyDown}
-        >
-          <CompactWhere where={p.crumbs.at(-2)?.label ?? ''} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, file)} />
-          <span className="docs-compact-name">
-            {dot !== null && <span className="docs-title-dot" data-tone={dot} aria-hidden="true" />}
-            {bar.title}
-          </span>
-          <span className="sr-only">{moreName(dot)}</span>
-        </button>
-        {oneBarTools(page.section).map((t) => (
-          <button
-            key={t} type="button" className="docs-tool" aria-label={DOCS_TOOL_TEXT[t]}
-            onPointerDown={keepFrameFocus} onClick={() => bar.command(t)}
-          >
-            <Icon name={TOOL_ICON[t]} size={20} />
-          </button>
-        ))}
-        <ReadLine progress={bar.progress} />
-      </div>
-      <div
-        id={panelId} className="docs-more-panel" role="region" aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}
-        hidden={!open}
+    <>
+      <button
+        ref={toggle.button} type="button" className="docs-title" aria-expanded={toggle.open} aria-controls={toggle.panelId}
+        onClick={toggle.onToggle} onKeyDown={toggle.onKeyDown}
       >
-        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />
-        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
-        <Actions
-          page={page} tree={tree} file={file} leafImage={p.leafImage} exportBody={p.exportBody} pageStore={p.pageStore}
-          exportAssets={p.exportAssets} onPlainView={p.onPlainView} form="stacked"
-        />
-      </div>
-      {visit.updatedTo !== null && (
-        <p className="docs-updated" role="status">{fillSentence(DOCS_HEAD_TEXT.updatedTo, { short: shortCommit(visit.updatedTo) })}</p>
-      )}
-    </header>
+        <CompactWhere where={p.crumbs.at(-2)?.label ?? ''} refText={rowRefText(page, tree)} badge={rowBadge(tree, page, visit.file)} />
+        <span className="docs-compact-name">
+          {p.dot !== null && <span className="docs-title-dot" data-tone={p.dot} aria-hidden="true" />}
+          {bar.title}
+        </span>
+        <span className="sr-only">{moreName(p.dot)}</span>
+      </button>
+      {oneBarTools(page.section).map((t) => (
+        <button
+          key={t} type="button" className="docs-tool" aria-label={DOCS_TOOL_TEXT[t]}
+          onPointerDown={keepFrameFocus} onClick={() => bar.command(t)}
+        >
+          <Icon name={TOOL_ICON[t]} size={20} />
+        </button>
+      ))}
+      <ReadLine progress={bar.progress} />
+    </>
   );
 }

@@ -1543,22 +1543,44 @@ describe('W8a reader frame in Chrome', () => {
       expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 
-    it('phone-born, back: the frame is not focused at insertion or at ready, and Tab stays in the host (the one bar replaces the compact row, so back is a new element: the head swap, not the mount, drops the focus to body)', async () => {
+    // The phone head is one shell for both states (`DocsHead.tsx#PhoneHead`): the compact row and the one bar draw the same
+    // `header`, the same row and the same back button, so the swap at ready replaces only the controls after back and the
+    // panel's tail. A reader of the page who focused back while the chunk loaded therefore keeps it: the very element, held
+    // here by a handle taken before the release, is the active element at ready. Nothing refocuses it (the mount takes no
+    // focus when a host control holds it, and the head calls no `focus()` on back).
+    it('phone-born, back: the very same element holds the focus across the swap to the one bar, the frame is not focused at insertion, and Tab goes to the next stop of the one bar', async () => {
       const s = await openSession(PHONE_VIEW);
       const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
       await s.goto(leafUrl('small.md'));
       await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'held: the compact row').toBe(false);
+      // By KEYBOARD: Tab from the top of the page to the compact head's back, and keep a handle to that element.
       await tabTo(s.page, '.docs-compact .docs-back', 'Tab');
+      const handle = await s.page.evaluateHandle(() => document.activeElement);
       await bridge.release();
       expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
       expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
       expect((await activeOf(s.page)).onFrame, 'and the frame does not hold the focus at ready').toBe(false);
+      const kept = await s.page.evaluate((el) => ({
+        same: document.activeElement === el, connected: el instanceof Element && el.isConnected,
+        back: el instanceof Element && el.matches('.docs-one-bar .docs-compact-bar > .docs-back'),
+      }), handle);
+      expect(kept, 'the very same element holds the focus, and it is the one bar\'s back').toEqual({ same: true, connected: true, back: true });
+      // The next stop in the one bar's DOM order, computed before the press.
+      const next = await nextStopAfter(s.page, ':focus');
+      expect(next, 'the one bar has a stop after back, and it is the title').toBe('button.docs-title');
       await s.page.keyboard.press('Tab');
       const landed = await s.page.evaluate(() => {
         const a = document.activeElement;
-        return { inFrame: a !== null && a === document.querySelector('.docs-reader iframe'), inHead: a?.closest('.docs-head') != null };
+        return {
+          inFrame: a !== null && a === document.querySelector('.docs-reader iframe'), inHead: a?.closest('.docs-head') != null,
+          at: a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}`,
+        };
       });
-      expect(landed, 'Tab goes to a control of the host\'s own head, not into the frame').toEqual({ inFrame: false, inHead: true });
+      expect(landed, 'one Tab goes to the next stop of the one bar, not into the frame').toEqual({ inFrame: false, inHead: true, at: next });
+      expect(s.app.errors, 'no page error').toEqual([]);
     }, 120_000);
 
     it('nothing owns focus when the reader mounts, phone-born: the frame IS focused at insertion and at ready (M8.1 kept; the 1280 case is "M8.1 live")', async () => {
