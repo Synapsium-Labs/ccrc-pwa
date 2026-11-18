@@ -60,6 +60,9 @@ ccrc quiz-record --report <WEEK>/single-report.json --sha <H_REPORT>
 `ccrc quiz-record` validates and packages the report and posts it through `ccrc-api`, and the run is recorded as pending
 until it is confirmed. Then open the console's Shadow lanes card and press **Confirm** (or **Discard**) on the pending run.
 Confirming the first run while all three W1a rows read Shadow makes it the baseline.
+Before you press Confirm, match the card's run id and report sha (its first 12 hex) with what `report` and `ccrc quiz-record`
+printed, and Discard any pending run you did not record. Match those two only: the card's `by` trace is whatever the poster
+sent, while the run id and the sha prefix are the server's own (it measures the sha over the report's bytes).
 
 ## What each step can say
 

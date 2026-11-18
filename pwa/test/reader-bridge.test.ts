@@ -56,6 +56,12 @@ interface Rig {
   readonly mount: ReturnType<typeof vi.fn>;
   readonly mermaid: ReturnType<typeof vi.fn>;
   readonly options: () => { document: RenderInput; adapters: HostAdapters };
+  /** What the nth mount call was given (0-based). */
+  readonly optionsAt: (n: number) => { document: RenderInput; adapters: HostAdapters };
+  /** Every frame the mount spy returned, in order; the first is `frame`. */
+  readonly frames: Rig['frame'][];
+  /** One entry per mount call and per frame destroy, in the order they happened: `mount 0`, `destroy 0`, `mount 1`... */
+  readonly order: string[];
   readonly run: () => ReturnType<typeof mountReader>;
 }
 
@@ -67,9 +73,22 @@ function rig(o: {
   e17?: ReaderE17Reading | 'recorded'; chrome?: ReaderChrome; onProgress?: (share: number) => void; onMermaidDrop?: () => void;
   /** The history members and the profile a mount is given (default: none, the Docs reader with no history input). */
   profile?: 'lab-draw'; version?: ReaderVersionSeed; changes?: ReaderMountInput['changes']; openVersion?: ReaderMountInput['openVersion'];
+  /** The element mounted into (default: a detached div). */
+  el?: HTMLElement;
 } = {}): Rig {
-  const frame = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn(), command: vi.fn() };
-  const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => frame as unknown as DocFrame);
+  const order: string[] = [];
+  const newFrame = (): Rig['frame'] => {
+    const n = frames.length;
+    const f = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn(() => { order.push(`destroy ${n}`); }), command: vi.fn() };
+    frames.push(f);
+    return f;
+  };
+  const frames: Rig['frame'][] = [];
+  const frame = newFrame();
+  const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => {
+    order.push(`mount ${mount.mock.calls.length - 1}`);
+    return (mount.mock.calls.length === 1 ? frame : newFrame()) as unknown as DocFrame;
+  });
   const mermaid = vi.fn(o.mermaid ?? (() => Promise.resolve('MERMAID')));
   const input: ReaderMountInput = {
     document: o.document ?? docOf(),
@@ -87,14 +106,17 @@ function rig(o: {
     ...(o.openVersion === undefined ? {} : { openVersion: o.openVersion }),
   };
   const store = o.store === undefined ? fakeStore() : o.store;
-  const run = () => mountReader(document.createElement('div'), input, {
+  const run = () => mountReader(o.el ?? document.createElement('div'), input, {
     mount: mount as unknown as typeof mountDocFrame,
     store: () => store,
     assets: o.assets ?? (() => Promise.resolve(STUB_ASSETS)),
     mermaid,
     ...(o.e17 === 'recorded' ? {} : { e17: o.e17 ?? 'does-not-hold' }),
   });
-  return { input, frame, mount, mermaid, run, options: () => mount.mock.calls[0]![1] };
+  return {
+    input, frame, frames, order, mount, mermaid, run,
+    options: () => mount.mock.calls[0]![1], optionsAt: (n) => mount.mock.calls[n]![1],
+  };
 }
 
 describe('the adapters', () => {
@@ -499,6 +521,321 @@ describe('the version (the W8a plan\'s refinement (k))', () => {
     const none = rig({ profile: 'lab-draw', version: seed });
     await none.run();
     expect(none.options().document.version).toBeUndefined();
+  });
+});
+
+// The Docs reader yields to a host element that owns focus (the completion plan's D-8729, `policy.ts#readerMountFocusFor`):
+// the bridge reads `ownerDocument.activeElement` once, after its last await and just before the synchronous library mount,
+// and puts the decision on the existing `focus` key.
+describe('the mount focus (D-8729)', () => {
+  /** A button appended to the page outside any reader element, focused. */
+  function outsideButton(): HTMLButtonElement {
+    const b = document.createElement('button');
+    document.body.append(b);
+    b.focus();
+    return b;
+  }
+  /** A reader element appended to the page, so a focus inside it is a connected one. */
+  function hostEl(): HTMLElement {
+    const el = document.createElement('div');
+    document.body.append(el);
+    return el;
+  }
+  const focusOf = (r: Rig, n = 0): unknown => r.optionsAt(n).adapters.focus;
+
+  it('body active: the Docs reader focuses its frame', async () => {
+    const r = rig({ el: hostEl() });
+    expect(document.activeElement).toBe(document.body);
+    await r.run();
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('the document element active: the Docs reader focuses its frame', async () => {
+    document.documentElement.tabIndex = -1;
+    document.documentElement.focus();
+    // jsdom lets a tabindex'd root take focus; if it ever did not, the case below would stop proving anything.
+    expect(document.activeElement).toBe(document.documentElement);
+    const r = rig({ el: hostEl() });
+    await r.run();
+    expect(focusOf(r)).toBe(true);
+    document.documentElement.removeAttribute('tabindex');
+  });
+
+  it('a connected button outside the reader holds focus: the Docs reader leaves it alone', async () => {
+    const el = hostEl();
+    const button = outsideButton();
+    const r = rig({ el });
+    await r.run();
+    expect(document.activeElement).toBe(button);
+    expect(focusOf(r)).toBe(false);
+  });
+
+  it('a button inside the reader element holds focus: the Docs reader focuses its frame', async () => {
+    const el = hostEl();
+    const inner = document.createElement('button');
+    el.append(inner);
+    inner.focus();
+    const r = rig({ el });
+    await r.run();
+    expect(document.activeElement).toBe(inner);
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('the reader element itself holding focus counts as the reader\'s own', async () => {
+    const el = hostEl();
+    el.tabIndex = -1;
+    el.focus();
+    const r = rig({ el });
+    await r.run();
+    expect(document.activeElement).toBe(el);
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('an active element that is not connected does not own focus', async () => {
+    const stray = document.createElement('button');
+    vi.spyOn(document, 'activeElement', 'get').mockReturnValue(stray);
+    const r = rig({ el: hostEl() });
+    await r.run();
+    expect(stray.isConnected).toBe(false);
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('focus is read from the reader element\'s own document, not the global one', async () => {
+    // The page has an outside button focused; the reader element lives in another document whose active element is its body.
+    const other = document.implementation.createHTMLDocument('other');
+    const el = other.createElement('div');
+    other.body.append(el);
+    outsideButton();
+    const r = rig({ el });
+    await r.run();
+    expect(other.activeElement).toBe(other.body);
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('the reader lab profile keeps its unconditional focus beside an outside button', async () => {
+    const el = hostEl();
+    outsideButton();
+    const r = rig({ el, profile: 'lab-draw' });
+    await r.run();
+    expect(focusOf(r)).toBe(true);
+  });
+
+  it('the adapter key set is the same whoever owns focus (the table in "the adapters" still holds)', async () => {
+    const quiet = rig({ el: hostEl() });
+    await quiet.run();
+    outsideButton();
+    const owned = rig({ el: hostEl() });
+    await owned.run();
+    expect(Object.keys(owned.options().adapters).sort()).toEqual(Object.keys(quiet.options().adapters).sort());
+  });
+
+  it('the read is taken after the assets load: a button focused while it is pending decides', async () => {
+    let release!: (a: typeof STUB_ASSETS) => void;
+    const assets = vi.fn(() => new Promise<typeof STUB_ASSETS>((res) => { release = res; }));
+    const r = rig({ el: hostEl(), assets });
+    const pending = r.run();
+    await vi.waitFor(() => expect(assets).toHaveBeenCalled());
+    outsideButton();
+    release(STUB_ASSETS);
+    await pending;
+    expect(focusOf(r)).toBe(false);
+  });
+
+  it('the read is taken after the assets load: a button blurred while it is pending no longer owns focus', async () => {
+    const button = outsideButton();
+    let release!: (a: typeof STUB_ASSETS) => void;
+    const assets = vi.fn(() => new Promise<typeof STUB_ASSETS>((res) => { release = res; }));
+    const r = rig({ el: hostEl(), assets });
+    const pending = r.run();
+    await vi.waitFor(() => expect(assets).toHaveBeenCalled());
+    button.blur();
+    release(STUB_ASSETS);
+    await pending;
+    expect(document.activeElement).toBe(document.body);
+    expect(focusOf(r)).toBe(true);
+  });
+
+  describe('across the Mermaid wait (a document whose scan inlines Mermaid on request)', () => {
+    const scanned = (): RenderInput => docOf({ scan: { mermaid: mermaidCounts(1, 10, 10) } } as Partial<RenderInput>);
+    /** A Mermaid dep that settles when `release` is called. */
+    function held(): { mermaid: () => Promise<string>; release: () => void } {
+      let release!: () => void;
+      const gate = new Promise<void>((res) => { release = res; });
+      return { mermaid: () => gate.then(() => 'MERMAID'), release };
+    }
+
+    it('a button focused while the Mermaid text loads decides', async () => {
+      const h = held();
+      const r = rig({ el: hostEl(), document: scanned(), mermaid: h.mermaid });
+      const pending = r.run();
+      await vi.waitFor(() => expect(r.mermaid).toHaveBeenCalled());
+      outsideButton();
+      h.release();
+      await pending;
+      expect(r.optionsAt(0).adapters.assets.mermaid).toBe('MERMAID');
+      expect(focusOf(r)).toBe(false);
+    });
+
+    it('a button blurred while the Mermaid text loads no longer owns focus', async () => {
+      const button = outsideButton();
+      const h = held();
+      const r = rig({ el: hostEl(), document: scanned(), mermaid: h.mermaid });
+      const pending = r.run();
+      await vi.waitFor(() => expect(r.mermaid).toHaveBeenCalled());
+      button.blur();
+      h.release();
+      await pending;
+      expect(r.optionsAt(0).adapters.assets.mermaid).toBe('MERMAID');
+      expect(focusOf(r)).toBe(true);
+    });
+
+    it('a rejected Mermaid load is also read after the wait', async () => {
+      let fail!: () => void;
+      const gate = new Promise<string>((_res, rej) => { fail = () => rej(new Error('chunk failed')); });
+      const r = rig({ el: hostEl(), document: scanned(), mermaid: () => gate });
+      const pending = r.run();
+      await vi.waitFor(() => expect(r.mermaid).toHaveBeenCalled());
+      outsideButton();
+      fail();
+      await pending;
+      expect(r.optionsAt(0).document.scan).toBeUndefined();
+      expect(focusOf(r)).toBe(false);
+    });
+  });
+
+  it('command still reaches the frame at once, once, whatever the mount decided about focus', async () => {
+    for (const owned of [false, true]) {
+      document.body.replaceChildren();
+      const el = hostEl();
+      if (owned) outsideButton();
+      const r = rig({ el });
+      const m = await r.run();
+      expect(focusOf(r)).toBe(!owned);
+      m.command!('jump');
+      expect(r.frame.command).toHaveBeenCalledTimes(1);
+      expect(r.frame.command).toHaveBeenCalledWith('jump');
+    }
+  });
+});
+
+// `openAt` (the completion plan's Task 13): a link to this very page spelled with its file name mounts the same document
+// again at the anchor, through the same mount function and adapters, with focus decided again and the latest theme.
+describe('openAt', () => {
+  function hostEl(): HTMLElement {
+    const el = document.createElement('div');
+    document.body.append(el);
+    return el;
+  }
+  const button = (): HTMLButtonElement => {
+    const b = document.createElement('button');
+    document.body.append(b);
+    b.focus();
+    return b;
+  };
+
+  it('a mount that destroys itself while the library mounts the new frame tears that frame down too (review of Task 13, nit 6)', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    type MountCall = (el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => unknown;
+    const real = r.mount.getMockImplementation() as MountCall;
+    r.mount.mockImplementationOnce((el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => {
+      const f = real(el, o);
+      m.destroy();
+      return f;
+    });
+    m.openAt!('far');
+    expect(r.mount).toHaveBeenCalledTimes(2);
+    expect(r.frames[1]!.destroy, 'the frame mounted while the mount was destroyed is destroyed').toHaveBeenCalledTimes(1);
+    m.openAt!('again');
+    expect(r.mount, 'and nothing mounts after that').toHaveBeenCalledTimes(2);
+  });
+
+  it('mounts the same document a second time with initialHash set and nothing else changed, the first frame destroyed first', async () => {
+    const r = rig({ el: hostEl(), document: docOf({ version: { sha: SHA40, draft: false } } as Partial<RenderInput>) });
+    const m = await r.run();
+    expect(r.optionsAt(0).document).not.toHaveProperty('initialHash');
+    m.openAt!('far');
+    expect(r.mount).toHaveBeenCalledTimes(2);
+    expect(r.optionsAt(1).document.initialHash).toBe('far');
+    expect(r.optionsAt(1).document).toEqual({ ...r.optionsAt(0).document, initialHash: 'far' });
+    expect(Object.keys(r.optionsAt(1).adapters).sort()).toEqual(Object.keys(r.optionsAt(0).adapters).sort());
+    expect(r.frames[0]!.destroy).toHaveBeenCalledTimes(1);
+    expect(r.order).toEqual(['mount 0', 'destroy 0', 'mount 1']);
+    expect(r.frame.update).not.toHaveBeenCalled();
+  });
+
+  it('hands the second mount the same assets, the same callbacks\' behaviour and the latest theme given through setPrefs', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    expect(r.optionsAt(0).adapters.prefs).toEqual({ theme: 'auto' });
+    m.setPrefs({ theme: 'light' });
+    m.setPrefs({ theme: 'dark' });
+    m.openAt!('far');
+    expect(r.optionsAt(1).adapters.prefs).toEqual({ theme: 'dark' });
+    expect(r.optionsAt(1).adapters.assets).toBe(r.optionsAt(0).adapters.assets);
+    const link: HostLink = { kind: 'fragment', id: 'x' };
+    r.optionsAt(1).adapters.onLink!(link);
+    expect(r.input.onLink).toHaveBeenCalledWith({ kind: 'fragment', id: 'x' });
+    r.optionsAt(1).adapters.onHash!('y');
+    expect(r.input.onHash).toHaveBeenCalledWith('y');
+  });
+
+  it('without a setPrefs, the second mount carries the prefs the first was given', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    m.openAt!('far');
+    expect(r.optionsAt(1).adapters.prefs).toEqual({ theme: 'auto' });
+  });
+
+  it('decides focus again: an outside button focused at that moment keeps it, and a quiet page lets the frame take it', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    expect(r.optionsAt(0).adapters.focus).toBe(true);
+    const b = button();
+    m.openAt!('one');
+    expect(r.optionsAt(1).adapters.focus).toBe(false);
+    b.blur();
+    m.openAt!('two');
+    expect(r.optionsAt(2).adapters.focus).toBe(true);
+  });
+
+  it('the lab profile keeps focus on a second mount too', async () => {
+    const r = rig({ el: hostEl(), profile: 'lab-draw' });
+    const m = await r.run();
+    button();
+    m.openAt!('far');
+    expect(r.optionsAt(1).adapters.focus).toBe(true);
+  });
+
+  it('does nothing after destroy', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    m.destroy();
+    m.openAt!('far');
+    expect(r.mount).toHaveBeenCalledTimes(1);
+    expect(r.order).toEqual(['mount 0', 'destroy 0']);
+  });
+
+  it('command, setPrefs and destroy act on the new frame after it', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    m.openAt!('far');
+    m.command!('jump');
+    expect(r.frames[0]!.command).not.toHaveBeenCalled();
+    expect(r.frames[1]!.command).toHaveBeenCalledTimes(1);
+    expect(r.frames[1]!.command).toHaveBeenCalledWith('jump');
+    m.setPrefs({ theme: 'dark' });
+    expect(r.frames[0]!.setPrefs).not.toHaveBeenCalled();
+    expect(r.frames[1]!.setPrefs).toHaveBeenCalledWith({ theme: 'dark' });
+    m.destroy();
+    expect(r.frames[1]!.destroy).toHaveBeenCalledTimes(1);
+    expect(r.frames[0]!.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it('a mount whose assets did not load has no openAt', async () => {
+    const r = rig({ assets: () => Promise.reject(new Error('chunk failed')) });
+    const m = await r.run();
+    expect('openAt' in m).toBe(false);
   });
 });
 

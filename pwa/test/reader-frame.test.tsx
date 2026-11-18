@@ -101,7 +101,10 @@ interface Harness {
   readonly renderFn: ReturnType<typeof vi.fn<ReaderDeps['render']>>;
   readonly mountFn: ReturnType<typeof vi.fn<ReaderDeps['mount']>>;
   readonly imagesFn: ReturnType<typeof vi.fn<ReaderDeps['images']>>;
-  readonly handle: { destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
+  readonly handle: {
+    destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>;
+    openAt: ReturnType<typeof vi.fn>;
+  };
   readonly inputs: ReaderMountInput[];
   readonly parser: ReturnType<typeof vi.fn<MarkdownParser>>;
   readonly onDraftAsset: ReturnType<typeof vi.fn<(delta: number) => void>>;
@@ -113,7 +116,7 @@ function harness(over: Partial<{
   outcome: ReaderRenderOutcome; mount: ReaderDeps['mount']; drafts: number;
 }> = {}): Harness {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), openAt: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => over.outcome ?? RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(over.mount ?? (async (_el, input) => {
     inputs.push(input);
@@ -169,6 +172,11 @@ function atWidth(width: number): void {
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
     };
   });
+}
+
+/** Lets what is pending settle: the mount's promise resolves and the body's run goes on past it. */
+async function settled(): Promise<void> {
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 }
 
 async function ready(h: Harness): Promise<ReaderMountInput> {
@@ -305,7 +313,11 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(input.document.initialHash).toBe('part');
     expect(input.document.result.html).toBe('<p>x</p>');
     expect(input.prefs).toEqual({ theme: 'light' });
-    await waitFor(() => expect(h.consumed).toHaveBeenCalledTimes(1));
+    // The fragment is spent when the frame reports ready, not when the mount resolves (completion plan Task 13).
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed).toHaveBeenCalledTimes(1);
   });
 
   it('F1: a percent-encoded fragment is decoded before the frame is seeded; a malformed escape stays raw', async () => {
@@ -340,6 +352,62 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a mount that resolves and then falls back before ready keeps the fragment for the plain view (completion plan Task 13)', async () => {
+    const h = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h, { pending: 'part' }));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a mount that resolves and then reports ready spends the fragment exactly once', async () => {
+    const h = harness();
+    render(frame(h, { pending: 'part' }));
+    const input = await ready(h);
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed).toHaveBeenCalledTimes(1);
+    act(() => { input.onReady(); });
+    await settled();
+    expect(h.consumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('a body with no pending fragment spends nothing at ready', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a ready after the body fell back, or after it ended, spends nothing', async () => {
+    const h1 = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h1, { pending: 'part' }));
+    const fellBack = await ready(h1);
+    await settled();
+    act(() => { fellBack.onFallback('timeout'); });
+    await screen.findByText(READER_FALLBACK_NOTE);
+    act(() => { fellBack.onReady(); });
+    expect(h1.consumed).not.toHaveBeenCalled();
+    cleanup();
+    const h2 = harness();
+    const r2 = render(frame(h2, { pending: 'part' }));
+    const ended = await ready(h2);
+    await settled();
+    r2.unmount();
+    act(() => { ended.onReady(); });
+    expect(h2.consumed).not.toHaveBeenCalled();
   });
 
   it('a mount that rejects keeps the fragment for the plain view', async () => {
@@ -509,6 +577,105 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     const input = await ready(h);
     act(() => { input.onHash('part-2'); });
     expect(replaceFragment).toHaveBeenCalledWith('part-2');
+  });
+
+  it('a link to this very page spelled with its file name rewrites the address and opens the frame at its anchor, with no new body read', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h.handle.openAt).toHaveBeenCalledTimes(1);
+    expect(h.handle.openAt).toHaveBeenCalledWith('sec');
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(navigate).not.toHaveBeenCalled();
+    await settled();
+    expect(h.renderFn).toHaveBeenCalledTimes(1);
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it('the anchor reaches openAt decoded, and the address bar keeps the link`s own spelling', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'caf%C3%A9' }); });
+    expect(h.handle.openAt).toHaveBeenCalledWith('café');
+    expect(replaceFragment).toHaveBeenCalledWith('caf%C3%A9');
+  });
+
+  it('a #fragment link rewrites the address and does not reopen the frame', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'fragment', id: 'sec' }); });
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(h.handle.openAt).not.toHaveBeenCalled();
+  });
+
+  it('a mount with no openAt takes a same-page link as an address rewrite alone', async () => {
+    const h = harness({ mount: async () => ({ destroy: vi.fn(), setPrefs: vi.fn() }) as ReaderMount });
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    const input = h.mountFn.mock.calls[0]?.[1] as ReaderMountInput;
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(navigate).not.toHaveBeenCalled();
+    expect(h.onFragment, 'no frame opens at the anchor, so the visit is handed nothing').not.toHaveBeenCalled();
+  });
+
+  it('the visit holds a same-page link\'s anchor until the frame opened at it is ready (review of Task 13, minor 3)', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'no fragment was handed to the first frame').not.toHaveBeenCalled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h.onFragment).toHaveBeenCalledWith('sec', location.pathname + location.search);
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'the frame opened at the anchor is up: the visit lets it go').toHaveBeenCalledTimes(1);
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'once').toHaveBeenCalledTimes(1);
+  });
+
+  it('a fallback of the frame opened at a same-page anchor leaves the anchor with the visit, for the plain view\'s scroll', async () => {
+    const h = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(h.onFragment).toHaveBeenCalledWith('sec', location.pathname + location.search);
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a same-page link that arrives after the body fell back, or ended, opens nothing', async () => {
+    const h1 = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h1));
+    const fellBack = await ready(h1);
+    await settled();
+    act(() => { fellBack.onFallback('timeout'); });
+    await screen.findByText(READER_FALLBACK_NOTE);
+    act(() => { fellBack.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h1.handle.openAt).not.toHaveBeenCalled();
+    cleanup();
+    const h2 = harness();
+    const r2 = render(frame(h2));
+    const ended = await ready(h2);
+    await settled();
+    r2.unmount();
+    act(() => { ended.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h2.handle.openAt).not.toHaveBeenCalled();
   });
 });
 
@@ -913,6 +1080,31 @@ describe('the default reader (spec 4.1)', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       if (saved !== undefined) Object.defineProperty(globalThis, 'Worker', saved);
+    }
+  });
+});
+
+describe('a deep link survives a fallback raised after the mount resolved (completion plan Task 13)', () => {
+  it('the real plain view scrolls the element the fragment names', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
+    const h = harness();
+    history.pushState(null, '', '/docs/demo/specs/a.md#user-content-fn-1');
+    try {
+      const { container } = render(<DocsScreen
+        path="/docs/demo/specs/a.md" search="" loaders={fakeLoaders({ file: okFile('Body.[^1]\n\n[^1]: The note.\n') }).loaders}
+        parser={parser} reader={h.reader}
+      />);
+      const input = await ready(h);
+      expect(input.document.initialHash).toBe('user-content-fn-1');
+      await settled();
+      act(() => { input.onFallback('timeout'); });
+      expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      expect(scroll.mock.contexts[0]).toBe(container.querySelector('article li#user-content-fn-1'));
+    } finally {
+      history.replaceState(null, '', '/');
     }
   });
 });

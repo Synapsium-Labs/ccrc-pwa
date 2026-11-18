@@ -12,7 +12,7 @@ import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
-import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import { conversationAfterClearFor, turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -74,7 +74,7 @@ import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
-import { quizBaselineRead } from '../continuity/quizStore.js';
+import { quizBaselineRead, quizCardReads } from '../continuity/quizStore.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -1713,6 +1713,9 @@ export function registerCoordRoutes(
       // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
       // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
+      // Overlord W2 forecasts B, fix round 1 (F3): the resumed worker's conversation id after its `/clear`, read from the
+      // live process by `turnverdict.ts`; the spend arm counts a reading only in the conversation the run was dispatched into.
+      conversationAfterClear: (rec, prior) => conversationAfterClearFor(turnReads, rec, prior),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     // D-8182 (§5.6): a fresh work run for a ticket in a private project waits (outside `coordMutex`) for its issue and is
@@ -2942,7 +2945,7 @@ export function registerCoordRoutes(
   app.get('/api/coord/lane-arm', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
-    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane)) });
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane), quizCardReads(coord.db)) });
   });
 
   app.post('/api/coord/lane-arm', async (req, reply) => {
@@ -2966,7 +2969,7 @@ export function registerCoordRoutes(
       notice({ kind: 'coord', sessionId: '', title: LANE_ARM_FEED_TITLE.changed, body: change, runId: null },
         'record-only', { degraded: 'shadow lane switch written, feed archive degraded' });
     }
-    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l)) });
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l), quizCardReads(coord.db)) });
   });
 
   /** `GET`/`POST /api/coord/run-close` (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26): the operator's three-state

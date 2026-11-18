@@ -23,6 +23,10 @@ import {
   type EdgeKind, type EdgeState, type EdgeTarget, type Forecast, type ProgrammeEdge, type RemainingRefusal, type RemainingStatement,
   type SealedForecast,
 } from '../../../shared/programmeFacts.js';
+import {
+  isProgrammeHealthWord, isRunSpendState,
+  type HealthEvidence, type HealthRow, type HealthVerdict, type RunSpendRow, type RunSpendState,
+} from '../../../shared/programmeFacts.js';
 import { redactCommand } from './redact.js';
 import { NEVER_STARTED_DETAIL, waveRepresentative } from '../../../shared/programmes.js';
 import {
@@ -34,6 +38,7 @@ import { tx } from './tx.js';
 
 /** The types `CoordStore`'s delegates name, so `store.ts` takes one import for this file. */
 export type { EdgeTarget, ProgrammeEdge, RemainingStatement, SealedForecast } from '../../../shared/programmeFacts.js';
+export type { HealthRow, HealthVerdict, RunSpendRow } from '../../../shared/programmeFacts.js';
 export type { NewEdge, NewRemaining } from './programmeRemaining.js';
 export type { EdgeSettle } from './edgeVerdict.js';
 export type { ForecastHistory, OutcomeFacts, UnsealedClose } from './forecast.js';
@@ -230,12 +235,15 @@ const sealOf = (r: SealRaw): SealedForecast => ({
 const SEAL_COLUMNS = 'id, program, closingRunId, sealedAt, asOf, statementId, lo, hi, kind, reason, source, n, seed, medianAt, ' +
   'p85At, outcome, scoredAt';
 
-/** Seals, oldest first: one programme's (`{ program }`), or every `open` seal whose 85% date is at or before `dueBy` (the
- *  score arm's read). */
-export function forecastsOf(db: DatabaseSync, q: { program: string } | { dueBy: number }): SealedForecast[] {
+/** Seals, oldest first: one programme's (`{ program }`), every `open` seal whose 85% date is at or before `dueBy` (the
+ *  score arm's read), or every seal scored `met` or `missed` at or after `scoredSince`, fleet-wide (calibration's read,
+ *  forecasts B). */
+export function forecastsOf(db: DatabaseSync, q: { program: string } | { dueBy: number } | { scoredSince: number }): SealedForecast[] {
   const rows = 'program' in q
     ? db.prepare(`SELECT ${SEAL_COLUMNS} FROM programme_forecasts WHERE program = ? ORDER BY id`).all(q.program)
-    : db.prepare(`SELECT ${SEAL_COLUMNS} FROM programme_forecasts WHERE outcome = 'open' AND p85At IS NOT NULL AND p85At <= ? ORDER BY id`).all(q.dueBy);
+    : 'dueBy' in q
+      ? db.prepare(`SELECT ${SEAL_COLUMNS} FROM programme_forecasts WHERE outcome = 'open' AND p85At IS NOT NULL AND p85At <= ? ORDER BY id`).all(q.dueBy)
+      : db.prepare(`SELECT ${SEAL_COLUMNS} FROM programme_forecasts WHERE outcome IN ('met', 'missed') AND scoredAt >= ? ORDER BY id`).all(q.scoredSince);
   return (rows as unknown as SealRaw[]).map(sealOf);
 }
 
@@ -311,4 +319,118 @@ export function outcomeFactsOf(db: DatabaseSync, sealId: number): OutcomeFacts |
     'SELECT openedAt, closedAt, state FROM runs WHERE program = ? AND (closedAt IS NULL OR closedAt > ?) ORDER BY id',
   ).all(seal.program, seal.asOf) as unknown as { openedAt: number; closedAt: number | null; state: string }[];
   return { doneWaveCloses: doneWaveCloses.sort((a, b) => a - b), runs };
+}
+
+// ── Health and spend (forecasts B) ──────────────────────────────────────────────────────────────────────────────────
+// `programme_health` and `run_spend` (one migration), each with one writer called only by its arm of the forecast lane:
+//   * `appendHealth`    the only INSERT into `programme_health` (append-only: no UPDATE or DELETE names it);
+//   * `recordRunSpend`  the only INSERT into `run_spend`, `ON CONFLICT DO NOTHING`, so a second row for one run is a no-op.
+// The health word, the change verdict and the spend verdict are L1 deciders'; the reads here hand them rows.
+
+/** The listed programmes' statements made at or after `since`, oldest first, masked as `remainingOf` masks them (the
+ *  health arm's scope read). */
+export function remainingSince(db: DatabaseSync, programs: readonly string[], since: number): RemainingStatement[] {
+  if (programs.length === 0) return [];
+  const marks = programs.map(() => '?').join(', ');
+  return (db.prepare(
+    `SELECT id, program, at, byId, runId, lo, hi, reason FROM programme_remaining WHERE program IN (${marks}) AND at >= ? ORDER BY id`,
+  ).all(...programs, since) as unknown as RemainingRaw[]).map((r) => ({ ...r, reason: mask(r.reason) }));
+}
+
+/** Appends one health row. `noticed` is true when the arm recorded a record-only notice for this change. */
+export function appendHealth(db: DatabaseSync, program: string, verdict: HealthVerdict, noticed: boolean, now: number): { id: number } {
+  const r = db.prepare('INSERT INTO programme_health (program, at, word, evidence, noticed) VALUES (?, ?, ?, ?, ?)')
+    .run(program, now, verdict.word, JSON.stringify(verdict.evidence), noticed ? 1 : 0);
+  return { id: Number(r.lastInsertRowid) };
+}
+
+interface HealthRaw { id: number; program: string; at: number; word: string; evidence: string }
+
+/** A stored evidence read back: anything not of the shape is `unreadable`, carried, never dropped. */
+function evidenceOf(text: string): HealthEvidence | 'unreadable' {
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { return 'unreadable'; }
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return 'unreadable';
+  const o = v as Record<string, unknown>;
+  if (!(o.matched === null || typeof o.matched === 'string')) return 'unreadable';
+  if (typeof o.values !== 'object' || o.values === null || Array.isArray(o.values)) return 'unreadable';
+  if (!Array.isArray(o.unmeasured) || !o.unmeasured.every((x) => typeof x === 'string')) return 'unreadable';
+  return { matched: o.matched, values: o.values as HealthEvidence['values'], unmeasured: o.unmeasured as string[] };
+}
+const healthOf = (r: HealthRaw): HealthRow => ({
+  id: r.id, program: r.program, at: r.at, word: isProgrammeHealthWord(r.word) ? r.word : 'unreadable', evidence: evidenceOf(r.evidence),
+});
+
+/** Each listed programme's newest health row, by programme; a programme with none has no entry. */
+export function newestHealthOf(db: DatabaseSync, programs: readonly string[]): HealthRow[] {
+  if (programs.length === 0) return [];
+  const marks = programs.map(() => '?').join(', ');
+  return (db.prepare(
+    `SELECT h.id, h.program, h.at, h.word, h.evidence FROM programme_health h WHERE h.program IN (${marks}) ` +
+    'AND h.id = (SELECT MAX(g.id) FROM programme_health g WHERE g.program = h.program) ORDER BY h.program',
+  ).all(...programs) as unknown as HealthRaw[]).map(healthOf);
+}
+
+/** Whether a row for this programme and word recorded a notice at or after `since` (the arm's once-a-day rule, F16). */
+export function healthNoticedSince(db: DatabaseSync, program: string, word: string, since: number): boolean {
+  return db.prepare('SELECT 1 AS x FROM programme_health WHERE program = ? AND word = ? AND noticed = 1 AND at >= ? LIMIT 1')
+    .get(program, word, since) !== undefined;
+}
+
+/** What the spend arm writes for one run. */
+export interface NewRunSpend {
+  readonly runId: number; readonly state: RunSpendState; readonly cost: number | null; readonly class: string | null;
+  readonly readAt: number | null;
+}
+
+/** THE ONLY INSERT into `run_spend`. One row per run: a second is a no-op (`ON CONFLICT DO NOTHING`), answered
+ *  `written: false`. `startCost` is never written (the coordinator's ruling on Task 7 Step 1). */
+export function recordRunSpend(db: DatabaseSync, row: NewRunSpend, now: number): { written: boolean } {
+  const r = db.prepare('INSERT INTO run_spend (runId, at, state, cost, class, readAt) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(runId) DO NOTHING')
+    .run(row.runId, now, row.state, row.cost, row.class, row.readAt);
+  return { written: Number(r.changes) === 1 };
+}
+
+/** One closed run the spend arm has not recorded: its session (null when dispatch never minted one), its window, and
+ *  whether a later run took the session. */
+/** The one SQL spelling of "a later run names this run's session with a later dispatch", over `runs r`: the spend arm's
+ *  closed runs and the portfolio's open ones read it alike (fix round 1, F1). */
+export const REDISPATCHED_SQL =
+  '(EXISTS (SELECT 1 FROM runs l WHERE l.sessionId = r.sessionId AND l.id <> r.id AND l.dispatchedAt > r.dispatchedAt))';
+
+export interface UnspentClose {
+  readonly runId: number; readonly sessionId: string | null; readonly dispatchedAt: number | null; readonly closedAt: number;
+  readonly redispatched: boolean; readonly resumed: boolean; readonly clearedAt: number | null; readonly conversation: string | null;
+}
+
+/** The spend arm's read: every run (work or review) closed at or after `since` with no `run_spend` row, oldest close
+ *  first, where `since` is the earlier of `firstPassAt` (the arm's first pass in this process) and the newest row's
+ *  `at` (no backfill at deploy, and a restart misses nothing a previous process would have read). `redispatched`: a
+ *  later run names the same session with a `dispatchedAt` after this run's, so the session's reading is no longer
+ *  this run's. `resumed`, `clearedAt` and `conversation` (`runs.dispatchConversation`) are what the dispatch recorded (fix
+ *  round 1, F3 and F10'). `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
+export function unspentClosesOf(db: DatabaseSync, firstPassAt: number, terminal: string): UnspentClose[] {
+  const newest = (db.prepare('SELECT MAX(at) AS at FROM run_spend').get() as { at: number | null }).at;
+  const since = newest === null ? firstPassAt : Math.min(firstPassAt, newest);
+  return (db.prepare(
+    'SELECT r.id AS runId, r.sessionId AS sessionId, r.dispatchedAt AS dispatchedAt, r.closedAt AS closedAt, ' +
+    'r.resumed AS resumed, r.clearedAt AS clearedAt, r.dispatchConversation AS conversation, ' +
+    `${REDISPATCHED_SQL} AS redispatched ` +
+    `FROM runs r WHERE r.kind IN ('work', 'review') AND r.state IN ${terminal} AND r.closedAt IS NOT NULL AND r.closedAt >= ? ` +
+    'AND NOT EXISTS (SELECT 1 FROM run_spend s WHERE s.runId = r.id) ORDER BY r.closedAt, r.id',
+  ).all(since) as unknown as (Omit<UnspentClose, 'redispatched' | 'resumed'> & { redispatched: number; resumed: number | null })[])
+    .map((r) => ({ ...r, redispatched: r.redispatched === 1, resumed: r.resumed === 1 }));
+}
+
+interface SpendRaw { runId: number; at: number; state: string; cost: number | null; class: string | null; readAt: number | null }
+
+/** The `run_spend` rows of the listed programmes' runs. A state word this build cannot read is `unreadable`, which every
+ *  spend read counts as unmeasured, never 0. */
+export function spendOf(db: DatabaseSync, programs: readonly string[]): RunSpendRow[] {
+  if (programs.length === 0) return [];
+  const marks = programs.map(() => '?').join(', ');
+  return (db.prepare(
+    'SELECT s.runId, s.at, s.state, s.cost, s.class, s.readAt FROM run_spend s JOIN runs r ON r.id = s.runId ' +
+    `WHERE r.program IN (${marks}) ORDER BY s.runId`,
+  ).all(...programs) as unknown as SpendRaw[]).map((r) => ({ ...r, state: isRunSpendState(r.state) ? r.state : 'unreadable' }));
 }

@@ -9,7 +9,8 @@
 // What the rows share:
 //   - Two hooks, both Playwright init scripts. The PARENT hook (the page's realm) records every iframe the reader
 //     mounts (attributes, srcdoc, whether it held focus when it was inserted), wraps `HTMLIFrameElement.prototype
-//     .contentWindow` so every `postMessage` to the frame is counted (target, payload, port), notes when `ready`
+//     .contentWindow` so every `postMessage` to the frame is counted (target, payload, port; not for a row that asks
+//     for the frame's window bare, `bareContentWindow`, since the wrapper is never a message's source), notes when `ready`
 //     arrived, and can put ops on the frame's end of the port before the frame is handed it. The FRAME hook (each
 //     frame's realm) captures the `MessagePort` the frame is handed, so a row can speak on the frame's own port once
 //     it is up. Measured (12 loads): the init script reaches a srcdoc frame BEFORE its scripts in some loads and
@@ -29,16 +30,18 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
-import { REFINED } from '@ccrc/ui';
+import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Route } from 'playwright-core';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
+import { DOCS_HEAD_TEXT } from '../src/docs/docsText';
 import { READER_E17_MERMAID, docsDrawFor } from '../src/docs/reader/policy';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { LAB_BATTERY_CHANNELS } from '../../shared/readerLab';
 import { LAB_BATTERY_CHANNELS_JS, LAB_BATTERY_PRELUDE_JS } from '../src/readerLab/battery';
+import { READER_IMAGE_REF_MAX_UNITS } from '../src/docs/reader/images';
 import { READER_IMAGE_BUDGET_BYTES, READER_STORE_PREFIX } from '../src/lib/readerLimits';
 import { COMMIT_A, entry, treeOk, treeResponse } from '../test/docsFixtures';
 import { openApp, serveDist, sharedDist, type DistServer, type OpenedApp } from './app';
@@ -56,7 +59,30 @@ const HOSTILE_PAYLOAD = 'ccrc-hostile-payload';
 const HOSTILE_FILL = 'rgb(255, 0, 255)';
 const COOKIE = { name: 'ccrc_session', value: 'demo-session' } as const;
 
+/** The directory counts of the deep leaves the mount-focus rows open (docs-compact-head's `DEEPER_CASES`): five directories are
+ *  nine crumbs unfolded and seven are eleven, wider than the head's row at 600 and 900. */
+const DEEP_DIRS = [5, 7] as const;
+const deepPath = (dirs: number): string => [...Array.from({ length: dirs }, (_, i) => `dir-${String.fromCharCode(97 + i)}`), 'deep.md'].join('/');
+
 const fence = (body: string): string => '```mermaid\n' + body + '\n```\n\n';
+
+/** Built, never typed (the hidden-character set is the library's: U+202E is a bidirectional override, U+200B a zero-width space). */
+const RLO = String.fromCharCode(0x202e);
+const ZWSP = String.fromCharCode(0x200b);
+/** The block hidden.md's copy tap writes. */
+const HIDDEN_BLOCK = `copy ${RLO}me${ZWSP} here`;
+/** The heading the same-page and stray-hash rows aim at, far below the fold (its slug is its id). */
+const FAR_ID = 'far-target';
+/** The footnote id the plain view gives its definition (`user-content-` + the label), for the deep-link row. */
+const FOOTNOTE_ID = 'user-content-fn-1';
+/** An image ref one code unit past the reader's seed limit that still names a real file: redundant `./` segments (a ref over
+ *  the limit as a PATH would be refused by the planner's own path rules, and never load), then the file's name. */
+const LONG_NAME = 'pixlong.png';
+const LONG_REF = ((): string => {
+  const rest = READER_IMAGE_REF_MAX_UNITS + 1 - LONG_NAME.length;
+  if (rest % 2 !== 0) throw new Error(`a ref of ${READER_IMAGE_REF_MAX_UNITS + 1} units cannot be built from "./" segments and ${LONG_NAME}`);
+  return './'.repeat(rest / 2) + LONG_NAME;
+})();
 
 const FLOWCHART = fence('flowchart LR\n  A[Start] --> B[End]');
 const SEQUENCE = fence('sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi');
@@ -101,6 +127,14 @@ function m88Doc(): string {
     .map((n) => `<!-- id:${n} -->\nAnchored ${n}.\n\n`).join('');
   return `---\nowner: ${SCRIPT_CLOSE}${LS}fm\n---\n# Title ${SCRIPT_CLOSE}${LS}h\n\nBody ${SCRIPT_CLOSE}${LS} text, `
     + `[the other page](./other.md).\n\n${fence('flowchart LR\n  Q1[Quiet] --> Q2[Page]')}${heads}${anchors}`;
+}
+
+/** A page that links to itself by its file name with a fragment near the top, and holds the target far down. */
+function selfDoc(): string {
+  const filler = (n: number): string => Array.from({ length: n }, (_, i) => `A paragraph of the self-linking page, number ${i}, with enough words to fill a line or two.\n\n`).join('');
+  // Three level-two headings make it a "document" to the library (the outline, the marks and the last visit are drawn for one).
+  return `# Self page\n\nSee [the far target](./self.md#${FAR_ID}) or [the bare link](#${FAR_ID}).\n\n## Near part\n\n${filler(30)}`
+    + `## Middle part\n\n${filler(30)}## Far target\n\nThe far target.\n\n${filler(40)}## Last part\n\n${filler(40)}`;
 }
 
 /** A PNG of exactly `size` bytes: a real 1x1 image with a `tEXt` chunk padding it out (it decodes as any PNG does). */
@@ -152,6 +186,12 @@ function fixtureFiles(o: Origins): Map<string, Body> {
   files.set('small.md', `# Small page\n\nRead [the other page](./other.md), the [external link](https://a.example/p) and the `
     + `[popup link](${o.a}/popup).\n\n![pixel](pix.png)\n\n\`\`\`text\ncopy me ${ESC} here\n\`\`\`\n`);
   files.set('other.md', '# Other page\n\nSecond.\n');
+  for (const dirs of DEEP_DIRS) files.set(deepPath(dirs), `# Deep page\n\nA leaf under ${dirs} directories.\n\n${'A paragraph of the deep page.\n\n'.repeat(12)}`);
+  files.set('hidden.md', `# Hidden characters\n\nA block whose text holds two hidden characters.\n\n\`\`\`text\n${HIDDEN_BLOCK}\n\`\`\`\n`);
+  files.set('self.md', selfDoc());
+  files.set('fn.md', `# Footnote page\n\nThe note is far below.[^1]\n\n${'A paragraph above the note, long enough to push it past the fold.\n\n'.repeat(80)}[^1]: The note.\n`);
+  files.set('imgs.md', `# Two images\n\n![long image](${LONG_REF})\n\n![ordinary image](pix.png)\n`);
+  files.set('fig.md', `# One figure\n\nA page with a single Mermaid fence.\n\n${FLOWCHART}`);
   let long = '# Long page\n\n';
   for (let i = 0; i < 120; i += 1) long += `## Part ${i}\n\nA paragraph of the long page, number ${i}, with enough words to fill a line or two of the frame.\n\n`;
   files.set('long.md', long);
@@ -162,6 +202,7 @@ function fixtureFiles(o: Origins): Map<string, Body> {
   files.set('m88.md', m88Doc());
   files.set('worst.md', worstDoc());
   files.set('pix.png', onePixelPng());
+  files.set(LONG_NAME, onePixelPng());
   const each = Math.floor(READER_IMAGE_BUDGET_BYTES / DOCS_MAX_IMAGES_PER_PAGE);
   const extra = READER_IMAGE_BUDGET_BYTES - each * DOCS_MAX_IMAGES_PER_PAGE;
   for (let i = 0; i < DOCS_MAX_IMAGES_PER_PAGE; i += 1) {
@@ -204,13 +245,30 @@ interface HookConfig {
   /** Frame realm: messages posted on the port once it is captured (a navigated child's, which has no scripts of the
    *  library's to be ahead of); with `holdLoadForChild`, once the parent has recorded and answered the child's word. */
   readonly onHello?: readonly unknown[];
-  /** Frame realm: the srcdoc document navigates here at once. */
+  /** Frame realm: the srcdoc document navigates here, at once, or with `navigateAfterLoad` only when the parent hook
+   *  posts it `ccrcHookGo`, which it does once it has taken the srcdoc's own load listener call. */
   readonly navigateTo?: string;
   /** With `holdLoadForChild`: the load-first ordering, forced at its worst. The srcdoc navigates only when the parent
    *  hook has taken the srcdoc's own load listener call (the parent tells it to), and the parent answers the child's
    *  word only once it holds the child's load call too, so the library's 'navigated' fallback is pending before the
    *  child can speak. */
   readonly navigateAfterLoad?: boolean;
+  /** Parent realm: every window `message` the parent receives is recorded (`__msgIn`: the payload's `t`, the origin, the port
+   *  count), so a row can wait on the parent's own receipt of a stray message and then assert it had no effect. */
+  readonly countMessages?: boolean;
+  /** Parent realm: `HTMLIFrameElement.prototype.contentWindow` is left unwrapped, so `iframe.contentWindow` is the
+   *  frame's own window and nothing posted to the frame is counted (`__posts`, `earlyOps` and the load-first hold need the
+   *  wrapper). The wrapper is a Proxy, and a Proxy is never the `source` of a message the frame posts, so under it a
+   *  listener that checks `event.source === iframe.contentWindow` never matches, which production's would: a row about
+   *  window messages from the frame runs bare (measured: the stray case missed such a listener with the wrapper on). */
+  readonly bareContentWindow?: boolean;
+  /** Parent realm: `Clipboard.prototype.writeText` records its text (`__clipWrites`) and resolves, so a row counts what the
+   *  console writes and when (headless Chrome grants no clipboard permission). */
+  readonly recordClipboard?: boolean;
+  /** Parent realm: the `content` of the srcdoc's `<meta http-equiv="Content-Security-Policy">` is replaced with this text
+   *  as the library sets the iframe's `srcdoc`, so the frame is parsed under a meta the library did not build. Used with
+   *  `skipCspAttr`, so the meta is the only policy the frame has. */
+  readonly srcdocMeta?: string;
 }
 
 function hookScript(cfg: HookConfig): string {
@@ -218,12 +276,31 @@ function hookScript(cfg: HookConfig): string {
   const CFG = ${JSON.stringify(cfg)};
   if (window.top === window) {
     window.__posts = []; window.__postPorts = []; window.__frames = []; window.__readyAts = []; window.__childPorts = [];
-    if (CFG.skipCspAttr) {
+    if (CFG.skipCspAttr || typeof CFG.srcdocMeta === 'string') {
       const orig = Element.prototype.setAttribute;
       Element.prototype.setAttribute = function (n, v) {
-        if (this.tagName === 'IFRAME' && String(n).toLowerCase() === 'csp') return undefined;
+        if (this.tagName === 'IFRAME') {
+          const name = String(n).toLowerCase();
+          if (CFG.skipCspAttr && name === 'csp') return undefined;
+          if (typeof CFG.srcdocMeta === 'string' && name === 'srcdoc') {
+            v = String(v).replace(/(<meta http-equiv="Content-Security-Policy" content=")[^"]*(")/, (m, a, b) => a + CFG.srcdocMeta + b);
+          }
+        }
         return orig.call(this, n, v);
       };
+    }
+    if (CFG.countMessages) {
+      window.__msgIn = [];
+      window.addEventListener('message', (e) => {
+        const d = e.data;
+        const f = document.querySelector('.docs-reader iframe');
+        window.__msgIn.push({ t: d !== null && typeof d === 'object' ? String(d.t) : typeof d, origin: e.origin, ports: e.ports.length,
+          fromReader: f !== null && e.source === f.contentWindow });
+      }, true);
+    }
+    if (CFG.recordClipboard && typeof Clipboard !== 'undefined') {
+      window.__clipWrites = [];
+      Clipboard.prototype.writeText = function (text) { window.__clipWrites.push(String(text)); return Promise.resolve(); };
     }
     let handed = null;
     if (CFG.holdLoadForChild) {
@@ -294,7 +371,7 @@ function hookScript(cfg: HookConfig): string {
       };
     }
     const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+    if (!CFG.bareContentWindow) Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
       configurable: true, enumerable: desc.enumerable,
       get() {
         const w = desc.get.call(this);
@@ -446,11 +523,18 @@ interface ApiHit {
 }
 
 interface SessionOptions {
+  /** The width the context is opened at, when it differs from `width` (the viewport it is then resized to): a fine pointer
+   *  opened at a desk width and narrowed, as docs-compact-head's `openView` does. */
+  readonly openWidth?: number;
+  /** The skin (Refined by default). */
+  readonly skin?: string;
   readonly width?: number;
   readonly height?: number;
   readonly hook?: HookConfig;
   /** Rewrite the built `index.html` before the page sees it (the shell meta controls). */
   readonly index?: (html: string) => string;
+  /** Let the context run the built app's service worker (lab 10 alone; `app.ts`'s `AppView.serviceWorkers`). */
+  readonly serviceWorkers?: 'allow';
 }
 
 interface Session {
@@ -471,7 +555,10 @@ afterEach(async () => {
 const SHELL_META = /<meta[^>]*http-equiv="Content-Security-Policy"[^>]*>/i;
 
 async function openSession(opts: SessionOptions = {}, using: Browser = browser): Promise<Session> {
-  const app = await openApp(using, { width: opts.width ?? 1280, skin: REFINED, theme: 'light' }, { api: {}, fleetFrames: [] });
+  const app = await openApp(using, {
+    width: opts.openWidth ?? opts.width ?? 1280, skin: opts.skin ?? REFINED, theme: 'light',
+    ...(opts.serviceWorkers === undefined ? {} : { serviceWorkers: opts.serviceWorkers }),
+  }, { api: {}, fleetFrames: [] });
   sessions.push(app);
   const { ctx, page } = app;
   if (opts.width !== undefined || opts.height !== undefined) {
@@ -607,9 +694,11 @@ const store = (page: Page): Promise<Record<string, string>> => page.evaluate(() 
 });
 const readerKeys = async (page: Page): Promise<string[]> => Object.keys(await store(page)).filter((k) => k.startsWith(READER_STORE_PREFIX));
 const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
-/** The reasons the console's own fallback line gave (`ReaderFrame`'s "ccrc: reader fell back (<reason>)"), in order. */
+/** The reasons the console's own fallback line gave (`ReaderFrame`'s "ccrc: reader fell back (<reason>)"), in order. A
+ *  reason is all the line holds up to its last `)`, so one with a space or a parenthesis of its own (`no host element`,
+ *  `mount <error>`, `images <error>`) reads whole rather than as no fallback at all. */
 const fellBackFor = (logs: readonly string[]): string[] => logs.flatMap((l) => {
-  const m = /ccrc: reader fell back \(([a-z-]+)\)/.exec(l);
+  const m = /ccrc: reader fell back \(([\s\S]*)\)$/.exec(l);
   return m === null ? [] : [m[1]!];
 });
 
@@ -695,6 +784,119 @@ function summariseSrcdoc(page: Page, n: number): Promise<SrcdocSummary> {
     };
   }, n);
 }
+
+// ---- the reader's lazy chunks, held (D-8729, completion plan Task 13) --------------------------------------------------
+
+/** The built app's chunk for `./reader/bridge` (`ReaderFrame.tsx#lazyMountReader`'s first `import()`): the emitted file is
+ *  `assets/<module name>-<hash>.js`, the name the build gives a dynamic import's chunk (`test/reader-built.test.ts` finds the
+ *  render job's the same way). A request for none fails by name in `arrival`, listing the script requests that did arrive. */
+const BRIDGE_CHUNK = /\/assets\/bridge-[^/]+\.js$/;
+/** The Mermaid text's chunk (`./reader/assets`' `loadMermaidAsset`; `test/reader-built.test.ts` pins exactly one emitted). */
+const MERMAID_CHUNK = /\/assets\/mermaid\.frame-[^/]+\.js$/;
+
+interface HeldChunk {
+  /** Resolves once a request for the chunk has arrived and is parked (bounded; the failure names the chunk and the script
+   *  requests seen). */
+  arrival(): Promise<void>;
+  /** Lets every parked request, and every later one, through. */
+  release(): Promise<void>;
+}
+
+/** Parks the browser's request for the chunk `pattern` names until the case calls `release()`. Routed on the context, before
+ *  the page loads; any other request falls through to the routes `openApp` and the session set up. */
+async function holdChunk(ctx: BrowserContext, label: string, pattern: RegExp): Promise<HeldChunk> {
+  const parked: Route[] = [];
+  const scripts: string[] = [];
+  let released = false;
+  await ctx.route((u) => u.pathname.includes('/assets/') && u.pathname.endsWith('.js'), async (route) => {
+    const { pathname } = new URL(route.request().url());
+    scripts.push(pathname);
+    if (released || !pattern.test(pathname)) {
+      await route.fallback();
+      return;
+    }
+    parked.push(route);
+  });
+  return {
+    async arrival() {
+      const deadline = Date.now() + 60_000;
+      while (parked.length === 0) {
+        if (Date.now() > deadline) throw new Error(`no request for the ${label} chunk (${String(pattern)}) arrived in 60 s; script requests seen: ${scripts.join(', ') || 'none'}`);
+        await sleep(25);
+      }
+    },
+    async release() {
+      released = true;
+      for (const route of parked.splice(0)) await route.fallback();
+    },
+  };
+}
+
+/** Keyboard focus onto the element `selector` names, the way a reader of the page gets there: Tab (or Shift+Tab) from where
+ *  focus stands, until it lands, at most `max` presses. The failure names the selector and the stops passed. */
+async function tabTo(page: Page, selector: string, key: 'Tab' | 'Shift+Tab', max = 60): Promise<void> {
+  const passed: string[] = [];
+  for (let i = 0; i < max; i += 1) {
+    await page.keyboard.press(key);
+    const here = await page.evaluate((sel) => {
+      const a = document.activeElement;
+      return { hit: a !== null && a.matches(sel), name: a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}` };
+    }, selector);
+    if (here.hit) return;
+    passed.push(here.name);
+  }
+  throw new Error(`${key} did not reach ${selector} in ${max} presses (stops: ${passed.join(' > ')})`);
+}
+
+/** What holds focus, in the parent document. */
+const activeOf = (page: Page): Promise<{ readonly onFrame: boolean; readonly cls: string; readonly tag: string }> => page.evaluate(() => {
+  const a = document.activeElement;
+  return { onFrame: a !== null && a === document.querySelector('.docs-reader iframe'), cls: a === null ? '' : String(a.className), tag: a === null ? 'null' : a.tagName.toLowerCase() };
+});
+
+const insertFocus = async (page: Page): Promise<boolean[]> => (await framesSeen(page)).map((f) => f.focusedAtInsert);
+
+/** The element Tab goes to next from the control `selector` names: the next focusable, visible element after it in document
+ *  order (a tabindex of -1, a disabled control, anything not drawn or inside a hidden region does not count). */
+const nextStopAfter = (page: Page, selector: string): Promise<string> => page.evaluate((sel) => {
+  const from = document.querySelector(sel);
+  if (from === null) return 'no such control';
+  const stops = [...document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, iframe, [tabindex]')]
+    .filter((e) => e.tabIndex >= 0 && !(e as HTMLButtonElement).disabled && e.checkVisibility({ visibilityProperty: true }));
+  const i = stops.indexOf(from as HTMLElement);
+  const next = stops[i + 1];
+  return i < 0 || next === undefined ? 'none' : `${next.tagName.toLowerCase()}.${String(next.className)}`;
+}, selector);
+
+/** How many `/api/docs` file reads the page has made for the section-relative `name` (the document's own bytes). */
+const fileReads = (s: Session, name: string): number => s.apiHits.filter((h) => {
+  const u = new URL(h.path, 'http://hits.invalid');
+  return u.pathname.endsWith('/file') && u.searchParams.get('path') === name;
+}).length;
+const historyReads = (s: Session, name: string): number => s.apiHits.filter((h) => {
+  const u = new URL(h.path, 'http://hits.invalid');
+  return u.pathname.endsWith('/history') && u.searchParams.get('path') === name;
+}).length;
+
+/** Where the element `id` sits in `frame`: its top and the frame's viewport height, or null when the frame has no such element. */
+const topIn = (frame: Frame, id: string): Promise<{ readonly top: number; readonly viewport: number } | null> => frame.evaluate((i) => {
+  const e = document.getElementById(i);
+  return e === null ? null : { top: e.getBoundingClientRect().top, viewport: window.innerHeight };
+}, id);
+const inView = (at: { readonly top: number; readonly viewport: number } | null): boolean => at !== null && at.top >= 0 && at.top < at.viewport;
+
+/** What the parent window has received, by the payload's `t` (the hook's `countMessages`), with each message's origin and port
+ *  count, and whether its source is the reader's iframe's `contentWindow` (true only for a row whose hook runs it bare). */
+type MessageIn = { t: string; origin: string; ports: number; fromReader: boolean };
+const messagesIn = (page: Page): Promise<MessageIn[]> => page.evaluate(() => (window as unknown as { __msgIn: MessageIn[] }).__msgIn);
+/** Every text the console wrote to the clipboard (the hook's `recordClipboard`). */
+const clipboardWrites = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __clipWrites: string[] }).__clipWrites);
+
+/** Lets the page render what its last task queued: two animation frames, then a task. A barrier for "nothing happened" claims
+ *  whose effect, had there been one, would be a React commit; it is not a delay. */
+const rendered = (page: Page): Promise<void> => page.evaluate(() => new Promise<void>((done) => {
+  requestAnimationFrame(() => { requestAnimationFrame(() => { setTimeout(done, 0); }); });
+}));
 
 // ---- the rows ---------------------------------------------------------------------------------------------------------
 
@@ -955,20 +1157,66 @@ describe('W8a reader frame in Chrome', () => {
     expect(await settle(s.page)).toBe('ready');
   }, 120_000);
 
-  it('M8.B5: a parent.postMessage of a well-formed navigate has no effect', async () => {
-    const { s, outcome } = await open('small.md');
+  // The stray messages and their controls (completion plan Task 13; the W8a residue's "hash" and "no control" items). The frame
+  // posts a well-formed navigate, store.set and hash to `parent` (a window message, no port): the parent's own window must
+  // receive all three (counted in the parent hook, a bounded wait), and then none has an effect. Each sink has a control of
+  // its own, the same message on the frame's own port. `STRAY_ID` is a heading of long.md far below the first screen, so a
+  // scroll of the frame would show. The hook runs bare (`bareContentWindow`), and each stray message's source is asserted to
+  // be the iframe's own `contentWindow`: so a library that acted on window messages from its frame behind the usual source
+  // check would act here as in production (row NDR-D2-T13-B-STRAYWIN, which survived the wrapped hook, where no source
+  // check can match).
+  const STRAY_ID = 'part-100';
+  const STRAY = [
+    { t: 'navigate', href: './other.md' },
+    { t: 'store.set', key: 'pref:ui', value: '{"x":1}' },
+    { t: 'hash', id: STRAY_ID },
+  ] as const;
+
+  it('M8.B5: a parent.postMessage of a well-formed navigate has no effect (store.set and hash too: the parent received all three)', async () => {
+    const { s, outcome } = await open('long.md', { hook: { countMessages: true, bareContentWindow: true } });
     expect(outcome).toBe('ready');
     const frame = await readerFrame(s.page);
     const before = await readerKeys(s.page);
-    await frame.evaluate(`(() => {
-      parent.postMessage({ t: 'navigate', href: './other.md' }, '*');
-      parent.postMessage({ t: 'store.set', key: 'pref:ui', value: '{"x":1}' }, '*');
-      parent.postMessage({ t: 'hash', id: 'x' }, '*');
-    })()`);
-    await sleep(1200);
-    expect(pathOf(s.page), 'no route').toBe(leafUrl('small.md'));
+    const hashBefore = await s.page.evaluate(() => location.hash);
+    const target = await topIn(frame, STRAY_ID);
+    expect(target, 'the page has the hash target').not.toBeNull();
+    expect(target!.top, 'and it is far below the first screen, so a scroll of the frame would move it').toBeGreaterThan(target!.viewport * 2);
+    const scrollBefore = await frame.evaluate(() => (document.scrollingElement as Element).scrollTop);
+    await frame.evaluate((messages) => { for (const m of messages) parent.postMessage(m, '*'); }, STRAY);
+    // The parent's window received all three, from the frame (origin "null" for the sandbox) and carrying no port: only then is "no effect" a claim.
+    await expect.poll(async () => (await messagesIn(s.page)).filter((m) => STRAY.some((x) => x.t === m.t)).map((m) => m.t).sort(), {
+      timeout: 10_000, message: 'the parent window did not receive the frame\'s three stray messages (navigate, store.set, hash)',
+    }).toEqual(['hash', 'navigate', 'store.set']);
+    expect((await messagesIn(s.page)).filter((m) => STRAY.some((x) => x.t === m.t)).every((m) => m.origin === 'null' && m.ports === 0 && m.fromReader),
+      'each came from the sandboxed frame, its source the iframe\'s own window (a source check would match it), with no port').toBe(true);
+    await rendered(s.page);
+    expect(pathOf(s.page), 'no route').toBe(leafUrl('long.md'));
     expect(await readerKeys(s.page), 'no store write').toEqual(before);
-    expect(await s.page.getByText('Open this link?').count(), 'no sheet').toBe(0);
+    expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
+    expect(await s.page.evaluate(() => location.hash), 'location.hash is unchanged').toBe(hashBefore);
+    expect(await frame.evaluate(() => (document.scrollingElement as Element).scrollTop), 'and the frame did not scroll').toBe(scrollBefore);
+    expect((await topIn(frame, STRAY_ID))!.top, 'the hash target has not moved').toBe(target!.top);
+  }, 120_000);
+
+  /** One sink per control, each triggered alone: the same message as the stray one, sent on the frame's own port. */
+  const SINKS = [
+    ['navigate', STRAY[0], async (s: Session): Promise<void> => {
+      await s.page.waitForFunction(() => location.pathname.endsWith('/other.md'), undefined, { timeout: 10_000 });
+    }],
+    ['store.set', STRAY[1], async (s: Session): Promise<void> => {
+      await s.page.waitForFunction((k) => localStorage.getItem(k) === '{"x":1}', `${READER_STORE_PREFIX}pref:ui`, { timeout: 10_000 });
+    }],
+    ['hash', STRAY[2], async (s: Session): Promise<void> => {
+      await s.page.waitForFunction((id) => location.hash === `#${id}`, STRAY_ID, { timeout: 10_000 });
+    }],
+  ] as const;
+  it.each(SINKS)('M8.B5 control: the same %s on the frame\'s own port reaches its sink', async (_name, message, reachesSink) => {
+    const { s, outcome } = await open('long.md');
+    expect(outcome).toBe('ready');
+    const frame = await readerFrame(s.page);
+    expect(await frame.evaluate('typeof window.__ccrcPort'), 'the frame hook captured the frame\'s own port').toBe('object');
+    await frame.evaluate((m) => (window as unknown as { __ccrcPort: MessagePort }).__ccrcPort.postMessage(m), message);
+    await reachesSink(s);
   }, 120_000);
 
   it('M8.B5: a second load gives the plain view with the fixed note', async () => {
@@ -1070,6 +1318,13 @@ describe('W8a reader frame in Chrome', () => {
     expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
     await s.app.ctx.close();
   };
+
+  it('the controls\' fallback reader reads each reason whole, spaces and parentheses included (review 2432 A3)', () => {
+    const line = (reason: string): string => `warning ccrc: reader fell back (${reason})`;
+    expect(fellBackFor([
+      line('nonce'), 'log ccrc-hook hello srcdoc', line('no host element'), line('mount TypeError: x (y)'), line('images AbortError: z'),
+    ])).toEqual(['nonce', 'no host element', 'mount TypeError: x (y)', 'images AbortError: z']);
+  });
 
   it('M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect', async () => {
     await childControl(false);
@@ -1372,4 +1627,490 @@ describe('W8a reader frame in Chrome', () => {
     expect(painted.decoded, 'and all 30 decode in the frame').toBe(DOCS_MAX_IMAGES_PER_PAGE);
     expect(m.readyMs, 'ready arrived').toBeGreaterThan(0);
   }, 300_000);
+
+  // ---- the mount's focus yields to a host control (D-8729, completion plan Task 13) ---------------------------------------
+  // The defect (desktop polish c16, fix round 2; c18's correction): a lazily loaded reader took focus from a head control the
+  // reader of the page had already moved to, and the next Tab jumped from the frame to an unrelated stop. The bridge chunk
+  // is held here, so "the page's reader moves focus before the mount" is a fact the case makes, not a race it hopes for. No
+  // case focuses anything after the reader mounted and then claims focus was kept: every focus move is before the release.
+  describe('the mount yields focus to a host control, and takes it when no one owns it (D-8729)', () => {
+    /** docs-compact-head's `DEEPER_CASES`: both skins, 5 and 7 directories, 600 x 960 and 900 x 800, under a fine pointer. */
+    const DESK_CASES = [INSTRUMENT, REFINED].flatMap((skin) => DEEP_DIRS.flatMap((dirs) =>
+      ([[600, 960], [900, 800]] as const).map(([w, h]) => [skin, dirs, w, h] as const)));
+
+    it.each(DESK_CASES)('desk-born, %s, %i directories, %i x %i: back keeps the focus a reader of the page gave it, the frame is not focused at insertion, and the first Tab stop is the first crumb, seen whole', async (skin, dirs, width, height) => {
+      const s = await openSession({ openWidth: Math.max(width, 900), width, height, skin });
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl(deepPath(dirs)));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      // Unfold the crumbs (the compact-head case's setup), then go to back by KEYBOARD: Shift+Tab from where the click left focus.
+      await s.page.locator('.docs-full .docs-crumbs-more').click({ timeout: 30_000 });
+      await tabTo(s.page, '.docs-full .docs-back', 'Shift+Tab');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      expect(await activeOf(s.page), 'back still holds the focus at ready (nothing focused after the mount)').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      // And a moment later, as M8.1 live checks the positive side: a focus the frame took after ready would show here.
+      await sleep(800);
+      expect(await activeOf(s.page), 'and a moment later').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      await s.page.keyboard.press('Tab');
+      const first = await s.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        return { text: a.textContent ?? '', seen: Math.max(0, Math.min(b.right, nav.right) - Math.max(b.left, nav.left)), w: b.width };
+      });
+      expect(first.text, 'the first Tab stop after back is the first crumb').toBe(DOCS_HEAD_TEXT.index);
+      expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 180_000);
+    /** Phone-born: the leaf opens at 412 x 915, so the mount asks for ccrc's one bar (`docs/readerBar.ts`). */
+    const PHONE_VIEW = { width: 412, height: 915 } as const;
+    /** ccrc's phone bar: its doors are outside the Docs head and outside the reader, and the head's swap does not touch them. */
+    const PHONE_DOOR = '.phone-bar-door';
+
+    it('phone-born, a phone bar door: it keeps the focus a reader of the page gave it, the frame is not focused at insertion, and Tab goes to the next stop of the host, not into the frame', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      // By KEYBOARD: Tab from the top of the page to the bar's first door (the skip link and the compact head come first).
+      await tabTo(s.page, PHONE_DOOR, 'Tab');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      const door = await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR);
+      expect(door, 'the door still holds the focus at ready (nothing focused after the mount)').toBe(true);
+      await sleep(800);
+      expect(await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR), 'and a moment later').toBe(true);
+      const next = await nextStopAfter(s.page, ':focus');
+      expect(next, 'the host has a stop after the door, and it is not the frame').toMatch(/^button\./);
+      await s.page.keyboard.press('Tab');
+      const landed = await s.page.evaluate(() => {
+        const a = document.activeElement;
+        return a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}`;
+      });
+      expect(landed, 'Tab goes to the next stop after the door in the host\'s own DOM order, not into the frame and not to body').toBe(next);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 120_000);
+
+    // The phone head is one shell for both states (`DocsHead.tsx#PhoneHead`): the compact row and the one bar draw the same
+    // `header`, the same row and the same back button, so the swap at ready replaces only the controls after back and the
+    // panel's tail. A reader of the page who focused back while the chunk loaded therefore keeps it: the very element, held
+    // here by a handle taken before the release, is the active element at ready. Nothing refocuses it (the mount takes no
+    // focus when a host control holds it, and the head calls no `focus()` on back).
+    it('phone-born, back: the very same element holds the focus across the swap to the one bar, the frame is not focused at insertion, and Tab goes to the next stop of the one bar', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'held: the compact row').toBe(false);
+      // The tree is in: the compact ROW (the shell), not the tree-less head, whose back is another element.
+      await s.page.locator('.docs-compact .docs-compact-bar').waitFor({ timeout: 30_000 });
+      // By KEYBOARD: Tab from the top of the page to the compact head's back, and keep a handle to that element.
+      await tabTo(s.page, '.docs-compact .docs-compact-bar .docs-back', 'Tab');
+      const handle = await s.page.evaluateHandle(() => document.activeElement);
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      expect((await activeOf(s.page)).onFrame, 'and the frame does not hold the focus at ready').toBe(false);
+      const kept = await s.page.evaluate((el) => ({
+        same: document.activeElement === el, connected: el instanceof Element && el.isConnected,
+        back: el instanceof Element && el.matches('.docs-one-bar .docs-compact-bar > .docs-back'),
+      }), handle);
+      expect(kept, 'the very same element holds the focus, and it is the one bar\'s back').toEqual({ same: true, connected: true, back: true });
+      await sleep(800);
+      expect(await s.page.evaluate((el) => document.activeElement === el, handle), 'and a moment later').toBe(true);
+      // The next stop in the one bar's DOM order, computed before the press.
+      const next = await nextStopAfter(s.page, ':focus');
+      expect(next, 'the one bar has a stop after back, and it is the title').toBe('button.docs-title');
+      await s.page.keyboard.press('Tab');
+      const landed = await s.page.evaluate(() => {
+        const a = document.activeElement;
+        return {
+          inFrame: a !== null && a === document.querySelector('.docs-reader iframe'), inHead: a?.closest('.docs-head') != null,
+          at: a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}`,
+        };
+      });
+      expect(landed, 'one Tab goes to the next stop of the one bar, not into the frame').toEqual({ inFrame: false, inHead: true, at: next });
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 120_000);
+
+    it('nothing owns focus when the reader mounts, phone-born: the frame IS focused at insertion and at ready (M8.1 kept; the 1280 case is "M8.1 live")', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect((await activeOf(s.page)).tag, 'held, with nothing focused').toBe('body');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'the library focused the iframe right after inserting it').toEqual([true]);
+      expect((await activeOf(s.page)).onFrame, 'and it holds focus at ready').toBe(true);
+    }, 120_000);
+
+    // The Mermaid wait: on request (E17 does not hold), a document whose figures the gate inlines makes the bridge load the
+    // Mermaid text before it mounts. The decision reads focus once, after that last await, so a focus move DURING the wait
+    // counts and one BEFORE it that ended inside the wait does not.
+    describe.skipIf(DRAW !== 'on-request')('the focus is read after the bridge\'s last wait (the held Mermaid chunk)', () => {
+      it('a head control focused while the Mermaid text is held keeps its focus; the frame is not focused at insertion', async () => {
+        const s = await openSession({ width: 1280, height: 800 });
+        const mermaid = await holdChunk(s.app.ctx, 'Mermaid text', MERMAID_CHUNK);
+        await s.goto(leafUrl('fig.md'));
+        await mermaid.arrival();
+        expect((await framesSeen(s.page)).length, 'held on the Mermaid wait: no frame yet').toBe(0);
+        await tabTo(s.page, '.docs-full .docs-back', 'Tab');
+        await mermaid.release();
+        expect(await settle(s.page), 'the reader came up').toBe('ready');
+        expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+        expect(await activeOf(s.page), 'back still holds the focus at ready').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      }, 120_000);
+
+      it('a head control focused BEFORE the Mermaid wait, then blurred while it is held: the frame IS focused at insertion', async () => {
+        const s = await openSession({ width: 1280, height: 800 });
+        const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+        const mermaid = await holdChunk(s.app.ctx, 'Mermaid text', MERMAID_CHUNK);
+        await s.goto(leafUrl('fig.md'));
+        await bridge.arrival();
+        await tabTo(s.page, '.docs-full .docs-back', 'Tab');
+        await bridge.release();
+        await mermaid.arrival();
+        expect((await framesSeen(s.page)).length, 'held on the Mermaid wait: no frame yet').toBe(0);
+        expect((await activeOf(s.page)).cls, 'back still holds the focus while the Mermaid text is held').toBe('docs-back');
+        await s.page.evaluate(() => (document.activeElement as HTMLElement).blur());
+        expect((await activeOf(s.page)).tag, 'focus is on body').toBe('body');
+        await mermaid.release();
+        expect(await settle(s.page), 'the reader came up').toBe('ready');
+        expect(await insertFocus(s.page), 'no one owned focus when the mount read it, so the frame was focused when inserted').toEqual([true]);
+        expect((await activeOf(s.page)).onFrame, 'and it holds focus at ready').toBe(true);
+      }, 120_000);
+    });
+  });
+
+  // ---- hidden characters through the real library (completion plan Task 13) ----------------------------------------------------
+  // The W8a residue: the copy check had never run against the real library for U+202E and U+200B. The frame's Copy tap posts
+  // the block's text and the library's own scan of it; the console asks first and writes only from the sheet's own button.
+  it('M8.B5 copy: a block holding U+202E and U+200B asks first, naming both, and the clipboard is written only by the sheet\'s own button', async () => {
+    const { s, outcome } = await open('hidden.md', { hook: { recordClipboard: true } });
+    expect(outcome).toBe('ready');
+    const frame = await readerFrame(s.page);
+    expect(await clipboardWrites(s.page), 'the hook is in place and nothing was written yet').toEqual([]);
+    await frame.locator('.code-copy').first().click();
+    await s.page.getByText('Copy with hidden characters?').waitFor({ timeout: 10_000 });
+    const shown = (await s.page.locator('.docs-reader-sheet-text').textContent()) ?? '';
+    expect(shown, 'the sheet names U+202E').toMatch(/⟦U\+202E [^⟧]+⟧/);
+    expect(shown, 'the sheet names U+200B').toMatch(/⟦U\+200B [^⟧]+⟧/);
+    expect(shown.includes(RLO) || shown.includes(ZWSP), 'and shows the characters as markers, not as themselves').toBe(false);
+    // The sheet is up, so the copy decision was "ask": no write has happened and none is pending.
+    expect(await clipboardWrites(s.page), 'nothing is written while the sheet asks').toEqual([]);
+    await s.page.getByRole('button', { name: 'Copy anyway' }).click();
+    await s.page.waitForFunction(() => (window as unknown as { __clipWrites: string[] }).__clipWrites.length > 0, undefined, { timeout: 10_000 });
+    const written = await clipboardWrites(s.page);
+    expect(written.length, 'one write').toBe(1);
+    expect(written[0], 'of the block\'s exact text (the fence\'s closing newline included), hidden characters in place').toBe(`${HIDDEN_BLOCK}\n`);
+    await s.page.getByText('Copy with hidden characters?').waitFor({ state: 'detached', timeout: 10_000 });
+  }, 120_000);
+
+  // ---- the meta-only row's own control (completion plan Task 13; the W8a residue's first control gap) ----------------------------
+  // Measured (Chromium build 1248, library 1.1.0, 20 metas written by the parent hook with the csp attribute suppressed):
+  // the frame's boot gate (`He` in `assets/frame/bootstrap.js`: the policy floor, `cspFloor` in `dist/frame/csp-rules.js`) admits only
+  // a policy of `default-src 'none'`, hash sources in `script-src`, `data:` (and `'unsafe-inline'` for styles) in the others,
+  // and `base-uri` and `form-action` of 'none'. So no meta that BOOTS has a network source: every meta that would open a
+  // channel (a `connect-src`, `img-src http: https:` or `*` or origin A, `default-src *`, a dropped `default-src`) is refused, and the reader
+  // falls back (reason "error", the frame removed). The changes that do boot are reorderings, a trailing semicolon and an
+  // extra script hash, none of which opens a channel. A control in which the battery reaches the origins through a booted
+  // frame therefore cannot be built; the two cases below pin both halves: a permissive meta never boots, and a meta that
+  // boots still reaches nothing. Their mutation needs two files (the frame asset's gate and the host's asset hash check).
+  describe('M8.B1 meta-only, what a changed meta can do (completion plan Task 13)', () => {
+    const PERMISSIVE: readonly (readonly [string, (a: string) => string])[] = [
+      ['a connect-src of *', (m) => `${m}; connect-src *`],
+      ['an img-src of http: and https:', (m) => m.replace(/img-src [^;]*/, 'img-src data: http: https:')],
+      ['an img-src naming origin A', (m) => m.replace(/img-src [^;]*/, `img-src data: ${origins.a}`)],
+      ['a default-src of *', (m) => m.replace("default-src 'none'", 'default-src *')],
+    ];
+    it.each(PERMISSIVE)('a meta with %s does not boot: the reader falls back, so the battery has no frame to reach the origins from', async (_name, weaken) => {
+      const meta = weaken(frameCsp());
+      expect(meta, 'the weakened meta differs from the library\'s').not.toBe(frameCsp());
+      const s = await openSession({ hook: { skipCspAttr: true, srcdocMeta: meta } });
+      await s.goto(leafUrl('small.md'));
+      let reach = '';
+      const outcome = await settle(s.page, 30_000);
+      if (outcome === 'ready') {
+        const from = origins.hits.length;
+        await runBattery(await readerFrame(s.page));
+        reach = ` (it booted, and the battery then reached ${reached(from).length} of ${CHANNELS.length}: ${reached(from).join(',')})`;
+      }
+      expect(outcome, `the boot gate refuses a policy with a network source${reach}`).toBe('fallback');
+      expect((await summariseSrcdoc(s.page, 0)).head[0]?.content, 'the frame was parsed under the weakened meta (the rewrite took)').toBe(meta);
+      expect((await framesSeen(s.page))[0]?.attrs['csp'], 'and no csp attribute').toBeUndefined();
+      expect(fellBackFor(s.logs), 'the reader fell back on the frame\'s error').toEqual(['error']);
+    }, 120_000);
+
+    it('a meta changed only by an extra script hash boots, and the battery still reaches 0 of 27', async () => {
+      const meta = frameCsp().replace(/(script-src [^;]*)/, `$1 'sha256-${'A'.repeat(43)}='`);
+      expect(meta, 'the meta differs from the library\'s').not.toBe(frameCsp());
+      const s = await openSession({ hook: { skipCspAttr: true, srcdocMeta: meta } });
+      await s.goto(leafUrl('small.md'));
+      expect(await settle(s.page, 30_000), 'a floor-clean change boots').toBe('ready');
+      expect((await summariseSrcdoc(s.page, 0)).head[0]?.content, 'under the changed meta').toBe(meta);
+      const from = origins.hits.length;
+      const run = await runBattery(await readerFrame(s.page));
+      expect(run.attempted.length).toBe(CHANNELS.length * 2);
+      expect(reached(from), '0 of 27 reach A or B').toEqual([]);
+      const refused = new Set(run.violations.map((v) => v.split('/battery/')[1]?.split('?')[0]).filter((n): n is string => n !== undefined));
+      expect(refused.size, `the changed meta refused the channels (${[...refused].join(',')})`).toBeGreaterThanOrEqual(20);
+    }, 120_000);
+  });
+
+  // ---- a link to this very page, in Chrome (completion plan Task 13; the coordinator's conditions, ask 553) -----------------------
+  // self.md links to itself by file name with a fragment near its top, and holds the target far down. The link routes as a
+  // `hash` with `reopen`: the console rewrites the fragment and opens the same document again in this body's mount, so no
+  // body is read again. A bare `#id` link is the library's own in-frame hash path and remounts nothing.
+  describe('a link to this page spelled with its file name (completion plan Task 13)', () => {
+    const DOC = `${READER_STORE_PREFIX}doc:${PROJECT}:${SECTION}:self.md:`;
+    const openSelf = async (): Promise<{ s: Session; frame: Frame }> => {
+      const { s, outcome } = await open('self.md');
+      expect(outcome).toBe('ready');
+      const frame = await readerFrame(s.page);
+      const at = await topIn(frame, FAR_ID);
+      expect(at, 'the page has the target').not.toBeNull();
+      expect(at!.top, 'it is far below the first screen, so reaching it takes a scroll').toBeGreaterThan(at!.viewport * 2);
+      expect(fileReads(s, 'self.md'), 'the page was read once').toBe(1);
+      return { s, frame };
+    };
+    const framesCount = (s: Session): Promise<number> => framesSeen(s.page).then((f) => f.length);
+
+    it('remounts the frame at the target: a second iframe, the target in view, the new frame focused, no body read again, no history entry', async () => {
+      const { s, frame } = await openSelf();
+      const old = await s.page.locator('.docs-reader iframe').elementHandle();
+      const entries = await s.page.evaluate(() => history.length);
+      const reads = { file: fileReads(s, 'self.md'), log: historyReads(s, 'self.md'), all: s.apiHits.length };
+      await frame.getByRole('link', { name: 'the far target' }).click();
+      await s.page.waitForFunction(() => (window as unknown as { __frames: unknown[] }).__frames.length === 2, undefined, { timeout: 10_000 });
+      expect(await old!.evaluate((e) => e.isConnected), 'the first frame was removed').toBe(false);
+      const again = await readerFrame(s.page);
+      await expect.poll(async () => inView(await topIn(again, FAR_ID)), {
+        timeout: 30_000, message: 'the target is not in the new frame\'s viewport (its top must be inside 0 and the frame\'s height)',
+      }).toBe(true);
+      expect(await s.page.evaluate(() => location.hash), 'the address bar holds the fragment').toBe(`#${FAR_ID}`);
+      expect(await s.page.evaluate(() => history.length), 'the jump added no history entry (the fragment is rewritten)').toBe(entries);
+      expect({ file: fileReads(s, 'self.md'), log: historyReads(s, 'self.md'), all: s.apiHits.length }, 'no request for the document, its history or anything else').toEqual(reads);
+      expect(await framesCount(s), 'a second iframe was seen').toBe(2);
+      expect((await postsSeen(s.page)).length, 'each frame was handed one hello').toBe(2);
+      expect((await framesSeen(s.page))[1]?.focusedAtInsert, 'the new frame was focused when inserted (the click was in the frame)').toBe(true);
+      expect((await activeOf(s.page)).onFrame, 'and holds focus').toBe(true);
+      expect(await settle(s.page, 5_000), 'the reader is up').toBe('ready');
+      expect(fellBackFor(s.logs), 'no fallback').toEqual([]);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 120_000);
+
+    it('a bare #id link scrolls in the frame, remounts nothing, updates the fragment, adds no history entry and reads nothing', async () => {
+      const { s, frame } = await openSelf();
+      const handle = await s.page.locator('.docs-reader iframe').elementHandle();
+      const entries = await s.page.evaluate(() => history.length);
+      const reads = s.apiHits.length;
+      await frame.getByRole('link', { name: 'the bare link' }).click();
+      await expect.poll(async () => inView(await topIn(frame, FAR_ID)), {
+        timeout: 30_000, message: 'the target is not in the frame\'s viewport after the bare link (the frame did not scroll to it)',
+      }).toBe(true);
+      await s.page.waitForFunction((h) => location.hash === h, `#${FAR_ID}`, { timeout: 10_000 });
+      expect(await framesCount(s), 'still one iframe').toBe(1);
+      expect(await handle!.evaluate((e) => e.isConnected), 'the same frame element').toBe(true);
+      expect(await s.page.evaluate(() => history.length), 'no history entry').toBe(entries);
+      expect(s.apiHits.length, 'no request at all').toBe(reads);
+      expect((await postsSeen(s.page)).length, 'no second hello').toBe(1);
+    }, 120_000);
+
+    it('the remount keeps the persisted reader state: the width pref, the marks, the folds and the last visit survive, and the frame shows them', async () => {
+      const { s, frame } = await openSelf();
+      await frame.locator('.aa-btn').click();
+      await frame.locator('input[data-pref="width"][value="wide"]').check();
+      await frame.locator('.h-mark').nth(1).click({ force: true }); // "Middle part"
+      await frame.locator('.h-fold').nth(3).click({ force: true }); // "Last part", below the target
+      const keys = { prefs: `${READER_STORE_PREFIX}pref:prefs`, seen: `${DOC}seen`, marks: `${DOC}marks`, folds: `${DOC}folds` };
+      await s.page.waitForFunction((ks) => ks.every((k) => localStorage.getItem(k) !== null), Object.values(keys), { timeout: 15_000 });
+      const before = Object.fromEntries(Object.entries(await store(s.page)).filter(([k]) => k.startsWith(READER_STORE_PREFIX)));
+      await frame.getByRole('link', { name: 'the far target' }).click();
+      await s.page.waitForFunction(() => (window as unknown as { __frames: unknown[] }).__frames.length === 2, undefined, { timeout: 10_000 });
+      const again = await readerFrame(s.page);
+      await expect.poll(async () => inView(await topIn(again, FAR_ID)), { timeout: 30_000, message: 'the target is not in the new frame\'s viewport' }).toBe(true);
+      // The new frame shows what was stored.
+      expect(await again.locator('input[data-pref="width"][value="wide"]').isChecked(), 'the new frame shows the wide pref').toBe(true);
+      expect(await again.locator('.h-mark').evaluateAll((bs) => bs.map((b) => b.textContent)), 'and the mark on "Middle part"').toEqual(['Mark read', 'Read', 'Mark read', 'Mark read']);
+      expect(await again.locator('.h-fold').evaluateAll((bs) => bs.map((b) => b.getAttribute('aria-expanded'))), 'and the fold on "Last part"').toEqual(['true', 'true', 'true', 'false']);
+      // Nothing under the prefix is lost, and nothing the visit chose changed. The frame itself moves two entries by design: the
+      // reading position (it scrolled to the target) and the last visit's time (its new boot stamps it, with the same commit).
+      const after = Object.fromEntries(Object.entries(await store(s.page)).filter(([k]) => k.startsWith(READER_STORE_PREFIX)));
+      expect(Object.keys(after).sort(), 'every stored key under the reader prefix is still there').toEqual(expect.arrayContaining(Object.keys(before).sort()));
+      const settledKeys = Object.keys(before).filter((k) => k !== keys.seen && !k.endsWith(':pos'));
+      expect(settledKeys.map((k) => [k, after[k]]), 'and each, but the position and the last visit, holds the same value').toEqual(settledKeys.map((k) => [k, before[k]]));
+      const seen = (o: Record<string, string>): { sha: string; at: number } => JSON.parse(o[keys.seen] ?? 'null') as { sha: string; at: number };
+      expect(seen(after).sha, 'the last visit names the same commit').toBe(seen(before).sha);
+      console.log(`T13-REMOUNT last visit stamped ${seen(before).at} then ${seen(after).at}; keys ${Object.keys(after).length} (before ${Object.keys(before).length}); marks, folds and pref kept`);
+    }, 120_000);
+  });
+
+  // ---- a deep link survives a fallback raised after the mount (completion plan Task 13) -------------------------------------------
+  // fn.md holds a footnote far below the fold; the plain view renders its definition with the id `user-content-fn-1` (its headings
+  // carry none). A forged `ready` with a wrong nonce is put on the port ahead of the frame's own word: the reader mounted (the
+  // mount resolved long before any port message is processed), and falls back on `nonce`, before its `ready`. The fragment was
+  // handed to the frame and not yet spent, so the plain view still scrolls it.
+  it('a deep link survives a fallback raised after the mount resolved: the plain view shows the fixed note and the named element is in view', async () => {
+    const forged = { t: 'ready', v: 1, nonce: '0'.repeat(32) };
+    const control = await openSession({ hook: { earlyOps: [forged] } });
+    await control.goto(leafUrl('fn.md'));
+    expect(await settle(control.page, 30_000, 'fallback'), 'without a fragment: the forged ready sends the reader to the plain view').toBe('fallback');
+    const idle = await control.page.locator(`article li#${FOOTNOTE_ID}`).evaluate((e) => ({ top: e.getBoundingClientRect().top, viewport: window.innerHeight }));
+    expect(idle.top, 'and there the footnote is below the first screen, so a scroll is what brings it into view').toBeGreaterThan(idle.viewport);
+
+    const s = await openSession({ hook: { earlyOps: [forged] } });
+    await s.goto(`${leafUrl('fn.md')}#${FOOTNOTE_ID}`);
+    expect(await settle(s.page, 30_000, 'fallback'), 'the reader fell back').toBe('fallback');
+    await expect.poll(() => fellBackFor(s.logs), { timeout: 5_000, message: 'the reader fell back on the frame\'s forged ready (nonce), after the mount' }).toEqual(['nonce']);
+    expect(await s.page.locator('.doc-plain-note').first().textContent(), 'the fixed note').toBe(READER_FALLBACK_NOTE);
+    expect((await framesSeen(s.page)).length, 'a frame was mounted').toBe(1);
+    await expect.poll(async () => inView(await s.page.locator(`article li#${FOOTNOTE_ID}`).evaluate((e) => ({ top: e.getBoundingClientRect().top, viewport: window.innerHeight }))), {
+      timeout: 15_000, message: `the plain view did not scroll #${FOOTNOTE_ID} into view`,
+    }).toBe(true);
+  }, 120_000);
+
+  // ---- an over-long image ref (completion plan Task 13) -------------------------------------------------------------------------
+  // The seed check refuses a whole seed carrying one image ref past 2048 code units, which would send the page to the plain view.
+  // The ref here is one past the limit (redundant "./" segments, so it still names a real file), beside an ordinary image.
+  it('an image ref one code unit over the seed limit is left out: the reader comes up, the ordinary image shows, the long one is the frame\'s not-loaded chip', async () => {
+    expect(LONG_REF.length, 'the ref is one past the limit').toBe(READER_IMAGE_REF_MAX_UNITS + 1);
+    const { s, outcome } = await open('imgs.md');
+    expect(outcome, 'the reader comes up (the seed stayed valid)').toBe('ready');
+    expect(fellBackFor(s.logs), 'no fallback').toEqual([]);
+    const frame = await readerFrame(s.page);
+    await frame.waitForFunction(() => [...document.querySelectorAll('img')].some((i) => i.complete && i.naturalWidth === 1), undefined, { timeout: 30_000 });
+    const seen = await frame.evaluate(() => ({
+      imgs: [...document.querySelectorAll('img')].map((i) => `${i.getAttribute('alt')}:${i.naturalWidth}`),
+      chips: [...document.querySelectorAll('[data-docreader-chrome]')].map((c) => c.textContent ?? '').filter((t) => t.includes('Image not loaded')),
+    }));
+    expect(seen.imgs, 'the ordinary image shows, decoded').toEqual(['ordinary image:1']);
+    expect(seen.chips.length, 'one not-loaded chip').toBe(1);
+    expect(seen.chips[0], 'and it is the long image\'s').toMatch(/^long image .*Image not loaded$/);
+    expect(fileReads(s, 'pix.png'), 'the ordinary image was read').toBeGreaterThan(0);
+    expect(fileReads(s, LONG_NAME), 'the long ref was never planned or loaded').toBe(0);
+  }, 120_000);
+
+  // ---- lab 10: a service worker never controls the sandboxed child (completion plan Task 13) ---------------------------------------
+  // The only case that lets a context run a service worker (`AppView.serviceWorkers`, `app.ts`); every other case blocks them.
+  // The built app registers its own worker (`main.tsx`'s `registerSW`). A positive control comes first in the same context: that
+  // worker is registered, active, and controls the console page, and a request of the page for a precached file is answered by it
+  // (`Response.fromServiceWorker()`). Only then the sandboxed child: the reader's own srcdoc frame (CSP `default-src 'none'`, so
+  // it makes no request) and, for the requests and the navigation the reader's frame cannot make, hand-built children in the
+  // controlled page and in a host page of the same origin. The precache ignores a `utm_` query, so every probe has its own URL
+  // (no HTTP cache can answer for another) and still names a file the worker holds. The harness's `/api` route still answers
+  // what the worker forwards (measured: a fetch the worker answered reached the route); the case asserts that, so the reader's
+  // fixtures arriving is a checked fact, not an assumption.
+  describe('lab 10: a service worker never controls a sandboxed srcdoc child (completion plan Task 13)', () => {
+    const PRECACHED = '/icons/icon-192.png';
+    const probe = (who: string): string => `${PRECACHED}?utm_lab10=${who}`;
+    const CONTROLLER_OF = `(() => { try { return navigator.serviceWorker === undefined ? 'absent' : navigator.serviceWorker.controller === null ? 'no-controller' : 'controller'; } catch (e) { return 'threw ' + e.name; } })()`;
+    interface Answered { readonly path: string; readonly viaWorker: boolean; readonly status: number; readonly from: Frame | null }
+
+    it('the built app\'s worker controls the console page, the reader\'s sandboxed frame and a hand-built one reach no controller, and their loads and navigation bypass the worker', async () => {
+      const s = await openSession({ serviceWorkers: 'allow' });
+      const answered: Answered[] = [];
+      s.page.on('response', (r) => {
+        let from: Frame | null = null;
+        try { from = r.request().frame(); } catch { /* a request of the worker itself has no frame */ }
+        const u = new URL(r.url());
+        answered.push({ path: u.pathname + u.search, viaWorker: r.fromServiceWorker(), status: r.status(), from });
+      });
+      const answer = async (path: string): Promise<Answered> => {
+        await expect.poll(() => answered.some((a) => a.path === path), { timeout: 15_000, message: `no response for ${path} was seen` }).toBe(true);
+        return answered.find((a) => a.path === path)!;
+      };
+
+      // Positive control: the worker registers, activates, claims the page, and answers a precached file.
+      await s.goto(leafUrl('small.md'));
+      await s.page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, { timeout: 30_000 }).catch(() => {
+        throw new Error('the built app\'s service worker never took control of the console page: it was not registered, did not activate, or did not claim (30 s)');
+      });
+      await expect.poll(() => s.page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).map((r) => ({ scope: new URL(r.scope).pathname, state: r.active?.state ?? 'none' }))), {
+        timeout: 15_000, message: 'the built app\'s worker is not one registration of scope / in state activated',
+      }).toEqual([{ scope: '/', state: 'activated' }]);
+      expect(s.app.ctx.serviceWorkers().length, 'Playwright sees the worker').toBeGreaterThan(0);
+      await s.page.reload({ waitUntil: 'load' }); // the document is controlled from its first byte
+      expect(await settle(s.page), 'the reader is up in the controlled page').toBe('ready');
+      expect(await s.page.evaluate(() => navigator.serviceWorker.controller !== null), 'the console page is controlled').toBe(true);
+      expect(await s.page.evaluate((u) => fetch(u).then((r) => r.status), probe('console')), 'the console fetches a precached file').toBe(200);
+      expect((await answer(probe('console'))).viaWorker, 'and the worker answered it').toBe(true);
+      expect(await s.page.evaluate((u) => fetch(u).then((r) => r.status), '/api/docs/demo/file?probe=lab10-console'), 'a request the worker forwards still reaches the harness\'s route').toBe(404);
+      expect((await answer('/api/docs/demo/file?probe=lab10-console')).viaWorker, 'it passed through the worker').toBe(true);
+      expect(s.apiHits.map((h) => h.path), 'and the route recorded it, as it did the reader\'s own reads').toEqual(expect.arrayContaining(['/api/docs/demo/file?probe=lab10-console']));
+      expect(fileReads(s, 'small.md'), 'the reader\'s document read was answered by the fixture').toBeGreaterThan(0);
+
+      // The reader's own sandboxed srcdoc frame: no controller is reachable, and it loads nothing.
+      const frame = await readerFrame(s.page);
+      expect(await frame.evaluate(CONTROLLER_OF), 'in the reader frame\'s realm there is no controller to reach').toMatch(/^(threw SecurityError|absent|no-controller)$/);
+      const refused = await frame.evaluate(async ([viaFetch, viaImage]) => {
+        const violations: string[] = [];
+        document.addEventListener('securitypolicyviolation', (e) => { violations.push(e.blockedURI); });
+        fetch(viaFetch!).catch(() => 0);
+        const i = new Image();
+        i.src = viaImage!;
+        for (let k = 0; k < 100 && violations.length < 2; k += 1) await new Promise((r) => setTimeout(r, 50));
+        return violations.length;
+      }, [probe('reader'), probe('readerimg')]);
+      expect(refused, 'the frame\'s CSP refused both attempts').toBeGreaterThanOrEqual(2);
+      expect(answered.filter((a) => a.from === frame).map((a) => a.path), 'no load of the reader frame was answered by anything, the worker included').toEqual([]);
+
+      // A same-origin child (allow-same-origin) is the control for the probe: it inherits the controller, and its load is the worker's.
+      const same = await mountControl(s.page, 'allow-scripts allow-same-origin');
+      expect(await same.evaluate(CONTROLLER_OF), 'a same-origin srcdoc child reaches the controller (the probe can see one)').toBe('controller');
+      await same.evaluate((u) => fetch(u).then((r) => r.status), probe('same'));
+      const sameAnswer = await answer(probe('same'));
+      expect(sameAnswer.viaWorker, 'and its load goes through the worker').toBe(true);
+      await s.page.evaluate(() => document.getElementById('control')?.remove());
+
+      // The hand-built sandboxed child (allow-scripts, no CSP): no controller, and its requests go to the network, not the worker.
+      const child = await mountControl(s.page, 'allow-scripts');
+      expect(await child.evaluate(CONTROLLER_OF), 'the sandboxed child reaches no controller').toMatch(/^(threw SecurityError|absent|no-controller)$/);
+      await child.evaluate(async ([viaFetch, viaImage]) => {
+        await fetch(viaFetch!, { mode: 'no-cors' }).catch(() => 0);
+        await fetch('/api/docs/demo/file?probe=lab10-child', { mode: 'no-cors' }).catch(() => 0);
+        const i = new Image();
+        i.src = viaImage!;
+        await new Promise((r) => { i.onload = r; i.onerror = r; });
+      }, [probe('child'), probe('childimg')]);
+      for (const path of [probe('child'), probe('childimg'), '/api/docs/demo/file?probe=lab10-child']) {
+        const a = await answer(path);
+        expect(a.viaWorker, `the child's request for ${path} was not answered by the worker`).toBe(false);
+        expect(a.from, `and it came from the child frame`).toBe(child);
+      }
+      expect(s.apiHits.map((h) => h.path), 'the child\'s request reached the network (the harness\'s route saw it)').toEqual(expect.arrayContaining(['/api/docs/demo/file?probe=lab10-child']));
+
+      // A sandboxed frame's navigation is never seen by the worker. The shell meta (`frame-src 'none'`) keeps any child of the
+      // app page from navigating, so the pair lives in a host page of the same origin: one plain iframe and one sandboxed, each
+      // navigating to a file the worker holds.
+      await s.app.ctx.route((u) => u.pathname === '/api/lab10/host', (route) => route.fulfill({
+        status: 200, contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html><title>host</title><iframe src="${probe('navplain')}"></iframe><iframe sandbox="allow-scripts" src="${probe('navboxed')}"></iframe>`,
+      }));
+      const host = await s.app.ctx.newPage();
+      host.on('response', (r) => { const u = new URL(r.url()); answered.push({ path: u.pathname + u.search, viaWorker: r.fromServiceWorker(), status: r.status(), from: null }); });
+      await host.goto(`${server.origin}/api/lab10/host`, { waitUntil: 'load' });
+      expect((await answer(probe('navplain'))).viaWorker, 'a plain iframe\'s navigation to a precached file is the worker\'s (control)').toBe(true);
+      const boxed = await answer(probe('navboxed'));
+      expect(boxed.status, 'the sandboxed frame\'s navigation was answered').toBe(200);
+      expect(boxed.viaWorker, 'and not by the worker').toBe(false);
+      expect(s.app.errors, 'no page error').toEqual([]);
+
+      // No registration outlives the case: a fresh context starts with none.
+      await s.app.ctx.close();
+      sessions.splice(sessions.indexOf(s.app), 1);
+      const fresh = await openSession({ serviceWorkers: 'allow' });
+      await fresh.page.goto(server.origin + PRECACHED, { waitUntil: 'load' });
+      expect(await fresh.page.evaluate(async () => (await navigator.serviceWorker.getRegistrations()).length), 'a fresh context holds no registration').toBe(0);
+      expect(fresh.app.ctx.serviceWorkers().length, 'and no worker').toBe(0);
+    }, 180_000);
+  });
 });

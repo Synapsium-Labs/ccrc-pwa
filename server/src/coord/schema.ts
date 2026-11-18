@@ -3659,6 +3659,7 @@ export const MIGRATIONS: readonly string[] = [
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
+
   // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
   // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
   // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
@@ -3781,6 +3782,68 @@ export const MIGRATIONS: readonly string[] = [
     CHECK ((clearedAt IS NULL) = (clearSequence IS NULL))
   );
   CREATE UNIQUE INDEX overlord_latches_standing ON overlord_latches(cause) WHERE clearedAt IS NULL;
+  `,
+
+  // ── 100: user_version 99 -> 100 ───────────────────────────────────────────
+  // The replay quiz's record path (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` Task 7, §5; slug
+  // quiz-run-pending-until-confirmed): `continuity_quiz_runs` gains the run's state, the single-arm report's counts, its mode
+  // and the interval's method, and the operator's ruling. `continuity/quizStore.ts#insertQuizRun` (the one inserter, from the
+  // record door) writes `pending` with no baseline; `continuity/quizStore.ts#ruleQuizRun` is the ONE writer of `state`,
+  // `ruledAt`, `ruledBy` and `baseline`. An existing row reads `confirmed` (none exist live: the record door never shipped
+  // before this entry), and the new count columns are NULL on it.
+  // COLUMNS ON AN EXISTING TABLE, nullable or defaulted: an older build opening a file at `user_version 100` takes rule 3 (it
+  // warns, reads as-is and migrates nothing), never names them, and boots. Its `quizBaselineRead` reads `baseline = 1` alone,
+  // and a pending row carries 0 there, so it still never counts an unconfirmed run. Done tests A (#2964) landed 92, the
+  // programme's phases (#2974) 93, forecasts A (#2987) 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96,
+  // the renewal hand-offs (#2934) 97, decision model B (#2990) 98 and the ladder (#2994) 99, so this is 100 by position
+  // (the coordinator's standing renumber license); whoever lands second renumbers.
+  // RE-MEASURE the slot before the PR and before merge (it must print 99 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_quiz_runs ADD COLUMN state TEXT NOT NULL DEFAULT 'confirmed';   -- pending | confirmed | discarded
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledAt INTEGER;      -- wall ms of the operator's confirm or discard
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledBy TEXT;         -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN answered INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN correct INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN runFailed INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN absent INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN arm TEXT;             -- treatment: recall on, the one arm run
+  ALTER TABLE continuity_quiz_runs ADD COLUMN settingsMode TEXT;    -- restricted | fallback
+  ALTER TABLE continuity_quiz_runs ADD COLUMN pilot TEXT;           -- skipped-by-ruling
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ci INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN method TEXT;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN bootstrapB INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN inputs TEXT;          -- the report's four input shas, a JSON object
+  `,
+
+  // ── 101: user_version 100 -> 101 ──────────────────────────────────────────
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
+  // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
+  // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
+  // a day. `run_spend`: one row per closed run, `measured` (a fresh reading inside the run's window), `absent` or
+  // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
+  // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
+  // of the forecast lane. `runs.dispatchConversation` (fix round 1, F3): the registry's conversation id the run was
+  // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
+  // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
+  // older build at this `user_version` takes rule 3 and never names them.
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96, the renewal hand-offs
+  // (#2934) 97, decision model B (#2990) 98, the ladder (#2994) 99 and the quiz record (#2991) 100, so this is 101 by
+  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 100 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    word TEXT NOT NULL, evidence TEXT NOT NULL, noticed INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX programme_health_by_program ON programme_health (program, id);
+  CREATE TABLE run_spend (
+    runId INTEGER PRIMARY KEY REFERENCES runs(id), at INTEGER NOT NULL, state TEXT NOT NULL, cost REAL, class TEXT,
+    readAt INTEGER, startCost REAL
+  );
+  ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
   `,
 ];
 

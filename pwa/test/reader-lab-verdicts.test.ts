@@ -185,6 +185,14 @@ describe('the reader lab verdicts (reader lab plan, Task 8)', () => {
     expect(busy(1500)).toBe('shared-thread');
   });
 
+  it('busy frame: gap evidence starts at 0.8 of the spin, not below it (review 1531, the unpinned factor)', () => {
+    const busy = (longestGapMs: number) => verdictsOf({}, {
+      ...LOCAL_OK, busy: { longestGapMs, timerLateMs: 250, spinMs: 3000 },
+    })['busy-frame'].verdict;
+    expect(busy(2399)).toBe('own-thread');
+    expect(busy(2400)).toBe('shared-thread');
+  });
+
   it('a hidden busy window is not measured and cannot favour draw on open', () => {
     const local = { ...LOCAL_OK, busy: { ...LOCAL_OK.busy!, gapHidden: true } };
     const v = verdictsOf({}, local);

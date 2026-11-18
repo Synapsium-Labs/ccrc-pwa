@@ -48,7 +48,10 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
 import { isDecisionModelWord } from '../src/coord/decisionModel.js';
-import { isEdgePredicate, isEdgeState, isRemainingRefusal, isUnforecastableReason } from '../../shared/programmeFacts.js';
+import {
+  EDGE_KINDS, isEdgePredicate, isEdgeState, isProgrammeHealthWord, isRemainingRefusal, isRunSpendState, isUnforecastableReason,
+} from '../../shared/programmeFacts.js';
+import { isServiceClass } from '../../shared/portfolio.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -68,7 +71,7 @@ import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import { ACTOR_ISSUERS } from '../../shared/overlord-identity.js';
-import { isLaneArmImport, isLaneArmLane, isLaneArmRefusal } from '../../shared/lane-arm.js';
+import { isLaneArmImport, isLaneArmLane, isLaneArmQuizState, isLaneArmRefusal } from '../../shared/lane-arm.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -1208,8 +1211,8 @@ describe('the rejection table is total, in both directions', () => {
         // (`'stood-kept'`) and `coord/schema.ts` seeds a lane's row by its name (`'roster-card'`). A word is a stored column
         // or a row key, never a `refused` or `reject.code`; its door's own refusal (`'lane-gated'`, review 2003 F3) is sent by
         // `refuseRoute`. Admitted through L0's guards, derived from `LANE_ARM_IMPORTS`, `LANE_ARM_LANES` and
-        // `LANE_ARM_REFUSALS`, never NOT_CODES.
-        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok)
+        // `LANE_ARM_REFUSALS`, never NOT_CODES; the quiz block's baseline state (`'not-yet'`) through `LANE_ARM_QUIZ_STATES`.
+        || isLaneArmImport(tok) || isLaneArmLane(tok) || isLaneArmRefusal(tok) || isLaneArmQuizState(tok)
         // THE ANSWER MARKS (Overlord W1, #2870): `coord/answerMarks.ts` names why a row carries no box and the ask detail as
         // literals, and `coord/answerMarkStore.ts` a mark's name. A reason rides `not-markable`'s `detail`, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from its own map and L0's, never NOT_CODES.
@@ -1253,11 +1256,20 @@ describe('the rejection table is total, in both directions', () => {
         // forecast (`'no-remaining'`, `'nothing-left'`, `'too-little-history'`). A reason rides a stored seal's `reason`,
         // never a `refused` or `reject.code`. Admitted through L0's guard, derived from `UNFORECASTABLE_REASON_MAP`, never NOT_CODES.
         || isUnforecastableReason(tok)
+        // THE PROGRAMME HEALTH (Overlord W2 forecasts B): `coord/programmeHealth.ts` names the health words, an edge's kind (its state
+        // is main's `isEdgeState`, above), and `coord/programmeFactsStore.ts` a spend row's state as literals. A word rides a `programme_health` or
+        // `run_spend` row or an edge's column, never a `refused` or `reject.code`. Admitted through L0's guards and lists,
+        // derived from `PROGRAMME_HEALTH_WORD_MAP`, `EDGE_KINDS` and `RUN_SPEND_STATE_MAP`, never NOT_CODES.
+        || isProgrammeHealthWord(tok) || (EDGE_KINDS as readonly string[]).includes(tok)
+        || isRunSpendState(tok)
+        // `coord/programmeHealth.ts` also reads a rank's class (`'fixed-date'`), a stored column of the operator's rank row: admitted
+        // through L0's `isServiceClass`, derived from `SERVICE_CLASS_MAP`.
+        || isServiceClass(tok)
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
         // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
         || isActorIssuerWordHere(tok, outsideIssuers),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, Overlord refusal, designation word or unforecastable reason`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word or unforecastable reason`).toBe(true);
     }
   });
 });

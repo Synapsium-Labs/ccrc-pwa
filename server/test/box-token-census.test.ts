@@ -69,6 +69,11 @@ const OVERLORD_SRC = read('server/src/coord/overlordRoutes.ts');
  *  the upload `PUT` and the status read `GET /api/overlord/private-names`, are the operator's and session-gated:
  *  `NAME_LIST_DOORS`. */
 const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
+/** The replay quiz's record path (Overlord W1a quiz record): a routes file of its own. Its one box-token lane is the record
+ *  door, `POST /api/continuity/quiz-runs`, whose caller is the operator's shell on the fleet box (`ccrc quiz-record`), gated
+ *  in its own onRequest; its rule door is the operator's, session-gated with a step-up: `QUIZ_SESSION_DOORS`. */
+const QUIZ_SRC = read('server/src/continuity/quizRoutes.ts');
+
 /** The Models sheet's write door (programme model-class-advance, wave R4): `POST /api/models/:lane`, a routes file of its own with NO
  *  box-token lane. The operator's door, session-gated: `MODELS_DOORS`. (The read beside it, `GET /api/models/:lane`, is in `server.ts`.) */
 const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
@@ -93,10 +98,11 @@ const CALLS_LANES = lanesIn(CALLS_SRC);
 const REMAINING_LANES = lanesIn(REMAINING_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const QUIZ_LANES = lanesIn(QUIZ_SRC);
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -187,6 +193,11 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
  *  EXEMPT. */
 const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-names'];
 
+/** The replay quiz's rule door (Overlord W1a quiz record): the operator confirms or discards a recorded run, behind a session
+ *  and the account gate's step-up. Hand-kept for the NAME only, compared with the quiz file's registrations in both directions
+ *  below; it consults no box token and does not sit in EXEMPT. */
+const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
+
 /** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
  *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like
  *  `NAME_LIST_DOORS`: the describe below derives the file's registrations and compares in both directions. The operator's, behind the
@@ -200,7 +211,8 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
+  ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -256,7 +268,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Programme work map WM0: POST /api/programmes/:slug/plan/phases/refs (`plan phase-ref`), a box-token lane in the plan file: eighty-seven machine lanes in all.
   'eighty-seven',
   // D-8183: the inbound path's two (`POST /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage`) in the plan file: eighty-nine machine lanes in all.
-  'eighty-eight', 'eighty-nine'];
+  'eighty-eight', 'eighty-nine',
+
+  // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: ninety machine lanes in all.
+  'ninety'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -410,7 +425,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length);
+    // …and the quiz file's one (Overlord W1a quiz record): the operator's record door, by name.
+    expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost its box-token lane, or the rule door gained a token check').toEqual(['POST /api/continuity/quiz-runs']);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 
@@ -453,6 +470,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'nameListRoutes.ts and NAME_LIST_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...NAME_LIST_DOORS].sort());
     expect(lanesIn(NAME_LIST_SRC), 'a name list door consults the box token — both are the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
+  it('QUIZ_SESSION_DOORS is exactly the rest of what the quiz file registers, in both directions; none is a lane or EXEMPT', () => {
+    const rest = registrationsIn(QUIZ_SRC).map((r) => r.key).filter((k) => !QUIZ_LANES.includes(k));
+    expect(rest.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'continuity/quizRoutes.ts and QUIZ_SESSION_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...QUIZ_SESSION_DOORS].sort());
+    for (const key of rest) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    expect(GATE_SRC, 'the record door is a box-token lane in EXEMPT').toContain(`  ['POST /api/continuity/quiz-runs',`);
   });
 
   it('MODELS_DOORS is exactly what the models routes file registers, in both directions; none is a lane or EXEMPT (model-class-advance R4)', () => {
@@ -1405,8 +1431,13 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
-  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
-  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. One pass, left to right: whichever
+   *  opens first wins, a comment or a string, so a `/*` inside a line comment or inside a string opens nothing, and a string
+   *  is kept whole. Blanking block comments first read a `/*` written in a line comment as a comment running to the next
+   *  `*\/`, which once hid eight lines of routes.ts from this scan (rows RLB-T4-M3 and RLB-T4-M4, review 2480). A `//` right
+   *  after a colon, a quote, a backtick or a backslash is not a comment, as before (a URL, a regex). */
+  const LAB_LEXEMES = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:'"`\\])\/\/[^\n]*/g;
+  const labCode = (s: string): string => s.replace(LAB_LEXEMES, (m) => (m.startsWith('/') ? '' : m));
   /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
   const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
   const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
@@ -1426,6 +1457,18 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
       expect(labKeeps('x', src), src).toEqual([]);
     }
+  });
+
+  // CONTROL: each planted file holds a `/*`, then a guarded call, then a later `*/`, so a scan that blanked block comments
+  // first, or that did not keep that kind of string whole, would read from the `/*` to the `*/` as one comment and miss
+  // the call between. One case per shape, so each reports on its own: the line comment and the three kinds of string.
+  it.each([
+    ['a line comment', "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;", 'x writes a log line'],
+    ['a double-quoted string', 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;', 'x loads fs'],
+    ['a single-quoted string', "const key = 'GET /*';\nconst f = require('node:fs');\n/* c */ const a = 1;", 'x loads fs'],
+    ['a template literal', "const key = `GET /*`;\nprocess.stdout.write('x');\n/* c */ const a = 1;", 'x writes a log line'],
+  ])('a `/*` inside %s opens no comment: the code after it is still read', (_where, src, seen) => {
+    expect(labKeeps('x', src), src).toEqual([seen]);
   });
 
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {

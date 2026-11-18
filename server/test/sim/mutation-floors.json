@@ -78,6 +78,9 @@
   "server/src/continuity/compactOwner.ts#compactRefusal": 1,
   "server/src/continuity/quiz.ts#quizBaseline": 1,
   "server/src/continuity/quiz.ts#validQuizReport": 1,
+  "server/src/continuity/quiz.ts#quizRuleVerdict": 1,
+  "server/src/continuity/quiz.ts#quizRecordVerdict": 1,
+  "server/src/coord/laneArm.ts#laneArmQuizViewOf": 1,
   "server/src/continuity/quiz.ts#quizLaneVerdict": 1,
   "server/src/continuity/quiz.ts#quizWeek": 1,
   "server/src/coord/portfolio.ts#portfolioOrder": 1,
@@ -221,5 +224,15 @@
   "server/src/coord/forecast.ts#forecastOutcome": 1,
   "server/src/coord/forecast.ts#forecastCalibration": 1,
   "server/src/coord/forecast.ts#sealBoundary": 1,
-  "server/src/coord/forecast.ts#leadHistoryFrom": 1
+  "server/src/coord/forecast.ts#leadHistoryFrom": 1,
+  "server/src/coord/programmeHealth.ts#programmeHealth": 1,
+  "server/src/coord/programmeHealth.ts#healthFactsOf": 1,
+  "server/src/coord/programmeHealth.ts#criticalPath": 1,
+  "server/src/coord/programmeHealth.ts#healthChangeVerdict": 1,
+  "server/src/coord/programmeMeasures.ts#waveSpend": 1,
+  "server/src/coord/programmeMeasures.ts#wavesOf": 1,
+  "server/src/coord/programmeMeasures.ts#doneCycles": 1,
+  "server/src/coord/programmeMeasures.ts#runSpendVerdict": 1,
+  "server/src/usage.ts#readSpendTurns": 1,
+  "server/src/coord/forecastLane.ts#spendReadingOf": 1
 }
