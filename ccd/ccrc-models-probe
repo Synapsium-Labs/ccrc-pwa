@@ -187,9 +187,10 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # WHEN IT RUNS (review A8): this function only STAGES the program, as a file
 # beside the probe's other scratch. The Codex request program runs it as a
 # child, past its credential gate, so a run that sent nothing (`--check`'s 3)
-# asked npm for nothing and waited for nothing. That request program re-checks
-# what it prints, so the version asked as is never below the floor whatever
-# the child answers, and the floor is asked as when the child fails or is late.
+# asked npm for nothing and waited for nothing. The program prints the last
+# good release, or nothing; the request program alone applies the floor (one
+# owner of that rule), so the version asked as is never below it whatever the
+# child answers, and the floor is asked as when the child fails or is late.
 #
 # ONE FILE FOR THE BOX, `~/.ccrc/codex-client-release.json` (0600, temp and
 # rename in its own directory): `version` and `readAt`, the last good release and
@@ -218,7 +219,7 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # the first 300 characters of the arm's stderr, where each refusal names its
 # remedy FIRST. The cache's `lastError` is the lookup's record.
 #
-# ITS TEST SEAM is its third argument: when non-empty, the named file's bytes
+# ITS TEST SEAM is its second argument: when non-empty, the named file's bytes
 # stand in for npm's answer, and a missing file is a failed lookup. The Codex
 # arm fills it from `CCRC_MODELS_PROBE_RELEASE_FIXTURE`, read on one line of
 # `_fetch_codex_lane`. Every contained test env sets that name
@@ -230,7 +231,7 @@ _codex_release_lookup_program() {
   cat <<'RELEASE_PY'
 import fcntl, json, os, re, signal, subprocess, sys, tempfile, time
 
-FLOOR, CACHE, ANSWER = sys.argv[1], sys.argv[2], sys.argv[3]
+CACHE, ANSWER = sys.argv[1], sys.argv[2]
 URL = "https://registry.npmjs.org/@openai/codex/latest"
 PLAIN = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
 CAP = 262144         # bytes of npm's answer; the `latest` manifest is a few KiB
@@ -243,10 +244,6 @@ LOCK_S = 15          # how long a probe waits for another's lookup
 
 def plain(v):
     return isinstance(v, str) and PLAIN.fullmatch(v) is not None
-
-
-def key(v):
-    return tuple(int(x) for x in v.split("."))
 
 
 def stamp(v):
@@ -412,8 +409,10 @@ except Exception as e:
     except Exception:
         c = {}
     c = failed(c, f"the lookup stopped: {type(e).__name__}")
+# The last good release, or nothing. The floor is not this program's: the request program alone asks as the greater
+# of this and the floor, so the rule "never below the floor" has one owner.
 v = c.get("version")
-print(v if plain(v) and plain(FLOOR) and key(v) > key(FLOOR) else FLOOR)
+print(v if plain(v) else "")
 RELEASE_PY
 }
 
@@ -578,7 +577,7 @@ def client_version():
     floor = os.environ["CODEX_CLIENT_VERSION"]
     v = ""
     try:
-        r = subprocess.run([sys.executable, "-I", os.environ["CCRC_PROBE_RELEASE_LOOKUP"], floor,
+        r = subprocess.run([sys.executable, "-I", os.environ["CCRC_PROBE_RELEASE_LOOKUP"],
                             os.environ["CCRC_PROBE_RELEASE_CACHE"], os.environ["CCRC_PROBE_RELEASE_ANSWER"]],
                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                            timeout=LOOKUP_WAIT_S)
@@ -586,7 +585,8 @@ def client_version():
     except Exception:
         pass
     as_key = lambda x: tuple(int(n) for n in x.split("."))
-    if not (PLAIN_VERSION.fullmatch(v) and PLAIN_VERSION.fullmatch(floor) and as_key(v) >= as_key(floor)):
+    # THE ONE PLACE the floor is applied: the lookup prints the last good release or nothing.
+    if not (PLAIN_VERSION.fullmatch(v) and PLAIN_VERSION.fullmatch(floor) and as_key(v) > as_key(floor)):
         v = floor
     try:
         with open(os.environ["CCRC_PROBE_VERSION_OUT"], "w") as f:

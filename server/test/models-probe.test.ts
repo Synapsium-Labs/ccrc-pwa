@@ -1561,15 +1561,15 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       fs.writeFileSync(file, src.slice(open + 1, close).join('\n') + '\n');
       return file;
     };
-    /** Runs the lookup with `curl` as the given script (or absent), and answers what it printed, how long it took and
-     *  the cache it left. */
+    /** Runs the lookup with `curl` as the given script (or absent), and answers what it printed (the last good release,
+     *  or nothing: the floor is the request program's to apply), how long it took and the cache it left. */
     const lookup = (curl: string | null): { out: string; ms: number; cache: Record<string, unknown> } => {
       const bin = path.join(home, 'lookup-bin');
       fs.mkdirSync(bin, { recursive: true });
       if (curl !== null) fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n${curl}\n`, { mode: 0o755 });
       const PATH = curl === null ? bin : `${bin}:${process.env['PATH'] ?? ''}`;
       const t0 = Date.now();
-      const r = spawnSync(pythonOrSkip()!, ['-I', lookupProgram(), FLOOR, cachePath(), ''], {
+      const r = spawnSync(pythonOrSkip()!, ['-I', lookupProgram(), cachePath(), ''], {
         env: { HOME: home, PATH }, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n', timeout: 45_000,
       });
       const ms = Date.now() - t0;
@@ -1585,28 +1585,28 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
 
     it('a curl that hangs past its own bound is killed by the alarm: the floor, within the bound, the reason kept', () => {
       const r = lookup('exec sleep 30');
-      expect(r.out).toBe(FLOOR);
+      expect(r.out).toBe('');
       expect(r.ms, 'the lookup outlived its alarm').toBeLessThan(25_000);
       expect(r.cache['lastError']).toBe('no answer within 10s');
     }, 60_000);
 
     it('a curl whose output passes the cap is killed at once: the floor, the size named', () => {
       const r = lookup(`printf '%s' '${npm(NEWER)}'\nexec yes ' '`);
-      expect(r.out).toBe(FLOOR);
+      expect(r.out).toBe('');
       expect(r.ms, 'the over-cap answer waited on the alarm').toBeLessThan(8_000);
       expect(r.cache['lastError']).toMatch(/^the answer is over \d+ bytes$/);
     }, 60_000);
 
     it('a curl that exits nonzero is a failed lookup whatever it printed', () => {
       const r = lookup(`printf '%s' '${npm(NEWER)}'\necho 'curl: (22) The requested URL returned error: 503' >&2\nexit 22`);
-      expect(r.out).toBe(FLOOR);
+      expect(r.out).toBe('');
       expect(r.cache['lastError']).toBe('curl exit 22: curl: (22) The requested URL returned error: 503');
       expect(r.cache).not.toHaveProperty('version');
     });
 
     it('no curl on PATH is a failed lookup, not a crash', () => {
       const r = lookup(null);
-      expect(r.out).toBe(FLOOR);
+      expect(r.out).toBe('');
       expect(r.cache['lastError']).toMatch(/^curl could not run \(/);
     });
   });
