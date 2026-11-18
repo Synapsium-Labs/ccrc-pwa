@@ -73,12 +73,13 @@ flowchart LR
   - `sectionCase`: `none` or `uppercase`, for the frame's own section labels.
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
-**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 29 slots:
+**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
 - surfaces: `bg`, `surface`, `surface2`;
 - ink: `text`, `text-muted`, `text-faint`;
 - edges: `border`, `rule`;
 - accent: `accent`, `accent-ink`, `focus`;
 - semantic, drawn as text: `ok`, `wait`, `no`, `info`, `chg`;
+- reference text: `term` (glossary terms), `id` (rule and fact ids), `violet` (the IMPORTANT alert title), `path` (code paths);
 - code: `code-block-bg`, `code-ink`, and `syn-comment`, `syn-keyword`, `syn-string`, `syn-number`, `syn-function`, `syn-type`, `syn-tag`, `syn-attr`, `syn-punct`, `syn-deleted`, `syn-inserted`, which replace the hard-coded `.hljs-*` hex.
 
 The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spells it a second time (§3). Each ccrc token mapped to these slots was measured on 2026-11-18 to resolve to a plain `#rrggbb` in all twelve palettes, through `var()` chains, both default blocks merged, and every pair §5 names was measured against its floor (the leaf plan's Results).
@@ -116,6 +117,7 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
   | `accent`, `accent-ink`, `focus` | `--accent`, `--ink-on-accent`, `--accent` |
   | `ok`, `wait`, `no`, `info` | `--status-done-text`, `--status-attention-text`, `--status-dead-text`, `--ink-secondary` |
   | `chg` ("changed since", magenta) | `--acct-magenta` |
+  | `term`, `id`, `violet`, `path` | `--acct-cyan`, `--acct-blue`, `--acct-violet`, `--ink-secondary` |
   | `code-block-bg`, `code-ink` | `--bg-well`, `--ink-on-well` |
   | `syn-<name>` (eleven) | `--syn-<name>` |
   | `radius`, `radiusSmall` | `--r-md`, `--r-sm` |
@@ -193,6 +195,7 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 | Code blocks | Library background, hard-coded `.hljs-*` hex | ccrc's well and `--syn-*` tokens. Wells stay dark in every palette, as in ccrc's chat |
 | Mermaid | Fixed warm palette on a white plate, inverted by a filter in dark | Colours derived from the slots by the library's `mermaidThemeOf` (`surface`, `surface2`, `text`, `border`, `accent`). No plate and no filter while hosted |
 | Focus | `outline: 2px solid var(--accent)` | The same rule on the `focus` slot, ccrc's accent |
+| Reference text | `--term`, `--id`, `--violet`, `--path`, hard-coded per mode | ccrc's lane hues `--acct-cyan`, `--acct-blue`, `--acct-violet`, and `--ink-secondary` for paths |
 | Semantic colours | `--ok`, `--wait`, `--no`, `--info`, `--chg` | ccrc's text variants `--status-done-text`, `--status-attention-text`, `--status-dead-text`, then `--ink-secondary`, and `--acct-magenta` for "changed since". Fills, dots and tints derive from them |
 
 **The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of slots its stylesheet puts in front of one another, with a floor.
@@ -291,7 +294,15 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 - An appearance is applied before first paint, from the seed, and in place from the op.
 - With an appearance, the frame ignores stored theme, hides Aa's theme row, shows the one line §6 gives (plain text, not focusable), and never writes `theme`. Without one, Aa is exactly 1.1.0's.
 - `.hljs-*` rules move onto the `syn-*` slots, with today's hex as their defaults, so a host that passes nothing sees no change.
-- Tints, hover, table head, inline-code and bar backgrounds are derived from the base slots with `color-mix` in the stylesheet, and `APPEARANCE_PAIRS` covers the derived pairs.
+- Every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, and `APPEARANCE_PAIRS` lists each derived pair:
+  - `accent-hover` and `accent-soft` derive from `accent`;
+  - `wait-soft` and `wait-tint` from `wait`, and `no-tint` from `no`;
+  - `chg-tint`, `chg-soft` and `chg-bg` from `chg`;
+  - `short-bg`, `paper`, `plate` and `topbar-bg` from the surfaces;
+  - `th-bg` from `accent` over `bg`, and `code-inline-bg` from `text` over `bg`;
+  - `code-comment` is `syn-comment`.
+
+  Every derived tint holds at most 6% of its colour. `chg-x` is a length, not a colour, and stays the library's.
 - An appearance with no colour group removes every host colour and leaves the hosted state as it was.
 - `skin.controlRow` sets popover row height under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters) never take a skin value.
 - While hosted, the stored prefs object never carries `theme`.

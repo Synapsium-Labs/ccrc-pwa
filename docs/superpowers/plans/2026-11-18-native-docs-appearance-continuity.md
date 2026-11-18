@@ -376,7 +376,10 @@ Measured 2026-11-18 with a script over `ui/src/styles/tokens.css` (both default 
 | `accent` (focus) on `bg` | 4.92 | Phosphor Daylight | 3 |
 | `accent-ink` on `accent` | 5.19 | GitHub Light | 4.5 |
 | `syn-comment` on `code-block-bg` | 5.24 | Solarized Light | 4.5 |
-| `info` (`--ink-secondary`) on `surface2` | 5.54 | Catppuccin Mocha | 4.5 |
+| `violet` (`--acct-violet`) on `surface2` | 4.79 | Solarized Dark | 4.5 |
+| `id` (`--acct-blue`) on `surface2` | 4.80 | Solarized Dark | 4.5 |
+| `term` (`--acct-cyan`) on `surface2` | 5.00 | Solarized Dark | 4.5 |
+| `info` and `path` (`--ink-secondary`) on `surface2` | 5.54 | Catppuccin Mocha | 4.5 |
 | `code-ink` on `code-block-bg` | 6.49 | Solarized Dark | 4.5 |
 | `text` on `th-bg` (6% accent over `bg`) | 7.04 | Catppuccin Latte | 4.5 |
 | coloured text on its own 6% tint over `bg` | 4.56 | Phosphor Daylight (accent) | 4.5 |
