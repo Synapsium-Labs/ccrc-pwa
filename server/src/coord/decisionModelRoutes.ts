@@ -26,9 +26,12 @@
 //
 // THE HOST AND ITS HOLDS FIRST, THE KEY SECOND (review 2418 F1 and F6, the coordinator's ruling). The key is written bound to
 // the origin it was entered for (`decisionModelHttp.ts#readDecisionModelKey`), after the host record and the holds have
-// committed; a key removal holds the armed gates before it removes the slot. A transaction that fails changes nothing
+// committed; a key removal holds the armed gates before it removes the slot. A PUT whose transaction fails changes nothing
 // (`write-failed`); a key write or removal that fails after it leaves the host and holds written and answers
-// `stored-not-applied`, and a key that is not bound to the stored host's origin is never sent.
+// `stored-not-applied`, and a key that is not bound to the stored host's origin is never sent. Remove key ALWAYS removes the
+// key (review 2431 L1): its holds skip an unreadable row, and when its transaction fails the slot is removed anyway and the
+// door answers `removed-not-held`. A key the egress masker would not catch is never stored (review 2431 L3): the masker is asked
+// before the transaction, and a write whose registration says otherwise removes the key again.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import { refuseRoute } from '../refuse.js';
@@ -40,7 +43,7 @@ import {
 } from '../../../shared/decisionModel.js';
 import { LEDGER_ROUTE_REFUSALS } from '../../../shared/refusal.js';
 import {
-  SLOT_WAIT_MS, readServerSecretMeta, removeServerSecret, slotChains, writeServerSecret,
+  SLOT_WAIT_MS, readServerSecretMeta, removeServerSecret, serverSecretLaneId, slotChains, writeServerSecret,
   type RegisterSecret,
 } from './ledgersSecrets.js';
 import { decisionDayOf } from './decisionModel.js';
@@ -139,7 +142,10 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
       rows.push({ row, state: r.state, usage, current: host === null ? null : store.currentLine(row, lineKeyOf(row, host)) });
     }
     const fleetToday = rows.reduce((n, r) => n + (r.usage.measured ? r.usage.serve + r.usage.maintain + r.usage.reserved : 0), 0);
-    const key = meta === null ? null : { setAt: meta.setAt ?? host?.keySetAt ?? 0, masked: 'masked' in meta ? meta.masked : false };
+    // A key is shown only when one is stored for the current host's origin (review 2431 L2): a key bound to another origin, or
+    // one whose record is missing, is never sent, so the console does not show a time for it.
+    const bound = host !== null && meta !== null && readDecisionModelKey(deps.ccrcDir, host.origin).kind === 'value';
+    const key = !bound || meta === null ? null : { setAt: meta.setAt ?? host?.keySetAt ?? 0, masked: 'masked' in meta ? meta.masked : false };
     return reply.code(200).send(decisionModelViewOf({ rows, fleetToday, fleetCap: DECISION_FLEET_DAILY_TOTAL,
       host: host === null ? null : { kind: host.kind, endpoint: host.endpoint, origin: host.origin, modelId: host.modelId }, key }));
   });
@@ -217,14 +223,16 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
   /** In the key door's transaction: hold every armed row the host change leaves without its line (`line-key`), or, after a key
    *  removal, every armed gate (`no-key`). Narrowings, so each lands, `row-only` over an incoherent journal. */
   const holdRows = (req: FastifyRequest, t: DecisionArmingTx, which: (row: DecisionRowId, s: DecisionRowState) => boolean,
-    cause: DecisionHeldCause): DecisionRowId[] => {
+    cause: DecisionHeldCause, unreadable: 'throw' | 'skip' = 'throw'): DecisionRowId[] => {
     // Every row is read before the first hold is journalled, so an unreadable row throws before any record is appended: a
-    // record appended and then rolled back with the transaction would stand in the journal with no row.
-    const states = DECISION_ROW_IDS.map((row) => {
+    // record appended and then rolled back with the transaction would stand in the journal with no row. The key removal skips
+    // an unreadable row instead (review 2431 L1): outside a door it already reads shut for a gate and off for advice.
+    const states: (readonly [DecisionRowId, DecisionRowState])[] = [];
+    for (const row of DECISION_ROW_IDS) {
       const r = t.rowRead(row);
-      if (r.kind === 'unreadable') throw new Error(`the row ${row} cannot be read`);
-      return [row, r.state] as const;
-    });
+      if (r.kind === 'row') states.push([row, r.state]);
+      else if (unreadable === 'throw') throw new Error(`the row ${row} cannot be read`);
+    }
     const held: DecisionRowId[] = [];
     for (const [row, state] of states) {
       if (!which(row, state)) continue;
@@ -250,6 +258,14 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
       const d = decideKeyDoor({ body: req.body, addresses,
         stored: stored === null ? null : { kind: stored.kind, origin: stored.origin, modelId: stored.modelId, keySet: keySetFor(stored.origin) } });
       if (!d.ok) return refuseRoute(reply, d.refusal, { detail: d.detail });
+      // A key the egress masker would not catch is never stored (review 2431 L3, the coordinator's ruling). The masker's catch is
+      // measured, not decided by a rule this door could restate, so it is asked first, beside the lane's rows (a row for a value
+      // never stored is harmless, and the stored key's row stays), and anything but `masked` refuses with nothing changed.
+      if (d.key !== null) {
+        let said: string;
+        try { said = deps.registerSecret(serverSecretLaneId(DECISION_MODEL_KEY_SLOT), d.key, { beside: true }); } catch { said = 'unregistered'; }
+        if (said !== 'masked') return refuseRoute(reply, 'bad-request', { detail: `the egress masker would not catch this key (${said}); nothing was changed` });
+      }
       const at = deps.time.clock.wall();
       const next = { kind: d.kind, endpoint: d.endpoint, origin: d.origin, modelId: d.modelId };
       // 1. The host record and its holds, in one transaction (review 2418 F1): nothing is changed when it fails.
@@ -271,7 +287,9 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
       if (d.key !== null) {
         let failed = false;
         try {
-          await writeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT, d.key, at, deps.registerSecret, { tail: 'none', bound: d.origin });
+          const written = await writeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT, d.key, at, deps.registerSecret, { tail: 'none', bound: d.origin });
+          // The write's own registration said the masker does not catch it after all: the key leaves the slot (review 2431 L3).
+          if (!written.masked) { failed = true; await removeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT).catch(() => 'none'); }
         } catch {
           // Any failure, `OperatorSecretStoredUnrecorded` included: a value with no record is bound to no origin, so it is never
           // sent, and the operator sends the key again.
@@ -297,19 +315,28 @@ export function registerDecisionModelRoutes(app: FastifyInstance, deps: Decision
     return underSlot(DECISION_MODEL_KEY_SLOT, async () => {
       const at = deps.time.clock.wall();
       const stored = hostOf(c);
-      // 1. The holds first (review 2418 F6): a removal that then fails leaves every armed gate held, never re-opened by a key set
-      //    again.
-      let held: DecisionRowId[];
+      // 1. The holds first (review 2418 F6), on every readable row (an unreadable one already reads shut for a gate, review 2431
+      //    L1), so a removal that then fails leaves every armed gate held, never re-opened by a key set again.
+      let held: DecisionRowId[] | null;
       try {
         held = c.inTx((t) => {
           if (stored !== null) t.setHost({ kind: stored.kind, endpoint: stored.endpoint, origin: stored.origin, modelId: stored.modelId, keySetAt: null }, deps.actorOf(req), at);
-          return holdRows(req, t, (row, s) => heldOnKeyRemoval(isDecisionGate(row), sideOf(s)), 'no-key');
+          return holdRows(req, t, (row, s) => heldOnKeyRemoval(isDecisionGate(row), sideOf(s)), 'no-key', 'skip');
         });
       } catch {
-        return refuseRoute(reply, 'write-failed', { detail: 'the host record and the holds could not be written; nothing was changed' });
+        held = null;
       }
-      // 2. Then the key.
-      try { await removeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT); } catch {
+      // 2. Then the key, always (review 2431 L1): Remove key removes it even when the holds could not be written.
+      let removed = true;
+      try { await removeServerSecret(deps.ccrcDir, DECISION_MODEL_KEY_SLOT); } catch { removed = false; }
+      if (held === null && !removed) {
+        return refuseRoute(reply, 'write-failed', { detail: 'the holds could not be written and the key could not be removed; nothing was changed' });
+      }
+      if (held === null) {
+        feed(req, 'decision model key removed; the holds were not written');
+        return refuseRoute(reply, 'removed-not-held', { detail: 'the key was removed, but the holds of the armed gates were not written; remove it again' });
+      }
+      if (!removed) {
         feed(req, `decision model key not removed${held.length > 0 ? `; held ${held.join(', ')}` : ''}`);
         return refuseRoute(reply, 'stored-not-applied', { detail: 'the armed gates were held, but the key could not be removed; remove it again' });
       }

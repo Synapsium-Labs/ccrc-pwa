@@ -506,7 +506,7 @@ export type DecisionEffect = 'clear-yes' | 'clear-no' | 'unsure' | { pick: strin
  * | 3 | `shadow`, or an advice row armed and held | `shadow` |
  * | 4 | the check is not `answered` | a gate `shut`; advice `skipped` |
  * | 5 | its host kind, origin or model is not today's | as row 4 |
- * | 6 | the line used is none, or its id is not the check's `lineGen`; for a gate, also when its armed line's key (`armedLineKey`) is none or names another revision, host kind, origin or model than the check | as row 4 |
+ * | 6 | the line used is none, or its id is not the check's `lineGen`; for a gate, also when its armed line's key (`armedLineKey`) is none, is another line's (its `id` is not the armed line's), or names another revision, host kind, origin or model than the check | as row 4 |
  * | 7 | the verdict is `unsure` | a gate `shut`; advice `unsure` |
  * | 8 | a yes-or-no row, a `yes` at or over the line | `clear-yes` |
  * | 9 | a yes-or-no row, otherwise | a gate `shut`; advice `clear-no` |
@@ -521,8 +521,9 @@ export type DecisionEffect = 'clear-yes' | 'clear-no' | 'unsure' | { pick: strin
  */
 export function applyDecision(check: DecisionCheck, now: { row: DecisionQuestionRow; side: DecisionRowSide;
   currentLine: { id: number; line: number } | null; host: { kind: DecisionHostKind; origin: string; modelId: string } | null;
-  /** The key the gate's armed line was admitted under (`decision_lines`: revision, host kind, origin, model), or null. */
-  armedLineKey: { revision: string; hostKind: DecisionHostKind; origin: string; modelId: string } | null }): DecisionEffect {
+  /** The key the gate's armed line was admitted under (its `decision_lines` row: id, revision, host kind, origin, model), or
+   *  null. The id ties it to `side.armedLine`, so the current line's key is never read as the armed one's (review 2431 L4). */
+  armedLineKey: { id: number; revision: string; hostKind: DecisionHostKind; origin: string; modelId: string } | null }): DecisionEffect {
   if (check.row !== now.row.id) throw new Error(`applyDecision: a check of ${check.row} applied to ${now.row.id}`);
   const gate = now.row.direction === 'gate';
   const { side } = now;
@@ -543,7 +544,7 @@ export function applyDecision(check: DecisionCheck, now: { row: DecisionQuestion
   if (used === null || used.id !== check.lineGen) return out;
   if (gate) {
     const k = now.armedLineKey;
-    if (k === null || k.revision !== check.revision || k.hostKind !== check.hostKind || k.origin !== check.origin
+    if (k === null || k.id !== used.id || k.revision !== check.revision || k.hostKind !== check.hostKind || k.origin !== check.origin
       || k.modelId !== check.modelId) return out;
   }
   // 7.

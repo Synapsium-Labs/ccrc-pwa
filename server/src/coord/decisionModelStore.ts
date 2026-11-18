@@ -184,15 +184,25 @@ export function decisionRowRead(db: DatabaseSync, row: DecisionRowId): DecisionR
  *  (`applyDecision` row 2), never the code verdict a disarmed gate would let through. */
 export const UNREADABLE_GATE_SIDE: DecisionRowSide = Object.freeze({ ...DECISION_ROW_DEFAULT, mode: 'armed', held: true });
 
+/** The rows of each database whose unreadable episode has been warned about: one line when a row turns unreadable, and again
+ *  only after it has read as a row in between (review 2431, a nit: not one line per read). */
+const WARNED_UNREADABLE = new WeakMap<DatabaseSync, Set<DecisionRowId>>();
+
 /** The side of a row as the arming reads it outside a door. An unreadable row reads `off` for advice and armed and held (shut)
- *  for a gate, with a warning, since only a downgrade or a hand edit can make one (`UNREADABLE_GATE_SIDE`). */
+ *  for a gate, with a warning once per episode, since only a downgrade or a hand edit can make one (`UNREADABLE_GATE_SIDE`). */
 export function decisionRowSideOf(db: DatabaseSync, row: DecisionRowId): DecisionRowSide {
   const r = decisionRowRead(db, row);
+  let warned = WARNED_UNREADABLE.get(db);
   if (r.kind === 'unreadable') {
     const gate = isDecisionGate(row);
-    console.warn(`ccrc-server: decision model: the row ${row} cannot be read; it reads ${gate ? 'armed and held (shut)' : 'off'}, and no door can move it until the row is repaired`);
+    if (warned === undefined) WARNED_UNREADABLE.set(db, (warned = new Set()));
+    if (!warned.has(row)) {
+      warned.add(row);
+      console.warn(`ccrc-server: decision model: the row ${row} cannot be read; it reads ${gate ? 'armed and held (shut)' : 'off'}, and no door can move it until the row is repaired`);
+    }
     return gate ? UNREADABLE_GATE_SIDE : DECISION_ROW_DEFAULT;
   }
+  warned?.delete(row);
   const { mode, ceiling, armedLine, held } = r.state;
   return { mode, ceiling, armedLine, held };
 }

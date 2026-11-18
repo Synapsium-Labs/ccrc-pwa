@@ -230,6 +230,28 @@ describe('a pass over rows that are off or in shadow', () => {
     expect(r.db.prepare('SELECT COUNT(*) AS c FROM decision_days').get()).toEqual({ c: 0 });
   });
 
+  it('an unreadable gate row costs nothing (review 2431): no model call, no reservation and no day row for it; a readable shadow row beside it is asked as before', async () => {
+    const readable = rig();
+    readable.setSide('scope.widens', SHADOW);
+    await readable.run();
+    // the control: the same gate, readable and in shadow, IS asked, so the silence below is the unreadable row's
+    expect(readable.calls.length).toBeGreaterThan(0);
+    expect(readable.db.prepare("SELECT row FROM decision_days WHERE row = 'scope.widens'").all()).toEqual([{ row: 'scope.widens' }]);
+
+    const r = rig();
+    r.setSide('relay.method', SHADOW); // a journalled move first: a planted row stands outside the authority journal
+    r.db.prepare(`INSERT INTO decision_rows (row, mode, ceiling, armedLineId, armedLineValue, heldCause, heldAt, updatedAt, actor)
+      VALUES ('scope.widens', 'shadow', 600, NULL, NULL, 'not-a-cause', NULL, ?, 'device-a')`).run(T0);
+    expect(decisionRowRead(r.db, 'scope.widens')).toEqual({ kind: 'unreadable' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try { await r.run(); } finally { warn.mockRestore(); }
+    expect(r.calls).toHaveLength(DECISION_ANCHOR_COUNT);
+    expect(r.calls.every((c) => !Object.keys(c.req.questions).includes('scope.widens'))).toBe(true);
+    expect(r.db.prepare("SELECT row FROM decision_days WHERE row = 'scope.widens'").all()).toEqual([]);
+    expect(r.db.prepare('SELECT row FROM decision_days').all()).toEqual([{ row: 'relay.method' }]);
+    expect(r.db.prepare('SELECT COALESCE(SUM(reserved), 0) AS n FROM decision_days').get()).toEqual({ n: 0 });
+  });
+
   it('a throw in one row is logged, and the lane goes on to the next row', async () => {
     const r = rig();
     r.setSide('relay.method', SHADOW);
@@ -314,7 +336,7 @@ describe('the anchors: today\'s bands and drift', () => {
     const check = await serveCheck(r, 'scope.widens', { cited: 'the operator words', goals: 'the new goals' });
     expect(check).toMatchObject({ outcome: 'answered', lineGen: id });
     const armedLine = decisionLineById(r.db, id)!;
-    const armedKey = { revision: armedLine.revision, hostKind: armedLine.hostKind, origin: armedLine.origin, modelId: armedLine.modelId };
+    const armedKey = { id: armedLine.id, revision: armedLine.revision, hostKind: armedLine.hostKind, origin: armedLine.origin, modelId: armedLine.modelId };
     expect(armedKey.revision).toBe(DECISION_QUESTIONS['scope.widens'].revision);
     expect(applyDecision(check, { row: DECISION_QUESTIONS['scope.widens'], side: decisionRowSideOf(r.db, 'scope.widens'),
       currentLine: { id: current.id, line: current.line }, host: hostNow(r),
@@ -323,6 +345,9 @@ describe('the anchors: today\'s bands and drift', () => {
     // Under another revision's key the same check shuts.
     expect(applyDecision(check, { row: DECISION_QUESTIONS['scope.widens'], side: decisionRowSideOf(r.db, 'scope.widens'),
       currentLine: { id: current.id, line: current.line }, host: hostNow(r), armedLineKey: { ...armedKey, revision: 'other-revision' } })).toBe('shut');
+    // The current line's key, with every field of today's, passed for the older armed line shuts too (review 2431 L4).
+    expect(applyDecision(check, { row: DECISION_QUESTIONS['scope.widens'], side: decisionRowSideOf(r.db, 'scope.widens'),
+      currentLine: { id: current.id, line: current.line }, host: hostNow(r), armedLineKey: { ...armedKey, id: current.id } })).toBe('shut');
     // Day 2: one more anchor moves. Against the newer line's baseline (today's bands of day 1) only one moved; against the older
     // line's, four have. The gate is held by drift.
     r.ft.advance(DAY);

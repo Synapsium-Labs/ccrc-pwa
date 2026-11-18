@@ -481,7 +481,7 @@ const missed = (row: DecisionRowId, outcome: Exclude<DecisionCheck['outcome'], '
 /** The key a gate's armed line was admitted under, as `answered` is gathered under it (F3, review 2418). */
 const keyOf = (row: DecisionRowId, o: Partial<NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']>> = {}):
   NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']> =>
-  ({ revision: DECISION_QUESTIONS[row].revision, hostKind: 'local', origin: LOCAL.origin, modelId: 'model-a', ...o });
+  ({ id: 3, revision: DECISION_QUESTIONS[row].revision, hostKind: 'local', origin: LOCAL.origin, modelId: 'model-a', ...o });
 const nowFor = (row: DecisionRowId, side: DecisionRowSide, o: Partial<Parameters<DecisionModelModule['applyDecision']>[1]> = {}):
   Parameters<DecisionModelModule['applyDecision']>[1] =>
   ({ row: DECISION_QUESTIONS[row], side, currentLine: { id: 3, line: 0.9 }, host: LOCAL, armedLineKey: keyOf(row), ...o });
@@ -556,6 +556,9 @@ export const APPLY_CASES: DecisionModelCase[] = [
     expect(keyed(keyOf(GATE, { hostKind: 'hosted' }))).toBe('shut');
     expect(keyed(keyOf(GATE, { origin: 'http://127.0.0.1:9001' }))).toBe('shut');
     expect(keyed(keyOf(GATE, { modelId: 'model-b' }))).toBe('shut');
+    // The CURRENT line's key passed for an older armed line (review 2431 L4): every field is today's, but the id is not the
+    // armed line's, so the gate shuts.
+    expect(keyed(keyOf(GATE, { id: 4 }))).toBe('shut');
     // A missed check is shut with or without a key, as before.
     expect(m.applyDecision(missed(GATE, 'unavailable'), nowFor(GATE, ARMED_GATE, { armedLineKey: null }))).toBe('shut');
     // Advice has no armed line: the key is not read, so a null or a foreign one still clears.
@@ -1202,6 +1205,35 @@ export const KEY_DOOR_CASES: DecisionLinesCase[] = [
     expect(kd(m, keyDoor({}, keyBody({ key: K20 }))).ok, '20 bytes').toBe(true);
     // A key-less call (the stored one) is not held to the floor.
     expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' })).ok).toBe(true);
+  } },
+  { name: 'key door 1c: a key is visible characters only, and its floor is counted after the trailing = is set aside (review 2431 L3)', run: (m) => {
+    const K20 = 'k'.repeat(20);
+    const K19 = 'k'.repeat(19);
+    const refused = (key: string, why: string): void => {
+      const got = m.decideKeyDoor(keyDoor({}, keyBody({ key })));
+      expect(got, why).toEqual(refusal('bad-request'));
+      expect(JSON.stringify(got), why).not.toContain('kkkk');
+    };
+    // The masker sets a trailing = aside, so 19 visible characters and = (or ==) are 19 bytes, under the floor.
+    refused(`${K19}=`, '19 plus =');
+    refused(`${K19}==`, '19 plus ==');
+    refused('='.repeat(25), 'nothing but =');
+    // 20 visible characters pass with or without it; an = inside the key is counted.
+    expect(kd(m, keyDoor({}, keyBody({ key: `${K20}=` }))).ok, '20 plus =').toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ key: `${K20}==` }))).ok, '20 plus ==').toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ key: `${'k'.repeat(10)}=${'k'.repeat(9)}` }))).ok, 'an = inside is a byte (the masker\'s own refusal is the route\'s)').toBe(true);
+    // No space, tab, control character, DEL, no-break space or soft hyphen, anywhere in the key.
+    const k8 = 'k'.repeat(8);
+    for (const [why, ch] of [['space', ' '], ['tab', '\t'], ['BEL', '\u0007'], ['ESC', '\u001b'], ['DEL', '\u007f'], ['C1 control', '\u0090'],
+      ['U+00A0', '\u00a0'], ['U+00AD', '\u00ad']] as const) {
+      refused(`${k8}${ch}${k8}${k8}`, `${why} inside`);
+      refused(`${ch}${K20}`, `${why} leading`);
+      refused(`${K20}${ch}`, `${why} trailing`);
+    }
+    // The edges of the visible range pass: ! and ~, U+00A1 and U+00AC, U+00AE and U+00FF.
+    for (const ch of ['!', '~', '\u00a1', '\u00ac', '\u00ae', '\u00ff']) {
+      expect(kd(m, keyDoor({}, keyBody({ key: `${K20}${ch}` }))).ok, `U+${ch.charCodeAt(0).toString(16)} is a key character`).toBe(true);
+    }
   } },
   { name: 'key door 2: an endpoint that is no http or https URL, or carries userinfo, a query or a fragment, is bad-endpoint', run: (m) => {
     const hosted = (endpoint: string): unknown => keyBody({ kind: 'hosted', endpoint });

@@ -277,6 +277,42 @@ describe('moveDecisionRowInTx: the journal record first, then the row, in one tr
         expect(warn).toHaveBeenCalledTimes(DECISION_ROW_IDS.length);
       } finally { warn.mockRestore(); }
     });
+    // Review 2431, a nit: one line per unreadable EPISODE of a row, not one per read (the lane reads each row many times a pass).
+    it('warns once for two reads of the same unreadable row, and once more only after the row was repaired and broken again', () => {
+      const broken = "INSERT OR REPLACE INTO decision_rows (row, mode, ceiling, heldCause, heldAt, updatedAt, actor) VALUES ('scope.widens', 'shadow', 600, 'bogus', 1, 1, 'x')";
+      const repaired = "INSERT OR REPLACE INTO decision_rows (row, mode, ceiling, updatedAt, actor) VALUES ('scope.widens', 'shadow', 600, 1, 'x')";
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        plant(broken);
+        expect(decisionRowSideOf(f.db, 'scope.widens')).toEqual(UNREADABLE_GATE_SIDE);
+        expect(decisionRowSideOf(f.db, 'scope.widens')).toEqual(UNREADABLE_GATE_SIDE);
+        expect(warn).toHaveBeenCalledTimes(1);
+        plant(repaired);
+        expect(decisionRowSideOf(f.db, 'scope.widens')).toMatchObject({ mode: 'shadow', held: false });
+        expect(warn).toHaveBeenCalledTimes(1);
+        plant(broken);
+        expect(decisionRowSideOf(f.db, 'scope.widens')).toEqual(UNREADABLE_GATE_SIDE);
+        expect(decisionRowSideOf(f.db, 'scope.widens')).toEqual(UNREADABLE_GATE_SIDE);
+        expect(warn).toHaveBeenCalledTimes(2);
+      } finally { warn.mockRestore(); }
+    });
+    it('the episodes are per row and per database: a second row, and a second database, each warn on their own', () => {
+      const bad = (row: string): string => `INSERT OR REPLACE INTO decision_rows (row, mode, ceiling, heldCause, heldAt, updatedAt, actor) VALUES ('${row}', 'shadow', 600, 'bogus', 1, 1, 'x')`;
+      const other = fx();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        plant(bad('scope.widens'));
+        plant(bad('relay.method'));
+        other.db.exec(bad('scope.widens'));
+        for (let i = 0; i < 3; i++) {
+          decisionRowSideOf(f.db, 'scope.widens');
+          decisionRowSideOf(f.db, 'relay.method');
+          decisionRowSideOf(other.db, 'scope.widens');
+        }
+        expect(warn).toHaveBeenCalledTimes(3);
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('relay.method'))).toHaveLength(1);
+      } finally { warn.mockRestore(); other.db.close(); }
+    });
     it('a ceiling of 49 or 5001 in the table reads unreadable; 50 and 5000 read as rows (review 2418 F5)', () => {
       expect([DECISION_CEILING_MIN, DECISION_CEILING_MAX]).toEqual([50, 5000]);
       const put = (row: string, ceiling: number): void => {

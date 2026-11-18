@@ -9,13 +9,14 @@
 //
 // THE KEY NEVER LEAVES: every response body and every notice body of every case is searched for the key's text and its last
 // four characters.
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { refuseRoute } from '../src/refuse.js';
+import { SecretMasker } from '../src/accounts/mask.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { tx } from '../src/coord/tx.js';
 import { OVERLORD_AUTHORITY_BASENAME } from '../src/coord/overlordAuthority.js';
@@ -63,6 +64,10 @@ interface GateState { auth: 'on' | 'off'; stepUp: 'fresh' | 'stale'; calls: Acco
 interface Rig {
   app: FastifyInstance; db: DatabaseSync; dir: string; ccrcDir: string; journal: OverlordAuthorityJournal; guard: OverlordAuthorityGuard;
   gate: GateState; bodies: string[]; notices: NoticeRecord[]; registered: string[]; resolves: Map<string, string[]>;
+  /** The door's `registerSecret`: a recorder that answers `masked` until a case replaces `fn` (`realMasker`, or a fake). */
+  reg: { fn: RegisterSecret };
+  /** Swaps `reg.fn` for the REAL egress masker over this rig's `coord.db`, keyed with a fixture box token. */
+  realMasker(): SecretMasker;
   lines(): { kind: string; row: string; gate: boolean; from: DecisionRowSide; to: DecisionRowSide }[];
   call(method: 'GET' | 'POST' | 'PUT' | 'DELETE', url: string, payload?: unknown): Promise<LightMyRequestResponse>;
   /** One store move in its own `tx()` (the planting of a state, never a door). */
@@ -78,6 +83,7 @@ interface Rig {
 
 let n = 0;
 const apps: FastifyInstance[] = [];
+const maskers: SecretMasker[] = [];
 afterEach(async () => { for (const a of apps.splice(0)) await a.close(); });
 
 async function rig(): Promise<Rig> {
@@ -103,7 +109,9 @@ async function rig(): Promise<Rig> {
   const notices: NoticeRecord[] = [];
   const notice: NoticeSink = (event) => { notices.push(event); return { archived: true } as never; };
   const registered: string[] = [];
-  const registerSecret: RegisterSecret = (_lane, value) => { registered.push(value); return 'masked'; };
+  const recorder: RegisterSecret = (_lane, value) => { registered.push(value); return 'masked'; };
+  const reg = { fn: recorder };
+  const registerSecret: RegisterSecret = (lane, value, o) => reg.fn(lane, value, o);
   const resolves = new Map<string, string[]>([['api.example.test', ['203.0.113.10']]]);
   const app = Fastify({ logger: false });
   apps.push(app);
@@ -114,7 +122,13 @@ async function rig(): Promise<Rig> {
   await app.ready();
   const bodies: string[] = [];
   const r: Rig = {
-    app, db, dir, ccrcDir, journal, guard, gate, bodies, notices, registered, resolves,
+    app, db, dir, ccrcDir, journal, guard, gate, bodies, notices, registered, resolves, reg,
+    realMasker: () => {
+      const m = new SecretMasker({ db, token: () => 'a'.repeat(64), log: () => {} });
+      maskers.push(m);
+      reg.fn = (lane, value, o) => m.ingestSecret(lane, value, o);
+      return m;
+    },
     lines: () => (existsSync(leaf) ? readFileSync(leaf, 'utf8').split('\n').filter((l) => l !== '').map((l) => (JSON.parse(l) as { entry: never }).entry) : []),
     call: async (method, url, payload) => {
       const res = await app.inject({ method, url, ...(payload === undefined ? {} : { payload: payload as object }) });
@@ -155,6 +169,7 @@ afterEach(() => {
     r.bodies.forEach((b, i) => expect(b.includes(secret), `response #${i} holds the key`).toBe(false));
     r.notices.forEach((x, i) => expect(JSON.stringify(x).includes(secret), `notice #${i} holds the key`).toBe(false));
   }
+  for (const m of maskers.splice(0)) m.close();
   if (r.db.isOpen) r.db.close();
 });
 
@@ -177,6 +192,12 @@ const serverDir = (): string => path.join(r.ccrcDir, 'operator-secrets', '.serve
 const hostOrigin = (): string | null => { const h = decisionHostRead(r.db); return h.kind === 'host' ? h.host.origin : null; };
 /** Plants a `decision_rows` row no reader accepts (an unknown held cause), so the door's transaction throws at its holds. It is the
  *  FIRST row `holdRows` visits, so no hold has been journalled when it throws. */
+/** Makes the host record refuse every write (a trigger), so the key door's transaction throws at its first statement and rolls back,
+ *  while every read of the table, the slot and the rows stays as it was. */
+const failHostWrites = (): void => {
+  r.db.exec(`CREATE TRIGGER fail_host_insert BEFORE INSERT ON decision_host BEGIN SELECT RAISE(ABORT, 'planted'); END;
+    CREATE TRIGGER fail_host_update BEFORE UPDATE ON decision_host BEGIN SELECT RAISE(ABORT, 'planted'); END;`);
+};
 const plantUnreadableRow = (row: DecisionRowId = 'programme.pick'): void => {
   r.db.prepare(`INSERT INTO decision_rows (row, mode, ceiling, armedLineId, armedLineValue, heldCause, heldAt, updatedAt, actor)
     VALUES (?, 'shadow', 600, NULL, NULL, 'not-a-cause', NULL, ?, 'device-a')`).run(row, T0);
@@ -598,7 +619,7 @@ describe('the key door: the host and holds first, the key second, the key bound 
     expect(hostOrigin()).toBe(LOCAL.origin);
     expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false, armedLine: { id: lineId, line: 0.9 } });
     expect(r.lines()).toHaveLength(lines);
-    expect(r.registered).not.toContain(KEY2);
+    // the masker was asked first (review 2431 L3), beside the lane's rows: a row for a value never stored, which is harmless
     expect(r.notices).toEqual([]);
   });
 
@@ -624,15 +645,65 @@ describe('the key door: the host and holds first, the key second, the key bound 
     expect(r.notices[r.notices.length - 1]!.body).toContain('key not removed');
   });
 
-  it('DELETE: a failed transaction changes nothing (write-failed): the key is still stored and no gate is held', async () => {
+  it('DELETE: one unreadable row does not stop it (review 2431 L1): the slot is gone, the readable armed gate is held no-key, the answer is 200', async () => {
     const lineId = r.armedGate();
-    plantUnreadableRow();
+    plantUnreadableRow(); // read before scope.widens: an unreadable row used to throw the whole transaction
     const res = await delKey();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.json(res)).toMatchObject({ ok: true, key: null, keySetAt: null, held: [GATE] });
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT).state).toBe('absent');
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: true, heldCause: 'no-key', armedLine: { id: lineId, line: 0.9 } });
+    expect(decisionHostRead(r.db)).toMatchObject({ host: { keySetAt: null } });
+  });
+
+  it('DELETE: an unreadable row AFTER the armed gate is skipped too, and the gate is still held', async () => {
+    r.armedGate();
+    plantUnreadableRow('goals.conflict');
+    const res = await delKey();
+    expect(res.statusCode, res.body).toBe(200);
+    expect(r.json(res)).toMatchObject({ ok: true, held: [GATE] });
+    expect(stateOf(GATE)).toMatchObject({ held: true, heldCause: 'no-key' });
+  });
+
+  it('DELETE: a transaction that fails still removes the key, and answers removed-not-held (review 2431 L1); nothing is held, nothing journalled', async () => {
+    const lineId = r.armedGate();
+    failHostWrites();
+    const lines = r.lines().length;
+    const res = await delKey();
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'removed-not-held' });
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT).state).toBe('absent');
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'absent' });
+    // the rolled-back transaction wrote nothing: the gate is not held, the host keeps its time, no record stands
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false, heldCause: null, armedLine: { id: lineId, line: 0.9 } });
+    expect(decisionHostRead(r.db)).toMatchObject({ host: { keySetAt: T0 } });
+    expect(r.lines()).toHaveLength(lines);
+    expect(r.notices[r.notices.length - 1]!.body).toContain('the holds were not written');
+  });
+
+  it('DELETE: a removal that fails after a good transaction is stored-not-applied: the key is still stored, every armed gate is held', async () => {
+    const lineId = r.armedGate();
+    chmodSync(serverDir(), 0o755);
+    const res = await delKey();
+    chmodSync(serverDir(), 0o700);
+    expect([res.statusCode, r.json(res)['error']]).toEqual([503, 'stored-not-applied']);
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toEqual({ state: 'value', value: KEY });
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: true, heldCause: 'no-key', armedLine: { id: lineId, line: 0.9 } });
+  });
+
+  it('DELETE: both failing is write-failed: the key is still stored, no gate is held, nothing is journalled', async () => {
+    const lineId = r.armedGate();
+    failHostWrites();
+    const lines = r.lines().length;
+    chmodSync(serverDir(), 0o755);
+    const res = await delKey();
+    chmodSync(serverDir(), 0o700);
     expect(res.statusCode, res.body).toBe(503);
     expect(r.json(res)).toMatchObject({ ok: false, error: 'write-failed' });
     expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: KEY });
     expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: false, heldCause: null, armedLine: { id: lineId, line: 0.9 } });
     expect(decisionHostRead(r.db)).toMatchObject({ host: { keySetAt: T0 } });
+    expect(r.lines()).toHaveLength(lines);
     expect(r.notices).toEqual([]);
   });
 });
@@ -681,6 +752,95 @@ describe('the key door: what a key and a model id may be (review 2418 F9)', () =
   });
 });
 
+describe('the key door: a key the egress masker would not catch is never stored (review 2431 L3)', () => {
+  const nothingChanged = (label: string): void => {
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT), label).toEqual({ state: 'value', value: KEY });
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin), label).toEqual({ kind: 'value', value: KEY });
+    expect(decisionHostRead(r.db), label).toEqual({ kind: 'none' });
+    expect(rowCount(), label).toBe(0);
+    expect(r.lines(), label).toEqual([]);
+    expect(r.notices, label).toEqual([]);
+  };
+  const door = async (key: string, label: string): Promise<void> => {
+    const res = await putKey({ ...LOCAL_BODY, key });
+    expect([res.statusCode, r.json(res)['error']], label).toEqual([400, 'bad-request']);
+    nothingChanged(label);
+  };
+  const sixteen = 'abcdefghijklmnop'; // 16 visible characters
+  const nineteen = 'abcdefghijklmnopqrs';
+
+  it('the door refuses 19 visible characters with one trailing =, and with two: the floor is counted after the = is set aside', async () => {
+    await door(`${nineteen}=`, '19 plus =');
+    await door(`${nineteen}==`, '19 plus ==');
+    await door(nineteen, '19');
+    expect(r.registered).toEqual([KEY]); // only the rig's own key: the masker was never asked // refused before the masker was asked
+  });
+
+  it('the door refuses a space inside, a leading space, a trailing tab, BEL, DEL, a no-break space and a soft hyphen', async () => {
+    await door(`${sixteen} ${sixteen}`, 'space inside');
+    await door(` ${sixteen}${sixteen}`, 'leading space');
+    await door(`${sixteen}${sixteen}\t`, 'trailing tab');
+    await door(`${sixteen}\u0007${sixteen}`, 'BEL');
+    await door(`${sixteen}\u007f${sixteen}`, 'DEL');
+    await door(`${sixteen} ${sixteen}`, 'U+00A0');
+    await door(`${sixteen}­${sixteen}`, 'U+00AD');
+    expect(r.registered).toEqual([KEY]); // only the rig's own key: the masker was never asked
+  });
+
+  it('a key with a colon, an equals sign inside or a comma passes the door and is refused by the MASKER preflight, with nothing changed', async () => {
+    r.realMasker();
+    for (const [label, key] of [['colon', `${sixteen}:${sixteen}`], ['equals inside', `${sixteen}=${sixteen}`], ['comma', `${sixteen},${sixteen}`]] as const) {
+      const res = await putKey({ ...LOCAL_BODY, key });
+      expect([res.statusCode, r.json(res)['error']], label).toEqual([400, 'bad-request']);
+      expect(String(r.json(res)['detail']), label).toContain('egress masker');
+      nothingChanged(label);
+    }
+  });
+
+  it('a visible 20-byte key passes with the real masker, and so does one with a trailing =; the masker catches both', async () => {
+    const masker = r.realMasker();
+    const key = 'abcdefghij0123456789';
+    const ok = await putKey({ ...LOCAL_BODY, key });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: key });
+    expect(masker.maskText(`k ${key} z`)).not.toContain(key);
+    expect(readServerSecretMeta(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toMatchObject({ masked: true });
+    const padded = `${key.replace('abcdefghij', 'jihgfedcba')}=`;
+    const ok2 = await putKey({ ...LOCAL_BODY, key: padded });
+    expect(ok2.statusCode, ok2.body).toBe(200);
+    expect(readDecisionModelKey(r.ccrcDir, LOCAL.origin)).toEqual({ kind: 'value', value: padded });
+    expect(masker.maskText(`k ${padded} z`)).not.toContain('0123456789');
+  });
+
+  it('the fixture keys of this file pass the real masker (so every other case here is not made to pass by a fake)', async () => {
+    r.realMasker();
+    const res = await putKey({ ...LOCAL_BODY, key: KEY2 });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT)).toEqual({ state: 'value', value: KEY2 });
+  });
+
+  it('a masker that says masked on the preflight and not-one-run on the write\'s own registration: stored-not-applied, and the slot is gone', async () => {
+    let calls = 0;
+    r.reg.fn = () => (++calls === 1 ? 'masked' : 'not-one-run');
+    const lineId = r.armedGate();
+    const res = await putKey({ ...OTHER_BODY, key: KEY2 });
+    expect(res.statusCode, res.body).toBe(503);
+    expect(r.json(res)).toMatchObject({ ok: false, error: 'stored-not-applied' });
+    expect(calls).toBeGreaterThanOrEqual(2);
+    expect(readServerSecretValue(r.ccrcDir, DECISION_MODEL_KEY_SLOT).state).toBe('absent');
+    expect(readDecisionModelKey(r.ccrcDir, OTHER.origin).kind).not.toBe('value');
+    // the host and the hold were written first and stand
+    expect(hostOrigin()).toBe(OTHER.origin);
+    expect(stateOf(GATE)).toMatchObject({ mode: 'armed', held: true, heldCause: 'line-key', armedLine: { id: lineId, line: 0.9 } });
+    expect(r.notices[r.notices.length - 1]!.body).toContain('the key was not stored');
+  });
+
+  it('a masker that cannot be asked at all (it throws) refuses bad-request with nothing changed', async () => {
+    r.reg.fn = () => { throw new Error('masker down'); };
+    await door(KEY2, 'masker throws');
+  });
+});
+
 describe('the read', () => {
   it('answers a view that readDecisionModelView accepts, with host.endpoint beside origin, and never the key', async () => {
     const lineId = r.armedGate();
@@ -702,6 +862,24 @@ describe('the read', () => {
     expect(v.fleetToday).toBe(0);
     expect(v.fleetCap).toBeGreaterThan(0);
     expect(res.body.includes(KEY)).toBe(false);
+  });
+
+  it('shows the key only when one is stored for the current host\'s origin (review 2431 L2)', async () => {
+    r.host(); // host A, keySetAt T0
+    const shown = async () => readDecisionModelView(JSON.parse((await r.call('GET', '/api/decision-model')).body));
+    const bound = await shown();
+    expect(bound.ok && bound.view.key).toEqual({ setAt: T0, masked: true });
+    await r.key(KEY, OTHER.origin); // a key entered for host B
+    const other = await shown();
+    expect(other.ok && other.view.host?.origin).toBe(LOCAL.origin);
+    expect(other.ok && other.view.key).toBeNull();
+    await r.key(KEY, LOCAL.origin);
+    const again = await shown();
+    expect(again.ok && again.view.key).toEqual({ setAt: T0, masked: true });
+    // a value whose record is missing is bound to nothing: no key either
+    rmSync(path.join(r.ccrcDir, 'operator-secrets', '.server', `${DECISION_MODEL_KEY_SLOT}.json`));
+    const norecord = await shown();
+    expect(norecord.ok && norecord.view.key).toBeNull();
   });
 
   it('offers an armed gate a newer current line, and with no host and no key answers null for both', async () => {

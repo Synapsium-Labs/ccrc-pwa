@@ -335,6 +335,7 @@ export function isOverlordRefusal(v: unknown): v is OverlordRefusal {
 export const DECISION_MODEL_REFUSALS = {
   'decision-row-unknown': 404, 'key-unset': 409, 'key-required': 409, 'private-state-host': 409, 'line-not-admitted': 409,
   'canary-unmet': 409, 'bad-ceiling': 400, 'bad-endpoint': 400, 'row-changed': 409, 'stored-not-applied': 503,
+  'removed-not-held': 503,
 } as const;
 export type DecisionModelRefusal = keyof typeof DECISION_MODEL_REFUSALS;
 
