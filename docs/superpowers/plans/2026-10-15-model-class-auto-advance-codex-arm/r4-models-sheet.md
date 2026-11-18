@@ -8,7 +8,7 @@ A task note for the programme ledger (model-class-advance, wave R4: Task 19's PO
 - `POST /api/models/:lane`, body exactly `{action: 'hold' | 'release' | 'revert', class}`, registered from its own
   file, `server/src/laneModelsRoutes.ts` (L4). Every decision is in `server/src/laneModelsAct.ts` (L1, pure). It is
   session-gated by the global gate (no EXEMPT row), takes no box token, and the box-token census reads its file as a
-  lane source of its own (`MODELS_DOORS`, both directions). The route count moved 265 -> 266.
+  lane source of its own (`MODELS_DOORS`, both directions). The route count moved 268 -> 269 (after merging `main`, whose renewal doors took it to 268).
 - The answer to a done act carries the fresh `LaneModelsRead` of the lane, read after the act and only on a done.
 - One audit line per op asked, naming the device the gate measured (`device:<label>`, D-5229), never a session id:
   `ccrc-server: models: <action> <lane> <class> by <actor> -> <outcome>`.
@@ -48,8 +48,6 @@ Every word is one `REFUSAL_STATUS` already had, so `shared/refusal.ts` is unchan
 - `models-post-answer-checks-the-lane-id`: the verdict also holds the verb's answer `id` to the lane asked, as
   `readShowAnswer` does for `show`.
 - `models-post-no-cache`: §3.11's 60 s cache is not built; #2736's `no-store` stands for the POST too (D-8693).
-- `gate-docstring-count-stays-behind`: `server/src/auth/gate.ts`'s docstring numeral moved +1 (262 -> 263), under
-  its claim holder's consent for that line only; it was already three behind `auth-gate.test.ts` and stays so.
 
 ## Live acceptance (not this wave's)
 
