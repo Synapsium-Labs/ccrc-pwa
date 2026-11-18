@@ -187,8 +187,9 @@ describe('useLaneModels (D-8406)', () => {
     expect(result.current).toBeNull();
   });
 
-  // R3b fix round 1, F2: `busy` and `not-started` say nothing ran. They keep the lane's last good read in the hook and in
-  // the screen cache, say their word beside it, and ask once more on their own; the retry's answer schedules nothing.
+  // R3b fix rounds 1 and 2, F2, N1 and N3: `busy` and `not-started` say nothing ran. They keep the lane's last
+  // non-transient answer in the hook and in the screen cache, say their word beside it, and ask once more on their own;
+  // the retry's answer schedules nothing.
   describe('a transient answer (F2)', () => {
     afterEach(() => { vi.useRealTimers(); });
     const flush = async (): Promise<void> => { await act(async () => { await Promise.resolve(); await Promise.resolve(); }); };
@@ -257,6 +258,74 @@ describe('useLaneModels (D-8406)', () => {
       expect(result.current).toEqual({ read: models, transient: null });
       await act(async () => { vi.advanceTimersByTime(LANE_TRANSIENT_RETRY_MS * 2); });
       expect(load).toHaveBeenCalledTimes(2);
+    });
+
+    // Fix round 2, N1: any non-transient answer is kept beside a transient one, not only a read, so an Anthropic lane's
+    // absent rides through a busy (and the picker says nothing over its alias rows).
+    it.each([
+      ['an Anthropic lane\'s absent', { kind: 'absent', laneKind: 'anthropic' }], ['an unreadable', { kind: 'unreadable' }],
+    ] as const)('%s, then busy: the answer stays, the word rides beside, and the cache keeps it', async (_n, models) => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const answers: unknown[] = [answer('lane-a', models as LaneModelsRead), answer('lane-a', { kind: 'busy' })];
+      let i = 0;
+      const load = vi.fn(async () => answers[Math.min(i++, 1)]);
+      const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModelsView('lane-a', load, false, key), { initialProps: { key: 0 } });
+      await flush();
+      const kept = peek(laneModelsKey('lane-a'))?.raw;
+      rerender({ key: 1 });
+      await flush();
+      expect(result.current).toEqual({ read: models, transient: 'busy' });
+      expect(peek(laneModelsKey('lane-a'))?.raw).toBe(kept);
+    });
+
+    // Fix round 2, N3: the retry is known by its issue number. A retry a newer read made stale never lands, and the newer
+    // read's own transient answer is not the retry's: it asks once more.
+    it('a retry superseded by a newer read: the newer transient answer still asks once more', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      let releaseRetry: (v: unknown) => void = () => {};
+      const answers: Array<() => Promise<unknown>> = [
+        async () => answer('lane-a', readOf('Good')),
+        async () => answer('lane-a', { kind: 'busy' }),
+        () => new Promise((resolve) => { releaseRetry = resolve; }), // the retry, held in flight
+        async () => answer('lane-a', { kind: 'busy' }), // a surface's newer read, which supersedes it
+        async () => answer('lane-a', readOf('After')),
+      ];
+      let i = 0;
+      const load = vi.fn(() => answers[Math.min(i++, answers.length - 1)]!());
+      const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModelsView('lane-a', load, false, key), { initialProps: { key: 0 } });
+      await flush();
+      rerender({ key: 1 });
+      await flush();
+      await act(async () => { vi.advanceTimersByTime(LANE_TRANSIENT_RETRY_MS); });
+      await flush();
+      expect(load).toHaveBeenCalledTimes(3); // the retry is in flight
+      rerender({ key: 2 });
+      await flush();
+      expect(load).toHaveBeenCalledTimes(4);
+      releaseRetry(answer('lane-a', readOf('Stale'))); // lands stale: dropped
+      await flush();
+      expect(result.current).toEqual({ read: readOf('Good'), transient: 'busy' });
+      await act(async () => { vi.advanceTimersByTime(LANE_TRANSIENT_RETRY_MS); });
+      await flush();
+      expect(load).toHaveBeenCalledTimes(5);
+      expect(result.current).toEqual({ read: readOf('After'), transient: null });
+    });
+
+    it('a non-transient answer drops a retry still pending: nothing more is asked', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      const answers: unknown[] = [answer('lane-a', readOf('Good')), answer('lane-a', { kind: 'busy' }), answer('lane-a', readOf('Next'))];
+      let i = 0;
+      const load = vi.fn(async () => answers[Math.min(i++, answers.length - 1)]);
+      const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModelsView('lane-a', load, false, key), { initialProps: { key: 0 } });
+      await flush();
+      rerender({ key: 1 }); // busy: a retry is pending
+      await flush();
+      rerender({ key: 2 }); // a surface's next read answers before the retry is due
+      await flush();
+      expect(result.current).toEqual({ read: readOf('Next'), transient: null });
+      await act(async () => { vi.advanceTimersByTime(LANE_TRANSIENT_RETRY_MS * 2); });
+      await flush();
+      expect(load).toHaveBeenCalledTimes(3);
     });
   });
 });

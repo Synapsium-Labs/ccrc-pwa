@@ -232,8 +232,8 @@ type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
 /** D-8406, R3b: `GET /api/models/:lane`'s reading of a lane, through the fleet's `models` op alone. Every outcome is its
  *  own arm, and none is folded into another (R3b, the coordinator's rulings of 2026-11-18):
  *  - `read`: the lane's classes, and `advance` as `show` reported it (absent only from a server older than R3).
- *  - `absent`: a lane with no class registry. `laneKind` keeps the reason `show` sent (`LaneAbsentKind`); absent, the
- *    answer did not say (the fleet box's roster has no such lane, or a `ccrc` that predates the key).
+ *  - `absent`: a lane with no class registry, or one the fleet box did not find. `laneKind` keeps the reason `show` sent
+ *    (`LaneAbsentKind`); absent, the fleet box's roster has no such lane (`no-such-account`, fix round 2, N1).
  *  - `unreadable`: the registry could not be read or parsed, or the op RAN and gave no usable answer (a timeout, an
  *    output past its cap, a lost answer, a stdout off the grammar). `code`, when present, is the box's reason
  *    (`LaneUnreadableCode`); absent, the server has no reason to name.

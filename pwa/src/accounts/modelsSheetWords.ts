@@ -172,11 +172,15 @@ export const MODELS_SHEET_TITLE = 'Model classes';
 export const MODELS_EMPTY_CLASS = 'No model: this class is empty on this lane.';
 export const MODELS_NOT_HELD = 'Not held: an automatic advance may move it.';
 /** What the sheet says when the lane's read answered no classes (R3b): the one sentence `laneReadWords` (`lib/models.ts`)
- *  gives each arm, and, on every arm but `absent`, that the class names are listed below and the sheet reads again. */
+ *  gives each arm, and, on every arm but `absent`, that the class names are listed below. The arms that do not say it
+ *  themselves add that the sheet reads again when it is opened; the transient arms (`busy`, `not-started`) already say
+ *  so, and say it once (fix round 2, N2). */
+const NAMES_LISTED = 'The four classes are listed below by name.';
 const READ_AGAIN = 'The four classes are listed below by name; the sheet reads again when it is opened.';
 export function modelsReadStateWords(read: Exclude<LaneModelsRead, { readonly kind: 'read' }>): string {
   const said = laneReadWords(read) ?? '';
-  return read.kind === 'absent' ? said : `${said} ${READ_AGAIN}`;
+  if (read.kind === 'absent') return said;
+  return `${said} ${read.kind === 'busy' || read.kind === 'not-started' ? NAMES_LISTED : READ_AGAIN}`;
 }
 export const MODELS_READ_ABSENT = modelsReadStateWords({ kind: 'absent' });
 export const MODELS_READ_UNREADABLE = modelsReadStateWords({ kind: 'unreadable' });

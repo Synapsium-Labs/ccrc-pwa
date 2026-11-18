@@ -247,7 +247,13 @@ describe('the lane-models helpers (D-8406)', () => {
     expect(lanePickerNote(GPT_LANE)).toBeNull();
     expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' })).toBeNull();
     expect(lanePickerNote({ kind: 'absent', laneKind: 'never-made' })).toMatch(/no class registry/);
-    expect(lanePickerNote({ kind: 'absent' })).toMatch(/no class registry/);
+    // fix round 2, N1: an absent with no lane kind (no-such-account) says the models were not found, never "no registry"
+    expect(lanePickerNote({ kind: 'absent' })).toMatch(/did not find this lane's models/);
+    expect(lanePickerNote({ kind: 'absent' })).not.toMatch(/registry/);
+    // and an Anthropic lane's absent kept beside a transient word still says nothing over its alias rows
+    expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' }, 'busy')).toBeNull();
+    expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' }, 'not-started')).toBeNull();
+    expect(lanePickerNote({ kind: 'unreadable' }, 'busy')).toBe(laneReadWords({ kind: 'busy' }));
     expect(lanePickerNote({ kind: 'busy' })).toBe(laneReadWords({ kind: 'busy' }));
     expect(lanePickerNote(GPT_LANE, 'busy')).toBe(laneReadWords({ kind: 'busy' }));
     expect(lanePickerNote(GPT_LANE, 'not-started')).toBe(laneReadWords({ kind: 'not-started' }));
@@ -255,7 +261,8 @@ describe('the lane-models helpers (D-8406)', () => {
 
   it('laneReadWords gives every arm but read its own sentence, and an unreadable names the box\'s reason', () => {
     const arms: LaneModelsRead[] = [
-      { kind: 'absent' }, { kind: 'absent', laneKind: 'anthropic' }, { kind: 'unreadable' }, { kind: 'unsupported' },
+      { kind: 'absent' }, { kind: 'absent', laneKind: 'anthropic' }, { kind: 'absent', laneKind: 'never-made' },
+      { kind: 'unreadable' }, { kind: 'unsupported' },
       { kind: 'not-started' }, { kind: 'refused', why: 'bad-lane' }, { kind: 'busy' },
       ...Object.keys(LANE_UNREADABLE_CODE_WORDS).map((code) => ({ kind: 'unreadable', code }) as LaneModelsRead),
     ];
@@ -263,7 +270,13 @@ describe('the lane-models helpers (D-8406)', () => {
     expect(said.every((t) => typeof t === 'string' && t.length > 0)).toBe(true);
     expect(new Set(said).size, 'no two arms share a sentence').toBe(arms.length);
     expect(laneReadWords(GPT_LANE)).toBeNull();
-    expect(laneReadWords({ kind: 'busy' })).toMatch(/passes|next read/i);
+    // fix round 2, N2: the transient arms say what happened and that the next open reads again, and promise nothing more
+    expect(laneReadWords({ kind: 'busy' })).toMatch(/busy with another models request/i);
+    expect(laneReadWords({ kind: 'not-started' })).toMatch(/did not reach the fleet box/i);
+    for (const kind of ['busy', 'not-started'] as const) {
+      expect(laneReadWords({ kind }), kind).toMatch(/Opening the picker or the Models sheet reads the lane again\.$/);
+      expect(laneReadWords({ kind }), kind).not.toMatch(/in a moment|next read shows|passes by itself|not up yet/i);
+    }
     expect(laneReadWords({ kind: 'unsupported' })).toMatch(/does not offer/i);
     for (const [code, words] of Object.entries(LANE_UNREADABLE_CODE_WORDS)) {
       expect(laneReadWords({ kind: 'unreadable', code } as LaneModelsRead), code).toContain(words);

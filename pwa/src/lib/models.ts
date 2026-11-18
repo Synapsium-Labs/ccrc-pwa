@@ -383,15 +383,18 @@ export const LANE_UNREADABLE_CODE_WORDS: Readonly<Record<LaneUnreadableCode, str
 
 /** R3b: what a lane read that did not answer its classes says, one sentence per arm, for every surface that names a
  *  lane's models (the Models sheet and the model picker); `null` for a `read`, which shows its classes instead. Each arm
- *  keeps its own words: `busy` says it passes, `unsupported` that this build does not offer the read, and an
- *  `unreadable` names the box's reason when it gave one. Pure. */
+ *  keeps its own words: `busy` says the box was busy, `unsupported` that this build does not offer the read, and an
+ *  `unreadable` names the box's reason when it gave one. The two transient arms (`busy`, `not-started`) say what
+ *  happened and that the next open reads again, and promise nothing more: the hook asks once more, not until it lands
+ *  (fix round 2, N2). An `absent` with no lane kind (`show` answered `no-such-account`) says only that the lane's models
+ *  were not found (N1). Pure. */
 export function laneReadWords(read: LaneModelsRead): string | null {
   switch (read.kind) {
     case 'read': return null;
     case 'absent':
-      return read.laneKind === 'anthropic'
-        ? 'This is an Anthropic lane: its classes are the client\'s own aliases, so it has no class registry to show.'
-        : 'This lane has no class registry, so its classes have no models to show.';
+      if (read.laneKind === 'anthropic') return 'This is an Anthropic lane: its classes are the client\'s own aliases, so it has no class registry to show.';
+      if (read.laneKind === 'never-made') return 'This lane has no class registry, so its classes have no models to show.';
+      return 'The fleet box did not find this lane\'s models, so no model is shown.';
     case 'unreadable':
       return read.code === undefined
         ? 'The lane\'s models could not be read just now, so no model is shown.'
@@ -399,22 +402,23 @@ export function laneReadWords(read: LaneModelsRead): string | null {
     case 'unsupported':
       return 'This build does not offer the read of a lane\'s models here: the fleet box\'s agent predates it, or this server has no fleet box to ask. Update the fleet box to see the models.';
     case 'not-started':
-      return 'The read of the lane\'s models did not start: the link to the fleet box was not up yet, or its model tool could not be started. It is asked again in a moment.';
+      return 'The request for the lane\'s models did not reach the fleet box, or its model tool could not be started there. Opening the picker or the Models sheet reads the lane again.';
     case 'refused':
       return 'This server would not ask about this lane: its name is not one the model tool takes. No model is shown.';
     case 'busy':
-      return 'The fleet box was busy with another models request, so the lane was not read this time. That passes by itself: the next read shows the models.';
+      return 'The fleet box was busy with another models request, so the lane was not read this time. Opening the picker or the Models sheet reads the lane again.';
   }
 }
 
-/** The model picker's note (R3b; fix round 1, F1 and F2): `laneReadWords`, only where a model is actually missing. An
- *  Anthropic lane's `absent` is by design (its rows are the client's own aliases, named as always), so the picker says
- *  nothing over it; nor over a `read`, nor before the first read lands. `transient` is the hook's word for a newest
- *  answer kept beside an older good read (`busy`, `not-started`): it is said, and the read's rows stay. Pure. */
+/** The model picker's note (R3b; fix rounds 1 and 2, F1, F2 and N1): `laneReadWords`, only where a model is actually
+ *  missing. An Anthropic lane's `absent` is by design (its rows are the client's own aliases, named as always), so the
+ *  picker says nothing over it, even beside a transient word; nor over a `read`, nor before the first read lands.
+ *  `transient` is the hook's word for a newest answer kept beside an older non-transient one (`busy`, `not-started`): it
+ *  is said, and the kept answer's rows stay. Pure. */
 export function lanePickerNote(read: LaneModelsRead | null, transient: 'busy' | 'not-started' | null = null): string | null {
+  if (read !== null && read.kind === 'absent' && read.laneKind === 'anthropic') return null;
   if (transient !== null) return laneReadWords({ kind: transient });
   if (read === null) return null;
-  if (read.kind === 'absent' && read.laneKind === 'anthropic') return null;
   return laneReadWords(read);
 }
 

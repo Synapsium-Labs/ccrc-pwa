@@ -8,12 +8,13 @@
 // `null` until a read lands for THIS lane: a caller then shows class names, never a model name it remembers. A failed
 // read keeps the lane's last good answer; with none, it stays `null`. An answer for another lane is never shown.
 //
-// A TRANSIENT ANSWER (R3b fix round 1, F2): `busy` and `not-started` say nothing ran, so they never replace the lane's
-// last good read, in this hook or in the screen cache. The read stays, and the word rides beside it (`transient`, read
-// through `useLaneModelsView`); with no good read to keep, the transient arm is shown as the read. Each transient answer
-// asks again ONCE, `LANE_TRANSIENT_RETRY_MS` later, so "the next read shows the models" is true without a loop: the
-// retry's own answer, transient or not, schedules nothing, and only a surface's next read can. A `refused`,
-// `unsupported`, `unreadable` or `absent` answer replaces the read as before.
+// A TRANSIENT ANSWER (R3b fix rounds 1 and 2, F2 and N1): `busy` and `not-started` say nothing ran, so they never
+// replace the lane's last answer that was not transient (a `read`, or an `absent`, `unreadable`, `refused` or
+// `unsupported`), in this hook or in the screen cache. That answer stays, and the word rides beside it (`transient`, read
+// through `useLaneModelsView`); so an Anthropic lane's `absent` rides through a `busy`. With nothing to keep, the
+// transient arm is shown as the read. Each transient answer asks again ONCE, `LANE_TRANSIENT_RETRY_MS` later, without a
+// loop: the retry is known by its issue number (N3), its own answer, transient or not, schedules nothing, and a surface's
+// next read is what asks after that. A non-transient answer replaces the read and drops a retry still pending.
 import { useEffect, useRef, useState } from 'react';
 import type { LaneModelsRead } from '../../../shared/models';
 import { api } from './api';
@@ -74,8 +75,10 @@ export function useLaneModelsView(
 ): LaneModelsView {
   const [state, setState] = useState<{ lane: string | null; read: LaneModelsRead | null; transient: LaneTransientKind | null }>(
     () => ({ lane, read: cached(lane), transient: null }));
-  // F2: whether the read in flight is the retry itself (its answer schedules no other), and the retry's timer.
-  const retryAsked = useRef(false);
+  // F2, N3: the retry's issue number while it is in flight (its answer schedules no other), and the retry's timer. A
+  // number, not a flag: a retry dropped as stale, or superseded after an act, never lands, and must not make the next
+  // unrelated answer read as the retry's.
+  const retryIssue = useRef<number | null>(null);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadNow = useRef<() => number>(() => 0);
   const current = useRef(lane);
@@ -90,33 +93,37 @@ export function useLaneModelsView(
       if (asked === null) return Promise.reject(new Error('no lane'));
       return load(asked, signal).then((raw) => ({ asked, raw }));
     },
-    onOutcome: (outcome) => {
-      // Whatever it came to, the retry's answer has arrived (F2): read the flag once, here.
-      const fromRetry = retryAsked.current;
-      retryAsked.current = false;
+    onOutcome: (outcome, issue) => {
+      // Whatever it came to, is this the retry's answer (F2, N3)?
+      const fromRetry = retryIssue.current !== null && issue === retryIssue.current;
+      if (fromRetry) retryIssue.current = null;
       if (!outcome.ok) { onReadNow.current?.({ ok: false, failure: laneReadFailureOf(outcome.err) }); return; }
       const { asked, raw } = outcome.raw as { asked: string; raw: unknown };
       if (asked !== current.current) return;
       const read = asLaneModelsRead(raw);
       if (read === null) { onReadNow.current?.({ ok: false, failure: 'unreadable' }); return; }
       if (isTransient(read)) {
-        // Nothing ran: keep the last good read (this hook's, else the cache's), never write the cache, and ask once more.
+        // Nothing ran: keep the last non-transient answer (this hook's, else the cache's), never write the cache, and ask
+        // once more.
         setState((prev) => {
           const kept = prev.lane === asked ? prev.read : cached(asked);
-          return kept?.kind === 'read' ? { lane: asked, read: kept, transient: read.kind } : { lane: asked, read, transient: null };
+          return kept !== null && !isTransient(kept)
+            ? { lane: asked, read: kept, transient: read.kind }
+            : { lane: asked, read, transient: null };
         });
         if (!fromRetry) {
           if (retryTimer.current !== null) clearTimeout(retryTimer.current);
           retryTimer.current = setTimeout(() => {
             retryTimer.current = null;
             if (current.current !== asked) return;
-            retryAsked.current = true;
-            reloadNow.current();
+            retryIssue.current = reloadNow.current();
           }, LANE_TRANSIENT_RETRY_MS);
         }
         onReadNow.current?.({ ok: true });
         return;
       }
+      // A non-transient answer is the lane's state: a retry still pending has nothing left to ask (N3).
+      if (retryTimer.current !== null) { clearTimeout(retryTimer.current); retryTimer.current = null; }
       put(laneModelsKey(asked), raw, Date.now());
       setState({ lane: asked, read, transient: null });
       onReadNow.current?.({ ok: true });
@@ -138,7 +145,7 @@ export function useLaneModelsView(
     previous.current = lane;
     if (was === lane) return;
     if (retryTimer.current !== null) { clearTimeout(retryTimer.current); retryTimer.current = null; }
-    retryAsked.current = false;
+    retryIssue.current = null;
     setState({ lane, read: cached(lane), transient: null });
     if (was !== null && lane !== null) reload();
   }, [lane, reload]);

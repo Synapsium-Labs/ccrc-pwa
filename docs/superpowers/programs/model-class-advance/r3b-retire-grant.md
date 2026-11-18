@@ -4,7 +4,7 @@ A task note for the programme ledger (model-class-advance, wave R3b, as re-plann
 [the codex-arm plan](../../plans/2026-10-15-model-class-auto-advance-codex-arm.md); D-8406, D-8688 and D-8693 say what
 R3 left for this wave). The coordinator folds what it needs into [the ledger](../model-class-advance.md); this file is
 not the ledger. The two departures are defined in the plan's "Deviations found" as D-8757 and D-8758, and cited here.
-Fix round 1 (review 2586) is folded into the sections below.
+Fix rounds 1 (review 2586) and 2 (review 2618) are folded into the sections below.
 
 ## What landed
 
@@ -20,11 +20,11 @@ Fix round 1 (review 2586) is folded into the sections below.
   | A ready frame whose ops lack `models`, or the bare local io | `unsupported` (this build does not offer the read; no fallback) |
   | The frame never left, the launcher could not start, or no ready frame yet (F5) | `not-started` |
   | The server's builder refused the lane | `refused`, with the builder's `why` |
-  | The agent's one models gate was held | `busy` (transient: the next read recovers it) |
+  | The agent's one models gate was held | `busy` (transient: the hook asks once more, and opening the picker or the sheet reads again) |
   | A timeout, an output past its cap, a lost answer, a stdout off the grammar | `unreadable`, as before |
   | `catalogue-unreadable`, `catalogue-invalid`, `registry-invalid`, `roster-absent`, `roster-unreadable`, `roster-invalid`, `no-answer` | `unreadable` with that `code` |
   | An empty stdout at exit 1 (`ccrc` died before the lane) | `unreadable` with code `no-output` (D-8758) |
-  | `show`'s registry is null | `absent`, with `laneKind` `anthropic` or `never-made` from `show`'s `anthropic` key (F1); no `laneKind` when the answer does not say (`no-such-account`, or an older `ccrc`) |
+  | `show`'s registry is null | `absent`, with `laneKind` `anthropic` or `never-made` from `show`'s `anthropic` key (F1); no `laneKind` for `no-such-account` (the fleet box's roster has no such lane), which the PWA words as models not found, never as no registry (N1) |
   | The argv-grammar words, `registry-unreadable`, any other refusal | `unreadable`, no code (D-8693) |
 
 - **An advance state word this server does not know** reads `{state: 'invalid'}` with the lane's classes kept
@@ -40,13 +40,18 @@ Fix round 1 (review 2586) is folded into the sections below.
   listed below on every arm but `absent`), and so does the session's model picker, in a note above its rows
   (`PickSheet`'s new `note`, through `lanePickerNote`). The picker's note is said only where a model is actually missing:
   never over an Anthropic lane's `absent`, whose rows are the client's own aliases by design, nor over a `read` (F1).
-- **A transient answer keeps the last good read (F2).** `busy` and `not-started` say nothing ran, so `useLaneModels` and
-  the screen cache keep the lane's last good read and the word rides beside it (`useLaneModelsView`'s `transient`, said
-  by the picker's note and by the sheet's `models-read-transient` line). Each transient answer asks again once, three
-  seconds later (`LANE_TRANSIENT_RETRY_MS`), and the retry's own answer schedules nothing, so it never loops. With no good
-  read to keep, the transient arm is shown as the read. A `refused`, `unsupported`, `unreadable` or `absent` answer still
-  replaces the read. After an act, the sheet does not write a transient after-act read into the cache, but shows it in
-  place, because the last good read predates the act; it then reads the lane again. `asLaneModelsRead` reads each new arm; an `unreadable` code it does not word is dropped
+- **A transient answer keeps the last non-transient one (F2, N1).** `busy` and `not-started` say nothing ran, so
+  `useLaneModels` and the screen cache keep the lane's last answer that was not transient (a `read`, or an `absent`,
+  `unreadable`, `refused` or `unsupported`) and the word rides beside it (`useLaneModelsView`'s `transient`, said by the
+  picker's note and by the sheet's `models-read-transient` line). So an Anthropic lane's `absent` rides through a `busy`,
+  and the picker still says nothing over its alias rows. Each transient answer asks again once, three seconds later
+  (`LANE_TRANSIENT_RETRY_MS`); the retry is known by its issue number, its own answer schedules nothing, so it never
+  loops, and a non-transient answer drops a retry still pending (N3). With nothing to keep, the transient arm is shown as
+  the read. A non-transient answer replaces the read. The two transient sentences say what happened and that opening the
+  picker or the sheet reads the lane again, and promise nothing more (N2); `not-started` says the request did not reach
+  the fleet box. After an act whose read is transient, the sheet shows that read in place, because the lane's last answer
+  predates the act, and drops the lane's cache entry, so another surface reads the lane fresh (N4); it then reads the
+  lane again. `asLaneModelsRead` reads each new arm; an `unreadable` code it does not word is dropped
   (absence permits), and a `refused` with no builder word is off the grammar. The sheet's "model files could not be
   read" sentence no longer speaks of files.
 - **Stale comments corrected:** `shared/models.mjs` (`MODELS_DIR_NAME`'s readers; `MODELS_LANE_ID_RE` and
@@ -73,7 +78,9 @@ Fix round 1 (review 2586) is folded into the sections below.
 - D-8757 (was `mca-w5-ccrcdir-param-kept`): `readLaneModels` keeps its `ccrcDir` parameter, unread (`_ccrcDir`),
   because `server/test/models-op.test.ts` (#2943's) still passes it. The sites that now only feed it: the parameter,
   `LaneModelsRouteDeps.ccrcDir` in `server/src/laneModelsRoutes.ts`, and its wiring in `server/src/server.ts` (the GET's
-  call and `registerLaneModelsRoutes`'s `ccrcDir`). The removal is the plan ticket `ccrcdir-param-drop`, after #2943.
+  call and `registerLaneModelsRoutes`'s `ccrcDir`). The removal is the plan ticket `ccrcdir-param-drop`, after #2943, and it must also touch the test files that pass
+  the parameter: `lane-models-op`, `lane-models`, `lane-models-post`, `lane-models-hold-race` and
+  `lane-models-grant-retired` (N6).
 - D-8758 (was `mca-w5-no-output-code`): an empty stdout at exit 1 reads `unreadable` with the server's own code
   `no-output`.
 - The picker words reach the session's model picker. The new-session sheet's Class choice and the inspector's routing

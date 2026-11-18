@@ -234,4 +234,16 @@ describe('a failed read of the lane', () => {
     }
     expect(MODELS_READ_UNREADABLE).toBe(modelsReadStateWords({ kind: 'unreadable' }));
   });
+
+  // fix round 2, N2: one sentence per state, and no two that disagree on when the sheet reads again.
+  it('the transient arms say once that the sheet reads again, and never "in a moment"; the others say it when it is opened', () => {
+    for (const kind of ['busy', 'not-started'] as const) {
+      const t = modelsReadStateWords({ kind });
+      expect(t.match(/again/g), kind).toHaveLength(1);
+      expect(t, kind).not.toMatch(/in a moment|when it is opened/i);
+    }
+    for (const a of [{ kind: 'unreadable' }, { kind: 'unsupported' }, { kind: 'refused', why: 'bad-lane' }] as const) {
+      expect(modelsReadStateWords(a), a.kind).toMatch(/reads again when it is opened/);
+    }
+  });
 });

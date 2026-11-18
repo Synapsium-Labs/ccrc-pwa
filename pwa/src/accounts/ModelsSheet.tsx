@@ -24,7 +24,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';
 import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
-import { put, laneModelsKey } from '../lib/screenCache';
+import { forget, put, laneModelsKey } from '../lib/screenCache';
 import { api } from '../lib/api';
 import { useLaneModelsView, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
 import { laneReadWords, type LaneReadFailure } from '../lib/models';
@@ -143,9 +143,13 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     const answer = asLaneModelsActAnswer(raw);
     const mine = answer !== null && answer.lane === lane && answer.action === action && answer.class === cls ? answer : null;
     // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6), unless
-    // its read is transient (R3b fix round 1, F2: nothing ran, so the cache keeps the lane's last good read). The sheet still
-    // shows that transient read in place, since the last good read predates the act, and then reads the lane again.
-    if (mine !== null && mine.models.kind !== 'busy' && mine.models.kind !== 'not-started') put(laneModelsKey(lane), raw, Date.now());
+    // its read is transient (R3b fix round 1, F2: nothing ran). Then the lane's cache entry goes (fix round 2, N4): it
+    // predates the act, so another surface reads the lane fresh rather than seed from it. The sheet still shows that
+    // transient read in place, for the same reason, and then reads the lane again.
+    if (mine !== null) {
+      if (mine.models.kind === 'busy' || mine.models.kind === 'not-started') forget(laneModelsKey(lane));
+      else put(laneModelsKey(lane), raw, Date.now());
+    }
     if (!live.current) return;
     setBusy(null);
     if (mine === null) {
