@@ -10,6 +10,7 @@ export const HIERARCHY_TEXT = {
   initiatives: 'File into initiatives',
   owning: 'Owning project',
   mapWaiting: 'Map waiting for you',
+  upkeep: 'Open the Upkeep epic',
   allAct: 'Make one coordinator the Linear owner of every project',
   allPick: 'Coordinator for every project',
   allNone: 'Choose a coordinator',

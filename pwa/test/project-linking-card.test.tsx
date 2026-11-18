@@ -9,6 +9,7 @@ import type { HierarchyAnswer, HierarchyProjectRow } from '../../shared/plan';
 import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
 import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
+import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
@@ -275,6 +276,15 @@ describe('the hierarchy settings', () => {
     expect(link.getAttribute('href')).toBe(itemPath(42));
     expect(within(rowOf('project-a')).getByText('3 inbound issues wait for an owner')).toBeInTheDocument();
     expect(await within(rowOf('project-b')).findByText('Migrated on 2026-11-12')).toBeInTheDocument();
+  });
+
+  it('a project with a team key links its Upkeep page, with no inbound issues waiting; one with no key shows none', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: null }))], hier([
+      hrow('project-a'), hrow('project-b', { teamKey: null }),
+    ]));
+    const link = await within(rowOf('project-a')).findByRole('link', { name: HIERARCHY_TEXT.upkeep });
+    expect(link.getAttribute('href')).toBe(upkeepPath('project-a'));
+    expect(within(rowOf('project-b')).queryByRole('link', { name: HIERARCHY_TEXT.upkeep })).toBeNull();
   });
 
   it('a refusal shows its fixed sentence', async () => {

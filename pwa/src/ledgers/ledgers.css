@@ -423,3 +423,36 @@
   .pg-goals .pg-goals-mod { grid-template-columns: minmax(0, 1fr); }
   .pg-goals .pg-goals-mod > :not(.pg-goals-date) { grid-column: 1; }
 }
+
+/* The epic page and the Upkeep page (Linear hierarchy design §11.2, D-8184): one head, then the checkpoints and the tickets.
+   GROUNDS: the head and each row state their own ground and ink. WIDTHS (the table of the plan's Task 5.3): under 1280 the
+   checkpoints are a list with the tickets below; from 1280 the two sit side by side; from 1700 (the 1920 view) each ticket's
+   state and links share the line with its title. Every text wraps anywhere, so a very long title is never clipped. */
+.ep-head {
+  display: flex; align-items: center; gap: var(--sp-1) var(--sp-2); flex-wrap: wrap; min-width: 0; padding: var(--sp-2);
+  border-left: 4px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-surface); color: var(--ink-primary);
+}
+.ep-head .ep-kicker { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-head .ep-name { margin: 0; min-width: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
+.ep-head .ep-summary { flex: 1 1 100%; margin: 0; min-width: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.ep-head .ep-link { min-width: 0; overflow-wrap: anywhere; }
+.ep-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
+@media (min-width: 1280px) { .ep-cols[data-cols='two'] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.ep-col { display: grid; gap: var(--sp-1); min-width: 0; align-content: start; background: var(--bg-page); color: var(--ink-primary); }
+.ep-col .ep-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-list { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ep-row {
+  display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-2); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+}
+.ep-row .ep-title { min-width: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+.ep-row .ep-meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--ink-secondary);
+}
+.ep-row .ep-meta > * { min-width: 0; overflow-wrap: anywhere; }
+.ep-head .ep-state,
+.ep-row .ep-state { font-family: var(--family-mono); font-size: var(--fs-xs); font-weight: var(--weight-medium); color: var(--ink-secondary); }
+@media (min-width: 1700px) {
+  .ep-tk { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+  .ep-tk .ep-meta { justify-content: flex-end; }
+}

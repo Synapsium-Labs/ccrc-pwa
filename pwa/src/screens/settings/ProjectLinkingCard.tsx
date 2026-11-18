@@ -25,6 +25,7 @@ import {
   HIERARCHY_TEXT, coordinatorWords, defaultOwnerWords, inboundWords, ownerForAllConsequence, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
+import { upkeepPath } from '../../lib/routes';
 import { ApiError } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
 import { candidateLabel, candidateWhy, candidatesShown, linkingRowsOf, teamLinkLine } from '../../fleet/linkingWords';
@@ -122,6 +123,7 @@ function HierarchyCell({ name, answer, reread, busy, setBusy, result }: {
           ? <TextLink href={itemPath(h.itemId)} onClick={inAppClick(itemPath(h.itemId))}>{HIERARCHY_TEXT.mapWaiting}</TextLink>
           : <p className="settings-note">{stateWords(h)}</p>}
         {inbound !== null && <p className="settings-note">{inbound}</p>}
+        {h.teamKey !== null && <TextLink href={upkeepPath(name)} onClick={inAppClick(upkeepPath(name))}>{HIERARCHY_TEXT.upkeep}</TextLink>}
       </div>
     </div>
   );
