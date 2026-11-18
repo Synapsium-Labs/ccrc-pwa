@@ -498,7 +498,7 @@ These close the gaps found against the standalone docs server (research B). Each
 | Index, project and directory pages | Yes, base §4.4 | The index's "newest five" cards, the project page's list of each section's docs, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
 | Recursive listings | Yes, base §2 (a) | Listings already recurse (`ccd/ccd:35878`); the path grammar allows 16 components (G2) |
 | Draft badges and banner | Yes, base §4.5 | More precise than today |
-| `?ref=<branch>` | Yes, base §3.1 | Stricter. `?ref=origin/<b>` reads as a local branch named `origin/<b>`; rewrite old links to the bare `?ref=<b>` (§9 Step 4). The old spellings `?ref=origin/<b>`, a tag and a short commit are Kept and resolve natively (X2 parity design §5.3) (amended 2026-11-18; X2 parity design). |
+| `?ref=<branch>` | Yes for a branch, base §3.1; the old spellings Kept, needed before the old server goes off | Stricter today: `?ref=origin/<b>` reads as a local branch named `origin/<b>`, and a tag or a short commit is refused, so old links are rewritten to the bare `?ref=<b>` (§9 Step 4). Designed: `?ref=origin/<b>` will read the remote-tracking branch unless a local branch of that name exists, and a tag (bare or `refs/tags/`) and a unique short commit will open at their commit, branches first (X2 parity design §5.3) (amended 2026-11-18; X2 parity design). |
 | Fetch on miss | Yes, base §2 (a) and §4.3 | `docs-fetch`, auto-refresh and the chip |
 | GitHub link | Yes, base §3.11 | |
 | Honest errors | Yes, base §4.7 | |
@@ -838,7 +838,7 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 
 ### Waiting on you
 
-Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export). The follow-on designs for §6's Kept and Open rows raise any genuine product conflict, such as print against the frame walls, as a console item when they need it (amended 2026-11-11; retirement parity, D-8287).
+Two product conflicts of the X2 parity design wait on you: reading state left on the old origin (C1) and HTML pages beyond today's walls (C3); each carries a recommendation there (amended 2026-11-18; X2 parity design). W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export). The follow-on designs for §6's Kept and Open rows raise any genuine product conflict, such as print against the frame walls, as a console item when they need it (amended 2026-11-11; retirement parity, D-8287).
 
 ### Later
 
@@ -846,7 +846,7 @@ Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23
 - `only` in the URL beside `at=`, if in-visit state proves too thin (`latest` needs no state: it is the page URL less `at`; amended 2026-11-16; W5b-2).
 - Ctrl/Cmd+K clashing with ccrc shortcuts, after W8's phone pass. Files over 2 MiB, PDFs and issue-tracker links left this list for §6's Kept rows, and print for its Open rows: retirement needs them (amended 2026-11-11; retirement parity, D-8287).
 - A no-JS static variant from `frameDocument`, for the Export action, once W8 lands.
-- Index page "newest five" cards (G10), as a presentation follow-up.
+- Index page "newest five" cards (G10): no longer Later, now Kept in §6's index row (amended 2026-11-18; X2 parity design).
 - Mermaid drawn on open in the reader (ruled 2026-11-03): the library change shipped in 1.1.0 and ccrc pins it; the reader moves to it when an E17 reading holds, by one recorded reading (amended 2026-11-10; library 1.1 take-up). The colouring divergences are ruled for now (the W8a row, §8); one colouring for both paths, through the library's `./highlight`, comes back only if you ask (amended 2026-10-31).
 - Any earlier plan for another viewer to own the renderer is settled outside this repo: under R-a, that viewer pins the library like any other.
 
