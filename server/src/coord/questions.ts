@@ -775,6 +775,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     put(askHoldKey(askId), { kind: 'ask', phase: 'lapsed', childId, askId, ev }, askEntry(childId, 'lapsed')?.[0]);
   };
   /** `heldApprovals.set(childId, held)`: the child's key, kept in place when it already holds a prompt. */
+  /** A held prompt's deferred push, with its source: the newest row it covers (approvals plan 2026-11-18, Task 1.4). */
+  const heldApprovalPush = (entry: HeldApproval): QuestionPush =>
+    (entry.rowIds.length === 0 ? entry.ev : { ...entry.ev, source: `approval:${Math.max(...entry.rowIds)}` });
   const setHeldApproval = (childId: string, held: Omit<HeldApproval, 'childId'>): void => {
     const key = approvalHoldKey(childId);
     const value: QuestionHold = { kind: 'approval', phase: 'held', childId, ...held };
@@ -899,8 +902,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
       const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
-      // The builder the restart re-seed shares (D-5925); the deferred push carries its newest row as its source (Task 1.4).
-      const ev = { ...askHoldPayload(r, hs, dialog, null), source: `approval:${open[open.length - 1]!.id}` };
+      const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
       setHeldApproval(r.id, { until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev });
       return { kind: 'held', parent: open[open.length - 1]!.parentId, record: { ...ev, recordAlways: true, recordOnly: true } };
     } catch (err) {
@@ -1128,7 +1130,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         if (hs.ask !== null && 'approval' in hs.ask) {
           setHeldApproval(r.id, {
             until: Math.max(...rows.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: rows.map((x) => x.id),
-            ev: { ...askHoldPayload(r, hs, dialog, null), ...(rows.length === 0 ? {} : { source: `approval:${rows[rows.length - 1]!.id}` }) },
+            ev: askHoldPayload(r, hs, dialog, null),
           });
           reseeded = true;
         }
@@ -1447,7 +1449,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const answer = decideDeferredApprovalPush(entry, read, now, paintedDialogOf(childId) === entry.dialogId, graceMs);
       if (answer === 'wait') continue;
       questionHolds.delete(key);
-      if (answer === 'push') push(entry.ev);
+      if (answer === 'push') push(heldApprovalPush(entry));
     }
   };
 
@@ -1586,7 +1588,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       if (read?.ok && read.rows.some((x) => entry.rowIds.includes(x.id) && Date.now() < x.notifyAt)) return null;
     } catch { /* unread: push, the operator's direction */ }
     dropApproval(childId, 'held');
-    return paintedDialogId === entry.dialogId ? entry.ev : null;
+    return paintedDialogId === entry.dialogId ? heldApprovalPush(entry) : null;
   };
 
   /** `POST /api/questions/approval-<n>/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the

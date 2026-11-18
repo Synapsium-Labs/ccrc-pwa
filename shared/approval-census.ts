@@ -83,6 +83,8 @@ export const APPROVAL_CENSUS_ROW_PATHS: readonly ApprovalCensusRowPath[] = ['hoo
 /** Whose answer settled a prompt (N3): the claimant `coordinator` (every ruled row in PR 1), the `operator` (every prompt
  *  that reached them), or `none` while a row is still held. The Overlord's word joins in PR 5. */
 export type ApprovalCensusAuthority = 'coordinator' | 'operator' | 'none';
+export const APPROVAL_CENSUS_AUTHORITY_MAP: Readonly<Record<ApprovalCensusAuthority, true>> = { coordinator: true, operator: true, none: true };
+export const APPROVAL_CENSUS_AUTHORITIES = Object.keys(APPROVAL_CENSUS_AUTHORITY_MAP) as ApprovalCensusAuthority[];
 
 /** The six read commands PR 6's gate counts (§3.6): each argument a path, no write. */
 export const READ_PROMPT_COMMANDS = ['cat', 'head', 'tail', 'wc', 'ls', 'stat'] as const;
