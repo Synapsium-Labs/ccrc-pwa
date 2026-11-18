@@ -9,9 +9,9 @@ records the coordinator's D-8681 ruling under that entry. That edit carries a `L
 
 - **What was built.** Tasks 4.1–4.4 of `docs/superpowers/plans/2026-11-10-linear-hierarchy.md`, and Task 4.5 (wave 3's
   carried findings, from the brief):
-  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 94: row
+  - **4.1, the migration and the drift deciders:** one migration for every table of the wave (it is entry 95: row
     revisions, #2965, took 87, renewal readings A, #2962, 88, remaining work A, #2951, 89, account organization D, #2958,
-    90, designation A, #2950, 91, done tests A, #2964, 92 and the work map's phases, #2974, 93 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
+    90, designation A, #2950, 91, done tests A, #2964, 92, the work map's phases, #2974, 93 and forecasts A, #2987, 94 while this was built; D-8673), `server/src/linear/driftPolicy.ts` (L1) and the plan store's
     drift, inbound, streak and settled-probe functions.
   - **4.2, the drift pass:** `server/src/linear/driftPass.ts` (L4), lane `linearDrift`. Every write it makes is the plan
     sync's, through `PlanSync#restore`, in the programme's flight; a sync write that landed first makes the restore moot.
@@ -175,11 +175,12 @@ migration is 92. Every fix has a test seen red against the code before it.
 
 The review read 6e4a12a3c with the full panel; round 2's fixes were all built as ruled, and six of its eight mutations went
 red. The coordinator ruled a short, closed list for this round (mail 23411), and carried the rest to a follow-up run after
-landing (below). Main was merged three times in this round, each on the coordinator's word: done tests A (#2964) took 92,
+landing (below). Main was merged four times in this round, each on the coordinator's word: done tests A (#2964) took 92,
 the work map WM0 (#2974) took 93 (its phases, the `plan phase-ref` lane and row, `plan-phases-v1`, and the refusal words
-`unknown-ref` and `bad-carry`, kept beside this wave's), and designation C (#2992) added two session-gated Settings doors
-(route counts only), so the migration is 94 (coord-db pins 94; the run-close replay undoes back to 53 and replays
-forty-one). The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
+`unknown-ref` and `bad-carry`, kept beside this wave's), designation C (#2992) added two session-gated Settings doors
+(route counts only), and, after the queue dropped the PR, forecasts A (#2987) took 94 and added the `forecasts` lane beside
+this wave's `linearDrift` (51 monotonic lanes), so the migration is 95 (coord-db pins 95; the run-close replay undoes back
+to 53 and replays forty-two). The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
 box-token machine lanes (89 with notify, pools/epoch and updates/intent), and 88 `ccrc-api` rows. Every fix has a test seen red before it: against the previous
 code for F2, A-2, A-3 and A-8, and, for the test-only F1, F4 and A-5, by mutating the line each guards.
 
