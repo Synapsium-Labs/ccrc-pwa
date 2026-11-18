@@ -75,7 +75,7 @@ flowchart LR
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
   "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
-- `label` is optional text for Aa's hosted line (§6): at most 64 characters, with no control character (U+0000 to U+001F, U+007F to U+009F). The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
+- `label` is optional text for Aa's hosted line (§6): 1 to 64 UTF-16 code units. It is refused if it holds a control character (U+0000 to U+001F, U+007F to U+009F) or a bidi or format character (U+200B to U+200F, U+202A to U+202E, U+2060 to U+2069, U+FEFF). An empty label is refused. The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
 **Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
@@ -165,7 +165,7 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
 - A new palette, or a third skin, reaches the reader with no reader change: it is applied to the root, and the adapter reads it.
 - Follow the system needs no special case. The root carries whichever palette the operating system picked, and the adapter reads that.
 
-**The scan that reds a second copy.** A new test, `pwa/test/reader-appearance-source.test.ts`, has four parts:
+**The scan that reds a second copy.** A new test, `pwa/test/reader-appearance-source.test.ts`, has these four parts, and a fifth, §5's contrast gate:
 1. **Slot coverage.** The mapping table's slots equal the library's `APPEARANCE_SLOTS`, in both directions.
 2. **Every palette resolves.** For every palette `THEMES` lists, and for both skins, each mapped token resolves, through `var()` chains in `tokens.css` and `skins.css`, to a literal the library's validator accepts. A token that resolves to `color-mix(...)` or nothing reds here, not on a phone.
 3. **No second list.** The scan covers `pwa/src/docs/`, `pwa/src/readerLab/` and `pwa/src/lib/appearance.ts`:
@@ -295,7 +295,7 @@ This section lists what does not change and what the new data could do. The stan
 **What the new data is.**
 - **Origin.** Colour, length and font values computed from ccrc's own stylesheets. A document cannot influence them: documents render inside the frame, never on ccrc's root.
 - **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again: closed keys; colour slots `#rrggbb` or `#rrggbbaa` only (`popShadow`'s colour may also be a bounded `rgba()`, §2); lengths as whole pixels in range; no `;`, braces, `url(` or `var(`. A `popShadow` within its bounds paints at most a 64 px blur and an 8 px spread around a popover, and it reaches no URL.
-- **The label.** It is the one free text that crosses. It is at most 64 characters, refused if it holds a control character, and set with `textContent`, so markup in it shows as its own characters and never renders.
+- **The label.** It is the one free text that crosses. It is 1 to 64 UTF-16 code units, refused if it holds a control, bidi or format character, and set with `textContent`, so markup in it shows as its own characters and never renders.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. They are the first binary bytes in the srcdoc that the library does not pin by hash: its own faces sit in a stylesheet that `frameDocument` checks against its manifest. So the library checks ccrc's faces by alphabet, signature and size, and ccrc pins them with a row: the bytes it passes are exactly the design system's font files. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, and a face that fails to load is dropped (§2.2).
 - **Exfiltration.** The frame learns ccrc's current colours. This contract gives it no way to send them anywhere: `default-src 'none'`, no network, and no frame-to-parent op of its own. Another design may add a frame-to-parent op additively, such as X2's figure images. That design argues its own threat model, and nothing here rules it out.
@@ -330,6 +330,7 @@ This section is written for the library programme to plan from. It names the lib
 
 | Export | Kind | What it is |
 |---|---|---|
+| `Appearance`, `AppearanceColourSlot`, `AppearanceSkinSlot` (`./frame`) | types | The contract value `{mode, colour?, skin?, label?}` and its slot-name unions, derived from `APPEARANCE_SLOTS` |
 | `APPEARANCE_CONTRACT` (`./frame`) | number, `1` | The contract version. Absent in 1.1.0, which is how a host detects support |
 | `APPEARANCE_SLOTS` (`./frame`) | readonly record | The closed slot names by group: `colour`, `skin`. The source of truth for both sides' tests |
 | `APPEARANCE_PAIRS` (`./frame`) | readonly list | `{fg, bg, floor}` for every pair the stylesheet draws, derived colours included, expressed over the slots |
@@ -354,7 +355,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
   - `th-bg` from `accent` over `bg`, and `code-inline-bg` from `text` over `bg`;
   - `code-comment` is `syn-comment`.
 
-  Every derived tint holds at most 6% of its colour. `chg-x` is a length, not a colour, and stays the library's.
+  Every derived tint holds at most 6% of its colour, mixed over `bg` or `surface`, the ground it is drawn on. Coloured text on its own tint is never drawn over `surface2`: measured, the accent over a tint on `surface2` is 4.23:1 at 6% and still 4.40:1 at 3% (Phosphor Daylight). On raised surfaces and in popovers, coloured text sits on the plain ground, never on a tint. `chg-x` is a length, not a colour, and stays the library's.
 - An appearance with no colour group removes every host colour and leaves the hosted state as it was.
 - Skin slots style the popovers and their headings, the radii of controls, cards and code, and nothing else. `controlRow` applies under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters, title block) never take a skin value.
 - `popShadow` replaces `--pop-shadow` on every popover, the quick jump, keys and contents drawer shadows included.
@@ -389,10 +390,10 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - a document's init directive still cannot set `themeVariables`, `themeCSS` or `darkMode`;
    - a newer appearance cancels redraws queued for an older one.
 6. The label:
-   - a 64-character label shows whole, and a 65-character one is refused, so the default shows;
-   - a label holding U+0000, U+001B, U+007F or U+0085 is refused;
+   - a label of 64 UTF-16 code units shows whole, and one of 65 is refused, so the default shows. So is an empty label;
+   - a label holding U+0000, U+001B, U+007F, U+0085, U+202E or U+2066 is refused;
    - a label of `<b>x</b>` shows those eight characters, and the line holds no element;
-   - with no label, the line is `APPEARANCE_LABEL_DEFAULT`, and no string of any host appears in the library's built assets.
+   - with no label, the line is `APPEARANCE_LABEL_DEFAULT`, and the string `ccrc` appears nowhere in the library's built assets.
 7. Hosted state:
    - an op with no colour group clears host colours;
    - while hosted, a `prefs` change never writes `theme`;
@@ -435,7 +436,7 @@ Each decision is a technical call within the operator's requirement, made and ar
 | X1-3 | How a change while open travels | (a) a new parent op on the existing port; (b) widen `prefs` with appearance keys; (c) remount | (a). `prefs` carries the reader's own enum preferences, which the frame persists to `pref:prefs`. Appearance is ccrc's, must never be persisted (§6), and has its own validator. One op per meaning keeps both closed key tables simple. (c) loses reading position and costs a full open | Proposed |
 | X1-4 | Change signal | (a) observe the root's `data-theme` and `data-skin`; (b) subscribe to the two stores plus the media query | (a). It reads the applied outcome, so Follow the system flips and every writer are covered by one observer | Proposed |
 | X1-5 | Bad values | (a) all or nothing per group, hosted with library colours on failure; (b) per slot; (c) fall back to the plain view | (a) for colour, (b) for skin slots and fonts. A partial palette can break contrast, and appearance never justifies losing the rich view | Proposed |
-| X1-12 | Semantic colours | (a) ccrc's text variants, with fills and tints derived; (b) ccrc's fill tokens; (c) separate text and fill slots | (a). The library draws these colours as text, and ccrc's fills miss 4.5:1 there: `--diff-add` is 1.69:1 in Phosphor Daylight, `--status-dead` 3.85:1 in Nord. (c) doubles the slots for no visible gain. `chg` keeps its magenta "changed since" meaning through `--acct-magenta`, where `--diff-add` green would change it | Proposed |
+| X1-12 | Semantic colours | (a) ccrc's text variants, with fills and tints derived; (b) ccrc's fill tokens; (c) separate text and fill slots | (a). The library draws these colours as text, and ccrc's fills miss 4.5:1 there: `--diff-add` is 1.69:1 in Phosphor Daylight, `--status-dead` 3.85:1 in Nord. (c) doubles the slots for no visible gain. `chg` keeps its magenta "changed since" meaning through `--acct-magenta`, where `--diff-add` green would change it. Accepted with it: these are ccrc's own text colours, so the frame reads as ccrc does. In some palettes `ok` (`--status-done-text`) is ccrc's secondary ink or near black, and `info` and `path` equal `text-muted`. So "ok" counts and dots are told apart by their word, not their hue, as on ccrc's own screens | Proposed |
 | X1-11 | Tints and composites | (a) base colours only, the library derives tints with `color-mix`; (b) carry ccrc's tint tokens and resolve them through a probe element | (a). ccrc's tints change form between palettes, so (b) needs a colour parser on both sides for no visible gain | Proposed |
 | X1-6 | Typography | (a) pass ccrc's two faces as font assets; (b) the library ships Geist; (c) keep library faces | (a). One home for ccrc's typefaces, and the frame cannot fetch them. (b) couples the library to one host. (c) misses typography | Proposed |
 | X1-7 | Density and controls | (a) carry every skin token that touches neither the frame bar nor the reading geometry, and reject the rest by name; (b) carry every skin token, the bar included; (c) radius, row height and label case only | (a), token by token in §2.3 (the coordinator's ruling on review 2645 F3): radius, popover rows, popover elevation and the section-label type are carried; type sizes, gutters, measures, the bar height and card padding are rejected because they move the reading layout or a budget; meter, motion, chat measures and sheet corners have no counterpart. (b) breaks the one-bar and desktop-fit budgets. (c) left elevation and label type neither carried nor rejected | Ruled |

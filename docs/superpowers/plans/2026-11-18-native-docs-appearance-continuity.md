@@ -69,7 +69,7 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/test/reader-frame.test.tsx` | — | 5 | Frame rows |
 | `pwa/browser/reader-appearance.browser.test.ts` (new) | — | 6 | AP-1 to AP-6 and AP-8 browser rows |
 | `pwa/browser/docs-compact-head.browser.test.ts`, `reader-frame.browser.test.ts`, `frame-cost.browser.test.ts` | — | 6 | Per-skin geometry and cost rows (AP-7, §9 budgets) |
-| `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` | — | 7 | D-8759 and D-8760 amendments |
+| `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` | — | 7 | D-8759, D-8760 and D-8761 amendments |
 
 ---
 
@@ -139,16 +139,17 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
     - `('phosphor', 'refined', 'coarse')` answers `--r-md` as `'10px'` (the second default block) and `colourScheme` `'dark'`;
     - `('nord', 'instrument', 'fine')` answers `--row-h` as `'32px'` and `--bg-page` as `'#2E3440'`;
     - a `var()` chain is followed: `--status-done` answers a hex in `'light'`.
-- [ ] **Step 2: Write the failing source rows** in `reader-appearance-source.test.ts`, in four describes:
+- [ ] **Step 2: Write the failing source rows** in `reader-appearance-source.test.ts`, in five describes. Parts 1 to 4 are spec §3's scan, in its order, and part 5 is spec §5's contrast gate:
   1. **Coverage:** the slot keys of `READER_APPEARANCE_MAP` equal `APPEARANCE_SLOTS`, in both directions.
-  2. **Every palette resolves:** for each id in `THEMES`, each skin in `SKINS`, and each pointer, `resolvePaletteTokens` answers every mapped token, and the verdict `readerAppearanceOf` returns has `dropped: null` and an empty `refused` list: every colour, every skin slot and the label are accepted. The case title names the palette, skin, pointer and token. (`audit.mjs` is not reused: it keys the default palette `DARK`, reads only the first `:root` block, and never reads `skins.css` or `color-scheme`.)
-  3. **Contrast:** for each palette, every `APPEARANCE_PAIRS` entry over the mapped values meets its floor. The number of palettes checked equals `THEMES.length`, read at run time, never a typed 12. Part 2 also expects each palette's `color-scheme` to be `light` or `dark`, and equal to its `THEMES` row's `mode`.
-  4. **No second list**, over `pwa/src/docs/`, `pwa/src/readerLab/` and `pwa/src/lib/appearance.ts`:
+  2. **Every palette resolves:** for each id in `THEMES`, each skin in `SKINS`, and each pointer, `resolvePaletteTokens` answers every mapped token, and the verdict `readerAppearanceOf` returns has `dropped: null` and an empty `refused` list: every colour, every skin slot and the label are accepted. Each palette's `color-scheme` is `light` or `dark`, equal to its `THEMES` row's `mode`. The case title names the palette, skin, pointer and token. (`audit.mjs` is not reused: it keys the default palette `DARK`, reads only the first `:root` block, and never reads `skins.css` or `color-scheme`.)
+  3. **No second list**, over `pwa/src/docs/`, `pwa/src/readerLab/` and `pwa/src/lib/appearance.ts`:
      - no file holds two or more `THEMES` ids, or two or more `SKINS` ids, as string literals or as object keys, quoted or not;
      - no file under `pwa/src/docs/reader/` holds a hex colour literal;
-     - only `pwa/src/docs/ReaderFrame.tsx` imports `THEMES`, and no file imports `SKINS`;
-     - no string in any value `readerAppearanceOf` builds in part 2 contains `;`, `{`, `}`, `url(` or `var(`, and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label` (run time);
-     - `appearance.ts` holds no such literal (source).
+     - only `pwa/src/docs/ReaderFrame.tsx` imports `THEMES`, and no file imports `SKINS`.
+  4. **No stylesheet crosses:**
+     - at run time, no string in any value `readerAppearanceOf` builds in part 2 contains `;`, `{`, `}`, `url(` or `var(` (except `popShadow`'s own bounded `rgba(`), and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label`;
+     - in source, `appearance.ts` holds no such literal.
+  5. **Contrast (spec §5):** for each palette and each skin, every `APPEARANCE_PAIRS` entry over the mapped values meets its floor, the derived pairs on the ground each tint is mixed over included. The number of palettes checked equals `THEMES.length`, read at run time, never a typed 12.
 - [ ] **Step 3: Run both to red.** `ccrc test -- ./node_modules/.bin/vitest run test/reader-appearance.test.ts test/reader-appearance-source.test.ts` from `pwa/`. Expected: FAIL, the module is missing.
 - [ ] **Step 4: Implement `appearance.ts` and the helper.** `appearance.ts` is pure (ring L1): no `document`, no `getComputedStyle`. `readerAppearanceOf` takes `mode` from `colourScheme`, trimmed: `'light'` or `'dark'`. Anything else is `'auto'` with the colour group dropped. Every palette block declares `color-scheme` (measured 2026-11-18), and part 2 pins that per palette.
 - [ ] **Step 5: Run to green**, same command. Expected: PASS.
@@ -284,7 +285,7 @@ Each row reads the frame's computed values through the existing harness's frame 
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md`
 
-- [ ] **Step 1: Amend in place, each with "(amended <date>; D-8759)" or "(…; D-8760)":**
+- [ ] **Step 1: Amend in place, each with "(amended <date>; D-8759)", "(…; D-8760)" or "(…; D-8761)":**
   - §4.4's parent-op sentence and its op table, and the M8.6 row's text and refusal column, gain `appearance` (D-8759);
   - §3.2's `mountDocFrame` return shape gains `setAppearance(a: Appearance): void` (D-8761);
   - §4.3 gains a row for ccrc's two faces;
@@ -305,13 +306,13 @@ Task 17's row: "Exercise both canonical skins, all twelve canonical palettes and
 | Row | Clause | Wave C row | F action (installed) |
 |---|---|---|---|
 | AP-1 | both canonical skins | Task 6 AP-1 | Open a doc under Refined and Instrument; frame values and faces are ccrc's |
-| AP-2 | all twelve palettes and Follow the system | Task 6 AP-2; Task 2 parts 2 and 3 | 14 appearances x 2 skins, the count read from the discovered catalogue |
+| AP-2 | all twelve palettes and Follow the system | Task 6 AP-2; Task 2 parts 2 and 5 | 14 appearances x 2 skins, the count read from the discovered catalogue |
 | AP-3 | ordinary open | Task 6 AP-3 | With a stale reader theme stored, values at first `ready` are the host's. On a device, no light-then-dark flash is seen. Paint before first paint is the library's own test (spec §10) |
 | AP-4 | lazy open | Task 4 "reads after the last await"; Task 6 AP-4 | Change during the chunk hold; the seed is the latest |
 | AP-5 | changes while open under the reviewed contract | Task 5; Task 6 AP-5 | Cycle, flip, switch; in place, within 100 ms, figures redrawn |
-| AP-6 | native chrome, typography, surfaces, focus, accessibility | Task 2 part 3; Task 6 AP-6 | Pairs meet floors on the installed frame; focus visible; Aa line |
+| AP-6 | native chrome, typography, surfaces, focus, accessibility | Task 2 part 5; Task 6 AP-6 | Pairs meet floors on the installed frame; focus visible; Aa line |
 | AP-7 | retained phone and desktop geometry budgets | Task 6 AP-7 | One bar, and 61, 48, 44 px on a phone; at most 1 px on tablet and desktop, per skin |
-| AP-8 | no independent catalogue or mode-only substitution | Task 2 part 4; Task 6 AP-8 | Scan green; the bridge sent `appearance` |
+| AP-8 | no independent catalogue or mode-only substitution | Task 2 parts 3 and 4; Task 6 AP-8 | Scan green; the bridge sent `appearance` |
 
 ## Mutation rows
 
@@ -321,11 +322,11 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 |---|---|---|
 | AP-M1 | `bridge.ts` never passes `appearance` | Task 4 "an outcome of kind `appearance`"; AP-8 browser row |
 | AP-M2 | Drop one slot from `READER_APPEARANCE_MAP` | Task 2 coverage (and typecheck) |
-| AP-M3 | Add `['nord', 'dracula']` to a file under `pwa/src/docs/` | Task 2 part 4 |
+| AP-M3 | Add `['nord', 'dracula']` to a file under `pwa/src/docs/` | Task 2 part 3 |
 | AP-M4 | Move the appearance read above the assets await | Task 4 "reads after the last await"; AP-4 |
 | AP-M5 | `ReaderFrame` ignores stamp changes | Task 5 "while open"; AP-5 |
 | AP-M6 | One unreadable colour leaves that slot out, instead of dropping the colour group | Task 2 "one colour token answering `''`" |
-| AP-M7 | Map `text ← --ink-disabled` | Task 2 part 3, in at least one palette |
+| AP-M7 | Map `text ← --ink-disabled` | Task 2 part 5, in at least one palette |
 | AP-M8 | Skip contract detection, so a `'none'` or `2` answer from `deps.libraryContract` still passes `appearance` | Task 4 "an older library" (the fake `mount` throws `TypeError`) |
 | AP-M9 | Remove the per-frame coalescing | Task 5 "coalesces to the latest per frame" |
 | AP-M10 | `readerAppearanceOf` returns the raw contract and skips `parseAppearance` | Task 2 "a skin token whose value the library refuses" |
@@ -339,6 +340,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
 | AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
 | AP-M20 | Drop the `[prefs]` effect, so stamp changes are the only trigger | Task 5 "the mode-only trigger" |
+| AP-M21 | `ReaderFrame.tsx` imports `readHostAppearance` by value | `docs-scans.test.ts`'s main-bundle scan (Task 4 "the main bundle stays library-free") |
 
 ## Deviations found
 
@@ -449,7 +451,7 @@ It returned 1 critical, 8 important and 10 minor findings. Each was fixed, or re
 
 | Finding | Disposition |
 |---|---|
-| C1: the 36 library colour properties include tints and composites that ccrc carries as `color-mix(...)` in some palettes, so all or nothing would drop Phosphor or Nord to mode only | Fixed. Version 1 carries 30 base colours only, and the library derives tints with `color-mix` (spec §2, X1-11). Measured: every mapped token is a literal in all 12 palettes |
+| C1: the 36 library colour properties include tints and composites that ccrc carries as `color-mix(...)` in some palettes, so all or nothing would drop Phosphor or Nord to mode only | Fixed. Version 1 carries base colours only (30 at the adversarial pass, 33 after review 2645 F2), and the library derives tints with `color-mix` (spec §2, X1-11). Measured: every mapped token is a literal in all 12 palettes |
 | I1: `audit.mjs` cannot resolve palettes for part 2 | Fixed. New test helper `paletteTokens.ts` (Task 2) |
 | I2: a fallback while open left the old palette on screen, and `prefs` persists `theme` | Fixed. An appearance with no colour group drops host colours and stays hosted. While hosted, `theme` is never sent or stored (spec §2.1, §7, §10) |
 | I3: `./host` may be imported only by `bridge.ts` | Fixed. The pure exports live in `./frame` (spec §10, Task 1) |
