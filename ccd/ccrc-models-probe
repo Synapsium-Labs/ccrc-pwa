@@ -58,10 +58,13 @@
 set -uo pipefail
 
 PROG="ccrc-models-probe"
-# The client version the Codex catalogue endpoint is asked for. A CONSTANT,
-# bumped deliberately (§5): OpenAI's backend keys what it advertises on it, so
-# tracking it automatically would change this box's model set without anybody
-# deciding to.
+# The FLOOR of the client version the Codex catalogue endpoint is asked for.
+# OpenAI's backend keys what it advertises on that version, so a version set by
+# hand withholds every model a newer client may use, and falls behind at every
+# Codex release. Since D-8743 (model-class-advance wave 2, reversing the
+# registry spec's "bumped deliberately" rule under the owner's rule of
+# 2026-10-07) the arm asks as the greater of the published Codex CLI release
+# (`_codex_client_version`, below) and this constant, which is never undercut.
 CODEX_CLIENT_VERSION="0.170.0"
 # `shared/roster.ts`'s ID_RE, in bash. An account id becomes a filename here.
 ID_RE='^[a-z][a-z0-9-]{0,31}$'
@@ -166,6 +169,212 @@ RAW="$TMPD/raw.json"
 NORM="$OUT.tmp.$$"
 trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 
+# ── the Codex client version (D-8743) ─────────────────────────────────────
+# The version the Codex arm asks as: the greater of the published Codex CLI
+# release and the floor above. The release is npm's registry answer for
+# `@openai/codex` at its `latest` dist-tag, and only its `version` is read: a
+# plain X.Y.Z of decimal numbers, nothing else (a prerelease, a build suffix, a
+# leading zero, an oversized number, an answer over CAP bytes or not a JSON
+# object is a FAILED lookup). It is asked through `curl -q` (no .curlrc), https
+# only, no redirect, bounded at LOOKUP_S, with nothing on stdin and no
+# credential: npm is never handed a token, a netrc or a config.
+#
+# ONE FILE FOR THE BOX, `~/.ccrc/codex-client-release.json` (0600, temp and
+# rename in its own directory): `version` and `readAt`, the last good release and
+# when it was read; `triedAt`, the last try, good or not; `lastError`, the last
+# failure's reason, gone after a success. A lookup runs only when `triedAt` is an
+# hour old, absent, unreadable or in the future, so lanes refreshed one after
+# another share one lookup an hour, and a failing npm is asked once an hour, not
+# once a lane. The lock beside it (`.lock`, flock) serialises lanes refreshed at
+# the same moment: a probe waits up to LOCK_S for the holder, re-reads what it
+# wrote, and never asks again inside the hour; one that cannot take the lock
+# uses the file as it stands.
+#
+# IT NEVER FAILS THE PROBE. A failed or slow lookup uses the cached release,
+# else the floor; a cache it cannot write is skipped; and if this whole program
+# fails, the caller asks as the floor. `--check`'s statuses are the catalogue
+# request's alone. ITS STDERR IS DROPPED, deliberately: it runs inside the
+# Codex arm, whose refusals name their remedy FIRST because the stale path
+# keeps only the first 300 characters of the arm's stderr, and a lookup note
+# ahead of them would push the remedy out. The cache's `lastError` is the
+# lookup's record (and what a doctor check can read).
+#
+# `CCRC_MODELS_PROBE_RELEASE_FIXTURE` is the lookup's ONE test seam, read in this
+# function's one call and nowhere else: when set, the named file's bytes stand in
+# for npm's answer, and a missing file is a failed lookup. Every contained test
+# env sets it (`ghContainedEnv`), so no suite asks npm.
+_codex_client_version() {
+  local v
+  v="$(python3 -I /dev/fd/3 "$CODEX_CLIENT_VERSION" "$HOME/.ccrc/codex-client-release.json" \
+    "${CCRC_MODELS_PROBE_RELEASE_FIXTURE:-}" 2>/dev/null 3<<'PY'
+import fcntl, json, os, re, signal, subprocess, sys, tempfile, time
+
+FLOOR, CACHE, FIXTURE = sys.argv[1], sys.argv[2], sys.argv[3]
+URL = "https://registry.npmjs.org/@openai/codex/latest"
+PLAIN = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
+CAP = 262144         # bytes of npm's answer; the `latest` manifest is a few KiB
+HOUR = 3600          # one lookup an hour for the box
+SKEW = 60            # a try stamped further ahead than this is not trusted
+LOOKUP_S = 10        # the lookup's bound
+LOCK_S = 15          # how long a probe waits for another's lookup
+
+
+def plain(v):
+    return isinstance(v, str) and PLAIN.fullmatch(v) is not None
+
+
+def key(v):
+    return tuple(int(x) for x in v.split("."))
+
+
+def stamp(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def read_cache():
+    try:
+        with open(CACHE, "rb") as f:
+            c = json.loads(f.read(CAP).decode("utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
+def due(c, now):
+    t = c.get("triedAt")
+    return not (stamp(t) and now - HOUR < t <= now + SKEW)
+
+
+class Late(Exception):
+    pass
+
+
+def _late(_sig, _frame):
+    raise Late()
+
+
+def fetch():
+    """npm's answer as bytes, at most CAP + 1 of them, or (None, reason)."""
+    if FIXTURE:
+        try:
+            with open(FIXTURE, "rb") as f:
+                return f.read(CAP + 1), None
+        except OSError as e:
+            return None, f"no answer ({e.strerror or type(e).__name__})"
+    argv = ["curl", "-q", "-sS", "--fail", "--max-time", str(LOOKUP_S), "--proto", "=https",
+            "--max-redirs", "0", "--max-filesize", str(CAP), "-H", "Accept: application/json", URL]
+    signal.signal(signal.SIGALRM, _late)
+    signal.alarm(LOOKUP_S + 3)
+    p = None
+    try:
+        p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        body = p.stdout.read(CAP + 1)
+        if len(body) > CAP:
+            p.kill()
+        err = p.stderr.read(400)
+        rc = p.wait()
+    except Late:
+        return None, f"no answer within {LOOKUP_S}s"
+    except OSError as e:
+        return None, f"curl could not run ({e.strerror or type(e).__name__})"
+    finally:
+        signal.alarm(0)
+        if p is not None and p.poll() is None:
+            p.kill()
+            p.wait()
+    if len(body) > CAP:
+        return body, None
+    if rc != 0:
+        why = err.decode("utf-8", "replace").strip().splitlines()
+        return None, f"curl exit {rc}" + (f": {why[0][:120]}" if why else "")
+    return body, None
+
+
+def lookup():
+    """(version, None) for a plain X.Y.Z, else (None, reason)."""
+    body, why = fetch()
+    if body is None:
+        return None, why
+    if len(body) > CAP:
+        return None, f"the answer is over {CAP} bytes"
+    try:
+        answer = json.loads(body.decode("utf-8"))
+    except ValueError:
+        return None, "the answer is not JSON"
+    if not isinstance(answer, dict):
+        return None, "the answer is not a JSON object"
+    v = answer.get("version")
+    if not plain(v):
+        return None, "the answer's version is not a plain X.Y.Z"
+    return v, None
+
+
+def write(c):
+    d = os.path.dirname(CACHE)
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=os.path.basename(CACHE) + ".tmp.")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(c, f)
+        os.replace(tmp, CACHE)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def refresh(c):
+    """Takes the lock, re-reads, and looks up when still due. Answers the cache to use."""
+    try:
+        os.makedirs(os.path.dirname(CACHE), exist_ok=True)
+        lock = os.open(CACHE + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        return c
+    try:
+        until = time.monotonic() + LOCK_S
+        while True:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() >= until:
+                    return read_cache()
+                time.sleep(0.1)
+        c = read_cache()
+        now = int(time.time())
+        if not due(c, now):
+            return c
+        v, why = lookup()
+        if v is not None:
+            new = {"version": v, "readAt": now, "triedAt": now}
+        else:
+            new = {k: c[k] for k in ("version", "readAt")
+                   if k in c and (plain(c[k]) if k == "version" else stamp(c[k]))}
+            new["triedAt"] = now
+            new["lastError"] = why[:200]
+        try:
+            write(new)
+        except OSError:
+            pass  # this run uses the answer; the next one asks again
+        return new
+    finally:
+        os.close(lock)
+
+
+c = read_cache()
+if due(c, int(time.time())):
+    c = refresh(c)
+v = c.get("version")
+print(v if plain(v) and plain(FLOOR) and key(v) > key(FLOOR) else FLOOR)
+PY
+  )" || v=""
+  [[ "$v" =~ ^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$ ]] || v="$CODEX_CLIENT_VERSION"
+  printf '%s\n' "$v"
+}
+
 # ── the fetch ────────────────────────────────────────────────────────────
 # Each arm writes the provider's RAW body to $RAW and returns non-zero when it
 # could not. Nothing here interprets the body; that is the normaliser's job, in
@@ -218,6 +427,12 @@ _fetch_codex_lane() {
     echo "$PROG: auth-library-absent: run ccrc update — this fetch was handed no readable auth library (${lib:-none}), so the credential of \"$ACCOUNT\" cannot be read; nothing was sent" >&2
     return 1
   fi
+  # The version this request asks as, in its URL and its user-agent (D-8743),
+  # learned only once nothing above refused; the normaliser records it as the
+  # catalogue's `clientVersion`.
+  local client_version
+  client_version="$(_codex_client_version)"
+  printf '%s\n' "$client_version" > "$TMPD/client-version" || true
   # How the interpreter runs:
   #   - under -I: no PYTHONPATH, PYTHONHOME or user site, and no script
   #     directory on sys.path, which is why the program loads the library by
@@ -231,7 +446,7 @@ _fetch_codex_lane() {
     for v in ${!CHATGPT_@} ${!LITELLM_@} ${!OPENAI_@}; do unset "$v"; done
     unset CCRC_CODEX_PYTHON
     export CHATGPT_TOKEN_DIR="$token_dir" LITELLM_LOCAL_MODEL_COST_MAP=True CCRC_MODELS_AUTH_LIB="$lib" \
-      CODEX_CLIENT_VERSION="$CODEX_CLIENT_VERSION" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
+      CODEX_CLIENT_VERSION="$client_version" CCRC_PROBE_ACCOUNT="$ACCOUNT" CCRC_PROBE_PROG="$PROG"
     exec "$py" -I -
   ) > "$RAW" <<'PY'
 import os, sys, traceback, urllib.request
@@ -315,7 +530,8 @@ if lib.expired(r):
 headers = {
     "Authorization": f"Bearer {r.access_token}",
     "originator": "codex_cli_rs",
-    "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
+    # The same version as `client_version` below (D-8743): a real client says its own.
+    "user-agent": f"codex_cli_rs/{os.environ['CODEX_CLIENT_VERSION']} (Unknown 0; unknown) unknown",
     "session_id": "00000000-0000-0000-0000-000000000000",
 }
 if r.account_id:
@@ -431,10 +647,14 @@ _normalise() {
   # the heredoc wins — `json.load(sys.stdin)` sees EOF on every input.
   # Measured directly against this exact line; `ccd`'s `_pr_py` documents and
   # fixes the identical conflict the same way (see its comment there).
-  python3 /dev/fd/3 "$PROBE_KIND" < "$RAW" > "$NORM" 3<<'PY'
-import json, sys, time
+  # The Codex arm's chosen client version (D-8743), when it ran; empty otherwise.
+  local client_version=""
+  [ -f "$TMPD/client-version" ] && client_version="$(cat "$TMPD/client-version")"
+  python3 /dev/fd/3 "$PROBE_KIND" "$client_version" < "$RAW" > "$NORM" 3<<'PY'
+import json, re, sys, time
 
 probe = sys.argv[1]
+client_version = sys.argv[2]
 
 def fail(msg):
     sys.stderr.write(msg + "\n")
@@ -587,12 +807,17 @@ ARMS = {
 if probe not in ARMS:
     fail("no normaliser arm for probe kind %r in this build" % probe)
 
-json.dump({
+catalogue = {
     "probe": probe,
     "fetchedAt": int(time.time()),
     "stale": False,
-    "models": ARMS[probe](raw),
-}, sys.stdout)
+}
+# D-8743: the client version a Codex catalogue was fetched as, a plain X.Y.Z, when the arm asked as one; absent
+# otherwise, never null. The same bound as `_codex_client_version`'s and shared/models.mjs's `isPlainVersion`.
+if probe == "codex" and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", client_version):
+    catalogue["clientVersion"] = client_version
+catalogue["models"] = ARMS[probe](raw)
+json.dump(catalogue, sys.stdout)
 PY
 }
 

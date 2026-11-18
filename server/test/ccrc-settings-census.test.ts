@@ -587,6 +587,7 @@ const SIBLING_ENV_ONLY: Record<string, { cls: EnvOnlyClass; why: string }> = {
   CCRC_CODEX_PYTHON: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the codex lane\'s interpreter in it, and unsets it for every other row.' },
   CCRC_MODELS_AUTH_LIB: { cls: 'handshake', why: 'ccrc\'s models refresh hands ccrc-models-probe the auth library\'s path in it, and unsets it for every other row.' },
   CCRC_MODELS_PROBE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s one test seam: a file whose bytes stand in for the network answer.' },
+  CCRC_MODELS_PROBE_RELEASE_FIXTURE: { cls: 'fixture-path', why: 'ccrc-models-probe\'s release-lookup seam (D-8743): a file whose bytes stand in for npm\'s answer for the published Codex release.' },
 };
 
 /** The graph settings ccd-graph-sweep read by its own `: "${NAME:=default}"` line between the graphify r2 wave's GR2 and

@@ -17,7 +17,7 @@
 //     other line of the probe. A missing file through that seam is exactly a
 //     failed fetch, which is how the stale path below is driven.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1234,5 +1234,251 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     for (const file of [PROBE, path.join(REPO, 'ccd', 'ccrc')]) {
       expect(codeLines(file).some((l) => l.includes('CCRC_PROBE_LANE_KIND')), `${path.basename(file)} names the lane-kind marker`).toBe(false);
     }
+  });
+});
+
+// ── model-class-advance wave 2 (D-8743): the Codex client version follows the published release ──────────────────────
+// The probe asks the Codex catalogue as the greater of npm's `@openai/codex` `latest` (a plain X.Y.Z only) and its
+// shipped constant, which is the floor. One box-wide cache file is looked up at most once an hour; a failed lookup
+// uses the cache, else the floor. The user-agent carries the same version, and the catalogue records it.
+// The release seam (`CCRC_MODELS_PROBE_RELEASE_FIXTURE`) replaces the npm request alone; every contained env defaults
+// it to a missing file (`ghContainedEnv`), so no case here reaches npm. The real request is driven in one case, through
+// a recording `curl` planted for that case.
+describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the published release (D-8743)', () => {
+  const FLOOR = /^CODEX_CLIENT_VERSION="(\d+\.\d+\.\d+)"$/m.exec(fs.readFileSync(PROBE, 'utf8'))?.[1] ?? '';
+  const parts = (v: string): number[] => v.split('.').map(Number);
+  const NEWER = ((): string => { const [a, b] = parts(FLOOR); return `${a}.${b! + 1}.0`; })();
+  const NEWER2 = ((): string => { const [a, b] = parts(FLOOR); return `${a}.${b! + 2}.3`; })();
+  const OLDER = ((): string => { const [a, b] = parts(FLOOR); return b! > 0 ? `${a}.${b! - 1}.9` : `${a! - 1}.999.0`; })();
+  const NPM_URL = 'https://registry.npmjs.org/@openai/codex/latest';
+  let pr: ProbeRuntime;
+  let py: string;
+  let lib: string;
+  const authDir = (): string => path.join(home, codexAuthDir('codex-a'));
+  const cachePath = (): string => path.join(home, '.ccrc', 'codex-client-release.json');
+  const cache = (): Record<string, unknown> => JSON.parse(fs.readFileSync(cachePath(), 'utf8')) as Record<string, unknown>;
+  const plantCache = (c: Record<string, unknown>): void => {
+    fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
+    fs.writeFileSync(cachePath(), JSON.stringify(c));
+  };
+  const now = (): number => Math.floor(Date.now() / 1000);
+  const answer = (name: string, body: string | Buffer): string => {
+    const f = path.join(home, `npm-${name}`);
+    fs.writeFileSync(f, body);
+    return f;
+  };
+  const npm = (version: unknown, extra: Record<string, unknown> = {}): string =>
+    JSON.stringify({ name: '@openai/codex', version, dist: { tarball: 'https://example.invalid/t.tgz' }, ...extra });
+  const codex = (extra: NodeJS.ProcessEnv = {}): Result =>
+    run(['codex-a', 'codex'], { CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, CCRC_MODELS_AUTH_LIB: lib, ...extra });
+  /** The version the one catalogue request of the latest run asked as, read off its URL and its user-agent, which
+   *  must agree. */
+  const askedAs = (): string => {
+    const calls = probeRuntimeCalls(pr.rec);
+    const req = calls[calls.length - 1]!.requests[0]!;
+    const fromUrl = /[?&]client_version=([^&]*)$/.exec(req.url)?.[1] ?? '';
+    const fromUa = /^codex_cli_rs\/(\S+) /.exec(req.headers['user-agent'] ?? '')?.[1] ?? '';
+    expect(fromUa, `the user-agent (${req.headers['user-agent']}) and client_version disagree`).toBe(fromUrl);
+    return fromUrl;
+  };
+
+  beforeEach(() => {
+    const bin = path.join(home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    lib = path.join(bin, 'ccgpt-auth.py');
+    fs.copyFileSync(AUTH_LIB, lib);
+    pr = probeRuntime(home, CODEX_RAW);
+    py = path.join(home, 'probe-runtime-python');
+    fs.writeFileSync(py, pr.python, { mode: 0o755 });
+    fs.mkdirSync(authDir(), { recursive: true });
+    plantBackendCredential(authDir(), { accountId: 'acct-codex-a' });
+  });
+
+  it('reads its floor off the probe, and the cases sit around it', () => {
+    expect(FLOOR).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(new Set([FLOOR, NEWER, NEWER2, OLDER]).size).toBe(4);
+  });
+
+  it('a newer published release is asked as, in client_version and the user-agent, and cached with when it was read', () => {
+    const t0 = now();
+    const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    const c = cache();
+    expect(c['version']).toBe(NEWER);
+    expect(c['readAt']).toBeGreaterThanOrEqual(t0);
+    expect(c['triedAt']).toBe(c['readAt']);
+    expect(c).not.toHaveProperty('lastError');
+    expect(fs.statSync(cachePath()).mode & 0o777).toBe(0o600);
+    expect(curlCalls()).toEqual([]);
+  });
+
+  it('the catalogue records the version it was fetched as, and parseCatalogue keeps it', () => {
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)) }).code).toBe(0);
+    const raw = catalogueAt('codex-a') as Record<string, unknown>;
+    expect(raw['clientVersion']).toBe(NEWER);
+    expect(parseCatalogue(raw).clientVersion).toBe(NEWER);
+    // At the floor too: every Codex catalogue the arm writes says what it asked as.
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    expect((catalogueAt('codex-a') as Record<string, unknown>)['clientVersion']).toBe(NEWER);
+  });
+
+  it('through the catalogue seam no lookup runs and no clientVersion is written', () => {
+    const r = run(['codex-a', 'codex'], {
+      CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW, CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)),
+    });
+    expect(r.code, r.stderr).toBe(0);
+    expect(catalogueAt('codex-a')).not.toHaveProperty('clientVersion');
+    expect(fs.existsSync(cachePath()), 'the seam ran a lookup').toBe(false);
+  });
+
+  it('an older release is cached as npm said it, and the floor is asked as', () => {
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('older', npm(OLDER)) }).code).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+    expect(cache()['version']).toBe(OLDER);
+    expect((catalogueAt('codex-a') as Record<string, unknown>)['clientVersion']).toBe(FLOOR);
+  });
+
+  it.each<[string, () => string | Buffer]>([
+    ['a prerelease', () => npm(`${NEWER}-alpha.1`)],
+    ['a build suffix', () => npm(`${NEWER}+build.7`)],
+    ['a leading zero', () => npm(`0${NEWER}`)],
+    ['two parts', () => npm(NEWER.split('.').slice(0, 2).join('.'))],
+    ['an oversized number', () => npm(`${'9'.repeat(12)}.0.0`)],
+    ['a number, not a string', () => npm(171)],
+    ['no version', () => JSON.stringify({ name: '@openai/codex' })],
+    ['not JSON', () => 'garbage <html>not a registry answer</html>'],
+    ['a JSON array', () => JSON.stringify([NEWER])],
+    ['undecodable bytes', () => Buffer.from([0xff, 0xfe, 0x20])],
+    ['an answer over the size cap', () => npm(NEWER, { padding: 'x'.repeat(300_000) })],
+  ])('%s is refused as a failed lookup: no cache, the floor asked as, the reason kept', (_name, body) => {
+    const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('refused', body()) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+    const c = cache();
+    expect(c).not.toHaveProperty('version');
+    expect(typeof c['lastError']).toBe('string');
+    expect((c['lastError'] as string).length).toBeLessThanOrEqual(200);
+    expect(c['triedAt']).toBeGreaterThanOrEqual(now() - 60);
+  });
+
+  it('a failed lookup uses the cached release, keeps when it was read, and records the try', () => {
+    const readAt = now() - 7200;
+    plantCache({ version: NEWER, readAt, triedAt: readAt });
+    const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') });
+    expect(r.code, r.stderr).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    const c = cache();
+    expect(c['version']).toBe(NEWER);
+    expect(c['readAt']).toBe(readAt);
+    expect(c['triedAt']).toBeGreaterThan(readAt);
+    expect(typeof c['lastError']).toBe('string');
+  });
+
+  it('a failed lookup with no cache asks as the floor; so does an unreadable cache', () => {
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+    fs.writeFileSync(cachePath(), '{"version":');
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+  });
+
+  it('a cached release below the floor never undercuts it', () => {
+    plantCache({ version: OLDER, readAt: now() - 60, triedAt: now() - 60 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)) }).code).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+  });
+
+  it('a cache tried within the hour is used and npm is not asked; one tried over an hour ago is refreshed', () => {
+    const tried = now() - 60;
+    plantCache({ version: NEWER, readAt: tried, triedAt: tried });
+    const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    expect(cache()['triedAt']).toBe(tried);
+    // A failed try within the hour counts too: the box does not ask again until the hour is out.
+    plantCache({ version: NEWER, readAt: now() - 7200, triedAt: tried, lastError: 'an earlier failure' });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    plantCache({ version: NEWER, readAt: now() - 3700, triedAt: now() - 3700 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs()).toBe(NEWER2);
+    expect(cache()['version']).toBe(NEWER2);
+  });
+
+  it('a try stamped in the future is not trusted: the lookup runs', () => {
+    plantCache({ version: NEWER, readAt: now() + 7200, triedAt: now() + 7200 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs()).toBe(NEWER2);
+  });
+
+  it('a probe that meets another holding the lookup waits for its answer and does not ask again', () => {
+    const held = path.join(home, 'lock-held');
+    const holder = spawn('python3', ['-I', '-c', [
+      'import fcntl, json, os, sys, time',
+      'cache, held, version = sys.argv[1], sys.argv[2], sys.argv[3]',
+      'os.makedirs(os.path.dirname(cache), exist_ok=True)',
+      'fd = os.open(cache + ".lock", os.O_RDWR | os.O_CREAT, 0o600)',
+      'fcntl.flock(fd, fcntl.LOCK_EX)',
+      'open(held, "w").close()',
+      'time.sleep(1.5)',
+      't = int(time.time())',
+      'json.dump({"version": version, "readAt": t, "triedAt": t}, open(cache, "w"))',
+      'fcntl.flock(fd, fcntl.LOCK_UN)',
+    ].join('\n'), cachePath(), held, NEWER], { stdio: 'ignore' });
+    try {
+      const until = Date.now() + 10_000;
+      while (!fs.existsSync(held) && Date.now() < until) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+      expect(fs.existsSync(held), 'the holder took the lock').toBe(true);
+      const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) });
+      expect(r.code, r.stderr).toBe(0);
+      expect(askedAs()).toBe(NEWER);
+      expect(cache()['version']).toBe(NEWER);
+    } finally {
+      holder.kill();
+    }
+  });
+
+  it('the network lookup sends no credential: curl -q, https only, no redirect, bounded, the one URL, nothing on stdin', () => {
+    const bin = path.join(home, '.local', 'bin');
+    fs.mkdirSync(bin, { recursive: true });
+    const body = answer('net', npm(NEWER));
+    const e = env({ CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, CCRC_MODELS_AUTH_LIB: lib });
+    delete e['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+    // After env(): it plants the poisoned curl, which this case replaces with a recorder that answers.
+    fs.writeFileSync(path.join(bin, 'curl'), [
+      '#!/bin/sh',
+      'for a in "$@"; do printf \'%s\\n\' "$a"; done > "$HOME/curl-argv"',
+      'cat > "$HOME/curl-stdin"',
+      `cat ${JSON.stringify(body)}`,
+    ].join('\n') + '\n', { mode: 0o755 });
+    const r = spawnSync(BASH, [PROBE, 'codex-a', 'codex'], { env: e, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    const argv = fs.readFileSync(path.join(home, 'curl-argv'), 'utf8').split('\n').filter(Boolean);
+    expect(argv[0], 'curl -q first, so no .curlrc is read').toBe('-q');
+    const after = (flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
+    expect(after('--proto')).toBe('=https');
+    expect(after('--max-redirs')).toBe('0');
+    expect(Number(after('--max-time'))).toBeLessThanOrEqual(10);
+    expect(argv[argv.length - 1]).toBe(NPM_URL);
+    for (const flag of ['-K', '--config', '-u', '--user', '-n', '--netrc', '--netrc-optional', '--netrc-file', '-b', '--cookie', '-E', '--cert', '--oauth2-bearer'])
+      expect(argv.includes(flag), `curl was handed ${flag}`).toBe(false);
+    expect(argv.some((a) => /authorization|bearer|token/i.test(a)), 'a credential-shaped argument').toBe(false);
+    expect(fs.readFileSync(path.join(home, 'curl-stdin'), 'utf8'), 'curl read a config on stdin').toBe('');
+  });
+
+  it('parseCatalogue keeps clientVersion on a Codex catalogue only, and only a plain X.Y.Z', () => {
+    const base = { fetchedAt: 1, stale: false, models: [] };
+    expect(parseCatalogue({ probe: 'codex', ...base, clientVersion: '0.171.2' }).clientVersion).toBe('0.171.2');
+    for (const bad of ['v0.171.2', '0.171.2-beta.1', '0.171', '00.1.2', 171, null, ''])
+      expect(parseCatalogue({ probe: 'codex', ...base, clientVersion: bad }), String(bad)).not.toHaveProperty('clientVersion');
+    expect(parseCatalogue({ probe: 'codex', ...base })).not.toHaveProperty('clientVersion');
+    expect(parseCatalogue({ probe: 'openrouter', ...base, clientVersion: '0.171.2' })).not.toHaveProperty('clientVersion');
+  });
+
+  it('the release seam is read in exactly one place', () => {
+    const code = fs.readFileSync(PROBE, 'utf8').split('\n').filter((l) => !/^\s*#/.test(l));
+    expect(code.filter((l) => l.includes('CCRC_MODELS_PROBE_RELEASE_FIXTURE'))).toHaveLength(1);
   });
 });
