@@ -128,7 +128,7 @@ export function resolvePaletteTokens(
 The map is spec §3's table, slot for slot. Each mapped colour token was measured to resolve to `#rrggbb` in all twelve palettes, and every pair to meet its floor (2026-11-18, Results, "Contrast under the map"). A pair that misses its floor under this map in some palette stops the wave and is reported. It is not remapped silently.
 
 - [ ] **Step 1: Write the failing pure rows** in `reader-appearance.test.ts`:
-  - `readerAppearanceOf` builds the raw contract (each value the token's computed text, trimmed) and returns `parseAppearance`'s verdict. It checks no range or grammar of its own:
+  - `readerAppearanceOf` builds the raw contract, each value the token's text exactly as `read` answers it (spec §2's grammars: ccrc normalises nothing, no trim and no case change), and returns `parseAppearance`'s verdict. It checks no range or grammar of its own:
   - `readerAppearanceOf`:
     - **every mapped token:** with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`. The keys of its value's `colour` equal `APPEARANCE_SLOTS.colour`, and the keys of its `skin` equal `APPEARANCE_SLOTS.skin`, both ways. Its `refused` list is empty, `dropped` is `null`, and its `label` is `READER_APPEARANCE_LABEL`;
     - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
@@ -136,7 +136,8 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
     - contract `'none'` (a library without the contract) and contract `2` (one newer than ccrc knows) each give `{kind:'mode-only', why:'contract-unsupported'}`;
     - a `colourScheme` of `'normal'` or `''` gives `mode: 'auto'`, no colour group, and `dropped.why: 'scheme-unreadable'`;
     - a skin token whose value the library refuses (for example `--row-h` answering `'60px'`) is left out by the verdict, and every colour stays;
-    - an upper-case hex answers what the verdict answers: ccrc does not lower-case it;
+    - **text as read:** with `--bg-page` answering `'#2E3440'` and `--r-md` answering `' 10px'` (a leading space, as an engine may keep it), the raw contract `readerAppearanceOf` passes to `parseAppearance` (a spy) carries `'#2E3440'` and `' 10px'` unchanged, the verdict's `colour.bg` is `'#2E3440'` and its `skin.radius` is `'10px'` (the library drops outer spaces), and `refused` is empty;
+    - **strings only:** every value in the built raw contract is a string (`typeof` over every leaf), `sectionWeight` included;
     - **section family:** with `--family-section` answering the same text as `--family-mono`, `sectionFamily` is `'mono'`; with it equal to `--family-ui`, `'sans'`; with any other text, the slot is left out;
     - its serialised value is at most 4096 bytes.
   - `resolvePaletteTokens`:

@@ -71,12 +71,33 @@ flowchart LR
 - `skin.<slot>` holds the skin's character, in ten slots, each falling back by itself (§2.3 says which ccrc token feeds each, and why the others are not carried):
   - `radius`, `radiusSmall` and `radiusLarge`: whole pixels from 0 to 24;
   - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
-  - `popShadow`: the popovers' elevation. It holds one to three comma-separated shadows. Each shadow has two to four lengths, then one colour, with no `inset`, no other function and no keyword. A length is `0` or whole px: the x and y offsets from -64 to 64, the blur from 0 to 64, the spread from -8 to 8. The colour is `#rrggbb`, `#rrggbbaa` or `rgba(r, g, b, a)`, with r, g and b whole numbers from 0 to 255 and a from 0 to 1. Both forms ccrc uses fit, measured in every palette: Refined's `0 12px 40px rgba(0, 0, 0, 0.55)` (and `rgba(26, 32, 27, 0.22)` in light palettes), and Instrument's hairline `0 0 0 1px #5F697C` (one `--edge-strong` per palette);
+  - `popShadow`: the popovers' elevation, one to three shadows, each two to four lengths and one colour, with no `inset`, no other function and no keyword. Both forms ccrc uses fit, measured in every palette: Refined's `0 12px 40px rgba(0, 0, 0, 0.55)` (and `rgba(26, 32, 27, 0.22)` in light palettes), and Instrument's hairline `0 0 0 1px #5F697C` (one `--edge-strong` per palette);
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
   "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
 - `label` is optional text for Aa's hosted line (§6): 1 to 64 UTF-16 code units. It is refused if it holds a control character (U+0000 to U+001F, U+007F to U+009F) or a bidi or format character (U+200B to U+200F, U+202A to U+202E, U+2060 to U+2069, U+FEFF). An empty label is refused. The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
+
+**The value grammars, exact.** The library's `parseAppearance` matches each value against one pattern, and ccrc sends each token's text exactly as `getPropertyValue` answers it. ccrc normalises nothing: no trim, no case change, no unit change. So both sides build from these patterns, and only from them:
+- **Types.** `mode`, `label` and every value in `colour` and `skin` is a JSON string. A number is refused, even `600` for `sectionWeight`, where the string `"600"` is accepted. Unknown keys are refused and named, at the top level and in each group.
+- **Spaces.** A value may begin and end with any number of ASCII spaces (U+0020), which the pattern ignores and the verdict drops, because a browser may keep the space after a custom property's colon. Inside a value, tokens are separated by exactly one U+0020, and shadows by a comma and one U+0020. Any other whitespace refuses the value: tab, line feed, carriage return, U+00A0, U+2028, U+2029, U+FEFF, and two spaces in a row.
+- **Size.** A value whose `JSON.stringify` text is longer than 8 192 UTF-16 code units is refused whole: the verdict keeps only a valid `mode`, and `refused` holds one entry, `{key: '*', why: 'too-large'}`. ccrc's own payload budget is half that (§9).
+
+| Key | Pattern, after the outer spaces | Range |
+|---|---|---|
+| `mode` | `light` \| `dark` \| `auto` | Anything else reads as `auto` |
+| `colour.<slot>` | `#[0-9A-Fa-f]{6}` \| `#[0-9A-Fa-f]{8}`. Hex is case-insensitive | — |
+| `radius`, `radiusSmall`, `radiusLarge` | `(0\|[1-9][0-9]?)px` | 0 to 24 |
+| `controlRow` | `[1-9][0-9]px` | 28 to 56 |
+| `popShadow` | `SHADOW(, SHADOW){0,2}`. `SHADOW` is `LEN LEN( LEN( LEN)?)? COLOUR`, single spaces between. `LEN` is `0` \| `0px` \| `-?[1-9][0-9]?px`. `COLOUR` is `#[0-9A-Fa-f]{6}` \| `#[0-9A-Fa-f]{8}` \| `rgba(INT, INT, INT, ALPHA)`, lower-case `rgba`, a comma and one space between arguments. `INT` is `0` \| `[1-9][0-9]{0,2}`, and `ALPHA` is `0` \| `1` \| `0\.[0-9]{1,3}` \| `1\.0{1,3}` | x and y offsets -64 to 64, blur 0 to 64, spread -8 to 8, `INT` 0 to 255 |
+| `sectionFamily` | `sans` \| `mono` | — |
+| `sectionSize` | `1[0-6]px` | 10 to 16 |
+| `sectionWeight` | `[1-9]00` | 100 to 900 |
+| `sectionTracking` | `-?0(\.[0-9]{1,3})?em` | -0.1 to 0.3 |
+| `sectionCase` | `none` \| `uppercase` | — |
+| `label` | §6's rule: 1 to 64 UTF-16 code units, refused by category (§2, `label`) | — |
+
+Every pattern is anchored and bounded: the longest value any colour or skin pattern accepts is a three-shadow `popShadow` of 154 characters. No colour or skin pattern admits `;`, `{`, `}`, a `(` other than `rgba(`'s, `url(`, `var(`, a comment opener, a backslash or a quote. The label is free text, rendered as text only (§8).
 
 **Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A coloured tint holds at most 4% of its colour, mixed over `bg` or `surface`, so every text colour keeps 4.5:1 on every tint, links and faint text included. Inline code never sits on a tint: its ground is the opaque `surface2` (§5, §10). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
 - surfaces: `bg`, `surface`, `surface2`;
@@ -297,7 +318,7 @@ This section lists what does not change and what the new data could do. The stan
 
 **What the new data is.**
 - **Origin.** Colour, length and font values computed from ccrc's own stylesheets. A document cannot influence them: documents render inside the frame, never on ccrc's root.
-- **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again: closed keys; colour slots `#rrggbb` or `#rrggbbaa` only (`popShadow`'s colour may also be a bounded `rgba()`, §2); lengths as whole pixels in range; no `;`, braces, `url(` or `var(`. A `popShadow` within its bounds paints at most a 64 px blur and an 8 px spread around a popover, and it reaches no URL.
+- **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again, against §2's exact patterns: closed keys, strings only, single ASCII spaces, bounded digits and a size cap of 8 192 UTF-16 code units; no `;`, braces, `url(` or `var(`. A `popShadow` within its bounds paints at most a 64 px blur and an 8 px spread around a popover, and it reaches no URL.
 - **The label.** It is the one free text that crosses. It is 1 to 64 UTF-16 code units, refused if it holds a control, bidi or format character, and set with `textContent`, so markup in it shows as its own characters and never renders.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. They are the first binary bytes in the srcdoc that the library does not pin by hash: its own faces sit in a stylesheet that `frameDocument` checks against its manifest. So the library checks ccrc's faces by alphabet, signature and size, and ccrc pins them with a row: the bytes it passes are exactly the design system's font files. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, and a face that fails to load is dropped (§2.2).
@@ -380,6 +401,9 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - accepts every slot at the edges of its grammar, `popShadow` at three shadows, offsets of ±64, blur 64 and spread ±8 included;
    - leaves out a `popShadow` with `inset`, four shadows, a blur of 65, a spread of 9, `rgba(256, 0, 0, 1)`, `rgba(0, 0, 0, 1.5)` or `rgb(0, 0, 0)`;
    - leaves out, without throwing, an unknown key, a 3-digit hex, `rgb()`, `var(`, `url(`, a `;`, an out-of-range length and an oversize payload, and names each in `refused`;
+   - **the forms ccrc sends:** accepts `#2E3440` and `#2e3440`, the strings `"10px"`, `"600"` and `"-0.011em"`, and a value with leading and trailing U+0020; refuses the numbers `10` and `600`;
+   - **whitespace and digits:** refuses a `popShadow` with a tab, a line feed, U+00A0, U+2028 or U+FEFF between tokens, or two spaces in a row, an alpha of `0.5555`, and a `sectionTracking` of `0.0800em`;
+   - **size:** a value whose `JSON.stringify` text is 8 192 UTF-16 code units long is judged slot by slot, and one of 8 193 is refused whole, with `refused` equal to `[{key: '*', why: 'too-large'}]`;
    - one refused colour leaves out the whole colour group; one refused skin slot leaves out only itself;
    - a bad `mode` reads as `auto`.
 2. Host API:
