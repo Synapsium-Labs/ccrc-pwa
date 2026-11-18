@@ -7,7 +7,7 @@ import type { CcrcConfig } from '../config.js';
 import type { FleetIO } from '../io.js';
 import { fieldMeasured } from '../registry.js';
 import type { CoordStore } from './store.js';
-import type { OtherLaneReads } from './otherLanes.js';
+import { OTHER_LANE_KEYS, OVERLORD_PROFILE, type OtherLaneReads } from './otherLanes.js';
 
 /** One episode for the whole process: every reads instance shares it, so an unmeasured episode logs one line in all.
  *  Counted by reads, not by time: the first unmeasured answer after a measured one (or since start) opens it, and a
@@ -25,8 +25,9 @@ export function otherLaneReadsOf(deps: {
       if (read.kind !== 'unmeasured') unmeasuredEpisode = false;
       else if (!unmeasuredEpisode) {
         unmeasuredEpisode = true;
-        console.warn(`ccrc-server: the Overlord designation is unreadable (${read.why}); the other write lanes refuse only `
-          + 'callers whose launch profile reads overlord or cannot be read until it reads again');
+        console.warn(`ccrc-server: the Overlord designation is unreadable (${read.why}); until it reads again, these lanes `
+          + `decide by the caller's launch profile and refuse only one that reads ${OVERLORD_PROFILE} or cannot be read: `
+          + OTHER_LANE_KEYS.join(', '));
       }
       return read;
     },

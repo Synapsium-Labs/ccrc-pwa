@@ -62,14 +62,41 @@ decider calls it. No inline copy was added by this pull request.
 - **`plan-doors-grow-on-the-hierarchy-wave`.** The Linear hierarchy wave 4 pull request (#2982) adds two plan write
   doors to `server/src/coord/planRoutes.ts` (`POST /api/programmes/:slug/plan/take` and
   `POST /api/teams/:team/plan/triage`). Census assertion 5 holds the plan rows to exactly the file's write doors, so
-  whichever of the two lands second adds their rows to `OTHER_LANES` (and, for the triage door, a decision on whether
-  a team-scoped door is a plan lane at all).
+  whichever of the two lands second adds their rows to `OTHER_LANES`. The coordinator ruled the team-scoped triage
+  door a plan lane (review round 1): the Overlord writes no plan at any scope. So the second to land adds both as
+  `plan-door` rows, the triage door keyed on its team.
 - **`plan-phase-refs-is-a-plan-lane`.** The programme work map's WM0 (#2974) landed on `main` while this pull request
   was being built, with a seventh plan write door, `POST /api/programmes/:slug/plan/phases/refs`. The merge of `main`
   made the census red (the door had no class) and `planRoutes.ts` fail to compile (its `door` now takes a lane), as
   designed. This pull request adds the row `planPhaseRefs` (`overlord-uses-its-doors`, via `plan-door`) and passes it
   at that registration. The routes suite refuses it with the other six and admits a plain session on a phased plan. The
-  Task 1 pin is unedited and still pins the six doors it was written against.
+  Task 1 pin's assertions are unedited and still pin the six doors it was written against. Its one later edit (the CI
+  fix commit) wraps its watcher in `quietAtTestEnd`, the watcher-quiet guard (D-8140): harness only, no assertion moved.
+- **`census-reads-every-route-file`** (review round 1). Assertion 3 first counted a lane's key in three route files
+  only, so a key quoted in `server.ts` stayed green. It now reads every file that registers a route (`server.ts`
+  among them) plus the claimant lanes' own files (`openRun.ts`, `reclaim.ts`), for every one of the 22 lanes: a key
+  sits once in its own handler, once in its claimant file, or (the Linear lanes) nowhere, because the proxy passes
+  `linearLaneOf(verb)`'s result, which assertion 5 now checks too. A new assertion holds the files that call
+  `refuseOtherLane` or `decideOtherLane` to the six that do today. The suite carries the planted keys as red checks.
+- **`overlord-profile-is-the-role`** (review round 1). `OVERLORD_PROFILE` is typed `FleetRole` and exported; the
+  census holds the designate door's route literal (`overlordRoutes.ts`, not edited here) to it, so the word the door
+  writes and the word the decider refuses cannot drift apart silently.
+- **`unmeasured-names-the-heir`** (review round 1). On the reclaim lane the unmeasured refusal reads the heir's profile,
+  and now says so (`the heir <id>'s launch profile`); every other lane still says `this caller's`. Both sheets say the
+  `unmeasured` refusal in one sentence, `OVERLORD_HEIR_UNMEASURED_TEXT` in `resumeHeirs.ts`, the archive sheet's
+  hand-over included.
+- **`episode-line-names-the-lanes`** (review round 1). The episode's log line names the lanes deciding by profile (every
+  row of the table), as question 4 says. Its wording therefore differs from the plan's quoted line (Task 2, "the
+  reads").
+
+## Residuals (review round 1)
+
+- Every `POST /api/mail` now runs `designationRead()`, which prepares its statement on each call: one small store read
+  on the hot mail ingress. Left as it is: a cache would be a second reader of the designation.
+- Census 7 skips `GET` and `HEAD`, so the websocket surfaces registered with `app.get` are in no class. They are
+  operator surfaces today.
+- `NOT_REFUSED` files the single-use-code door `POST /api/token/claim` and the reader lab's probe under
+  `launch-profile`. The label overstates their residual: neither carries a caller identity for the Overlord to use.
 
 ## Process note
 

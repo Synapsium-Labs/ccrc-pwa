@@ -44,7 +44,7 @@ import { claimedRunsOf } from './runWords';
 import './fleet.css';
 import { restoreReachesEnsure } from './archivePutAway';
 import { substrateFaultText } from './substrateWords';
-import { OVERLORD_HEIR_TEXT, resumeHeirs, type ResumeHeir } from './resumeHeirs';
+import { OVERLORD_HEIR_TEXT, OVERLORD_HEIR_UNMEASURED_TEXT, resumeHeirs, type ResumeHeir } from './resumeHeirs';
 import { sessionLabel } from './sessionLabel';
 
 /** Restore, for both kinds of row (spec §5.2): a workspace is restored (`ws-restore`); a stopped main checkout is
@@ -105,6 +105,7 @@ function claimsNotMovedText(body: unknown): string {
     : kind === CLAIMS_MOVE_REFUSALS.claimantChanged ? `another session${by === null ? '' : ` (${by})`} took the runs over first`
     : kind === 'unknown-session' ? 'this box has no registry row for that coordinator'
     : kind === 'overlord-not-a-coordinator' ? OVERLORD_HEIR_TEXT
+    : kind === 'unmeasured' ? OVERLORD_HEIR_UNMEASURED_TEXT
     : kind === 'heir-is-a-worker' ? `that session is the worker of another coordinator's open run${by === null ? '' : ` (${by})`}`
     : kind ?? 'the move was refused';
   return `Its runs could not be moved: ${why}${detail !== null && kind !== null && detail !== why ? ` (${detail})` : ''}.`

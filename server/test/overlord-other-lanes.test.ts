@@ -113,6 +113,9 @@ describe('otherLaneVerdict: an unmeasured designation asks the caller\'s profile
       if (v.kind === 'refuse') {
         expect(v.detail).toContain('bad pending kind');
         expect(v.detail).toContain(OTHER_LANES[lane].route);
+        // The reclaim lane reads the heir's profile, not the caller's (the operator's): its detail names the heir.
+        expect(v.detail).toContain(lane === 'runReclaim' ? `the heir ${OTHER}'s launch profile` : "this caller's launch profile");
+        expect(v.detail.includes("this caller's"), lane).toBe(lane !== 'runReclaim');
       }
     }
   });
@@ -249,7 +252,10 @@ describe('otherLaneReadsOf (L3)', () => {
     expect(lines()).toBe(0);
     reads.designation(); reads.designation();
     expect(lines()).toBe(1);
-    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Overlord designation'))[0]).toMatch(/^ccrc-server: the Overlord designation is unreadable \(bad pending kind\)/);
+    const line = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('Overlord designation'))[0]!;
+    expect(line).toMatch(/^ccrc-server: the Overlord designation is unreadable \(bad pending kind\)/);
+    // It names the lanes deciding by profile (question 4): every row of the table, in its order.
+    expect(line.endsWith(`cannot be read: ${OTHER_LANE_KEYS.join(', ')}`), line).toBe(true);
     reads.designation();
     expect(lines()).toBe(1);
     reads.designation();

@@ -24,7 +24,7 @@ import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, TextInput } from '@c
 import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
 import { refusalText } from '../lib/refusalWords';
 import { ensureSession } from '../session/useEnsure';
-import { OVERLORD_HEIR_TEXT, type ResumeHeir } from './resumeHeirs';
+import { OVERLORD_HEIR_TEXT, OVERLORD_HEIR_UNMEASURED_TEXT, type ResumeHeir } from './resumeHeirs';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -80,7 +80,7 @@ export const RECLAIM_COPY: Record<
 /** The reclaim door's two Overlord refusals (Overlord W1 other lanes, C48), in the operator's words. */
 const RECLAIM_OVERLORD_TEXT: Readonly<Record<'overlord-not-a-coordinator' | 'unmeasured', string>> = {
   'overlord-not-a-coordinator': OVERLORD_HEIR_TEXT,
-  unmeasured: "the Overlord's designation could not be read, so the heir could not be checked; try again",
+  unmeasured: OVERLORD_HEIR_UNMEASURED_TEXT,
 };
 
 /** `err` -> the sentence rendered inline. Status-first, `abandonErrorText`'s

@@ -1,7 +1,8 @@
 // The other write lanes' census (Overlord W1, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-other-lanes.md`
 // Task 4; spec §3.5 C48, §3.8 H10, §15 A5). Every assertion reads the sources in both directions:
 //   1-2. every `attribution` and `landing-write` lane passes its key, once, at its own door;
-//   3.   no key sits at the wrong door;
+//   3.   no key sits at the wrong door, in any route file or a claimant lane's own file, and only the six files that
+//        ask today call the decider or its sender;
 //   4.   the mail ingress asks once, between check 6 and check 7;
 //   5.   the Linear rows are exactly the proxy's write verbs, and the plan rows exactly the plan file's write doors;
 //   6.   run open and reclaim ask once each, at their places in the order;
@@ -11,7 +12,9 @@
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { OTHER_LANES, OTHER_LANE_KEYS, linearLaneOf, type OtherLane, type OtherLaneVia } from '../src/coord/otherLanes.js';
+import {
+  OTHER_LANES, OTHER_LANE_KEYS, OVERLORD_PROFILE, linearLaneOf, type OtherLane, type OtherLaneVia,
+} from '../src/coord/otherLanes.js';
 import { OPEN_RUN_GATES } from '../src/coord/openRun.js';
 import { EXEMPT } from '../src/auth/gate.js';
 import { LINEAR_OPS } from '../src/linear/ops.js';
@@ -22,6 +25,14 @@ import {
 
 const OPEN_RUN_SRC = read('server/src/coord/openRun.ts');
 const RECLAIM_SRC = read('server/src/coord/reclaim.ts');
+
+/** Every server source file, repository-relative. */
+const srcFiles = (): string[] => (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])
+  .filter((f) => f.endsWith('.ts')).map((f) => `server/src/${f.split(path.sep).join('/')}`).sort();
+/** Every server source file that registers a route. */
+const routeFiles = (): string[] => srcFiles().filter((f) => registrationsIn(read(f)).length > 0);
+/** Comment lines stripped: a slice runs into the next route's docblock, and a comment is no call. */
+const codeOf = (body: string): string => body.split('\n').filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join('\n');
 
 const rowsVia = (via: OtherLaneVia): OtherLane[] => OTHER_LANE_KEYS.filter((k) => OTHER_LANES[k].via === via);
 const count = (hay: string, needle: string): number => hay.split(needle).length - 1;
@@ -76,30 +87,78 @@ describe('1-2. the attributed and landing lanes pass their keys at their own doo
   });
 });
 
+/** Where a lane's key is quoted, among the given sources: `file xN` for each file that quotes it. A key belongs once in
+ *  its own handler (attribution, ingress, landing and plan lanes), once in its claimant lane's own file (run open,
+ *  reclaim), or nowhere (the Linear lanes: the proxy passes `linearLaneOf(verb)`'s result, assertion 5). */
+function wrongDoors(lane: OtherLane, sources: Readonly<Record<string, string>>): string[] {
+  const { route, via } = OTHER_LANES[lane];
+  const quoted = `'${lane}'`;
+  const hits = Object.entries(sources).filter(([, src]) => count(src, quoted) > 0);
+  const where = hits.map(([f, src]) => `${f} x${count(src, quoted)}`);
+  const home = via === 'open-run-gate' ? 'server/src/coord/openRun.ts' : via === 'reclaim-heir' ? 'server/src/coord/reclaim.ts'
+    : via === 'linear-proxy' ? null : hits.find(([, src]) => keysOf(src).includes(route))?.[0] ?? '(no registrar)';
+  const expected = home === null ? [] : [`${home} x1`];
+  const misplaced = where.filter((w) => !expected.includes(w));
+  if (home !== null && via !== 'open-run-gate' && via !== 'reclaim-heir' && Object.hasOwn(sources, home)
+    && count(handlerBody(sources[home]!, route), quoted) !== 1) misplaced.push(`${home}: not once in ${route}'s handler`);
+  if (home !== null && !where.includes(`${home} x1`)) misplaced.push(`${home}: missing`);
+  return misplaced;
+}
+
 describe('3. no key at the wrong door', () => {
-  const SRCS: Record<string, string> = {
-    'coord/routes.ts': COORD_SRC, 'coord/ledgersRoutes.ts': LEDGER_SRC, 'coord/planRoutes.ts': PLAN_SRC,
-  };
-  it.each(OTHER_LANE_KEYS.filter((k) => !['linear-proxy', 'open-run-gate', 'reclaim-heir'].includes(OTHER_LANES[k].via)))(
-    '%s is quoted only in the handler of its own route', (lane) => {
-      const route = OTHER_LANES[lane].route;
-      const quoted = `'${lane}'`;
-      let inHandlers = 0; let inFiles = 0;
-      for (const src of Object.values(SRCS)) {
-        inFiles += count(src, quoted);
-        if (keysOf(src).includes(route)) inHandlers += count(handlerBody(src, route), quoted);
-      }
-      expect([inFiles, inHandlers], `${quoted} outside ${route}`).toEqual([1, 1]);
-    });
+  /** Every route file (`server.ts` among them), plus the claimant lanes' own files, which register no route. */
+  let memo: Record<string, string> | null = null;
+  const scanned = (): Record<string, string> => memo ??= Object.fromEntries(
+    [...new Set([...routeFiles(), 'server/src/coord/openRun.ts', 'server/src/coord/reclaim.ts'])].map((f) => [f, read(f)]));
+
+  it('scans every route file, server.ts among them', () => {
+    const files = Object.keys(scanned());
+    for (const f of ['server/src/server.ts', 'server/src/coord/routes.ts', 'server/src/coord/ledgersRoutes.ts',
+      'server/src/coord/planRoutes.ts', 'server/src/linear/proxyRoutes.ts', 'server/src/coord/openRun.ts',
+      'server/src/coord/reclaim.ts']) expect(files).toContain(f);
+  });
+
+  it.each(OTHER_LANE_KEYS)('%s is quoted only where its lane asks', (lane) => {
+    expect(wrongDoors(lane, scanned()), lane).toEqual([]);
+  });
 
   it('every lane key quoted in those files is a row of the table', () => {
-    for (const src of Object.values(SRCS)) {
-      for (const m of src.matchAll(/(?:requireAttribution\([^;]*?, |landingWrite\([^;]*?, )'([A-Za-z]+)'\)|(?:door\(|refuseOtherLane\(reply, )'([A-Za-z]+)'/g)) {
+    for (const src of Object.values(scanned())) {
+      for (const m of src.matchAll(/(?:requireAttribution\([^;]*?, |landingWrite\([^;]*?, )'([A-Za-z]+)'\)|(?:door\(|refuseOtherLane\(reply, |decideOtherLane\()'([A-Za-z]+)'/g)) {
         const key = m[1] ?? m[2]!;
         if (['byUuid', 'fromUuid', 'sessionUuid'].includes(key)) continue; // the uuid field, not a lane
         expect(OTHER_LANE_KEYS as string[], m[0]).toContain(key);
       }
     }
+  });
+
+  it('the files that call the decider or its sender are exactly the six that ask today', () => {
+    const CALL = /(?<!function )\b(?:refuseOtherLane|decideOtherLane)\s*(?:<[^>()]*>)?\(/;
+    expect(srcFiles().filter((f) => CALL.test(codeOf(read(f))))).toEqual([
+      'server/src/coord/openRun.ts', 'server/src/coord/planRoutes.ts', 'server/src/coord/reclaim.ts',
+      'server/src/coord/routes.ts', 'server/src/linear/proxyRoutes.ts', 'server/src/refuse.ts',
+    ]);
+  });
+
+  it('RED CHECK: a key planted in server.ts ahead of the plan routes, and one at another door, are wrong doors', () => {
+    const plantedServer = scanned()['server/src/server.ts']!.replace('registerPlanRoutes(',
+      "await refuseOtherLane(reply, 'planMet', id, reads);\n  registerPlanRoutes(");
+    expect(plantedServer).not.toBe(scanned()['server/src/server.ts']);
+    expect(wrongDoors('planMet', { ...scanned(), 'server/src/server.ts': plantedServer }))
+      .toContain('server/src/server.ts x1');
+    const plantedOpen = `${scanned()['server/src/coord/openRun.ts']!}\nconst x = decideOtherLane('runReclaim', id, reads);\n`;
+    expect(wrongDoors('runReclaim', { ...scanned(), 'server/src/coord/openRun.ts': plantedOpen }))
+      .toContain('server/src/coord/openRun.ts x1');
+    const plantedLinear = scanned()['server/src/linear/proxyRoutes.ts']!.replace('linearLaneOf(verb)', "'linearCreate' as const");
+    expect(wrongDoors('linearCreate', { ...scanned(), 'server/src/linear/proxyRoutes.ts': plantedLinear }))
+      .toContain('server/src/linear/proxyRoutes.ts x1');
+  });
+
+  it('the designate door writes the profile word the decider refuses (one word, two sides)', () => {
+    const src = read('server/src/coord/overlordRoutes.ts');
+    const words = [...src.matchAll(/\bprofile: (?:'([a-z-]+)'|(OVERLORD_PROFILE)\b)/g)].map((m) => m[1] ?? OVERLORD_PROFILE);
+    expect(words, 'the route the designate door creates the body with').toEqual([OVERLORD_PROFILE]);
+    expect(src).toMatch(new RegExp(`launchDigestOf\\((?:'${OVERLORD_PROFILE}'|OVERLORD_PROFILE)\\)`));
   });
 });
 
@@ -130,6 +189,9 @@ describe('5. the Linear and plan lanes', () => {
     const handle = between(LINEAR_PROXY_SRC, 'async function handle(', '\n  }\n');
     expect(count(handle, 'linearLaneOf(verb)')).toBe(1);
     expect(count(handle, 'refuseOtherLane(')).toBe(1);
+    // The lane it passes is linearLaneOf's result, never a literal (assertion 3 also finds no Linear key quoted there).
+    expect(count(handle, 'const lane = linearLaneOf(verb);')).toBe(1);
+    expect(count(handle, 'refuseOtherLane(reply, lane, ')).toBe(1);
     expect(before(handle, 'deps.attribute(', 'refuseOtherLane(')).toBe(true);
     expect(before(handle, 'refuseOtherLane(', 'validateLinearCall(')).toBe(true);
   });
@@ -211,10 +273,6 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/auth/passkey/assert/finish': ['operator-sign-in', 'the operator\'s passkey door'],
 };
 
-/** Every server source file that registers a route. */
-const routeFiles = (): string[] => (readdirSync(path.join(REPO, 'server', 'src'), { recursive: true }) as string[])
-  .filter((f) => f.endsWith('.ts')).map((f) => `server/src/${f.split(path.sep).join('/')}`)
-  .filter((f) => registrationsIn(read(f)).length > 0).sort();
 /** The auth gate's own table: a door it does not exempt is session-gated when sign-in is armed. */
 const EXEMPT_KEYS: ReadonlySet<string> = new Set(EXEMPT.keys());
 /** The child-only door (Table 2), read from the gate's approvals-lane entries, never spelled here (the coordinator's ruling,
@@ -224,7 +282,6 @@ const CHILD_ONLY: ReadonlySet<string> = new Set([...EXEMPT].filter(([k, why]) =>
 /** A handler that reads a caller's identity: attribution, or a uuid read off the request (a field name followed by `:` is
  *  an object key it writes, not a read). Comment lines are stripped first: a slice runs into the next route's docblock. */
 const IDENTITY_READS = /requireAttribution\(|\.attribute\(|attributionVerdict\(|\b(?:byUuid|fromUuid|sessionUuid)\b(?!\s*:)/;
-const codeOf = (body: string): string => body.split('\n').filter((l) => !/^\s*(\/\/|\/?\*)/.test(l)).join('\n');
 
 interface Placed { readonly key: string; readonly file: string; readonly cls: string }
 

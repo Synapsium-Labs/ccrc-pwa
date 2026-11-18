@@ -6,6 +6,7 @@
 // `designationFactOf`), plus an id still on the row's `stopsOwed` (slug `refused-set-is-roleofs-and-owed-stops`), which
 // differs on purpose from the Overlord doors' `callerStandingOf`: failing closed on a lane that is not an Overlord door
 // means refusing more, so a pending body is refused here and no incarnation is read.
+import type { FleetRole } from '../../../shared/fleetRoles.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
 import type { OverlordRefusal } from '../../../shared/refusal.js';
 import { designationFactFrom, designationFactOf } from '../roleOf.js';
@@ -63,8 +64,9 @@ export type OtherLaneVerdict<L extends OtherLane = OtherLane> =
   | { readonly kind: 'refuse'; readonly word: (typeof OTHER_LANES)[L]['word'] | 'unmeasured';
       readonly detail: string };
 
-/** The profile word the designate and rebind doors write on the Overlord's body (designation A). */
-const OVERLORD_PROFILE = 'overlord';
+/** The profile word the designate and rebind doors write on the Overlord's body (designation A). Typed as the role, so
+ *  a rename of the role is a compile error here; the census holds the designate door's route literal to this word. */
+export const OVERLORD_PROFILE: FleetRole = 'overlord';
 
 /** The kebab words this file spells that are no wire refusal: the `via` column, the verdict's and the profile read's
  *  own kinds. The mail-routes kebab census admits them through `isOtherLaneKebab`; the refusal words are
@@ -83,18 +85,18 @@ export function otherLaneVerdict<L extends OtherLane>(lane: L, callerId: string,
   const { route } = OTHER_LANES[lane];
   const word: (typeof OTHER_LANES)[L]['word'] = OTHER_LANES[lane].word;
   const d = facts.designation;
+  const who = lane === 'runReclaim' ? `the heir ${callerId}` : callerId;
   if (d.kind === 'unmeasured') {
     const p = facts.profile;
     const couldBeOverlord = p === 'not-read' || p.kind === 'unreadable'
       || (p.kind === 'measured' && p.word === OVERLORD_PROFILE);
     if (couldBeOverlord) {
       return { kind: 'refuse', word: 'unmeasured', detail: `the Overlord's designation could not be read (${d.why}), and `
-        + `this caller's launch profile reads ${profileText(p)}, so ${route} cannot rule out that it is the Overlord; `
+        + `${lane === 'runReclaim' ? `${who}'s` : "this caller's"} launch profile reads ${profileText(p)}, so ${route} cannot rule out that it is the Overlord; `
         + 'transient, retry' };
     }
     return { kind: 'pass-unmeasured', why: d.why };
   }
-  const who = lane === 'runReclaim' ? `the heir ${callerId}` : callerId;
   const refuse: OtherLaneVerdict<L> = { kind: 'refuse', word, detail: `${who} is the Overlord's body, which acts only `
     + `through its own doors (spec §3.5, H10); ${route} is not one of them` };
   const fact = designationFactFrom(d);
