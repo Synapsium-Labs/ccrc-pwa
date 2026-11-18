@@ -270,11 +270,11 @@ Each row reads the frame's computed values through the existing harness's frame 
     - each colour slot's computed value on the frame root equals the host's computed value for its mapped token (both lower-cased), and the frame's `color-scheme` equals the host's;
     - the frame's sans and mono roles resolve to the loaded ccrc faces (`document.fonts` in the frame holds both with status `loaded`, and a chrome label's computed `font-family` starts with the library's fixed family name for the host face).
 
-    Once per skin, with Aa open and under a fine pointer, assert:
-    - a popover row's height equals `--row-h`;
-    - the popover's `box-shadow` equals `--elev-pop`;
-    - the radii of a control, a pill and a popover equal `--r-md`, `--r-sm` and `--r-lg`;
-    - the Aa group heading's `font-family` role, `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the host's section-label tokens.
+    Once per skin, with Aa open and under a fine pointer, assert the rows below. Each compares the browser's computed value on both sides, never a token's text with a computed value. The host side is a probe element in ccrc's own document (test-only, removed after), given the token through the same property: `box-shadow: var(--elev-pop)`, `border-radius: var(--r-md)`, `height: var(--row-h)`, and for the heading `font-size: var(--fs-section); letter-spacing: var(--ls-section)`, so an `em` resolves against the same size. Both sides then serialise alike: `rgba(0, 0, 0, 0.55) 0px 12px 40px 0px` on each, and `letter-spacing` in px on each.
+    - a popover row's height equals the probe's `height`;
+    - the popover's `box-shadow` equals the probe's;
+    - the radii of a control, a pill and a popover equal the probes' for `--r-md`, `--r-sm` and `--r-lg`;
+    - the Aa group heading's `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the probe's; its `font-family` starts with the library's fixed family name for the role `sectionFamily` names.
 
     And per skin, the frame bar's height, the measure, the prose size, the gutters and the title block's sizes equal BASE. Each is compared as a computed length in px, or as an element's `getBoundingClientRect()` height for the bar and the title block, never as a token's text. BASE is taken in the library's own faces and a hosted open is in ccrc's, so the fixture's title and byline each fit on one line in both faces at every tested width: a face change then cannot wrap them and move a box.
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
