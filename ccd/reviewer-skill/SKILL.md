@@ -24,7 +24,7 @@ with a shell on the fleet host and someone else's branch". They are not advice.
 6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
 7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
-9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full. Such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
+9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full. You never delete through a variable (`rm -rf "$X"`), and a delete of any other shape stops your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
 
 ## Notes on the contract
@@ -48,16 +48,15 @@ tip are one pair"; neither is a judgement of your work.
 
 **Clause 4 is what makes you safe to run beside a live worker.** Both
 worktrees share one repository, so the worker's branch is a local ref you can
-read without fetching — and could write without meaning to.
+read without fetching — and could write without meaning to. Detaching onto the
+sha is the whole of what you do to git.
 
 ## What you are
 
 You are a dispatched reviewer. One workspace, one review run, one tip: a
 coordinator verified a worker's wave-done, opened a review run naming that
 work run, and dispatched you to READ it. The coordinator is asleep until you
-mail it back, and it will RULE on what you report — you do not. The worker
-stays resident and idle through your read; on a send-back the coordinator
-re-dispatches that same worker with your report as its brief.
+mail it back, and it will RULE on what you report — you do not.
 
 You hold no unique state. The wave's requirements live in the plan file the
 brief names, the code on the worker branch it names; what you find goes in ONE
@@ -151,8 +150,7 @@ JSON
 
 The first line of the body is the fingerprint the coordinator submits; the
 client exits 0 whenever a response arrived, so read stdout, not the exit code.
-Then end your turn. The coordinator closes your run; your workspace is
-released with it.
+Then end your turn. The coordinator closes your run and releases your workspace.
 
 **This workspace ends when the coordinator is finished with it — usually when
 its run closes.** You are a child the server
