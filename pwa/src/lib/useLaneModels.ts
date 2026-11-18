@@ -17,6 +17,12 @@ import { usePoll } from './usePoll';
 /** What a landed read came to, for a caller that says it (the Models sheet): `ok`, or the class of failure (F12). */
 export type LaneModelsReadOutcome = { readonly ok: true } | { readonly ok: false; readonly failure: LaneReadFailure };
 
+/** What a caller that writes the lane holds (the Models sheet): `supersede()` drops every read of this hook still in flight,
+ *  so none of them lands, puts the screen cache back or replaces the shown read. The sheet calls it the moment an act's 200
+ *  arrives, before the read it then asks for is issued (review 2523 F2: a read issued before the act could otherwise land in
+ *  between). It is `usePoll`'s own `supersede`. */
+export interface LaneModelsControl { readonly supersede: () => void }
+
 const cached = (lane: string | null): LaneModelsRead | null =>
   lane === null ? null : asLaneModelsRead(peek(laneModelsKey(lane))?.raw);
 
@@ -24,13 +30,15 @@ const cached = (lane: string | null): LaneModelsRead | null =>
  *  injectable for tests; it defaults to the app's one API client. `refreshOn` is a surface's own "shown again" signal
  *  (the model picker opening): each time it turns true the lane is asked again, so a class the registry moved while the
  *  screen stayed open is named the moment the models are looked at. `refreshKey` is a caller's own "ask again": each time
- *  it changes the lane is read once more (the Models sheet, after an act whose outcome is unknown). */
+ *  it changes the lane is read once more (the Models sheet, after every act). `control`, when given, is filled with this hook's
+ *  `LaneModelsControl` once it is mounted. */
 export function useLaneModels(
   lane: string | null,
   load: (lane: string, signal: AbortSignal) => Promise<unknown> = (l, signal) => api.laneModels(l, { signal }),
   refreshOn = false,
   refreshKey = 0,
   onRead?: (outcome: LaneModelsReadOutcome) => void,
+  control?: { current: LaneModelsControl | null },
 ): LaneModelsRead | null {
   const [state, setState] = useState<{ lane: string | null; read: LaneModelsRead | null }>(
     () => ({ lane, read: cached(lane) }));
@@ -38,7 +46,7 @@ export function useLaneModels(
   current.current = lane;
   const onReadNow = useRef(onRead);
   onReadNow.current = onRead;
-  const { reload } = usePoll({
+  const { reload, supersede } = usePoll({
     // `null` asks once on mount and on every return to the page; `0` is the injected mode, which asks nothing.
     pollMs: lane === null ? 0 : null,
     request: (signal) => {
@@ -57,6 +65,11 @@ export function useLaneModels(
       onReadNow.current?.({ ok: true });
     },
   });
+  useEffect(() => {
+    if (control === undefined) return undefined;
+    control.current = { supersede };
+    return () => { control.current = null; };
+  }, [control, supersede]);
   // A new lane on a mounted hook (the session moved accounts): show its cached answer, if any, and ask about it now.
   // From no lane to one, `usePoll` asks by itself (its cadence changed), so only a move between two lanes asks here.
   const previous = useRef(lane);
@@ -73,7 +86,7 @@ export function useLaneModels(
     wasShown.current = refreshOn;
     if (refreshOn && !before && lane !== null) reload();
   }, [refreshOn, lane, reload]);
-  // A caller's own "ask again" (the Models sheet, after an act whose outcome is unknown): each change of the key reads the
+  // A caller's own "ask again" (the Models sheet, after every act): each change of the key reads the
   // lane once more. The first render's key is the baseline, so mounting asks nothing extra.
   const lastKey = useRef(refreshKey);
   useEffect(() => {

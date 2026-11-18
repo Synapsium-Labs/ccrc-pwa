@@ -158,11 +158,12 @@ describe('ModelsSheet: which acts a class offers', () => {
 describe('ModelsSheet: Hold and Release settle only on the server\'s answer', () => {
   it('Hold: the row does not change before the act resolves, the class\'s controls stand down, then the row shows the ANSWER\'s read', async () => {
     const d = deferred<unknown>();
-    // the lane\'s next read (asked for after the act) says what the box holds now: the answer\'s own state
+    // the lane\'s next read, asked for after the act, is held open, so what the row and the cache show is the ANSWER\'s own
+    const reread = deferred<unknown>();
     const heldRead = read(okAdvance({ opus: { ...OPUS_ADV, hold: { at: '2026-11-18T10:30:00Z', by: 'hand' } } }), { opus: 'Gamma Plus' });
-    let after = false;
-    const load = vi.fn(async () => wire(after ? heldRead : read(okAdvance())));
-    const { act: doAct } = mount(read(okAdvance()), { load, act: () => { after = true; return d.promise; } });
+    let reads = 0;
+    const load = vi.fn(() => { reads += 1; return reads === 1 ? Promise.resolve(wire(read(okAdvance()))) : reread.promise; });
+    const { act: doAct } = mount(read(okAdvance()), { load, act: () => d.promise });
     await ready();
     fireEvent.click(within(rowOf('opus')).getByRole('button', { name: 'Hold the opus class' }));
     expect(doAct).toHaveBeenCalledWith('lane-a', { action: 'hold', class: 'opus' });
@@ -177,10 +178,11 @@ describe('ModelsSheet: Hold and Release settle only on the server\'s answer', ()
     expect(rowOf('opus').textContent).toContain('Gamma Plus');
     expect(within(rowOf('opus')).getByRole('button', { name: 'Release the opus class' })).toBeTruthy();
     expect(statusText()).toMatch(/held the opus class/i);
+    // the lane is read again after the act (F1 a), and that read is still in flight
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
     // the answer is put in the screen cache for the other surfaces
     // (the hook's own `put` holds the GET's answer, which has no `action`: only the act's answer does)
-    // (the post-act read, asked for after the act, then puts the GET's own answer there: the lane's newest state either way)
-    expect(peek(laneModelsKey('lane-a'))?.raw).toMatchObject({ models: { kind: 'read' } });
+    expect(peek(laneModelsKey('lane-a'))?.raw).toMatchObject({ action: 'hold', class: 'opus', models: heldRead });
   });
 
   it('shows the answer\'s read at once, and reads the lane again after EVERY act: the read that lands replaces it (F1 a)', async () => {
@@ -224,6 +226,35 @@ describe('ModelsSheet: Hold and Release settle only on the server\'s answer', ()
     expect(within(rowOf('opus')).getByRole('button', { name: 'Release the opus class' })).toBeTruthy();
     await act(async () => { fresher.resolve(wire(read(okAdvance({ opus: { ...OPUS_ADV, hold: { at: '2026-11-18T10:30:00Z', by: 'hand' } } })))); await fresher.promise; });
     expect(rowOf('opus').textContent).toContain('Held by hand since 2026-11-18 10:30Z');
+  });
+
+  it('a read sent BEFORE the act that lands after its 200 but BEFORE the follow-up read is issued is dropped, even when that follow-up read then fails (review 2523 F2)', async () => {
+    const opening = deferred<unknown>();
+    const answered = deferred<unknown>();
+    const held = read(okAdvance({ opus: { ...OPUS_ADV, hold: { at: '2026-11-18T10:30:00Z', by: 'hand' } } }));
+    let reads = 0;
+    const load = vi.fn(() => {
+      reads += 1;
+      return reads === 1 ? opening.promise : Promise.reject(new TypeError('Failed to fetch'));
+    });
+    // drawn from the screen cache, so the opening read is still in flight when Hold is tapped
+    put(laneModelsKey('lane-a'), wire(read(okAdvance())), Date.now());
+    mount('pending', { load, act: () => answered.promise });
+    await ready();
+    fireEvent.click(within(rowOf('opus')).getByRole('button', { name: 'Hold the opus class' }));
+    // the 200 and the late opening read (not held) in one turn: the read lands after the 200, before any effect has asked again
+    await act(async () => {
+      answered.resolve(actAnswer('hold', 'opus', held));
+      opening.resolve(wire(read(okAdvance())));
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    });
+    // the follow-up read was asked for, and failed
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    await screen.findByTestId('models-read-failed');
+    // the row and the cache are still the act's: held, with Release offered
+    expect(rowOf('opus').textContent).toContain('Held by hand since 2026-11-18 10:30Z');
+    expect(within(rowOf('opus')).getByRole('button', { name: 'Release the opus class' })).toBeTruthy();
+    expect(peek(laneModelsKey('lane-a'))?.raw).toMatchObject({ action: 'hold', class: 'opus', models: held });
   });
 
   it('a sheet closed mid-act still puts the answer in the screen cache, so a reopen shows the post-act state (F6)', async () => {
@@ -283,7 +314,7 @@ describe('ModelsSheet: Hold and Release settle only on the server\'s answer', ()
     expect((within(rowOf('haiku')).getByRole('button', { name: 'Hold the haiku class' }) as HTMLButtonElement).disabled).toBe(false);
   });
 
-  it('an exited refusal (lane-act-refused) says its code\'s words, claims nothing was changed, and reads the lane again', async () => {
+  it('an exited refusal (lane-act-refused) says its code\'s words, never claims that nothing was changed, and reads the lane again', async () => {
     const load = vi.fn(async () => wire(read(okAdvance())));
     mount(read(okAdvance()), { act: async () => { throw new ApiError(409, { ok: false, error: 'lane-act-refused', verbCode: 'lock-busy' }); }, load });
     await ready();
@@ -450,8 +481,10 @@ describe('ModelsSheet: one announcement, kinds apart, and where the focus goes (
 describe('ModelsSheet: a failed read of the lane is said in words (F12)', () => {
   it.each([
     ['signed out', new ApiError(401, { error: 'unauthenticated' }), 'signed-out', /signed out/i],
+    ['a foreign origin, which is not signed out (F9)', new ApiError(403, { ok: false, error: 'foreign-origin' }), 'foreign-origin', /not opened at the console's own address/i],
+    ['a lane that left the roster (F9)', new ApiError(404, { ok: false, error: 'not-found' }), 'not-in-roster', /no longer in the fleet's roster/i],
     ['no answer', new TypeError('Failed to fetch'), 'no-answer', /no answer arrived/i],
-    ['an answer it cannot read', new ApiError(404, { error: 'not-found' }), 'unreadable', /cannot read/i],
+    ['an answer it cannot read', new ApiError(400, { error: 'Bad Request' }), 'unreadable', /cannot read/i],
   ])('%s: words, the reason class, no skeleton forever, and a Try again that reads once more', async (_n, err, failure, re) => {
     let fail = true;
     const load = vi.fn(async () => { if (fail) throw err; return wire(read(okAdvance())); });
@@ -502,5 +535,23 @@ describe('ModelsSheet: a Revert confirm is re-checked against the CURRENT read (
     expect(doAct).toHaveBeenCalledTimes(1); // the hold only: the revert was never sent
     expect(document.body.textContent).not.toContain('Put back an empty class');
     expect(screen.queryByRole('button', { name: 'Revert the opus class' })).toBeNull();
+  });
+
+  it('a read whose advance record cannot be read also withdraws it, and the sentence covers that state too (review 2523 F9)', async () => {
+    const hold = deferred<unknown>();
+    const advanceUnreadable = read({ state: 'unreadable', detail: 'bad bytes', pending: null, classes: null });
+    let after = false;
+    mount(read(okAdvance()), {
+      load: vi.fn(async () => wire(after ? advanceUnreadable : read(okAdvance()))),
+      act: () => { after = true; return hold.promise; },
+    });
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Revert the opus class' }));
+    await screen.findByRole('dialog', { name: /revert the opus class\?/i });
+    fireEvent.click(within(rowOf('haiku')).getByRole('button', { name: 'Hold the haiku class', hidden: true }));
+    await act(async () => { hold.resolve(actAnswer('hold', 'haiku', advanceUnreadable)); await hold.promise; });
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /revert the opus class\?/i })).toBeNull());
+    expect(alertText()).toMatch(/revert of the opus class was cancelled/i);
+    expect(alertText()).toMatch(/advance record could not be read/i);
   });
 });

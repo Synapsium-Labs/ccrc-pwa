@@ -60,9 +60,13 @@ export interface ModelsActFailure {
 
 const NOTHING_CHANGED = 'Nothing was changed.';
 
-/** The verb's own refusal words (`deploy/models-op.mjs`'s `hold`, `release` and `revert`: every code they can print), each a
- *  sentence of its own. NO sentence says nothing was changed or written: a revert writes its hold FIRST, so a refusal after
- *  that leaves the class held, and the sheet reads the lane again and shows what it holds (F1, F9). */
+/** The refusal words `ccrc models <lane> hold|release|revert` can print: a HAND-KEPT list of every code `deploy/models-op.mjs`
+ *  (the prelude every op runs, `holdOp`, `revertOp` and what they write through) and the lane-lock layer in `ccd/ccrc`
+ *  (`_models_lock`, `_models_answer_locked`, `_models_answer`) print on that path, each a sentence of its own.
+ *  `server/test/models-verb-codes.test.ts` scans both files and reds when a printed code is in neither this list nor its
+ *  list of codes that belong to other ops. NO sentence says nothing was changed or written: a revert writes its hold
+ *  FIRST, so a refusal after that leaves the class held, and the sheet reads the lane again and shows what it holds
+ *  (F1, F9). */
 export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'no-previous': 'There is no earlier model on record for this class, so there is nothing to put back.',
   'previous-not-in-catalogue': 'The model this class had before is no longer in the lane\'s catalogue, so it cannot be put back.',
@@ -84,6 +88,14 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'registry-unreadable': 'The lane\'s class registry cannot be read on the fleet box.',
   'catalogue-unreadable': 'The lane\'s model catalogue cannot be read on the fleet box.',
   'catalogue-invalid': 'The lane\'s model catalogue is not one the fleet box accepts.',
+  'roster-absent': 'The fleet box has no account roster yet, so this lane could not be looked up. Run the install on the fleet box.',
+  'roster-unreadable': 'The fleet box\'s account roster exists but cannot be read, so this lane could not be looked up. Fix its permissions on the fleet box.',
+  'roster-invalid': 'The fleet box\'s account roster is not one this build accepts, so this lane could not be looked up. Fix it on the fleet box.',
+  'bad-account-id': 'That is not an account id the fleet box takes.',
+  'install-incomplete': 'The fleet box\'s ccrc install is incomplete: a file it ships with is missing or older than the rest. Re-run the install on the fleet box.',
+  'budget-deferred': 'The time budget of the run on the fleet box could not carry this change, so it was deferred. Try again in a moment.',
+  'no-answer': 'The fleet box\'s model tool gave no usable answer, so the sheet cannot say what happened. The row shows what the lane holds now. If it keeps happening, re-run the install on the fleet box.',
+  'unknown-class': 'That is not one of the four classes.',
 };
 
 /** A refusal code as a screen may print it: a kebab word, never a sentence, a path or a command. */
@@ -165,6 +177,9 @@ export const MODELS_RETRY = 'Try again';
 /** A failed read of the lane, by what happened (F12): never a skeleton forever. */
 export const MODELS_READ_FAILED: Readonly<Record<LaneReadFailure, string>> = {
   'signed-out': 'The lane could not be read: you are signed out of this console. Sign in again, then try again.',
+  'foreign-origin': 'The lane could not be read: the console refused this page because it was not opened at the console\'s own address. Open the console at that address, then try again.',
+  refused: 'The lane could not be read: the console refused the request.',
+  'not-in-roster': 'The lane could not be read: it is no longer in the fleet\'s roster.',
   'no-answer': 'The lane could not be read: no answer arrived (you may be offline, or the link to the fleet box is down).',
   unreadable: 'The lane could not be read: the console got an answer it cannot read, so no models are shown.',
 };
@@ -244,9 +259,11 @@ export function classActs(advance: LaneAdvanceRead | undefined, cls: ModelClass)
  *  again when it is confirmed, and sends nothing when it is no longer so. */
 export const revertStillOffered = (read: LaneModelsRead | null, cls: ModelClass): boolean =>
   read?.kind === 'read' && classActs(read.advance, cls).revert;
-/** Said when a Revert that was asked about is withdrawn because the lane no longer offers it. */
+/** Said when a Revert that was asked about is withdrawn because the lane's current read no longer offers it: the class
+ *  has no earlier model on record now, or the read no longer shows the advance record at all (it is unreadable, invalid,
+ *  unreported, absent or was not read, or the lane itself could not be read). */
 export const revertWithdrawnWords = (cls: ModelClass): string =>
-  `The revert of the ${cls} class was cancelled: the lane no longer has an earlier model on record for it. Nothing was sent.`;
+  `The revert of the ${cls} class was cancelled: the lane's latest read no longer offers it, because the class has no earlier model on record or the lane's advance record could not be read just now. Nothing was sent.`;
 
 export const holdAriaLabel = (action: 'hold' | 'release', cls: ModelClass): string =>
   `${action === 'hold' ? 'Hold' : 'Release'} the ${cls} class`;

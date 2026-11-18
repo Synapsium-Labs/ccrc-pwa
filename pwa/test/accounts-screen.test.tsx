@@ -628,7 +628,7 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
 });
 
 // The Models act (model-class-advance wave R4, Task 20 as re-planned): the fold's one way into the Models sheet, on a Codex
-// lane only (the roster's lane kind, managed or not: F10, the operator's ruling), stood down under the same rule as its
+// lane only (the roster's lane kind, managed or not: F10, the coordinator's ruling, D-8752), stood down under the same rule as its
 // neighbours, and the sheet it opens reads the lane through the one hook. Neutral lane ids with rows of their own (F19).
 describe('AccountsScreen: the fold\'s Models act', () => {
   const connectOf = (over: Partial<AccountsConnect> = {}): AccountsConnect =>

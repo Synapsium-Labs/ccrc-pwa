@@ -7,7 +7,7 @@ import type { LaneModelsRead } from '../../shared/models';
 import { useLaneModels } from '../src/lib/useLaneModels';
 import { clearScreenCache } from '../src/lib/screenCache';
 import { ApiError } from '../src/lib/apiError';
-import type { LaneModelsReadOutcome } from '../src/lib/useLaneModels';
+import type { LaneModelsControl, LaneModelsReadOutcome } from '../src/lib/useLaneModels';
 
 afterEach(() => { clearScreenCache(); vi.restoreAllMocks(); });
 
@@ -135,8 +135,49 @@ describe('useLaneModels (D-8406)', () => {
     await waitFor(() => expect(seen).toHaveLength(5));
     expect(seen).toEqual([
       { ok: false, failure: 'signed-out' }, { ok: false, failure: 'no-answer' }, { ok: false, failure: 'unreadable' },
-      { ok: false, failure: 'unreadable' }, { ok: true },
+      { ok: false, failure: 'not-in-roster' }, { ok: true },
     ]);
+  });
+
+  it('a stale read (an older one landing after a newer) and an aborted one (the hook unmounted) report nothing to the observer (F12, review 2523 F8)', async () => {
+    const seen: LaneModelsReadOutcome[] = [];
+    let older!: (v: unknown) => void;
+    let calls = 0;
+    const load = vi.fn((lane: string) => {
+      calls += 1;
+      return calls === 1 ? new Promise<unknown>((r) => { older = r; }) : Promise.resolve(answer(lane, readOf('Newer')));
+    });
+    const { rerender, unmount } = renderHook(({ key }: { key: number }) => useLaneModels('lane-a', load, false, key, (o) => seen.push(o)), { initialProps: { key: 0 } });
+    rerender({ key: 1 }); // a newer read is issued while the first is in flight
+    await waitFor(() => expect(seen).toEqual([{ ok: true }]));
+    await act(async () => { older(answer('lane-a', readOf('Older'))); await Promise.resolve(); });
+    expect(seen).toEqual([{ ok: true }]); // the stale one reported nothing
+    let last!: (v: unknown) => void;
+    load.mockImplementationOnce(() => new Promise<unknown>((r) => { last = r; }));
+    rerender({ key: 2 });
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(3));
+    unmount(); // its read is aborted
+    await act(async () => { last(answer('lane-a', readOf('After unmount'))); await Promise.resolve(); });
+    expect(seen).toEqual([{ ok: true }]);
+  });
+
+  it('a caller\'s control supersedes every read in flight: it lands nothing, and the next read is asked as usual (review 2523 F2)', async () => {
+    const seen: LaneModelsReadOutcome[] = [];
+    const control: { current: LaneModelsControl | null } = { current: null };
+    let opening!: (v: unknown) => void;
+    let calls = 0;
+    const load = vi.fn((lane: string) => {
+      calls += 1;
+      return calls === 1 ? new Promise<unknown>((r) => { opening = r; }) : Promise.resolve(answer(lane, readOf('After the act')));
+    });
+    const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModels('lane-a', load, false, key, (o) => seen.push(o), control), { initialProps: { key: 0 } });
+    expect(control.current).not.toBeNull();
+    act(() => { control.current!.supersede(); });
+    await act(async () => { opening(answer('lane-a', readOf('Before the act'))); await Promise.resolve(); });
+    expect(result.current).toBeNull(); // the superseded read landed nothing
+    expect(seen).toEqual([]);
+    rerender({ key: 1 });
+    await waitFor(() => expect(result.current).toEqual(readOf('After the act')));
   });
 
   it('an existing caller that passes no observer is unchanged: a failed read is still nothing', async () => {

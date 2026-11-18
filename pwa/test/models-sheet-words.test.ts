@@ -79,16 +79,18 @@ describe('modelsActFailure: what a refused act says, and whether it may have hap
     expect(modelsActFailure(new TypeError('Failed to fetch'), 'lane-a', 'opus').outcome).toBe('unknown');
   });
 
-  // Every code `hold`, `release` and `revert` (deploy/models-op.mjs: holdOp, revertOp, advanceForWrite, writeJsonFile, materialise
-  // and the loaders their gates read) can print as a refusal.
+  // The codes deploy/models-op.mjs (holdOp, revertOp, advanceForWrite, writeJsonFile, materialise, the loaders their gates read
+  // and the prelude every op runs) and the lane-lock layer in ccd/ccrc print on the hold, release and revert path: a hand-kept
+  // list. server/test/models-verb-codes.test.ts is the scan that keeps it whole.
   const REACHABLE = [
     'no-previous', 'previous-not-in-catalogue', 'previous-taken', 'lock-busy', 'lock-unwritable', 'no-registry', 'registry-invalid',
     'unroutable-lane', 'no-such-account', 'anthropic-lane', 'registry-unwritable', 'advance-unwritable', 'settings-unwritable',
     'materialise-failed', 'advance-file-unreadable', 'advance-file-invalid', 'advance-invalid', 'registry-unreadable',
-    'catalogue-unreadable', 'catalogue-invalid',
+    'catalogue-unreadable', 'catalogue-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid', 'bad-account-id',
+    'install-incomplete', 'budget-deferred', 'no-answer', 'unknown-class',
   ];
 
-  it('every code a hold, release or revert can print has a sentence of its own (F9), and no two share one', () => {
+  it('every code on the hold, release and revert path that this list names has a sentence of its own (F9), and no two share one', () => {
     for (const code of REACHABLE) expect(Object.hasOwn(VERB_CODE_WORDS, code), code).toBe(true);
     expect(new Set(Object.values(VERB_CODE_WORDS)).size).toBe(Object.keys(VERB_CODE_WORDS).length);
   });
@@ -196,16 +198,24 @@ describe('classActs and revertStillOffered', () => {
 
 // ── a failed read of the lane, in words (F12) ──
 describe('a failed read of the lane', () => {
-  it('is classed by what happened: signed out, no answer, or an answer this console cannot read', () => {
+  it('is classed by what happened: signed out, a foreign origin, refused, out of the roster, no answer, or unreadable (F9)', () => {
     expect(laneReadFailureOf(new ApiError(401, { error: 'unauthenticated' }))).toBe('signed-out');
-    expect(laneReadFailureOf(new ApiError(403, 'no'))).toBe('signed-out');
+    // A 403 is never "signed out": signing in cannot cure it.
+    expect(laneReadFailureOf(new ApiError(403, { ok: false, error: 'foreign-origin' }))).toBe('foreign-origin');
+    expect(laneReadFailureOf(new ApiError(403, 'no'))).toBe('refused');
     expect(laneReadFailureOf(new TypeError('Failed to fetch'))).toBe('no-answer');
     expect(laneReadFailureOf(new ApiError(503, { error: 'unavailable' }))).toBe('no-answer');
-    expect(laneReadFailureOf(new ApiError(404, { error: 'not-found' }))).toBe('unreadable');
+    // The route's own 404 word: the lane has left the roster. A 404 without it (a server with no such route) is unreadable.
+    expect(laneReadFailureOf(new ApiError(404, { error: 'not-found' }))).toBe('not-in-roster');
+    expect(laneReadFailureOf(new ApiError(404, { error: 'Not Found', statusCode: 404 }))).toBe('unreadable');
   });
   it('each class has words of its own, and the unreadable-files sentence no longer promises class names it did not draw', () => {
-    expect(new Set(Object.values(MODELS_READ_FAILED)).size).toBe(3);
+    expect(new Set(Object.values(MODELS_READ_FAILED)).size).toBe(6);
     expect(MODELS_READ_FAILED['signed-out']).toMatch(/sign/i);
+    expect(MODELS_READ_FAILED['foreign-origin']).toMatch(/address/i);
+    expect(MODELS_READ_FAILED['foreign-origin']).not.toMatch(/sign/i);
+    expect(MODELS_READ_FAILED.refused).not.toMatch(/sign/i);
+    expect(MODELS_READ_FAILED['not-in-roster']).toMatch(/no longer in the fleet's roster/);
     expect(MODELS_READ_FAILED['no-answer']).toMatch(/no answer|offline/i);
     expect(MODELS_READ_FAILED.unreadable).toMatch(/cannot read/i);
     expect(MODELS_READ_UNREADABLE).not.toMatch(/class names only/i);

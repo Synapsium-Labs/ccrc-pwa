@@ -346,14 +346,19 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE };
 }
 
-/** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401 or 403), `no-answer` (no
- *  answer arrived, or the server answered with a 5xx: offline, a dropped link, a fleet box that did not reply) and
- *  `unreadable` (an answer came that this console cannot read: a 4xx of any other kind, or a 2xx the one reader above
- *  refused, which the caller names itself). Pure. */
-export type LaneReadFailure = 'signed-out' | 'no-answer' | 'unreadable';
+/** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401), `foreign-origin` (the
+ *  gate's 403 `foreign-origin`: the page was opened at an address the console does not accept, which signing in cannot
+ *  cure), `refused` (any other 403), `not-in-roster` (the route's 404 `not-found`: the lane has left the roster),
+ *  `no-answer` (no answer arrived, or the server answered with a 5xx: offline, a dropped link, a fleet box that did not
+ *  reply) and `unreadable` (an answer came that this console cannot read: a 4xx of any other kind, a 404 without the
+ *  route's word, or a 2xx the one reader above refused, which the caller names itself). Pure. */
+export type LaneReadFailure = 'signed-out' | 'foreign-origin' | 'refused' | 'not-in-roster' | 'no-answer' | 'unreadable';
 export function laneReadFailureOf(err: unknown): LaneReadFailure {
   if (!(err instanceof ApiError)) return 'no-answer';
-  if (err.status === 401 || err.status === 403) return 'signed-out';
+  const word = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
+  if (err.status === 401) return 'signed-out';
+  if (err.status === 403) return word === 'foreign-origin' ? 'foreign-origin' : 'refused';
+  if (err.status === 404 && word === 'not-found') return 'not-in-roster';
   return err.status >= 500 ? 'no-answer' : 'unreadable';
 }
 

@@ -7,8 +7,10 @@
 // ONE READ. The sheet reads through `useLaneModels` (`lib/useLaneModels.ts`), the same hook every other surface that names a
 // lane's models reads through: no second hook and no second fetch of the GET. An act's 200 carries the FRESH read, shown at
 // once, put in the screen cache for the other surfaces (even if the sheet was closed while the act was with the box), and kept
-// until a read STARTED AFTER it lands: the sheet asks the lane again after EVERY act, whatever the outcome, and the hook lets a
-// read begun before that ask land stale (`usePoll`'s newest-issued rule), so an older read never puts the old state back.
+// until a read STARTED AFTER it lands: the sheet asks the lane again after EVERY act, whatever the outcome. The moment a 200
+// arrives the sheet supersedes every read of the hook still in flight (`LaneModelsControl`, `usePoll`'s `supersede`), so a read
+// issued before the act (the opening read of a sheet drawn from the cache) can never land between the 200 and the read asked
+// for after it, and an older read never puts the old state back, on screen or in the cache (review 2523 F2).
 //
 // NON-OPTIMISTIC. A tap stands down every control (one write at a time: the fleet agent has one models gate), marks the tapped
 // class's controls busy, and changes nothing else. The row moves only on the server's answer, and then only to a read. "Nothing
@@ -24,7 +26,7 @@ import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';
 import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
 import { put, laneModelsKey } from '../lib/screenCache';
 import { api } from '../lib/api';
-import { useLaneModels, type LaneModelsReadOutcome } from '../lib/useLaneModels';
+import { useLaneModels, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
 import type { LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
@@ -79,7 +81,8 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     setReadFailure(outcome.failure);
     setSaid({ kind: 'alert', text: MODELS_READ_FAILED[outcome.failure] });
   };
-  const read = useLaneModels(lane, load, open, refreshKey, onRead);
+  const reads = useRef<LaneModelsControl | null>(null);
+  const read = useLaneModels(lane, load, open, refreshKey, onRead, reads);
   // The act's own fresh read, shown while the hook's read is still the one it replaced.
   const [fresh, setFresh] = useState<{ over: LaneModelsRead | null; read: LaneModelsRead } | null>(null);
   const readNow = useRef(read);
@@ -125,6 +128,8 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
       settle(cls);
       return;
     }
+    // A 200: no read issued before it may land now (F2). The read asked for in `settle` is issued after this.
+    reads.current?.supersede();
     const answer = asLaneModelsActAnswer(raw);
     const mine = answer !== null && answer.lane === lane && answer.action === action && answer.class === cls ? answer : null;
     // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6).
