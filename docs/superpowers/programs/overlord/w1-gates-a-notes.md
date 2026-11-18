@@ -260,4 +260,7 @@ first-run green. No complete local suite is claimed; the original full-run signa
 Broad staged whitespace checking reports an incoming blank line at EOF in `server/test/routeRegistrations.ts`.
 That file measures identical to pinned main and is left unchanged; the two manually resolved files pass whitespace
 checking. Documentation checks passed: deviation references 34/34, anchors 9/9 and citations 4/4. The refreshed
-handoff still waits for CI and actual CodeQL after the round's single push.
+handoff still waits for CI and actual CodeQL after the round's single push. Armed growth passed 96/96 against
+committed merge `02c2b522b`, with no waiver. The complete branch-delta scan against pinned main found zero private
+hits. A broader incoming-file scan's eight matches were neutral home-directory fixtures in three files identical
+to pinned main; none was a new identifier authored in this round.
