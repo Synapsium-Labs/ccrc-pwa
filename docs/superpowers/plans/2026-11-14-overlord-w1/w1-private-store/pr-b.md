@@ -116,6 +116,12 @@ to an existing plan file outside a ledger branch; the coordinator folds it into 
   `deliver` while the row is still `recorded` or `queued`, sent as actor `mail-lane` (the ack route is the mail lane's ack). Any
   other mail is left alone, and the route's answer never changes. An ack before the lane typed the line moves the row to
   `delivered` although no nudge was typed; the session read the message's id from its inbox, which is the delivery.
+- **`ack-route-lines-under-item-436`** (review 2627 F-1). `server/src/coord/routes.ts` is held by run 1850. Under the operator's
+  ruling on item 436 (Overlord PRs edit the files run 1850 holds now, and run 1850 merges them later), this PR adds exactly two
+  insertions there and changes nothing else: the import `import { settleAckedOperatorNudge } from '../operatorModel/nudgeLane.js';`
+  after `planFactsOf`'s import, and, in `POST /api/mail/:id/ack` right after `const acked = coord.markAcked(id, Date.now());`, one
+  comment line and `if (acked.ok) settleAckedOperatorNudge({ coord, operatorModel: deps.operatorModel, now: Date.now(), warn: (l) =>
+  console.warn(l) }, delivery.mailId);`. Removing the call reds the self-ack case (measured).
 - **`recheck-pinned-inside-the-slot`** (review 2627 F-3). A case holds the session's queue slot, flips the re-ask while the call
   waits, and releases it: the answer is `target-moved` and nothing is typed. Moving the re-ask before the slot is granted turns
   it red (measured by hand).

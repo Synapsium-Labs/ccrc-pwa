@@ -157,6 +157,7 @@ import {
 } from '../../../shared/plainAutoMemory.js';
 import { planStorePort } from './planStore.js';
 import { planFactsOf } from './planRunFacts.js';
+import { settleAckedOperatorNudge } from '../operatorModel/nudgeLane.js';
 
 /** The approval request's id shapes (plan Task 16): a registry id as `ccrc-api`'s `SAFE_RE` admits it, a lowercase
  *  sha256, and the hook's 128-bit nonce. */
@@ -1216,6 +1217,8 @@ export function registerCoordRoutes(
     }
 
     const acked = coord.markAcked(id, Date.now());
+    // A session's own ack of an operator-message nudge settles that message as the lane's ack does (Overlord W1 private store B).
+    if (acked.ok) settleAckedOperatorNudge({ coord, operatorModel: deps.operatorModel, now: Date.now(), warn: (l) => console.warn(l) }, delivery.mailId);
     if (acked.ok) {
       return reply.code(200).send({ ok: true, already: false, parked: false, state: acked.state });
     }
