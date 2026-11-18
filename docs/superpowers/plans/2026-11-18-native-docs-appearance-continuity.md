@@ -64,7 +64,7 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/src/docs/reader/policy.ts` | L1 | 4 | `readerMountPlan` gains `appearance: boolean` |
 | `pwa/test/reader-policy.test.ts` | — | 4 | The two `readerMountPlan` `.toEqual` rows gain the field |
 | `pwa/test/reader-bridge.test.ts` | — | 4 | Bridge rows, and the two `readerMountPlan` rows of "readerMountPlan is the one decision" |
-| `pwa/test/docs-scans.test.ts` | — | 4 | `hostAppearance.ts` and `appearance.ts` join `READER_ADAPTERS` |
+| `pwa/test/docs-scans.test.ts` | — | 4 | `hostAppearance.ts` and `appearance.ts` join `READER_ADAPTERS`, and `adapterUseAllowed` gains the three lazy edges between the bridge and them |
 | `pwa/src/docs/ReaderFrame.tsx` | L4 | 5 | Seed, post-mount resend, follow, coalesce |
 | `pwa/test/reader-frame.test.tsx` | — | 5 | Frame rows |
 | `pwa/browser/reader-appearance.browser.test.ts` (new) | — | 6 | AP-1 to AP-6 and AP-8 browser rows |
@@ -217,15 +217,18 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
   - **after `destroy()`**, `follow` does nothing;
   - **the lab:** with `profile: 'lab-draw'`, no `appearance` is passed, `seed` is `{hosted: false}` and the root is never read;
   - **the plan:** in `reader-policy.test.ts`, the Docs row (`readerMountPlan(undefined, 100, chrome, e17)`) expects `{ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true, appearance: true }`, and the lab row (`readerMountPlan('lab-draw', …)`) expects `{ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }`. Both rows exist on `main` today without the field, so they go red until Step 3. So do the two rows of `reader-bridge.test.ts`'s case "readerMountPlan is the one decision, and only lab-draw maps to drawing on open", which gain `appearance: false` (lab-draw) and `appearance: true` (Docs);
-  - **the main bundle stays library-free:** in `docs-scans.test.ts`, `hostAppearance.ts` and `appearance.ts` join `READER_ADAPTERS`, so a value import of either from outside `pwa/src/docs/reader/` reds the existing main-bundle scan;
+  - **the main bundle stays library-free:** in `docs-scans.test.ts`:
+    - `READER_ADAPTERS` becomes `['src/docs/reader/bridge', 'src/docs/reader/assets', 'src/docs/reader/hostAppearance', 'src/docs/reader/appearance']`;
+    - `adapterUseAllowed(file, target, dynamic)` keeps its two arms and gains exactly three, each a static value import made inside the lazily loaded chunk: `bridge.ts` → `src/docs/reader/hostAppearance` (the read), `bridge.ts` → `src/docs/reader/appearance` (`READER_APPEARANCE_CONTRACTS`, for the support check), and `hostAppearance.ts` → `src/docs/reader/appearance` (`readerAppearanceOf`). Without them, the existing "M8.10" case reds `main-bundle:value-import` on the plan's own imports;
+    - a new case in clause W8a plants, in a tree copy, a value import of `hostAppearance` and one of `appearance` in `src/docs/ReaderFrame.tsx`, and one of `appearance` in `src/docs/DocsHead.tsx`. Each answers `main-bundle:value-import`, and the unplanted tree answers none;
   - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
   - **only the verdict is passed:** with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
-- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts`). Expected: FAIL on the new rows and the four changed `readerMountPlan` rows (two in each file) only.
+- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`). Expected: FAIL on the new rows and the four changed `readerMountPlan` rows (two in each file) only. `docs-scans` stays green here: no source imports the new modules yet, and its planted case passes on a tree copy once `READER_ADAPTERS` names them.
 - [ ] **Step 3: Implement.**
   - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer is checked against `READER_APPEARANCE_CONTRACTS`.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
   - The lab path is decided by `readerMountPlan`, which gains `appearance: boolean`: `false` for `lab-draw`.
-- [ ] **Step 4: Run to green**, plus `test/reader-policy.test.ts`. Expected: PASS.
+- [ ] **Step 4: Run to green:** `test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`. Expected: PASS, with `docs-scans`' "M8.10" case green over the three new edges.
 - [ ] **Step 5: Commit**: `feat(docs): the reader bridge carries ccrc's appearance`.
 
 ### Task 5: The frame follows the host
@@ -234,7 +237,7 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
 - Modify: `pwa/src/docs/ReaderFrame.tsx`, `pwa/test/reader-frame.test.tsx`
 
 **Interfaces:**
-- Consumes: Task 3's `useHostAppearance`; Task 4's `ReaderMountInput.appearanceRoot`, `ReaderMount.seed` and `ReaderMount.follow`. It imports no value from `docs/reader/` (the main-bundle scan, Task 4).
+- Consumes: Task 3's `useHostAppearance`; Task 4's `ReaderMountInput.appearanceRoot`, `ReaderMount.seed` and `ReaderMount.follow`, as types. It imports no value from the four `READER_ADAPTERS` (`bridge.ts`, `assets.ts`, `hostAppearance.ts`, `appearance.ts`) other than the existing dynamic `import()` of the bridge (the main-bundle scan, Task 4). Its existing value imports of `reader/history`, `reader/policy` and `reader/readerText` stay.
 
 - [ ] **Step 1: Write the failing rows** in `reader-frame.test.tsx`:
   - **seed:** the mount input's `appearanceRoot` is `document.documentElement`;
@@ -531,7 +534,7 @@ There is one commit per finding, then this Results commit. The coordinator ruled
 | M-7: D-8761 missing from Task 7 | Fixed |
 | M-8: tint ground unstated | Fixed. Tints mix over `bg` or `surface`, never `surface2`. Measured: 4.23:1 at 6% and 4.40:1 at 3% on `surface2` |
 | M-9: types missing from §10 | Fixed |
-| M-10: the library could reach the main bundle | Fixed. The bridge alone reads the root (`follow`), `ReaderFrame` imports no value from `docs/reader/`, the two modules join `READER_ADAPTERS`, and new row AP-M21 |
+| M-10: the library could reach the main bundle | Fixed. The bridge alone reads the root (`follow`), `ReaderFrame` imports no value from the bridge or the two new modules, the two modules join `READER_ADAPTERS`, and new row AP-M21. (Review 2657 F3 corrected this line: `ReaderFrame` does value-import `reader/history`, `reader/policy` and `reader/readerText`, and `adapterUseAllowed` needed three new edges.) |
 | M-11: semantic colours lose hue in some palettes | Accepted and recorded in X1-12: these are ccrc's own text colours |
 | M-12: label rules | Fixed. UTF-16 code units, bidi and format characters refused, empty refused, and the test names `ccrc` |
 | M-13: scan part numbers differed | Fixed. Parts 1 to 4 follow spec §3, and part 5 is §5's contrast |
