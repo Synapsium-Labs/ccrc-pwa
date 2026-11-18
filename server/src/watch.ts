@@ -2216,8 +2216,7 @@ export class FleetWatcher {
   liveSpendReading(sessionId: string): LiveSpendReading {
     if (!this.usageSwept) return { kind: 'not-ready' };
     if (this.usageUnreadable.has(sessionId)) return { kind: 'unreadable' };
-    const r = spendReadingOf(this.usage.get(sessionId), this.usageConversation.get(sessionId),
-      this.spendTurns.get(sessionId) ?? { kind: 'unread' });
+    const r = spendReadingOf(this.usage.get(sessionId), this.usageConversation.get(sessionId), this.spendTurns.get(sessionId));
     return r === null ? { kind: 'none' } : { kind: 'reading', ...r };
   }
 

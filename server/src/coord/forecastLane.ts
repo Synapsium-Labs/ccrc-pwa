@@ -68,16 +68,18 @@ export interface UsageRead {
 }
 
 /** The watcher's three maps shaped into one reading: the usage sweep's `SessionUsage` (its `ts` in epoch seconds), the
- *  conversation pair it was read beside, and the turn marker's answer. Null when the session has no reading. Shapes;
- *  judges nothing. */
+ *  conversation pair it was read beside, and the turn marker's answer. Null when the session has no reading. A session
+ *  whose marker the lane has not read yet (`turn` undefined) reads `unread`, so its reading is never measured on a guess
+ *  (fix round 2, F2-a). Shapes; judges nothing. */
 export function spendReadingOf(
   usage: Pick<SessionUsage, 'ts' | 'cost' | 'class'> | undefined,
   conversation: { sidecar: string | null; registry: string } | undefined,
-  turn: SpendTurnRead,
+  turn: SpendTurnRead | undefined,
 ): SpendReading | null {
   if (usage === undefined) return null;
   return { readAt: usage.ts * 1000, cost: usage.cost, class: usage.class,
-    sidecarUuid: conversation?.sidecar ?? null, conversationUuid: conversation?.registry ?? null, turn };
+    sidecarUuid: conversation?.sidecar ?? null, conversationUuid: conversation?.registry ?? null,
+    turn: turn ?? { kind: 'unread' } };
 }
 
 /** What the spend and health arms need beyond the store, from the watcher. `spendSince` is when the spend arm first ran

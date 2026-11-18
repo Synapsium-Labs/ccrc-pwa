@@ -198,7 +198,7 @@ const spendRun = (c: CoordStore, o: { program?: string; wave?: number; kind?: st
 const rowOf = (c: CoordStore, runId: number) => c.db.prepare('SELECT runId, at, state, cost, class, readAt, startCost FROM run_spend WHERE runId = ?').get(runId);
 const reading = (o: Partial<SpendReading> = {}): SpendReading =>
   ({ readAt: T0 - HOUR - 5 * MIN, cost: 3.5, class: 'opus', sidecarUuid: 'conv-1', conversationUuid: 'conv-1',
-    turn: { kind: 'read', turnAt: T0 - 2 * HOUR }, ...o });
+    turn: { kind: 'read', turnAt: T0 - 2 * HOUR, background: 0 }, ...o });
 
 interface Harness {
   live: ForecastLive; ready: { value: boolean }; readings: Map<string, SpendReading>; unreadable: Set<string>;
@@ -250,8 +250,8 @@ describe('the spend arm', () => {
     const h = harness();
     const after = closed(coord, 'sess-a', { wave: 1 });
     const idle = closed(coord, 'sess-b', { wave: 2, dispatchedAt: T0 - 20 * HOUR, closedAt: T0 - HOUR });
-    h.readings.set('sess-a', reading({ turn: { kind: 'read', turnAt: T0 - HOUR - 4 * MIN } }));
-    h.readings.set('sess-b', reading({ readAt: T0 - 19 * HOUR, turn: { kind: 'read', turnAt: T0 - 19 * HOUR - MIN } }));
+    h.readings.set('sess-a', reading({ turn: { kind: 'read', turnAt: T0 - HOUR - 4 * MIN, background: 0 } }));
+    h.readings.set('sess-b', reading({ readAt: T0 - 19 * HOUR, turn: { kind: 'read', turnAt: T0 - 19 * HOUR - MIN, background: 0 } }));
     runForecastLane(coord, T0, entropy(), h.live);
     expect(rowOf(coord, after)).toMatchObject({ state: 'outside', cost: null });
     expect(rowOf(coord, idle)).toMatchObject({ state: 'measured', cost: 3.5 });

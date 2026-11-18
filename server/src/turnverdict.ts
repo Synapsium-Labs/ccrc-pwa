@@ -156,7 +156,8 @@ export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<
 }
 
 /** How many times, and how far apart, `conversationAfterClearFor` reads a resumed worker's live process for the
- *  conversation its `/clear` opened (Overlord W2 forecasts B, fix round 1, F3): at most about a second in all. */
+ *  conversation its `/clear` opened (Overlord W2 forecasts B, fix round 1, F3): about a second of sleeping in all, plus the
+ *  reads' own latency (the pane's pid, then up to that many live-file reads); a failed read ends it at once. */
 export const CONVERSATION_ROTATE_READS = 10;
 const CONVERSATION_ROTATE_STEP_MS = 100;
 

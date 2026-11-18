@@ -76,14 +76,15 @@ export async function readUsage(io: FleetIO, registryDir: string, id: string, no
 
 /** The turn marker of each session with a usage reading (Overlord W2 forecasts B, fix round 1, F2), judged against the
  *  registry's conversation the reading was taken beside (`conversations`, the usage sweep's own map): `read` with its
- *  newest turn's start, or `unread` for any answer that cannot vouch (absent, unmeasured, malformed, foreign, a throw).
+ *  newest turn's start and its newest Stop's live background count (fix round 2, F2-b), or `unread` for any answer that
+ *  cannot vouch (absent, unmeasured, malformed, foreign, a throw).
  *  `readMark` is the marker's one reader (`turnmark.ts#readTurnMarkMeasured`), handed in by the watcher. */
 export async function readSpendTurns(readMark: (id: string, registryUuid: string) => Promise<TurnMarkRead>,
   conversations: ReadonlyMap<string, { readonly registry: string }>): Promise<Map<string, SpendTurnRead>> {
   const out = new Map<string, SpendTurnRead>();
   await Promise.all([...conversations].map(async ([id, c]) => {
     const mark = await readMark(id, c.registry).catch((): TurnMarkRead => ({ ok: false, reason: 'unmeasured' }));
-    out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt } : { kind: 'unread' });
+    out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt, background: mark.bg } : { kind: 'unread' });
   }));
   return out;
 }

@@ -380,7 +380,7 @@ const spendRow = (runId: number, state: RunSpendRow['state'], cost: number | nul
 const reading = (cost: number | null, o: { cls?: string | null; readAt?: number; sidecar?: string | null; turnAt?: number | null | 'unread' } = {}): LiveSpendReading =>
   ({ kind: 'reading', cost, class: o.cls === undefined ? 'opus' : o.cls, readAt: o.readAt ?? NOW - HOUR / 6,
     sidecarUuid: o.sidecar === undefined ? 'conv-1' : o.sidecar, conversationUuid: 'conv-1',
-    turn: o.turnAt === 'unread' ? { kind: 'unread' } : { kind: 'read', turnAt: o.turnAt === undefined ? NOW - HOUR : o.turnAt } });
+    turn: o.turnAt === 'unread' ? { kind: 'unread' } : { kind: 'read', turnAt: o.turnAt === undefined ? NOW - HOUR : o.turnAt, background: 0 } });
 const liveRow = (runId: number, sessionId: string, r: LiveSpendReading, o: Partial<LiveSpendRow> = {}): LiveSpendRow =>
   ({ runId, sessionId, reading: r, redispatched: false, resumed: false, clearedAt: null, conversation: 'conv-1', ...o });
 const SPEND_ZERO = { total: null, byClass: {}, perWaveMedian: null, wavesMeasured: 0, wavesUnmeasured: 0, runsUnmeasured: 0,

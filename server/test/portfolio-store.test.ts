@@ -373,7 +373,7 @@ describe('portfolioFacts fills w2 (forecasts B)', () => {
     mk('prog-a', { wave: 3 });
     mk('prog-a', { wave: 4, state: 'done', sessionId: 'sess-closed' });
     coord.db.prepare("UPDATE runs SET resumed = 1, clearedAt = ?, dispatchConversation = 'conv-a' WHERE id = ?").run(NOW - DAY, withA);
-    const r: SpendReading = { readAt: NOW - HOUR, cost: 1.25, class: 'opus', sidecarUuid: 'conv-a', conversationUuid: 'conv-a', turn: { kind: 'read', turnAt: null } };
+    const r: SpendReading = { readAt: NOW - HOUR, cost: 1.25, class: 'opus', sidecarUuid: 'conv-a', conversationUuid: 'conv-a', turn: { kind: 'read', turnAt: null, background: 0 } };
     const asked: string[] = [];
     const usage: SpendUsageRead = (id) => {
       asked.push(id);

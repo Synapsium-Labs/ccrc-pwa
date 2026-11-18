@@ -101,8 +101,10 @@ const GRACE_MS = SPEND_READ_GRACE_MINUTES * 60_000;
 /** What one run cost, first match: `absent` with no session, no reading, or a reading with no cost figure; `measured` only
  *  when every test holds, else `outside`:
  *  - the window: the reading lies in `[dispatchedAt, closedAt + SPEND_READ_GRACE_MINUTES]`;
- *  - freshness (F2, ruled): no main-thread turn of the session started after the reading was rendered, so nothing was
- *    spent since it; a marker that could not vouch fails it;
+ *  - freshness (F2, ruled): no main-thread turn of the session started after the reading was rendered, and its newest
+ *    Stop left no background work live (F2-b, ruled: an agent, workflow or shell running past the render spends unseen,
+ *    and a Stop cannot say when that work ended, so any live count, or one it could not count, fails it); a marker that
+ *    could not vouch fails it;
  *  - the session was not dispatched to a later run since;
  *  - the conversation (F3, ruled; `clear-restarts-cost-by-session-id`): the reading was taken in the registry's current
  *    conversation AND in the one the run was dispatched into, so a mid-run `/clear` (a partial cost) reads outside;
@@ -115,7 +117,8 @@ export function runSpendVerdict(
   const evidence = { class: reading.class, readAt: reading.readAt };
   if (reading.cost === null) return { state: 'absent', cost: null, ...evidence };
   const inWindow = run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt && reading.readAt <= run.closedAt + GRACE_MS;
-  const fresh = reading.turn.kind === 'read' && (reading.turn.turnAt === null || reading.turn.turnAt <= reading.readAt);
+  const fresh = reading.turn.kind === 'read' && (reading.turn.turnAt === null || reading.turn.turnAt <= reading.readAt)
+    && reading.turn.background === 0;
   const sameConversation = reading.sidecarUuid !== null && reading.sidecarUuid === reading.conversationUuid
     && reading.sidecarUuid === run.conversation;
   const cleared = !run.resumed || run.clearedAt !== null;

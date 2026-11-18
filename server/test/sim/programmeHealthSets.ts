@@ -17,12 +17,17 @@ import type { PortfolioEntry, PortfolioRun } from '../../../shared/portfolio.js'
 import type * as Health from '../../src/coord/programmeHealth.js';
 import type { HealthExtras, HealthFacts } from '../../src/coord/programmeHealth.js';
 import type * as Measures from '../../src/coord/programmeMeasures.js';
+import type * as Lane from '../../src/coord/forecastLane.js';
+import type { TurnMarkRead } from '../../src/coord/stall.js';
+import type * as Usage from '../../src/usage.js';
 import { mulberry32 } from '../fakeTime.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const HEALTH_TS = path.resolve(here, '../../src/coord/programmeHealth.ts');
 const MEASURES_TS = path.resolve(here, '../../src/coord/programmeMeasures.ts');
+const USAGE_TS = path.resolve(here, '../../src/usage.ts');
+const FORECAST_LANE_TS = path.resolve(here, '../../src/coord/forecastLane.ts');
 export const PROGRAMME_HEALTH_KEY = 'server/src/coord/programmeHealth.ts#programmeHealth';
 export const HEALTH_FACTS_KEY = 'server/src/coord/programmeHealth.ts#healthFactsOf';
 export const CRITICAL_PATH_KEY = 'server/src/coord/programmeHealth.ts#criticalPath';
@@ -30,9 +35,13 @@ export const HEALTH_CHANGE_KEY = 'server/src/coord/programmeHealth.ts#healthChan
 export const WAVE_SPEND_KEY = 'server/src/coord/programmeMeasures.ts#waveSpend';
 export const WAVES_KEY = 'server/src/coord/programmeMeasures.ts#wavesOf';
 export const RUN_SPEND_VERDICT_KEY = 'server/src/coord/programmeMeasures.ts#runSpendVerdict';
+export const SPEND_TURNS_KEY = 'server/src/usage.ts#readSpendTurns';
+export const SPEND_READING_KEY = 'server/src/coord/forecastLane.ts#spendReadingOf';
 
 export type HealthModule = Pick<typeof Health, 'programmeHealth' | 'healthFactsOf' | 'criticalPath' | 'healthChangeVerdict'>;
 export type MeasuresModule = Pick<typeof Measures, 'waveSpend' | 'wavesOf' | 'bucketOf' | 'isOpenRun' | 'closedIn' | 'doneCycles' | 'runSpendVerdict'>;
+export type UsageModule = Pick<typeof Usage, 'readSpendTurns'>;
+export type SpendReadingModule = Pick<typeof Lane, 'spendReadingOf'>;
 export interface Case<M> { name: string; run: (m: M) => void }
 
 const HOUR = 3_600_000;
@@ -606,13 +615,13 @@ export function measuresCases(): Case<MeasuresModule>[] {
       conversation: 'conv-1', ...o });
   const reading = (o: Partial<SpendReadingIn> = {}): SpendReadingIn =>
     ({ readAt: CLOSED - 5 * 60_000, cost: 4.25, class: 'opus', sidecarUuid: 'conv-1', conversationUuid: 'conv-1',
-      turn: { kind: 'read', turnAt: CLOSED - 30 * 60_000 }, ...o });
+      turn: { kind: 'read', turnAt: CLOSED - 30 * 60_000, background: 0 }, ...o });
   const OUTSIDE = (r: { class: string | null; readAt: number }) => ({ state: 'outside', cost: null, class: r.class, readAt: r.readAt });
 
   add('runSpendVerdict: an in-window, fresh, same-conversation reading is measured, with its cost, class and time', (m) => {
     const r = reading();
     expect(m.runSpendVerdict(spendRun(), r)).toEqual({ state: 'measured', cost: 4.25, class: 'opus', readAt: r.readAt });
-    expect(m.runSpendVerdict(spendRun(), reading({ readAt: DISPATCHED, turn: { kind: 'read', turnAt: DISPATCHED - 1 } })))
+    expect(m.runSpendVerdict(spendRun(), reading({ readAt: DISPATCHED, turn: { kind: 'read', turnAt: DISPATCHED - 1, background: 0 } })))
       .toMatchObject({ state: 'measured', readAt: DISPATCHED });
   });
   add('runSpendVerdict: a reading older than the run\'s dispatch is outside, with no cost (the earlier wave\'s conversation)', (m) => {
@@ -626,18 +635,29 @@ export function measuresCases(): Case<MeasuresModule>[] {
   });
   add('runSpendVerdict: a turn that started after the render makes the reading outside; one at the render or before does not (F2)', (m) => {
     const r = reading();
-    const after = reading({ turn: { kind: 'read', turnAt: r.readAt + 1 } });
+    const after = reading({ turn: { kind: 'read', turnAt: r.readAt + 1, background: 0 } });
     expect(m.runSpendVerdict(spendRun(), after)).toEqual(OUTSIDE(after));
-    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: r.readAt } }))).toMatchObject({ state: 'measured', cost: 4.25 });
+    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: r.readAt, background: 0 } }))).toMatchObject({ state: 'measured', cost: 4.25 });
   });
-  add('runSpendVerdict: no turn since the /clear is fresh; a reading idle for hours in the queue is still measured (F2)', (m) => {
-    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: null } }))).toMatchObject({ state: 'measured', cost: 4.25 });
-    const idle = reading({ readAt: DISPATCHED + 1, turn: { kind: 'read', turnAt: DISPATCHED } });
+  add('runSpendVerdict: no turn recorded and no background work live is fresh; a reading idle for hours in the queue is still measured (F2)', (m) => {
+    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: null, background: 0 } }))).toMatchObject({ state: 'measured', cost: 4.25 });
+    const idle = reading({ readAt: DISPATCHED + 1, turn: { kind: 'read', turnAt: DISPATCHED, background: 0 } });
     expect(m.runSpendVerdict(spendRun({ closedAt: DISPATCHED + 9 * HOUR }), idle)).toMatchObject({ state: 'measured', cost: 4.25 });
   });
   add('runSpendVerdict: a marker that could not vouch is outside (F2)', (m) => {
     const r = reading({ turn: { kind: 'unread' } });
     expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: background work the newest Stop left live, or could not count, makes the reading outside (F2-b)', (m) => {
+    const turnAt = CLOSED - 30 * 60_000;
+    for (const background of [1, 3, -1]) {
+      const r = reading({ turn: { kind: 'read', turnAt, background } });
+      expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+    }
+    // Straight after a `/clear` no Stop has counted anything yet: −1, so outside, never a guess.
+    const cleared = reading({ turn: { kind: 'read', turnAt: null, background: -1 } });
+    expect(m.runSpendVerdict(spendRun(), cleared)).toEqual(OUTSIDE(cleared));
+    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt, background: 0 } }))).toMatchObject({ state: 'measured', cost: 4.25 });
   });
   add('runSpendVerdict: a reading in another conversation than the one the run was dispatched into is outside (F3, a mid-run /clear)', (m) => {
     const r = reading({ sidecarUuid: 'conv-2', conversationUuid: 'conv-2' });
@@ -807,6 +827,86 @@ export const RUN_SPEND_VERDICT_SET: MutantSet<MeasuresModule> = {
     { id: 'RS-14', old: '\n    && reading.sidecarUuid === run.conversation;', new: ';' },
     { id: 'RS-15', old: '&& sameConversation && cleared)', new: '&& sameConversation)' },
     { id: 'RS-16', old: 'const cleared = !run.resumed || run.clearedAt !== null;', new: 'const cleared = true;' },
+    // Fix round 2, F2-b: background work live after the render is not fresh.
+    { id: 'RS-17', old: '\n    && reading.turn.background === 0;', new: ';' },
+    { id: 'RS-18', old: 'reading.turn.background === 0', new: 'reading.turn.background <= 0' },
+  ],
+};
+
+// ── The spend arm's turn guard (fix round 2, F2-a): the adapter side, where a marker that cannot vouch becomes `unread` ──
+
+export interface AsyncCase<M> { name: string; run: (m: M) => Promise<void> | void }
+const asyncSuiteOf = <M>(cases: readonly AsyncCase<M>[]) => (m: M): Record<string, SuiteCase> =>
+  Object.fromEntries(cases.map((c) => [c.name, () => c.run(m)]));
+
+const MARK: Extract<TurnMarkRead, { ok: true }> = {
+  ok: true, sessionId: 'conv-1', state: 'done', event: 'Stop', at: NOW - HOUR, turnAt: NOW - 2 * HOUR, stopAt: NOW - HOUR,
+  bg: 0, bgKinds: [], bgIds: [], err: null, restartAt: null, lostBg: 0, lostKinds: [], lostIds: [], crons: null, graceUntil: null,
+};
+
+/** `usage.ts#readSpendTurns` over a stub marker reader: each answer that cannot vouch, and a throw, reads `unread`; one
+ *  that vouches carries its newest turn and its newest Stop's background count. */
+export function spendTurnsCases(): AsyncCase<UsageModule>[] {
+  const conv = (ids: readonly string[]) => new Map(ids.map((id) => [id, { registry: `reg-${id}` }]));
+  return [
+    { name: 'readSpendTurns: absent, unmeasured, malformed, foreign and stale markers, and a reader that throws, each read unread (F2-a)', run: async (m) => {
+      const reasons = ['absent', 'unmeasured', 'malformed', 'foreign', 'stale'] as const;
+      const got = await m.readSpendTurns(async (id) => {
+        if (id === 'throws') throw new Error('read failed');
+        return { ok: false, reason: reasons.find((r) => r === id) ?? 'unmeasured' };
+      }, conv([...reasons, 'throws']));
+      expect(Object.fromEntries(got)).toEqual(Object.fromEntries([...reasons, 'throws'].map((id) => [id, { kind: 'unread' }])));
+    } },
+    { name: 'readSpendTurns: a marker that vouches reads its newest turn and its newest Stop\'s live background count, asked with the registry id (F2-a, F2-b)', run: async (m) => {
+      const asked: string[] = [];
+      const got = await m.readSpendTurns(async (id, registry) => {
+        asked.push(`${id}:${registry}`);
+        return id === 'busy' ? { ...MARK, bg: 2 } : id === 'cleared' ? { ...MARK, turnAt: null, bg: -1 } : MARK;
+      }, conv(['idle', 'busy', 'cleared']));
+      expect(Object.fromEntries(got)).toEqual({
+        idle: { kind: 'read', turnAt: MARK.turnAt, background: 0 },
+        busy: { kind: 'read', turnAt: MARK.turnAt, background: 2 },
+        cleared: { kind: 'read', turnAt: null, background: -1 },
+      });
+      expect(asked.sort()).toEqual(['busy:reg-busy', 'cleared:reg-cleared', 'idle:reg-idle']);
+    } },
+  ];
+}
+
+/** `forecastLane.ts#spendReadingOf`: a session whose marker the lane has not read yet reads `unread`, never fresh. */
+export function spendReadingCases(): AsyncCase<SpendReadingModule>[] {
+  const usage = { ts: 1_790_000_000, cost: 2.5, class: 'opus' };
+  const conversation = { sidecar: 'conv-1', registry: 'conv-1' };
+  return [
+    { name: 'spendReadingOf: no turn read yet for the session reads unread (F2-a)', run: (m) => {
+      expect(m.spendReadingOf(usage, conversation, undefined)?.turn).toEqual({ kind: 'unread' });
+    } },
+    { name: 'spendReadingOf: a turn read is carried as read; no usage is no reading', run: (m) => {
+      const turn = { kind: 'read', turnAt: 5, background: 0 } as const;
+      expect(m.spendReadingOf(usage, conversation, turn)).toEqual({ readAt: usage.ts * 1000, cost: 2.5, class: 'opus',
+        sidecarUuid: 'conv-1', conversationUuid: 'conv-1', turn });
+      expect(m.spendReadingOf(undefined, conversation, turn)).toBeNull();
+    } },
+  ];
+}
+
+export const SPEND_TURNS_SET: MutantSet<UsageModule> = {
+  modulePath: USAGE_TS, suite: asyncSuiteOf(spendTurnsCases()),
+  mutants: [
+    // The review's mutant (a): a marker that cannot vouch read as fresh.
+    { id: 'ST-1', old: "mark.ok ? { kind: 'read', turnAt: mark.turnAt, background: mark.bg } : { kind: 'unread' }",
+      new: "{ kind: 'read', turnAt: mark.ok ? mark.turnAt : null, background: mark.ok ? mark.bg : 0 }" },
+    // The review's mutant (c): a throw no longer caught.
+    { id: 'ST-2', old: ".catch((): TurnMarkRead => ({ ok: false, reason: 'unmeasured' }))", new: '' },
+    { id: 'ST-3', old: 'background: mark.bg }', new: 'background: 0 }' },
+  ],
+};
+
+export const SPEND_READING_SET: MutantSet<SpendReadingModule> = {
+  modulePath: FORECAST_LANE_TS, suite: asyncSuiteOf(spendReadingCases()),
+  mutants: [
+    // The review's mutant (b): a session with no turn read yet read as fresh.
+    { id: 'SR-1', old: "turn: turn ?? { kind: 'unread' }", new: "turn: turn ?? { kind: 'read', turnAt: null, background: 0 }" },
   ],
 };
 
@@ -819,4 +919,6 @@ export const PROGRAMME_HEALTH_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [WAVES_KEY]: WAVES_SET as MutantSet<never>,
   [DONE_CYCLES_KEY]: DONE_CYCLES_SET as MutantSet<never>,
   [RUN_SPEND_VERDICT_KEY]: RUN_SPEND_VERDICT_SET as MutantSet<never>,
+  [SPEND_TURNS_KEY]: SPEND_TURNS_SET as MutantSet<never>,
+  [SPEND_READING_KEY]: SPEND_READING_SET as MutantSet<never>,
 };

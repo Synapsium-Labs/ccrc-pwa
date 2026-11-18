@@ -352,8 +352,13 @@ export const isRunSpendState = (v: unknown): v is RunSpendState =>
 /** Whether a main-thread turn of the session started after a reading was rendered, from the session's turn marker
  *  (fix round 1, F2: freshness is judged against the session's own turns, not the pass clock). `read`: the marker was read
  *  and is this conversation's, `turnAt` its newest turn's start (epoch ms), null when no turn started since the `/clear`
- *  that opened it. `unread`: the marker could not vouch (absent, unreadable, malformed, another conversation's). */
-export type SpendTurnRead = { readonly kind: 'read'; readonly turnAt: number | null } | { readonly kind: 'unread' };
+ *  that opened it; `background` the count of background work (agents, workflows, shells) its newest Stop left live, −1
+ *  when that Stop could not count it or no Stop was recorded since the `/clear` (fix round 2, F2-b: background work after
+ *  the render is spent unseen, so only 0 vouches). `unread`: the marker could not vouch (absent, unreadable, malformed,
+ *  another conversation's). */
+export type SpendTurnRead =
+  | { readonly kind: 'read'; readonly turnAt: number | null; readonly background: number }
+  | { readonly kind: 'unread' };
 /** A session's newest reading as a spend verdict judges it: `readAt` in epoch ms (the render); `sidecarUuid` the
  *  conversation the reading was taken in (the sidecar's `session_id`); `conversationUuid` the registry's current one;
  *  `turn` the marker's answer, read after the render. */
