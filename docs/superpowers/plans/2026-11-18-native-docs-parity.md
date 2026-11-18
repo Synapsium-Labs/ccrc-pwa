@@ -280,10 +280,10 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Files:** Modify `pwa/src/docs/print/**`, `pwa/src/lib/printTreeJob.ts` (asks `render` for its print mode), `pwa/src/docs/reader/bridge.ts`; Test `pwa/test/docs-print-figures.test.ts` (new), `pwa/test/print-tree.test.ts`; lab PRINT-L1.
 
-**Interfaces:** Produces `checkFigurePng(b64: string): Promise<{ ok: true; blob: Blob } | { ok: false; why: 'not-png' | 'too-large' | 'too-wide' | 'decode' }>` (signature, 1 MiB, 2048 px, decode with `createImageBitmap`, re-encode on a console canvas); caps 64 figures and 16 MiB.
+**Interfaces:** Produces `checkFigurePng(b64: string): Promise<{ ok: true; blob: Blob } | { ok: false; why: 'not-png' | 'too-large' | 'too-wide' | 'decode' }>` (in this order: signature; at most 1 MiB; width and height from IHDR through P1.4's `imageHeaderDims`, each at most 2048; only then `createImageBitmap`; the decoded size checked against the header's; re-encode on a console canvas); caps 64 figures and 16 MiB.
 
 - [ ] **Step 0: Lab PRINT-L1:** a 30-figure document's print-mode draw on desktop and phone; record; if out of line, stop and report the numbers to the coordinator.
-- [ ] **Step 1: Failing tests:** `print mode: facts, byline and reading time, In short and Where things stand boxes, section numbers, status labels and the review strip's counts print` (one assertion per spec §4.6 row PR3 to PR8, from the library's print mode, through the same allow-list); `print mode: the library's scoped print stylesheet is loaded under the print root only`; `print figures: non-PNG refused`; `print figures: 1 MiB plus one refused before decode`; `print figures: 4096 px refused`; `print figures: 65th refused`; `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
+- [ ] **Step 1: Failing tests:** `print mode: facts, byline and reading time, In short and Where things stand boxes, section numbers, status labels and the review strip's counts print` (one assertion per spec §4.6 row PR3 to PR8, from the library's print mode, through the same allow-list); `print mode: the library's scoped print stylesheet is loaded under the print root only`; `print figures: non-PNG refused`; `print figures: 1 MiB plus one refused before decode`; `print figures: a PNG declaring 4096 px is refused before createImageBitmap` (a spy on `createImageBitmap`, a PNG under 1 MiB whose IHDR declares 4096 by 4096: the spy is never called); `print figures: a decoded size that differs from the header refuses`; `print figures: 65th refused`; `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): drawn figures in print (X2 P5)`.
 
 ## Mutation rows
@@ -343,6 +343,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.49 | P5.3 | Hand a stale place of another visit to the router instead of skipping it | places: stale places after navigating away cost no extra Back |
 | M11.50 | P5.2 | Import `resolveItemLink` from the render job | docs-ring: resolveItemLink is imported only by trackerLinkJob.ts |
 | M11.51 | P1.5 | Default a missing `mtimeNs` to `"0"` in `statPinOf` | entryView: a draft without mtimeNs stays withheld |
+| M11.52 | P5.5 | Check the dimensions only after decode | print figures: a PNG declaring 4096 px is refused before createImageBitmap |
 | M11.56 | P2.3 | Drop `docs-folder --add` from the hook's jq verb lists | session hook: docs-folder --add is denied in a child |
 
 ## Deviations found
