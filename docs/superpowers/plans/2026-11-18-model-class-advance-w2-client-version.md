@@ -132,6 +132,23 @@ drops unknown fields.
 - Each guard gets a mutation row measured red and restored from a saved copy (table below).
 - The models-probe, models, settings-census, harness-integrity and `ccrc-models` suites, then the PR's CI.
 
+### Task 6: fix round 1 (review run 2482, the coordinator's rulings)
+
+- F1: every exception at the two parse sites and around the program's top-level flow is a failed try, recorded with
+  `triedAt`; a cache that cannot be parsed is absent. Tests: a deeply nested answer, a deeply nested cache file.
+- F2: the curl arm's bounds get tests, the lookup program run directly with a planted `curl` that hangs, passes the
+  cap, exits nonzero or is absent; and mutation rows for the alarm, `--max-time`, `--max-filesize`, the over-cap kill
+  and the exit-status check.
+- A1: the probe and the direct runs get a non-empty stdin, and curl must read none of it.
+- A2, A3, A11, A12: comments, counts, the missing-answer case's assertions, the two-seam headers.
+- A4: M9 holds the lock 3 s and is marked timing-dependent below.
+- A5: the bounds are stated as they are (§1.1, D-8743, the spec's amendment).
+- A6: a stamp up to 60 s ahead is trusted as clock skew; further ahead triggers a lookup. The boundary is tested.
+- A8: the lookup runs past the credential gate. Test: a refused credential asks npm nothing.
+- A9: `stripCcrcKnobs` and its guard, above.
+- Found by the round's mutation run: the floor had two owners. The lookup now prints the last good release or
+  nothing, and the request program alone applies the floor.
+
 ## 3. Mutation rows
 
 | Guard | Mutation | Expected red |
@@ -149,43 +166,45 @@ Measured results are below.
 
 ## Mutation results
 
-Measured 2026-11-18 on this branch. Each row applied one exact replacement to the named file, ran
-`server/test/models-probe.test.ts` through `ccrc test`, and restored the file from its saved bytes. The coordinator's
-`mutation-run.py` mutates a Python module in memory, and these guards live in a bash script (with embedded Python)
-driven by vitest, so the rows ran through a small script that does the same save, mutate, run and restore by hand.
+Measured 2026-11-18 at fix round 1's tip, every row run again after the round's last code change (review A3: the counts
+are the file's as it now reads). Each row applied one exact replacement to the named file, ran
+`server/test/models-probe.test.ts` (M26: `ccd-harness-integrity.test.ts`) through `ccrc test`, and restored the file
+from its saved bytes. The coordinator's `mutation-run.py` mutates a Python module in memory, and these guards live in
+a bash script (with embedded Python) driven by vitest, so the rows ran through a small script that does the same save,
+mutate, run and restore by hand. Each row was checked to fail on the case written for it, not on a crash: the slice's
+memory cap killed processes twice during the run.
 
-| Row | File | Mutation | Result |
+| Row | File | Mutation | Result (failing cases) |
 |---|---|---|---|
-| M1 | probe | the release is used even below the floor | killed (2 cases) |
+| M1 | probe | the request asks as the release even below the floor | killed (2) |
 | M2 | probe | any version string is accepted | killed (5) |
-| M3 | probe | the size cap is removed | survived at first: cutting the read at the cap already broke the JSON. A case with a good object padded past the cap was added; then killed (2) |
-| M4 | probe | a lookup on every run | killed (3) |
-| M5 | probe | a failed lookup drops the cached release | killed (1) |
-| M6 | probe | the user-agent back to `0.0.0` | killed (20) |
+| M3 | probe | the size check is removed | killed (3) |
+| M4 | probe | a lookup on every run | killed (4) |
+| M5 | probe | a failed lookup drops the cached release | killed (2) |
+| M6 | probe | the user-agent back to `0.0.0` | killed (24) |
 | M7 | probe | the catalogue does not record the version | killed (2) |
 | M8 | probe | `curl` without `-q` (reads `.curlrc`) | killed (1) |
-| M9 | probe | no lock wait | killed (1) |
-| M10 | probe | a try stamped in the future is trusted | killed (1) |
+| M9 | probe | no lock wait (timing-dependent, see Known limits) | killed (1) |
+| M10 | probe | a try stamped any distance ahead is trusted | killed (2) |
 | M11 | `shared/models.mjs` | `parseCatalogue` keeps any `clientVersion` | killed (1) |
-| M12 | probe | the request asks as the floor | killed (6) |
+| M12 | probe | the request asks as the floor | killed (9) |
 | M13 | `server/test/ccdWsHelpers.ts` | contained envs leave the release seam empty | killed (1) |
-| M14 | probe | a failed try is not recorded | killed (12) |
+| M14 | probe | a failed try is not recorded | killed (15) |
+| M15 | probe | no alarm | killed (1) |
+| M16 | probe | no `--max-time` | killed (1) |
+| M17 | probe | no `--max-filesize` | killed (1) |
+| M18 | probe | no kill and early return on an over-cap answer | killed (1) |
+| M19 | probe | curl's exit status unchecked | killed (1) |
+| M20 | probe | the answer's parse catches `ValueError` only | killed (1) |
+| M21 | probe | the cache's parse catches `OSError` and `ValueError` only | killed (1) |
+| M22 | probe | the lookup runs before the credential gate | killed (1) |
+| M23 | probe | curl inherits the lookup's stdin | killed (1) |
+| M24 | probe | no stamp ahead of the clock is trusted | killed (1) |
+| M26 | `server/test/ccdWsHelpers.ts` | `stripCcrcKnobs` drops the containment seams | killed (1) |
 
-### Task 6: fix round 1 (review run 2482, the coordinator's rulings)
-
-- F1: every exception at the two parse sites and around the program's top-level flow is a failed try, recorded with
-  `triedAt`; a cache that cannot be parsed is absent. Tests: a deeply nested answer, a deeply nested cache file.
-- F2: the curl arm's bounds get tests, the lookup program run directly with a planted `curl` that hangs, passes the
-  cap, exits nonzero or is absent; and mutation rows for the alarm, `--max-time`, `--max-filesize`, the over-cap kill
-  and the exit-status check.
-- A1: the probe and the direct runs get a non-empty stdin, and curl must read none of it.
-- A2, A3, A11, A12: comments, counts, the missing-answer case's assertions, the two-seam headers.
-- A4: M9 holds the lock 3 s and is marked timing-dependent below.
-- A5: the bounds are stated as they are (§1.1, D-8743, the spec's amendment).
-- A6: a stamp up to 60 s ahead is trusted as clock skew; further ahead triggers a lookup. The boundary is tested.
-- A8: the lookup runs past the credential gate. Test: a refused credential asks npm nothing.
-- A9: `stripCcrcKnobs` and its guard, above.
-
+The first run of the round left M1 alive: the floor was applied twice, in the lookup's output and in the request
+program's re-check. The lookup now prints the last good release or nothing, and the request program alone applies the
+floor. In the wave's first round, M3 survived until a good answer padded past the cap was added.
 ## Known limits
 
 - **An unwritable `~/.ccrc` (A7).** If the lock cannot be created, the lookup never runs and the probe asks as the
