@@ -160,9 +160,11 @@ describe('the refresher since wave 3', () => {
 
   it('a failed project-statuses page after a read keeps what was held for this key, its read mark included (D-8701)', async () => {
     const held = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => linearRecord('read-project-statuses').body, () => ({ data: {} }));
+    expect(sent.filter((q) => q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses)).toHaveLength(2);   // the failed second read really went out (D-8183)
     expect(held?.projectStatuses).toHaveLength(5);
     expect(statusesMark).toBe('read');
     const refused = await refreshWith(() => linearRecord('read-initiatives-probe').body, () => linearRecord('read-project-statuses').body, () => RATELIMITED_ERRORS);
+    expect(sent.filter((q) => q === LINEAR_HIERARCHY_DOCUMENTS.projectStatuses)).toHaveLength(2);
     expect(refused?.projectStatuses).toHaveLength(5);
     expect(statusesMark).toBe('read');
   });

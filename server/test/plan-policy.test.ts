@@ -2,9 +2,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
-  ticketIsHeld,
+  ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
+import type { HierarchyProjectFacts, InboundRow } from '../src/coord/planStore.js';
+import { TRIAGE_DECISIONS } from '../../shared/plan.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
 import type { PlanEpicBody, PlanPutBody } from '../../shared/plan.js';
 
@@ -186,5 +188,122 @@ describe('callers and owners', () => {
     expect(linearOwnerOf('project-a', facts({ presence: () => 'unmeasured' }))).toMatchObject({ live: false, gone: false });
     expect(linearOwnerOf('project-a', facts({ presence: () => 'dead' }))).toMatchObject({ live: false, gone: true });
     expect(linearOwnerOf('project-a', facts({ presence: () => 'absent' }))).toMatchObject({ gone: true });
+  });
+});
+
+// ── The inbound path's deciders (D-8183, Task 4.3) ──
+
+const projectFacts = (project: string, over: Partial<HierarchyProjectFacts> = {}): HierarchyProjectFacts =>
+  ({ project, teamKey: 'AAA', initiatives: 'on', linearOwner: null, ownsTeam: false, order: null, ...over });
+
+describe('teamOwnerProject (D-8183)', () => {
+  it('the project marked ownsTeam owns the team key', () => {
+    const rows = [projectFacts('project-a', { order: 1 }), projectFacts('project-b', { order: 2, ownsTeam: true })];
+    expect(teamOwnerProject('AAA', rows)).toBe('project-b');
+  });
+  it('with none marked, the first project that set the key owns it, whatever the row order', () => {
+    const rows = [projectFacts('project-b', { order: 5 }), projectFacts('project-a', { order: 2 }), projectFacts('project-c', { order: null })];
+    expect(teamOwnerProject('aaa', rows)).toBe('project-a');
+  });
+  it('a key no project holds has no owning project, and another team key is not counted', () => {
+    expect(teamOwnerProject('BBB', [projectFacts('project-a', { order: 1 })])).toBeNull();
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { teamKey: 'BBB', order: 1, ownsTeam: true })])).toBeNull();
+  });
+  it('a project with a key and no order still owns it when it is the only one', () => {
+    expect(teamOwnerProject('AAA', [projectFacts('project-a', { order: null })])).toBe('project-a');
+  });
+});
+
+describe('linearOwnerOfTeam (D-8183)', () => {
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  it("answers the owning project's named owner, else its latest programme's coordinator", () => {
+    const rows = [projectFacts('project-a', { order: 1, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 2 })];
+    expect(linearOwnerOfTeam('AAA', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named', live: true });
+    expect(linearOwnerOfTeam('AAA', [projectFacts('project-b', { order: 2 })], f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+  });
+  it('a team no project holds has no owner row at all', () => {
+    expect(linearOwnerOfTeam('CCC', [projectFacts('project-a', { order: 1 })], f)).toBeNull();
+  });
+});
+
+describe('linearOwnerOfProject (D-8183)', () => {
+  const f = { latestProgrammeCoordinator: (p: string) => `coord-of-${p}`, presence: () => 'alive' as const };
+  it("a project with no key is its own owner's; a sharing project answers the team's owning project", () => {
+    const rows = [projectFacts('project-a', { teamKey: null, linearOwner: 'coord-x' }), projectFacts('project-b', { order: 1 }), projectFacts('project-c', { order: 2, linearOwner: 'coord-c' })];
+    expect(linearOwnerOfProject('project-a', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-x', source: 'named' });
+    expect(linearOwnerOfProject('project-c', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b', source: 'default' });
+    expect(linearOwnerOfProject('project-b', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-of-project-b' });
+  });
+  it('a project that is in no row has no named owner and only the default', () => {
+    expect(linearOwnerOfProject('project-z', [], f)).toMatchObject({ project: 'project-z', id: 'coord-of-project-z', source: 'default' });
+  });
+});
+
+describe('parsePlanTriage (D-8183)', () => {
+  const bad = { ok: false, word: 'plan-bad-body' };
+  it('the four decisions are spelled once', () => expect(TRIAGE_DECISIONS).toEqual(['hand', 'upkeep', 'close', 'raise']));
+  it('a hand needs a programme key; its epic and checkpoint are optional here and checked by the route', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand', programme: 'Not A Key' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1', note: 'n' }))
+      .toEqual({ ok: true, triage: { issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1', note: 'n' } });
+  });
+  it('a close needs a reason of at most 500 characters; the note is bounded alike', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close', reason: 'x'.repeat(501) })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'close', reason: 'duplicate of another' })).toMatchObject({ ok: true });
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'raise', note: 'x'.repeat(501) })).toMatchObject(bad);
+  });
+  it('upkeep and raise take the issue alone; an issue that is no identifier, an unknown decision and an unknown field are refused', () => {
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'upkeep' })).toEqual({ ok: true, triage: { issue: 'AAA-12', decision: 'upkeep' } });
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'raise' })).toMatchObject({ ok: true });
+    expect(parsePlanTriage({ issue: 'not an id', decision: 'upkeep' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'delete' })).toMatchObject(bad);
+    expect(parsePlanTriage({ issue: 'AAA-12', decision: 'upkeep', extra: 1 })).toMatchObject(bad);
+    expect(parsePlanTriage(null)).toMatchObject(bad);
+  });
+});
+
+describe('parsePlanTake (D-8183)', () => {
+  const bad = { ok: false, word: 'plan-bad-body' };
+  it('takes an issue into an epic, with an optional checkpoint', () => {
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1' })).toEqual({ ok: true, take: { issue: 'AAA-12', epic: 'e1' } });
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', checkpoint: 'c1' })).toEqual({ ok: true, take: { issue: 'AAA-12', epic: 'e1', checkpoint: 'c1' } });
+  });
+  it('closes with a why, or returns with a note', () => {
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: 'duplicate' } })).toEqual({ ok: true, take: { issue: 'AAA-12', close: { why: 'duplicate' } } });
+    expect(parsePlanTake({ issue: 'AAA-12', return: { note: 'not ours' } })).toEqual({ ok: true, take: { issue: 'AAA-12', return: { note: 'not ours' } } });
+  });
+  it('exactly one arm, each well-formed, no unknown field', () => {
+    expect(parsePlanTake({ issue: 'AAA-12' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', close: { why: 'x' } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: '' } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', close: { why: 'x'.repeat(501) } })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', return: {} })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'Not A Key' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', checkpoint: 'c1' })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'AAA-12', epic: 'e1', extra: 1 })).toMatchObject(bad);
+    expect(parsePlanTake({ issue: 'nope', epic: 'e1' })).toMatchObject(bad);
+  });
+});
+
+describe('triageVerdict (D-8183)', () => {
+  const row = (state: InboundRow['state']): InboundRow => ({
+    linearId: 'l1', workspaceId: 'ws-a', teamKey: 'AAA', identifier: 'AAA-12', title: 't', body: null, seenAt: 1, mailedTo: null, mailedAt: null,
+    handedTo: null, reason: null, actedAt: null, state, itemId: null,
+  });
+  const owner = { id: 'coord-a', source: 'named' as const, live: true, gone: false };
+  it('only the team owner triages', () => {
+    expect(triageVerdict('coord-b', owner, row('waiting'))).toEqual({ ok: false, word: 'not-linear-owner' });
+    expect(triageVerdict('coord-a', { id: null }, row('waiting'))).toEqual({ ok: false, word: 'not-linear-owner' });
+    expect(triageVerdict('coord-a', owner, row('waiting'))).toEqual({ ok: true });
+  });
+  it('the issue must be waiting or mailed', () => {
+    expect(triageVerdict('coord-a', owner, row('mailed'))).toEqual({ ok: true });
+    for (const s of ['handed', 'taken', 'placed', 'closed', 'raised'] as const) expect(triageVerdict('coord-a', owner, row(s))).toEqual({ ok: false, word: 'issue-not-inbound' });
+    expect(triageVerdict('coord-a', owner, null)).toEqual({ ok: false, word: 'issue-not-inbound' });
+  });
+  it('the owner is judged before the issue', () => {
+    expect(triageVerdict('coord-b', owner, null)).toEqual({ ok: false, word: 'not-linear-owner' });
   });
 });

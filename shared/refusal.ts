@@ -85,7 +85,7 @@ export type ProjectAddRefusal = (typeof PROJECT_ADD_REFUSALS)[number];
 export const LINEAR_PROXY_REFUSALS = [
   'bad-field', 'team-unknown', 'workspace-unknown', 'name-unknown', 'team-ambiguous', 'workspace-required', 'name-ambiguous',
   'issue-moved', 'policy-denied', 'policy-unavailable', 'journal-unavailable', 'linear-unauthorised', 'linear-forbidden',
-  'linear-invalid',
+  'linear-invalid', 'plan-owned',
 ] as const;
 export type LinearProxyRefusal = (typeof LINEAR_PROXY_REFUSALS)[number];
 
@@ -608,6 +608,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'wave-overlap': 409, 'ticket-workspace-mismatch': 409, 'linear-text-public': 409, 'plan-owned': 409, 'map-rewrites-plan': 409,
   'map-incomplete': 409, 'migration-in-flight': 409, 'not-managed': 409, 'issue-not-inbound': 409, 'item-act-mismatch': 409,
   'plan-closed': 409, 'plan-runs-open': 409,
+  // The phase words (programme work map WM0, D-8715): a reference to a plan object or phase that is not there, or is dropped,
+  // reads like the other absent objects; a refused carry is a state that exists.
+  'unknown-ref': 404, 'bad-carry': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */

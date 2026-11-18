@@ -19,6 +19,7 @@ import {
   PORTFOLIO_WINDOW_DAYS, isServiceClass,
   type PortfolioAsk, type PortfolioFacts, type PortfolioItem, type PortfolioProgramme, type PortfolioRun, type RankRow, type RankWrite,
 } from '../../../shared/portfolio.js';
+import { isRebuiltRun } from '../../../shared/programmes.js';
 import type { LiveAskRead } from './ports.js';
 import { tx } from './tx.js';
 export type { LiveAskRead, PortfolioFacts, RankWrite };
@@ -80,10 +81,6 @@ const LISTED = (terminal: string): string =>
 /** An ask row that is its child's newest: the only one the live-ask port can speak for. */
 const NEWEST_ASK = '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.childId))';
 
-/** A run `CoordStore#reconstruct` minted: the one writer that inserts a run with `dispatchedAt` already set, to its own
- *  `openedAt`, and with no claimant. Every other run is opened `planned` with a claimant and dispatched later
- *  (`markDispatched`), so it never matches (review 2130 F10). */
-const REBUILT = '(claimedBy IS NULL AND dispatchedAt IS NOT NULL AND dispatchedAt = openedAt)';
 
 /** Everything `portfolioFor` reads. It only bounds what it fetches: items still open or closed in the window; and asks
  *  released or answered in the window, still `answering`, or `released` or `declined` and their child's newest row (an
@@ -101,10 +98,12 @@ export function portfolioFacts(db: DatabaseSync, now: number, terminalStatesSql:
     `SELECT program, position, cls, fixedDate, setAt, setBy FROM portfolio_rank WHERE program IN (${listed}) ORDER BY program`,
   ).all() as unknown as RankRowRaw[]).map((r) => ({ ...r, cls: isServiceClass(r.cls) ? r.cls : null, clsRaw: r.cls }));
   const runs: PortfolioRun[] = (db.prepare(
-    `SELECT id, program, wave, kind, reviews, state, openedAt, dispatchedAt, closedAt, closeDetail, ${REBUILT} AS rebuilt FROM runs ` +
+    'SELECT id, program, wave, kind, reviews, state, openedAt, dispatchedAt, closedAt, closeDetail, claimedBy FROM runs ' +
     `WHERE program IN (${listed}) ORDER BY id`,
-  ).all() as unknown as (Omit<PortfolioRun, 'kind' | 'rebuilt'> & { kind: string; rebuilt: number })[])
-    .map(({ rebuilt, ...r }) => ({ ...r, kind: isRunKind(r.kind) ? r.kind : 'unknown', ...(rebuilt === 1 ? { rebuilt: true as const } : {}) }));
+  ).all() as unknown as (Omit<PortfolioRun, 'kind' | 'rebuilt'> & { kind: string; claimedBy: string | null })[])
+    // The rebuilt-run rule is `shared/programmes.ts#isRebuiltRun`'s alone (forecasts A moved it out of this file's SQL).
+    .map(({ claimedBy, ...r }) => ({ ...r, kind: isRunKind(r.kind) ? r.kind : 'unknown',
+      ...(isRebuiltRun({ claimedBy, dispatchedAt: r.dispatchedAt, openedAt: r.openedAt }) ? { rebuilt: true as const } : {}) }));
   const itemRows = db.prepare(
     'SELECT id, program, title, neededBy, state, raisedAt, heldUntil, tickedAt, closedAt FROM operator_items ' +
     `WHERE program IN (${listed}) AND (state IN ${openItems} OR closedAt >= ?) ORDER BY id`,

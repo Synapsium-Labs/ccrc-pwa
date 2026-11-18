@@ -16,6 +16,7 @@ import {
 import { READER_LAB_DRAW_WATCHDOG_MS } from '../src/lib/readerLimits';
 import { loadReaderAssets } from '../src/docs/reader/assets';
 import { mountReader, type ReaderMountInput } from '../src/docs/reader/bridge';
+import type { ReaderVersionSeed } from '../src/docs/reader/history';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -64,6 +65,8 @@ function rig(o: {
   assets?: () => Promise<typeof STUB_ASSETS>; mermaid?: () => Promise<string>;
   /** The E17 reading the deps plan with (default `does-not-hold`: on request); `'recorded'` passes no `e17` dep at all. */
   e17?: ReaderE17Reading | 'recorded'; chrome?: ReaderChrome; onProgress?: (share: number) => void; onMermaidDrop?: () => void;
+  /** The history members and the profile a mount is given (default: none, the Docs reader with no history input). */
+  profile?: 'lab-draw'; version?: ReaderVersionSeed; changes?: ReaderMountInput['changes']; openVersion?: ReaderMountInput['openVersion'];
 } = {}): Rig {
   const frame = { update: vi.fn(), setPrefs: vi.fn(), destroy: vi.fn(), command: vi.fn() };
   const mount = vi.fn((_el: HTMLElement, _o: { document: RenderInput; adapters: HostAdapters }) => frame as unknown as DocFrame);
@@ -78,6 +81,10 @@ function rig(o: {
     ...(o.chrome === undefined ? {} : { chrome: o.chrome }),
     ...(o.onProgress === undefined ? {} : { onProgress: o.onProgress }),
     ...(o.onMermaidDrop === undefined ? {} : { onMermaidDrop: o.onMermaidDrop }),
+    ...(o.profile === undefined ? {} : { profile: o.profile }),
+    ...(o.version === undefined ? {} : { version: o.version }),
+    ...(o.changes === undefined ? {} : { changes: o.changes }),
+    ...(o.openVersion === undefined ? {} : { openVersion: o.openVersion }),
   };
   const store = o.store === undefined ? fakeStore() : o.store;
   const run = () => mountReader(document.createElement('div'), input, {
@@ -116,6 +123,71 @@ describe('the adapters', () => {
       expect(keys).toEqual([...expected].sort());
       for (const k of ['changes', 'openVersion', 'mermaidGate']) expect(keys).not.toContain(k);
     }
+  });
+
+  it('a Docs mount given changes and openVersion passes exactly those two more keys, for each draw and bar', async () => {
+    const rows: Array<[ReaderE17Reading, ReaderChrome]> = [
+      ['does-not-hold', 'frame-bar'], ['holds', 'frame-bar'], ['does-not-hold', 'host-bar'], ['holds', 'host-bar'],
+    ];
+    for (const [e17, chrome] of rows) {
+      const plain = rig({ e17, chrome });
+      await plain.run();
+      const withHistory = rig({ e17, chrome, changes: () => Promise.resolve(null), openVersion: vi.fn() });
+      await withHistory.run();
+      expect(Object.keys(withHistory.options().adapters).sort())
+        .toEqual([...Object.keys(plain.options().adapters), 'changes', 'openVersion'].sort());
+    }
+  });
+
+  it('a lab-draw mount given changes and openVersion passes neither', async () => {
+    const r = rig({ profile: 'lab-draw', changes: () => Promise.resolve(null), openVersion: vi.fn() });
+    await r.run();
+    const keys = Object.keys(r.options().adapters);
+    expect(keys).not.toContain('changes');
+    expect(keys).not.toContain('openVersion');
+  });
+
+  it('a Docs mount given only one of the two passes only that one', async () => {
+    const c = rig({ changes: () => Promise.resolve(null) });
+    await c.run();
+    expect(Object.keys(c.options().adapters)).toContain('changes');
+    expect(Object.keys(c.options().adapters)).not.toContain('openVersion');
+    const o = rig({ openVersion: vi.fn() });
+    await o.run();
+    expect(Object.keys(o.options().adapters)).toContain('openVersion');
+    expect(Object.keys(o.options().adapters)).not.toContain('changes');
+  });
+
+  it('changes forwards the sha to the input and resolves what it resolves, null included', async () => {
+    const answer = { ranges: [[1, 2]] as const, removedAfter: [3] };
+    const changes = vi.fn((_sha: string) => Promise.resolve<{ ranges: readonly (readonly [number, number])[]; removedAfter?: readonly number[] } | null>(answer));
+    const r = rig({ changes });
+    await r.run();
+    await expect(r.options().adapters.changes!(SHA64)).resolves.toBe(answer);
+    expect(changes).toHaveBeenCalledTimes(1);
+    expect(changes).toHaveBeenCalledWith(SHA64);
+    const none = rig({ changes: () => Promise.resolve(null) });
+    await none.run();
+    await expect(none.options().adapters.changes!(SHA40)).resolves.toBeNull();
+  });
+
+  it('openVersion forwards a fresh object holding the sha and only the library gave, and {} as {}', async () => {
+    const openVersion = vi.fn();
+    const r = rig({ openVersion });
+    await r.run();
+    const given = { sha: SHA40, only: SHA64 };
+    r.options().adapters.openVersion!(given);
+    expect(openVersion).toHaveBeenLastCalledWith({ sha: SHA40, only: SHA64 });
+    expect(openVersion.mock.lastCall![0]).not.toBe(given);
+    r.options().adapters.openVersion!({});
+    expect(openVersion).toHaveBeenLastCalledWith({});
+    expect(Object.keys(openVersion.mock.lastCall![0] as object)).toEqual([]);
+    r.options().adapters.openVersion!({ only: SHA40 });
+    expect(openVersion.mock.lastCall![0]).toEqual({ only: SHA40 });
+    const extra = { sha: SHA40, other: 1 } as unknown as { sha: string };
+    r.options().adapters.openVersion!(extra);
+    expect(Object.keys(openVersion.mock.lastCall![0] as object)).toEqual(['sha']);
+    expect(openVersion).toHaveBeenCalledTimes(4);
   });
 
   it('mermaidDraw is on-request, storePrefix is ccrc:reader:v1:, focus is true', async () => {
@@ -402,6 +474,32 @@ describe('the version (the W8a plan\'s refinement (k))', () => {
     await none.run();
     expect(none.options().document.version).toBeUndefined();
   });
+
+  const seed: ReaderVersionSeed = {
+    sha: SHA40, draft: true,
+    commits: [{ sha: SHA64, subject: 's', date: '2026-01-01T00:00:00Z', parents: [] }], only: SHA64,
+  };
+
+  it('a seed on the Docs profile is the document\'s version exactly, and the document\'s own version is ignored', async () => {
+    const own = { sha: 'b'.repeat(40), draft: false, commits: [], only: null };
+    const r = rig({ document: docOf({ version: own }), version: seed });
+    await r.run();
+    expect(r.options().document.version).toEqual({ sha: SHA40, draft: true, commits: seed.commits, only: SHA64 });
+    expect(Object.keys(r.options().document.version!).sort()).toEqual(['commits', 'draft', 'only', 'sha']);
+    const bare = rig({ version: { sha: SHA64, draft: false, commits: null, only: null } });
+    await bare.run();
+    expect(bare.options().document.version).toEqual({ sha: SHA64, draft: false, commits: null, only: null });
+  });
+
+  it('a seed on lab-draw is not used: the document\'s version is cut as before, with no commits and no only', async () => {
+    const own = { sha: SHA64, draft: false, commits: [], only: SHA64 };
+    const r = rig({ profile: 'lab-draw', document: docOf({ version: own }), version: seed });
+    await r.run();
+    expect(r.options().document.version).toEqual({ sha: SHA64, draft: false });
+    const none = rig({ profile: 'lab-draw', version: seed });
+    await none.run();
+    expect(none.options().document.version).toBeUndefined();
+  });
 });
 
 describe('failure and teardown', () => {
@@ -604,8 +702,8 @@ describe('the reader lab profile (reader lab plan, Task 7)', () => {
 
   it('readerMountPlan is the one decision, and only lab-draw maps to drawing on open', () => {
     expect(readerMountPlan('lab-draw', 100, 'frame-bar', 'holds'))
-      .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' });
+      .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false });
     expect(readerMountPlan(undefined, 100, 'frame-bar', 'does-not-hold'))
-      .toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true, chrome: 'frame-bar' });
+      .toEqual({ draw: 'on-request', watchdogMs: readerWatchdogMs(100), store: true, chrome: 'frame-bar', history: true });
   });
 });

@@ -9,8 +9,10 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isOverlordRefusal, isReviewRoundsRefusal } from '../../shared/refusal.js';
+import { isOtherLaneKebab } from '../src/coord/otherLanes.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
+import { isLinearActionVerb } from '../../shared/ledgers.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -46,7 +48,7 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
 import { isDecisionModelWord } from '../src/coord/decisionModel.js';
-import { isEdgePredicate, isRemainingRefusal } from '../../shared/programmeFacts.js';
+import { isEdgePredicate, isEdgeState, isRemainingRefusal, isUnforecastableReason } from '../../shared/programmeFacts.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -897,6 +899,10 @@ describe('the rejection table is total, in both directions', () => {
         || isRunRefuseCode(tok)
         // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
         || isPlanKebab(tok)
+        // THE HIERARCHY ITEMS' VERBS (D-8182, D-8183): `coord/hierarchyRoutes.ts`'s item-act `switch` names an action's verb as a
+        // literal (`'linear-drift'`, `'linear-owner'`). A verb rides an operator item's `action`, never a `refused` or `reject.code`.
+        // Admitted through L0's guard, derived from `LINEAR_ACTION_VERB_MAP`, never NOT_CODES.
+        || isLinearActionVerb(tok)
         // BUILD 9a WAVE 4 — a FOURTH union, checked together and never merged, for
         // the reason the `enter-ignored` note above already states. `LifecycleGapReason`
         // reaches this scanner because `mirrorplan.ts` lives in `server/src/coord` and
@@ -1202,13 +1208,21 @@ describe('the rejection table is total, in both directions', () => {
         || isOverlordRefusal(tok)
         // ...and its acts, its store's answers and the read words it takes, through that decider's own exported guard.
         || isDesignationKebab(tok)
+        // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
+        // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
+        // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
+        || isOtherLaneKebab(tok)
         // THE REMAINING-WORK DOOR (Overlord W2 remaining work A): `coord/programmeFactsStore.ts` names why it refused a
         // good body (`'too-many-open-edges'`), and `coord/programmeRemaining.ts` an edge target's predicate (`'run-closed'`,
         // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,
         // never a `refused` or `reject.code`. Admitted through L0's guards, derived from `REMAINING_REFUSALS` and
         // `EDGE_PREDICATES`, never NOT_CODES.
-        || isRemainingRefusal(tok) || isEdgePredicate(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, Overlord refusal or designation word`).toBe(true);
+        || isRemainingRefusal(tok) || isEdgePredicate(tok) || isEdgeState(tok)
+        // THE SEALED FORECASTS (Overlord W2 forecasts A): `coord/forecast.ts#forecastProgramme` names why a programme is not
+        // forecast (`'no-remaining'`, `'nothing-left'`, `'too-little-history'`). A reason rides a stored seal's `reason`,
+        // never a `refused` or `reject.code`. Admitted through L0's guard, derived from `UNFORECASTABLE_REASON_MAP`, never NOT_CODES.
+        || isUnforecastableReason(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, Overlord refusal, designation word or unforecastable reason`).toBe(true);
     }
   });
 });

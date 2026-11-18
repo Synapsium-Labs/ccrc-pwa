@@ -380,7 +380,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan(undefined, 100, chrome, e17))
-          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome });
+          .toEqual({ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true });
       }
     }
   });
@@ -389,7 +389,7 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     for (const e17 of READINGS) {
       for (const chrome of CHROMES) {
         expect(readerMountPlan('lab-draw', 100, chrome, e17))
-          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' });
+          .toEqual({ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false });
       }
     }
   });

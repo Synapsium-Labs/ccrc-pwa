@@ -6,7 +6,7 @@ import { describe, it, expect } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { readTarget, type TargetReadPort } from '../src/coord/doneTestRead.js';
+import { readTarget, runPrMerged, type TargetReadPort } from '../src/coord/doneTestRead.js';
 import type { TargetAnswer } from '../../shared/doneTests.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -163,5 +163,30 @@ describe('readTarget: the one gatherer of a predicate\'s rows', () => {
     expect(asked).toBe(0);
     readTarget(port, { predicate: 'review-passed', runId: id });
     expect(asked).toBe(1);
+  });
+});
+
+// The drift grace's gatherer (Linear hierarchy §7.3, wave 4; the coordinator's ruling on review 2408's fix round 3): it reads
+// the run's lineage, its branch and its session, takes the session's listed PR from its caller, and `runPrMergedSeen` decides.
+describe('runPrMerged: the drift grace asks the one reader whether a run\'s PR is merged', () => {
+  it('a merging run with no close record whose lineage says merged reads merged, so the grace keeps the merge\'s close', () => {
+    const b = build();
+    const id = b.working();
+    for (const to of ['awaiting-review', 'merging'] as const) {
+      if (!b.coord.advance(id, to, 'test').ok) throw new Error(`fixture advance to ${to} refused`);
+    }
+    b.coord.foldPrLineage(id, [{ pr: 5, branch: `ws/project-a-s${id}`, phase: 'merged', recordedAt: b.openedSeconds(id) + 5 }]);
+    const read = b.coord.run(id);
+    expect(read.ok && read.run !== null ? [read.run.state, read.run.closePr] : null).toEqual(['merging', null]);
+    expect(runPrMerged(b.coord, id, () => null)).toBe(true);
+  });
+  it('the session\'s listed PR counts only on the run\'s own branch, and an unknown run is not merged', () => {
+    const b = build();
+    const id = b.working();
+    const own = `ws/project-a-s${id}`;
+    expect(runPrMerged(b.coord, id, () => null)).toBe(false);
+    expect(runPrMerged(b.coord, id, (s) => (s === `project-a-s${id}` ? { phase: 'merged', branch: own } : null))).toBe(true);
+    expect(runPrMerged(b.coord, id, () => ({ phase: 'merged', branch: 'ws/other' }))).toBe(false);
+    expect(runPrMerged(b.coord, 99_999, () => ({ phase: 'merged', branch: own }))).toBe(false);
   });
 });

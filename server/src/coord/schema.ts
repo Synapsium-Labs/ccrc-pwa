@@ -3470,7 +3470,6 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE asks ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE operator_items ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
   `,
-
   // ── 88: user_version 87 -> 88 ─────────────────────────────────────────────
   // The daily backstop's setting (Overlord spec R19, Table 11.1d; W1, plan `w1-renewal-readings.md` Task 2): one row, the hour
   // and IANA zone at which an Overlord generation that has lived through it is due a soft renewal, seeded 04:00 UTC and marked
@@ -3486,7 +3485,6 @@ export const MIGRATIONS: readonly string[] = [
     isDefault INTEGER NOT NULL, setAt INTEGER NOT NULL);
   INSERT INTO renewal_backstop_settings (id, hour, zone, isDefault, setAt) VALUES (1, 4, 'UTC', 1, 0);
   `,
-
   // ── 89: user_version 88 -> 89 ─────────────────────────────────────────────
   // What a programme says is left (Overlord W2 remaining work A, plan `w2-remaining-work.md` Task 2; spec §5.6 H38, Table
   // 11.1a): `programme_remaining`, one append-only row per statement a coordinator makes of the waves left (a range with a
@@ -3572,6 +3570,94 @@ export const MIGRATIONS: readonly string[] = [
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
+  `,
+  // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
+  // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
+  // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
+  // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
+  // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
+  // nothing on an existing table: an older build opening a file at `user_version 93` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
+  // (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 first, so WM0 took the next slot each time (the
+  // coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 92 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_phases (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL, key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, droppedWhy TEXT, UNIQUE (program, key));
+  CREATE TABLE plan_phase_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, phaseId INTEGER NOT NULL REFERENCES plan_phases(id),
+    kind TEXT NOT NULL CHECK (kind IN ('epic', 'ticket')), refId INTEGER NOT NULL, carriedTo INTEGER REFERENCES plan_phases(id),
+    carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
+    CHECK (carriedTo IS NULL OR kind = 'ticket'));
+  `,
+
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
+  // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3; spec §5.6 H38, Table 11.1a row "Sealed
+  // forecasts (85% dates)"): `programme_forecasts`, one row per closed work run (its wave boundary, `closingRunId` UNIQUE),
+  // computed as of `asOf` from the statement it names (`statementId`, NULL when none stood) and replayable from `seed`;
+  // `outcome` is `open` until the forecast lane scores it at `p85At`. Writers: `programmeFactsStore.ts#sealForecast` (the
+  // INSERT, `ON CONFLICT DO NOTHING`) and `#scoreForecast` (`outcome` and `scoredAt` only, on an `open` row), each called
+  // only by its arm of the forecast lane. NEW TABLE only: an older build at this `user_version` takes rule 3 and never
+  // names it. Account organization D (#2958) landed 90, the Overlord's designation (#2950) 91, done tests A (#2964) 92 and the
+  // programme's phases (#2974) 93, so this is 94 by position (the coordinator's standing renumber license, 2026-11-17);
+  // whoever lands second renumbers. RE-MEASURE the slot (it must print 93 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    closingRunId INTEGER NOT NULL UNIQUE REFERENCES runs(id), sealedAt INTEGER NOT NULL, asOf INTEGER NOT NULL,
+    statementId INTEGER REFERENCES programme_remaining(id), lo INTEGER, hi INTEGER, kind TEXT NOT NULL, reason TEXT,
+    source TEXT, n INTEGER, seed INTEGER, medianAt INTEGER, p85At INTEGER, outcome TEXT NOT NULL DEFAULT 'open', scoredAt INTEGER
+  );
+  CREATE INDEX programme_forecasts_by_program ON programme_forecasts (program, id);
+  `,
+
+  // ── 95: user_version 94 -> 95 ─────────────────────────────────────────────
+  // The drift, migration and inbound stores of the Linear hierarchy (design 2026-11-10 §7.2 to §7.5, wave 4, D-8183), one entry
+  // for every table of the wave. `linear_drift_marks`: per workspace, the drift pass's watermark for each changed* kind (the
+  // `updatedAt` that kind's read reached, one per kind so a change between two reads is never skipped; D-8723) and when it
+  // last ran. `linear_drift_events`: one row per owned field found changed on a bound object (`bindingId` is
+  // `linear_bindings.id`), whether ccrc put it back, and when it commented; `value` and `actor` hold LINEAR TEXT, read only
+  // under `untrusted`, and `actor` is always the literal `not read` in this build (the changed* documents select no actor and
+  // `ops.ts` is frozen; D-8703). `linear_migrations`: one row per team migration (`state` is a `MigrationState` word, `map` the
+  // approved map, `itemId` the operator item that asks for it, `reportItemId` the report's), and `linear_migration_moves`: one
+  // row per subject it moves, with the object before and after, unique per (migration, subject) so a re-run never doubles a move.
+  // `linear_inbound`: an issue a person filed in a managed team, seen by the inbound sweep; `state` is `waiting | mailed |
+  // handed | taken | placed | closed | raised` (`INBOUND_STATES`), `reason` a close's reason (with the refusal's marker when
+  // ccrc gave the close up), `actedAt` when the close's Linear writes landed or were given up, and `itemId` the operator item a
+  // `raise` made (the one fact that links a raised row to its answer); those three are D-8723's. `title` and `body` are the
+  // reporter's LINEAR TEXT (read only under `untrusted`), kept, bounded by the plan's ticket bounds, so `plan triage upkeep`
+  // and `plan take` make the ticket without calling Linear (D-8705).
+  // `linear_sync_streaks` and `linear_probe_settled` (D-8723) persist the plan sync's D-8701 episode streaks and its settled-probe marks,
+  // which wave 3 kept in process memory (its carried findings 1 and 6).
+  //
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 95` warns, reads as-is, names none of them and
+  // boots. The plan's number was 58; row revisions (#2965) took 87, renewal readings A (#2962) 88, remaining work A (#2951)
+  // 89, account organization D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92 and the work map's phases
+  // (#2974) 93 and forecasts A (#2987) 94, so this is 95, and it is renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 94 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_marks (workspaceId TEXT PRIMARY KEY, initiatives TEXT NOT NULL, projects TEXT NOT NULL,
+    milestones TEXT NOT NULL, issues TEXT NOT NULL, passAt INTEGER NOT NULL);
+  CREATE TABLE linear_drift_events (id INTEGER PRIMARY KEY AUTOINCREMENT, bindingId INTEGER NOT NULL, at INTEGER NOT NULL,
+    field TEXT NOT NULL, value TEXT NOT NULL, actor TEXT NOT NULL, restored INTEGER NOT NULL, commentedAt INTEGER);
+  CREATE TABLE linear_migrations (id INTEGER PRIMARY KEY AUTOINCREMENT, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    state TEXT NOT NULL, map TEXT, itemId INTEGER, reportItemId INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+    appliedAt INTEGER, putBackAt INTEGER);
+  CREATE TABLE linear_migration_moves (id INTEGER PRIMARY KEY AUTOINCREMENT, migrationId INTEGER NOT NULL,
+    subject TEXT NOT NULL, kind TEXT NOT NULL, linearId TEXT, identifier TEXT, before TEXT, after TEXT NOT NULL,
+    appliedAt INTEGER, revertedAt INTEGER);
+  CREATE UNIQUE INDEX linear_migration_moves_one ON linear_migration_moves(migrationId, subject);
+  CREATE TABLE linear_inbound (linearId TEXT PRIMARY KEY, workspaceId TEXT NOT NULL, teamKey TEXT NOT NULL,
+    identifier TEXT NOT NULL, title TEXT NOT NULL, body TEXT, seenAt INTEGER NOT NULL, mailedTo TEXT, mailedAt INTEGER,
+    handedTo TEXT, reason TEXT, actedAt INTEGER, state TEXT NOT NULL, itemId INTEGER);
+  CREATE TABLE linear_sync_streaks (key TEXT PRIMARY KEY, keyDigest TEXT NOT NULL, since INTEGER NOT NULL,
+    lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
+  CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
 ];
 

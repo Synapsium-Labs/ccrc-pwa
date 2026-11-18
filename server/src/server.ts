@@ -94,6 +94,7 @@ import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
+import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
@@ -262,6 +263,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
+  '/api/projects/:project/upkeep',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
@@ -2105,22 +2108,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // its handle's `serial`: one mutex holds a plan write and a run's open apart. The follow-up verb's own-epic check reads the
   // caller's open run (the binding's one view, `bindingsOf(...).worker()`, ARCH-42), and that run's ticket's epic, from the
   // plan port.
+  // Overlord W1 other lanes (H10): one reads instance for the plan doors and the Linear proxy's writes. With no store the
+  // designation reads unmeasured, so only a caller whose launch profile reads overlord or cannot be read is refused.
+  const otherLaneReads = otherLaneReadsOf({ coord: deps.coord ?? { designationRead: () => ({ kind: 'unmeasured', why: 'no coordination store' }) }, io: deps.io, cfg: deps.cfg });
   registerPlanRoutes(app, {
     coord: deps.coord, plan: deps.plan, serial: coordRoutes.serial, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     sessionAuth, authEnabled: deps.cfg.authEnabled, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     runOfSession: (id) => {
       const open = deps.coord?.bindingsOf(id).worker();
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
-    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
+    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2165,10 +2172,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
   registerLinearProxyRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8183: the plan owns the tickets of a managed team (`plan-owned`).
+    managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
+    boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
   registerLinkingRoutes(app, {
@@ -3701,7 +3711,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  and `reclaim.ts#moveClaims` over this server's store, registry and tmux. Called inside the coordination serialiser. */
   const claimsPort = (coord: CoordStore, id: string): ClaimsCoordPort => ({
     bindingsOf: (sid) => coord.bindingsOf(sid),
-    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, choice, claimed),
+    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads }, id, choice, claimed),
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
