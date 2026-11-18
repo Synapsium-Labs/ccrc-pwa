@@ -219,9 +219,13 @@ export function authBox(prefix: string, opts: { roster?: unknown; mint?: string;
  *  above already in place), the fast knobs, and the Linux arm of both `ccrc` and the helper whatever the host. */
 export function authEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   const e = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
+  // The probe's release-lookup seam (D-8743) survives the strip: it is containment, not a knob. `ghContainedEnv` set it to
+  // a missing file, which the probe reads as a failed lookup, so the Codex check never asks npm.
+  const release = e['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
   for (const k of Object.keys(e)) if (k.startsWith('CCRC_')) delete e[k];
   Object.assign(e, {
     OSTYPE: 'linux-gnu', CCRC_AUTH_SCRIPT: join(home, 'fake-script'), CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '30',
+    CCRC_MODELS_PROBE_RELEASE_FIXTURE: release,
   }, extra);
   assertManagerStandIns(e, home);
   return e;
@@ -242,12 +246,12 @@ export function ccrcAuth(home: string, args: string[], stdin = '', extra: NodeJS
 }
 
 /** The env the agent's account op spawns `ccrc account` with (`agent/src/accountop.ts`): exactly HOME, PATH and LANG,
- *  plus this fixture's own knobs (the Linux arm and the pty vehicle, none of them a bus). No `XDG_RUNTIME_DIR` and no
+ *  plus this fixture's own knobs (the Linux arm, the pty vehicle and the probe's release seam, none of them a bus). No `XDG_RUNTIME_DIR` and no
  *  `DBUS_SESSION_BUS_ADDRESS`, so the verb must find the user manager by itself. */
 export function agentSpawnEnv(home: string): NodeJS.ProcessEnv {
   const full = authEnv(home);
   const e: NodeJS.ProcessEnv = { HOME: home, PATH: full['PATH'], LANG: 'C.UTF-8' };
-  for (const k of ['OSTYPE', 'CCRC_AUTH_SCRIPT', 'CCRC_AUTH_TICK', 'CCRC_AUTH_TIMEOUT']) e[k] = full[k];
+  for (const k of ['OSTYPE', 'CCRC_AUTH_SCRIPT', 'CCRC_AUTH_TICK', 'CCRC_AUTH_TIMEOUT', 'CCRC_MODELS_PROBE_RELEASE_FIXTURE']) e[k] = full[k];
   assertManagerStandIns(e, home);
   return e;
 }
