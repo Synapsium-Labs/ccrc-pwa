@@ -1250,6 +1250,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/continuity/renewal-backstop': 'an hour, an IANA zone name, a flag and a time: no session text (Overlord W1 renewal readings A)',
     '/api/coord/roll-idle': 'one setting word and its two choices (D-7453)',
     '/api/coord/plain-auto-memory': 'one setting word, its default and its two choices (Overlord W1a launch profiles PR B)',
+    '/api/coord/renewal-mode': 'one setting word, its default and its two choices (Overlord W1a, the renewal hand-offs)',
     '/api/coord/scope-sweep': "the sweep's two switches, each a marker state word (D-7994)",
     '/api/coord/delegation-adopt': "the adoption switch's marker state, two capability words, refusal words, and the lane's counts and kept worktrees' projects, names and parent sessions: no session text (D-8112, D-8114)",
     '/api/testbox': "the test box's state and reasons, the two hosts' tool versions and the run counts: no session text (D-7411)",
