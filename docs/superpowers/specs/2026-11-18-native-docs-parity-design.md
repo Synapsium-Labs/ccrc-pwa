@@ -204,16 +204,17 @@ flowchart TB
 | Decision | Options | Chosen, and why |
 |---|---|---|
 | Where variants live | (a) In the library as layouts, each its own enhance bundle; (b) host CSS over the default; (c) the standalone reader's files inside the frame | (a): the variants differ in code. (c) loads Mermaid from a CDN, reads storage directly and rewrites links itself, all of which the frame forbids. |
-| How the frame loads one | (a) Only the chosen layout's bundle is inlined, allowed by its own hash; (b) every layout inlined | (a): the srcdoc stays the size it is today. |
+| How the frame loads one | (a) Only the chosen layout's bundle is inlined, allowed by its own hash; (b) every layout inlined | (a): the srcdoc holds one layout's code, held to its cap per layout with X1's fonts in it (§6). |
 | Persistence | (a) A per-device reading pref, plus `?variant=` for one visit; (b) URL only, as in the standalone; (c) server-side | (a): the standalone reader keeps the choice in the URL only; a per-device pref keeps that link behaviour and adds a lasting choice. |
 | The control | (a) A Layout row in ccrc's Page details sheet; (b) in the library's Aa menu | (a): the Aa menu's ownership is X1's, and a layout change remounts the frame, which the host does. |
 
 - **Names.** `default` (AB), `classic`, `editorial` (A), `review` (B), `guided` (C). `?variant=` accepts the standalone reader's names (`AB`, `A`, `B`, `C`, `classic`) and maps them; an unknown name opens the default, as in the standalone reader.
 - **State.** Each layout's own state (B's and C's per-doc keys) goes through the bridge's `store.set` under the reader prefix, as per-doc fields named per layout; the 1 MiB budget and eviction are unchanged.
+- **Appearance.** Every layout follows ccrc's appearance while hosted, through the appearance slots and pairs as X1's merged contract defines them, and passes the contrast pairs gate (§6). A layout brings its own structure, never its own palette.
 - **Phone, laptop, wide.** Every layout must keep ccrc's one-bar, tap and desktop-fit budgets at 412×915, 1280×800 and 1920×1080. A layout that cannot is fixed in the library before it ships; none is shipped as "desktop only".
 - **Departure.** Rich-docs §3.3 says the library ships only the default layout. That sentence predates your #1418 ruling (2026-10-25, layout variants kept), which the amended §6 row carries ("every kept variant"); the leaf plan defines the reconciliation as D-8762. §3.3 is superseded by it once wave P5 implements it, and P5 amends §3.3's text then.
 
-**Test strategy.** Library: each layout passes the conformance corpus and the frame CSP hash check. ccrc: the pref round trip; `?variant=` mapping and its carry on doc links; one browser row per layout per width (one bar, no horizontal scroll, contents reachable). Mutation rows M11.7 to M11.9.
+**Test strategy.** Library: each layout passes the conformance corpus, the appearance contrast suite in hosted mode and the frame CSP hash check, and its srcdoc with X1's fonts stays under its cap. ccrc: the pref round trip; `?variant=` mapping and its carry on doc links; one browser row per layout per width (one bar, no horizontal scroll, contents reachable). Mutation rows M11.7 to M11.9.
 
 ### 4.3 Files above 2 MiB
 
@@ -481,11 +482,12 @@ The rich-docs state contract starts state fresh on ccrc's origin (G7, §5.2). Ev
 
 ## 6. Library side: what the shared renderer library must add (designed, not made)
 
-This section is the parity request to the shared renderer library, the public library ccrc's reader embeds. Library 1.1.0 stays pinned in this wave. The coordinator folds this request and the appearance wave's (X1) into one library wave and one release; the two are independent of each other, and nothing below depends on X1's interface. The release and its signed tag are yours.
+This section is the parity request to the shared renderer library, the public library ccrc's reader embeds. Library 1.1.0 stays pinned in this wave. The coordinator folds this request and the appearance wave's (X1) into one library wave and one release. Their interfaces are separate (X2's ops and layouts, X1's appearance op), but they share one constraint: every layout takes its colours and fonts from the appearance slots, as the default does. So the library wave carries X1's contract first, and the layouts conform to it. The release and its signed tag are yours.
 
 | Change | Rows | Compatibility |
 |---|---|---|
 | Layouts `classic`, `editorial`, `review`, `guided` beside `default`, each its own enhance bundle and script hash; the frame policy built for the chosen layout | R19 | Additive; a host that names no layout gets `default` |
+| Every layout, `default` included, uses the appearance slots and passes the appearance pairs' contrast gate in hosted mode: the appearance slots and pairs as X1's merged contract defines them. The library's conformance and contrast suites run per layout, and each layout's srcdoc is held to its cap per layout, with X1's fonts in it | R19, R10 | A constraint on the layouts above; a layout that fails it does not ship |
 | The render step returns the doc's item values (from the byline item fact, a promise-delta `item:` line and the legacy item header), at most 50 of at most 100 characters; the seed accepts resolved item links (value and href) and draws them; the library carries no default tracker | R20 | Additive; no links seeded means items stay text |
 | Frame-to-host op `place {kind, id?}`; host commands `close-overlay` and `goto {id}` | R13, R14 | Additive; the frame sends `place` only when the seed says the host accepts it, so a 1.1 host never counts it as a refused op |
 | Host command `print-figures`; frame-to-host op `print-figure {i, n, png}`: each figure drawn for print with HTML labels off, rasterised at most 2048 px a side, at most 64 figures, 1 MiB each, 16 MiB in all, enforced by the host parser before any decode | R21 (stage 2) | Additive; sent only when the seed says the host accepts it |
@@ -600,7 +602,7 @@ none - design of recorded required parity scope of the native Docs reader progra
 
 ### Later
 
-- The library release: the coordinator's one library wave for this request and X1's, then your release and signed tag.
+- The library release: the coordinator's one library wave for this request and X1's, X1's appearance contract first and the layouts conforming to it, then your release and signed tag.
 - Implementation: waves P1 to P6 of the leaf plan, each dispatched by the coordinator.
 - The side-by-side check on the installed release: F, Task 17.
 

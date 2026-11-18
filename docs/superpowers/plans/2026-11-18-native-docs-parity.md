@@ -54,7 +54,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 | Row | Task 17 row | Installed action and observation | Waves |
 |---|---|---|---|
 | AR-1 | Outside folders | Add a non-repo folder in Settings, open its six sections, see "Not in a repository" and each file's modified time; history, changes, versions, GitHub and Share are off with reasons; a symlink out is listed and never read; reads refused while sign-in is dark; Remove ends access. No Git conversion. | P2 |
-| AR-2 | Layout variants | Open a doc in `default`, `classic`, `editorial`, `review` and `guided` (Page details, and `?variant=` with the standalone names); the choice persists per device; each is usable at 412×915, 1280×800 and 1920×1080. | P5 |
+| AR-2 | Layout variants | Open a doc in `default`, `classic`, `editorial`, `review` and `guided` (Page details, and `?variant=` with the standalone names); the choice persists per device; each is usable at 412×915, 1280×800 and 1920×1080; each follows ccrc's appearance while hosted (theme and fonts through the appearance slots, as X1's merged contract defines them) and passes its contrast pairs. | P5 |
 | AR-3 | Large files | Real fixtures at 2 MiB, 4 MiB and 64 MiB, one byte below, at and above each: Markdown in parts, an image view, Download; over 64 MiB the plain sentence and nothing partial; a draft above 4 MiB opens through its snapshot (the overlay-cap decision). Peak page memory measured on the phone. | P1 |
 | AR-4 | PDFs | List, open inline and download one PDF below, at and above 4 MiB; no network from the frame or its worker; links do not navigate; phone and desktop. | P3 |
 | AR-5 | Tracker links | Configure two rules in Settings; matching item ids link through the external-link sheet; a non-match stays text; a rule with a placeholder beside the host is refused; no tracker is named in the shipped code. | P4, P5 |
@@ -242,7 +242,8 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Interfaces:** Produces `type ReaderLayout = 'default' | 'classic' | 'editorial' | 'review' | 'guided'`; `layoutFromVariant(v: string | null): ReaderLayout` (`AB`→default, `A`→editorial, `B`→review, `C`→guided, `classic`→classic, else default); pref key `ccrc:reader:v1:pref:prefs` gains `layout`.
 
-- [ ] **Step 1: Failing tests:** `layouts: variant names map`; `layouts: pref persists per device and ?variant overrides one visit`; `layouts: ?variant carries on doc links`; browser: one row per layout per width (one bar, no horizontal scroll, contents reachable).
+- [ ] **Step 1: Failing tests:** `layouts: variant names map`; `layouts: pref persists per device and ?variant overrides one visit`; `layouts: ?variant carries on doc links`; `layouts: each layout's srcdoc, with X1's fonts, stays under its cap`; browser: one row per layout per width (one bar, no horizontal scroll, contents reachable, ccrc's appearance applied in light and dark).
+- [ ] **Step 1a: The library's own proof, recorded.** Copy into Results the release's conformance and appearance contrast suite results per layout; a layout without both is not adopted.
 - [ ] **Step 2 to 4:** run, implement, run.
 - [ ] **Step 5: Amend rich-docs §3.3.** Replace "The standalone server's other layouts: the design-prototype variants and the old `classic` layout. Only the default layout ships." with "The standalone server's other layouts ship as library layouts beside the default: `classic`, `editorial`, `review` and `guided` (amended <date>; X2 P5, D-8762)."
 - [ ] **Step 6: Commit** `feat(docs): reader layouts (X2 P5, D-8762)`.
