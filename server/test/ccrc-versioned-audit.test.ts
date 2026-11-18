@@ -29,7 +29,7 @@ import {
 import path, { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ccdSource } from './ccdWsHelpers.js';
+import { ccdSource, stripCcrcKnobs } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { installVersionedTree } from './installTreeFixture.js';
 
@@ -56,7 +56,7 @@ function auditBox(prefix: string): { home: string; v1: string; v0: string } {
 
 function auditEnv(home: string): NodeJS.ProcessEnv {
   const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
-  for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+  stripCcrcKnobs(env);
   // Each of these changes what Node reports as a module's own path — the
   // subject of row 6 — so none may leak in from the runner.
   for (const k of ['NODE_OPTIONS', 'NODE_PRESERVE_SYMLINKS', 'NODE_PRESERVE_SYMLINKS_MAIN']) delete env[k];

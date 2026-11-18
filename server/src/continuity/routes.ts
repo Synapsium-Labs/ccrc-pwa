@@ -32,6 +32,7 @@ import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFact
 import { RENEW_REQUESTS_CURSOR, effectiveGeneration, sessionLiveGeneration, type TimerRow } from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
+import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
 import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
@@ -41,7 +42,7 @@ import {
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
-import { designationFactFrom, identityOf as generationIdentityOf, type DesignationFact } from '../roleOf.js';
+import { identityOf as generationIdentityOf } from '../roleOf.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -301,10 +302,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
     console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
   };
-  /** The designation as this call reads it, or `unmeasured` (a read that throws included). */
-  const designationReadOf = (coord: CoordStore): DesignationFact | 'unmeasured' => {
-    try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
-  };
   /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
   const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
     const gens = coord.liveGenerations();
@@ -433,16 +430,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     return { id, b: by };
   };
   const refuseNote = (reply: FastifyReply, r: NoteVerdictRefusal, more = '') => refuseRoute(reply, r, { detail: `${NOTE_DETAIL[r]}${more}` });
-  /** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
-  const liveGenerationOf = (coord: CoordStore, id: string) => {
-    const gens = coord.liveGenerations();
-    const fact = designationReadOf(coord);
-    if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
-    const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
-    if (row === undefined) return 'no-generation' as const;
-    const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
-    return { row, state: effectiveGeneration(row, live).state };
-  };
 
   /**
    * `POST /api/sessions/:id/notes { byId, byUuid, key, kind, waitsOn, next, revises?, closes? }`: append one note. A
@@ -495,7 +482,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
     const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined)(input.key), id);
     const live = coord.liveNotes(id);
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
     const verdict = noteVerdict(input, keyFact, live.ok ? live.notes.length : 'unmeasured', revised);
     // The detail names the key only when the revised note, if any, is a live note of the caller's; else the note's id.
@@ -586,7 +573,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     const asked = handoverAsked(typeof gen === 'string' ? gen : gen.state);
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');

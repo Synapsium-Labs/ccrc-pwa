@@ -112,6 +112,7 @@ not after.
    suites. The brief's `Lenses:` line names the held-out panel
    (`../ccrc-coordinator/references/review-panel.md`, clause 14) — the
    reviewer runs it; this session never runs it on the diff itself.
+   Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word.
    `cap-concurrency` here is ordinary: the reviewer needs a slot and
    the idle worker no longer holds one, so retry on the next wake. **End your
    turn.** The reviewer's `review-done` mail wakes you.

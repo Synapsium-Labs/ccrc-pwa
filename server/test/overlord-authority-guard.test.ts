@@ -18,6 +18,7 @@ afterEach(() => removeTmpFixtures());
 
 const HEAD_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_authority_head'))!;
 const DESIGNATION_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_designation'))!;
+const LADDER_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE overlord_ladder'))!;
 /** The migration that creates `decision_rows`, a table `OVERLORD_AUTHORITY_TABLES` lists (decision model B): boot coherence reads
  *  every listed table, so a fixture database without it reads `unmeasured` (rows). Found by its table, as the head migration is. */
 const DECISION_ROWS_MIGRATION = MIGRATIONS.find((sql) => sql.includes('CREATE TABLE decision_rows'))!;
@@ -42,6 +43,7 @@ function fixture(): { dir: string; db: DatabaseSync; leaf: string } {
   const db = new DatabaseSync(path.join(dir, 'coord.db'));
   db.exec(HEAD_MIGRATION);
   db.exec(DESIGNATION_MIGRATION); // `OVERLORD_AUTHORITY_TABLES` lists its table, so boot coherence reads it beside the head row
+  db.exec(LADDER_MIGRATION); // and the ladder's two tables, in the same list
   db.exec(DECISION_ROWS_MIGRATION);
   return { dir, db, leaf: path.join(dir, OVERLORD_AUTHORITY_BASENAME) };
 }
