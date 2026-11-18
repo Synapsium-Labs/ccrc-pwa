@@ -242,7 +242,11 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     openAt(id) {
       if (destroyed) return;
       frame.destroy();
-      frame = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
+      const next = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
+      frame = next;
+      // The library runs host code while it mounts (a focus or insertion handler, a fallback): one that destroyed this
+      // mount then reached the frame before it, so the new frame goes too.
+      if (destroyed) next.destroy();
     },
   };
 }

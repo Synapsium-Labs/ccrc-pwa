@@ -733,6 +733,22 @@ describe('openAt', () => {
     return b;
   };
 
+  it('a mount that destroys itself while the library mounts the new frame tears that frame down too (review of Task 13, nit 6)', async () => {
+    const r = rig({ el: hostEl() });
+    const m = await r.run();
+    const real = r.mount.getMockImplementation()!;
+    r.mount.mockImplementationOnce((el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => {
+      const f = real(el, o);
+      m.destroy();
+      return f;
+    });
+    m.openAt!('far');
+    expect(r.mount).toHaveBeenCalledTimes(2);
+    expect(r.frames[1]!.destroy, 'the frame mounted while the mount was destroyed is destroyed').toHaveBeenCalledTimes(1);
+    m.openAt!('again');
+    expect(r.mount, 'and nothing mounts after that').toHaveBeenCalledTimes(2);
+  });
+
   it('mounts the same document a second time with initialHash set and nothing else changed, the first frame destroyed first', async () => {
     const r = rig({ el: hostEl(), document: docOf({ version: { sha: SHA40, draft: false } } as Partial<RenderInput>) });
     const m = await r.run();
