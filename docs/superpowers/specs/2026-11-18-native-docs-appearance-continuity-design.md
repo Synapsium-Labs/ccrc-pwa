@@ -56,13 +56,14 @@ flowchart LR
   P["ccrc preference<br/>theme.ts and skin.ts"] --> R["Root stamp<br/>data-theme and data-skin"]
   R --> T["Applied tokens<br/>tokens.css and skins.css"]
   T --> M["Adapter reads mapped tokens<br/>one mapping table"]
-  M --> V["Library validator<br/>closed slots, hex only"]
-  V -->|valid| A["Seed at mount<br/>appearance op while open"]
-  V -->|invalid| F["Mode only<br/>today's light, dark or auto"]
+  M --> C{"Library has<br/>the contract?"}
+  C -->|yes| V["Library parseAppearance<br/>verdict slot by slot"]
+  V --> A["Seed at mount<br/>appearance op while open"]
+  C -->|no| F["Mode-only mount<br/>prefs.theme, as today"]
   A --> X["Frame root<br/>library-owned custom properties"]
   F --> X
 ```
-*Figure 1. Where appearance comes from and how it reaches the frame. The catalogue stays on the left. Only resolved values cross, and only after the library's own validator accepts them. A payload it refuses leaves the reader on today's mode-only path.*
+*Figure 1. Where appearance comes from and how it reaches the frame. The catalogue stays on the left, and only resolved values cross. The library's own validator decides every value: a refused colour drops the colour group, and the frame stays hosted in the library's colours for the mode. A refused skin slot drops only itself. Only a library without the contract leaves ccrc on today's mode-only mount.*
 
 **The contract (library-owned).**
 - `mode` is `light`, `dark` or `auto`: the resolved direction. It sets `color-scheme` and the library's defaults for any slot the host leaves out.
@@ -268,8 +269,8 @@ There is no skew inside one mount. The host half and the frame half of a mount c
 | Library without the contract (1.1.0) | The adapter finds no supported `APPEARANCE_CONTRACT` and sends today's `prefs.theme`. Aa keeps its theme row | 1.1.0 throws on an unknown adapter key, so the adapter must not send one. With the exact pin this is a build error, so the case is reached through a test seam only |
 | Library contract newer than the adapter knows | Today's `prefs.theme`, until ccrc adopts it | The adapter supports an explicit set of contract versions |
 | A mapped colour reads empty or not as a literal, at mount or while open | An appearance with `mode` and no colour group: the frame stays hosted, drops any host colours it had, and shows the library's colours for that mode. `console.warn('ccrc-reader: …')` once | Half a palette could put dark ink on a dark surface, and a stale palette left on screen would be worse. All or nothing per group is safe |
-| A shape or font value is refused | That slot keeps the library default. Colours still apply | Shape and type cannot hurt contrast |
-| The frame receives a malformed `appearance` op | The frame ignores the whole op and keeps the previous appearance | The same rule as any parent op the frame cannot use |
+| A skin slot or the label is refused | That slot keeps the library default. Colours still apply | Shape and type cannot hurt contrast |
+| The frame receives an `appearance` op with bad values | The frame runs the same `parseAppearance` and applies its verdict, slot by slot, with the colour group all or nothing. Only a value that is not a plain object is ignored whole | One bad-value rule, the validator's, at mount and while open |
 | A new ccrc skin or palette | Values flow with no reader change. The §5 gate reds a palette whose mapped pairs miss a floor | The library never sees ids, so an unknown skin cannot exist for it |
 | The reader lab | Mounts with no appearance, as today | E17 and E18 readings stay comparable to the recorded phone blocks |
 
@@ -324,10 +325,10 @@ This section is written for the library programme to plan from. It names the lib
 | `APPEARANCE_CONTRACT` (`./frame`) | number, `1` | The contract version. Absent in 1.1.0, which is how a host detects support |
 | `APPEARANCE_SLOTS` (`./frame`) | readonly record | The closed slot names by group: `colour`, `skin`. The source of truth for both sides' tests |
 | `APPEARANCE_PAIRS` (`./frame`) | readonly list | `{fg, bg, floor}` for every pair the stylesheet draws, derived colours included, expressed over the slots |
-| `parseAppearance(x)` (`./frame`) | pure function | Returns `{ok: true, appearance}`, or `{ok: false, why, key}`. The same validator the frame runs |
+| `parseAppearance(x)` (`./frame`) | pure function | Never throws for a value. Returns `{appearance, refused}`: `appearance` is always usable, and `refused` lists `{key, why}` for each slot it left out. A refused colour drops the whole colour group. A refused skin slot or label drops itself. A bad `mode` reads as `auto`. The same validator the frame runs on the seed and on every op |
 | `mermaidThemeOf(colours)` (`./frame`) | pure function | Mermaid `themeVariables` derived from the slots. Documents still cannot set any theme key |
 | `APPEARANCE_LABEL_DEFAULT` (`./frame`) | string | "Appearance follows the app's settings": the line shown with no host label, naming no host |
-| `HostAdapters.appearance?` (`./host`) | adapter key | The contract value at mount. Validated with `parseAppearance`. Throws `TypeError` like any adapter key on a bad shape |
+| `HostAdapters.appearance?` (`./host`) | adapter key | The contract value at mount, taken through `parseAppearance`: a bad slot value never throws. Only a value that is not a plain object throws `TypeError`, like any adapter key |
 | `FrameAssets.fonts?` (`./host`) | asset | `{sans?: string, mono?: string}`, base64 woff2. Checked as §2.2 says, and dropped rather than thrown on failure |
 | `DocFrame.setAppearance(a)` (`./host`) | method | Posts the `appearance` op after `ready`. Queued before `ready`, latest wins. Seeds later remounts |
 
@@ -357,8 +358,9 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 **Tests the library ships.**
 1. `parseAppearance`:
    - accepts every slot at the edges of its grammar;
-   - refuses an unknown key, a nested value, a 3-digit hex, `rgb()`, `var(`, `url(`, a `;`, an out-of-range length and an oversize payload;
-   - names the refused key.
+   - leaves out, without throwing, an unknown key, a 3-digit hex, `rgb()`, `var(`, `url(`, a `;`, an out-of-range length and an oversize payload, and names each in `refused`;
+   - one refused colour leaves out the whole colour group; one refused skin slot leaves out only itself;
+   - a bad `mode` reads as `auto`.
 2. Host API:
    - an unknown adapter key still throws;
    - `appearance` is accepted;

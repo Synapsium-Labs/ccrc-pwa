@@ -16,8 +16,7 @@
 - Both 2026-11-06 phone blocks stay byte for byte. Phone 412 x 915: title at most 61 px, console part at most 48 px, tap floor 44 px; tablet and desktop at most 1 px from a fresh BASE, measured per skin.
 - The library version is exact (no `^`), and M8.12 still holds: CSP hashes equal the embedded script bytes, `assets.json` sha256 matches. Its release, signed tag and the exact version ccrc pins are the operator's.
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
-- No value the adapter sends contains `;`, `{`, `}`, `url(` or `var(`; colours are `#rrggbb` or `#rrggbbaa` only.
-- Colour slots are all or nothing: one unreadable mapped colour sends mode only for that change. Shape and font slots fall back one by one. Appearance never drops the reader to the plain view.
+- One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc at most 196 608 characters over the same document at the 1.1.0 pin; hosted open-to-`ready` median at most 1.10 x BASE median; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
 - The reader lab mounts with no appearance (spec X1-10).
@@ -52,7 +51,7 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | File | Ring | Task | Responsibility |
 |---|---|---|---|
 | `pwa/package.json`, `pwa/package-lock.json` | — | 1 | Exact re-pin |
-| `pwa/src/docs/reader/appearance.ts` (new) | L1 | 2 | `READER_APPEARANCE_MAP`, `READER_APPEARANCE_CONTRACTS`, `normaliseHostColour`, `readerAppearanceOf` |
+| `pwa/src/docs/reader/appearance.ts` (new) | L1 | 2 | `READER_APPEARANCE_MAP`, `READER_APPEARANCE_CONTRACTS`, `READER_APPEARANCE_LABEL`, `readerAppearanceOf` |
 | `pwa/test/reader-appearance.test.ts` (new) | — | 2 | Pure rule rows |
 | `pwa/test/reader-appearance-source.test.ts` (new) | — | 2 | Slot coverage, every palette resolves, contrast pairs, second-copy scan |
 | `pwa/test/helpers/paletteTokens.ts` (new) | — | 2 | `resolvePaletteTokens(themeId, skinId, pointer)`: both default blocks merged, `phosphor` as the default, the skin block and its `(pointer: fine)` arm, `var()` chains, `color-scheme` |
@@ -101,7 +100,6 @@ export const READER_APPEARANCE_MAP: {
 };
 export const READER_APPEARANCE_CONTRACTS: readonly number[]; // [1]
 export const READER_APPEARANCE_LABEL = 'Appearance follows ccrc Settings'; // the contract's label, ruled copy (ask 594)
-export function normaliseHostColour(text: string): string | null; // '#rrggbb' | '#rrggbbaa', lower case
 export type ReaderAppearanceOutcome =
   | { readonly kind: 'appearance'; readonly value: Appearance;
       /** `null`: every colour applied. Otherwise the colour group was dropped (spec §7). */
@@ -119,18 +117,15 @@ export function resolvePaletteTokens(
 The map is spec §3's table, slot for slot. Each mapped colour token was measured to resolve to `#rrggbb` in all twelve palettes, and every pair to meet its floor (2026-11-18, Results, "Contrast under the map"). A pair that misses its floor under this map in some palette stops the wave and is reported. It is not remapped silently.
 
 - [ ] **Step 1: Write the failing pure rows** in `reader-appearance.test.ts`:
-  - `normaliseHostColour`:
-    - `'#2E3440'` and `' #2e3440 '` give `'#2e3440'`;
-    - `'#2E3440CC'` gives `'#2e3440cc'`;
-    - `'rgba(4, 6, 5, 0.62)'` gives `'#0406059e'`;
-    - each of `'#abc'`, `'color-mix(in srgb, #BF616A 12%, transparent)'`, `'var(--x)'`, `'url(x)'`, `'red'`, `'#2e3440;'` and `''` gives `null`.
+  - `readerAppearanceOf` builds the raw contract (each value the token's computed text, trimmed) and returns `parseAppearance`'s verdict. It checks no range or grammar of its own:
   - `readerAppearanceOf`:
     - with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`, its `label` is `READER_APPEARANCE_LABEL`, and `parseAppearance` of its value is `ok`;
     - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
     - an unreadable skin token keeps every colour, leaves that slot out, and has `dropped: null`;
     - contract `undefined` and contract `2` each give `{kind:'mode-only', why:'contract-unsupported'}`;
     - a `colourScheme` of `'normal'` or `''` gives `mode: 'auto'`, no colour group, and `dropped.why: 'scheme-unreadable'`;
-    - `controlRow` `'52px'` is kept and `'60px'` is left out; `sectionCase` `'uppercase'` is kept and `'small-caps'` is left out;
+    - a skin token whose value the library refuses (for example `--row-h` answering `'60px'`) is left out by the verdict, and every colour stays;
+    - an upper-case hex answers what the verdict answers: ccrc does not lower-case it;
     - **section family:** with `--family-section` answering the same text as `--family-mono`, `sectionFamily` is `'mono'`; with it equal to `--family-ui`, `'sans'`; with any other text, the slot is left out;
     - its serialised value is at most 4096 bytes.
   - `resolvePaletteTokens`:
@@ -212,7 +207,8 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **while open, mode only:** `setAppearance` calls `DocFrame.setPrefs({theme})` once;
   - **after `destroy()`**, `setAppearance` does nothing;
   - **the lab:** with `profile: 'lab-draw'`, no `appearance` is passed and `input.appearance` is never called;
-  - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly.
+  - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
+  - **only the verdict is passed:** with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
 - [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts`). Expected: FAIL on the new rows only.
 - [ ] **Step 3: Implement.**
   - Contract detection takes `deps.contract`, or else `APPEARANCE_CONTRACT` from the library's `./frame` entry, and checks it against `READER_APPEARANCE_CONTRACTS`.
@@ -321,7 +317,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M7 | Map `text ← --ink-disabled` | Task 2 part 3, in at least one palette |
 | AP-M8 | Skip contract detection, always pass `appearance` | Task 4 "an older library" |
 | AP-M9 | Remove the per-frame coalescing | Task 5 "coalesces to the latest per frame" |
-| AP-M10 | `normaliseHostColour` accepts any string starting `#` | Task 2 normaliser rows (`'#2e3440;'`) |
+| AP-M10 | `readerAppearanceOf` returns the raw contract and skips `parseAppearance` | Task 2 "a skin token whose value the library refuses" |
 | AP-M11 | `useHostAppearance` reads the stored choice instead of the root | Task 3 "a system flip moves the stamp" |
 | AP-M12 | The lab profile passes `appearance` | Task 4 "the lab" |
 | AP-M13 | A hosted mount sends neither `appearance` nor `prefs.theme`, so the stored theme rules | Task 6 AP-3 (stale stored theme) |
