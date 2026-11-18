@@ -35,10 +35,11 @@ export type EdgeVerdict =
   | { readonly verdict: 'none' }
   | { readonly verdict: Exclude<EdgeVerdictWord, 'none'>; readonly settle: EdgeSettle };
 
-/** The edge as the verdict reads it: its state (an unknown stored word reads `open` with `stateUnreadable`) and its
- *  clock. */
+/** The edge as the verdict reads it (`ProgrammeEdge`'s fields): its state (an unknown stored word reads `open` with
+ *  `stateUnreadable`), whether its kind and target are words and shapes this build can read, and its clock. */
 export interface EdgeVerdictEdge {
-  readonly state: EdgeState; readonly stateUnreadable?: true; readonly unmeasuredSince: number | null;
+  readonly state: EdgeState; readonly stateUnreadable?: true; readonly kindUnreadable?: true; readonly targetUnreadable?: true;
+  readonly unmeasuredSince: number | null;
 }
 
 /** The reader's evidence or reason, masked and cut whole: ids and words by the reader's contract, masked anyway, since
@@ -48,11 +49,14 @@ const evidenceOf = (text: string): string => cutWhole(redactCommand(text), EDGE_
 const end = (verdict: 'met' | 'ended' | 'unmeasurable', state: Exclude<EdgeState, 'open'>, evidence: string): EdgeVerdict =>
   ({ verdict, settle: { kind: 'end', state, evidence: evidenceOf(evidence) } });
 
-/** First match and total over every edge state (read or unreadable), every reader answer and any clock. Replacing an
- *  answer with an unmeasured one never moves the verdict to `met` or `ended`. */
-export function edgeVerdict(edge: EdgeVerdictEdge, answer: TargetAnswer, now: number): EdgeVerdict {
-  // 1. Only an `open` edge this build can read is settled; a word a newer build wrote is never overwritten.
-  if (edge.state !== 'open' || edge.stateUnreadable === true) return { verdict: 'none' };
+/** First match and total over every edge state (read or unreadable), every reader answer and any clock. `answer` is null
+ *  when the target could not be asked (a stored shape this build cannot read). Replacing an answer with an unmeasured one
+ *  never moves the verdict to `met` or `ended`. */
+export function edgeVerdict(edge: EdgeVerdictEdge, answer: TargetAnswer | null, now: number): EdgeVerdict {
+  // 1. Only an `open` edge this build can read whole is settled: a word or shape a newer build wrote is never ended by
+  //    this one, so the block stays visible, flagged, until a build that can read it measures it.
+  if (edge.state !== 'open' || edge.stateUnreadable === true || edge.kindUnreadable === true || edge.targetUnreadable === true
+    || answer === null) return { verdict: 'none' };
   if (answer.kind === 'unmeasured') {
     const since = edge.unmeasuredSince;
     // 2. Seven days of unbroken unmeasured answers end the block, never as met.

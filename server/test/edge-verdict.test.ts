@@ -23,10 +23,15 @@ describe('edgeVerdict: the domain', () => {
   for (const state of EDGE_STATES) {
     for (const unmeasuredSince of clocks) {
       edges.push({ state, unmeasuredSince });
-      if (state === 'open') edges.push({ state, stateUnreadable: true, unmeasuredSince });
+      if (state === 'open') {
+        edges.push({ state, stateUnreadable: true, unmeasuredSince });
+        edges.push({ state, kindUnreadable: true, unmeasuredSince });
+        edges.push({ state, targetUnreadable: true, unmeasuredSince });
+      }
     }
   }
-  const settled = (e: EdgeVerdictEdge) => e.state === 'open' && e.stateUnreadable !== true;
+  const settled = (e: EdgeVerdictEdge) =>
+    e.state === 'open' && e.stateUnreadable !== true && e.kindUnreadable !== true && e.targetUnreadable !== true;
   const old = (e: EdgeVerdictEdge) => e.unmeasuredSince !== null && NOW - e.unmeasuredSince >= UNMEASURABLE_AFTER_MS;
 
   /** The table, written out over the domain: the expected word and the state or clock it hands the writer. */
@@ -50,6 +55,7 @@ describe('edgeVerdict: the domain', () => {
         expect(got, JSON.stringify({ e, a })).toEqual(expected(e, a));
         n += 1;
       }
+      expect(settleOf(edgeVerdict(e, null, NOW)), 'a target not asked is never settled').toBe('none');
     }
     expect(n).toBe(edges.length * ANSWERS.length);
   });
