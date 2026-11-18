@@ -91,6 +91,14 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
   readNow.current = read;
   const shown: LaneModelsRead | null = fresh !== null && fresh.over === read ? fresh.read : read;
   const shownNow = useRef(shown);
+  // The read's one state sentence: a non-read answer's own words, or the transient word beside a kept good read (F2).
+  // The two never show together, so they are one element.
+  const stateNote: { testid: string; kind: string; text: string | null } | null =
+    shown === null ? null
+      : shown.kind !== 'read' ? { testid: 'models-read-state', kind: shown.kind, text: modelsReadStateWords(shown) }
+        : view.transient !== null && shown === read
+          ? { testid: 'models-read-transient', kind: view.transient, text: laneReadWords({ kind: view.transient }) }
+          : null;
   shownNow.current = shown;
 
   const [busy, setBusy] = useState<ModelClass | null>(null);
@@ -185,20 +193,13 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
         </div>
       )}
       {shown === null && readFailure === null && <Skeleton lines={4} />}
-      {shown !== null && shown.kind !== 'read' && (
-        <>
-          <p className="acct-models-note" data-testid="models-read-state" data-kind={shown.kind}>
-            {modelsReadStateWords(shown)}
-          </p>
-          {shown.kind !== 'absent' && (
-            <ul className="acct-models-names">
-              {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
-            </ul>
-          )}
-        </>
+      {stateNote !== null && (
+        <p className="acct-models-note" data-testid={stateNote.testid} data-kind={stateNote.kind}>{stateNote.text}</p>
       )}
-      {shown !== null && shown.kind === 'read' && view.transient !== null && shown === read && (
-        <p className="acct-models-note" data-testid="models-read-transient" data-kind={view.transient}>{laneReadWords({ kind: view.transient })}</p>
+      {shown !== null && shown.kind !== 'read' && shown.kind !== 'absent' && (
+        <ul className="acct-models-names">
+          {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
+        </ul>
       )}
       {shown !== null && shown.kind === 'read' && (
         <>
