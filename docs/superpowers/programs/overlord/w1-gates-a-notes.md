@@ -264,3 +264,27 @@ handoff still waits for CI and actual CodeQL after the round's single push. Arme
 committed merge `02c2b522b`, with no waiver. The complete branch-delta scan against pinned main found zero private
 hits. A broader incoming-file scan's eight matches were neutral home-directory fixtures in three files identical
 to pinned main; none was a new identifier authored in this round.
+
+### Incoming other-lanes fixture integration repair
+
+Exact-tip CI at `051edbf9d` exposed two incoming designation fixtures still passing a string actor: the pin suite
+failed 13 cases, the routes suite failed 35, and the tests-inclusive check reported the two corresponding TS2322
+assignments. These were integration defects, not load flakes. The coordinator authorized a new fixture-only round,
+with no production change or further merge. The current holder granted exact leave for both actor fixtures before
+editing; their separate inbound-plan door hunks are untouched.
+
+Both `seedDesignation` helpers now use the existing account-gate actor pattern through `attributionIdentity` and
+`actorOf`, preserving subject `operator-a`. The complete pin suite passed 13/13. The complete routes suite then
+passed 27/35: eight pending-rebind cases exposed a second fixture mismatch, its direct SQL restoring only the
+pending subject after `goLive` cleared the actor metadata. A structured ruling extended the same round, and the
+holder granted exact additional leave before that SQL changed. The existing update now binds all four pending
+actor fields from the same minted actor; every assertion remains unchanged. The complete routes rerun passed 35/35.
+
+All runs were serial, foreground, one whole file per fleet-wrapper invocation. The write-door census passed 49/49.
+The complete tests-inclusive check first passed 12/12 after the two actor conversions. After the final SQL edit,
+its rerun failed two subprocess checks (PWA process exit and sibling-directory discovery), with five shared-slice
+OOM kills reported. An isolated retry failed the helper-file discovery check, with one shared-slice OOM kill.
+Neither resource-affected final attempt is claimed green; no TypeScript diagnostic was reported in those attempts.
+CI must measure the final head. No complete local suite is claimed, and the original signal remains red/shallow.
+Documentation checks passed: deviation references 34/34, anchors 9/9 and citations 4/4. The round's three-file diff
+passes whitespace checking; privacy scanning gates the commit, description and outgoing status before publication.

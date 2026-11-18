@@ -29,6 +29,8 @@ import { NotifyLog } from '../src/notifylog.js';
 import {
   bindPendingGeneration, designatePending, designationRead, failPending, goLive, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
+import { actorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { ID_GATE_TOKEN } from './idGateFixture.js';
@@ -77,12 +79,14 @@ const REFUSING = ['live', 'pend-designate', 'pend-rebind'] as const;
 type Refusing = typeof REFUSING[number];
 const WHY = 'stopsOwed is not a JSON array of strings';
 const fakeJournal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
+const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(actorOf('operator-a', '0123456789abcdef'));
 
 function seedDesignation(db: DatabaseSync, st: State): void {
   if (st === 'none') return;
   const des = (id: string, opKey: string): void => {
     expect(designatePending(db, fakeJournal, { sessionId: id, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
-      actor: 'operator-a', at: NOW, opKey }).ok).toBe(true);
+      actor: OPERATOR, at: NOW, opKey }).ok).toBe(true);
   };
   const live = (): void => {
     des(OWED, 'op-owed');
@@ -102,8 +106,8 @@ function seedDesignation(db: DatabaseSync, st: State): void {
     des(OAK, 'op-live');
     expect(bindPendingGeneration(db, OAK, GEN, NOW + 1)).toEqual({ ok: true, changed: true });
     expect(goLive(db, fakeJournal, OAK, GEN, NOW + 2)).toMatchObject({ ok: true, changed: true });
-    db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = ?, pendingDeadlineAt = ?, pendingActor = 'operator-a'")
-      .run(PEND_R, NOW + 3, NOW + 60_000);
+    db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = ?, pendingDeadlineAt = ?, pendingActor = ?, pendingActorKind = ?, pendingActorIssuer = ?, pendingActorStrength = ?")
+      .run(PEND_R, NOW + 3, NOW + 60_000, OPERATOR.subject, OPERATOR.kind, OPERATOR.issuer, OPERATOR.strength);
     expect(designationRead(db)).toMatchObject({ kind: 'designated', row: { pending: { sessionId: PEND_R, kind: 'rebind' } } });
     return;
   }
