@@ -233,4 +233,5 @@ moved the foreground command to background after 600 seconds, and it completed w
 command started. The original identity-path claim reached its hard cap during verification; the worker re-claimed
 those paths before appending these measurements. Exact-tip CI, node floor and actual CodeQL remain the handoff gate
 for this round's one push. The merged clock-port census passed 94/94; deviation references passed 34/34, anchors
-9/9 and citations 4/4. Complete changed-file and public-text scans precede publication.
+9/9 and citations 4/4. Armed growth passed 96/96 against committed merge `9b0d3d5a3`; no waiver was added.
+The complete changed-file and commit-text scan found zero private hits; public-description scanning precedes publication.
