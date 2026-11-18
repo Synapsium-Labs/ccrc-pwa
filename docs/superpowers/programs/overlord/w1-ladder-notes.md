@@ -114,6 +114,10 @@ passed four files and 246 cases; the run waited 587 seconds for a fleet test slo
 12 guard mutants were killed and source hashes independently matched the restored files. These measurements add to,
 not replace, the earlier local masking limitation and the first full-run `red` / `unclear` signal.
 
+Committed armed growth and absolute-cap checks passed 108 cases against merge-base `59f68dc`: schema +25 net code
+lines, store +16, server composition +3, all other measured rows unchanged, with no waiver or over-limit row.
+The ledger guard passed; the complete added-text privacy scan remains a publication gate.
+
 Exact-tip CI and actual CodeQL remain the post-push handoff gate. The coordinator also requires a short review of
 this identity integration before landing; the worker does not merge or enqueue its own PR.
 
