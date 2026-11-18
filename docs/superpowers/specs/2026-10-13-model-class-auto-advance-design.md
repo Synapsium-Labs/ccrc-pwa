@@ -329,8 +329,10 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
 - **Per lane:** the cache it read (when it was fetched, and its format), or why it read none.
 - **A class whose id changed** from one id to another gets a `history` entry and a `previous` in the lane's advance
   file (§2.1), written by the same refresh under the same lock, so Revert has something to put back, and one push.
-  The advance file is written first and the aliases file second; a move is keyed by its two ids and its evidence
-  time, so a second record of it is refused and a write the refresh lost is re-derived by the next one (D-8747). A
+  The advance file is written first and the aliases file second; a move is known by the class's newest history
+  entry (the same two ids while the aliases file still reads the old one), so a second record of it is refused, even
+  when newer evidence for the new id has arrived, and a write the refresh lost is re-derived by the next one
+  (D-8747). A
   change of source alone is not a move. A class's first id is not a move either: a release that lands while the class
   has no id becomes its first id, with no history and no push, and sessions are compared against it from then. An
   Anthropic lane's advance file is created without a registry: each class's `family` is its own class word (D-8747).
@@ -381,9 +383,10 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   it today. Every spawn rewrites the routing record, and a class change drops the id, so the id is recorded again
   after either. A session with no routing record gets none, and a session with no recorded id is never pending. The
   step costs the tick no fork while nothing has changed.
-- **A model picked by hand is never typed over.** A move is typed only while a fresh reading of the session still
-  shows the recorded id and its transcript holds no `/model` since the record's stamp; otherwise ccd stands down until
-  a later reading agrees again. A changed id counts as pending on an Anthropic lane when the class
+- **A model picked by hand is never typed over.** A move is typed only while a fresh reading of the session shows the
+  recorded id (or the new id, once ccd's own re-pick has landed, which the readback then records) and its transcript
+  holds no `/model` since the record's stamp that ccd's own keystroke journal does not explain; otherwise ccd stands
+  down until a later reading agrees again, at no cost to the tick while nothing changes. A changed id counts as pending on an Anthropic lane when the class
   is not held, and on a Codex lane only under D11's fallback.
 - **The move is a re-pick of the alias row** in the `/model` picker, session-only, as ccd applies a class today
   (`_route_type_model`). Whether a re-pick re-resolves the alias in a running session is unmeasured, so the
