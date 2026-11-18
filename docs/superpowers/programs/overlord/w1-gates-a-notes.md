@@ -235,3 +235,29 @@ those paths before appending these measurements. Exact-tip CI, node floor and ac
 for this round's one push. The merged clock-port census passed 94/94; deviation references passed 34/34, anchors
 9/9 and citations 4/4. Armed growth passed 96/96 against committed merge `9b0d3d5a3`; no waiver was added.
 The complete changed-file and commit-text scan found zero private hits; public-description scanning precedes publication.
+
+### Landing-order absorption after other lanes A
+
+The migration-95 head passed exact-tip CI, node floor and actual CodeQL, and the coordinator accepted its fresh
+handoff. Landing then waited for other lanes A (#2996): their two floor registrations conflicted with this branch's
+actor codec registration. After #2996 merged, the coordinator explicitly authorized one further main merge, the
+additive union of those floor hunks only, the requested census/ring checks and one push. Any other conflict would
+have stopped the round.
+
+The single fetched main is `8ff15803eed81e6b9529f11d44d16ba225624d17`. Preview and actual merge conflicted only in
+`server/test/sim/mutation-floors.json` and `server/test/sim/mutation-floors.test.ts`; the current claim holder granted
+exact co-edit leave before either resolution. Both families remain, with no lowered floor or assertion deletion.
+Other files merged automatically; no additional behavior was authored in this round. Schema and the shared
+decision-model record case are unchanged from the prior head, so actor migration 95 and forecast migration 94 stand.
+
+The merged floor suite passed 188/188, the other-lanes write-door census 49/49 and the box-token census 60/60.
+All 50 ring/single-definition files passed separately through the fleet wrapper, in serial foreground invocations.
+The watcher-port file's first run lost a worker to SIGKILL, with four shared-slice OOM kills reported; its isolated
+retry passed 22/22. The mail file's first isolated attempt was OOM-killed at exit 137, with five shared-slice kills;
+its later isolated retry passed 61/61. Those failed attempts remain reported, not recast as assertion failures or
+first-run green. No complete local suite is claimed; the original full-run signal remains red/shallow.
+
+Broad staged whitespace checking reports an incoming blank line at EOF in `server/test/routeRegistrations.ts`.
+That file measures identical to pinned main and is left unchanged; the two manually resolved files pass whitespace
+checking. Documentation checks passed: deviation references 34/34, anchors 9/9 and citations 4/4. The refreshed
+handoff still waits for CI and actual CodeQL after the round's single push.
