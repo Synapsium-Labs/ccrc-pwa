@@ -32,6 +32,7 @@ import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { bootPassSummary, runOperatorModelBootPass, w1Citations } from './operatorModel/bootPass.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -139,6 +140,9 @@ if (!landingReplay.ok) {
 // the open cannot trust leaves every message record refused (`journal-unreadable`), and `operatorModelBootLines` says what to do.
 const operatorModel = openOperatorModelStore(cfg.operatorModelDbPath, cfg.ccrcDir, time.clock.wall());
 for (const line of operatorModelBootLines(operatorModel, cfg.home)) console.warn(`ccrc-server: ${line}`);
+// I8, once, with both stores open and before the watcher: re-derive what a crash left (counts only, never a text).
+{ const bp = runOperatorModelBootPass({ operatorModel: operatorModel.store, coord, citations: w1Citations, now: () => time.clock.wall() });
+  console.warn(`ccrc-server: ${bootPassSummary(bp.counts)}`); for (const line of bp.lines) console.warn(`ccrc-server: ${line}`); }
 // The push outbox's boot pass (Overlord W1, `pushSender.ts#bootPushOutbox`): synchronously, before the fleet link
 // connects, the server listens or the watcher starts, so nothing can push before it and every `sending` row it finds
 // belongs to a process that died.
