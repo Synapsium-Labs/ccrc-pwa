@@ -22,7 +22,7 @@ import {
 import type { PoolSet } from '../../../shared/poolset.js';
 import { readActorColumns, type ActorWire } from '../../../shared/overlord-identity.js';
 import type { RecordedActor } from '../auth/callerIdentity.js';
-import { isRecordedActor } from '../auth/attributionIdentity.js';
+import { isAccountGateOperator } from '../auth/attributionIdentity.js';
 
 /** What a writer needs of the journal: the one synchronous append (declared here by its consumer, so a test passes a fake). */
 export type AuthorityAppender = Pick<OverlordAuthorityJournal, 'appendInTx'>;
@@ -36,8 +36,7 @@ export interface ActorRefused { readonly ok: false; readonly reason: 'actor' }
 
 /** The one actor check a designation writer makes: minted by the adapter (`isRecordedActor`), kind `operator`, issuer
  *  `account-gate` and strength `operator`: neither a forged object, a session actor nor a console-only actor may write. */
-const actorRefused = (a: unknown): boolean =>
-  !isRecordedActor(a) || a.kind !== 'operator' || a.issuer !== 'account-gate' || a.strength !== 'operator';
+const actorRefused = (a: unknown): boolean => !isAccountGateOperator(a);
 const ACTOR_REFUSED: ActorRefused = { ok: false, reason: 'actor' };
 /** The actor's four values, in the column order every writer spells: subject, kind, issuer, strength. */
 const actorCols = (a: ActorWire): [string, string, string, string] => [a.subject, a.kind, a.issuer, a.strength];
