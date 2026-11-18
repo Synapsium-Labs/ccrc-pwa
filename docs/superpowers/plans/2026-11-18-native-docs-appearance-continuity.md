@@ -360,6 +360,7 @@ Unused from run 2631's block: 8761.
   - The 29 distinct colour tokens the map names (focus and accent share `--accent`), `--accent-on-well`, and the 2 radius tokens resolve to `#rrggbb` or whole px in all 12 palettes: 0 misses.
   - Every palette declares `color-scheme` as `light` or `dark`.
   - Skin values: `--row-h` is 52 px for Refined and 32 px for Instrument under a fine pointer; `--case-section` is `none` or `uppercase`.
+  - Every skin token's value per skin (fix round 1, F3), read from `tokens.css` and `skins.css`, is in spec §2.3, with its verdict. The library's in-document cards draw no shadow, a read of its frame stylesheet: figures and tables set `box-shadow: none`. Its popovers draw `--pop-shadow`, or a fixed shadow for quick jump, keys and the contents drawer.
 
 ### Contrast under the map (fix round 1, F1)
 

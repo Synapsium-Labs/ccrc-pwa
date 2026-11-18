@@ -67,10 +67,13 @@ flowchart LR
 **The contract (library-owned).**
 - `mode` is `light`, `dark` or `auto`: the resolved direction. It sets `color-scheme` and the library's defaults for any slot the host leaves out.
 - `colour.<slot>` is one value per colour slot, `#rrggbb` or `#rrggbbaa` only. The group is all or nothing. An appearance with no colour group is valid. It means "hosted, in the library's own colours for `mode`", and it clears any host colours applied before.
-- `skin.<slot>` holds the skin's character. Each slot falls back one by one:
-  - `radius` and `radiusSmall`: whole pixels from 0 to 24;
-  - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers (Aa, contents, quick jump), applied only under `(pointer: fine)`. Measured values: Refined 52 px, Instrument 32 px under a fine pointer;
-  - `sectionCase`: `none` or `uppercase`, for the frame's own section labels.
+- `skin.<slot>` holds the skin's character, in ten slots, each falling back by itself (§2.3 says which ccrc token feeds each, and why the others are not carried):
+  - `radius`, `radiusSmall` and `radiusLarge`: whole pixels from 0 to 24;
+  - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
+  - `popShadow`: the popovers' elevation, one to three shadows, each two to four lengths in px and one colour;
+  - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
+
+  "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
 **Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
@@ -101,6 +104,39 @@ ccrc's typefaces are part of its visual language, and the frame cannot fetch the
 - **Size.** The library's derived srcdoc cap rises by exactly the two faces' cap, so fonts never push a document into `too-large`.
 - **Use.** While hosted, the frame's sans role and its chrome use ccrc's UI face, and code uses ccrc's mono face. The serif reading face stays the library's. Font choice in Aa stays the reader's (§6).
 
+### 2.3 The skin, token by token
+
+The operator asked that controls and density align with the skin, and that the reading layout and the budgets be kept. So a skin token is carried when it touches neither the frame's bar nor the reading geometry. It is rejected, by name, when it would move either, or when the frame has no counterpart. Values were read from `ui/src/styles/tokens.css` and `skins.css` on 2026-11-18. Instrument's values at a width of 900 px or more, and under a fine pointer, follow a slash.
+
+| ccrc token | Refined | Instrument | Verdict | Why |
+|---|---|---|---|---|
+| `--fs-ui` | 15 px | 15 / 13 px | Rejected | The frame bar's labels. 2 px of type at 900 px and above moves the desktop bar, against the 1 px desktop-fit budget |
+| `--fs-prose` | 15 px | 15 / 14 px | Rejected | Prose size is the reading layout (the library's `--rem` and its 18 px serif) |
+| `--fs-meta` | 12 px | 11 px | Rejected | The byline and meta lines sit in the document's title block, in the reading layout |
+| `--fs-page` | 20 / 24 px | 14 px | Rejected | The document title, in the reading layout |
+| `--fs-section` | 15 px | 11 px | Carried | `sectionSize`, popover headings only |
+| `--weight-section` | 600 | 500 | Carried | `sectionWeight` |
+| `--family-section` | UI face | mono face | Carried | `sectionFamily`: ccrc compares the token with its own `--family-ui` and `--family-mono` and sends the role |
+| `--case-section` | none | uppercase | Carried | `sectionCase` |
+| `--ls-section` | -0.011em | 0.08em | Carried | `sectionTracking` |
+| `--gutter` | 16 / 24 / 32 px | 12 / 14 px | Rejected | The reading layout's gutters (the library's `--pad` and `--gut`) |
+| `--row-h` | 52 px | 44 / 32 px | Carried | `controlRow`, popover rows under a fine pointer only. A coarse pointer keeps the 44 px tap floor |
+| `--pad-card` | 16 px | 12 px | Rejected | The library's cards (callouts, figures) sit in the reading flow |
+| `--gap-section` | 32 px | 20 px | Rejected | Spacing in the reading flow |
+| `--page-max` | 760 px | 960 px | Rejected | The reading measure (the library's `--measure`, 44 rem) |
+| `--page-max-wide` | 1120 px | none | Rejected | The library's break-out width for tables and figures (`--wide`), in the reading layout |
+| `--measure-chat`, `--measure-chat-prose` | 1200 px, 90ch | 100%, 100ch | Rejected | Chat only. No counterpart in the frame |
+| `--head-h` | 56 px | 44 / 40 px | Rejected | The frame bar (`--bar-h`, 48 px): the one-bar and desktop-fit budgets |
+| `--section-flow` | column-reverse | row | Rejected | ccrc's page Section heads. No counterpart |
+| `--r-sm` | 6 px | 3 px | Carried | `radiusSmall`: inline code, keycaps, pills |
+| `--r-md` | 10 px | 5 px | Carried | `radius`: controls, code blocks |
+| `--r-lg` | 14 px | 8 px | Carried | `radiusLarge`: popovers, callouts and figure cards. Radius is paint only |
+| `--r-xl` | 20 px | 12 px | Rejected | Sheet and drawer top corners. The frame has no bottom sheet |
+| `--elev-card` | a palette shadow | none | Rejected | No counterpart: the library's in-document cards draw no shadow (measured: figures and tables set `box-shadow: none`) |
+| `--elev-pop` | `0 12px 40px` and a palette colour | `0 0 0 1px` and `--edge-strong` | Carried | `popShadow`, on every popover |
+| `--meter-h`, `--meter-segments`, `--meter-gap` | 5 px, 1, 0 | 8 px, 10, 2 px | Rejected | The frame draws no meter. Reading progress shows on ccrc's own bar |
+| `--dur-fast`, `--dur-base`, `--dur-slow` | 180, 240, 320 ms | 120 ms | Rejected | They time ccrc's sheets, card expands and shared-element moves, which the frame does not have. The frame's own hover and fold fades are 100 to 150 ms |
+
 ## 3. One source of truth for the catalogue
 
 This section says how the reader uses ccrc's catalogue without copying it, and what reds a copy. The rule: the catalogue never leaves the design system. The reader reads applied values, not names.
@@ -120,8 +156,10 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
   | `term`, `id`, `violet`, `path` | `--acct-cyan`, `--acct-blue`, `--acct-violet`, `--ink-secondary` |
   | `code-block-bg`, `code-ink` | `--bg-well`, `--ink-on-well` |
   | `syn-<name>` (eleven) | `--syn-<name>` |
-  | `radius`, `radiusSmall` | `--r-md`, `--r-sm` |
-  | `controlRow`, `sectionCase` | `--row-h`, `--case-section` |
+  | `radius`, `radiusSmall`, `radiusLarge` | `--r-md`, `--r-sm`, `--r-lg` |
+  | `controlRow`, `popShadow` | `--row-h`, `--elev-pop` |
+  | `sectionSize`, `sectionWeight`, `sectionTracking`, `sectionCase` | `--fs-section`, `--weight-section`, `--ls-section`, `--case-section` |
+  | `sectionFamily` | `--family-section`, as a role: `mono` when it equals `--family-mono`, `sans` when it equals `--family-ui`, left out otherwise |
 - A new palette, or a third skin, reaches the reader with no reader change: it is applied to the root, and the adapter reads it.
 - Follow the system needs no special case. The root carries whichever palette the operating system picked, and the adapter reads that.
 
@@ -304,7 +342,8 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 
   Every derived tint holds at most 6% of its colour. `chg-x` is a length, not a colour, and stays the library's.
 - An appearance with no colour group removes every host colour and leaves the hosted state as it was.
-- `skin.controlRow` sets popover row height under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters) never take a skin value.
+- Skin slots style the popovers and their headings, the radii of controls, cards and code, and nothing else. `controlRow` applies under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters, title block) never take a skin value.
+- `popShadow` replaces `--pop-shadow` on every popover, the quick jump, keys and contents drawer shadows included.
 - While hosted, the stored prefs object never carries `theme`.
 - The frame's derived srcdoc cap rises by the fonts' cap.
 - While hosted, Mermaid draws with `mermaidThemeOf`, with no white plate and no invert filter, and figures already drawn are redrawn on a change, nearest first, one per task.
@@ -371,7 +410,7 @@ Each decision is a technical call within the operator's requirement, made and ar
 | X1-12 | Semantic colours | (a) ccrc's text variants, with fills and tints derived; (b) ccrc's fill tokens; (c) separate text and fill slots | (a). The library draws these colours as text, and ccrc's fills miss 4.5:1 there: `--diff-add` is 1.69:1 in Phosphor Daylight, `--status-dead` 3.85:1 in Nord. (c) doubles the slots for no visible gain. `chg` keeps its magenta "changed since" meaning through `--acct-magenta`, where `--diff-add` green would change it | Proposed |
 | X1-11 | Tints and composites | (a) base colours only, the library derives tints with `color-mix`; (b) carry ccrc's tint tokens and resolve them through a probe element | (a). ccrc's tints change form between palettes, so (b) needs a colour parser on both sides for no visible gain | Proposed |
 | X1-6 | Typography | (a) pass ccrc's two faces as font assets; (b) the library ships Geist; (c) keep library faces | (a). One home for ccrc's typefaces, and the frame cannot fetch them. (b) couples the library to one host. (c) misses typography | Proposed |
-| X1-7 | Density and controls | (a) carry the skin's radius, popover row height and section-label case, and keep the frame's bar and reading layout; (b) carry every skin token, the bar included; (c) radius only | (a). It aligns the controls a reader touches with the skin. The operator's own constraints fix the rest: the reading layout is kept, and the bar is held by the one-bar and desktop-fit budgets (at most 1 px). (b) breaks those budgets. (c) leaves density unaligned | Proposed |
+| X1-7 | Density and controls | (a) carry every skin token that touches neither the frame bar nor the reading geometry, and reject the rest by name; (b) carry every skin token, the bar included; (c) radius, row height and label case only | (a), token by token in §2.3 (the coordinator's ruling on review 2645 F3): radius, popover rows, popover elevation and the section-label type are carried; type sizes, gutters, measures, the bar height and card padding are rejected because they move the reading layout or a budget; meter, motion, chat measures and sheet corners have no counterpart. (b) breaks the one-bar and desktop-fit budgets. (c) left elevation and label type neither carried nor rejected | Ruled |
 | X1-8 | Code wells | (a) ccrc's dark wells in every palette; (b) follow the page in light palettes | (a). That is ccrc's own rule in chat and tool cards, and the contrast gate already holds `--syn-*` on the well | Proposed |
 | X1-9 | Mermaid | (a) colours from the slots, redraw on change; (b) keep the neutral plate | (a). A white plate in a dark palette is the separate-destination look the operator asked to remove | Proposed |
 | X1-10 | The reader lab | (a) no appearance; (b) the host appearance | (a). Its E17 and E18 readings stay comparable with the recorded blocks | Proposed |
@@ -395,6 +434,8 @@ none - design of a recorded required follow-on of the native Docs reader program
 - Standing boundaries: `allow-scripts`, `frame-src 'none'`, no parent-DOM access or extra channel, the two phone blocks byte for byte, the existing budgets, and the library exactly 1.1.0 in this wave.
 
 - **Aa's line while hosted (ask 594, answered by the coordinator 2026-11-18, option 0).** Aa shows the one static line "Appearance follows ccrc Settings", with no button. Its accessibility is in §6. Outside ccrc, Aa keeps its theme row, as the host adapter decides. A Settings shortcut is not added: one would ride the bridge's existing command vocabulary, or come back as an ask.
+
+- **Density and controls (review 2645 F3, ruled by the coordinator 2026-11-18).** Popover elevation and the section-label type are carried as skin slots, because they touch neither the frame bar nor the reading geometry. Every ccrc skin token is carried or rejected by name in §2.3.
 
 ### Waiting on you
 - Nothing. The design's technical choices are recorded in §12. The library's release and ccrc's re-pin wait on you when the library change is ready (Later).
