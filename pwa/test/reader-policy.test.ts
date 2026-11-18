@@ -442,28 +442,24 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
 // The policy ring (the architecture spec's L1, completion plan Task 13): `policy.ts` is pure deciders, so nothing it reaches
 // at run time may be a `.tsx`, a module that imports `react` or `react-dom` (a hook module), a store or `lib/api.ts`. The
 // walk follows every runtime import and re-export through relative specifiers, reading the declarations with the TypeScript
-// compiler API; `import type` / `export type` and declarations whose named specifiers are all `type` are erased and skipped,
-// bare package specifiers are leaves. `docLinkTarget` once lived in `docsLinks.ts`, which imports `pinFor` from the
+// compiler API; `import type` / `export type` declarations are erased and skipped, bare package specifiers are leaves. A
+// declaration whose named specifiers are all `type` is NOT erased: under the package's `verbatimModuleSyntax` it compiles
+// to `import {} from` (or `export {} from`), which still loads the module (review of Task 13, minor 2). `docLinkTarget` once lived in `docsLinks.ts`, which imports `pinFor` from the
 // `useDocsVisit.ts` hook module: that chain is what this walk turns red on.
 const PWA_ROOT = path.join(import.meta.dirname, '..');
 const POLICY_FILE = path.join(PWA_ROOT, 'src', 'docs', 'reader', 'policy.ts');
 
-/** The runtime module specifiers one source file names: import and export declarations that are not type-only, `import x =
+/** The runtime module specifiers one source file names: every import and export declaration but an `import type` or an
+ *  `export type` one (an inline `type` on each specifier still leaves an empty import that loads the module), `import x =
  *  require()` and literal dynamic `import()`. */
 function runtimeSpecifiers(file: string, text: string): string[] {
   const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
   const out: string[] = [];
   const visit = (n: ts.Node): void => {
     if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
-      const c = n.importClause;
-      const bindings = c?.namedBindings;
-      const allNamedType = c !== undefined && c.name === undefined && bindings !== undefined && ts.isNamedImports(bindings)
-        && bindings.elements.length > 0 && bindings.elements.every((e) => e.isTypeOnly);
-      if (!(c?.isTypeOnly === true || allNamedType)) out.push(n.moduleSpecifier.text);
+      if (n.importClause?.isTypeOnly !== true) out.push(n.moduleSpecifier.text);
     } else if (ts.isExportDeclaration(n) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)) {
-      const allNamedType = n.exportClause !== undefined && ts.isNamedExports(n.exportClause)
-        && n.exportClause.elements.length > 0 && n.exportClause.elements.every((e) => e.isTypeOnly);
-      if (!(n.isTypeOnly || allNamedType)) out.push(n.moduleSpecifier.text);
+      if (!n.isTypeOnly) out.push(n.moduleSpecifier.text);
     } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference)
       && ts.isStringLiteral(n.moduleReference.expression) && !n.isTypeOnly) {
       out.push(n.moduleReference.expression.text);
@@ -593,15 +589,28 @@ describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a h
     ]);
   });
 
-  it('import type, export type and an import whose named specifiers are all type are erased and skipped', () => {
+  it('import type and export type are erased and skipped', () => {
     const fs = treeOf({
       'src/docs/reader/policy.ts': [
-        "import type { A } from '../comp';", "export type { B } from '../comp';", "import { type C, type D } from '../comp';",
-        "export { type E } from '../comp';", "import type React from 'react';", "export type { A, B };",
+        "import type { A } from '../comp';", "export type { B } from '../comp';", "import type React from 'react';",
+        "export type { A, B };",
       ].join('\n'),
       'src/docs/comp.tsx': "import { useState } from 'react';\nexport const z = useState;",
     });
     expect(ringBreaks(entry, root, fs)).toEqual([]);
+  });
+
+  it('an import or export whose specifiers are each marked type still loads its module (verbatimModuleSyntax keeps the empty import)', () => {
+    for (const line of ["import { type C, type D } from '../comp';", "export { type E } from '../comp';"]) {
+      const fs = treeOf({
+        'src/docs/reader/policy.ts': line,
+        'src/docs/comp.tsx': "import { useState } from 'react';\nexport const z = useState;",
+      });
+      expect(ringBreaks(entry, root, fs), line).toEqual([
+        'src/docs/comp.tsx is a .tsx (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+        'src/docs/comp.tsx imports react, so it is a hook module (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+      ]);
+    }
   });
 
   it('a relative specifier that resolves to no file is reported, so the walk cannot go quiet on a typo', () => {
