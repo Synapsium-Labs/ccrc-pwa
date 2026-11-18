@@ -14,6 +14,9 @@ import { CoordStore } from '../src/coord/store.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { quizBaselineRead, quizPendingRead, quizRuns } from '../src/continuity/quizStore.js';
 import { BOOTSTRAP } from '../../deploy/history-gate.mjs';
+import { REPORT_FIELDS, REPORT_KIND, singleReportOf } from '../../deploy/history-quiz-single.mjs';
+import { canonicalJson } from '../../ccd/history/lib.mjs';
+import { QUIZ_SINGLE_REPORT_KEYS, QUIZ_SINGLE_REPORT_KIND } from '../src/continuity/quiz.js';
 import { QUIZ_BOOTSTRAP } from '../../shared/lane-arm.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
@@ -215,5 +218,44 @@ describe('POST /api/continuity/quiz-runs/:id/rule (the rule door, session and st
     r.coord.setLaneArm('continuity', 'live', 5);
     await r.stepUp();
     expect(json(await rule(r, a, 'confirm'))).toEqual({ ok: true, id: a, state: 'confirmed', baseline: false });
+  });
+});
+
+// The contract with PR 1 (#2988): the report `deploy/history-quiz-single.mjs#singleReportOf` builds, written as its `report`
+// subcommand writes it, is the report the record door takes, field for field (plan §4 and §5).
+describe('the contract: history\'s single-arm report is the record door\'s', () => {
+  it('the kind and the field list are the same', () => {
+    expect(QUIZ_SINGLE_REPORT_KIND).toBe(REPORT_KIND);
+    expect([...QUIZ_SINGLE_REPORT_KEYS]).toEqual([...REPORT_FIELDS]);
+  });
+
+  it('singleReportOf over a fixture run records pending, and the row carries its counts, share, interval and inputs', async () => {
+    const r = await rig();
+    const fam = (n: number) => ({ store_id: '00000000-0000-4000-8000-0000000005a1', ccrc_id: `quiz-${n % 3}`, generation: `g-${n % 3}` });
+    const entries = Array.from({ length: 10 }, (_, n) => ({ ...fam(n), qid: `q${n}` }));
+    const answers = new Map<string, unknown>(entries.map((e, n) => [e.qid, n === 9 ? { question_state: 'run-failed' }
+      : { question_state: 'answered', answer_field: { state: 'value' }, correct: n % 4 !== 0 }]));
+    const report = singleReportOf({
+      setup: { seed: sha('contract seed'), settings_mode: 'restricted', judge_model: 'claude-opus-9-1' }, setupSha256: sha('setup'),
+      frozen: { entries }, frozenSha256: sha('frozen'), summarySha256: sha('summary'), judgedSha256: sha('judged'),
+      summary: { finished_ms: r.now - HOUR, ccrc_release: 'v9.9.8', claude_code_versions: ['2.9.1'], steer_armed: 'yes', agents_on_armed: 'no' },
+      judged: { claude_code_version: '2.9.2' }, answers,
+    }) as Record<string, any>;
+    const text = `${canonicalJson(report) as string}\n`;
+    const res = await record(r, { report: text, sha256: sha(text), recordedBy: TRACE });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(json(res)).toMatchObject({ ok: true, fresh: true, state: 'pending' });
+    const runs = quizRuns(r.coord.db);
+    expect(runs.ok && runs.rows).toEqual([expect.objectContaining({
+      reportSha: sha(text), questionsSha: sha('frozen'), questions: 10, families: 3, score: 6 / 9, answered: 9, runFailed: 1, absent: 0,
+      lo: report.interval.lower.num / report.interval.lower.den, hi: report.interval.upper.num / report.interval.upper.den,
+      measuredAt: r.now - HOUR, judgeModel: 'claude-opus-9-1', ccrcRelease: 'v9.9.8', claudeBuilds: ['2.9.1', '2.9.2'],
+      steerArmed: 'yes', agentsOnArmed: 'no', state: 'pending', baseline: false,
+    })]);
+    const row = r.coord.db.prepare('SELECT correct, arm, settingsMode, pilot, ci, method, bootstrapB, inputs FROM continuity_quiz_runs').get();
+    expect({ ...(row as Record<string, unknown>), inputs: JSON.parse(String((row as { inputs: string }).inputs)) }).toEqual({
+      correct: 6, arm: 'treatment', settingsMode: 'restricted', pilot: 'skipped-by-ruling', ci: BOOTSTRAP.ci, method: BOOTSTRAP.method,
+      bootstrapB: BOOTSTRAP.B, inputs: report.inputs,
+    });
   });
 });
