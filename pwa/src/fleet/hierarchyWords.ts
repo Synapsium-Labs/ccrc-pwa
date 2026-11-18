@@ -20,14 +20,33 @@ export const HIERARCHY_TEXT = {
   unreadable: 'The hierarchy settings could not be read. Reload this page to try again.',
   rereadFailed: 'The hierarchy settings could not be read again. What is shown may be out of date, and a row you changed stays locked until they are read again.',
   readAgain: 'Read again',
-  defaultNamed: "Default: the latest programme's coordinator",
 } as const;
 
-/** The empty owner option: what the rule picks when no owner is named (`ownerNow`, design §7.5). */
-export function defaultOwnerWords(now: HierarchyProjectRow['ownerNow']): string {
-  if (now.source === 'none' || now.id === null) return 'Default: none live';
-  if (now.source === 'named') return HIERARCHY_TEXT.defaultNamed;
-  return `Default: ${now.id} (${now.live ? 'live' : 'not live'})`;
+/** The ONE reader of `ownerNow.project`: the project the effective owner was decided for. Absence (an older server) reads as the
+ *  project's own owner. */
+export const ownerFrom = (row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>): string => row.ownerNow.project ?? row.project;
+
+/** Whether the effective owner comes from another project (the one that owns this project's team key). */
+export const ownerIsInherited = (row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>): boolean => ownerFrom(row) !== row.project;
+
+/** The empty owner option: the coordinator the rule picks now and whether it is live, for every source (`ownerNow`, design §7.5);
+ *  for a project that does not own its team key, the owning project's owner, and where it comes from. */
+export function defaultOwnerWords(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow'>): string {
+  const now = row.ownerNow;
+  const who = now.source === 'none' || now.id === null ? 'Default: none live' : `Default: ${now.id} (${now.live ? 'live' : 'not live'})`;
+  return ownerIsInherited(row) ? `${who}, from ${ownerFrom(row)}, which owns team key ${row.teamKey ?? ''}` : who;
+}
+
+/** The note under the owner select of a project whose owner comes from another project, or null. */
+export function ownerInheritedNote(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow'>): string | null {
+  return ownerIsInherited(row)
+    ? `This project's own owner setting is not used while ${ownerFrom(row)} owns team key ${row.teamKey ?? ''}.` : null;
+}
+
+/** The option for a project's own named owner that is not in the coordinator list. Its liveness is known only when it is the
+ *  effective owner of an own-owner row; it is absent from the list, so otherwise it reads not live. */
+export function namedOwnerWords(row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>, named: string): string {
+  return coordinatorWords({ id: named, live: !ownerIsInherited(row) && row.ownerNow.id === named && row.ownerNow.live });
 }
 
 /** One coordinator's option label. */

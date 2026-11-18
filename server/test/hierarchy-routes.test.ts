@@ -65,7 +65,7 @@ describe('hierarchy routes', () => {
     const body = (await get()).json();
     expect(body.projects).toEqual([{
       project: 'project-a', teamKey: null, initiatives: 'on', linearOwner: null, ownsTeam: false,
-      ownerNow: { id: 'sess-2', source: 'default', live: true }, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0,
+      ownerNow: { id: 'sess-2', source: 'default', live: true, project: 'project-a' }, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0,
     }]);
     expect(body.coordinators).toEqual([{ id: 'sess-1', live: false }, { id: 'sess-2', live: true }]);
   });
@@ -78,6 +78,8 @@ describe('hierarchy routes', () => {
     await setProject('project-b', { initiatives: 'on', linearOwner: 'sess-1', ownsTeam: false });
     const rows = (await get()).json().projects as { project: string; ownerNow: { id: string; source: string } }[];
     expect(rows.map((r) => [r.project, r.ownerNow.id, r.ownerNow.source])).toEqual([['project-a', 'sess-2', 'named'], ['project-b', 'sess-2', 'named']]);
+    // `project` is the project the owner was decided for: the sibling's is the owning project (decided by `ownsTeam`), the owner's its own.
+    expect(rows.map((r) => [r.project, (r as unknown as { ownerNow: { project: string } }).ownerNow.project])).toEqual([['project-a', 'project-a'], ['project-b', 'project-a']]);
   });
 
   it('with no project marked ownsTeam, the first project that set the key owns it', async () => {
@@ -86,13 +88,15 @@ describe('hierarchy routes', () => {
     db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-b', 'AAA'), ('project-a', 'AAA')").run();
     const rows = (await get()).json().projects as { project: string; ownerNow: { id: string } }[];
     expect(rows.map((r) => [r.project, r.ownerNow.id])).toEqual([['project-a', 'sess-2'], ['project-b', 'sess-2']]);
+    // No row is marked, so the lowest order (project-b set the key first) decides: both rows name project-b.
+    expect(rows.map((r) => (r as unknown as { ownerNow: { project: string } }).ownerNow.project)).toEqual(['project-b', 'project-b']);
   });
 
   it('a hibernated owner reads live', async () => {
     // `coordinatorPresenceIn` answers `alive` for an asleep session, so the route's `live` follows it.
     claim('prog-a', 'project-a', 'sess-1', 1);
     presence['sess-1'] = 'alive';
-    expect((await get()).json().projects[0].ownerNow).toEqual({ id: 'sess-1', source: 'default', live: true });
+    expect((await get()).json().projects[0].ownerNow).toEqual({ id: 'sess-1', source: 'default', live: true, project: 'project-a' });
   });
 
   it('an unmeasured owner is neither live nor gone: it reads not live', async () => {

@@ -55,7 +55,7 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
    *  (`teamOwnerProject`, the one rule the triage route and the drift pass ask too). */
   const ownerNow = (plan: PlanStorePort, rows: readonly HierarchyProjectFacts[], row: HierarchyProjectFacts): HierarchyProjectRow['ownerNow'] => {
     const o = linearOwnerOfProject(row.project, rows, { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf });
-    return { id: o.id, source: o.source, live: o.live };
+    return { id: o.id, source: o.source, live: o.live, project: o.project };
   };
 
   /**

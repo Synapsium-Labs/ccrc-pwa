@@ -6,7 +6,7 @@ import { ToastHost } from '@ccrc/ui';
 import { LINKING_REFUSALS, type ProjectLinkingWire } from '../../shared/linking';
 import type { ProjectRow } from '../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../shared/plan';
-import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
+import { HIERARCHY_TEXT, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
 import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
 import { upkeepPath } from '../src/lib/routes';
@@ -534,5 +534,52 @@ describe('the hierarchy settings', () => {
     ]));
     expect(await within(rowOf('project-b')).findByText('Default: coord-b (not live)')).toBeInTheDocument();
     expect(within(rowOf('project-a')).getByText('coord-z (not live)')).toBeInTheDocument();
+  });
+
+  it('the empty option names the default owner and its liveness for a named, a default and a none source alike', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire({ teamKey: 'CCC' }))], hier([
+      hrow('project-a', { ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: 'coord-b', source: 'default', live: false, project: 'project-b' } }),
+      hrow('project-c', { teamKey: 'CCC', ownerNow: { id: null, source: 'none', live: false, project: 'project-c' } }),
+    ]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('Default: coord-b (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-c')).getByText('Default: none live')).toBeInTheDocument();
+    expect(screen.queryByText(/latest programme/)).toBeNull();
+    expect(screen.queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('a project whose owner comes from the project owning its key says so, with that coordinator liveness', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([
+      hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a' } }),
+      hrow('project-b', { ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+    ]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live), from project-a, which owns team key AAA');
+    expect(within(rowOf('project-b')).getByText("This project's own owner setting is not used while project-a owns team key AAA.")).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('an inherited owner with none live says so, and an own named owner outside the list is not labelled with another coordinator liveness', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA', linearOwner: 'coord-z' }))], hier([
+      hrow('project-a', { ownsTeam: true, ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } }),
+      hrow('project-b', { linearOwner: 'coord-z', ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+    ]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live), from project-a, which owns team key AAA');
+    expect(within(rowOf('project-b')).getByText('coord-z (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-a')).getByText('Default: none live')).toBeInTheDocument();
+  });
+
+  it('a missing project field reads as the project own owner', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { ownerNow: { id: 'coord-a', source: 'default', live: true } })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(screen.queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('the none-live words for an inherited owner', () => {
+    const r = hrow('project-b', { ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } });
+    expect(defaultOwnerWords(r)).toBe('Default: none live, from project-a, which owns team key AAA');
+    expect(ownerInheritedNote(r)).toBe("This project's own owner setting is not used while project-a owns team key AAA.");
+    expect(namedOwnerWords(r, 'coord-z')).toBe('coord-z (not live)');
+    expect(namedOwnerWords(hrow('project-a', { ownerNow: { id: 'coord-z', source: 'named', live: true } }), 'coord-z')).toBe('coord-z');
   });
 });

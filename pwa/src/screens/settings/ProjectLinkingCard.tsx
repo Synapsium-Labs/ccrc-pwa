@@ -22,7 +22,7 @@ import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/pl
 import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultOwnerWords, inboundWords, ownerForAllConsequence, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, coordinatorWords, defaultOwnerWords, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
@@ -101,16 +101,18 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, setNeed, r
   };
   const inbound = inboundWords(h.inboundWaiting);
   const named = h.linearOwner;
+  const inheritedNote = ownerInheritedNote(h);
   const known = answer.coordinators.some((c) => c.id === named);
   return (
     <div className="linking-cell linking-hier" data-linking-hier="">
       <div className="linking-cell linking-owner">
         <label htmlFor={ownerId} className="settings-note">{HIERARCHY_TEXT.owner}</label>
         <Select id={ownerId} value={named ?? ''} disabled={busy || locked} onChange={(e) => write({ linearOwner: e.target.value === '' ? null : e.target.value })}>
-          <option value="">{defaultOwnerWords(h.ownerNow)}</option>
-          {named !== null && !known && <option value={named}>{coordinatorWords({ id: named, live: h.ownerNow.live })}</option>}
+          <option value="">{defaultOwnerWords(h)}</option>
+          {named !== null && !known && <option value={named}>{namedOwnerWords(h, named)}</option>}
           {answer.coordinators.map((c) => <option key={c.id} value={c.id}>{coordinatorWords(c)}</option>)}
         </Select>
+        {inheritedNote !== null && <p className="settings-note">{inheritedNote}</p>}
       </div>
       <div className="linking-cell linking-toggles">
         <OptionRow label={HIERARCHY_TEXT.initiatives} checked={h.initiatives === 'on'} disabled={busy || locked}
