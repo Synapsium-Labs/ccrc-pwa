@@ -41,7 +41,7 @@ import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAd
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
 import type { EpicView, HierarchyAnswer, HierarchyProjectRow, PlanView } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
-import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
 /** `GET /api/projects/:project/upkeep`'s answer (`hierarchyRoutes.ts`): the Upkeep epic (null before first use) and the inbound closes Linear refused (`at` is the server's `actedAt`, which may be null). */
 export interface UpkeepClose { readonly identifier: string; readonly teamKey: string; readonly word: string; readonly at: number | null }
@@ -563,7 +563,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused. */
     plan: (slug: string) => getJson<{ ok: true; plan: PlanView }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
     upkeep: (project: string) => getJson<UpkeepAnswer>(`/api/projects/${encodeURIComponent(project)}/upkeep`),
-    ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: unknown }>('/api/hierarchy/owner', { linearOwner }),
+    /** `POST /api/items/:id/linear` (D-8184): one act on a hierarchy item (map, report, drift, initiatives, owner). */
+    linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
+      postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
+    ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>

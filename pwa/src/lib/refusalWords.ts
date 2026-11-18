@@ -398,6 +398,14 @@ export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request',
 /** A linking route's failure in words: the route words first, then every other refusal's sentence. */
 export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
 
+/** `POST /api/items/:id/linear`'s one word that has no sentence above (D-8184); its other refusals read `linkingErrorText`. */
+export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found', string>> = {
+  'not-found': 'The server does not know that item. Reload the page.',
+};
+/** `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
+export const linearItemErrorText = (err: unknown): string =>
+  refusalText(err, { ...LINEAR_ITEM_REFUSAL_TEXT, 'not-open': LEDGER_REFUSAL_TEXT['not-open'] }) ?? linkingErrorText(err);
+
 /** The sentences that name what the answer carries, keyed by word and read by `Object.hasOwn` (never a literal branch on a
  *  code). `null`: the answer did not carry it, so the fixed sentence above is what is said. */
 const LINKING_NAMED_TEXT: Readonly<Record<string, (body: Record<string, unknown>) => string | null>> = {

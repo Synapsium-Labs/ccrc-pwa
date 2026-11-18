@@ -8,6 +8,7 @@ import type { Plugin } from 'vite';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { compressAssets } from './build/compressAssets.js';
+import { REACT_SINGLETON } from './vite.react-singleton.js';
 
 // The worker bundle resolves `decode-named-character-reference` (reached through
 // remark-gfm and micromark) to its plain `index.js`, never its `browser` entry,
@@ -82,35 +83,10 @@ function precompressAssets(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  // ONE REACT, ALWAYS.
-  //
-  // @ccrc/ui is consumed as SOURCE from a sibling folder and keeps its own
-  // react/react-dom/vaul so Storybook can run standalone. Node resolves a bare
-  // import from the IMPORTER outward, so ui/src/primitives/sheet.tsx — and vaul
-  // and radix beneath it — all find ui/node_modules/react long before they
-  // reach this package. Two React instances (19.3.0 there, 19.2.7 here), and
-  // every hook the sheet calls throws "Invalid hook call".
-  //
-  // `dedupe` alone does NOT fix it: dedupe picks one copy among the candidates
-  // the resolver already offers, and ui's copy is simply found first. These
-  // aliases are absolute and unconditional, so there is only ever one
-  // candidate. vaul is aliased too — otherwise it loads from ui's tree and
-  // drags ui's radix, and therefore ui's react, back in behind it.
-  //
-  // react-dom is listed BEFORE react because vite matches alias keys by prefix
-  // in insertion order, and 'react-dom' starts with 'react'.
-  //
-  // EVERY REACT-CALLING PACKAGE ui DEPENDS ON BELONGS IN ALL THREE LISTS
-  // (dedupe, alias, and `test.server.deps.inline` below). framer-motion joined
-  // when the composites migrated: `ToolCard` renders `motion`/`AnimatePresence`,
-  // so it reaches react through framer-motion's copy exactly as the sheet
-  // reaches it through vaul's. (NOT because of reduced motion — ui has its own
-  // `usePrefersReducedMotion` precisely so that branch needs no framer import.)
-  // Adding a ui dependency without adding it here fails only under test, and
-  // fails as "Invalid hook call" — which reads like a bug in the component
-  // rather than a second React.
+  // ONE REACT, ALWAYS: the three lists live in vite.react-singleton.ts, whose header holds the rule (and
+  // vitest.browser.config.ts reads the same module). Only pwa's own `@` alias is stated here.
   resolve: {
-    dedupe: ['react', 'react-dom', 'vaul', 'framer-motion', '@radix-ui/react-popover'],
+    dedupe: [...REACT_SINGLETON.dedupe],
     alias: {
       // `@/…` RESOLVES INTO `@ccrc/ui`'s SOURCE, not into pwa's. shadcn's CLI
       // writes `@/lib/utils`-style imports into whatever `components.json`
@@ -125,14 +101,7 @@ export default defineConfig({
       // this branch, where `tsc` and the bundle read different files and the
       // type check passed on a binding that was `undefined` at runtime.
       '@': fileURLToPath(new URL('../ui/src', import.meta.url)),
-      'react-dom': fileURLToPath(new URL('./node_modules/react-dom', import.meta.url)),
-      react: fileURLToPath(new URL('./node_modules/react', import.meta.url)),
-      vaul: fileURLToPath(new URL('./node_modules/vaul', import.meta.url)),
-      'framer-motion': fileURLToPath(new URL('./node_modules/framer-motion', import.meta.url)),
-      // The Popover (D-5934) reaches react through Radix exactly as the sheet
-      // does through vaul, so pwa carries its own copy on vaul's Radix line
-      // here and this alias takes it (D-6018).
-      '@radix-ui/react-popover': fileURLToPath(new URL('./node_modules/@radix-ui/react-popover', import.meta.url)),
+      ...REACT_SINGLETON.alias,
     },
   },
   plugins: [
@@ -251,6 +220,6 @@ export default defineConfig({
     // instance. Inlining routes both through vite's pipeline, where the alias
     // above applies. The app BUILD never needed this — it bundles everything,
     // so the alias already held there.
-    server: { deps: { inline: [/node_modules\/(vaul|@radix-ui|framer-motion)\//, '@ccrc/ui'] } },
+    server: { deps: { inline: [...REACT_SINGLETON.inline] } },
   },
 });
