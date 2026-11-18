@@ -80,9 +80,9 @@ export const templateOffered = (l: ProjectLinkingWire): boolean =>
  *  key is shared, and the state. Every value shown, and every body written, is the hierarchy answer's row, the one source the
  *  server re-measures after each write (it clears `ownsTeam` on a sibling in the same transaction). Each control writes the
  *  moment it changes, the whole settings body at once. */
-function HierarchyCell({ name, answer, reread, busy, locked, setBusy, setNeed, result }: {
+function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, result }: {
   name: string; answer: HierarchyAnswer; reread: () => number; busy: boolean; locked: boolean; setBusy: (b: boolean) => void;
-  setNeed: (seq: number) => void; result: ReturnType<typeof useResultLine>;
+  raise: (seq: number) => void; result: ReturnType<typeof useResultLine>;
 }): ReactNode {
   const ownerId = useId();
   const h = answer.projects.find((p) => p.project === name);
@@ -94,8 +94,13 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, setNeed, r
       .then(
         // The row stays locked until a read at least as new as this write has LANDED (`locked`): the next write's body is this
         // row's answer, so it must be the new one. A failed re-read keeps the lock (the card offers a retry of the read).
-        () => { result.say(LINKING_TEXT.saved); setNeed(reread()); },
-        (err: unknown) => result.say(linkingErrorText(err), 'refusal'),
+        // A write can change other rows on the server (an owning-project write clears its siblings), so it raises the card's floor.
+        () => { result.say(LINKING_TEXT.saved); raise(reread()); },
+        (err: unknown) => {
+          // A write whose result is unknown (not a refusal) may have landed: lock behind a read, as after a success.
+          if (!(err instanceof ApiError)) raise(reread());
+          result.say(linkingErrorText(err), 'refusal');
+        },
       )
       .finally(() => setBusy(false));
   };
@@ -132,9 +137,9 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, setNeed, r
   );
 }
 
-function LinkingRow({ name, linking, now, onStored, answer, landed, floor, reread }: {
+function LinkingRow({ name, linking, now, onStored, answer, landed, floor, raise, reread }: {
   name: string; linking: ProjectLinkingWire; now: number; onStored: (project: string, linking: ProjectLinkingWire) => void;
-  answer: HierarchyAnswer | null; landed: number; floor: number; reread: () => number;
+  answer: HierarchyAnswer | null; landed: number; floor: number; raise: (seq: number) => void; reread: () => number;
 }): ReactNode {
   const keyId = useId();
   const overrideId = useId();
@@ -155,7 +160,10 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, rerea
     void api.saveLinking(name, body)
       .then(
         (a) => { onStored(name, a.linking); setNeed(reread()); result.say(LINKING_TEXT.saved); },
-        (err: unknown) => result.say(linkingErrorText(err), 'refusal'),
+        (err: unknown) => {
+          if (!(err instanceof ApiError)) setNeed(reread());
+          result.say(linkingErrorText(err), 'refusal');
+        },
       )
       .finally(() => setBusy(false));
   };
@@ -235,7 +243,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, rerea
         )}
         {pr !== null && <TextLink href={pr}>{LINKING_TEXT.templatePr}</TextLink>}
       </div>
-      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={landed < Math.max(need, floor)} setBusy={setBusy} setNeed={setNeed} result={result} />}
+      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} result={result} />}
       <div className="linking-result"><ResultLine line={result.line} /></div>
       <QuickConfirm
         open={asking}
@@ -266,7 +274,10 @@ function OwnerForAll({ answer, reread, setFloor }: { answer: HierarchyAnswer; re
     result.clear();
     void api.ownerForAll(pick)
       // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
-      .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => result.say(linkingErrorText(err), 'refusal'))
+      .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => {
+        if (!(err instanceof ApiError)) setFloor(reread());
+        result.say(linkingErrorText(err), 'refusal');
+      })
       .finally(() => setBusy(false));
   };
   return (
@@ -293,12 +304,14 @@ export function ProjectLinkingCard(): ReactNode {
   const [read, setRead] = useState<Read>({ kind: 'loading' });
   // The hierarchy answer (D-8184), four conditions apart: unread yet, an older server (the route is absent: 404, no hierarchy
   // controls and no note), a read that failed (said, with its fixed sentence) and the answer itself.
-  // `stale` is a re-read that failed after an answer was held: the last good answer stays (its controls with it) and the card says so.
-  const [hier, setHier] = useState<{ kind: 'loading' | 'absent' | 'failed' } | { kind: 'read'; answer: HierarchyAnswer; stale: boolean; landed: number }>({ kind: 'loading' });
+  // The note shows while a read that failed is newer than the last one that landed (`failedSeq > landed`): the last good answer
+  // stays, a row that wrote stays locked behind a read, and the card says so and offers Read again.
+  const [hier, setHier] = useState<{ kind: 'loading' | 'absent' | 'failed' } | { kind: 'read'; answer: HierarchyAnswer; landed: number }>({ kind: 'loading' });
   // Every read is numbered when it starts, and `landedRef` is the number of the last answer that landed. A read lands only when
   // it is newer than that (so a newer one settling first is kept and an older one settling after it is dropped; two rows can
   // write at once). A failed read lands nothing: it only marks what is shown stale. A row stays locked until `landed` reaches
   // the number of the read its own write started.
+  const [failedSeq, setFailedSeq] = useState(0);
   const seqRef = useRef(0);
   const landedRef = useRef(0);
   const reread = useCallback((): number => {
@@ -307,17 +320,19 @@ export function ProjectLinkingCard(): ReactNode {
       (answer) => {
         if (mine <= landedRef.current) return;
         landedRef.current = mine;
-        setHier({ kind: 'read', answer, stale: false, landed: mine });
+        setHier({ kind: 'read', answer, landed: mine });
       },
       (err: unknown) => {
         if (mine <= landedRef.current) return;
-        setHier((h) => (h.kind === 'read' ? { ...h, stale: true } : { kind: err instanceof ApiError && err.status === 404 ? 'absent' : 'failed' }));
+        setFailedSeq((f) => Math.max(f, mine));
+        setHier((h) => (h.kind === 'read' ? h : { kind: err instanceof ApiError && err.status === 404 ? 'absent' : 'failed' }));
       },
     );
     return mine;
   }, []);
   // The seq of the read the last owner-for-all save needs: a floor every row's lock also checks.
-  const [floor, setFloor] = useState(0);
+  const [floor, setFloorState] = useState(0);
+  const raise = useCallback((seq: number): void => setFloorState((f) => Math.max(f, seq)), []);
 
   useEffect(() => {
     let live = true;
@@ -342,18 +357,18 @@ export function ProjectLinkingCard(): ReactNode {
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} reread={reread} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} raise={raise} reread={reread} />)}
           </ul>
         );
   }
   return (
     <Section level={3} scope={card.scope} title={card.title} purpose={card.purpose} data-linking="section" className="linking-section">
       <div className="linking-card">{hier.kind === 'failed' && <p className="settings-note" role="alert">{HIERARCHY_TEXT.unreadable}</p>}
-        {hier.kind === 'read' && hier.stale && <div className="linking-stale" role="alert">
+        {hier.kind === 'read' && failedSeq > hier.landed && <div className="linking-stale" role="alert">
           <p className="settings-note">{HIERARCHY_TEXT.rereadFailed}</p>
           <Button variant="ghost" onClick={() => reread()}>{HIERARCHY_TEXT.readAgain}</Button>
         </div>}{body}
-        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={reread} setFloor={setFloor} />}</div>
+        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={reread} setFloor={raise} />}</div>
     </Section>
   );
 }

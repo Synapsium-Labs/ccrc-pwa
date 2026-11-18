@@ -84,7 +84,12 @@ function TicketRow({ ticket }: { ticket: TicketView }): ReactNode {
   const url = linearHref(ticket.url);
   // Spec §11.4: from 1920 up, the ticket's run state is inline. It is the fleet store's live run, worded by the console's one
   // `runStateWord`; a run not in the live list (closed, or not heard yet) draws none: the wire carries no run state to fall back on.
-  const run = useFleetStore((s) => (ticket.runId === null ? undefined : s.runs.find((r) => r.id === ticket.runId)));
+  // The store is read as the WORD (a string, or null), never the run object: a runs frame that changes nothing this row shows
+  // does not re-render it.
+  const runWord = useFleetStore((s) => {
+    const run = ticket.runId === null ? undefined : s.runs.find((r) => r.id === ticket.runId);
+    return run === undefined ? null : runStateWord(run);
+  });
   return (
     <li className="ep-row ep-tk" data-ticket={ticket.key} data-state={ticket.state}>
       <span className="ep-title">{ticket.title}</span>
@@ -93,7 +98,7 @@ function TicketRow({ ticket }: { ticket: TicketView }): ReactNode {
         <span>{ticketKindWords(ticket.kind)}</span>
         {ticket.identifier !== null && <span className="ep-ident">{ticket.identifier}</span>}
         {ticket.runId !== null && <Internal href={runPath(ticket.runId)}>{runWords(ticket.runId)}</Internal>}
-        {run !== undefined && <span className="ep-state ep-run-state" data-ticket-run-state>{runStateWord(run)}</span>}
+        {runWord !== null && <span className="ep-state ep-run-state" data-ticket-run-state>{runWord}</span>}
         {url !== null && <External href={url}>{EPIC_TEXT.openInLinear}</External>}
       </span>
     </li>

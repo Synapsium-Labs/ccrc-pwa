@@ -18,6 +18,7 @@ import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import type { ProjectLinkingWire } from '../../shared/linking';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
+import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
 import { resolveChrome } from './harness';
 import { openApp, serveDist, sharedDist, type AppFixture, type AppView, type DistServer } from './app';
 
@@ -186,6 +187,8 @@ const measure = (el: Element): Measured => {
     clippedSelects: [...el.querySelectorAll('select')].flatMap((s) => {
       const cs = getComputedStyle(s);
       const ctx = document.createElement('canvas').getContext('2d')!;
+      // The shorthand serializes empty when the engine cannot express the font as one: say so, never measure in the 10px default.
+      if (cs.font === '') return [`${s.closest('[data-linking-row]')?.getAttribute('data-linking-row') ?? 'all'}: computed font is empty`];
       ctx.font = cs.font;
       const text = s.selectedOptions[0]?.textContent ?? '';
       const room = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
@@ -320,6 +323,37 @@ describe('Settings › Security › Project linking, per width, skin and theme (
         }
       }
     }, 240_000);
+  }
+
+  for (const width of [360, 1920]) {
+    it(`a failed re-read after a write shows the stale note and Read again, contained, at ${width}px`, async () => {
+      for (const skin of SKINS) {
+        const view: AppView = { skin, theme: 'light', width };
+        const { ctx, page, errors, section } = await open(view);
+        try {
+          // The hierarchy read fails from now on: the write below saves (the fixture answers it), and its re-read is refused.
+          await ctx.route('**/api/hierarchy', (route) => route.abort('failed'));
+          await section.locator('[data-linking-row="project-a"]').getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }).click();
+          const note = section.locator('.linking-stale');
+          await note.waitFor({ timeout: 30_000 });
+          expect(await note.getByRole('button', { name: HIERARCHY_TEXT.readAgain }).count()).toBe(1);
+          const m = await section.evaluate(measure);
+          assertContained(m, named(view));
+          const box = await note.boundingBox();
+          const card = await section.locator('.linking-card').boundingBox();
+          expect(box!.x, `${named(view)}: the stale note starts left of the card`).toBeGreaterThanOrEqual(card!.x - 0.5);
+          expect(box!.x + box!.width, `${named(view)}: the stale note runs past the card`).toBeLessThanOrEqual(card!.x + card!.width + 0.5);
+          const button = await note.getByRole('button').boundingBox();
+          expect(button!.width, `${named(view)}: Read again keeps its usual size`).toBeLessThan(box!.width);
+          const shots = process.env.CCRC_SHOTS;
+          if (shots) await section.screenshot({ path: path.join(shots, `project-linking-stale-${skin}-${width}.png`) });
+          void page;
+          expect(errors.filter((e) => !/Failed to fetch|net::ERR/.test(e))).toEqual([]);
+        } finally {
+          await ctx.close();
+        }
+      }
+    }, 120_000);
   }
 
   it('at 1280 a row is one grid line wherever the card is 760 px or wider, and the template button wraps under it elsewhere', async () => {
