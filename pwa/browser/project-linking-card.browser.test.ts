@@ -60,12 +60,18 @@ const PROJECTS = [
 const SERVED = [...PROJECTS, { ...PROJECTS[0]!, workdir: '/w2/project-a' }, { ...PROJECTS[0]!, workdir: '/w3/project-a' }];
 
 /** The hierarchy answer (D-8184): project-a and project-c share `KEY`, so their owning-project control draws too. */
+const LONG_COORD = 'cc-coord-with-a-rather-long-identifier-b';
 const HIER = {
   ok: true,
-  coordinators: [{ id: 'cc-coord-a', live: true }, { id: 'cc-coord-with-a-rather-long-identifier-b', live: false }],
+  coordinators: [{ id: 'cc-coord-a', live: true }, { id: LONG_COORD, live: false }],
   projects: [...new Set(PROJECTS.map((p) => p.name))].map((project, i) => ({
-    project, teamKey: PROJECTS.find((p) => p.name === project)!.linking.teamKey, initiatives: 'on', linearOwner: null,
-    ownerNow: { id: 'cc-coord-a', source: 'default', live: true }, ownsTeam: false,
+    project, teamKey: PROJECTS.find((p) => p.name === project)!.linking.teamKey, initiatives: 'on',
+    // A7: project-a names the long coordinator (its select SHOWS that long value); project-c, which shares the key, shows the
+    // longest default option, the inherited one ("Default: …, from project-a, which owns team key KEY").
+    linearOwner: i === 0 ? LONG_COORD : null,
+    ownerNow: project === 'project-c' ? { id: 'cc-coord-a', source: 'default', live: true, project: 'project-a' }
+      : i === 0 ? { id: LONG_COORD, source: 'named', live: false } : { id: 'cc-coord-a', source: 'default', live: true },
+    ownsTeam: false,
     state: i === 0 ? 'map-waiting' : i === 1 ? 'migrated' : 'not-migrated', stateAt: NOW - 86_400_000, itemId: i === 0 ? 7 : null,
     inboundWaiting: i === 0 ? 3 : 0,
   })),
@@ -116,6 +122,8 @@ interface Measured {
   rows: RowMeasure[];
   ellipsis: string[];
   clipped: string[];
+  /** A7: a select whose shown (selected) option text is wider than its content box, which `scrollWidth` does not see. */
+  clippedSelects: string[];
 }
 
 /** The card's geometry, measured in the page. */
@@ -172,6 +180,18 @@ const measure = (el: Element): Measured => {
     clipped: [...el.querySelectorAll('*')]
       .filter((e) => e.tagName !== 'SELECT' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0)
       .map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
+    // A7: a select's shown value is drawn inside its own box, so `scrollWidth` never trips on it. Measure the selected option's
+    // text in the select's own font against the content box less the platform's disclosure arrow (the system's Select keeps the
+    // native one, `appearance` not reset; 24px is its width plus the gap, measured generously for Chrome, not for the text).
+    clippedSelects: [...el.querySelectorAll('select')].flatMap((s) => {
+      const cs = getComputedStyle(s);
+      const ctx = document.createElement('canvas').getContext('2d')!;
+      ctx.font = cs.font;
+      const text = s.selectedOptions[0]?.textContent ?? '';
+      const room = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - 24;
+      const need = ctx.measureText(text).width;
+      return need > room ? [`${s.closest('[data-linking-row]')?.getAttribute('data-linking-row') ?? 'all'}: "${text}" needs ${Math.ceil(need)}px of ${Math.floor(room)}px`] : [];
+    }),
   };
 };
 
@@ -180,6 +200,9 @@ const assertContained = (m: Measured, at: string): void => {
   expect(m.section.scrollWidth, `${at}: the section overflows sideways`).toBeLessThanOrEqual(m.section.clientWidth);
   expect(m.ellipsis, `${at}: text is cut short with an ellipsis`).toEqual([]);
   expect(m.clipped, `${at}: an element is wider than its box`).toEqual([]);
+  // A7 (the review's ruling) is about the desktop widths: on a phone the select is as wide as the card and the picker lists the
+  // whole option, so a very long value may be cut in the closed select there.
+  if (m.viewport >= 1280) expect(m.clippedSelects, `${at}: a select shows only part of its value`).toEqual([]);
   expect(m.pageScrollWidth, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClientWidth);
   expect(m.body.box.left, `${at}: the card starts left of the viewport`).toBeGreaterThanOrEqual(0);
   expect(m.body.box.right, `${at}: the card runs past the viewport`).toBeLessThanOrEqual(m.viewport);
@@ -267,7 +290,9 @@ describe('Settings › Security › Project linking, per width, skin and theme (
                 expect(toggles.top).toBeGreaterThanOrEqual(owner.bottom - 0.5);
                 expect(state.top).toBeGreaterThanOrEqual(toggles.bottom - 0.5);
               } else {
-                for (const c of [toggles, state]) expect(Math.abs(c.top - owner.top), `${at}: ${r.name}'s second line at ${cardWidth}px`).toBeLessThan(1);
+                // A7: the owner select has the hierarchy cell's first line; the toggles and the state line share the one under it.
+                expect(Math.abs(state.top - toggles.top), `${at}: ${r.name}'s second line at ${cardWidth}px`).toBeLessThan(1);
+                expect(toggles.top, `${at}: ${r.name}'s toggles are not under the owner select`).toBeGreaterThanOrEqual(owner.bottom - 0.5);
               }
             }
             // The all-projects act sits at the card's end, under every row, and wraps nothing past the card.

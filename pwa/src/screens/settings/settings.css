@@ -382,6 +382,10 @@
   .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
   .linking-template, .linking-result, .linking-hier { grid-column: 1 / -1; }
   .linking-hier { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr); column-gap: var(--pad-card); align-items: start; }
+  /* A7: the owner select's value is a coordinator id, and its default option names the owner, whether it is live and, for an
+     inherited owner, the project it comes from: far wider than a third of the card. It takes the hierarchy cell's whole first
+     line; the toggles and the state line share the line under it. */
+  .linking-owner { grid-column: 1 / -1; }
   .linking-all { grid-template-columns: minmax(0, 1fr) auto; align-items: end; }
   .linking-all label, .linking-all p { grid-column: 1 / -1; }
   .linking-all button { width: auto; }
