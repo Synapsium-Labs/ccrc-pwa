@@ -49,13 +49,17 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   started after the cache's `fetchedAt` outranks the cache's target, and a cache fetched after the newest kept launch
   outranks that launch. The aliases file keeps the newest filled launch reading per class, so a marker that goes
   never lowers it, and a candidate no newer than the evidence of the class's current id never replaces it: a lost
-  marker, a stale cache or an unlaunchable target never hands a class back to older evidence. A cache older than seven
-  days by its own `fetchedAt` is stale (D25, D-8745), which doctor names; staleness is reported, never fallen back
-  from. Its own `staleAt` is ignored.
+  marker or a stale cache never hands a class back to older evidence. A cache older than seven days by its own
+  `fetchedAt` is stale (D25, D-8745), which doctor names; staleness is reported, never fallen back from. Its own
+  `staleAt` is ignored. The one exception is a kept id the lane's build cannot launch: it is dropped from the label,
+  and the class reads unobserved, naming the lane's build (Task A2.2's `unlaunchable`), with no move recorded.
 - **One reader per runtime strips a model id's `[1m]` suffix** (Claude Code's mark of a 1M-context session):
   `bareModelId` in `shared/model-aliases.mjs` and `_model_id_bare_to` in `ccd/lib/model-aliases.sh`. Every id
   comparison and every recorded id goes through it, and one fixture table (`server/test/fixtures/model-id-bare.json`)
-  holds the two equal. Two readers, because the two run in different processes and languages.
+  holds the two equal. Two readers, because the two run in different processes and languages. A third strip on
+  `main`, in `ccd/ccrc-doctor-checks`' embedded node program for the Fable ceiling check
+  (`.replace(/(\[1m\])+$/, "")`), is legitimately different and stays: it reads a value an operator typed into a
+  home's settings, where the suffix may repeat, and compares no session's id.
 - **The four WARN names are fixed** (spec §2.8). The new `model-advance-blocked` cause words are exactly
   `alias-source-absent`, `alias-cache-stale`, `aliases-file-unreadable` and `aliases-file-invalid`. No fifth word.
 - **Only a fresh alias launch is seen in use** (D-8744): a spawn in mode `new` that launched the class by its alias,
@@ -63,9 +67,11 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   to the lane it ran on, whose first reading no `/model` typed since the launch precedes. A resume, a respawn, a held
   launch, a typed older id and A3.0's measurement launches never count. A hold on one class never stops another
   class's marker.
-- **"Unobserved" is data** (D-8744): a held class whose id rests on evidence older than its hold, or a class with no
-  id, reads `unobserved: true` on the aliases file and the wire, and is exempt from `model-held-behind` and
-  `model-sessions-behind`.
+- **"Unobserved" is data** (D-8744): a held class whose id rests on evidence older than its hold, a class with no
+  id, and a class whose kept id the lane's build cannot launch read `unobserved: true` on the aliases file and the
+  wire. It exempts a class from `model-held-behind` only: while a hold stands, `model-sessions-behind` judges every
+  session of the class against `hold.model`, observed or not. An unheld class with no launchable id names no
+  session.
 - **No class word and no model id is spelled in shipped source** beyond what the census already allows: classes come
   from `CLASSES` (`shared/models.mjs`), family tokens from `FAMILY_TOKENS`, and ids from data. Test fixtures use
   invented ids (`claude-opus-9-1`, `claude-opus-9-2`, `claude-fable-9-1`), so no fixture goes stale at a release.
@@ -85,15 +91,19 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
    excluded case).
 2. **A reading made on one lane counted for another after a swap, or a swap that loses the newest reading.** A swap
    respawns with `--resume`, which writes no marker, every spawn removes the old marker before it creates the new
-   process, and the aliases file keeps the newest filled reading, so the removal never hands the class back to an
-   older one (Task A3.2's "a swap leaves no marker", Task A2.3's "a swap and a wake record no backward move").
+   process, and the aliases file keeps the newest filled reading an hourly refresh has read, so the removal never
+   hands the class back to an older one (Task A3.2's "a swap leaves no marker", Task A2.3's "a swap and a wake record
+   no backward move"). A reading filled and removed between two refreshes is lost; the class stays on its older
+   evidence until the next fresh launch reports (D-8744's cost).
 3. **A home holding several cache files, or an old cache after a release.** The newest current-format file is the
    lane's cache, an older-format file is never a source, and a marked launch newer than the cache outranks its
    target; `show` and `lanes` carry both when they disagree (Task A2.1's test "several files", Task A2.2's "newer use
    outranks an older cache", Task A2.4's "lanes carries both ids").
 4. **A lane on a Claude Code build too old for its cache's target, or whose build cannot be read.** The label never
    names a model the lane cannot launch: an unreadable build gates a target with a minimum build as "unknown", never
-   "ok" (Task A2.2's tests "target needs a newer build" and "an unreadable build gates a minimum").
+   "ok", and a kept id whose row needs a newer build than the lane now runs is dropped from the label, the class
+   reading unobserved with the lane's build named (Task A2.2's tests "target needs a newer build", "an unreadable
+   build gates a minimum" and "a kept id the build cannot launch is dropped from the label").
 5. **An unreadable advance or aliases file at launch, and a hold the home's settings defeat.** The session launches on
    the alias and one floored swap.log line says why (Task A3.4); a hold is refused when the home's `settings.json`
    env names that class's key, because a settings env block beats the launch environment (Task A2.3).
@@ -210,20 +220,31 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 **Interfaces:**
 - Consumes: `CacheReading`, `AliasRow`, `newestCache` (A2.1); `familyClassOf`, `CLASSES` (`shared/models.mjs`).
 - Produces: `resolveAliases(input: ResolveInput): Aliases`, with
-  `ResolveInput = { own: CacheReading[], box: CacheReading[], launches: Launch[], prior: Aliases|null, holds: Partial<Record<ModelClass, { at: string }>>, laneVersion: string|null, saved: Record<string, string>, nowMs: number }`,
+  `ResolveInput = { own: CacheReading[], box: CacheReading[], launches: Launch[], prior: Aliases|null, holds: Partial<Record<ModelClass, { at: string, model: string }>>, laneVersion: string|null, saved: Record<string, string>, nowMs: number }`,
   `Launch = { class: ModelClass, id: string, bornAt: string }` (a filled launch marker of this lane, Task A3.2, its id
-  already through `bareModelId`), `prior` the lane's aliases file as last written (null when absent, unreadable or
-  invalid), `holds` the advance file's standing holds, and `saved` the home's saved levels, model id to level
+  already through `bareModelId`), `prior` the lane's aliases file as last written (null only when that file is
+  absent: Task A2.3 never calls the resolver over an unreadable or invalid one), `holds` the advance file's standing
+  holds with their `hold.model`, and `saved` the home's saved levels, model id to level
   (`modelSettings.<id>.effortLevel`).
-- Produces: `bareModelId(raw: string): string` (removes one trailing `[1m]`; the one JS reader of that suffix).
+- Produces: `bareModelId(raw: string): string` (removes one trailing `[1m]`; the JS reader of that suffix for every
+  id ccrc compares, Global Constraints).
 - Produces: the file `Aliases = { v: 1, at: string, cache: { fetchedAt: string, format: 'current'|'older' } | { none: 'absent'|'unreadable'|'invalid' }, stale: boolean, classes: Record<ModelClass, AliasClass> }`,
-  `AliasClass = { id: string|null, source: 'cache'|'use'|null, evidenceAt: string|null, idSince: string|null, cacheTarget: string|null, seenId: string|null, seenAt: string|null, unobserved: boolean, row: AliasRow|null, rowFrom: 'own'|'box'|null, orphaned: { id: string, level: string }|null }`.
+  `AliasClass = { id: string|null, source: 'cache'|'use'|null, evidenceAt: string|null, idSince: string|null, cacheTarget: string|null, seenId: string|null, seenAt: string|null, unobserved: boolean, unlaunchable: { needs: string, laneVersion: string|null }|null, row: AliasRow|null, rowFrom: 'own'|'box'|null, heldRow: AliasRow|null, orphaned: { id: string, level: string }|null }`.
   - `seenId` and `seenAt` are the newest filled launch reading of the class ever recorded on the lane: the newer of
     `prior`'s and the current markers', by `bornAt`. A marker that goes never lowers them.
   - `cacheTarget` and `seenId` are both kept, so a reader sees when they disagree (D-8744).
   - `evidenceAt` is the time of the evidence `id` rests on (the cache's `fetchedAt`, or `seenAt`). `idSince` is when a
     refresh first wrote the current `id`, kept from `prior` while `id` is unchanged.
-  - `unobserved` is true when `id` is null, or when the class is held and `evidenceAt` is before the hold's `at`.
+  - `unlaunchable` is set when the row of the kept `id` names a `minVersion` above `laneVersion`, or names one while
+    `laneVersion` is null: `needs` is that `minVersion`, `laneVersion` the lane's build. The class keeps `id` in the
+    file, and every label and effort reader treats it as no id (Tasks A3.1, A4.1). No move is recorded when it is set,
+    nor when it clears with the build's return (the id is unchanged). A newer candidate of another id that arrives
+    while it is set replaces the id with no move recorded, because a model the lane could not launch is not a move
+    away.
+  - `unobserved` is true when `id` is null, when `unlaunchable` is set, or when the class is held and `evidenceAt` is
+    before the hold's `at`.
+  - `heldRow` is the row of `hold.model` while the class is held (from the lane's own cache, else the box's, as `row`),
+    else null. While a hold stands, the effort reader and the labels use it, never `row` (Tasks A3.1, A4.1).
 - Produces: `parseAliases(json): Aliases` (throws `AliasesInvalid` with a `field`, `AdvanceInvalid`'s idiom),
   `serializeAliases(a): string`, `aliasesSourceCause(a): 'alias-source-absent'|'alias-cache-stale'|null`,
   `ALIASES_VERSION = 1`, `CACHE_STALE_AFTER_MS = 604_800_000`.
@@ -259,6 +280,10 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   - `a first id has idSince now` and `an unchanged id keeps idSince`;
   - `a held class with only older evidence is unobserved`, `a cache fetched after the hold observes it`, and `a hold
     on one class leaves another observed`;
+  - `a kept id the build cannot launch is dropped from the label` (`prior` `id` X2 from a cache whose row needs a
+    newer build than `laneVersion` now: `id` X2 kept, `unlaunchable` names both builds, `unobserved` true; the same
+    input with the build back: `unlaunchable` null, `id` X2, `idSince` kept); `a newer id replaces an unlaunchable one`;
+  - `a held class carries the held id's row` (`heldRow` is `hold.model`'s row, `row` the current id's);
   - `orphaned` names a saved level under another id of the class's family when `saved` has none under the current id,
     and is null when the current id has one;
   - `bareModelId strips one [1m]`, reading every row of `server/test/fixtures/model-id-bare.json`.
@@ -269,7 +294,8 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 - [ ] **Step 5: Green, then the mutation rows:** drop the stale flag; let staleness remove the cache as a candidate;
   let an older launch outrank the cache; drop the minimum-build gate; read a `box` reading's targets; prefer a `box`
   row over an own row; drop the family filter; let a candidate older than `prior`'s `evidenceAt` replace the id;
-  forget `prior`'s kept reading; set `unobserved` for every class on a lane with one hold. Each reds a named test.
+  forget `prior`'s kept reading; set `unobserved` for every class on a lane with one hold; drop the `unlaunchable`
+  check; fill `heldRow` from the current id. Each reds a named test.
 - [ ] **Step 6: Commit** `feat(models): resolve an Anthropic lane's class ids from the newest evidence`.
 
 ### Task A2.3: the writer on an Anthropic lane
@@ -285,7 +311,8 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   `readSessionFile`.
 - Produces, in `shared/models.mjs`: `aliasesFileName(id) = '<id>.aliases.json'`, beside `registryFileName`.
 - Produces, in `shared/model-advance.mjs`: `parseAdvance` validates an optional `hold.model` (a `MODEL_ID_RE` id) and
-  an optional `releasedAt` on a class (an ISO time; an older build keeps both as unknown keys); `BLOCKED_CAUSES` gains
+  an optional `releasedAt` on a class (an ISO time), and `checkEntry` an optional `evidenceAt` on a history entry
+  (an ISO time); an older build keeps all three as unknown keys. `BLOCKED_CAUSES` gains
   the four Anthropic cause words; `seedAnthropicAdvance(): Advance`, an advance file with every class's `family` set
   to the class's own word, `hold`, `previous` and `pending` null, and empty history. `recordMove`, `lastMoveOf` and
   `HISTORY_CAP` are unchanged.
@@ -298,12 +325,23 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
     (`version_to` as Task A2.1 measured it, else null), its saved levels (`<home>/settings.json`'s `modelSettings`,
     read in-process, ids and levels only), its own aliases file as `prior`, and its advance file's holds. It writes
     the lane's aliases file.
-  - A move is a class whose id changed from one non-null id to another, which by A2.2's rule rests on newer evidence.
-    For each move the op appends a history entry with `recordMove` (how `advance`, canary `not-run`) and itself sets
-    `classes.<c>.previous` to `{model: <old id>, effort: null}`, both in the same lock. A change of source alone is
-    never a move. A class's first id (null before) is never a move: no history, no `previous`, no push; it is the
-    class's baseline, and its `idSince` is the refresh's time. Since a kept reading never lowers, an id becomes null
-    again only when the aliases file is lost, and that is not a move either.
+  - **Only an absent aliases file is a fresh start** (`prior` null). An unreadable or invalid one is never written
+    over: the op refuses, under the lock, with the cause word `aliases-file-unreadable` or `aliases-file-invalid`, and
+    writes neither file. Every reader then treats the lane as having no aliases file it can read (today's behaviour,
+    and `unobserved` on the wire), and doctor's cause names the file until the operator moves it aside.
+  - A move is a class whose id changed from one non-null id to another, which by A2.2's rule rests on newer evidence,
+    with no `unlaunchable` on the old id. A change of source alone is never a move. A class's first id (null before)
+    is never a move: no history, no `previous`, no push; it is the class's baseline, and its `idSince` is the
+    refresh's time.
+  - **The order of the two writes**, inside the one lock: the advance file first, then the aliases file. For each
+    move the advance write appends a history entry with `recordMove` (`how: 'advance'`, `ok: true`, canary
+    `not-run`, `cause: 'newer'`, and `evidenceAt`, the new id's evidence time) and sets `classes.<c>.previous` to
+    `{model: <old id>, effort: null}` itself. A move is keyed by its `from`, `to` and `evidenceAt`: when the class's
+    history already holds an entry with all three, the op appends nothing and leaves `previous` as it is. So a crash
+    after the advance write and before the aliases write is re-derived by the next refresh, which finds the same move
+    from the same `prior`, records nothing twice, writes the aliases file, and answers the move in `moved` so that it
+    is pushed then. The Anthropic path never calls `advanceForWrite` or `reconcilePending`: it reads the advance file
+    with `readAdvance`, creates a missing one with `seedAnthropicAdvance`, and writes no pending intent.
   - Its answer is `{ok: true, moved: [{class, from, to}]}`, one entry per move in `CLASSES` order (`from` and `to` the
     two ids), or a refusal with the existing refusal shape.
   - An Anthropic lane's own path, before the `anthropic-lane` and `no-registry` gates: it admits `hold`, `release`,
@@ -311,7 +349,8 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
     `backfillAdvance`. `set-class` and every other registry op keep both refusals. `rm` and `lanes` keep running
     before both gates, and `rm` also reaps the aliases file; its clear of `LANE_ENV_KEYS` is unchanged.
   - `hold` on an Anthropic lane records `hold.model`, the class's current id from the aliases file. It refuses
-    `alias-source-absent` when that id is null, and `settings-overrides-hold` when the home's `settings.json` `env`
+    `aliases-file-unreadable` or `aliases-file-invalid` when that file cannot be read, `alias-source-absent` when the
+    id is null or `unlaunchable`, and `settings-overrides-hold` when the home's `settings.json` `env`
     names the class's `ANTHROPIC_DEFAULT_<CLASS>_MODEL` (a settings env beats the launch environment, so the hold
     could not reach a launch). `revert` holds at `previous.model`. `release` clears the hold and sets the class's
     `releasedAt` to the release's time, so Task A2.5 can count a day from it. A release appends no history entry and
@@ -326,7 +365,13 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   before a release fills X1, S2 marked after it fills X2, one refresh: id X2; then S2's marker is removed, as a swap or
   a wake's respawn does, and a second refresh: id X2, `moved` empty, no history entry, no `previous`; then S1's marker
   is removed too and a third refresh: id X2, not null); `a stale cache records no backward move` (a cache that gave
-  X2 goes stale, an older launch reported X1: id X2); `hold records the held id`; `hold with no id refuses
+  X2 goes stale, an older launch reported X1: id X2); `an unreadable prior is never written over` and `an invalid
+  prior is never written over` (each: the refusal's cause word, the file's bytes and mtime unchanged, the advance file
+  untouched, no `moved`); `a move's entry is complete` (`ok: true`, `cause: 'newer'`, `evidenceAt`; `lastMoveOf`
+  returns it); `a cut-short move is re-derived once` (the op's second write is made to fail, whichever file it is:
+  after the next refresh the history holds exactly one entry for the move, the aliases file names the new id, and
+  the move was answered in `moved` exactly once across the two refreshes); `an
+  unlaunchable id's replacement is not a move`; `hold records the held id`; `hold with no id refuses
   alias-source-absent`; `hold refuses settings-overrides-hold`; `revert holds the previous id`; `release keeps
   releasedAt and spends no history` (ten history entries before, ten after, `lastMoveOf` unchanged); `the first hold
   seeds the advance file` (families are the class words); `set-class still refuses anthropic-lane`; `rm reaps the
@@ -338,8 +383,9 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 - [ ] **Step 3: Implement** the op, the Anthropic path, the seed, the hold field and the reap, beside the existing
   ops, before `readPairs`.
 - [ ] **Step 4: Green, then the mutation rows:** admit `set-class` on an Anthropic lane; seed with `backfillAdvance`;
-  drop `hold.model`; record a source change as a move; record a first id as a move; pass `prior` as null; record a
-  release as a history entry; read a target from another home; drop `aliases-refresh` from `MODELS_WRITE_OPS`. Each
+  drop `hold.model`; record a source change as a move; record a first id as a move; pass `prior` as null; write over
+  an invalid `prior`; write the aliases file before the advance file; drop the `from`/`to`/`evidenceAt` key check;
+  record a release as a history entry; read a target from another home; drop `aliases-refresh` from `MODELS_WRITE_OPS`. Each
   reds a named test.
 - [ ] **Step 5: Commit** `feat(models): the aliases file and holds on an Anthropic lane`.
 
@@ -385,8 +431,9 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 ### Task A2.5: doctor's Anthropic causes
 
 **Files:**
-- Modify: `deploy/models-op.mjs` (`advanceHealthOp`, `laneHealth`), `shared/model-aliases.mjs` and `.d.mts`
-  (`aliasSessionBehind`), `ccd/ccrc-doctor-checks`, `README.md`
+- Modify: `deploy/models-op.mjs` (`advanceHealthOp`, `laneHealth`, and a `sessionsBehindOf` arm for an Anthropic
+  lane), `shared/model-aliases.mjs` and `.d.mts` (`aliasSessionBehind`, `AliasSession`, `AliasBehind`),
+  `ccd/ccrc-doctor-checks`, `README.md`
 - Test: `server/test/ccrc-doctor-model-advance.test.ts`, `server/test/ccrc-doctorFixture.ts`
 
 **Interfaces:**
@@ -395,35 +442,69 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   - `blocked` carries `alias-source-absent`, `alias-cache-stale`, `aliases-file-unreadable` or
     `aliases-file-invalid`. An absent aliases file is no finding: the first hourly refresh writes it, and a refresh
     that fails says so on its own output row.
-  - `heldBehind` names a held class whose aliases id is not its `hold.model`. A class whose `id` is null or whose
-    `unobserved` is true is never named: nothing newer has been observed.
-  - `sessionsBehind` names a running session of the lane whose sidecar id, through `bareModelId`, differs from the id
-    its class should run: `hold.model` while the class is held, else the class's current id. The session's class is
-    its routing record's: the `class=` word of `$REG/<id>.routeapplied`, the class ccd composed and served (a degrade
-    included). A session with no class word, or `default`, is never named, and neither is a session of a class whose
-    `id` is null or whose `unobserved` is true. The day (`BEHIND_AFTER_MS`) counts from the hold's `at` while held,
-    else from the later of the class's `idSince` (the move, or the first id) and its `releasedAt`. This is the
-    Anthropic arm of #2943's `sessionBehind`, called from the same `laneHealth`, written as a pure
-    `aliasSessionBehind(session: {cls: ModelClass|null, id: string}, cls: AliasClass, adv: ClassAdvance, nowMs: number): boolean`
-    in `shared/model-aliases.mjs`: legitimately a second function because an Anthropic lane has no registry to pass
-    `sessionBehind`.
+  - `heldBehind` names a held class whose aliases id is not its `hold.model`. A class whose `unobserved` is true (no
+    id, an unlaunchable id, or no evidence since the hold) is never named here: nothing newer has been observed. Its
+    row carries exactly the fields #2943's `_check_model-held-behind` reads: `{class, hold: {at, by}, reason: 'newer',
+    pin: <hold.model>, newer: <the aliases id>}`.
+  - `sessionsBehind` names a running session of the lane by
+    `aliasSessionBehind(session: AliasSession, cls: AliasClass, adv: ClassAdvance, lane: Aliases, nowMs: number): AliasBehind | null`
+    in `shared/model-aliases.mjs`, with
+    `AliasSession = { cls: ModelClass | null, model: string, renderMs: number, turnAtMs: number | null }` and
+    `AliasBehind = { class: ModelClass, from: string, to: string, movedAt: string, turnAt: string, renderAt: string }`,
+    the exact fields #2943's `_check_model-sessions-behind` reads; `laneHealth` adds `session`. None of them is ever
+    null. It answers null (not behind) unless all of these hold:
+    1. the session has a class: `cls` is the `class=` word of `$REG/<id>.routeapplied`, the class ccd composed and
+       served (a degrade included); none, or `default`, is null;
+    2. the class's expected id: `hold.model` while a hold stands, whatever `unobserved` says; else the aliases `id`,
+       and null when `id` is null or `unlaunchable` is set;
+    3. `from`, the sidecar's model through `bareModelId`, differs from the expected id (`to`);
+    4. `from`'s `familyClassOf` is the session's class, and `from` is neither the current id nor the held id of another
+       class of the lane (`lane.classes`): a session whose operator picked another class by hand is not behind;
+    5. the render came after the turn began: with a turn marker (`$REG/<sid>.turn.json`), `renderMs` strictly later
+       than its `turnAt`; with none, `turnAt` is the sidecar reading's own `ts`;
+    6. `movedAt`: the hold's `at` while held, else the later of the class's `idSince` and its `releasedAt`; it is at
+       least `BEHIND_AFTER_MS` before `nowMs`, and `turnAt` is strictly later than it.
+    It is the Anthropic arm of #2943's `sessionBehind`, called from the same `laneHealth`: legitimately a second
+    function because an Anthropic lane has no registry to pass `sessionBehind`, and it keeps that rule's two guards
+    (another class's model is not behind, and a render after a turn after the move).
+  - `sessionsUnmeasured` (D-5220's rule: a session is never silently passed) names an Anthropic session it could not
+    judge, by the first file that failed, read in this order: `$REG/<sid>.routeapplied` (`route-record-absent`,
+    `route-record-unreadable`), the sidecar (`sidecar-absent`, `sidecar-unreadable`, #2943's words), the turn marker
+    when present (`marker-unreadable`; an absent marker is no failure here). A `routeapplied` that names no class, or
+    `default`, is read and judged not behind. When the aliases file cannot be read every session of the lane is
+    named, as `aliases-file-unreadable` or `aliases-file-invalid`.
   - `heldBack` stays empty: there is no canary to fail.
 - Produces: in the doctor checks, `alias-source-absent` WARNs only when this box's `ccd caps` lists `alias-launch-v1`
   (Task A3.2); before that it is a PASS note, "no source until ccd marks alias launches".
 
 - [ ] **Step 1: Write the failing tests:** one per cause, firing and clearing, on fixture files; `an Anthropic lane
-  never says lane-not-codex-kind`; `held behind on an Anthropic lane`; `a null id is never held behind`; `an
-  unobserved class is never held behind`; `a held session is not behind` (it runs `hold.model`); `a null id names no
-  session behind`; `a session with no class or default is never behind`; `a degraded session is judged by its served
-  class`; `a 1M-context session on the current id is not behind` (sidecar `<id>[1m]`); `the day counts from the
-  release`; `the day counts from a first id`; `no source is a note before alias-launch-v1`.
-- [ ] **Step 2: Run red, implement, run green.** The doctor checks print the words they receive, so
-  `ccrc-doctor-checks` gains only each cause's remedy line: `alias-source-absent` "start one session on this lane
-  through ccd, or sign it in so Claude Code writes a catalogue"; `alias-cache-stale` "the next session Claude Code
-  starts on this lane refreshes it"; the two file causes "the next hourly refresh rewrites it".
-- [ ] **Step 3: Mutation rows:** drop each cause; compare a held session against the aliases id; count the day from
-  the move under a released hold; WARN without the capability; drop the null or `unobserved` exemption; compare an
-  id without `bareModelId`; take a session's class from its sidecar id's family. Each reds a named test.
+  never says lane-not-codex-kind`; `held behind on an Anthropic lane` (the row's five fields); `a null id is never
+  held behind`; `an unobserved class is never held behind`; `a held session is not behind` (it runs `hold.model`, and
+  the fixture's held class is unobserved, so the mutation below can red); `a session still on the newer id after a
+  revert is named behind` (held on X1 by a revert, unobserved, a session on X2: named, `to` X1, `movedAt` the hold's
+  `at`); `a null id names no session behind`; `an unlaunchable id names no session behind`; `a session with no class
+  or default is never behind`; `a degraded session is judged by its served class`; `a session on another class's
+  model is not behind`; `a render before its turn is not behind`; `with no turn marker the turn is the reading`; `a
+  1M-context session on the current id is not behind` (sidecar `<id>[1m]`); `the day counts from the release`; `the
+  day counts from a first id`; `an Anthropic row beside a Codex row does not SKIP` (one `advance-health` answer with
+  both lanes' `sessionsBehind` rows: `_check_model-sessions-behind` WARNs naming both, never SKIPs); one test per
+  `sessionsUnmeasured` word above; `no source is a note before alias-launch-v1`.
+- [ ] **Step 2: Run red, implement, run green.** The doctor checks print the words they receive. The printer lines
+  that change in `ccd/ccrc-doctor-checks` (as on #2943's head):
+  - `_dr_ma_read`'s SKIP text "no lane on this box has a model registry, so no class can advance" becomes "no lane on
+    this box has a model registry or an aliases file, so no class can advance";
+  - the four PASS texts' head "`$DR_MA_LANES` lane(s) with a model registry:" becomes "lane(s) with a model registry
+    or an aliases file:";
+  - each cause gains its remedy line: `alias-source-absent` "start one session on this lane through ccd, or sign it in
+    so Claude Code writes a catalogue"; `alias-cache-stale` "the next session Claude Code starts on this lane refreshes
+    it"; the two file causes "the refresh will not write over it: read it, then move it aside, and the next hourly
+    refresh starts it again".
+  `_check_model-sessions-behind`'s row text and `_check_model-held-behind`'s are unchanged: the rows carry their
+  fields.
+- [ ] **Step 3: Mutation rows:** drop each cause; compare a held session against the aliases id; exempt an unobserved
+  held class's sessions; count the day from the move under a released hold; WARN without the capability; drop the
+  null or `unobserved` exemption from `heldBehind`; compare an id without `bareModelId`; take a session's class from
+  its sidecar id's family; drop guard 4; drop guard 5; leave `turnAt` null with no marker. Each reds a named test.
 - [ ] **Step 4: The README** names the four causes in the doctor section and the aliases file in `ccrc models`.
 - [ ] **Step 5: The gate measurement** (wave contract), recorded in the task note.
 - [ ] **Step 6: Commit** `feat(doctor): Anthropic causes for model-advance-blocked`, then push once (worker clause 20).
@@ -507,9 +588,18 @@ tests pin both), and the note records each session id.
 **Interfaces:**
 - Produces: `_alias_facts_to <var> <wrapper> <class>`, setting `<var>` to ONE line:
   `absent`, `unreadable <why>`, `invalid <field>`, or `facts <id|-> <efforts> <held-id|-> <orphaned-level|-> <seen|->`,
-  where `<efforts>` is a comma list, `none` when the row says the model takes none, and `-` when the row has no effort
-  field or there is no row. It reads `~/.ccrc/models/<wrapper>.aliases.json` and `<wrapper>.advance.json` with one
-  `jq` call, cached per supervisor by both files' mtimes and sizes (no fork on an unchanged file). Always rc 0.
+  where:
+  - `<id>` is the class's current id, and `-` when it is null or `unlaunchable` is set (Task A2.2): an id the lane's
+    build cannot launch is no id to ccd;
+  - `<efforts>` is read from `heldRow` while the class is held, else from `row`: a comma list, `none` when the row says
+    the model takes none, and `-` when the row has no effort field, there is no row, or there is no id;
+  - `<seen|->` is `seen` exactly when `seenId`, through `bareModelId`, equals the class's current id: a launch has
+    reported THIS id. A kept reading of an older id is never `seen` (the canary by use, spec §2.5.6). The jq program
+    derives it; nothing in the file is named `seen`.
+  It reads `~/.ccrc/models/<wrapper>.aliases.json` and `<wrapper>.advance.json` with one `jq` call, cached per
+  supervisor and keyed on both files' bytes, read with `read -r -d ''` behind a `[[ -f && -r ]]` test, as
+  `_roster_fp_to` reads the roster: no `stat`, no fork, on an unchanged file. An unreadable or invalid aliases file
+  answers `unreadable` or `invalid`, and every caller then acts as today. Always rc 0.
 - Produces: `_lane_class_efforts_to <var> <wrapper> <class>`: on an Anthropic lane the `<efforts>` above; on a Codex
   lane the levels of the catalogue row for the class's registry pin, read from `registryFileName` and
   `catalogueFileName`'s files (`<wrapper>.classes.json` and `<wrapper>.json`), same cache: a non-empty list as a
@@ -520,12 +610,15 @@ tests pin both), and the note records each session id.
 
 - [ ] **Step 1: Write the failing tests** in a fixture HOME, with fixture files named by those two functions: each
   answer shape; `an unchanged file forks no jq` (a counting `jq` shim on PATH: two reads, one fork); `a changed file is
-  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is unknown, never none`; `the bare id
+  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is unknown, never none`; `seen only when
+  the kept reading is the current id` (`cacheTarget` X2 is the id, `seenId` X1: `-`; `seenId` X2: `seen`); `a held
+  class's efforts come from the held id's row`; `an unlaunchable id reads as no id`; `the bare id
   matches the JS reader`, reading every row of `server/test/fixtures/model-id-bare.json` (Task A2.2); the library's
   load tests as `long-lived.sh`'s (a faithful copy loads; a changed copy refuses the start).
 - [ ] **Step 2: Run red, implement, run green.**
-- [ ] **Step 3: Mutation rows:** drop the mtime check; fold `unreadable` into `absent`; answer `none` for a Codex
-  empty list; strip nothing in `_model_id_bare_to`.
+- [ ] **Step 3: Mutation rows:** drop the byte check; fold `unreadable` into `absent`; answer `none` for a Codex
+  empty list; strip nothing in `_model_id_bare_to`; answer `seen` whenever `seenId` is set; read `row` while held.
+  Each reds a named test.
 - [ ] **Step 4: Commit** `feat(ccd): one cached reader of a lane's aliases and holds`.
 
 ### Task A3.2: the launch marker (D-8744)
@@ -544,10 +637,14 @@ tests pin both), and the note records each session id.
 - Produces: `_alias_observe <id>`, the supervise tick's step of its own. It is called in `cmd_supervise`'s `live)`
   arm on its own line right after `_route_apply_check "$id"`, never from inside `_route_apply_check`, whose gate 1
   returns before anything when nothing is pending, which is the steady state. In this task it runs
-  `_alias_launch_fill`; Task A3.6 adds the routing record's id to the same step. It reads only the registry (`-e` and
-  `_reg_read_to`, no fork) unless a marker of this session is unfilled.
+  `_alias_launch_fill`; Task A3.6 adds the routing record's id to the same step. Its steady state is builtins only:
+  `-e`, `_reg_read_to`, `[[ -nt ]]` and `read -r -d ''`, never `stat` and never a `$( )`. It calls the forking
+  `_usage_sidecar_read` only when a marker of this session is unfilled, `$REG/usage/<id>.json` is a regular file newer
+  than the marker (`[[ -nt ]]`), and the sidecar's bytes differ from the ones this supervisor last judged for this
+  session (a memo in a supervisor variable). So an idle pane whose sidecar never changes costs one read at most.
 - Produces: `_alias_launch_fill <id>`: when the marker's id is `-`, and `_usage_sidecar_read` gives a reading whose
-  `ts` is at or after the born epoch and whose `uuid` is the session's current uuid, it writes that reading's model,
+  `ts` is strictly later than the born epoch (as `main` holds the readback: a reading in the epoch's own second cannot
+  be told from the previous process's) and whose `uuid` is the session's current uuid, it writes that reading's model,
   through `_model_id_bare_to`, into the marker, once, unless `_alias_fill_overruled` holds. It never rewrites a filled
   marker. `_reg_purge` reaps the file with the row.
 - Produces: `_alias_fill_overruled <id> <born-epoch> <reading-ts>` -> rc 0 when the session's transcript holds a
@@ -565,13 +662,19 @@ tests pin both), and the note records each session id.
   writes no marker`, `class default writes no marker` (A3.0's launches); `the first reading fills the id`; `a 1M
   reading fills the bare id`; `a typed older id before the first reading drops the marker`; `a later typed older id
   never rewrites it`; `an unreadable transcript does not fill`; `a reading before the process start does not fill`;
-  `another uuid does not fill`; `the fill runs with nothing pending` (a session whose record and `routeapplied` agree,
-  so `_route_apply_check` returns at its gate 1: the marker is still filled); `the observe step forks nothing once
-  filled`; `caps lists alias-launch-v1`.
-- [ ] **Step 2: Run red, implement, run green;** re-run `ccd-route-spawn`, `ccd-spawn-split`, `ccd-route-tick`.
+  `another uuid does not fill`; `a reading in the born epoch's own second does not fill`; `the fill runs with nothing
+  pending` (a session whose record and `routeapplied` agree, so `_route_apply_check` returns at its gate 1: the marker
+  is still filled); `the observe step forks nothing once filled`; `an unchanged sidecar is read once` (an unfilled
+  marker and a sidecar whose bytes do not change across five ticks: one `_usage_sidecar_read`); `caps lists
+  alias-launch-v1`.
+- [ ] **Step 2: Run red, implement, run green;** re-run `ccd-route-spawn`, `ccd-spawn-split`, `ccd-route-tick`, and
+  `ccd-tick-budget`. Expected there: every fixture's `TICK_BUDGET` is unchanged, because no fixture plants a marker,
+  an aliases file or a usage sidecar, so the new step costs builtins only; any other figure is a fork this task added,
+  to remove, not to re-pin.
 - [ ] **Step 3: Mutation rows:** write on resume; skip the removal before the spawn; date by `.spawn`; rewrite a
   filled marker; skip `_alias_fill_overruled`; move the `_alias_observe` call inside `_route_apply_check` after its
-  gate 1; suppress the marker for a hold on any class. Each reds a named test.
+  gate 1; suppress the marker for a hold on any class; fill from a reading in the born epoch's own second; drop the
+  sidecar-bytes memo. Each reds a named test.
 - [ ] **Step 4: Commit** `feat(ccd): mark a fresh alias launch and the id it first reported`.
 
 ### Task A3.3: "a class whose model lists no effort levels takes none" (D-8750)
@@ -645,41 +748,67 @@ tests pin both), and the note records each session id.
 ### Task A3.6: the routing record with the id, the readback by id, and the move
 
 **Files:**
-- Modify: `ccd/ccd` (`_route_apply_pending`, `_route_apply_now`, `_route_readback`), `ccd/lib/model-aliases.sh`
-  (`_alias_observe`, `_route_id_pending`)
+- Modify: `ccd/ccd` (`_route_applied_set`, `_route_apply_pending`, `_route_apply_now`, `_route_readback`),
+  `ccd/lib/model-aliases.sh` (`_alias_observe`, `_route_id_pending`)
 - Test: `server/test/ccd-route-model-id.test.ts`; re-run `ccd-route-apply`, `ccd-route-tick`, `ccd-route-settle`,
-  `ccd-route-holddown`
+  `ccd-route-holddown` and `ccd-tick-budget`
 
 **Interfaces:**
 - Consumes: `_alias_facts_to`, `_model_id_bare_to` (A3.1), `_alias_observe` (A3.2), `_usage_sidecar_read`,
-  `_route_type_model`, `_route_applied_get_to`, `_route_applied_set`; Task A3.0 Step 2's result.
+  `_route_type_model`, `_route_applied_get_to`, `_route_applied_set`, `_route_readback_overruled`'s transcript reader
+  (`_operator_choice_read`); Task A3.0 Step 2's result.
 - Produces: `routeapplied` gains `model=<id>`, recorded (never typed) by `_alias_observe`, the tick's own step outside
-  `_route_apply_check`'s gate (Task A3.2), on every lane (spec §2.5.6). When `routeapplied` has no `model`, and
-  `_usage_sidecar_read` gives a reading of this session (its current uuid) whose `ts` is at or after both the process
-  start (`_pane_born`) and the `routeapplied` stamp's mtime, it records that reading's model through
-  `_model_id_bare_to`. Every spawn rewrites `routeapplied` without `model`, so the step records it again after each
-  spawn. Once `model` is recorded the step reads only the registry; a later change to it is the readback's (below).
-- Produces: `_route_id_pending <id>` -> rc 0 only when all hold: an Anthropic lane; the class is not held;
-  `routeapplied` has a `model` (an absent `model` is never pending, so nothing is typed at rollout: `_alias_observe`
-  records it first); the facts' id differs from it, both bare; and the facts say `seen` (the canary by use). rc 1
-  otherwise, and always on a Codex lane, because this plan does not arm D11's fallback. `_route_apply_pending`
-  answers 0 when it holds, so `_route_apply_check` passes its gate 1 and reaches its own readback and applier.
+  `_route_apply_check`'s gate (Task A3.2), on every lane (spec §2.5.6). Its lifecycle:
+  - **Recorded** when `$REG/<id>.routeapplied` exists and has no `model`, and `_usage_sidecar_read` gives a reading of
+    this session (its current uuid) whose `ts` is strictly later than both the process start (`_pane_born`) and the
+    `routeapplied` stamp's mtime, as `main`'s readback holds it (a swap's resume keeps the uuid, so a reading in the
+    stamp's own second may be the old process's last render). The model is recorded through `_model_id_bare_to`. The
+    sidecar is read under Task A3.2's gate (a regular file newer than `routeapplied`, bytes changed since the last
+    pass), so the steady state forks nothing.
+  - **Dropped** whenever the class changes: `_route_applied_set` itself removes `model=` when it writes a `class=`
+    whose value differs from the recorded one, so the applier's class arm, the class readback, the seed and the
+    promotion all drop it through the one writer. The next fresh reading records it again.
+  - **Re-recorded after every spawn**, which rewrites `routeapplied` without `model`.
+  - **Never created:** a session with no `routeapplied` (`_spawn_start` removes it for a session with no record) gets
+    no recording, and `_alias_observe` never creates the file. Such a session has no class, is never id-pending, and
+    is never named behind (Task A2.5).
+- Produces: `_route_id_pending <id>` -> rc 0 only when all hold, asked in this order so that the steady state reads
+  nothing but the registry: `routeapplied` has a `model` (an absent `model` is never pending, so nothing is typed at
+  rollout); an Anthropic lane (`_is_anthropic_backend`, builtins); the class is not held; the facts' id differs from
+  `model`, both bare; the facts say `seen` (the canary by use, Task A3.1); and **the operator has not picked a model
+  by hand**: a fresh reading of this uuid (strictly later than the stamp, within `ROUTE_READBACK_FRESH`) whose bare
+  model equals the recorded `model`, and no `/model` in the transcript at or after the stamp (or an undatable one),
+  read through `_operator_choice_read` with `_route_readback_overruled`'s arguments. When the last condition fails,
+  `_route_id_pending` stands down: rc 1, nothing typed, `model=` unchanged, until a later fresh reading agrees with
+  `model` again. A model picked by hand is never typed over. rc 1 otherwise, and always on a Codex lane, because this
+  plan does not arm D11's fallback. `_route_apply_pending` answers 0 when it holds, so `_route_apply_check` passes
+  its gate 1 and reaches its own readback and applier.
 - Produces: `_route_apply_now` re-types the alias row through `_route_type_model` when `_route_id_pending` holds and
   Task A3.0 Step 2 held. `_route_readback` confirms an id change when the reading's model, through
   `_model_id_bare_to`, equals the wanted id, and records it as `model=`.
 
 - [ ] **Step 1: Write the failing tests:** `model is recorded with nothing pending` (a session whose record and
   `routeapplied` agree, so `_route_apply_check` returns at its gate 1: `model=` is still recorded); `model is recorded
-  again after a spawn`; `a reading before the stamp is not recorded`; `a 1M reading records the bare id`; `an absent
-  model is not pending` (an idle session with no `model` stamp is never typed into); `an id change is pending only
-  after a launch was seen`; `a held class is never pending` (D19); `release is not typed`; `the readback confirms by
-  id` (and a `[1m]` reading of the wanted id confirms); `a Codex lane is never id-pending`; `the tick forks no jq on an
-  unchanged file`. If Task A3.0 Step 2 failed: `an id change is recorded, never typed` replaces the typing test.
+  again after a spawn`; `a reading in the stamp's own second is not recorded`; `a reading before the stamp is not
+  recorded`; `a 1M reading records the bare id`; `a class change drops model` (the applier's class arm and the class
+  readback each: `model=` gone, then recorded again from the next fresh reading); `no routeapplied, no model` (the
+  file is not created); `an absent model is not pending` (an idle session with no `model` stamp is never typed into);
+  `an id change is pending only after a launch was seen`; `a cache target with an older kept reading types nothing`
+  (`cacheTarget` X2 is the class's id, `seenId` X1: no keystroke); `an operator /model is never re-picked` (a `/model`
+  in the transcript after the stamp: no keystroke, `model=` unchanged); `a hand-picked model stands down until a
+  reading agrees` (a fresh reading of another id: no keystroke; a later reading of `model`'s id: pending again); `a
+  held class is never pending` (D19); `release is not typed`; `the readback confirms by id` (and a `[1m]` reading of
+  the wanted id confirms); `a Codex lane is never id-pending`; `the tick forks no jq on an unchanged file`. If Task
+  A3.0 Step 2 failed: `an id change is recorded, never typed` replaces the typing test.
 - [ ] **Step 2: Run red, implement, run the suites above green,** each load flake re-run alone before it is called
-  a break.
+  a break. `ccd-tick-budget`: every fixture's `TICK_BUDGET` unchanged (its fixtures plant `routeapplied` with no
+  `model` and no usage sidecar, so the recording's gate is false and `_route_id_pending` stops at its first
+  condition). Add one case beside them: an Anthropic fixture with `model=` recorded, an unchanged aliases file and a
+  facts id equal to `model`, whose steady tick costs the `idle-home` figure exactly.
 - [ ] **Step 3: Mutation rows:** drop the `seen` condition; read an absent `model` as differing; drop the hold
   check; compare by family instead of id; record `model` from inside `_route_apply_check` instead of `_alias_observe`;
-  compare without `_model_id_bare_to`. Each reds a named test.
+  compare without `_model_id_bare_to`; record from a reading in the stamp's own second; keep `model=` across a class
+  change; create `routeapplied` for a session with none; drop the hand-pick check. Each reds a named test.
 - [ ] **Step 4: Commit** `feat(ccd): the routing record carries the model id, and an alias move reaches a running
   session`, then push once.
 
@@ -706,19 +835,26 @@ tests pin both), and the note records each session id.
 
 **Interfaces:**
 - Produces: `describe`'s `labels` on an Anthropic lane, from the aliases file: per class `{model: id, label: row
-  label ?? id, efforts: row efforts ?? null}`, and `{model: null, label: null, efforts: null}` for a class with no id,
-  which `classRow` already reads (a bare null would read the whole lane `unreadable`). `LaneClassModel` gains optional
-  fields `takesNoEffort?: true` (the row says the model takes none, D-8750), `source?: 'cache' | 'use' | null`,
-  `cacheTarget?: string | null`, `seenId?: string | null`, `unobserved?: true` and
+  label ?? id, efforts: row efforts ?? null}`, where while a hold stands `id` is `hold.model` and the row is
+  `heldRow` (the model the class's sessions launch on), and `{model: null, label: null, efforts: null}` for a class
+  with no id or an `unlaunchable` one, which `classRow` already reads (a bare null would read the whole lane
+  `unreadable`). `LaneClassModel` gains optional fields `takesNoEffort?: true` (the row says the model takes none,
+  D-8750), `source?: 'cache' | 'use' | null`, `cacheTarget?: string | null`, `seenId?: string | null`,
+  `unobserved?: true`, `unlaunchable?: { needs: string; laneVersion: string | null }`, `aliasId?: string` (the
+  alias's current id, set only while a hold makes `model` another id, so the sheet can show both) and
   `orphanedEffort?: { id: string; level: string } | null`, each read by `classRow` with absence read as today. The
   held id is not a new field: `readAdvanceReport` already passes each class's `hold` through whole, and
   `hold.model` (Task A2.3's `.d.mts`) rides it. `efforts`' docstring in `shared/models.ts` is rewritten: `[]` is a
   list that names no level, which the pickers read as no constraint, and "takes none" is `takesNoEffort`, never `[]`.
   `readShowAnswer` reads an Anthropic lane's `show` (no registry, an `aliases` field) as `read` when the aliases file
-  was read, and as `absent` when it is absent, as today.
+  was read, as `absent` when it is absent, as today, and as `unreadable`, `LaneModelsRead`'s existing arm, when its
+  `state` is `unreadable` or `invalid`: three answers, never one.
 
 - [ ] **Step 1: Write the failing tests:** `an Anthropic lane reads its aliases`; `a class with no id reads as a row
-  of nulls, the lane read`; `an unobserved class carries unobserved`; `the held id rides advance.hold.model`; `an
+  of nulls, the lane read`; `an unlaunchable id reads as a row of nulls and names the builds`; `a held class's label
+  and efforts are the held id's` (held on X1, the alias moved to X2: `model` X1, X1's label and levels); `an unobserved
+  class carries unobserved`; `the held id rides advance.hold.model`; `an unreadable or invalid aliases file reads the
+  lane unreadable`; `an
   older server's answer reads as today` (fields absent); `asLaneModelsRead keeps the new fields` and drops a
   malformed one to absent.
 - [ ] **Step 2: Run red, implement, run green.**
@@ -742,15 +878,19 @@ tests pin both), and the note records each session id.
 - Produces: on the Anthropic list, `modelOptions` keeps every class as a row whatever its `model` (a class with no id
   shows its class word), and keeps the class word as the row's readback key, because an Anthropic pane prints a
   family name, not an id; only the label comes from the read. `effortOptions` narrows by a non-empty `efforts` on the
-  Anthropic list too, and offers `Auto` alone for `'takes-none'` (no level rows and no Ultracode). Ultracode's place:
-  on an un-narrowed list it stays at index 4, before Max; on a narrowed list it goes right after the last rung
-  present, before `Auto`. The rung a recorded intent names stays a lit row, as on the dedicated list today.
+  Anthropic list too, and offers `Auto` alone for `'takes-none'` (no level rows and no Ultracode). Ultracode's place
+  (it is xhigh plus workflow orchestration): on an un-narrowed list it stays at index 4, right after Xhigh and before
+  Max; on a narrowed list it goes right after Xhigh when the list names xhigh, and is left out when it does not. The
+  rung a recorded intent names stays a lit row, as on the dedicated list today, and a recorded `ultracode` intent on a
+  list without xhigh stays a lit Ultracode row before `Auto`, sublabelled as not listed.
 
 - [ ] **Step 1: Write the failing tests:** `an Anthropic class row shows its label with the class word as sublabel`;
   `a label follows a moved id` (two reads, two labels: the spec §2.6 test); `a class with no id keeps its row`; `the
   active row still lights from a family name`; `an Anthropic class that takes none offers Auto alone`; `an empty list
-  leaves all five rungs` (`[]` is never "takes none"); `Ultracode follows the last rung of a narrowed list` (levels
-  `low,high`: Low, High, Ultracode, Auto); `Ultracode stays before Max on a full list`; `effortIsKnown refuses a level
+  leaves all five rungs` (`[]` is never "takes none"); `Ultracode follows Xhigh on a narrowed list` (levels
+  `low,xhigh,max`: Low, Xhigh, Ultracode, Max, Auto); `a narrowed list without xhigh offers no Ultracode` (levels
+  `low,high`: Low, High, Auto); `a recorded ultracode stays lit without xhigh`; `Ultracode stays before Max on a full
+  list`; `effortIsKnown refuses a level
   for takes-none`; `an unread lane offers today's rows`.
 - [ ] **Step 2: Run red, implement, run green.**
 - [ ] **Step 3: Commit** `feat(pwa): Anthropic labels and effort levels from the lane's data`.
@@ -766,11 +906,14 @@ tests pin both), and the note records each session id.
 - Produces: on an Anthropic lane each class row shows its id's label, where the id came from ("from Claude Code's
   catalogue" or "seen at a launch"), both ids when the cache's target and the launch disagree, the held id when held,
   Revert when `revertable`, and the orphaned saved level as one line ("saved effort <level> is keyed to an older
-  model; ccd carries it at launch under Auto"). The held id is read from `advance.classes[c].hold.model`. A class with
-  no id shows its class word and no Hold; a class whose `unobserved` is set says its alias's resolution is not
-  observed while the hold stands.
+  model; ccd carries it at launch under Auto"). The held id is read from `advance.classes[c].hold.model`, and the
+  alias's current id beside it from `aliasId` when they differ. A class with no id shows its class word and no Hold; a
+  class whose `unlaunchable` is set shows its class word and says the lane's build is older than its model needs,
+  naming both builds; a class whose `unobserved` is set says its alias's resolution is not observed while the hold
+  stands.
 
-- [ ] **Step 1: Write the failing tests:** one per row state above; `Hold is disabled with no id`; `unobserved shows
+- [ ] **Step 1: Write the failing tests:** one per row state above; `Hold is disabled with no id or an unlaunchable
+  one`; `unobserved shows
   only on its own class` (a lane with one class held and unobserved: the other classes say nothing of it).
 - [ ] **Step 2: Run red, implement, run green;** the widths' screenshots in the task note.
 - [ ] **Step 3: Commit** `feat(pwa): the Models sheet on an Anthropic lane`, then push once.
@@ -792,33 +935,40 @@ The departures from the re-plan of 2026-11-16 that this plan makes. Numbers issu
 ### D-8744 — D18's source is the lane's own cache, then a fresh alias launch; newest evidence wins
 
 Where: waves A2 and A3, and spec §2.5.2 and D18. Proposed by wave 6's worker; ruled by the programme's operator on
-2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7). An Anthropic lane's class id comes from
-the lane's own catalogue cache (current format, its target launchable by the lane's build) or from a fresh alias
-launch, whichever is newer: a launch whose process started after the cache's fetch outranks the cache's target, and
-`show` and `lanes` carry both ids when they disagree, with no fifth cause word. Only a fresh alias launch is seen: a
-spawn that launched the class by its alias, with no explicit model, no hold on its own class and no resume, which ccd
-marks at spawn (`$REG/<id>.aliaslaunch`) with its process start and its lane, and fills once, from a step of the
-supervise tick of its own, with the id the session first reported, unless a `/model` typed since the launch precedes
-that reading, which drops the mark. A resume, a respawn, a held launch, a typed older id and A3.0's measurement
-launches never count. The aliases file keeps the newest filled reading per class, so a mark that goes never lowers it,
-and an id only ever moves to newer evidence: a lost mark, a stale cache or an unlaunchable target never hands a class
-back to older evidence, and a class's first id is not a move. A held class whose id rests on evidence older than its
-hold, or a class with no id, reads `unobserved` on the aliases file and the wire, and is exempt from
-`model-held-behind` and `model-sessions-behind`; a hold stops marks for its own class only. Each id's row comes from
-the lane's own cache when it lists the id, else from the newest cache on the box that does; that a row is the same
-across organisations is unmeasured. D-8684's roster grouping is not built: A0 found no pair of cached homes in one
-organisation to check it against, and the uncached homes record none. Cost if wrong: a home with no cache shows class
-words until ccd marks a launch on it, and a class keeps an id after its evidence has aged until newer evidence comes.
+2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7; review 2495, B1, B5, F3, F4 and F5). An
+Anthropic lane's class id comes from the lane's own catalogue cache (current format, its target launchable by the
+lane's build) or from a fresh alias launch, whichever is newer: a launch whose process started after the cache's
+fetch outranks the cache's target, and `show` and `lanes` carry both ids when they disagree, with no fifth cause word.
+Only a fresh alias launch is seen: a spawn that launched the class by its alias, with no explicit model, no hold on
+its own class and no resume, which ccd marks at spawn (`$REG/<id>.aliaslaunch`) with its process start and its lane,
+and fills once, from a step of the supervise tick of its own, with the id the session first reported strictly after
+its process started, unless a `/model` typed since the launch precedes that reading, which drops the mark. A resume,
+a respawn, a held launch, a typed older id and A3.0's measurement launches never count. The canary by use holds only
+when the kept launch reading is the class's current id. The aliases file keeps the newest filled reading per class
+that a refresh has read, so a mark that goes never lowers it, and an id only ever moves to newer evidence: a lost mark
+or a stale cache never hands a class back to older evidence, and a class's first id is not a move. The one exception
+is a kept id whose row needs a newer build than the lane now runs: it is dropped from the label, the class reads
+unobserved naming the lane's build, and no move is recorded, then or when the build returns. A held class whose id
+rests on evidence older than its hold, a class with no id and a class with an unlaunchable id read `unobserved` on
+the aliases file and the wire; that exempts the class from `model-held-behind` only, and while a hold stands
+`model-sessions-behind` judges its sessions against the held id. A hold stops marks for its own class only. A running
+session's model picked by hand is never typed over. Each id's row comes from the lane's own cache when it lists the
+id, else from the newest cache on the box that does; that a row is the same across organisations is unmeasured.
+D-8684's roster grouping is not built: A0 found no pair of cached homes in one organisation to check it against, and
+the uncached homes record none. Cost if wrong: a home with no cache shows class words until ccd marks a launch on it;
+a class keeps an id after its evidence has aged until newer evidence comes; and a reading filled and removed (by a
+swap, a wake or a restart) between two hourly refreshes is lost, so the class stays on older evidence until the next
+fresh launch reports.
 
 ### D-8745 — a catalogue cache is stale after seven days
 
-Where: wave A2, and spec D25. Proposed by wave 6's worker; ruled by the programme's operator on 2026-11-18. Its
-second half is the worker's, in fix round 2, carrying the ruling on review 2486's F-R2 (an id never falls back to
-older evidence) to the cache; the coordinator rules it with the round. A cache is stale after seven days by its `fetchedAt`, the window of the seed
-each Claude Code build bundles, not by its own `staleAt`, which lapses within the hour while Claude Code keeps
-launching over it. Staleness is reported (`alias-cache-stale`) and never fallen back from: a stale cache stays the
-class's evidence until newer evidence comes, because falling back to an older launch would record a backward move.
-Cost if wrong: a cache older than seven days keeps its labels, with a WARN, on a lane where no session starts.
+Where: wave A2, and spec D25. Proposed by wave 6's worker; ruled by the programme's operator on 2026-11-18, the second
+half (a stale cache stays evidence) in wave 6's second fix round, as the newest-evidence rule of review 2466's F12
+applied to the cache. A cache is stale after seven days by its `fetchedAt`, the window of the seed each Claude Code
+build bundles, not by its own `staleAt`, which lapses within the hour while Claude Code keeps launching over it.
+Staleness is reported (`alias-cache-stale`) and never fallen back from: a stale cache stays the class's evidence until
+newer evidence comes, because falling back to an older launch would record a backward move. Cost if wrong: a cache
+older than seven days keeps its labels, with a WARN, on a lane where no session starts.
 
 ### D-8746 — effort is carried by class, plus an orphaned saved level under `auto`
 
@@ -830,17 +980,23 @@ rewrites the saved level. Cost if wrong: a launch outside ccd keeps losing a sav
 
 ### D-8747 — an Anthropic lane's own path for holds, a release kept as `releasedAt`, and `rm` unchanged
 
-Where: wave A2, and spec §2.5.7. Proposed by wave 6's worker; ruled by the programme's operator on 2026-11-18 (review
-2466, F4; review 2486, F-R3). A registry-less Anthropic lane gets its own path past both the `anthropic-lane` and the
-`no-registry` gates, for `hold`, `release`, `revert` and the new `aliases-refresh`. Its advance file is created
-without a registry, each class's `family` its own class word, and a hold records `hold.model`. A release clears the
-hold and is kept as a `releasedAt` key on the class, which `parseAdvance` validates and an older build keeps; it is
-no history entry, spends no `HISTORY_CAP` slot, and `lastMoveOf` never sees it, so no new `how` word is needed.
-`model-sessions-behind` counts its day from it. `rm` already ran before both gates; it now also reaps the aliases
-file, and its clear of the keys ccrc itself wrote into the home's `settings.json` stays: ccrc never writes a model or
-effort choice there. A move appends a history entry and sets `previous` itself, because `recordMove` does not; a
-change of source alone, and a class's first id, are never moves. Cost if wrong: three admitted ops on a lane kind
-that refused all but `show`, and one more optional key on a class of the advance file.
+Where: wave A2, and spec §2.5.3 and §2.5.7. Proposed by wave 6's worker; ruled by the programme's operator on
+2026-11-18 (review 2466, F4; review 2486, F-R3; review 2495, B3, F2 and N5). A registry-less Anthropic lane gets its
+own path past both the `anthropic-lane` and the `no-registry` gates, for `hold`, `release`, `revert` and the new
+`aliases-refresh`. Its advance file is created without a registry, each class's `family` its own class word, and a
+hold records `hold.model`. A release clears the hold and is kept as a `releasedAt` key on the class, which
+`parseAdvance` validates and an older build keeps; it is no history entry, spends no `HISTORY_CAP` slot, and
+`lastMoveOf` never sees it, so no new `how` word is needed. `model-sessions-behind` counts its day from it. `rm`
+already ran before both gates; it now also reaps the aliases file, and its clear of the keys ccrc itself wrote into
+the home's `settings.json` stays: ccrc never writes a model or effort choice there. A move is written advance file
+first, aliases file second, under one lock: a history entry (`how: 'advance'`, `ok: true`, canary `not-run`,
+`cause: 'newer'`, and its `evidenceAt`) and `previous`, set by the op because `recordMove` does not. A move is keyed
+by its `from`, `to` and `evidenceAt`, so a second record of it is refused and a lost second write is re-derived by the
+next refresh; the path never calls `advanceForWrite`. A change of source alone, and a class's first id, are never
+moves. Only an absent aliases file is a fresh start: an unreadable or invalid one is never written over, and doctor
+names it until the operator moves it aside. Cost if wrong: three admitted ops on a lane kind that refused all but
+`show`, three more optional keys in the advance file (`hold.model`, `releasedAt` and an entry's `evidenceAt`), and a lane whose aliases file breaks stays on today's behaviour
+until a hand act.
 
 ### D-8748 — A3 measures first
 
