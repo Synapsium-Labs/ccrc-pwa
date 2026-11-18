@@ -4275,8 +4275,16 @@ so fail-closed comes before a tidy screen. The task note is `docs/superpowers/pr
 - **Tests.** Three rows in `drawer-mask-rows.test.ts` (describe "D-8749"), each red at `main`, and the new
   `mask-break-grammar.test.ts`. Twelve mutants, each red (`c45.md` §6).
 
+- **Fix round 1 (review 2514).** The first `ROW_BREAK` change also refused a LF, blanks, CR break that a CR LF followed,
+  so a LF or a move down, a blank or an SGR, then a CR CR LF ended a key's chain at a blank row: 1,152 key bytes in the
+  drawer and up to 1,600 in pane history where `main` showed 0 (review 2514 F1, blocking). The lookahead is `main`'s
+  again and `breakStartAt`'s CR CR LF arm reads back as the grammar reads forward (`row-break-lookahead-restored`), so
+  those forms measure as at `main`; a push that ends in both CRs of a CR CR LF is held (`crcr-push-end-held`, review 2514
+  F2: the whole key at `main`, 0 here). Three more rows and four mutants; the minors F3 to F14 in `c45.md` §13.
+
 **Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
-`main` shows too (`c45.md` §12); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say; each mutant in
+`main` shows too (`c45.md` §12 and §13.6); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
+round's at 20775879e as §13.5 says; each mutant in
 `c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
@@ -4662,7 +4670,10 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   2445 F1, not by cutting at the break's start, which leaked every form); `ROW_BREAK` reads CR CR LF as one break, and the
   other consecutive-break forms stay as at `main`, carried (`drawer-consecutive-breaks`, F4); `breakStartAt`'s one
   difference from `ROW_BREAK` is kept and pinned (F2); the slow case's setup is carried as a test change
-  (`secret-mask-slow-case-db`, F5). Sizes and runs in `c45.md`.
+  (`secret-mask-slow-case-db`, F5). Fix round 1 (review 2514): `ROW_BREAK`'s LF, blanks, CR lookahead is `main`'s again
+  and `breakStartAt`'s CR CR LF arm agrees with it (`row-break-lookahead-restored`, review 2514 F1: the first change ended
+  a key's chain at a LF, blank, CR CR LF, a new leak), and a push that ends in both CRs of a CR CR LF is held
+  (`crcr-push-end-held`, review 2514 F2, closed). Sizes and runs in `c45.md`.
 
 ## Out of scope
 
