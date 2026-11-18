@@ -2,8 +2,8 @@
 
 Every lens, refuter, scout and implementer brief a coordinator, worker or reviewer writes carries the two
 sentences below, word for word. Subagents never read a skill, and they raise almost every permission prompt, so a
-rule that lives only in a skill never reaches the session that needs it. The reviewer skill pins the same two
-sentences as its clause 11, the worker skill's clause 5 carries the rule's first half, and `review-panel.md` and
+rule that lives only in a skill never reaches the session that needs it. The reviewer skill's clause 9 carries the
+rule and the worker skill's clause 5 carries its first half, and `review-panel.md` and
 `review-brief.md` carry both in the text they hand on.
 
 **The rule.** Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full.

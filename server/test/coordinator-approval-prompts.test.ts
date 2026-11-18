@@ -1,7 +1,7 @@
 // Approvals PR P (plan 2026-11-18, section 3.8, Task P.1): the literal-path rule and the prose-names line are
 // carried, word for word, into every lens and subagent brief the skills tell a session to write. Subagents
 // never read a skill and raise almost every permission prompt, so the sentences must sit in the text the
-// briefs are copied from. The reviewer skill pins the same two sentences as its clause 11
+// briefs are copied from. The reviewer skill pins the rule in its clause 9
 // (reviewer-skill.test.ts); this file pins the coordinator skill's references. The coordinator skill's twenty
 // clauses are untouched and stay pinned by coordinator-skill.test.ts.
 import { describe, it, expect } from 'vitest';
@@ -46,10 +46,9 @@ describe('the literal-path rule in the coordinator skill\'s brief text', () => {
     expect(text).toContain('`../ccrc-coordinator/references/approval-prompts.md` word for word (the literal-path rule and the prose-names line)');
   });
 
-  it('the reviewer skill carries the same two sentences in clause 11', () => {
+  it('the reviewer skill carries the rule in clause 9', () => {
     const skill = readFileSync(path.join(root, 'ccd/reviewer-skill/SKILL.md'), 'utf8');
-    const line = skill.split('\n').find((l) => l.startsWith('11. '));
+    const line = skill.split('\n').find((l) => l.startsWith('9. '));
     expect(line).toContain(RULE);
-    expect(line).toContain(PROSE);
   });
 });

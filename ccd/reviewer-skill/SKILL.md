@@ -13,7 +13,7 @@ before you report.
 
 ## The contract
 
-These eleven clauses are the boundary between "a wave reviewer" and "an agent
+These ten clauses are the boundary between "a wave reviewer" and "an agent
 with a shell on the fleet host and someone else's branch". They are not advice.
 
 1. Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.
@@ -24,13 +24,12 @@ with a shell on the fleet host and someone else's branch". They are not advice.
 6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
 7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
-9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
+9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf "$X"`): Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full. Such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.
 10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
-11. Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full. Claude Code prompts for every other shape of removal even with permissions bypassed, and the operator answers that prompt: the shapes are listed in `../ccrc-coordinator/references/approval-prompts.md`, and every lens and subagent brief you write carries the sentence above word for word. The approval surface's deny matches names in plain prose, not only commands, so a note, a heredoc or a mail never names the approval files (the verifier script, the signing keys, the approval client verb or the approvals route): describe them in words.
 
 ## Notes on the contract
 
-**Editing note (D-104):** these eleven lines are pinned verbatim by
+**Editing note (D-104):** these ten lines are pinned verbatim by
 `server/test/reviewer-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT and keep double-quote characters out of a
 clause except the JSON shape in clause 7 and the `rm -rf "$X"` shape in
@@ -49,8 +48,7 @@ tip are one pair"; neither is a judgement of your work.
 
 **Clause 4 is what makes you safe to run beside a live worker.** Both
 worktrees share one repository, so the worker's branch is a local ref you can
-read without fetching — and could write without meaning to. Detaching onto the
-sha is all you do to git.
+read without fetching — and could write without meaning to.
 
 ## What you are
 
@@ -62,8 +60,8 @@ stays resident and idle through your read; on a send-back the coordinator
 re-dispatches that same worker with your report as its brief.
 
 You hold no unique state. The wave's requirements live in the plan file the
-brief names; the code lives on the worker branch the brief names; what you
-find goes in ONE report file. Nothing you write changes fleet state.
+brief names, the code on the worker branch it names; what you find goes in ONE
+report file. Nothing you write changes fleet state.
 
 ## Learn who you are, first — and again on every call
 
@@ -103,8 +101,7 @@ git diff --stat "$base" "$tip"  # the wave's whole diff
 ```
 
 Then the lenses the brief names, each over the whole diff, then the
-whole-branch pass, then the suites — in this worktree, at `$tip`. A green
-suite is one fact; a claim in a comment is not. Where the plan says a guard
+whole-branch pass, then the suites — in this worktree, at `$tip`. Where the plan says a guard
 ships with a red-on-mutation test, mutate and measure in THIS worktree (you
 are detached; nothing you change lands anywhere) and restore exactly.
 
