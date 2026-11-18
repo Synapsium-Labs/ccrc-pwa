@@ -337,7 +337,11 @@ describe('the fresh read after the act never joins a show already in flight (F2,
     expect(await a).toEqual(await b);
   });
 
-  it('through the real local arm: a fake launcher whose show reads its state at its START, held until released', async () => {
+  // TIMING-DEPENDENT: the 300/500/300 ms sleeps order the two shows, so under heavy load this case can pass without the
+  // `fresh` option or fail on the first show not yet started. The deterministic guard is the hand-resolved case
+  // ("a show begun before the act is still running when the act settles: the POST's models come from a show begun AFTER the
+  // act", above, whose shows are resolved by hand); this one only adds the real local arm.
+  it('through the real local arm (TIMING-DEPENDENT; the hand-resolved case above is the deterministic guard): a fake launcher whose show reads its state at its START, held until released', async () => {
     const home = mkTmp('ccrc-lanemodels-fresh-local-');
     const bin = path.join(home, '.local', 'bin');
     mkdirSync(bin, { recursive: true });
@@ -378,7 +382,7 @@ describe('the fresh read after the act never joins a show already in flight (F2,
     const res = await posted;
     expect(res.statusCode, res.body).toBe(200);
     expect(readFileSync(seq, 'utf8').trim().split('\n'), 'the POST began its own show').toHaveLength(2);
-    expect(res.json().models.classes[C1].model, 'the POST answered with the state read before the act').toBe('model-6.1-gamma');
+    expect(res.json().models.classes[C1].model, 'the POST answered with the model read AFTER the act (its own fresh show)').toBe('model-6.1-gamma');
     expect((await get).kind).toBe('read');
   }, 30_000);
 });

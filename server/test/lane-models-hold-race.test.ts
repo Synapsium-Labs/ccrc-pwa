@@ -4,7 +4,12 @@
 // for real, against the REAL `ccd/ccrc` behind `_inst_shim`'s own launcher bytes, the real lane-files lock, and a real
 // `flock` holder in another process (an inert `sh -c 'echo held; read _'`, so it stands in for ANY writer holding the lock,
 // not for the commit itself). `modelsEnv` copies PATH and LANG from `process.env`, so each case points those two at this
-// suite's contained environment for its duration and restores them after, which keeps the poisoned gh and curl first.
+// suite's contained environment for its duration and restores them after. That does NOT keep the poisoned gh and curl first:
+// `modelsEnv` (agent/src/modelsop.ts) puts node's own directory ahead of PATH, so where node is /usr/bin/node the real
+// gh and curl sit ahead of the poisoned copies. It makes no difference here, and the header says so rather than claim a
+// guard: the hold/release/revert path (`ccrc models <lane> hold|release|revert`, `_models_answer_locked` and
+// `_models_node_locked` in ccd/ccrc, then deploy/models-op.mjs and shared/model-advance.mjs) never calls gh or curl,
+// so the poisoned copies guard nothing it runs; they only keep a stray call from the harness itself contained.
 //
 // WHAT THE CASES PROVE, and no more:
 //  1. the hold serialises behind a held lane lock, answers nothing until it is released, then lands (200 done, held by hand);
@@ -14,6 +19,8 @@
 //     lock and released together, leave a consistent end state whichever takes the lock first.
 // They do NOT run the hourly step itself, nor a commit racing a hold that is mid-write: the verb's lock is what orders them.
 // In case 4 the order the two waiters take the lock in is the kernel's, so the case asserts the invariant both orders keep.
+// In every observed run the commit took the lock first, so case 4's `abandoned` branch (hold first) has NOT been seen to
+// run; it asserts an invariant both orders keep, not an order the suite forces.
 //
 // SKIPPED WITHOUT flock, NEVER PASSED: every case is `it.skipIf(!HAVE_FLOCK)`, and `HAVE_FLOCK` is MEASURED (`flock
 // --version` exits 0), so a box with no flock shows these as skipped in the run's summary and never as a vacuous pass.
@@ -69,7 +76,7 @@ describe('a POST hold against the lane-files lock: the real local arm (localIOFo
   const release = (child: ChildProcess): Promise<void> => new Promise((resolve) => {
     if (child.exitCode !== null || child.signalCode !== null) { resolve(); return; }
     child.once('exit', () => resolve());
-    child.stdin!.end();
+    if (child.stdin) child.stdin.end(); else child.kill();   // a child spawned with stdin 'ignore' (lockedCommit) has none
   });
   afterEach(async () => {
     if (savedPath === undefined) delete process.env.PATH; else process.env.PATH = savedPath;

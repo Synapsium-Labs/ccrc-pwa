@@ -54,7 +54,13 @@ function showOnce(io: FleetIO, lane: string): Promise<ModelsAsked> {
 
 /** `fresh`: begin a `show` of this read's own, never joining one in flight (the read an act asks for after it ends, F2).
  *  A fresh `show` is not entered in the in-flight map either: a plain read that began after the act could share it, but
- *  the map stays the plain reads' alone. */
+ *  the map stays the plain reads' alone.
+ *
+ *  WHY ITS OWN SHOW, NOT AN INVALIDATED MAP (review 2523 F3). Dropping the lane's in-flight entry when an act ends would
+ *  serve the same purpose, but this is simpler and holds on both arms: the local arm has no gate, so a joined show may have
+ *  read the lane before the act wrote. On the agent arm (the live setting) a GET's `show` still running when this one starts
+ *  makes the agent's one models gate answer `busy`, so this read falls back to the files and the 200 carries no `advance`
+ *  (the sheet then offers no act); the sheet reads the lane again after every act, and that read recovers it. */
 export interface LaneModelsReadOpts { readonly fresh?: boolean }
 
 export async function readLaneModels(io: FleetIO, ccrcDir: string, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {

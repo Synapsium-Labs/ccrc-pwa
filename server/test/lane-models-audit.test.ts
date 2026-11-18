@@ -15,12 +15,19 @@ import type { FleetIO } from '../src/io.js';
 import type { PtyLike } from '../src/pty.js';
 import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import { CLASSES, laneClassModels, parseCatalogue, parseRegistry } from '../../shared/models.js';
-import { testDeps } from './helpers.js';
+import { loadConfig } from '../src/config.js';
+import { seedRoster, testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** A lane the default test roster holds. */
-const LANE = 'claude-a';
+/** A neutral lane, rostered for this suite alone (the programme's tests name their lanes lane-a and lane-b, review 2523 F10). */
+const LANE = 'lane-a';
+const ROSTER = {
+  version: 1,
+  accounts: [
+    { id: LANE, label: LANE, configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+  ],
+};
 const [C0, C1] = CLASSES;
 /** The label the session was created with: what the gate measures as the device. A control character is flattened. */
 const LABEL = 'audit phone';
@@ -51,7 +58,10 @@ describe('POST /api/models/:lane, built through buildServer with sign-in armed: 
 
   async function signedIn(label: string): Promise<{ cookie: string; token: string; asked: string[] }> {
     const home = mkTmp('ccrc-lane-models-audit-');
-    const base = testDeps(home);
+    seedRoster(home, ROSTER);
+    const base0 = testDeps(home);
+    seedRoster(home, ROSTER);   // testDeps seeds the default roster; this suite's lane is the one rostered
+    const base: Deps = { ...base0, cfg: loadConfig({ CCRC_HOME: home }) };
     mkdirSync(path.join(home, '.ccrc'), { recursive: true });
     writeFileSync(path.join(home, '.ccrc', 'auth.scrypt'), `${await hashLine('correct horse battery staple', FAST_PARAMS, 1)}\n`);
     const seeder = new SessionStore(path.join(home, '.ccrc', 'sessions.json'));
