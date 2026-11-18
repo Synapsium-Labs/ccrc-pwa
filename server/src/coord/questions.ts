@@ -774,10 +774,10 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const setLapsedAsk = (childId: string, askId: number, ev: QuestionPush): void => {
     put(askHoldKey(askId), { kind: 'ask', phase: 'lapsed', childId, askId, ev }, askEntry(childId, 'lapsed')?.[0]);
   };
-  /** `heldApprovals.set(childId, held)`: the child's key, kept in place when it already holds a prompt. */
   /** A held prompt's deferred push, with its source: the newest row it covers (approvals plan 2026-11-18, Task 1.4). */
   const heldApprovalPush = (entry: HeldApproval): QuestionPush =>
     (entry.rowIds.length === 0 ? entry.ev : { ...entry.ev, source: `approval:${Math.max(...entry.rowIds)}` });
+  /** `heldApprovals.set(childId, held)`: the child's key, kept in place when it already holds a prompt. */
   const setHeldApproval = (childId: string, held: Omit<HeldApproval, 'childId'>): void => {
     const key = approvalHoldKey(childId);
     const value: QuestionHold = { kind: 'approval', phase: 'held', childId, ...held };
