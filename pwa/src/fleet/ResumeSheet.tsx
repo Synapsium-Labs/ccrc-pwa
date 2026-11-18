@@ -22,8 +22,9 @@ import type { ReactNode } from 'react';
 import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Button, QC_ACTIONS, QC_CONSEQUENCE, Select, Sheet, TextInput } from '@ccrc/ui';
 import { ApiError, UNKNOWN_RUN_TEXT, api, apiErrorText, isRegistryUnmeasurable, kickoffErrorText } from '../lib/api';
+import { refusalText } from '../lib/refusalWords';
 import { ensureSession } from '../session/useEnsure';
-import type { ResumeHeir } from './resumeHeirs';
+import { OVERLORD_HEIR_TEXT, OVERLORD_HEIR_UNMEASURED_TEXT, type ResumeHeir } from './resumeHeirs';
 import './fleet.css';
 
 /** The reclaim refusals this sheet renders its OWN sentence for — a total
@@ -76,6 +77,12 @@ export const RECLAIM_COPY: Record<
   unknown: 'the hand-over was refused, for a reason this build does not recognise',
 };
 
+/** The reclaim door's two Overlord refusals (Overlord W1 other lanes, C48), in the operator's words. */
+const RECLAIM_OVERLORD_TEXT: Readonly<Record<'overlord-not-a-coordinator' | 'unmeasured', string>> = {
+  'overlord-not-a-coordinator': OVERLORD_HEIR_TEXT,
+  unmeasured: OVERLORD_HEIR_UNMEASURED_TEXT,
+};
+
 /** `err` -> the sentence rendered inline. Status-first, `abandonErrorText`'s
  *  own dispatch (`AbandonSheet.tsx`): each status gets its own read of
  *  `err.body`, never one generic "request failed", and EVERY branch returns a
@@ -84,6 +91,13 @@ function reclaimErrorText(err: unknown): string {
   if (!(err instanceof ApiError)) return RECLAIM_COPY.unknown;
   const body = typeof err.body === 'object' && err.body !== null
     ? (err.body as Record<string, unknown>) : {};
+  // Overlord W1 other lanes (C48): the heir is the Overlord's body (403), or the designation could not be read (502), whose
+  // `detail` is the evidence. By the WORD (`refusalText`); an older server never sends either.
+  const overlord = refusalText(err, RECLAIM_OVERLORD_TEXT);
+  if (overlord !== null) {
+    return overlord === RECLAIM_OVERLORD_TEXT.unmeasured && typeof body.detail === 'string' && body.detail.trim() !== ''
+      ? body.detail.trim() : overlord;
+  }
   // D-5971: the WORD, not the status (the door answers it 502, the table's status; an older server's kickoff
   // answered the same word 503). `detail` is the only thing separating this code's two producers — an
   // unlistable registry and a tmux that did not answer (D-1139).

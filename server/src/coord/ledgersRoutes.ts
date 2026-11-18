@@ -64,13 +64,14 @@ import {
 import type { BoundRowRef } from './pushOutboxStore.js';
 import { WAITING_URL } from '../pushOutbox.js';
 import { itemBoundOf, type OutboxView } from '../pushSender.js';
+import type { OtherLane } from './otherLanes.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
 export interface LedgerCoordinatorDeps {
   coord: CoordStore | undefined;
   requireMailToken: (req: FastifyRequest, reply: FastifyReply, route: string) => boolean;
-  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
+  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid', lane?: OtherLane) => Promise<boolean>;
   notice: NoticeSink;
   bus: Bus;
   now: () => number;
@@ -347,7 +348,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
     if (outside !== null) return refuseOutsideDocLink(reply, outside);
-    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
+    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid', 'itemRaise'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
     if (v.runId !== null) {

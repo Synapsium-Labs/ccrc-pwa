@@ -94,6 +94,7 @@ import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
+import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
@@ -2105,9 +2106,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // its handle's `serial`: one mutex holds a plan write and a run's open apart. The follow-up verb's own-epic check reads the
   // caller's open run (the binding's one view, `bindingsOf(...).worker()`, ARCH-42), and that run's ticket's epic, from the
   // plan port.
+  // Overlord W1 other lanes (H10): one reads instance for the plan doors and the Linear proxy's writes. With no store the
+  // designation reads unmeasured, so only a caller whose launch profile reads overlord or cannot be read is refused.
+  const otherLaneReads = otherLaneReadsOf({ coord: deps.coord ?? { designationRead: () => ({ kind: 'unmeasured', why: 'no coordination store' }) }, io: deps.io, cfg: deps.cfg });
   registerPlanRoutes(app, {
     coord: deps.coord, plan: deps.plan, serial: coordRoutes.serial, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     sessionAuth, authEnabled: deps.cfg.authEnabled, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     runOfSession: (id) => {
       const open = deps.coord?.bindingsOf(id).worker();
@@ -2165,7 +2169,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
   registerLinearProxyRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
@@ -3701,7 +3705,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  and `reclaim.ts#moveClaims` over this server's store, registry and tmux. Called inside the coordination serialiser. */
   const claimsPort = (coord: CoordStore, id: string): ClaimsCoordPort => ({
     bindingsOf: (sid) => coord.bindingsOf(sid),
-    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, choice, claimed),
+    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads }, id, choice, claimed),
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {
