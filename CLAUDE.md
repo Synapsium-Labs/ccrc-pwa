@@ -658,7 +658,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
   `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). They register from `server/src/coord/overlordRoutes.ts`
-  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The Models
+  sheet's write door, `POST /api/models/:lane` (hold, release and revert of a class, the answer re-read, never inferred), consults no
+  box token either and is session-gated when armed, its audit line naming the device; it registers from
+  `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a
+  lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.
