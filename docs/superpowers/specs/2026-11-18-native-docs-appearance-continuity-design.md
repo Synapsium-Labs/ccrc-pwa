@@ -317,7 +317,7 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | One bar on a phone | the frame's own bar off, ccrc's bar only, per skin | as above |
 | Appearance payload | at most 4 KiB serialised, about 50 keys | unit row on the adapter's output |
 | Ops while open | at most 1 per animation frame, latest wins | unit row with a fake clock |
-| Hosted srcdoc growth, in three parts | (1) ccrc's two faces: exactly 187 640 characters of base64, pinned to the files. (2) The library's own growth: its frame assets (guard, bootstrap, enhance, stylesheet) at the new release at most 32 768 characters over 1.1.0's 781 099. (3) The appearance seed: at most 4 096. So a hosted mount grows by at most 224 504 characters over the same document at the 1.1.0 pin | (1) and (3): unit rows. (2): Task 1, read from the installed package. (1) plus (3), at most 191 736 over a BASE taken at the new pin: `frame-cost` browser row |
+| Hosted srcdoc growth, in three parts | (1) ccrc's two faces: exactly 187 640 characters of base64, pinned to the files. (2) This contract's own library growth, measured at the library commit that lands it: its frame assets (guard, bootstrap, enhance, stylesheet) at most 32 768 characters over 1.1.0's 781 099. In the one library wave this contract lands first. Another design's additions in the same release, such as X2's, are measured from this contract's commit against a share of their own, which the coordinator sets when that design is accepted. The release's library growth is the sum of the shares. (3) The appearance seed: at most 4 096. So a hosted mount grows, over the same document at the 1.1.0 pin, by at most 224 504 characters plus the other designs' shares | (1) and (3): unit rows. (2): the library's test 8 at this contract's commit, and Task 1 Step 2a, which reads it and the release. (1) plus (3), at most 191 736 over a BASE taken at the new pin, which already holds every share: `frame-cost` browser row |
 | Open to `ready` | hosted median of 9 opens at most 1.10 x the BASE median of 9, desktop Chromium, same runner | `frame-cost` browser row |
 | Change while open | frame root shows the new values within 100 ms. Same iframe and nonce. Scroll within 1 px | `reader-appearance` browser row |
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
@@ -411,19 +411,24 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - while hosted, a `prefs` change never writes `theme`;
    - a font that fails its checks or `FontFace` load is dropped, and the mount reaches `ready`;
    - a document at the old srcdoc cap still mounts with both faces.
-8. Size: the frame assets (guard, bootstrap, enhance, stylesheet) grow by at most 32 768 characters over 1.1.0's 781 099.
-9. Boundaries, written so that they pin this contract's own additions and nothing else:
-   - `frameCsp()` answers the same with and without an appearance, and this contract adds no CSP source;
-   - this contract adds exactly one parent-to-frame op, `appearance`, and no frame-to-parent op.
+8. Size, by contract, in commit order. The library keeps one table of size shares: 1.1.0's frame-asset total as the baseline, then one row per design in the order its commit lands. This contract's commit adds the table and its own row, 32 768 characters. The test sums the four frame assets' characters from the generated frame manifest, and asserts the total is at most the baseline plus the sum of the shares listed. At this contract's commit the table holds one share, so the test measures this contract's own growth against 1.1.0. A later design, X2 for one, adds its own row in its own commit with the share the coordinator set, so its growth is measured from this contract's commit and never spends this contract's share.
+9. Boundaries, pinned at this contract's commit:
+   - **frame-to-parent ops:** the set of op names the frame sends equals the set at the commit before this contract's, which is 1.1.0's. The test lists that set, so the row compares before and after this contract and nothing else;
+   - **parent-to-frame ops:** the set the frame accepts is the set before this commit plus `appearance`;
+   - **the canonical CSP:** `frameCsp()` takes no argument and embeds one hash per inlined script, so its text changes whenever a frame script changes. The row asserts what this contract may not change: `frameCsp()` equals 1.1.0's value with each script hash source replaced by this version's. That is the same directives in the same order, the same sources other than hashes, and four hash sources, one per inlined script;
+   - **behaviour:** the srcdoc's CSP meta and the iframe's `csp` attribute of a mount with an appearance and both fonts equal those of the same mount, at the same version, without them. And a spy on the port counts the frame-to-parent messages of a mount that gets a seed and then 20 `appearance` ops: the count equals that of the same mount and actions with no appearance.
 
-   Neither row compares the whole op set or the whole CSP with 1.1.0's, so another design's additive op can ship in the same library wave and release, on its own interface and with its own tests.
+   **Which of these constrain later additive work, and how:**
+   - **Test 4** (with no appearance, the corpus equals 1.1.0's) constrains every later change to the no-appearance output. A later design whose new behaviour a document or host must ask for keeps it green. One that changes what an existing document renders re-baselines the test in its own commit and argues it in its own design.
+   - **Test 8** constrains a later design only through the share table: each design adds its own row, and its growth is checked against its own share.
+   - **Test 9** constrains nothing later. Its op lists and its CSP baseline are pinned at this contract's commit. A later design that adds an op, such as X2's figure-image op, adds it to the lists in its own commit, with its own threat model, and the row still holds. The behaviour rows hold at every version. They forbid only making the CSP or the frame-to-parent traffic depend on an appearance.
 10. Meaning without colour, each with an appearance whose colours are chosen to collide (`chg` equal to `wait` and to `violet`, and `term` equal to `text`):
     - a heading mark in the changed state reads "Changed since you read it";
     - a changed block's mark and a changed row's mark (wide and stack layouts) differ from an attention rule's, a waiting callout's, an attention task item's and an attention row's in shape: their computed `box-shadow` and `border-left`, with every colour removed, are not equal;
     - `a.term` has a computed `text-decoration-line` of `underline` and `text-decoration-style` of `dotted`;
     - a glossary table's term cell is its row's first cell, at a computed `font-weight` of 600.
 
-**One release for more than one design.** The library wave that carries this contract may also carry X2's figure-image op, a frame-to-parent op designed separately. The two have independent interfaces and tests. This section designs only its own.
+**One release for more than one design.** The library wave that carries this contract may also carry X2's figure-image op, a frame-to-parent op designed separately. The two have independent interfaces and tests. This contract's commit lands first in the wave, and each later design is measured from it: its size against its own share (test 8), and its ops against lists it extends (test 9). The coordinator sets X2's share when X2's design is accepted. This section designs only its own.
 
 **Compatibility.** A 1.1.0 host keeps working unchanged against the new version. The new version's frame ignores nothing a 1.1.0 host sends. A host built for the new version that is pinned back to 1.1.0 fails to build, and does not fail at run time.
 
