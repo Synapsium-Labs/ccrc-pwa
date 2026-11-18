@@ -40,9 +40,13 @@ this pull request)
 - **Wave AP2 follows W3's second step.**
   - PR 5 holds for the Overlord, under `mayHold`, only the rows the coordinator held and then declined, let lapse or
     could not allow. Rows released at mint go to the operator as today.
-  - PR 6 lets the Overlord allow one family, `read-only`, confined to the child's own workspace, under a second key
-    the fleet pins apart. It is a closed allowlist of commands and options. The Overlord allows no write and no delete
-    in v1. `forbidden` stays the operator's, always.
+  - In PR 5 the Overlord may also allow an `ordinary` row its coordinator held and let lapse, as the coordinator could
+    have, under today's signer and verifier. This is the one named exception to the version-1 ban on irreversible
+    approvals, and its reason is parity: a coordinator already holds exactly this authority. Each such allow is
+    counted by its own word.
+  - PR 6 lets the Overlord allow reads beyond `ordinary`: one family, `read-only`, confined to the child's own
+    workspace, under a second key the fleet pins apart. It is a closed allowlist of commands and options. The Overlord
+    allows no write beyond `ordinary`. `forbidden` stays the operator's, always.
 - **The trigger shape stays `escalate` in v1.** No tier of this plan may allow a delete through a variable: not the
   coordinator, not a grant, not the Overlord. Prevention (PR P) and the park (PR 3) are what cover it. PR P keeps
   children from writing the shape, and the park turns the one that slips through into a row on Waiting on you, not a
@@ -220,8 +224,10 @@ is `sent`, or one of the skip words:
 
 **The read.** `GET /api/approvals/census?days=N`:
 
-- **What it answers:** counts by path, state, release reason, class, thread (main or subagent), deny currency and
-  programme, and the redacted rows.
+- **What it answers:** counts by path, state, release reason, class, thread (main or subagent), deny currency,
+  programme and the ruling's authority (coordinator, Overlord or operator), and the redacted rows. From PR 5 the
+  Overlord's `ordinary` allows count under their own word, `overlord-ordinary`, so M38's card shows how many there
+  are.
 - **Who may read it:** it is session-gated, so the operator's console reads it. The Overlord's door process reads it
   once W2's identity port names it.
 - **What it never answers:** an unredacted input. Its privacy is the redacted input's (`APPROVAL_INPUT_RETENTION_DAYS`).
@@ -501,8 +507,18 @@ that Table 6.7b applies to asks.
   - A subagent's prompt gets the time left under the 480 s live bound.
   - A main-thread prompt is parked first (§3.3), and the Overlord rules the parked row. Its ruling is used by the
     retry, as any park ruling is.
-- **The Overlord's acts.** `answer-approval` denies with a reason, which needs no grant. It allows only what §3.6
-  admits, under a live grant naming the family. It may also escalate to the operator with a brief, or `attach-brief`.
+- **The Overlord's acts.** `answer-approval` denies with a reason, which needs no grant. It allows two things:
+  - **An `ordinary` row, by parity (the coordinator's ruling of 2026-11-18).** Only a row its coordinator held and let
+    lapse, not one it declined. Only `ordinary`, under today's v1 signer and verifier, with no new key: a v2 record,
+    authority `overlord`, signed with the main key. Never on a row whose deny is not current. Each allow is counted
+    as `overlord-ordinary` in the census (§3.1).
+    - **Why it is an exception.** An `ordinary` allow can delete inside a root, which is irreversible. It is the one
+      named exception to the version-1 ban on irreversible approvals (spec §7.3), and its reason is parity. A
+      coordinator already holds exactly this authority. The operator's direction is that coordinators and the
+      Overlord settle prompts before the operator. Without it, every `ordinary` prompt a busy coordinator lets lapse
+      reaches the operator, which is the share M38 must bring down. It stands on the operator's answer to open
+      question 2.
+  - **A `read-only` request (PR 6),** as §3.6 admits, under a live grant naming the family. It may also escalate to the operator with a brief, or `attach-brief`.
   It answers only through its own door, behind the designation, the fence and the authority decider (§7.1).
 - **The hold's columns are the row's.** The row keeps its coordinator, so a late coordinator ruling still counts
   (D-5289). The tier adds two columns, `overlordUntil` and `overlordOutcome`, from the asks tier's closed list (§6.1).
@@ -511,7 +527,7 @@ that Table 6.7b applies to asks.
 ```mermaid
 flowchart LR
   C["Coordinator<br/>ordinary allows, any deny"] -->|"held, then declined, lapsed,<br/>or class too high"| Q{"mayHold<br/>(approval kind)"}
-  Q -- "yes" --> V["The Overlord<br/>deny, or a family allow<br/>under a live grant"]
+  Q -- "yes" --> V["The Overlord<br/>deny, an ordinary allow by parity,<br/>or a read-only allow under a grant"]
   Q -- "no" --> O["The operator"]
   V -->|"escalate or lapse"| O
   R["released at mint,<br/>or forbidden"] --> O
@@ -552,16 +568,15 @@ of 2026-11-18. It is a closed allowlist, and it inherits every rule `ordinary` a
 - **No write family in v1 (the coordinator's ruling of 2026-11-18, after the fix-round-1 wave-done).** The first
   revision also had `scratch-write`: literal `rm` and `mkdir` under the temp root. That family was a subset of
   `ordinary`, so it added no shape anyone could allow, only a key use and a table. It is dropped.
-  - The Overlord allows no `ordinary` row either. An `ordinary` allow can delete, which is irreversible, and the
-    coordinator already allows those. A held `ordinary` row the coordinator let lapse reaches the Overlord, which may
-    deny it or send it to the operator.
+  - The Overlord's `ordinary` allows are not a family. They are PR 5's parity exception (§3.5), on rows the
+    coordinator let lapse, under the main key. `read-only` is the one family, and the only allow the wide key signs.
 - **The trigger shape stays `escalate`, family `none`, in v1.** A delete through a variable (a `for` loop, unquoted
   and mid-word variables) is allowed by no tier of this plan. Loops and pipelines stay `escalate` too.
   - What covers it is prevention (PR P, §3.8), which keeps children from writing the shape, and the park (PR 3,
     §3.3), which turns the one that slips through into a row on Waiting on you with its context.
   - PR 6 alone would not have settled the trigger prompt.
-- **Reversibility (F16).** A deny and a `read-only` allow change nothing, so they are reversible. No Overlord approval
-  is irreversible, so the version-1 ban on irreversible effects holds with no exception.
+- **Reversibility (F16).** A deny and a `read-only` allow change nothing, so they are reversible. The one irreversible
+  Overlord approval is the `ordinary` allow by parity (§3.5), the ban's one named exception.
 - **The family decider,** `approvalFamily(request, row)` (L1), answers `read-only` or `none`.
   - It answers `none` for a row whose deny is not current (F5).
   - A property test pins that `forbidden` never has a family.
@@ -573,12 +588,13 @@ of 2026-11-18. It is a closed allowlist, and it inherits every rule `ordinary` a
 
 **A second key.**
 
-- **The pair.** The server keeps a second Ed25519 pair, `approval-signing-wide`, and uses it only for a ruling whose
-  authority is `overlord`.
+- **The pair.** The server keeps a second Ed25519 pair, `approval-signing-wide`, and uses it only for an `overlord`
+  ruling of family `read-only`. The Overlord's `ordinary` allows and its denies use the main key.
 - **The pin.** The fleet box's install spine pins its public half beside the first.
 - **Its name** contains `approval-signing`, so the child's surface deny and the classifier's forbidden match already
   cover it.
-- **Revocation.** Removing the wide pin on the fleet box revokes every Overlord allow at once, with no server change.
+- **Revocation.** Removing the wide pin on the fleet box revokes every Overlord `read-only` allow at once, with no
+  server change. Its `ordinary` allows go with the main key and the kill switch, as a coordinator's do.
 
 **Record v2** ships in PR 3, for the operator's authority. It adds three fields, `authority`, `denyCurrent` and
 `family`, and the authority names the key:
@@ -586,7 +602,8 @@ of 2026-11-18. It is a closed allowlist, and it inherits every rule `ordinary` a
 | Authority | Key |
 |---|---|
 | `coordinator`, `operator` | main |
-| `overlord` | wide |
+| `overlord`, an `ordinary` allow or a deny | main |
+| `overlord`, a `read-only` allow | wide |
 
 `approvalRulingBytes` signs all fields. A v1 record is unchanged and is always checked against the main key.
 
@@ -600,7 +617,8 @@ of 2026-11-18. It is a closed allowlist, and it inherits every rule `ordinary` a
 | v2 | `ordinary`, deny current | `coordinator` | main | allow |
 | v2 | `ordinary` or `escalate`, any deny currency | `operator` | main | allow (PR 3): the operator's own ruling, through the step-up door |
 | v2 | `escalate` family `read-only`, deny current | `overlord` | wide | allow (PR 6) |
-| v2 | `ordinary` | `overlord` | any | no allow: the Overlord allows no write |
+| v2 | `ordinary`, deny current | `overlord` | main | allow (PR 5), under the same rule as a coordinator's. The door admits only a row its coordinator let lapse |
+| v2 | `ordinary` | `overlord` | wide | no allow: the wide key signs `read-only` only |
 | v2 | deny not current | `coordinator` or `overlord` | any | no allow (F5) |
 | v2 | family `none`, or a family the authority may not use, or a key that is not the authority's | any | any | no allow |
 | any | `forbidden` | any | any | no allow, ever |
@@ -694,7 +712,8 @@ This plan records its calls by slug. The coordinator mints D-numbers for any dev
 | `grants-are-scoped-and-expire` | Standing grants | none; per run; per programme | Per run, child or agent, at most 8 h, `ordinary` only, the claimant re-checked at use, signed only through the one signing site | Proposed |
 | `overlord-holds-only-held-rows` | Which rows the Overlord's tier takes | every released reason; rows the coordinator held | Rows the coordinator held, then declined, let lapse or could not allow. Mint-time reasons are Later | Ruled (fix round 1) |
 | `overlord-approval-is-a-mayhold-case` | The Overlord's hold | a new predicate; a case of `mayHold` | A case of `mayHold` (C31, H18). No parallel mechanism | Proposed |
-| `families-on-an-allowlist` | What the Overlord may allow | any `escalate`; listed commands; an allowlist of commands and options; a write family | One closed allowlist, `read-only`, inside the child's workspace (Table 3e), a re-ruling of round 5 for it only. No write family and no `ordinary` allow: `scratch-write` was a subset of `ordinary` and is dropped | Ruled (fix round 1; write family dropped 2026-11-18) |
+| `families-on-an-allowlist` | What the Overlord may allow beyond `ordinary` | any `escalate`; listed commands; an allowlist of commands and options; a write family | One closed allowlist, `read-only`, inside the child's workspace (Table 3e), a re-ruling of round 5 for it only. No write family: `scratch-write` was a subset of `ordinary` and is dropped | Ruled (fix round 1; write family dropped 2026-11-18) |
+| `overlord-ordinary-by-parity` | Whether the Overlord may allow `ordinary` | never; as a coordinator does | As a coordinator does, on rows the coordinator held and let lapse, deny current, the main key, each counted as `overlord-ordinary`. The one named exception to the version-1 ban on irreversible approvals, by parity | Ruled (2026-11-18), on the operator's answer to question 2 |
 | `wide-key-is-separately-pinned` | The signer for the Overlord's allows | the same key with a flag; a second key | A second key, pinned apart, named by the record's authority | Proposed |
 
 *Table 4. The calls this plan makes.*
@@ -704,7 +723,7 @@ This plan records its calls by slug. The coordinator mints D-numbers for any dev
 | # | Question | Answer, or recommendation | Whose |
 |---|---|---|---|
 | 1 | Parking changes where approvals appear. A parked prompt reaches the operator as a row on Waiting on you from park time, and no longer as a menu in a pane. The first sight is delayed by at most the tier windows: the same as today on the main thread, and up to five minutes later on a subagent | Yes (the coordinator's provisional ruling, 2026-11-18) | The operator |
-| 2 | May the Overlord approve reads inside a child's own workspace? | Yes (provisional), as Table 3e bounds them. A read is reversible, so the version-1 ban needs no exception | The operator |
+| 2 | May the Overlord approve, inside a child's own workspace, what its coordinator could (`ordinary`), and reads beyond that? | Yes (provisional). `ordinary` by parity, on rows the coordinator let lapse, as the one named exception to the version-1 ban on irreversible approvals (§3.5); reads as Table 3e bounds them | The operator |
 | 3 | May coordinators' own permission prompts be held for the Overlord? | Yes (provisional), in AP2, under the same `mayHold`. Plain top-level sessions stay the operator's | The operator |
 | 4 | Does a running Claude Code re-read a changed `--settings` file? | Measure it in Task 0.1. The chosen arm ships either way | Author |
 | 5 | The park horizon | 2 h | Author |
@@ -720,15 +739,16 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
   Overlord under `mayHold` for held rows, then the operator. The two old reasons are answered by the park, grants and
   the wide key.
 - **Table 6.7b** gains an approvals row for held rows only (F12). A released row stays unheld.
-- **Table 7.1a** gains `answer-approval`. A deny and a `read-only` allow are reversible, and it allows no write
-  (F16).
+- **Table 7.1a** gains `answer-approval`. A deny and a `read-only` allow are reversible. An `ordinary` allow is
+  irreversible, the one named exception to the version-1 ban, by parity (F16).
+- **§7.3** names that exception beside the ban, and the ban's other statements point at it.
 - **New calls C71 to C76 in Table 13a:**
   - C71: the stale digest (`stale-deny-routes-capped`);
   - C72: the park (`approval-park-is-deny-and-retry`, `operator-allow-is-signed`, `park-is-a-lane`);
   - C73: standing grants (`grants-are-scoped-and-expire`);
   - C74: the census (`approval-census-first`, `hook-reports-route-as-a-fact`);
   - C75: the Overlord's tier and families (`overlord-holds-only-held-rows`, `overlord-approval-is-a-mayhold-case`,
-    `families-on-an-allowlist`);
+    `families-on-an-allowlist`, `overlord-ordinary-by-parity`);
   - C76: the second key (`wide-key-is-separately-pinned`).
 - **§12 gains M38.**
 - **§14 gains waves AP1 and AP2,** with a capability word per PR.
@@ -793,7 +813,7 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
 | 2 | AP1 | The per-agent envelope list with its hook fix (path 6); the untrusted-build item | PR 1 | +80 server, +120 hook, +60 pwa; +550 tests |
 | 3 | AP1 | The park: `approval_parks`, the parked-aware rule door, the lapse and stale carve-outs, the operator's signed ruling, record v2 and the verifier's v2 rule for `operator`, the child's nudge, the Shadow lanes row, the subagent window | PR 2 | +450 server, +100 hook, +60 verifier, +40 shared, +100 pwa; +1,000 tests |
 | 4 | AP1 | Standing grants: the table, the door, `shapeKey`, `grantCovers`, the claimant re-check, the one signing site | PR 3 | +400 server, +80 classifier; +600 tests; +60 skill reference |
-| 5 | AP2 | The Overlord's tier for held rows: the `approval` kind in `mayHold`, its door, `answer-approval` | PR 4, W3 step two | +400 server, +100 pwa; +700 tests |
+| 5 | AP2 | The Overlord's tier for held rows: the `approval` kind in `mayHold`, its door, `answer-approval`, the `ordinary` allow by parity and its verifier row, the `overlord-ordinary` census word | PR 4, W3 step two | +450 server, +20 verifier, +100 pwa; +850 tests |
 | 6 | AP2 | The `read-only` family on its allowlist, the wide key, the `overlord` authority, the install pin, doctor's check | PR 5 | +600 classifier, +200 server, +40 verifier, +40 install; +1,500 tests |
 
 *Table 8. The eight pull requests. Growth is the author's estimate. growth-check runs armed on any listed file a PR
@@ -992,11 +1012,15 @@ grows.*
 - [ ] Red:
   - `mayHold` holds a row the coordinator held and then declined, let lapse or could not allow, only under every H18
     condition;
-  - it never holds a row minted released, or a `forbidden`, `truncated` or `unparseable` row.
+  - it never holds a row minted released, or a `forbidden`, `truncated` or `unparseable` row;
+  - the parity allow: an `ordinary` row its coordinator let lapse, deny current, is allowed with a v2 `overlord`
+    record under the main key, and the census counts it as `overlord-ordinary`;
+  - no parity allow on an `ordinary` row the coordinator declined, on a row whose deny is not current, or on an
+    `escalate` row; the verifier refuses an `overlord` record on an `ordinary` row signed with the wide key.
 - [ ] Green: the new case, `answer-approval` in `OVERLORD_ACT_KINDS`, and the door behind the designation, the fence
   and the authority decider.
 - [ ] Mutations: drop the arming check, and the disarmed case reds. Admit a mint-released row, and the released case
-  reds.
+  reds. Admit a declined row to the parity allow, and the declined case reds.
 
 ### Task 6.1: The `read-only` family, on its allowlist (PR 6)
 
@@ -1012,7 +1036,7 @@ grows.*
   - **Shape:** a pipeline; a loop; a variable in an operand; the trigger prompt's shape.
   - **Deny:** a row whose deny is not current.
   - **Writes:** `rm -rf <temp root>/x`, `mkdir <temp root>/x` and `rm -rf <worktree>/x`, each `ordinary` and each
-    family `none`; the verifier refuses an `overlord` record for any of them.
+    family `none`. The Overlord's `ordinary` allow is PR 5's parity case, never a family.
 - [ ] Red, the admitted cases: each `read-only` command with each allowed option on an in-root literal path.
 - [ ] Red, the property: `forbidden` never has a family.
 - [ ] Green: `approvalFamily` in `approvalguard.ts` (L1), as closed option tables.
