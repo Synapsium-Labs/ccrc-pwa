@@ -106,7 +106,7 @@ export type ReaderAppearanceOutcome =
       readonly dropped: null | { readonly why: 'colour-unreadable' | 'scheme-unreadable'; readonly token: string } }
   | { readonly kind: 'mode-only'; readonly why: 'contract-unsupported' };
 export function readerAppearanceOf(
-  read: (token: HostToken) => string, colourScheme: string, contract: number | undefined,
+  read: (token: HostToken) => string, colourScheme: string, contract: number | 'none',
 ): ReaderAppearanceOutcome;
 // pwa/test/helpers/paletteTokens.ts
 export function resolvePaletteTokens(
@@ -122,7 +122,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
     - with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`, its `label` is `READER_APPEARANCE_LABEL`, and `parseAppearance` of its value is `ok`;
     - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
     - an unreadable skin token keeps every colour, leaves that slot out, and has `dropped: null`;
-    - contract `undefined` and contract `2` each give `{kind:'mode-only', why:'contract-unsupported'}`;
+    - contract `'none'` (a library without the contract) and contract `2` (one newer than ccrc knows) each give `{kind:'mode-only', why:'contract-unsupported'}`;
     - a `colourScheme` of `'normal'` or `''` gives `mode: 'auto'`, no colour group, and `dropped.why: 'scheme-unreadable'`;
     - a skin token whose value the library refuses (for example `--row-h` answering `'60px'`) is left out by the verdict, and every colour stays;
     - an upper-case hex answers what the verdict answers: ccrc does not lower-case it;
@@ -179,14 +179,14 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 
 ```ts
 // hostAppearance.ts (L3)
-export interface HostAppearanceRead { readonly stamp: string; readonly read: (contract: number | undefined) => ReaderAppearanceOutcome }
+export interface HostAppearanceRead { readonly stamp: string; readonly read: (contract: number | 'none') => ReaderAppearanceOutcome }
 export function readHostAppearance(doc: Document): HostAppearanceRead; // one getComputedStyle, stamp from the root's two attributes
 // assets.ts
 export function loadReaderFonts(): Promise<{ readonly sans: string; readonly mono: string }>; // base64 woff2
 // bridge.ts: ReaderMountInput gains
 readonly appearance?: () => HostAppearanceRead;     // called once, synchronously, right before mountDocFrame
 // ReaderMountDeps gains
-readonly contract?: number;                          // tests only; absent, the host entry's APPEARANCE_CONTRACT
+readonly libraryContract?: () => number | 'none';   // the skew seam; absent, the library's ./frame APPEARANCE_CONTRACT, or 'none' when it exports none
 readonly fonts?: () => Promise<{ sans: string; mono: string }>;
 // ReaderMount gains
 readonly seededStamp: string | null;                 // the stamp the seed was read under; null when no appearance was read
@@ -202,7 +202,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **an outcome of kind `appearance`** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
   - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
-  - **an older library:** with `deps.contract` absent and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds in mode only (`prefs.theme`, no `appearance`). This seam is the only way to reach the case: with the exact pin it is a build error;
+  - **an older library:** with `deps.libraryContract` answering `'none'`, and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds as a mode-only mount (`prefs.theme`, no `appearance`, no `fonts`). With `deps.libraryContract` answering `2`, the same. This seam is the only way to reach the case: with the exact pin it is a build error;
   - **while open, hosted:** `setAppearance` calls `DocFrame.setAppearance` once, including for a dropped colour group, and never `setPrefs`;
   - **while open, mode only:** `setAppearance` calls `DocFrame.setPrefs({theme})` once;
   - **after `destroy()`**, `setAppearance` does nothing;
@@ -211,7 +211,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **only the verdict is passed:** with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
 - [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts`). Expected: FAIL on the new rows only.
 - [ ] **Step 3: Implement.**
-  - Contract detection takes `deps.contract`, or else `APPEARANCE_CONTRACT` from the library's `./frame` entry, and checks it against `READER_APPEARANCE_CONTRACTS`.
+  - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer is checked against `READER_APPEARANCE_CONTRACTS`.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
   - The lab path is decided by `readerMountPlan`, which gains `appearance: boolean`: `false` for `lab-draw`.
 - [ ] **Step 4: Run to green**, plus `test/reader-policy.test.ts`. Expected: PASS.
@@ -315,7 +315,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M5 | `ReaderFrame` ignores stamp changes | Task 5 "while open"; AP-5 |
 | AP-M6 | One unreadable colour leaves that slot out, instead of dropping the colour group | Task 2 "one colour token answering `''`" |
 | AP-M7 | Map `text ← --ink-disabled` | Task 2 part 3, in at least one palette |
-| AP-M8 | Skip contract detection, always pass `appearance` | Task 4 "an older library" |
+| AP-M8 | Skip contract detection, so a `'none'` or `2` answer from `deps.libraryContract` still passes `appearance` | Task 4 "an older library" (the fake `mount` throws `TypeError`) |
 | AP-M9 | Remove the per-frame coalescing | Task 5 "coalesces to the latest per frame" |
 | AP-M10 | `readerAppearanceOf` returns the raw contract and skips `parseAppearance` | Task 2 "a skin token whose value the library refuses" |
 | AP-M11 | `useHostAppearance` reads the stored choice instead of the root | Task 3 "a system flip moves the stamp" |
