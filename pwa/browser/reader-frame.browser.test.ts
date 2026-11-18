@@ -608,9 +608,11 @@ const store = (page: Page): Promise<Record<string, string>> => page.evaluate(() 
 });
 const readerKeys = async (page: Page): Promise<string[]> => Object.keys(await store(page)).filter((k) => k.startsWith(READER_STORE_PREFIX));
 const sleep = (ms: number): Promise<void> => new Promise((r) => { setTimeout(r, ms); });
-/** The reasons the console's own fallback line gave (`ReaderFrame`'s "ccrc: reader fell back (<reason>)"), in order. */
+/** The reasons the console's own fallback line gave (`ReaderFrame`'s "ccrc: reader fell back (<reason>)"), in order. A
+ *  reason is all the line holds up to its last `)`, so one with a space or a parenthesis of its own (`no host element`,
+ *  `mount <error>`, `images <error>`) reads whole rather than as no fallback at all. */
 const fellBackFor = (logs: readonly string[]): string[] => logs.flatMap((l) => {
-  const m = /ccrc: reader fell back \(([a-z-]+)\)/.exec(l);
+  const m = /ccrc: reader fell back \(([\s\S]*)\)$/.exec(l);
   return m === null ? [] : [m[1]!];
 });
 
@@ -1071,6 +1073,13 @@ describe('W8a reader frame in Chrome', () => {
     expect(await s.page.getByText('Open this link?').count() + await s.page.getByText('Copy with hidden characters?').count(), 'no sheet').toBe(0);
     await s.app.ctx.close();
   };
+
+  it('the controls\' fallback reader reads each reason whole, spaces and parentheses included (review 2432 A3)', () => {
+    const line = (reason: string): string => `warning ccrc: reader fell back (${reason})`;
+    expect(fellBackFor([
+      line('nonce'), 'log ccrc-hook hello srcdoc', line('no host element'), line('mount TypeError: x (y)'), line('images AbortError: z'),
+    ])).toEqual(['nonce', 'no host element', 'mount TypeError: x (y)', 'images AbortError: z']);
+  });
 
   it('M8.B5 control: without the shell meta, a navigated child receives the port and still achieves no effect', async () => {
     await childControl(false);

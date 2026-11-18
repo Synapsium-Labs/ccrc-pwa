@@ -2027,8 +2027,9 @@ sentences of fix round 1's block in place.
     (corrected in place at D2's first item, review 2432's A1: this said the control fails naming `timeout`).
   - (c) a second control, "load first", forces that ordering at its worst: the srcdoc navigates only once the parent hook
     has taken its own load call, and the parent answers the child's word only once it holds the child's load call too, so
-    the 'navigated' fallback is pending before the child can speak. It asserts the two held load calls, then everything
-    the first control asserts.
+    the 'navigated' fallback is pending before the child can speak. It asserts everything the first control asserts, and
+    the two held load calls after the port record and the fallback's reason (corrected in place at D2's first item,
+    review 2432's A3: this said it asserts the held calls first).
   Everything new sits behind `holdLoadForChild`, which only the two controls set: no product file changes, and the wall
   cases read none of it (they set no `holdLoadForChild`, and the one shared line, the hand-off in the parent's
   `contentWindow` wrapper, does nothing without it). Rows (the fence below), each red: `NDR-D1-FR2-B5-NEVER-SPEAKS` (the
