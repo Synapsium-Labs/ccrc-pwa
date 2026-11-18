@@ -282,7 +282,22 @@ number from `POST /api/ledger/deviations`.
   handed one; until wave 7 adds the read that hands it (and the map and report arms of the item act route), a map or
   report item shows its why and how text with its controls, and those controls answer the refusal's fixed sentence.
   Wave 7 imports these shapes and defines them nowhere else; if its capture or build finds a shape must change, it
-  changes it in `shared/plan.ts` and amends this entry. Record: the wave 5 note (the coordinator's ruling, run 2447).
+  changes it in `shared/plan.ts` and amends this entry. The body draws the counts and the class groups only: spec
+  §11.3's section of each programme's epics and checkpoints is not drawn, since the three shapes do not carry it, and
+  wave 7 adds that section together with the read it needs (amended in review round 2, the coordinator's ruling).
+  Record: the wave 5 note (the coordinator's ruling, run 2447).
+- **D-8738 (2026-11-18)** — owner-now-wire: wave 5 is a PWA wave, but the project linking card's Linear owner select
+  needs two facts the hierarchy read (`GET /api/hierarchy`) did not carry, so its `ownerNow` gains two optional fields,
+  both decided on the server by the owner rule's own functions and read in the PWA through one reader (`ownerFrom`,
+  `pwa/src/fleet/hierarchyWords.ts`). `project` is the project the owner was decided for (`linearOwnerOfProject`): a
+  project whose shared team key another project owns names that project, so the card can say where its owner comes
+  from and that its own owner setting is not used meanwhile (review round 1). `ifUnnamed` is the coordinator the
+  default rule picks with no named owner, and whether it is live (`linearOwnerOf` with no named owner), so the select's
+  empty option names who the operator gets by choosing it, not the named owner it would clear (review round 2); for a
+  shared-key sibling, whose owner comes from the project that owns the key, it names the sibling's own default, which
+  applies once the key is no longer shared, and the note under the select names the owner now. Both are
+  additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
+  the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
 
 ## Global Constraints
 

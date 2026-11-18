@@ -11,8 +11,8 @@ changes no other line and no checkbox.
   programme page's Plan section) is not built: the desktop-polish Work card replaces it (the ledger's ruling of
   2026-11-16), and `ProgrammeScreen.tsx` is untouched.
   - **5.1, the project row's hierarchy settings** (`pwa/src/screens/settings/ProjectLinkingCard.tsx`, words in
-    `pwa/src/fleet/hierarchyWords.ts`): per project, the Linear owner select (its empty option names the default and
-    whether it is live), File into initiatives, Owning project (only when another project shares the team key), the
+    `pwa/src/fleet/hierarchyWords.ts`): for every project the card lists, the Linear owner select (its empty option names the
+    coordinator the default rule gives and whether it is live), File into initiatives, Owning project (only when another project shares the team key), the
     hierarchy state line (the map item linked when it waits), the count of inbound issues waiting, and a link to the
     project's Upkeep page. One card-level act names one coordinator the Linear owner of every project, behind a
     `QuickConfirm`. The add-project sheet gains the owner select and the initiatives toggle.
@@ -37,10 +37,19 @@ changes no other line and no checkbox.
   and nothing hands it one yet, so a map or report item shows its why and how text with its controls. **Wave 7 must add:**
   the read that hands `ItemView` a map's or report's counts and entries, and the `approve`, `return`, `put-back` and
   `done` arms of `POST /api/items/:id/linear`, which answer `unavailable` today (the controls show that word's fixed
-  sentence). Wave 7 imports the three shapes and defines them nowhere else. Two more things wave 7 owns here: spec §11.3
-  has the map item show each programme's epics and checkpoints (`MapBody.epics` and `backlog`), which the three shapes
-  do not carry, so the body grows a section for them once `MapBody` lands; and the sticky act bar dropped the
-  `--safe-bottom` inset where no phone bar is mounted, which only matters once a body is handed.
+  sentence). Wave 7 imports the three shapes and defines them nowhere else. The body draws the counts and the class
+  groups only: spec §11.3 has the map item show each programme's epics and checkpoints (`MapBody.epics` and `backlog`),
+  which the three shapes do not carry, so wave 7 adds that section together with the read it needs (D-8737 amended in
+  review round 2). Wave 7 also owns one layout point: the sticky act bar dropped the `--safe-bottom` inset where no phone
+  bar is mounted, which only matters once a body is handed.
+- **D-8738, owner-now-wire** (the coordinator's rulings of fix rounds 1 and 2). This is a PWA wave, but the hierarchy
+  read's `ownerNow` gains two optional fields the owner select needs, both decided on the server by the owner rule's own
+  functions and read in the PWA through one reader (`ownerFrom`): `project`, the project the owner was decided for (so a
+  project whose shared team key another project owns can say where its owner comes from), and `ifUnnamed`, the
+  coordinator the default rule picks with no named owner and whether it is live (so the empty option names who the
+  operator gets by choosing it; for a shared-key sibling it names the sibling's own default, which applies once the key
+  is no longer shared, and the note under the select names the owner now). Absence permits: an older server's answer
+  reads as the project's own owner.
 
 ## Wire differences from the plan's Interfaces
 
@@ -53,7 +62,7 @@ changes no other line and no checkbox.
 | 5.3 | evidence `{pr}` links the pull request | `pullUrl` with the project's measured repository slug from the project list; with no slug known, "PR #n" as plain text |
 | 5.3 | the Upkeep page lists its tickets | it also lists `notClosed` (the inbound closes Linear refused), each word with a fixed sentence: `not-found`, `linear-forbidden`, `linear-invalid`, `malformed`, `policy-denied`, the words the server records when it gives a close up; any other word is framed |
 | 5.1 | the Upkeep link on the row when inbound issues wait | the link shows whenever the project has a team key |
-| 5.1 | the owner select's empty option names the default owner and whether it is live | the hierarchy read's `ownerNow` gains `project`, the project the owner was decided for (`linearOwnerOfProject` already decided it; the route dropped it), optional on the wire so an older server's answer reads as the project's own owner (the coordinator's ruling in fix round 1). The option says `Default: <id> (live)`, `(not live)` or `Default: none live` for every source; for a project whose shared team key another project owns, it names that project's owner and its liveness, and a note under the select (which wraps, so a phone shows it whole) says which project the owner comes from and that the project's own owner setting is not used meanwhile |
+| 5.1 | the owner select's empty option names the default owner and whether it is live | D-8738: the hierarchy read's `ownerNow` gains two optional fields, decided on the server and read through one reader (`ownerFrom`): `project`, the project the owner was decided for (fix round 1), and `ifUnnamed`, the coordinator the default rule gives with no named owner and whether it is live (fix round 2). The empty option names who the operator gets by choosing it: `Default: <id> (live)`, `(not live)` or `Default: none live`, from `ifUnnamed` (an older server's answer, with neither field, reads as before). For a project whose shared team key another project owns, the option names the project's own default (it applies once the key is no longer shared), and a note under the select (which wraps, so a phone shows it whole) names the owner now and whether it is live, which project it comes from, and that the project's own owner setting is not used meanwhile. A project the hierarchy answer does not list (no stored settings and no programme home) draws its controls at the defaults the server would answer, and its first write stores them; the add-project sheet reads an older server's 404 as absent, as the card does, through one reader (`hierarchyAbsent`) |
 | 5.1 | `hierarchyWords.ts` under `screens/settings/` | it lives in `pwa/src/fleet/`, beside `linkingWords.ts`, because the add-project sheet in `fleet/` reads it and `fleet/` never imports `screens/` |
 | 5.1 | at 1920 "one grid line per row" | from 480px to under 760px of card width a row is four lines, and three lines from 760px up: the card is capped at 960px and its layout follows the card's width (a container query), so 1920 is the same container as 1280. The hierarchy cell takes its own line, and inside it the Linear owner select takes a full line of its own, with the toggles and the state on the line under it, so the select shows its whole value with a long coordinator id (review round 1); the browser file measures a select's shown value against its box |
 | 5.4 | every act's control on the item | on a Waiting list row, only the light acts draw (drift: Hand and Keep; initiatives: Check again); map, report and owner draw their controls on the item page only, because Approve and Put back need the body on screen and Name needs the coordinator list |
@@ -62,6 +71,9 @@ changes no other line and no checkbox.
 
 ## Test and build changes beyond the plan's files
 
+- `pwa/browser/add-project-sheet.browser.test.ts` (review round 2): the add-project sheet's owner select and initiatives
+  toggle under the console rules in all twenty views, and an older server's 404 drawing neither (no browser file covered
+  the sheet before).
 - `pwa/vite.react-singleton.ts` holds the React-singleton lists (dedupe, aliases, inline), read by both
   `pwa/vite.config.ts` and `pwa/vitest.browser.config.ts`, pinned by `pwa/test/react-singleton-pin.test.ts`. The 200-issue
   browser case renders the real `ItemView` to static markup on the node side, and that needs one React. Changing the
@@ -73,16 +85,18 @@ changes no other line and no checkbox.
 
 ## Screenshots
 
-One picture per view of the three browser files, 195 in all, taken with `CCRC_SHOTS=<dir>` at the pull request's tip and
-attached to the wave-done mail (they are not committed): the project linking card, the epic page and the Upkeep page in
-all twenty views (360, 390, 1280, 1470 and 1920, Refined and Instrument, both themes); the five hierarchy items' pages in
-all twenty views; the 200-issue map body in all twenty views and the report body at the five widths; the map item's page
-in the real shell at 360 and 390 in both skins and themes; and the Waiting list rows at 360 and 1280. Every picture uses
+One picture per view of the four browser files, 219 in all, taken with `CCRC_SHOTS=<dir>` at the pull request's tip and
+attached to the wave-done mail (they are not committed): the project linking card, the add-project sheet, the epic page
+and the Upkeep page in all twenty views (360, 390, 1280, 1470 and 1920, Refined and Instrument, both themes); the linking
+card with a failed re-read (its stale note and Read again) at 360 and 1920 in both skins; the five hierarchy items' pages
+in all twenty views; the 200-issue map body in all twenty views and the report body at the five widths; the map item's
+page in the real shell at 360 and 390 in both skins and themes; and the Waiting list rows at 360 and 1280. The
+add-project sheet's views with an older server (its hierarchy read answering 404) take no pictures. Every picture uses
 fixture names only. To make them again:
 
-    ( cd pwa && CCRC_SHOTS=<dir> CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run \
+    ( cd pwa && CCRC_SHOTS=<dir> CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --maxWorkers=1 \
         --config vitest.browser.config.ts browser/project-linking-card.browser.test.ts browser/epic-page.browser.test.ts \
-        browser/linear-items.browser.test.ts )
+        browser/linear-items.browser.test.ts browser/add-project-sheet.browser.test.ts )
 
 ## Follow-ups noted, not built
 
@@ -93,6 +107,10 @@ fixture names only. To make them again:
 - **The Upkeep answer's shape is typed on the PWA side only.** `GET /api/projects/:project/upkeep` is not typed against
   a shared shape; a later wave can move it into `shared/plan.ts`, where the server types its reply against it. The same
   goes for the refused-close words, which the PWA lists from the server's give-up words by hand.
+- **The linking card's visibility select after a team-key write with an unknown result** (from before this wave,
+  D-8147). Such a write now re-reads the hierarchy, but not the project list, so the row's `linking.teamKey` stays at its
+  value before the write, and the visibility select then sends that old key with its override, which can revert a key the
+  write had committed. A later wave re-reads the project list too.
 - **One minor point from the last re-review, left as it is.** The Upkeep page's test of a refused close with no time
   counts the rows but does not assert that row draws no date (the typecheck catches the null case). (The other point,
   two rows saving at once on the linking card, was fixed in review round 1: a row stays locked until a read at least as
