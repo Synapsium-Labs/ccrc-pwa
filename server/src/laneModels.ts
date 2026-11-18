@@ -17,7 +17,8 @@
 // answer (`timeout`, `too-large`, `lost`, a stdout off the grammar) is `unreadable`: it may have run a verb whose state
 // is unknown. A `show` refusal the retired files path used to answer past (`CARRIED_CODES`), and `ccrc` dying before
 // the lane, is `unreadable` WITH the box's reason, so the sheet can name it; the argv-grammar words stay `unreadable`
-// with no code (D-8693). `absent` is a lane with no class registry. Nothing here names a model.
+// with no code (D-8693). `absent` is a lane with no class registry, with the reason `show` gave (`laneKind`). Nothing here
+// names a model.
 import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import { ADVANCE_VERSION, AdvanceInvalid, lastMoveOf, parseAdvance } from '../../shared/model-advance.mjs';
 import {
@@ -62,8 +63,8 @@ function showOnce(io: FleetIO, lane: string): Promise<ModelsAsked> {
 export interface LaneModelsReadOpts { readonly fresh?: boolean }
 
 /** `_ccrcDir` is unread since R3b, which retired the files fallback; it stays in the signature only because callers in a
- *  test file an open pull request holds still pass it (R3b's departure `mca-w5-ccrcdir-param-kept`), and goes once
- *  that pull request has landed. */
+ *  test file an open pull request holds still pass it (D-8757), and goes once that pull request has landed (the plan
+ *  ticket `ccrcdir-param-drop`). */
 export async function readLaneModels(io: FleetIO, _ccrcDir: string, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {
   let asked: ModelsAsked;
   try { asked = await (opts.fresh === true ? io.models(lane, 'show') : showOnce(io, lane)); } catch { asked = { kind: 'lost' }; }
@@ -101,7 +102,13 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
     return isCarriedCode(raw.error) ? { kind: 'unreadable', code: raw.error } : { kind: 'unreadable' };
   }
   if (raw.ok !== true || raw.op !== 'show' || raw.id !== lane) return { kind: 'unreadable' };
-  if (raw.registry === null) return { kind: 'absent' };
+  // F1: `show` says why there is no registry (`anthropic`), and the answer keeps it, so a surface can tell an Anthropic
+  // lane (its classes are the client's own) from one never initialised. Any other value says nothing, and none is kept.
+  if (raw.registry === null) {
+    if (raw.anthropic === true) return { kind: 'absent', laneKind: 'anthropic' };
+    if (raw.anthropic === false) return { kind: 'absent', laneKind: 'never-made' };
+    return { kind: 'absent' };
+  }
   const reg = raw.registry;
   if (!isObj(reg) || !isObj(reg.classes) || !isObj(raw.labels)) return { kind: 'unreadable' };
   const pins = reg.classes;

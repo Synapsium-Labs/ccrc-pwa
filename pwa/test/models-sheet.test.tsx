@@ -139,6 +139,18 @@ describe('ModelsSheet: what it shows', () => {
     expect(screen.queryAllByRole('button', { name: /hold|release|revert/i })).toHaveLength(0);
   });
 
+  // R3b fix round 1, F2: a transient newest answer keeps the lane's last good read on the sheet, its word beside it.
+  it.each(['busy', 'not-started'] as const)('a %s answer over a good read keeps the classes and says the word beside them', async (kind) => {
+    put(laneModelsKey('lane-a'), wire(read(okAdvance())), Date.now());
+    mount({ kind });
+    await ready();
+    const said = await screen.findByTestId('models-read-transient');
+    expect(said.getAttribute('data-kind')).toBe(kind);
+    expect(said.textContent).toMatch(kind === 'busy' ? /busy.*next read/i : /did not start.*again in a moment/i);
+    expect(rowOf('opus').textContent).toContain('Gamma 6.1');
+    expect(screen.queryByTestId('models-read-state')).toBeNull();
+  });
+
   it('the model picker says why it names no model, and says nothing over a read', () => {
     const opts = [{ label: 'Opus class', route: { field: 'class' as const, value: 'opus' }, readback: '', active: false }];
     render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}}

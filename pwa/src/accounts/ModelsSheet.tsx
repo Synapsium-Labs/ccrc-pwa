@@ -26,8 +26,8 @@ import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';
 import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
 import { put, laneModelsKey } from '../lib/screenCache';
 import { api } from '../lib/api';
-import { useLaneModels, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
-import type { LaneReadFailure } from '../lib/models';
+import { useLaneModelsView, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
+import { laneReadWords, type LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
   MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
@@ -82,7 +82,9 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     setSaid({ kind: 'alert', text: MODELS_READ_FAILED[outcome.failure] });
   };
   const reads = useRef<LaneModelsControl | null>(null);
-  const read = useLaneModels(lane, load, open, refreshKey, onRead, reads);
+  // F2: a transient newest answer keeps the read the sheet shows, and its word is said beside it.
+  const view = useLaneModelsView(lane, load, open, refreshKey, onRead, reads);
+  const read = view.read;
   // The act's own fresh read, shown while the hook's read is still the one it replaced.
   const [fresh, setFresh] = useState<{ over: LaneModelsRead | null; read: LaneModelsRead } | null>(null);
   const readNow = useRef(read);
@@ -132,8 +134,10 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     reads.current?.supersede();
     const answer = asLaneModelsActAnswer(raw);
     const mine = answer !== null && answer.lane === lane && answer.action === action && answer.class === cls ? answer : null;
-    // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6).
-    if (mine !== null) put(laneModelsKey(lane), raw, Date.now());
+    // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6), unless
+    // its read is transient (R3b fix round 1, F2: nothing ran, so the cache keeps the lane's last good read). The sheet still
+    // shows that transient read in place, since the last good read predates the act, and then reads the lane again.
+    if (mine !== null && mine.models.kind !== 'busy' && mine.models.kind !== 'not-started') put(laneModelsKey(lane), raw, Date.now());
     if (!live.current) return;
     setBusy(null);
     if (mine === null) {
@@ -192,6 +196,9 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
             </ul>
           )}
         </>
+      )}
+      {shown !== null && shown.kind === 'read' && view.transient !== null && shown === read && (
+        <p className="acct-models-note" data-testid="models-read-transient" data-kind={view.transient}>{laneReadWords({ kind: view.transient })}</p>
       )}
       {shown !== null && shown.kind === 'read' && (
         <>

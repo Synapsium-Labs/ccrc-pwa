@@ -4,7 +4,7 @@ import type { LaneModelsRead } from '../../shared/models';
 import { EFFORT_LADDER } from '../../shared/routing-ladder';
 import { CANARY_RESULTS, HOLD_BY, HOWS } from '../../shared/model-advance.mjs';
 import {
-  LANE_UNREADABLE_CODE_WORDS, asLaneModelsRead, classWord, effortOptions, laneClassLabel, laneReadWords, liveModelNames,
+  LANE_UNREADABLE_CODE_WORDS, asLaneModelsRead, classWord, effortOptions, laneClassLabel, lanePickerNote, laneReadWords, liveModelNames,
   modelOptions, modelReadbackFor, type PickOption,
 } from '../src/lib/models';
 
@@ -233,10 +233,30 @@ describe('the lane-models helpers (D-8406)', () => {
     expect(read({ kind: 'unreadable', code: 7 })).toEqual({ kind: 'unreadable' });
   });
 
+  // R3b fix round 1, F1: the absent arm keeps the lane kind `show` sent, and the picker's note is said only where a model
+  // is actually missing: never over an Anthropic lane's absent, whose rows are the client's own aliases.
+  it('asLaneModelsRead keeps an absent read\'s lane kind, and drops one it does not read', () => {
+    const read = (models: unknown) => asLaneModelsRead({ ok: true, lane: 'claude', models });
+    expect(read({ kind: 'absent', laneKind: 'anthropic' })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(read({ kind: 'absent', laneKind: 'never-made' })).toEqual({ kind: 'absent', laneKind: 'never-made' });
+    expect(read({ kind: 'absent', laneKind: 'later' })).toEqual({ kind: 'absent' });
+  });
+
+  it('lanePickerNote: nothing over a read, an Anthropic absent or no read yet; the words elsewhere; a transient word beside a kept read', () => {
+    expect(lanePickerNote(null)).toBeNull();
+    expect(lanePickerNote(GPT_LANE)).toBeNull();
+    expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' })).toBeNull();
+    expect(lanePickerNote({ kind: 'absent', laneKind: 'never-made' })).toMatch(/no class registry/);
+    expect(lanePickerNote({ kind: 'absent' })).toMatch(/no class registry/);
+    expect(lanePickerNote({ kind: 'busy' })).toBe(laneReadWords({ kind: 'busy' }));
+    expect(lanePickerNote(GPT_LANE, 'busy')).toBe(laneReadWords({ kind: 'busy' }));
+    expect(lanePickerNote(GPT_LANE, 'not-started')).toBe(laneReadWords({ kind: 'not-started' }));
+  });
+
   it('laneReadWords gives every arm but read its own sentence, and an unreadable names the box\'s reason', () => {
     const arms: LaneModelsRead[] = [
-      { kind: 'absent' }, { kind: 'unreadable' }, { kind: 'unsupported' }, { kind: 'not-started' },
-      { kind: 'refused', why: 'bad-lane' }, { kind: 'busy' },
+      { kind: 'absent' }, { kind: 'absent', laneKind: 'anthropic' }, { kind: 'unreadable' }, { kind: 'unsupported' },
+      { kind: 'not-started' }, { kind: 'refused', why: 'bad-lane' }, { kind: 'busy' },
       ...Object.keys(LANE_UNREADABLE_CODE_WORDS).map((code) => ({ kind: 'unreadable', code }) as LaneModelsRead),
     ];
     const said = arms.map((a) => laneReadWords(a));

@@ -303,12 +303,25 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(dir, cfg, 'read'), '~/.ccrc/models itself must NOT be readable').toBeNull();
     });
 
-    it('the agent\'s source names no lane model file: the grant\'s helpers are gone', () => {
+    /** Every `.ts` file under `dir`, at any depth (F4), that names one of the grant's helpers or a model file's name. */
+    const modelFileHolders = (dir: string): string[] => readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts'))
+      .filter((f) => /\b(isLaneModelsReadName|isLaneModelsFile|registryFileName|catalogueFileName|MODELS_DIR_NAME)\b/
+        .test(readFileSync(path.join(dir, f), 'utf8')))
+      .sort();
+
+    it('CONTROL: the scan finds a planted name at the top and in a subdirectory, and passes a clean file', () => {
+      const dir = mkTmp('ccrc-wl-models-scan-');
+      mkdirSync(path.join(dir, 'sub', 'deeper'), { recursive: true });
+      writeFileSync(path.join(dir, 'top.ts'), "import { MODELS_DIR_NAME } from 'x';\n");
+      writeFileSync(path.join(dir, 'sub', 'deeper', 'planted.ts'), "const p = registryFileName('lane-a');\n");
+      writeFileSync(path.join(dir, 'sub', 'clean.ts'), 'export const x = 1;\n');
+      expect(modelFileHolders(dir)).toEqual(['sub/deeper/planted.ts', 'top.ts'].map((f) => path.join(...f.split('/'))));
+    });
+
+    it('the agent\'s source names no lane model file, at any depth: the grant\'s helpers are gone', () => {
       const srcDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'src');
-      const holders = readdirSync(srcDir).filter((f) => f.endsWith('.ts'))
-        .filter((f) => /\b(isLaneModelsReadName|isLaneModelsFile|registryFileName|catalogueFileName|MODELS_DIR_NAME)\b/
-          .test(readFileSync(path.join(srcDir, f), 'utf8')));
-      expect(holders).toEqual([]);
+      expect(modelFileHolders(srcDir)).toEqual([]);
     });
   });
 });

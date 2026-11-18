@@ -236,8 +236,14 @@ describe('readLaneModels through the op (D-8686)', () => {
     expect(r.reads).toEqual([]);
   });
 
-  it('registry null (an Anthropic lane, or one never initialised) is absent', async () => {
-    expect(await rig(exited(showJson('lane-a', { registry: null, labels: null }))).read()).toEqual({ kind: 'absent' });
+  // R3b fix round 1, F1: `show` says why there is no registry, and the answer keeps it (an adapter never narrows it).
+  it('registry null is absent, with the lane kind show sent: an Anthropic lane, or one never initialised', async () => {
+    const absent = (over: Record<string, unknown>) => rig(exited(showJson('lane-a', { registry: null, labels: null, ...over }))).read();
+    expect(await absent({ anthropic: true })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await absent({ anthropic: false })).toEqual({ kind: 'absent', laneKind: 'never-made' });
+    // a `ccrc` that sends no `anthropic` key, or a value off the grammar, says nothing, and nothing is kept
+    expect(await absent({ anthropic: undefined })).toEqual({ kind: 'absent' });
+    expect(await absent({ anthropic: 'yes' })).toEqual({ kind: 'absent' });
   });
 
   it('missing labels, a label whose model is not the pin, a bad pin or a bad efforts list is unreadable', async () => {
@@ -376,6 +382,20 @@ describe('the mixed pairs (D-8688)', () => {
       const f = fake(onModels);
       expect(await readLaneModels(f.io, f.ccrcDir, 'lane-a')).toEqual({ kind });
       expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP]);
+    });
+
+    // R3b fix round 1, F5: before the link's first ready frame no agent has said what it answers, so nothing is sent
+    // and the answer is not-started (the frame never left), never unsupported ("update the fleet box" is the wrong remedy).
+    it('before the first ready frame (agentOps unset) it is not-started, with nothing sent; a ready frame without the op is unsupported', async () => {
+      const frames: Array<Record<string, unknown>> = [];
+      const state: { agentOps: string[] | undefined } = { agentOps: undefined };
+      const client = { state, request: async (f: Record<string, unknown>) => { frames.push(f); throw new Error('never asked'); } };
+      const io = createIo(client as never);
+      expect(await io.models('lane-a', 'show')).toEqual({ kind: 'not-started' });
+      expect(await readLaneModels(io, '/nonexistent/.ccrc', 'lane-a')).toEqual({ kind: 'not-started' });
+      state.agentOps = ['update', 'token-sync'];
+      expect(await io.models('lane-a', 'show')).toEqual({ kind: 'unsupported' });
+      expect(frames).toEqual([]);
     });
 
     it('a bad lane is refused by the builder before the wire', async () => {

@@ -220,13 +220,20 @@ const LANE_UNREADABLE_CODE_LITERAL = [
 ] as const;
 export type LaneUnreadableCode = (typeof LANE_UNREADABLE_CODE_LITERAL)[number];
 
+/** Why a lane has no class registry, as `show` said it (R3b fix round 1, F1): `anthropic` is an Anthropic lane, whose
+ *  classes are the client's own aliases by design, and `never-made` a lane `ccrc models <id> init` never ran on. Derived
+ *  from an `as const` literal, the pattern above, and not exported. */
+const LANE_ABSENT_KIND_LITERAL = ['anthropic', 'never-made'] as const;
+export type LaneAbsentKind = (typeof LANE_ABSENT_KIND_LITERAL)[number];
+
 /** Why the server's builder refused to ask (`buildModelsArgv`), a type-only import, erased at compile time. */
 type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
 
 /** D-8406, R3b: `GET /api/models/:lane`'s reading of a lane, through the fleet's `models` op alone. Every outcome is its
  *  own arm, and none is folded into another (R3b, the coordinator's rulings of 2026-11-18):
  *  - `read`: the lane's classes, and `advance` as `show` reported it (absent only from a server older than R3).
- *  - `absent`: a lane with no class registry (an Anthropic lane, or one `ccrc models <id> init` never ran on).
+ *  - `absent`: a lane with no class registry. `laneKind` keeps the reason `show` sent (`LaneAbsentKind`); absent, the
+ *    answer did not say (the fleet box's roster has no such lane, or a `ccrc` that predates the key).
  *  - `unreadable`: the registry could not be read or parsed, or the op RAN and gave no usable answer (a timeout, an
  *    output past its cap, a lost answer, a stdout off the grammar). `code`, when present, is the box's reason
  *    (`LaneUnreadableCode`); absent, the server has no reason to name.
@@ -239,7 +246,7 @@ type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
  *  A reader shows class names for every arm but `read`, and never a model name this tree spells. */
 export type LaneModelsRead =
   | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead }
-  | { readonly kind: 'absent' }
+  | { readonly kind: 'absent'; readonly laneKind?: LaneAbsentKind }
   | { readonly kind: 'unreadable'; readonly code?: LaneUnreadableCode }
   | { readonly kind: 'unsupported' }
   | { readonly kind: 'not-started' }

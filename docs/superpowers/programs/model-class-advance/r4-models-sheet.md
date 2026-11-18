@@ -16,9 +16,9 @@ defined in the plan's "Deviations found" as D-8752 to D-8756, and cited here.
 - The answer to a done act carries the lane's `LaneModelsRead`, from a `show` started after the act: it never joins a
   `show` already in flight (D-8756). It starts a show of its own rather than invalidating the in-flight map when an act
   ends, which is simpler and holds on both arms (the local arm has no gate, so a joined show may predate the act's write).
-  On the agent arm a GET's show still running makes the agent's one models gate answer `busy`, so the after-act read falls
-  back to the files and the 200 carries no `advance`; the sheet reads the lane again after every act, and that read
-  recovers it (review 2523 F3).
+  On the agent arm a GET's show still running makes the agent's one models gate answer `busy`, so the after-act read
+  answers `busy` (until R3b it fell back to the files, and the 200 carried no `advance`); the sheet reads the lane again
+  after every act, and that read recovers it (review 2523 F3).
 - One audit line per op asked, once the op has answered, naming the device the gate measured (`device:<label>`,
   D-5229), never a session id: `ccrc-server: models: <action> <lane> <class> by <actor> -> <outcome>` (D-8753).
 - The Models sheet (`pwa/src/accounts/ModelsSheet.tsx`), drawn in the `AccountSheet` shell, opens from a "Models" act

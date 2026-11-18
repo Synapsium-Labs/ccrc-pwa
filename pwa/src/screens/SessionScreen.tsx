@@ -53,8 +53,8 @@ import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords
 import { HistoryTab } from '../session/HistoryTab';
 import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, laneReadWords, type PickOption } from '../lib/models';
-import { useLaneModels } from '../lib/useLaneModels';
+import { modelOptions, effortOptions, lanePickerNote, type PickOption } from '../lib/models';
+import { useLaneModelsView } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
@@ -369,8 +369,10 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
-  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
+  // D-8406: the lane's model files, which name each class's model in the picker and give its readback. The view's
+  // transient word (R3b fix round 1, F2) is said in the picker's note, beside the last good read it kept.
+  const laneView = useLaneModelsView(wrapper, undefined, picker === 'model');
+  const laneModels = laneView.read;
   // D-8686: the roster row decides which option lists the two pickers show (`modelListProvider`).
   const entry = entryFor(roster, wrapper);
   const route = routeView(live, wrapper, entry, accountProvider(roster, wrapper), laneModels);
@@ -767,7 +769,7 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
-        note={laneModels === null ? null : laneReadWords(laneModels)}
+        note={lanePickerNote(laneModels, laneView.transient)}
         options={modelOptions(
           wrapper, entry, laneModels, live?.model ?? null,
           routeInfo

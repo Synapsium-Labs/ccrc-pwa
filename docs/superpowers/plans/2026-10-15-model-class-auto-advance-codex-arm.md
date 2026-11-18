@@ -18649,3 +18649,11 @@ Where: wave R4 (Task 19's POST). Found by R4's worker; numbered by the coordinat
 ### D-8756 — no 60 s cache on the models routes
 
 Where: wave R4 (Task 19's POST), §3.11 and D-8693. Found by R4's worker; numbered by the coordinator on 2026-11-18. §3.11's per-lane 60 s cache, which a POST would replace with its own answer, is not built: #2736's `no-store` stands for the POST as for the GET. The read after an act starts a fresh `show` and never joins one already in flight (R4 fix round 1), so it shows what the act left. Concurrent GETs of one lane still share one `show`. Cost if wrong: every open of the sheet asks the box once.
+
+### D-8757 — `readLaneModels` keeps its `ccrcDir` parameter, unread, until #2943 lands
+
+Where: wave R3b (the files fallback's retirement). Found by R3b's worker as `mca-w5-ccrcdir-param-kept`; numbered by the coordinator on 2026-11-18. With the files path gone, `readLaneModels` (`server/src/laneModels.ts`) no longer reads `ccrcDir`, but the parameter stays, named `_ccrcDir`, because `server/test/models-op.test.ts` (in #2943's files and under its claim) still passes it, and #2943 is never rebased. Every site that now exists only to feed it: the parameter itself; `LaneModelsRouteDeps.ccrcDir` (`server/src/laneModelsRoutes.ts#LaneModelsRouteDeps`) and its pass to the POST's after-act read; and `server/src/server.ts`'s two pieces of wiring, the GET's call and `registerLaneModelsRoutes`'s `ccrcDir`. The removal is the plan ticket `ccrcdir-param-drop`, which follows #2943's merge. Cost if wrong: one unread parameter and one unread dependency field for one more PR.
+
+### D-8758 — an empty stdout at exit 1 reads `unreadable`, code `no-output`
+
+Where: wave R3b (the outcomes the files path used to cover). Found by R3b's worker as `mca-w5-no-output-code`; numbered by the coordinator on 2026-11-18. `ccd/ccrc`'s `_ccrc_die` before any lane sub ran exits 1 and prints nothing on stdout, so `show` sends no refusal word for it. The coordinator's ruling carries the refusal's code on `unreadable`; this case has none, so it carries the server's own word, `no-output`, in `LaneUnreadableCode` beside the seven refusal words (`shared/models.ts`), worded in the PWA (`LANE_UNREADABLE_CODE_WORDS`). No `ccrc` prints it. Cost if wrong: one code word of the server's own beside the box's.

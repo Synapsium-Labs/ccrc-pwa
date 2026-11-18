@@ -28,7 +28,7 @@ import type { RosterWire, RouteField } from '../../../shared/api';
 import { MODELS_ARGV_REFUSALS, type ModelsArgvRefusal } from '../../../shared/agent-protocol';
 import {
   CLASSES, type LaneAdvanceRead, type LaneAdvanceState, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead,
-  type LaneUnreadableCode, type ModelClass,
+  type LaneAbsentKind, type LaneUnreadableCode, type ModelClass,
 } from '../../../shared/models';
 import { CANARY_RESULTS, HOLD_BY, HOWS, type HistoryEntry, type Hold, type Pending, type Previous } from '../../../shared/model-advance.mjs';
 import type { ProviderId } from '../../../shared/providers';
@@ -328,7 +328,12 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   // R3b: each arm the read can answer instead of the classes. An `unreadable` keeps a `code` this build words and drops one
   // it does not (absence permits: it reads as an unreadable with no reason, never a lost answer); a `refused` must carry a
   // builder word.
-  if (kind === 'absent' || kind === 'unsupported' || kind === 'not-started' || kind === 'busy') return { kind };
+  if (kind === 'absent') {
+    // F1: the reason `show` gave, kept when it is one this build reads; any other value reads as "not said".
+    const laneKind = (models as { laneKind?: unknown }).laneKind;
+    return typeof laneKind === 'string' && Object.hasOwn(LANE_ABSENT_KINDS, laneKind) ? { kind, laneKind: laneKind as LaneAbsentKind } : { kind };
+  }
+  if (kind === 'unsupported' || kind === 'not-started' || kind === 'busy') return { kind };
   if (kind === 'unreadable') {
     const code = (models as { code?: unknown }).code;
     return typeof code === 'string' && Object.hasOwn(LANE_UNREADABLE_CODE_WORDS, code) ? { kind, code: code as LaneUnreadableCode } : { kind };
@@ -359,6 +364,10 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE };
 }
 
+/** The absent read's reasons (`LaneAbsentKind`, deliberately not exported as a value from `shared/models.ts`), pinned to
+ *  the type: a reason added there is a compile error until it is added here. */
+const LANE_ABSENT_KINDS: Readonly<Record<LaneAbsentKind, true>> = { anthropic: true, 'never-made': true };
+
 /** R3b: the box's reason for an `unreadable` read, as a clause that finishes "The lane's models could not be read: …".
  *  Keyed on `LaneUnreadableCode`, so a reason the server adds is a compile error here until it is worded. */
 export const LANE_UNREADABLE_CODE_WORDS: Readonly<Record<LaneUnreadableCode, string>> = {
@@ -379,7 +388,10 @@ export const LANE_UNREADABLE_CODE_WORDS: Readonly<Record<LaneUnreadableCode, str
 export function laneReadWords(read: LaneModelsRead): string | null {
   switch (read.kind) {
     case 'read': return null;
-    case 'absent': return 'This lane has no class registry, so its classes have no models to show.';
+    case 'absent':
+      return read.laneKind === 'anthropic'
+        ? 'This is an Anthropic lane: its classes are the client\'s own aliases, so it has no class registry to show.'
+        : 'This lane has no class registry, so its classes have no models to show.';
     case 'unreadable':
       return read.code === undefined
         ? 'The lane\'s models could not be read just now, so no model is shown.'
@@ -387,12 +399,23 @@ export function laneReadWords(read: LaneModelsRead): string | null {
     case 'unsupported':
       return 'This build does not offer the read of a lane\'s models here: the fleet box\'s agent predates it, or this server has no fleet box to ask. Update the fleet box to see the models.';
     case 'not-started':
-      return 'The read of the lane\'s models did not start: the link to the fleet box was not up, or its model tool could not be started. No model is shown.';
+      return 'The read of the lane\'s models did not start: the link to the fleet box was not up yet, or its model tool could not be started. It is asked again in a moment.';
     case 'refused':
       return 'This server would not ask about this lane: its name is not one the model tool takes. No model is shown.';
     case 'busy':
       return 'The fleet box was busy with another models request, so the lane was not read this time. That passes by itself: the next read shows the models.';
   }
+}
+
+/** The model picker's note (R3b; fix round 1, F1 and F2): `laneReadWords`, only where a model is actually missing. An
+ *  Anthropic lane's `absent` is by design (its rows are the client's own aliases, named as always), so the picker says
+ *  nothing over it; nor over a `read`, nor before the first read lands. `transient` is the hook's word for a newest
+ *  answer kept beside an older good read (`busy`, `not-started`): it is said, and the read's rows stay. Pure. */
+export function lanePickerNote(read: LaneModelsRead | null, transient: 'busy' | 'not-started' | null = null): string | null {
+  if (transient !== null) return laneReadWords({ kind: transient });
+  if (read === null) return null;
+  if (read.kind === 'absent' && read.laneKind === 'anthropic') return null;
+  return laneReadWords(read);
 }
 
 /** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401), `foreign-origin` (the

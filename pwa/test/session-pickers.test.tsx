@@ -837,3 +837,45 @@ describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8
     });
   });
 });
+
+// R3b fix round 1, F1 and F3: the model picker's note, through the real screen. The lane read is the one fetch this
+// file answers with a body: a never-made lane says it has no registry, an Anthropic lane's absent says nothing (its rows
+// are the client's own aliases), and a transient answer says its word. Deleting the note's wiring in `SessionScreen`
+// reds the first case; making the Anthropic absent show the note reds the second.
+describe('the model picker says why it names no model (R3b)', () => {
+  const answerLaneWith = (models: unknown): void => {
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('/api/models/')) {
+        const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+        return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200 });
+    }));
+  };
+
+  it('a lane whose registry was never made: the note says so, above the class rows', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'never-made' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/no class registry/);
+  });
+
+  it('an Anthropic lane\'s absent: no note at all, and the alias rows as always', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'anthropic' });
+    renderScreen();
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /Opus class/ })).toBeInTheDocument();
+    // let the lane's read land before measuring the note's absence
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes('/api/models/claude'))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('pick-note')).toBeNull();
+  });
+
+  it('a busy box: the note says the word', async () => {
+    answerLaneWith({ kind: 'busy' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/busy.*next read/i);
+  });
+});
