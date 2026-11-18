@@ -4002,9 +4002,12 @@ settle the question alone. Everything else reaches the operator at once, as it d
 
 This section says which question rows the Overlord's tier sees, and which owner in the tree keeps them.
 
-- **C17. Items and asks may hold for the Overlord, and approvals stay as today.** A row is held only when the hold
-  predicate `mayHold` (§6.7) says yes. Any other row reaches the operator at once, marked "brief pending", and the
-  Overlord's brief follows through its own door (C17, H17, H18).
+- **C17. Items, asks and, from wave AP2, children's permission prompts may hold for the Overlord.** A row is held
+  only when the hold predicate `mayHold` (§6.7) says yes. Any other row reaches the operator at once, marked "brief
+  pending", and the Overlord's brief follows through its own door (C17, H17, H18). Approvals were kept as they were
+  until the operator's direction of 2026-11-18. The approvals plan (`docs/superpowers/plans/2026-11-18-overlord-approvals.md`)
+  answers the two reasons this row gave: parking and standing grants solve the window, and a second, separately pinned
+  key carries the wider allows (C71 to C76).
 
 | Channel | Today | With the Overlord |
 |---|---|---|
@@ -4014,7 +4017,7 @@ This section says which question rows the Overlord's tier sees, and which owner 
 | A child's ask that lapsed at the coordinator, or a release with no reason | Pushed to the operator | Unchanged. Its class is `unknown`, so it is not held. The Overlord may attach a brief |
 | A root session's own ask (a coordinator's AskUserQuestion dialog) | Pushed to the operator | Unchanged. Its class is `unknown`, so it is not held. D-8126 allows such a dialog only before a programme's goals are pinned, so it should be rare |
 | A coordinator's question-ending turn | Waits for the operator to type | Clause 20 already says to raise it as an item, so it takes the item row above |
-| A child's permission prompt (approvals) | Coordinator first, then the operator | **Unchanged in this programme.** A 60 s main-thread window leaves no room for a second hop, and widening an allow beyond `ordinary` would change the signer and the hook's verifier. Later (see "Where things stand") |
+| A child's permission prompt (approvals) | Coordinator first, then the operator | Coordinator first, then the Overlord when `mayHold` is true (Table 6.7b, from wave AP2), then the operator. The window: a standing grant answers at once, a background subagent waits up to 480 s, and past the live window the hook parks the prompt (a deny that says when to retry), so a later ruling meets the retry (C72, C73). Wider allows: two families confined to the child's roots, signed by a second key the fleet pins apart (C75, C76). A stale deny digest is routed with its allow capped (C71) |
 | A `forbidden`-class prompt | Straight to the operator | Unchanged: forbidden acts are O1 by definition |
 | A review-cap ask | The operator's ask, pushed | Gone for coordinators once D-8125 lands. Where D-8125 refuses `coord-lift-off`, the operator switched coordinator lifts off, so it stays the operator's |
 
@@ -4547,7 +4550,8 @@ taken only where the Overlord may settle the row alone, and it delays the push, 
 | a `decide` item whose whole class is `unknown` | yes, a triage hold of 5 minutes | escalate with a brief, or return as over-asked |
 | a classed item whose every class a live grant covers through its effect | yes | answer (staged, for O3), escalate |
 | a `value` item whose whole class is O5, with a cited entry that is `active` and `stated`, rests on an operator message, was confirmed by the operator or quotes a whole message, and has the item's subject | yes | `state-a-fact`, escalate. No grant covers `state-a-fact`: that entry is its one cover |
-| any other classed item or ask; a `secret` or `do` item; a lapsed or root ask | no: it reaches the operator at once, marked "brief pending" | `attach-brief` only |
+| a child's permission prompt its coordinator declined, let lapse, could not allow (class `escalate`), or could not hold (`run-unclaimed`, `run-other-programme`, `parent-not-live`), from wave AP2 | yes, for the time left under the 480 s live bound; a main-thread prompt is parked first and the parked row is held | `answer-approval` (deny with a reason; allow only a family under a live grant, C75), escalate |
+| any other classed item or ask; a `secret` or `do` item; a lapsed or root ask; a `forbidden`, `truncated` or `unparseable` permission prompt | no: it reaches the operator at once, marked "brief pending" | `attach-brief` only |
 
 *Table 6.7b. What is held, and what each held row admits.*
 
@@ -4940,6 +4944,7 @@ Every act the Overlord can take is a row in one table. The server enforces the t
 | `nudge-owner` | Mail the owner of a routed request a follow-up. It is served by the relay door, under the relay's egress checks and ceilings. It carries no operator quote and spends no request authority | none | reversible | n/a | refuse | allow | allow |
 | `raise-item` | Raise an operator item of its own, with a brief, under the item actor `overlord`. The server draws its controls. It is keyed by its subject, so one item stands for one subject | none | reversible | n/a | refuse | allow | allow |
 | `answer-item`, `answer-ask` (carriers) | Answer a held question with an option | the effect's | the effect's, compensable at least | never themselves | refuse | refuse: it files a sealed prediction with its brief instead | allow, when that kind is armed; shadow while it is not |
+| `answer-approval` (from wave AP2) | Rule a child's held or parked permission prompt: deny with a reason, or allow once a request whose family (`read-only`, `scratch-write`) a live grant names | none: a family's effect is confined to the child's own roots | compensable: the child's branch keeps its history and is attic-pinned at reclaim, and a correction mail follows; a request of family `none` is not contained and is refused at every rung | deny: n/a; allow: only under a live grant naming the family | refuse | refuse: it files a sealed prediction with its brief instead | allow, when the kind is armed; shadow while it is not |
 | `start-programme` | Start a coordinator in a named workspace (§8.2) | none when an `operator` request names the project or programme; O3 otherwise | compensable, judged by what a started session can do | no, in version 1: an unrequested start is a proposal for one tap (§8.2) | refuse | proposal for one tap | allow |
 | `rekick-coordinator` | Re-kick a coordinator as the same session | none | compensable | n/a | refuse | proposal for one tap | allow |
 | `approve-spec`, `approve-dod`, `widen-scope` | Effects a grant may cover | O3 | compensable; whether an overturn can still honour it is measured when asked (`overturnableNow`) | yes | refuse | refuse | allow by grant, staged |
@@ -7632,6 +7637,7 @@ from rows the server writes, never from the Overlord's own account.
 | M35 | The picture first: briefs that open with a place line, premises raised and the rows each one settled, and routine questions of class none that still reached the operator under the default profile | Every brief; the rest watched | Brief rows, items, `operatorProfile` |
 | M36 | Timers: set, fired and cancelled by cause, per role; how late each fired, and how long its mail took to deliver; refusals by word; pending timers whose setter is gone | Every fired timer delivered; fired at most a minute late while the server runs, a burst the mail caps split aside; none pending for a setter measured gone | `continuity_timers`, mail deliveries, `continuity_timer_refusals` |
 | M37 | Responses: for each class of push, the share acted on, acted on after an open of its own push, opened, not opened, settled elsewhere and unmeasured, split by delivery at once or in a batch, and the median time to act against the next briefing time; each class's state, pin and changes, with their causes; and, shown apart, Waiting on you rows, digest corrections, chat replies and the pushes outside the classes | Classes that interrupt acted on at least half the time; the unmeasured share under 10% once W1's push pieces have landed; the rest watched | `operator_responses`, `response_receipts`, `response_classes` |
+| M38 | Permission prompts the operator must answer, per programme-day, by path (the approvals plan's Table 2a), read beside M1, which counts items and asks only | Half of the first two weeks' figure four weeks after wave AP1 goes Live, a quarter four weeks after AP2 | The approval census (`approvals` and `approval_census` rows), the outbox's approval sources |
 
 *Table 12. The measures, in number order.*
 
@@ -7640,7 +7646,9 @@ from rows the server writes, never from the Overlord's own account.
 The rulings are in §2. These are the calls the author made to build them, each stated in its final form. The operator
 approved them on 2026-11-10 ("Where things stand"), and each can still be overturned by number. C61 to C69 carry R20
 (2026-11-14), and the operator approved them on 2026-11-14, with this revision's pull request (#2792). C70 carries R21
-(2026-11-15), proposed with its revision's pull request. "Shaped by" names
+(2026-11-15), proposed with its revision's pull request. C71 to C76 carry the operator's direction of 2026-11-18 that
+children's permission prompts go through the coordinators and the Overlord, proposed with the approvals plan's pull
+request (`docs/superpowers/plans/2026-11-18-overlord-approvals.md`). "Shaped by" names
 the hardening calls that changed a call from its rev 8 form. §13.1 lists every H call.
 
 | # | Call | Options considered | Chosen, and why | Status | Shaped by |
@@ -7715,6 +7723,12 @@ the hardening calls that changed a call from its rev 8 form. §13.1 lists every 
 | C68 | How the budget uses the figures | not at all, a weight on each push, a state per class | A state per class, `quiet` or `interrupting`, and a pin, in `response_classes`. A class is one of H35's kinds of push that a state can change: escalation, released hold, brief. A batch push is no class: it always waits for a briefing time, and each push it carries counts for its own class, so a quiet class is still measured. New classes start quiet, a Setting on by default and read as on when unreadable: a quiet class waits for the briefing time, never past its urgency's deferral limit. The operator's "Let it interrupt" or "Keep it quiet" pins the class until the operator changes it again (the coordinator's ruling). The acted share counts every delivered row with a verdict, less those settled elsewhere, not actionable, or unread, because acts need no receipts (the coordinator's ruling). The server may only move an unpinned interrupting class to quiet, under 20% acted over 30 measured messages; at the defaults no class is unpinned and interrupting, so it acts only once "start quiet" is off or a class is released with "Let the figures decide". It proposes "let it interrupt" when half of a quiet class's messages were acted on, withheld while more than half of the rows not acted on are unmeasured, and only the operator decides. Evidence counts only messages admitted after the class's last change of state, a carried push by the time it was deferred. Only the pushes the budget rules on are affected, so I9 holds. Shadow first, with the budget. Not a feed of the operator model. Narrowing alone follows ruling 4's direction by the author's analogy, not by the operator's words | Approved | R20, H35, H37 |
 | C69 | Where the operator sees it, and corrects it | Settings only, the Week page and Settings | The figures per class on the Week page, split by delivery at once or in a batch, with the pushes outside the classes and digest corrections shown apart. In Settings, each class's state and pin with "Let it interrupt", "Keep it quiet" and "Let the figures decide". "I handled this elsewhere" on any measured message, kept in a column of its own and read ahead of the lane's seal. None needs the step-up | Approved | R20, H36 |
 | C70 | What the operator's ticks on Waiting on you are | a grant in waiting, a blind answer, one three-way choice, two stated facts | Two stated facts, the answer marks "could answer this" and "not sure of my answer": independent, each one reversible value a row with every change kept, on `decide` and `value` items and asks the operator was shown, open or recently cleared, and the first alone ("could handle this") on `do` items, under the same rule (#2900). They grant nothing and count in no bound, cell or grant's evidence. `could-answer` feeds the operator model through S1, decides which kinds are briefed first, and sits beside a grant proposal's evidence. An answer marked `unsure` is no yardstick: never a hit, a miss or an agreeing blind answer. One append-only table that copies no fact from the row it names, written by one session-gated operator door that confers nothing (§9.2.1). The proposal on tech detail is apart, in §9.5.1 | Proposed with R21 | H40, H43, H44 |
+| C71 | A child whose deny digest is older than the managed file's | skip the hold silently, as before; re-stamp on change; accept any digest the managed file has had | Accept the history the installer keeps, and cap that child's allow at `escalate`. Holds, denies and hand-overs work, and nothing is allowed under older deny rules. A re-stamp would assert a load `ccd` cannot see, and give the field a second writer | Proposed with the approvals plan | H18 |
+| C72 | The main thread's 60 s window | a longer wait; park; standing grants; a model call | Park plus grants. Past the live window the hook prints a deny that says the prompt is parked and when to retry. A later ruling becomes a one-shot grant on the request's digest, which the retry meets on its first poll. The operator's Allow on a parked `escalate` row is a pane pass, never a signature | Proposed with the approvals plan | |
+| C73 | Ruling before the prompt | none; grants per run, child or agent | A coordinator records standing grants for its own runs: `ordinary` only, at most 8 h, scoped to a run, a child or one agent. Nothing covers `forbidden` | Proposed with the approvals plan | |
+| C74 | Measuring what reaches the operator | build first; measure first | Measure first: the hook stamps its route in the envelope, the questions owner writes one census row for each prompt that has no row, every approval push carries its source, and M38 reads them | Proposed with the approvals plan | |
+| C75 | The Overlord's tier for permission prompts | a predicate of its own; a case of `mayHold` | A case of `mayHold`, armed as `answer-approval`. It allows only two families confined to the child's own roots (`read-only`, `scratch-write`), so the act is contained and compensable, and it denies anything | Proposed with the approvals plan | H18, H26 |
+| C76 | The signer and the verifier for wider allows | the same key with a flag; a second key | A second key, used only for the Overlord's rulings, pinned on the fleet box apart from the first. Record v2 names the authority and the family, and the verifier allows `escalate` only for that key, that authority and a family. Unpinning it revokes every wider allow at once. An older verifier refuses v2 | Proposed with the approvals plan | |
 
 *Table 13a. The author's calls in their final form, and the hardening calls that shaped each one.*
 
@@ -7813,8 +7827,11 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 | W4b, the playbook | Practice entries, the door and `practiceFor` over the trigger table, which started in W1a; the trigger key `response-quiet:<class>`, and response figures as entries' metrics and guards; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
 | W5, start and re-kick | The start and re-kick doors; retiring as a proposal; `portfolioFocus`; the capability word `overlord-start-v1` |
 | W6, propose and report | Grant proposals raised by the server; scarcity admission, and rank as the first sort key where work waits; the weekly portfolio packet; the Overlord's proposals about its own procedures; the digest section; the capability word `overlord-propose-v1` |
+| AP1, approvals routed (runs beside the waves above, needing nothing from the Overlord) | The stale deny digest routed with its allow capped, first and alone (C71); the prevention rule in the reviewer skill and every brief; the approval census and M38 (C74); the per-agent envelope; the subagent window, the park and one-shot grants, in shadow first (C72); coordinators' standing grants (C73); the capability words `approval-deny-history-v1`, `approval-census-v1`, `approval-route-v2` and `approval-grants-v1` |
+| AP2, approvals through the Overlord (after W3's second step) | The `approval` kind in `mayHold`, `answer-approval` and its door (C75); the families, the second key, record v2 and the verifier's v2 rule (C76); the capability words `overlord-approvals-v1` and `approval-wide-v1` |
 
-*Table 14. The waves. Table 13.1 names the wave of each H call.*
+*Table 14. The waves. Table 13.1 names the wave of each H call. AP1 and AP2 are the approvals plan's
+(`docs/superpowers/plans/2026-11-18-overlord-approvals.md`).*
 
 - **Each wave is useful by itself.** W1 gives the operator one place to ask where everything stands, answered from
   rows and history, and a portfolio they rank. W2 routes, follows up and reports. W3 puts a brief on every decision,
@@ -8097,15 +8114,20 @@ body now states the plan's ruling, in its words. Appendix B's Table B7 lists eac
   been built. W0 and W1a do not wait for it.
 - **A design for the split install** (ruling 1). Nothing in this spec waits for it on a server that already runs
   apart from its sessions.
+- **Approvals through the Overlord, three questions** (the approvals plan, its §5; the Later entry of that name moved
+  into waves AP1 and AP2 on the operator's direction of 2026-11-18):
+  - A parked permission prompt reaches you as a row on Waiting on you, not as a menu in a session's pane. Recommended:
+    yes.
+  - Version 1's families the Overlord may allow beyond `ordinary` are `read-only` and `scratch-write`, both inside the
+    child's own roots. Network, credentials and writes outside the roots stay yours. Recommended: those two only.
+  - Whether a coordinator's own permission prompts are held for the Overlord too. Recommended: yes in AP2, under the same
+    `mayHold`; plain top-level sessions stay yours.
 
 ### Later
 
 - **The split install.** The server in one container and the sessions and their agent in another, on one host, so
   that the install brings the server-side measurement of `separate-user` and has the whole ladder (ruling 1, §7.4). Trigger: a one-box
   install is to go past `advise`. It uses the supervision backend for containers (#270).
-- **Approvals through the Overlord.** Holding children's permission prompts for the Overlord, and letting a grant widen
-  allows beyond `ordinary`. Trigger: approvals are a large share of what still reaches the operator after W3,
-  counted beside M1, which counts items and asks only.
 - **A session credential behind the identity port** (H2, H28). Trigger: sessions run in their own containers, or the
   scoped credential (#273) or the per-agent token (#275) lands. It is what lets irreversible effects be reconsidered.
 - **A second host adapter** (H2): Claude Code's SDK host, with no terminal. Trigger: the supervision backend for
