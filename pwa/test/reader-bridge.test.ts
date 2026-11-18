@@ -736,7 +736,8 @@ describe('openAt', () => {
   it('a mount that destroys itself while the library mounts the new frame tears that frame down too (review of Task 13, nit 6)', async () => {
     const r = rig({ el: hostEl() });
     const m = await r.run();
-    const real = r.mount.getMockImplementation()!;
+    type MountCall = (el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => unknown;
+    const real = r.mount.getMockImplementation() as MountCall;
     r.mount.mockImplementationOnce((el: HTMLElement, o: { document: RenderInput; adapters: HostAdapters }) => {
       const f = real(el, o);
       m.destroy();
