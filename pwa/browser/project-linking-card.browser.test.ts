@@ -200,9 +200,10 @@ const assertContained = (m: Measured, at: string): void => {
   expect(m.section.scrollWidth, `${at}: the section overflows sideways`).toBeLessThanOrEqual(m.section.clientWidth);
   expect(m.ellipsis, `${at}: text is cut short with an ellipsis`).toEqual([]);
   expect(m.clipped, `${at}: an element is wider than its box`).toEqual([]);
-  // A7 (the review's ruling) is about the desktop widths: on a phone the select is as wide as the card and the picker lists the
-  // whole option, so a very long value may be cut in the closed select there.
-  if (m.viewport >= 1280) expect(m.clippedSelects, `${at}: a select shows only part of its value`).toEqual([]);
+  // A7: every ordinary value shows whole at every width. The one very long coordinator id (LONG_COORD) is checked at 1280 and up
+  // only: no select can show an arbitrarily long id on a phone, where the picker lists it in full.
+  const phone = m.viewport < 1280;
+  expect(m.clippedSelects.filter((c) => !(phone && c.includes(LONG_COORD))), `${at}: a select shows only part of its value`).toEqual([]);
   expect(m.pageScrollWidth, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClientWidth);
   expect(m.body.box.left, `${at}: the card starts left of the viewport`).toBeGreaterThanOrEqual(0);
   expect(m.body.box.right, `${at}: the card runs past the viewport`).toBeLessThanOrEqual(m.viewport);

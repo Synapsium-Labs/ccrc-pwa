@@ -30,17 +30,16 @@ export const ownerFrom = (row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>
 export const ownerIsInherited = (row: Pick<HierarchyProjectRow, 'project' | 'ownerNow'>): boolean => ownerFrom(row) !== row.project;
 
 /** The empty owner option: the coordinator the rule picks now and whether it is live, for every source (`ownerNow`, design §7.5);
- *  for a project that does not own its team key, the owning project's owner, and where it comes from. */
+ *  always the short form: where an inherited owner comes from is `ownerInheritedNote`'s, which wraps. */
 export function defaultOwnerWords(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow'>): string {
   const now = row.ownerNow;
-  const who = now.source === 'none' || now.id === null ? 'Default: none live' : `Default: ${now.id} (${now.live ? 'live' : 'not live'})`;
-  return ownerIsInherited(row) ? `${who}, from ${ownerFrom(row)}, which owns team key ${row.teamKey ?? ''}` : who;
+  return now.source === 'none' || now.id === null ? 'Default: none live' : `Default: ${now.id} (${now.live ? 'live' : 'not live'})`;
 }
 
 /** The note under the owner select of a project whose owner comes from another project, or null. */
 export function ownerInheritedNote(row: Pick<HierarchyProjectRow, 'project' | 'teamKey' | 'ownerNow'>): string | null {
   return ownerIsInherited(row)
-    ? `This project's own owner setting is not used while ${ownerFrom(row)} owns team key ${row.teamKey ?? ''}.` : null;
+    ? `This owner comes from ${ownerFrom(row)}, which owns team key ${row.teamKey ?? ''}. This project's own owner setting is not used meanwhile.` : null;
 }
 
 /** The option for a project's own named owner that is not in the coordinator list. Its liveness is known only when it is the

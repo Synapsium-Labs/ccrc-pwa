@@ -554,8 +554,8 @@ describe('the hierarchy settings', () => {
       hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a' } }),
       hrow('project-b', { ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
     ]));
-    await within(rowOf('project-b')).findByText('Default: coord-a (live), from project-a, which owns team key AAA');
-    expect(within(rowOf('project-b')).getByText("This project's own owner setting is not used while project-a owns team key AAA.")).toBeInTheDocument();
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('This owner comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.')).toBeInTheDocument();
     expect(within(rowOf('project-a')).queryByText(/own owner setting is not used/)).toBeNull();
   });
 
@@ -564,7 +564,7 @@ describe('the hierarchy settings', () => {
       hrow('project-a', { ownsTeam: true, ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } }),
       hrow('project-b', { linearOwner: 'coord-z', ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
     ]));
-    await within(rowOf('project-b')).findByText('Default: coord-a (live), from project-a, which owns team key AAA');
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
     expect(within(rowOf('project-b')).getByText('coord-z (not live)')).toBeInTheDocument();
     expect(within(rowOf('project-a')).getByText('Default: none live')).toBeInTheDocument();
   });
@@ -577,8 +577,8 @@ describe('the hierarchy settings', () => {
 
   it('the none-live words for an inherited owner', () => {
     const r = hrow('project-b', { ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } });
-    expect(defaultOwnerWords(r)).toBe('Default: none live, from project-a, which owns team key AAA');
-    expect(ownerInheritedNote(r)).toBe("This project's own owner setting is not used while project-a owns team key AAA.");
+    expect(defaultOwnerWords(r)).toBe('Default: none live');
+    expect(ownerInheritedNote(r)).toBe('This owner comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.');
     expect(namedOwnerWords(r, 'coord-z')).toBe('coord-z (not live)');
     expect(namedOwnerWords(hrow('project-a', { ownerNow: { id: 'coord-z', source: 'named', live: true } }), 'coord-z')).toBe('coord-z');
   });
