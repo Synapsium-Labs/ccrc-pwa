@@ -3,6 +3,7 @@ import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js'
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
 import { epicAdmitsRun, epicForWave, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
+import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
 
 /**
  * `POST /api/runs`' synchronous preconditions, decided (D-5384, audit ticket
@@ -87,6 +88,8 @@ export interface OpenRunFacts {
    *  true for a slug with no row (a new programme that skipped `plan put`); `ended` is `planEnd IS NOT NULL`; `ticket`
    *  finds a ticket of this programme by key (an Upkeep ticket belongs to no programme, so it is never found). */
   readonly plan: (slug: string) => OpenRunPlanFacts;
+  /** Overlord W1 other lanes (C48): the designation and the claimant's launch profile, read by `overlordClaimant`. */
+  readonly otherLaneReads: OtherLaneReads;
 }
 
 export interface OpenRunPlanFacts {
@@ -207,7 +210,7 @@ export type OpenRunConflictCode = Extract<RunRefuseCode,
  *  the bare shape refusal has NO `detail` key, every other `error` has one. */
 export type OpenRunRefusal =
   | { gate: OpenRunGate; error: 'bad-request'; detail?: string }
-  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
+  | { gate: OpenRunGate; error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
   | { gate: OpenRunGate; refused: OpenRunConflictCode; by?: string; detail?: string };
 
 /** The admitted open, shaped: what `CoordStore.openRun` and the route's later
@@ -247,7 +250,10 @@ interface Ctx {
   ticket?: OpenRunTicket | null;
 }
 
-type GateResult = { error: 'bad-request'; detail?: string } | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal; detail: string }
+/** C48's two words at `overlordClaimant`, `error` words sent by `refuseRoute` (slug `overlord-run-refusal-is-an-error-word`). */
+type OverlordClaimantRefusal = 'overlord-not-a-coordinator' | 'unmeasured';
+type GateResult = { error: 'bad-request'; detail?: string }
+  | { error: 'run-unreadable' | 'bad-session-id' | AttributionRefusal | OverlordClaimantRefusal; detail: string }
   | { refused: OpenRunConflictCode; by?: string; detail?: string } | undefined;
 type Gate = (c: Ctx) => GateResult | Promise<GateResult>;
 
@@ -342,6 +348,13 @@ const GATES = [
     }
     const r = await c.f.attribute(c.b.claimedBy as string, uuid as string);
     return r.ok ? undefined : { error: r.error, detail: r.detail };
+  }],
+  // Overlord W1 other lanes (C48, §3.5): the Overlord's body never becomes a claimant. After `attribution` (an
+  // unattributed or stale caller keeps its answer) and before `reviewRead`, the first store read, so a refused open
+  // leaves no `planned` row, places no hold and learns nothing about the store.
+  ['overlordClaimant', async (c) => {
+    const v = await decideOtherLane('runOpen', c.b.claimedBy as string, c.f.otherLaneReads);
+    return v.kind === 'refuse' ? { error: v.word, detail: v.detail } : undefined;
   }],
   ['reviewRead', (c) => {
     if (!isReview(c)) return undefined;

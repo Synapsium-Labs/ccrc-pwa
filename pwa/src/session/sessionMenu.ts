@@ -6,11 +6,12 @@ import { substrateFaultText } from '../fleet/substrateWords';
 import { sessionDocsHref } from '../docs/docsLinks';
 import { isPutAway, restoreReachesEnsure } from '../fleet/archivePutAway';
 import { hasPrCap, prDoorWord } from './prCap';
+import { coordinatorRole } from '../fleet/sessionFacts';
 
 /** One item of the ⋯ menu: its command, its words, and whether it is offered enabled. */
 export interface SessionMenuEntry {
   id: 'open-terminal' | 'session-pr' | 'session-model' | 'session-effort' | 'session-browser' | 'open-history' | 'session-docs'
-    | 'session-swap' | 'session-archive' | 'session-restore';
+    | 'session-swap' | 'session-renew' | 'session-archive' | 'session-restore';
   label: string;
   enabled: boolean;
   /** The reason a gated item is disabled (the substrate chip's own words), on `title`. */
@@ -53,6 +54,11 @@ export function sessionMenu(session: FleetSession | null): SessionMenuEntry[] {
   // and SwapSheet's confirm fires api.swap with no substrate check of its own — so an ungated door here was a swap
   // reachable with no gate anywhere.
   entries.push({ id: 'session-swap', label: 'Move to another account', enabled: fault === null, title: faultTitle });
+  // Renew now (Overlord W1a hand-offs): a long-lived session's own act, offered for the one long-lived role the fleet frame
+  // names today (a coordinator), gated like Move: under a substrate fault the console cannot see the pane it would renew.
+  if (session !== null && coordinatorRole(session)) {
+    entries.push({ id: 'session-renew', label: 'Renew now', enabled: fault === null, title: faultTitle });
+  }
   // Archive for every session, Restore for one already put away (workspace lifecycle §5.2) — never both. Archive is
   // gated like Move above: it ends the pane. It needs the row to choose its words, so a deep link that has not seen
   // its first frame yet offers it disabled. Restore is gated exactly where it IS Restart's request

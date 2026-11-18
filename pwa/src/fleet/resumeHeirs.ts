@@ -20,3 +20,10 @@ export function resumeHeirs(
     .map((s) => ({ id: s.id, name: sessionLabel(s) }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
 }
+
+/** The reclaim door and the archive hand-over refuse an heir that is the Overlord's body (Overlord W1 other lanes, C48),
+ *  answered `overlord-not-a-coordinator`. Both sheets say it in this one sentence. */
+export const OVERLORD_HEIR_TEXT = 'that session is the Overlord, which never takes a programme';
+/** The same doors' `unmeasured`: the designation could not be read, so neither door could rule the heir out as the
+ *  Overlord's body (question 4). Both sheets say it in this one sentence; the server's `detail` is the evidence. */
+export const OVERLORD_HEIR_UNMEASURED_TEXT = "the Overlord's designation could not be read, so the heir could not be checked; try again";

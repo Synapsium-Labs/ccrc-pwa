@@ -24,6 +24,7 @@ import {
 import { basename, dirname, resolve } from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
 import { brotliCompressSync, brotliDecompressSync, constants as Z, createBrotliCompress, createBrotliDecompress } from 'node:zlib';
+import { FTS_STRUCTURE_ROWID, parseFtsStructure } from './fts-structure.mjs';
 import { BUSY_TIMEOUT_MS, CONTROL_FILE_MAX, MAX_INTERRUPTED_ATTEMPTS, RECOVER_PHASES, SCHEMA_VERSION, SEGMENT_HEADER_BYTES, SIDECAR_WHOLE_MAX, UUID_RE, WRITER_RE, backupNameOf, blobOverDecodeCap, FTS_REBUILD_STEP, FTS_SHADOWS, FTS_STEP, formatRecoverCursor, ftsTextOf, historyPaths, journalRecord, jsonWithinStructureBound, newSha256, orderSegmentNames, parseSegmentName, restoreNameOk, segmentName, segmentTempName, sidecarIndexText } from './lib.mjs';
 
 /** The codec word every blob row records: Brotli at quality 5 (RV6). */
@@ -322,6 +323,37 @@ export const FTS_GATE_SQL = Object.freeze({
   backfill: 'SELECT completed_ms FROM derivation_state WHERE step = ? AND version = 1',
   rebuild: 'SELECT 1 AS x FROM derivation_state WHERE step = ? AND completed_ms IS NULL LIMIT 1',
 });
+
+/** D-8726 (history-fts-fold-once): the statements that read each FTS5 index's structure record, spelled once; cli.mjs's
+ *  STATUS_SQL carries them by reference, so the EXPLAIN cost pin sees each one. Row id 10 is a primary-key read. */
+export const FTS_STRUCTURE_SQL = Object.freeze({
+  table: "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?",
+  blobs: `SELECT block FROM blobs_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
+  nodes: `SELECT block FROM nodes_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
+});
+
+/** One FTS5 index's structure (fts-structure.mjs's parseFtsStructure), `blobs_fts` or `nodes_fts`: `missing` when the
+ *  table or its record is absent, `unreadable` when a read throws or the bytes do not parse. Never throws (D-8726). */
+export function ftsStructureOn(db, table) {
+  try {
+    if (db.prepare(FTS_STRUCTURE_SQL.table).get(`${table}_data`) === undefined) return { state: 'missing' };
+    const r = db.prepare(FTS_STRUCTURE_SQL[table === 'blobs_fts' ? 'blobs' : 'nodes']).get();
+    return parseFtsStructure(r === undefined ? null : r.block);
+  } catch {
+    return { state: 'unreadable' };
+  }
+}
+
+/** Status's reading (D-8726): each index's segment count, null where the table or its record is absent. A record that
+ *  cannot be read throws, so status names it unmeasured rather than read it as no segments. */
+export function ftsSegmentsOn(db) {
+  const count = (table) => {
+    const s = ftsStructureOn(db, table);
+    if (s.state === 'unreadable') throw new Error(`${table}'s structure record could not be read`);
+    return s.state === 'ok' ? s.nSegment : null;
+  };
+  return { blobs: count('blobs_fts'), nodes: count('nodes_fts') };
+}
 
 /** The four facts decideGrepIndex reads, measured on a reader: the read-only FTS5 probe (a probe that THROWS reads as
  *  'threw', never folded into 'absent'), whether derivation has made blobs_fts, whether a doctor --repair rebuild row is open

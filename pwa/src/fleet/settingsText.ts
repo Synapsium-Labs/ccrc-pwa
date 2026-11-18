@@ -18,6 +18,7 @@ import { createElement, Fragment, useCallback, useEffect, useId, useRef, useStat
 import type { FocusEvent, MouseEvent, ReactNode } from 'react';
 import { STALL_SECTION_TEXT, type StallLevel } from '../../../shared/api';
 import { PLAIN_AUTO_MEMORY_TEXT } from '../../../shared/plainAutoMemory';
+import type { RenewalMode } from '../../../shared/continuity';
 import { navigate } from '../lib/router';
 import type { SettingsSectionId } from '../lib/routes';
 import { COLLECT_PAUSE_TEXT, COLLECT_SECTION_TEXT } from './collectLaneWords';
@@ -285,6 +286,19 @@ export type SettingsScope = (typeof SETTINGS_SCOPE)[keyof typeof SETTINGS_SCOPE]
 /** One card's head: whose it is, its name, and what it is for. */
 export interface SettingsCardText { scope: SettingsScope; title: string; purpose: string }
 
+/** Overlord W1a hand-offs: the soft-renewal mode's words (Table 11.1d). One sentence each; the choices are L0's. */
+export const RENEWAL_MODE_TEXT = {
+  legend: 'When soft renewals happen',
+  purpose: 'When a coordinator\'s conversation is renewed for a soft reason (two compactions, a new install). '
+    + 'Nothing changes while the continuity lane is in shadow.',
+  choices: { 'when-away': 'When I\'m away', 'on-schedule': 'On schedule' } satisfies Record<RenewalMode, string>,
+  notes: {
+    'when-away': 'A long-lived session renews at a break in your activity.',
+    'on-schedule': 'A long-lived session renews when due, waiting at most 30 minutes for a break.',
+  } satisfies Record<RenewalMode, string>,
+  unread: 'The server could not read this row, so soft renewals follow the default.',
+} as const;
+
 /** Each card's head, by section, in §3.3's order. A section page renders its cards from its own list here, so the
  *  order is written once (Updates' list is C5's one-line insert point for the Claude Code card). */
 export const SETTINGS_CARDS = {
@@ -347,6 +361,10 @@ export const SETTINGS_CARDS = {
     /** Overlord W1a launch profiles PR B (H14): auto memory for plain sessions, after Roll idle sessions. */
     plainMemory: {
       scope: SETTINGS_SCOPE.fleet, title: PLAIN_AUTO_MEMORY_TEXT.legend, purpose: PLAIN_AUTO_MEMORY_TEXT.purpose,
+    },
+    /** Overlord W1a hand-offs: when soft renewals happen, after Auto memory for plain sessions. */
+    renewalMode: {
+      scope: SETTINGS_SCOPE.fleet, title: RENEWAL_MODE_TEXT.legend, purpose: RENEWAL_MODE_TEXT.purpose,
     },
     /** D-8121: the browser MCP servers' box default and what the fleet's running sessions use, before Roll idle sessions. */
     browser: {

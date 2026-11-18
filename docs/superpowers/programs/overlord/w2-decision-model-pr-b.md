@@ -81,10 +81,10 @@ saved copy). The arm door's `shadow` lands in the same pull request as this suit
 
 ## 3. What the plan left open, and how it is built
 
-- **The migration slot.** 95 by position on this push: account organization D (#2958) landed 90, designation A (#2950) 91,
-  done tests A (#2964) 92, the programme work map WM0 (#2974) 93 and forecasts A (#2987) 94. Gates A (#2993) and handoffs
-  (#2934) land first at 95 and 96, so this renumbers to 97 (or the next free slot) in the merge the coordinator asks for at
-  acceptance; a migration's number is its position, so it cannot be 97 before 95 and 96 are on main. Three tables and an
+- **The migration slot.** 98 by position, taken in the landing merge the coordinator asked for: account organization D
+  (#2958) landed 90, designation A (#2950) 91, done tests A (#2964) 92, the programme work map WM0 (#2974) 93, forecasts A
+  (#2987) 94, Linear hierarchy W4 (#2982) 95, gates A (#2993) 96 and handoffs (#2934) 97. Fix round 2 pushed it at 95 (main
+  plus one then); a migration's number is its position, so it moved only once 95 to 97 were on main. Three tables and an
   index, no seed.
 - **Review 2418's nits, as taken (F9).** The arm, key `PUT` and key `DELETE` doors ask their step-up from
   `decisionLines.ts#decisionStepUp`, the one rule; the DNS resolver is built once in `index.ts` and carried on `deps.decisions`

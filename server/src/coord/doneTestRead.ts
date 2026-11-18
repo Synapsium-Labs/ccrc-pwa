@@ -3,10 +3,11 @@
 // other file reads a run's `closePr` or `prLineage` to decide a predicate (`single-definition/done-test-reader.test.ts`).
 // Remaining work B clears its programme edges through it, and done tests B binds a request's test to it.
 //
-// Ring: L3, context C5 Coordination. It reads through its port alone, decides nothing (the answer is `targetVerdict`'s),
-// and reads no clock and no fleet box: only stored columns.
+// Ring: L3, context C5 Coordination. It reads through its port alone, decides nothing (the answer is `targetVerdict`'s,
+// or `runPrMergedSeen`'s), and reads no clock and no fleet box: only stored columns, and, for `runPrMerged`, the session's
+// listed PR its caller hands it.
 import type { DoneTarget, TargetAnswer } from '../../../shared/doneTests.js';
-import { targetVerdict, type TargetFacts } from './doneTests.js';
+import { runPrMergedSeen, targetVerdict, type TargetFacts } from './doneTests.js';
 import type { CoordStore } from './store.js';
 
 /** What the reader needs of coordination, declared by this consumer: one run, the runs that review it, one item. */
@@ -43,4 +44,18 @@ export function readTarget(coord: TargetReadPort, target: DoneTarget): TargetAns
     facts = { kind: 'threw', why: thrownWord(err) };
   }
   return targetVerdict(target, facts);
+}
+
+/** A session's PR as the newest fleet listing shows it, with the branch the session is on; null when the listing has no row
+ *  for it. The caller reads the listing (this reader reads no fleet box). */
+export type SessionPrOf = (sessionId: string) => { phase: string | null; branch: string | null } | null;
+
+/** The drift grace's one question (Linear hierarchy §7.3, wave 4): is this run's PR merged, as its lineage or its session's
+ *  listing shows. It gathers the run's lineage, branch and session; `runPrMergedSeen` decides. */
+export function runPrMerged(coord: Pick<CoordStore, 'run'>, runId: number, sessionPrOf: SessionPrOf): boolean {
+  const read = coord.run(runId);
+  if (!read.ok) return runPrMergedSeen({ run: 'unreadable' });
+  const r = read.run;
+  if (r === null) return runPrMergedSeen({ run: 'absent' });
+  return runPrMergedSeen({ run: 'read', lineage: r.prLineage, ownBranch: r.branch, listing: r.sessionId === null ? null : sessionPrOf(r.sessionId) });
 }

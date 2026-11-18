@@ -45,6 +45,7 @@ import {
   SECRET_TAIL_MIN, SECRET_VALUE_MAX, secretAnswer, secretTailOf, type ItemView, type StoredSecretsAnswer,
 } from '../../shared/ledgers.js';
 import { LEDGER_ROUTE_REFUSALS, REFUSAL_STATUS } from '../../shared/refusal.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
 const PASSPHRASE = 'a test passphrase for the secret suite';
@@ -1291,6 +1292,7 @@ describe('the slot\'s chain has a deadline (review 1391 A-3)', () => {
     const bare = Fastify({ logger: false });
     registerLedgerOperatorRoutes(bare, {
       coord, bus: new Bus(), now: () => NOW0 + 1, presenceOf: () => 'alive', gate: () => ({ pass: true }) as never, ccrcDir,
+      identity: attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }),
       registerSecret: () => 'unregistered', retireSecret: () => {}, slotWaitMs: 100,
       withAbandon: (async () => { throw new Error('no abandon hold in this rig'); }) as never, sendClose: ((reply: unknown) => reply) as never,
       authEnabled: false, sessionAuth: () => ({ pass: true }) as never, mailToken: () => null, liveAsk: () => ({ kind: 'unmeasured' }),

@@ -26,6 +26,7 @@ import type { CoordStore } from './coord/store.js';
 import type { OperatorModelStore } from './operatorModel/store.js';
 import type { PlanStorePort } from './coord/planStore.js';
 import type { PlanSync } from './linear/planSync.js';
+import type { DriftPass } from './linear/driftPass.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
 import type { DecisionDeps } from './coord/decisionModelLane.js';
@@ -220,6 +221,8 @@ export interface Deps {
   decisions?: DecisionDeps;
   /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
   planSync?: PlanSync | null;
+  /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */
+  driftPass?: DriftPass | null;
   /** The Overlord authority journal and its guard (Overlord W1, authority journal plan Tasks 3 and 4), built once in `index.ts`
    *  over `~/.ccrc/overlord-authority.jsonl`, the guard passed to the journal as its `AuthorityGuardPort`. The designation and
    *  ladder stores append through `overlordAuthority.appendInTx`; gates B's step 3 reads `overlordAuthorityGuard.state()`.

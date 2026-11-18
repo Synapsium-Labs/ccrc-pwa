@@ -5,33 +5,44 @@
 //      seal; to seal, it draws a seed from the `Entropy` port, reads the lead history as of the boundary, asks
 //      `forecastProgramme` and writes the answer (`sealForecast`);
 //   2. the SCORE arm: for each open seal whose 85% date has passed, it reads the measured closes since its boundary, asks
-//      `forecastOutcome` and writes `met` or `missed` (`scoreForecast`).
+//      `forecastOutcome` and writes `met` or `missed` (`scoreForecast`);
+//   3. the EDGE arm (remaining work B, plan `w2-remaining-work.md` Task 5): for each edge that counts as open
+//      (`openEdgesToMeasure`), it asks the done-test vocabulary's one reader about the target (`doneTestRead.ts#readTarget`,
+//      which answers a throw as `unmeasured`), asks `edgeVerdict`, and hands any verdict but `none` to the one writer of
+//      an edge's state (`settleEdge`).
 // It DECIDES NOTHING: every verdict is an L1 decider's. It is the only caller of the two writers of `programme_forecasts`
-// (`single-definition/writers-map.test.ts`). It sends no mail and pushes nothing; what it seals, nothing serves yet (PR B's
+// and of `settleEdge` (`single-definition/writers-map.test.ts`). It sends no mail and pushes nothing; what it seals, nothing serves yet (PR B's
 // `portfolioFor` will). A throw on one close or one seal is caught and recorded on the pass record, and the pass goes on.
 import type { Entropy } from '../time/ports.js';
 import type { SealedForecast } from '../../../shared/programmeFacts.js';
 import {
   forecastOutcome, forecastProgramme, sealBoundary, type ForecastHistory, type OutcomeFacts, type UnsealedClose,
 } from './forecast.js';
-import type { NewSeal } from './programmeFactsStore.js';
+import type { EdgeSettle, NewSeal } from './programmeFactsStore.js';
+import { readTarget, type TargetReadPort } from './doneTestRead.js';
+import { edgeVerdict } from './edgeVerdict.js';
+import type { ProgrammeEdge } from '../../../shared/programmeFacts.js';
 
 /** What the lane reads and writes, declared here by its consumer. `CoordStore` serves it with its delegates of the same
  *  names (`programmeFactsStore.ts`). A read that throws is caught by the pass, per close or per seal. */
-export interface ForecastLanePort {
+export interface ForecastLanePort extends TargetReadPort {
   unsealedClosesOf(now: number): { closes: UnsealedClose[]; missed: number };
   leadHistoryOf(program: string, asOf: number): ForecastHistory;
   sealForecast(seal: NewSeal, now: number): { written: boolean };
   forecastsOf(q: { dueBy: number }): SealedForecast[];
   outcomeFactsOf(sealId: number): OutcomeFacts | null;
   scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean };
+  openEdgesToMeasure(): ProgrammeEdge[];
+  settleEdge(id: number, settle: EdgeSettle, now: number): { written: boolean };
 }
 
 /** One pass's record: seals written, closes still waiting for their statement, seals scored, closes missed in a gap
- *  (never sealed), and each failure as `<programme>: <message>`. */
+ *  (never sealed), each failure as `<programme>: <message>`, edges ended (met, target-ended or target-unmeasurable), and
+ *  open edges whose target answered unmeasured. */
 export interface ForecastPass {
   readonly sealed: number; readonly waiting: number; readonly scored: number; readonly missed: number;
   readonly failed: readonly string[];
+  readonly edgesEnded: number; readonly edgesUnmeasured: number;
 }
 
 const SEED_BOUND = 2 ** 32;
@@ -67,5 +78,21 @@ export function runForecastLane(port: ForecastLanePort, now: number, entropy: Pi
       failed.push(`${s.program}: ${message(err)}`);
     }
   }
-  return { sealed, waiting, scored, missed, failed };
+  let edgesEnded = 0;
+  let edgesUnmeasured = 0;
+  try {
+    for (const e of port.openEdgesToMeasure()) {
+      try {
+        const v = edgeVerdict(e, e.target === null ? null : readTarget(port, e.target), now);
+        if (v.verdict === 'none') continue;
+        if (v.verdict === 'unmeasured') edgesUnmeasured += 1;
+        if (port.settleEdge(e.id, v.settle, now).written && v.settle.kind === 'end') edgesEnded += 1;
+      } catch (err) {
+        failed.push(`${e.program}: ${message(err)}`);
+      }
+    }
+  } catch (err) {
+    failed.push(`edges: ${message(err)}`);
+  }
+  return { sealed, waiting, scored, missed, failed, edgesEnded, edgesUnmeasured };
 }

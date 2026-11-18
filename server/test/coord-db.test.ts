@@ -749,9 +749,13 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[91] (runs.closePr, a run's own bound PR as its close measured it, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0),
     // and MIGRATIONS[93] (programme_forecasts, the sealed forecasts, Overlord W2 forecasts A),
-    // and MIGRATIONS[94] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
-    expect(COORD_SCHEMA_VERSION).toBe(95);
-    expect(MIGRATIONS.length).toBe(95);
+    // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183),
+    // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
+    // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
+    // hand-offs, Overlord W1a),
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
+    expect(COORD_SCHEMA_VERSION).toBe(98);
+    expect(MIGRATIONS.length).toBe(98);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -864,15 +868,18 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
-    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
+    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A),
     // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
     // and MIGRATIONS[90] (overlord_designation, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, Overlord W2 done tests A),
-    // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0), and MIGRATIONS[93]
-    // (programme_forecasts, Overlord W2 forecasts A),
-    // and MIGRATIONS[94] (decision_rows, decision_host and decision_lines, Overlord W2); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(95);
+    // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0),
+    // and MIGRATIONS[93] (programme_forecasts, Overlord W2 forecasts A),
+    // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
+    // and MIGRATIONS[95] (the designation actor columns, gates A),
+    // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(98);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

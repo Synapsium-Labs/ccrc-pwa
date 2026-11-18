@@ -20,6 +20,7 @@ import { NAME_LIST_BODY_MAX, NAME_LIST_KEY_SLOT, NAME_LIST_MAX_CHARS, NAME_LIST_
 import { recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import * as callerIdentity from '../src/auth/attributionIdentity.js';
 
 const FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
 const PASSPHRASE = 'a test passphrase for the name list suite';
@@ -113,6 +114,21 @@ function expectNoLeak(r: Rig): void {
 }
 
 describe('PUT /api/overlord/private-names: the gate, before the body is used', () => {
+  it('a refused identity actor stops before any key or list write (gates A)', async () => {
+    const real = callerIdentity.attributionIdentity;
+    vi.spyOn(callerIdentity, 'attributionIdentity').mockImplementation((deps) => ({
+      ...real(deps), operator: () => { throw new Error('the test identity port refused the actor'); },
+    }));
+    const r = await rig();
+    await r.stepUp();
+    const res = await put(r, { rows: ROWS });
+    // The existing credential-body error handler maps thrown errors to a fixed bad-request, never their text.
+    expect(res.statusCode).toBe(400);
+    expect(json(res)).toMatchObject({ error: 'bad-request' });
+    expect(listOf(r)).toEqual({ kind: 'measured', value: { kind: 'none' } });
+    expect(readServerSecretValue(r.ccrcDir, NAME_LIST_KEY_SLOT)).toEqual({ state: 'absent' });
+    expectNoLeak(r);
+  });
   it('no session: refused by the session gate, and nothing is written', async () => {
     const r = await rig();
     const res = await r.send({ method: 'PUT', payload: { rows: ROWS }, cookie: false });

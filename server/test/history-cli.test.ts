@@ -555,6 +555,7 @@ describe('ccrc history status (Linux)', () => {
     for (let i = 0; i < 200_000; i += 1) ent.run(`seed-${i}`, tr.lastInsertRowid, blob.lastInsertRowid);
     const tick = db.prepare('INSERT INTO ticks (ts_ms, lag_ms, bytes, files_behind, bytes_behind) VALUES (?, 0, 0, 0, 0)');
     for (let i = 0; i < 10_000; i += 1) tick.run(Date.now() - (10_000 - i) * 120_000);
+    healthStore.createFtsTables(db);   // D-8726: status reads each FTS5 index's structure record, so the seeded store has them
     db.exec('COMMIT');
     db.close();
     const r = status(box);
@@ -1103,6 +1104,26 @@ describe('status health: the measured snapshot through deriveHealth (task 28)', 
     expect(wordsOf(statusOf(box).env!['health']['fail'])).not.toContain('journal-unwritable');
     healthFs.writeFileSync(healthPath.join(dir, 'x.900.1.obs'), JSON.stringify(fullObs(old)), { mode: 0o600 });   // CONTROL
     expect(wordsOf(statusOf(box).env!['health']['fail'])).toContain('journal-unwritable');
+  });
+
+  it('D-8726: status reads each FTS5 index\'s segments from its structure record, and WARNs fts-segments-high from 500', () => {
+    const box = healthHh.makeHistoryBox('ccrc-history-health-fts-segments-', { role: 'fleet', shim: true });
+    ageFile(shimOf(box), 60 * 60_000);
+    tickedStore(box, Date.now());
+    const db = healthStore.openWriter(dbFile(box));
+    try {
+      healthStore.withTx(db, 'NORMAL', () => { healthStore.createFtsTables(db); });
+      db.exec("INSERT INTO blobs_fts(blobs_fts, rank) VALUES ('automerge', 0)");
+      db.exec("INSERT INTO blobs_fts(blobs_fts, rank) VALUES ('crisismerge', 1999)");
+      const ins = db.prepare('INSERT INTO blobs_fts(rowid, body) VALUES (?, ?)');
+      for (let i = 1; i < 500; i += 1) ins.run(i, `zq${i}`);   // one segment per commit
+      expect(wordsOf(statusOf(box).env!['health']['warn']), 'CONTROL: 499 segments').not.toContain('fts-segments-high');
+      ins.run(500, 'zq500');
+    } finally { healthStore.closeWriter(db); }
+    const h = statusOf(box).env!['health'];
+    const item = (h['warn'] as Array<{ word: string; detail: string }>).find((i) => i.word === 'fts-segments-high');
+    expect(item?.detail).toContain('blobs_fts holds 500 segments');
+    expect(wordsOf(h['fail'])).not.toContain('status-unreadable');
   });
 
   // FU3F review F2: a blocked file (a directory at its sidecar name, planted/ unusable) is spool-planted, never a journal hold or an unmeasured read.

@@ -29,6 +29,14 @@ export const BINDING_STATES = ['pending', 'bound', 'failed'] as const;
 export type BindingState = (typeof BINDING_STATES)[number];
 export const MIGRATION_STATES = ['proposing', 'proposed', 'approved', 'applying', 'applied', 'put-back', 'failed'] as const;
 export type MigrationState = (typeof MIGRATION_STATES)[number];
+/** Where an inbound Linear issue stands (D-8183): waiting for a coordinator, mailed to one, handed to a session, taken into the
+ *  plan, placed, closed in Linear with a reason, or raised to the operator. */
+export const INBOUND_STATES = ['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised'] as const;
+export type InboundState = (typeof INBOUND_STATES)[number];
+/** What the team's Linear owner decides about an inbound issue (`plan triage`, D-8183): hand it to a programme, place it in the
+ *  team's Upkeep epic, close it with a reason, or raise it to the operator. */
+export const TRIAGE_DECISIONS = ['hand', 'upkeep', 'close', 'raise'] as const;
+export type TriageDecision = (typeof TRIAGE_DECISIONS)[number];
 /** A project's place in the per-team migration, as its row in the console says it. */
 export const HIERARCHY_STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
 export type HierarchyState = (typeof HIERARCHY_STATES)[number];
@@ -76,7 +84,7 @@ export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 const PLAN_KEBAB: ReadonlySet<string> = new Set<string>([
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
   ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
-  ...HIERARCHY_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
+  ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
 ]);
 export const isPlanKebab = (tok: string): boolean => PLAN_KEBAB.has(tok);
 

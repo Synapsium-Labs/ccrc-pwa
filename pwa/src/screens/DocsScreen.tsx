@@ -54,6 +54,7 @@ const DEFAULT_READER: ReaderDeps = {
   render: (src, o) => docsRunner.render(src, o),
   mount: lazyMountReader,
   images: loadReaderImages,
+  history: api.docs,
 };
 
 /** The index's answer this visit. `null` has one meaning: no index request has been made in this visit yet. */

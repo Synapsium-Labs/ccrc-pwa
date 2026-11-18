@@ -315,7 +315,9 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'decision_rows', 'decision_host', 'decision_lines'] as const;
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts',
+  'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
+  'decision_rows', 'decision_host', 'decision_lines'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -396,8 +398,9 @@ describe(TABLES_PIN, () => {
       // its caller's transaction. Confirm the restore's `appendConfirmInTx` joins it in authority journal C.
       overlord_authority_head: ['server/src/coord/overlordAuthorityJournal.ts#OverlordAuthorityJournal.appendInTx'],
       // The designation (Overlord W1, C2): one writer per move of the row, each appending its authority record first where one is owed.
-      overlord_designation: ['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
-        .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`),
+      // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
+      overlord_designation: [...['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
+        .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
       // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
       // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
       // nothing deletes a receipt; the boot's record.
@@ -414,6 +417,10 @@ describe(TABLES_PIN, () => {
       // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
       claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
       programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
+      // The renewal hand-offs (Overlord W1a): the Renew now door's request, the prompt route's mark and the lane's quiet of it.
+      continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
+      operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
+      operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
       // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
       // reservation and its settle, the boot release settling through the same writer; the anchor columns' one writer (PR B).
       decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
@@ -426,9 +433,9 @@ describe(TABLES_PIN, () => {
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
-      // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
+      // remaining-work door; remaining work B's `settleEdge` writes `programme_edges`' state columns alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
-      programme_edges: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      programme_edges: ['insertRemaining', 'settleEdge'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
       // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
       // score arm's outcome write, each reached only from its arm of the forecast lane.
       programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
@@ -571,6 +578,22 @@ describe(TABLES_PIN, () => {
     expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
       'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
       `${S}insertRemaining`,
+    ]);
+  });
+  // Remaining work B (plan w2-remaining-work.md Task 5): an edge's state columns have one writer, `settleEdge`, reached only
+  // from the forecast lane's edge arm, and it writes only a row still open. No coordinator path clears an edge.
+  it('settleEdge is called exactly once outside the store, inside the forecast lane', () => {
+    expect(callSitesOf('settleEdge')(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/forecastLane.ts#runForecastLane',
+      `${S}settleEdge`,
+    ]);
+  });
+  it('settleEdge\'s UPDATEs set the state columns alone, and only on a row still open', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_edges\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
+    expect(updates.map((m) => [m[1], m[2]])).toEqual([
+      ['state = ?, endedAt = ?, evidence = ?', "id = ? AND state = 'open'"],
+      ['unmeasuredSince = ?', "id = ? AND state = 'open' AND unmeasuredSince IS NOT ?"],
     ]);
   });
   // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): each writer is reached only from its

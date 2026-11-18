@@ -177,3 +177,156 @@ describe('the score arm', () => {
     expect(seals(coord).find((x) => x.closingRunId === r)).toMatchObject({ outcome: 'open', scoredAt: null });
   });
 });
+
+// Overlord W2 remaining work B (plan w2-remaining-work.md, Task 5): the edge arm. Every target is read through the
+// done-test vocabulary's one reader, over the same fixture coord.db.
+describe('the edge arm', () => {
+  const HEAD = 'a'.repeat(40);
+  const WEEK = 7 * DAY;
+  const closeRun = (c: CoordStore, id: number, s: 'done' | 'failed', closePr: { pr: number; merged: boolean } | null, at = T0) =>
+    c.db.prepare('UPDATE runs SET state = ?, closedAt = ?, closePr = ? WHERE id = ?')
+      .run(s, at, closePr === null ? null : JSON.stringify({ ...closePr, head: HEAD }), id);
+  const edgeOn = (c: CoordStore, target: Record<string, unknown>, kind = 'needs-landed'): number => {
+    const r = c.insertRemaining('prog-a', 'lane-a-project-a', { lo: 1, hi: 2, reason: 'left', runId: null },
+      [{ kind: kind as never, target: target as never, why: 'waits on it' }], null, T0 - HOUR);
+    if (!r.ok) throw new Error(r.detail);
+    return [...r.added, ...r.kept][0]!;
+  };
+  const edgeRow = (c: CoordStore, id: number) =>
+    c.db.prepare('SELECT state, endedAt, evidence, unmeasuredSince FROM programme_edges WHERE id = ?').get(id) as
+      { state: string; endedAt: number | null; evidence: string | null; unmeasuredSince: number | null };
+  /** The store, with its run read throwing: the reader answers `unmeasured` and holds. */
+  const locked = (c: CoordStore): ForecastLanePort => Object.assign(Object.create(c) as CoordStore, {
+    run: () => { throw new Error('database is locked'); },
+  });
+
+  it('an edge whose run closed with its pull request merged is met after one pass, run-closed and pr-merged alike', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const landed = edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    const merged = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    expect(runForecastLane(coord, T0 - MIN, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 0, failed: [] });
+    expect(edgeRow(coord, landed)).toEqual({ state: 'open', endedAt: null, evidence: null, unmeasuredSince: null });
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ edgesEnded: 2, failed: [] });
+    expect(edgeRow(coord, landed)).toEqual({ state: 'met', endedAt: T0, evidence: 'pr-7', unmeasuredSince: null });
+    expect(edgeRow(coord, merged)).toEqual({ state: 'met', endedAt: T0, evidence: 'pr-7', unmeasuredSince: null });
+  });
+
+  it('an edge whose pull request closed unmerged is target-ended, with the measured end', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const e = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    closeRun(coord, rb, 'done', { pr: 7, merged: false });
+    runForecastLane(coord, T0, entropy());
+    expect(edgeRow(coord, e)).toEqual({ state: 'target-ended', endedAt: T0, evidence: 'pr-7-not-merged', unmeasuredSince: null });
+  });
+
+  it('a pr-merged edge on a pull request that is not the run\'s own ends target-unmeasurable at once (review 2381 N1)', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const e = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 6 });
+    coord.foldPrLineage(rb, [{ pr: 6, branch: 'ws/b', phase: 'closed', recordedAt: Math.floor(T0 / 1000) - 60 }]);
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ edgesEnded: 1, edgesUnmeasured: 0 });
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'target-unmeasurable', endedAt: T0, evidence: 'unmeasurable: lineage-unattributed' });
+  });
+
+  it('an operator-confirms edge is met once the item is done', () => {
+    const item = coord.raiseItem({ program: 'prog-a', runId: null, raisedBy: 'lane-a-project-a', kind: 'do', title: 't', why: 'w',
+      how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, T0 - DAY);
+    const e = edgeOn(coord, { predicate: 'operator-confirms', itemId: item }, 'needs-decision');
+    coord.db.prepare("UPDATE operator_items SET state = 'done' WHERE id = ?").run(item);
+    runForecastLane(coord, T0, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'met', evidence: `item-${item}-done` });
+  });
+
+  it('an item in a state word this build does not know keeps its edge open with the clock running, never ended at once (review 2439 F1)', () => {
+    const item = coord.raiseItem({ program: 'prog-a', runId: null, raisedBy: 'lane-a-project-a', kind: 'do', title: 't', why: 'w',
+      how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, T0 - DAY);
+    const e = edgeOn(coord, { predicate: 'operator-confirms', itemId: item }, 'needs-decision');
+    coord.db.prepare("UPDATE operator_items SET state = 'deferred' WHERE id = ?").run(item);
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 1, failed: [] });
+    expect(edgeRow(coord, e)).toEqual({ state: 'open', endedAt: null, evidence: null, unmeasuredSince: T0 });
+    runForecastLane(coord, T0 + WEEK - 1, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'open', unmeasuredSince: T0 });
+    coord.db.prepare("UPDATE operator_items SET state = 'done' WHERE id = ?").run(item);
+    runForecastLane(coord, T0 + WEEK - 1, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'met', evidence: `item-${item}-done` });
+  });
+
+  it('an unmeasured target leaves the edge open with its clock; seven days of unmeasured passes later it is target-unmeasurable', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const e = edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    expect(runForecastLane(locked(coord), T0, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 1, failed: [] });
+    expect(edgeRow(coord, e)).toEqual({ state: 'open', endedAt: null, evidence: null, unmeasuredSince: T0 });
+    expect(coord.openEdgesOf(['prog-a'])[0]).toMatchObject({ id: e, unmeasured: true });
+    runForecastLane(locked(coord), T0 + WEEK - 1, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'open', unmeasuredSince: T0 });
+    expect(runForecastLane(locked(coord), T0 + WEEK, entropy())).toMatchObject({ edgesEnded: 1 });
+    expect(edgeRow(coord, e)).toEqual({ state: 'target-unmeasurable', endedAt: T0 + WEEK, evidence: `unmeasured since ${T0}: Error`, unmeasuredSince: T0 });
+  });
+
+  it('a measured pending answer in between resets the clock', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const e = edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    runForecastLane(locked(coord), T0, entropy());
+    runForecastLane(coord, T0 + 3 * DAY, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'open', unmeasuredSince: null });
+    runForecastLane(locked(coord), T0 + 4 * DAY, entropy());
+    runForecastLane(locked(coord), T0 + WEEK + DAY, entropy());
+    expect(edgeRow(coord, e)).toMatchObject({ state: 'open', unmeasuredSince: T0 + 4 * DAY });
+  });
+
+  it('a second pass changes nothing', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    runForecastLane(locked(coord), T0, entropy());
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    runForecastLane(coord, T0 + MIN, entropy());
+    const before = coord.db.prepare('SELECT * FROM programme_edges ORDER BY id').all();
+    expect(runForecastLane(coord, T0 + 2 * MIN, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 0, failed: [] });
+    expect(coord.db.prepare('SELECT * FROM programme_edges ORDER BY id').all()).toEqual(before);
+  });
+
+  it('an edge a concurrent pass already met is not written again (the writer\'s state = open guard)', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const e = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    const stale = coord.openEdgesToMeasure();
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    runForecastLane(coord, T0, entropy());
+    closeRun(coord, rb, 'done', { pr: 7, merged: false });
+    const port: ForecastLanePort = Object.assign(Object.create(coord) as CoordStore, { openEdgesToMeasure: () => stale });
+    expect(runForecastLane(port, T0 + MIN, entropy())).toMatchObject({ edgesEnded: 0, failed: [] });
+    expect(edgeRow(coord, e)).toEqual({ state: 'met', endedAt: T0, evidence: 'pr-7', unmeasuredSince: null });
+  });
+
+  it('an edge whose state, kind or target this build cannot read is never written', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const a = edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    const b = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    const k = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 8 });
+    coord.db.prepare("UPDATE programme_edges SET state = 'paused' WHERE id = ?").run(a);
+    coord.db.prepare("UPDATE programme_edges SET target = '{\"predicate\":\"pr-merged\",\"runId\":1,\"pr\":7,\"repo\":\"x\"}' WHERE id = ?").run(b);
+    coord.db.prepare("UPDATE programme_edges SET kind = 'needs-x' WHERE id = ?").run(k);
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    const before = coord.db.prepare('SELECT * FROM programme_edges ORDER BY id').all();
+    expect(runForecastLane(locked(coord), T0 + WEEK * 2, entropy())).toMatchObject({ edgesEnded: 0, edgesUnmeasured: 0, failed: [] });
+    expect(runForecastLane(coord, T0 + WEEK * 2, entropy())).toMatchObject({ edgesEnded: 0, failed: [] });
+    expect(coord.db.prepare('SELECT * FROM programme_edges ORDER BY id').all()).toEqual(before);
+  });
+
+  it('a throw from the writer on one edge is recorded on the pass, and the next edge is still settled', () => {
+    const rb = run(coord, 'prog-b', 1, T0 - DAY, null);
+    const first = edgeOn(coord, { predicate: 'run-closed', runId: rb });
+    const second = edgeOn(coord, { predicate: 'pr-merged', runId: rb, pr: 7 });
+    closeRun(coord, rb, 'done', { pr: 7, merged: true });
+    const port: ForecastLanePort = Object.assign(Object.create(coord) as CoordStore, {
+      settleEdge: (id: number, settle: Parameters<CoordStore['settleEdge']>[1], now: number) => {
+        if (id === first) throw new Error('database is locked');
+        return coord.settleEdge(id, settle, now);
+      },
+    });
+    expect(runForecastLane(port, T0, entropy())).toMatchObject({ edgesEnded: 1, failed: ['prog-a: database is locked'] });
+    expect(edgeRow(coord, first).state).toBe('open');
+    expect(edgeRow(coord, second).state).toBe('met');
+  });
+});

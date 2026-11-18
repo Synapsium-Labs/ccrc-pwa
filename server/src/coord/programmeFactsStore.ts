@@ -6,8 +6,9 @@
 // One writer per fact, and nothing else writes either table:
 //   * `insertRemaining`  the only INSERT into `programme_remaining` (append-only: no UPDATE or DELETE names it) and the
 //                        only INSERT into `programme_edges`, both in the statement's one transaction;
-//   * the edge's state columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`) are remaining work B's `settleEdge`'s,
-//     called only by the forecast lane's edge arm. No coordinator path clears an edge.
+//   * `settleEdge`       the only writer of an edge's state columns (`state`, `endedAt`, `evidence`, `unmeasuredSince`),
+//                        and only of an `open` row, called only by the forecast lane's edge arm (remaining work B). No
+//                        coordinator path clears an edge.
 // The body's rules and the target verdict are `programmeRemaining.ts`'s (L1); this file reads and writes.
 //
 // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3): `programme_forecasts`, two writers,
@@ -18,7 +19,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import {
   EDGE_KINDS, EDGE_STATES, OPEN_EDGES_PER_PROGRAMME_MAX, SEAL_LOOKBACK_DAYS, SEAL_WAIT_MINUTES, edgeTargetKey, isForecastKind,
-  isForecastSource, isSealOutcome, isUnforecastableReason, parseEdgeTarget,
+  isEdgeState, isForecastSource, isSealOutcome, isUnforecastableReason, parseEdgeTarget,
   type EdgeKind, type EdgeState, type EdgeTarget, type Forecast, type ProgrammeEdge, type RemainingRefusal, type RemainingStatement,
   type SealedForecast,
 } from '../../../shared/programmeFacts.js';
@@ -28,12 +29,21 @@ import {
   leadHistoryFrom, type ForecastHistory, type LeadRun, type OutcomeFacts, type UnsealedClose,
 } from './forecast.js';
 import { edgeTargetVerdict, type EdgeTargetFacts, type NewEdge, type NewRemaining } from './programmeRemaining.js';
+import type { EdgeSettle } from './edgeVerdict.js';
 import { tx } from './tx.js';
 
 /** The types `CoordStore`'s delegates name, so `store.ts` takes one import for this file. */
 export type { EdgeTarget, ProgrammeEdge, RemainingStatement, SealedForecast } from '../../../shared/programmeFacts.js';
 export type { NewEdge, NewRemaining } from './programmeRemaining.js';
+export type { EdgeSettle } from './edgeVerdict.js';
 export type { ForecastHistory, OutcomeFacts, UnsealedClose } from './forecast.js';
+
+/** An edge counts as OPEN unless its stored state is one of this build's closed words: a word only a newer build knows
+ *  counts as open, as `edgeOf` reads it, so no unknown state lets a second open edge in (review 2347 F2). The ONE
+ *  spelling, read by the writer's keep lookup and cap count and by the edge arm's read. The partial unique index
+ *  `programme_edges_one_open` stays `WHERE state = 'open'` (slug `unknown-edge-state-guarded-in-the-writer`): the writer's
+ *  keep lookup, in the insert's own transaction, is what refuses the second edge. */
+const OPEN_EDGE_SQL = `state NOT IN (${EDGE_STATES.filter((w) => w !== 'open').map((w) => `'${w}'`).join(', ')})`;
 
 export type InsertRemainingResult =
   | { ok: true; id: number; added: number[]; kept: number[] }
@@ -48,10 +58,10 @@ export function insertRemaining(
   db: DatabaseSync, program: string, byId: string, statement: NewRemaining, edges: readonly NewEdge[], build: string | null, now: number,
 ): InsertRemainingResult {
   return tx(db, (): InsertRemainingResult => {
-    const openId = db.prepare("SELECT id FROM programme_edges WHERE program = ? AND kind = ? AND target = ? AND state = 'open'");
+    const openId = db.prepare(`SELECT id FROM programme_edges WHERE program = ? AND kind = ? AND target = ? AND ${OPEN_EDGE_SQL} ORDER BY id LIMIT 1`);
     const keyed = edges.map((e) => ({ e, target: edgeTargetKey(e.target) }));
     const existing = keyed.map(({ e, target }) => (openId.get(program, e.kind, target) as { id: number } | undefined)?.id ?? null);
-    const open = (db.prepare("SELECT COUNT(*) AS n FROM programme_edges WHERE program = ? AND state = 'open'").get(program) as { n: number }).n;
+    const open = (db.prepare(`SELECT COUNT(*) AS n FROM programme_edges WHERE program = ? AND ${OPEN_EDGE_SQL}`).get(program) as { n: number }).n;
     const adding = existing.filter((id) => id === null).length;
     if (open + adding > OPEN_EDGES_PER_PROGRAMME_MAX) {
       return { ok: false, why: 'too-many-open-edges',
@@ -75,28 +85,21 @@ export function insertRemaining(
   });
 }
 
-/** The facts a target's verdict reads (`programmeRemaining.ts#edgeTargetVerdict`). A run's `prLineage` is written by
- *  `foldPrLineage` alone, from a typed list, so one that does not parse as a list of entries is a corrupt file and
- *  throws, naming the run, rather than reading as a lineage that lists nothing. */
+/** The facts a target's verdict reads (`programmeRemaining.ts#edgeTargetVerdict`): the run's programme, or the item's
+ *  programme and state. It reads no lineage and no close record: whether a pull request is the run's own, and merged, is
+ *  `doneTestRead.ts#readTarget`'s to answer when the edge arm asks it (review 2377 F3, review 2381 N1). */
 export function edgeTargetFacts(db: DatabaseSync, target: EdgeTarget): EdgeTargetFacts {
   if (target.predicate === 'operator-confirms') {
     const it = db.prepare('SELECT program, state FROM operator_items WHERE id = ?').get(target.itemId) as
       { program: string; state: string } | undefined;
     return { predicate: target.predicate, item: it ?? null };
   }
-  const run = db.prepare('SELECT program, prLineage FROM runs WHERE id = ?').get(target.runId) as
-    { program: string; prLineage: string | null } | undefined;
-  if (run === undefined) return { predicate: target.predicate, run: null };
-  if (target.predicate === 'run-closed') return { predicate: target.predicate, run: { program: run.program, prs: [] } };
-  const v: unknown = run.prLineage === null || run.prLineage === '' ? [] : JSON.parse(run.prLineage);
-  if (!Array.isArray(v) || !v.every((x) => typeof x === 'object' && x !== null && typeof (x as { pr?: unknown }).pr === 'number')) {
-    throw new Error(`run ${target.runId}: prLineage is not a list of pull request entries`);
-  }
-  return { predicate: target.predicate, run: { program: run.program, prs: (v as { pr: number }[]).map((x) => x.pr) } };
+  const run = db.prepare('SELECT program FROM runs WHERE id = ?').get(target.runId) as { program: string } | undefined;
+  return { predicate: target.predicate, run: run === undefined ? null : { program: run.program } };
 }
 
 /** The door's step 9: `ok`, or why the target is refused. It reads (`edgeTargetFacts`) and asks the verdict; it writes
- *  nothing. A throw is the store's (an unreadable lineage). */
+ *  nothing. A throw is the store's (a locked or closed database). */
 export function edgeTargetCheck(db: DatabaseSync, slug: string, target: EdgeTarget): { ok: true } | { ok: false; detail: string } {
   return edgeTargetVerdict(slug, target, edgeTargetFacts(db, target));
 }
@@ -124,7 +127,7 @@ interface EdgeRaw {
 function edgeOf(r: EdgeRaw): ProgrammeEdge {
   const kind = (EDGE_KINDS as readonly string[]).includes(r.kind) ? (r.kind as EdgeKind) : null;
   const target = parseEdgeTarget(r.target);
-  const known = (EDGE_STATES as readonly string[]).includes(r.state);
+  const known = isEdgeState(r.state);
   const state: EdgeState = known ? (r.state as EdgeState) : 'open';
   const edge: ProgrammeEdge = {
     id: r.id, program: r.program, kind, target, why: mask(r.why), state, openedAt: r.openedAt, openedBy: r.openedBy,
@@ -135,6 +138,28 @@ function edgeOf(r: EdgeRaw): ProgrammeEdge {
   if (!known) edge.stateUnreadable = true;
   if (state === 'open' && r.unmeasuredSince !== null) edge.unmeasured = true;
   return edge;
+}
+
+/** The edge arm's read: every edge that counts as open (`OPEN_EDGE_SQL`, an unknown state included, flagged by
+ *  `edgeOf`), of every programme, oldest first. */
+export function openEdgesToMeasure(db: DatabaseSync): ProgrammeEdge[] {
+  return (db.prepare(
+    'SELECT e.id, e.program, e.kind, e.target, e.why, e.state, e.openedAt, s.byId AS openedBy, e.endedAt, e.evidence, ' +
+    `e.unmeasuredSince FROM programme_edges e JOIN programme_remaining s ON s.id = e.statementId WHERE e.${OPEN_EDGE_SQL} ORDER BY e.id`,
+  ).all() as unknown as EdgeRaw[]).map(edgeOf);
+}
+
+/** THE ONLY WRITER of an edge's state columns, and only of a row still `open` (the literal word: a state a newer build
+ *  wrote is never overwritten, and a concurrent pass that settled it first wins). An `end` sets the state, `endedAt` and
+ *  the evidence; a `clock` sets `unmeasuredSince` alone, and only when it changes. `written: false` when nothing
+ *  changed. Called only by the forecast lane's edge arm, with `edgeVerdict`'s answer. */
+export function settleEdge(db: DatabaseSync, id: number, settle: EdgeSettle, now: number): { written: boolean } {
+  const r = settle.kind === 'end'
+    ? db.prepare("UPDATE programme_edges SET state = ?, endedAt = ?, evidence = ? WHERE id = ? AND state = 'open'")
+      .run(settle.state, now, settle.evidence, id)
+    : db.prepare("UPDATE programme_edges SET unmeasuredSince = ? WHERE id = ? AND state = 'open' AND unmeasuredSince IS NOT ?")
+      .run(settle.unmeasuredSince, id, settle.unmeasuredSince);
+  return { written: Number(r.changes) === 1 };
 }
 
 /** Every edge whose state is not `met`, for the listed programmes, oldest first. `openedBy` is the statement's sender. */

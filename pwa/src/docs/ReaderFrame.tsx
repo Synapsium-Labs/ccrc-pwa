@@ -30,11 +30,18 @@
 // latched, so a walk that ends with a 401 starts the new body at once, with no mount of its own (review 2372 F1). A body whose
 // images reported none stops listening when the walk ends.
 //
+// A body also owns its history (completion plan Task 12 part B, `readerHistory.ts`): when the leaf hands it the opened pin
+// (`opened`), the body's run starts the commit-list read as the render starts, so it runs beside the render and the images,
+// and awaits the seed once the images are in and before the mount. The mount then carries the version seed (the served
+// commit, the draft flag, the commits and the day filter) and the `changes` and `openVersion` of that body, which are closed
+// over the body's own pin and text and answer nothing once the body ends. The document carries no version of its own: the
+// seed is the one carrier. Without `opened` there is no history read and no version list, and the seed is the served hash alone.
+//
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
 import { THEMES } from '@ccrc/ui';
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import type { DocsShowOk } from '../../../shared/docs';
+import type { DocPin, DocsPageLocation, DocsShowOk } from '../../../shared/docs';
 import { utf8ByteLength } from '../lib/markdownGuard';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import type { MarkdownParser } from '../lib/markdownRunner';
@@ -43,6 +50,7 @@ import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
 import { DocsAssetContext } from './DocImage';
+import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
 import {
@@ -51,6 +59,8 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
+import { readerServedHash, readerVersionSeed } from './reader/history';
+import { startReaderHistory } from './readerHistory';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
@@ -68,6 +78,8 @@ export interface ReaderDeps {
   render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
+  /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
+  readonly history?: DocsHistoryLoader;
 }
 
 /** The default `mount`: the adapter and the frame's texts load on first use, each through its own literal `import()`
@@ -87,6 +99,9 @@ export interface ReaderFrameProps {
   readonly link: LinkBase;
   readonly parser: MarkdownParser;
   readonly reader: ReaderDeps;
+  /** What the body's history is read for: the pin the leaf opened it at, the page now and the day filter of the history
+   *  entry the page stands on. Absent, no history is read and the frame offers no `changes` or `openVersion`. */
+  readonly opened?: { readonly pin: DocPin; readonly page: DocsPageLocation & { kind: 'path' }; readonly only: string | null };
   /** The visit's pending fragment: handed to the frame as its `initialHash` when it mounts. */
   readonly pendingFragment: string | null;
   /** Called once the fragment is handed over. */
@@ -261,6 +276,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
 
     void (async () => {
       const first = live.current;
+      // The body's history starts with its render, so the commit list is read beside the render and the images.
+      const opened = first.props.opened;
+      const history = opened === undefined ? null : startReaderHistory({
+        project: first.props.link.project, show: first.props.show, text, pin: opened.pin,
+        page: () => (live.current.props.opened ?? opened).page, only: opened.only,
+        history: first.props.reader.history ?? null, loaders: first.assets?.loaders ?? null,
+        queue: first.assets?.queue ?? null, signal: ac.signal,
+      });
       let outcome: ReaderRenderOutcome;
       try {
         outcome = await first.props.reader.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: ac.signal });
@@ -326,6 +349,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         uncount(counted);
       }
 
+      // The version seed: the served commit (or a draft's head) with the doc's commits and the day filter. It is awaited here,
+      // after the images, so the frame is seeded when it mounts; a body that ended or landed meanwhile mounts nothing.
+      const shown = first.props.show;
+      const seed = history === null
+        ? readerVersionSeed(readerServedHash(shown) ?? '', shown.source === 'draft', null, null)
+        : await history.seed;
+      if (ac.signal.aborted || landed) return;
+
       const cur = live.current;
       const el = hostRef.current;
       if (el === null) {
@@ -343,12 +374,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
           initialHash: decodedFragment(cur.props.pendingFragment),
-          // The W8a plan's refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
-          // The adapter keeps this only for a full hex sha (`withServedVersion`).
-          version: cur.props.show.source === 'draft'
-            ? { sha: cur.props.show.head ?? null, draft: true }
-            : { sha: cur.props.show.commit ?? null, draft: false },
         },
+        // The W8a plan's refinement (k) and Task 12: the commit a committed doc was read at, or the head a draft was read over
+        // with its flag, with the doc's commits and the day filter. Absent for a served hash that is not a full commit.
+        ...(seed === null ? {} : { version: seed }),
+        ...(history === null ? {} : {
+          changes: (sha: string) => history.changes(sha),
+          openVersion: (v: { sha?: string; only?: string }) => history.openVersion(v),
+        }),
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),

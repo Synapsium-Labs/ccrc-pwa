@@ -283,7 +283,7 @@ import { CHILD_RECLAIM_SWEEP_MS, COLLECT_OBSERVE_INTERVAL_MS, DIVERGENCE_SWEEP_M
 // changes: `ccdargv.js` and `childReclaimSweep.js` are imported a second time here, by name.
 import type { ChildReclaimCollectInput } from './childReclaimSweep.js';
 import { NO_FLEET_IDENTITY } from './fleetidentity.js';
-import { SLEEP_LANES, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
+import { SLEEP_LANES, designationOfCoord, hibernatePass, stopDonePass, type HibernateSweepMemory, type StopDoneMemory } from './sleepLane.js';
 import { DEPS_SHED_STAMP_SUFFIX, depsShedMemory, depsShedPass, type DepsShedMemory } from './depsShedPass.js';
 import type { SleepPolicyName } from './sleep.js';
 import { StaleArchiveBeat } from './staleArchiveBeat.js';
@@ -293,7 +293,7 @@ import {
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
 import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
-import { rollTargetsOf } from './coord/rollTarget.js';
+import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
 import {
   COLLECT_AUDITS_PER_PASS, COLLECT_FEED_TITLE, collectAfterAct, collectFeedTitle, collectAfterAudit, collectAfterFoldFailed, collectAfterHold,
@@ -2468,7 +2468,7 @@ export class FleetWatcher {
         const reads = turnReadDeps(this.deps, this);
         const coord = this.deps.coord;
         await rollPass({
-          coord, viewers: this.deps.viewers,
+          coord, continuity: coord, viewers: this.deps.viewers,
           targets: () => (coord === undefined ? null : rollTargetsOf(coord.rollSettings())),
           release: () => this.nodeRelease(),
           liveWord: (rec) => liveWordFor(reads, rec), mark: (rec) => turnMarkFor(reads, rec),
@@ -2851,6 +2851,8 @@ export class FleetWatcher {
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
+      void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -6176,7 +6178,8 @@ export class FleetWatcher {
       const pass = generationsPass({ coord, clock: this.deps.time.clock, entropy: this.deps.time.entropy, proc: this.generationsProc,
         log: (line) => console.warn(line), retried: this.generationsRetried, emptyTries: this.generationsEmptyTries }, {
         registry: records.map((r) => ({ id: r.id, uuid: r.unmeasured.includes('uuid') ? null : r.uuid,
-          lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child })),
+          lane: r.unmeasured.includes('wrapper') ? null : r.wrapper, child: r.child,
+          precompact: r.route === null ? null : r.route.unreadable.includes('precompact') ? 'unread' : r.route.fields.precompact ?? null })),
         // When this tick's registry read began: a start received since is held a pass (review 2006 R1).
         listedAt,
         readings,
@@ -6185,6 +6188,8 @@ export class FleetWatcher {
         orgOf: (account) => cfg.roster.byId.get(account)?.org ?? null,
       });
       if (pass.live && pass.planned.length > 0) await acts.run(pass.planned);
+      // The PreCompact field's retraction runs live or shadow (ruling F2 on review 2312): a `refuse` never outlives its reason.
+      if (pass.retract.length > 0) await acts.retract(pass.retract);
     });
   }
 
@@ -7112,13 +7117,21 @@ export class FleetWatcher {
       console.warn(`ccrc-server: stall-watch coordinator ${id} mail unreadable (${read.kind}: ${read.detail}) — held this sweep`);
       return;
     }
+    // The restarted arm reaches a long-lived session run-less (the renewal hand-offs, Task 7): its role from `roleFactsOf`, as a
+    // claimant of open runs, so a row whose child marker reads a child is never told. The designation is a role fact (designation
+    // A), read here plainly (`designationOfCoord`, no notice: the mail sweep raises that one); unmeasured, the role is unread and
+    // the session is not told, as the mail sweep delivers nothing then.
+    const designation = designationOfCoord(store);
+    const role = designation === 'unmeasured' ? null : roleOf(roleFactsOf(id, { child: tick.records.find((x) => x.id === id)?.child ?? { kind: 'unreadable' },
+      childRunKind: 'unmeasured', openCoordinators: new Set([id]), intentDeclared: 'unmeasured', designation }));
     const si: StallSessionInput = {
       sessionId: id, role: 'coordinator', run: null, worker, mark, liveStartedAt: lr?.startedAt ?? null,
       markUnreadableSince: this.stallMarkUnreadableSince.get(id) ?? null,
       mail: read.mail, deliveries: read.deliveries, notices: [], arming, coordinationPaused: paused,
+      longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
-    for (const sv of [stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
+    for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
     // coord-blocked (D-6942): the same session facts, with the claimant's child marker from this tick's rows
