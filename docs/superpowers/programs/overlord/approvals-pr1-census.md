@@ -72,6 +72,17 @@ Departures are listed by slug. The coordinator mints the numbers.
   count; a quoted command name leaves no list.
 - `literal-options`: in `literalInRoot` an option word (a leading `-`) is a literal but no path; a path at a root
   counts as inside it (a read of the worktree itself).
+- `path-guard-w3-releases-hook`: consolidation W3's path guard reds a diff that touches a W3-owned file beside the
+  approval signing path. This plan edits the session hook (Task 1.2) beside the questions owner (Task 1.3) by design,
+  and W3 has landed, so the guard's signing arm drops the session hook as its `pwa/` arm was dropped once W7 landed.
+  The verifier and the signer stay on it.
+- `census-read-through-questions`: the census read reaches the store through the questions owner
+  (`questions.ts#censusSources`), not directly, because that owner holds the approvals and census rows (C31) and W3's
+  question census keeps every question-table read in that file. `approvalRowsForCensus` joins W3's closed method list
+  and `approvalPushSources` its not-a-question list.
+- `hook-gate-compacted`: the gate's checks are folded so the hook grows by at most 40 net code lines (the growth
+  check's limit), with no waiver: one jq request body with the truncation as a branch, and paired checks that share a
+  word on one line.
 - `characterization-runtime`: Task 1.1's file takes about 150 s, almost all of it the shared approvals fixture
   (about 6 s a case).
 - `baseline-dates`: the card states the baseline rule; the Live dates of PR 0, PR P and PR 1 are owed to this note
