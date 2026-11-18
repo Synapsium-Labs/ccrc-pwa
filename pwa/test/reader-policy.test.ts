@@ -440,12 +440,14 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
 });
 
 // The policy ring (the architecture spec's L1, completion plan Task 13): `policy.ts` is pure deciders, so nothing it reaches
-// at run time may be a `.tsx`, a module that imports `react` or `react-dom` (a hook module), a store or `lib/api.ts`. The
-// walk follows every runtime import and re-export through relative specifiers, reading the declarations with the TypeScript
-// compiler API; `import type` / `export type` declarations are erased and skipped, bare package specifiers are leaves. A
-// declaration whose named specifiers are all `type` is NOT erased: under the package's `verbatimModuleSyntax` it compiles
-// to `import {} from` (or `export {} from`), which still loads the module (review of Task 13, minor 2). `docLinkTarget` once lived in `docsLinks.ts`, which imports `pinFor` from the
-// `useDocsVisit.ts` hook module: that chain is what this walk turns red on.
+// at run time may be a `.tsx`, a module that imports `react` or `react-dom` (a hook module), a store, `lib/api.ts` or
+// `@ccrc/ui`. The walk follows every runtime import and re-export through relative specifiers, reading the declarations
+// with the TypeScript compiler API; `import type` / `export type` declarations are erased and skipped. Bare package
+// specifiers are leaves, but `react`, `react-dom` and `@ccrc/ui` are each a break: `@ccrc/ui` is the design system,
+// consumed as source, and its one entry loads its React components (review 2480's A3). A declaration whose named
+// specifiers are all `type` is NOT erased: under the package's `verbatimModuleSyntax` it compiles to `import {} from` (or
+// `export {} from`), which still loads the module (review of Task 13, minor 2). `docLinkTarget` once lived in
+// `docsLinks.ts`, which imports `pinFor` from the `useDocsVisit.ts` hook module: that chain is what this walk turns red on.
 const PWA_ROOT = path.join(import.meta.dirname, '..');
 const POLICY_FILE = path.join(PWA_ROOT, 'src', 'docs', 'reader', 'policy.ts');
 
@@ -508,6 +510,8 @@ function ringBreaks(entry: string, root: string, fs: { read(p: string): string |
       if (!spec.startsWith('.')) {
         if (spec === 'react' || spec === 'react-dom' || spec.startsWith('react/') || spec.startsWith('react-dom/')) {
           breaks.push(`${r} imports ${spec}, so it is a hook module (${via})`);
+        } else if (spec === '@ccrc/ui') {
+          breaks.push(`${r} imports ${spec}, the design system, whose one entry loads React components (${via})`);
         }
         continue;
       }
@@ -611,6 +615,17 @@ describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a h
         'src/docs/comp.tsx imports react, so it is a hook module (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
       ]);
     }
+  });
+
+  it('a runtime import of @ccrc/ui, the design system consumed as source, is found with the chain; a type import of it is erased', () => {
+    const through = (line: string) => treeOf({
+      'src/docs/reader/policy.ts': "import { a } from '../links';\nexport const x = a;",
+      'src/docs/links.ts': `${line}\nexport const a = 1;`,
+    });
+    expect(ringBreaks(entry, root, through("import { cn } from '@ccrc/ui';"))).toEqual([
+      'src/docs/links.ts imports @ccrc/ui, the design system, whose one entry loads React components (src/docs/reader/policy.ts -> src/docs/links.ts)',
+    ]);
+    expect(ringBreaks(entry, root, through("import type { SkinId } from '@ccrc/ui';"))).toEqual([]);
   });
 
   it('a relative specifier that resolves to no file is reported, so the walk cannot go quiet on a typo', () => {
