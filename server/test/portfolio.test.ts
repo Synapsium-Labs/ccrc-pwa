@@ -5,7 +5,7 @@ import * as portfolio from '../src/coord/portfolio.js';
 import { operatorShownAt } from '../../shared/ledgers.js';
 import { SERVICE_CLASSES, isServiceClass } from '../../shared/portfolio.js';
 import {
-  ASK_CASES, BLOCKING_CASES, CYCLE_CASES, ENDING_CASES, ITEM_CASES, LIST_CASES, ORDER_CASES, PURITY_CASES, WAVE_CASES,
+  ASK_CASES, BLOCKING_CASES, CYCLE_CASES, ENDING_CASES, ITEM_CASES, LIST_CASES, ORDER_CASES, PURITY_CASES, W2_CASES, WAVE_CASES,
   type PortfolioCase,
 } from './portfolioCases.js';
 
@@ -22,6 +22,7 @@ suite('itemWaitMs and the items\' operator wait', ITEM_CASES);
 suite('portfolioFor: ask waits (question 10)', ASK_CASES);
 suite('portfolioFor: what blocks the programme', BLOCKING_CASES);
 suite('portfolioFor: no clock', PURITY_CASES);
+suite('portfolioFor: the W2 measures (forecasts B)', W2_CASES);
 
 describe('the class vocabulary', () => {
   it('lists the four classes in band order and reads nothing else as a class', () => {

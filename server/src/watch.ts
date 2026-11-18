@@ -19,6 +19,8 @@ import {
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
 import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
+import type { LiveSpendReading } from '../../shared/portfolio.js';
+import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
@@ -35,7 +37,7 @@ import { finishedAfter } from './coord/finished.js';
 import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
-import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
+import { readSpendTurns, readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
 import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
@@ -179,7 +181,7 @@ import { renewalActsOf } from './continuity/renewalWiring.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
-import { runForecastLane } from './coord/forecastLane.js';
+import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -2208,6 +2210,17 @@ export class FleetWatcher {
     return hs === undefined ? { kind: 'unmeasured' } : { kind: 'read', key: hs.state === 'waiting' ? askKey(hs.ask) : null };
   }
 
+  /** `portfolioStore.ts#SpendUsageRead`'s adapter (Overlord W2 forecasts B): a session's reading for the spend reads,
+   *  `not-ready` before the usage sweep's first pass in this process. A read-only accessor that stores nothing. The turn
+   *  read beside it is the forecast lane's last pass's (at most one lane interval old); a session it has not read yet
+   *  reads `unread`, so its reading is never measured on a guess. */
+  liveSpendReading(sessionId: string): LiveSpendReading {
+    if (!this.usageSwept) return { kind: 'not-ready' };
+    if (this.usageUnreadable.has(sessionId)) return { kind: 'unreadable' };
+    const r = spendReadingOf(this.usage.get(sessionId), this.usageConversation.get(sessionId), this.spendTurns.get(sessionId));
+    return r === null ? { kind: 'none' } : { kind: 'reading', ...r };
+  }
+
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means
    *  THIS PROCESS HAS NEVER MEASURED — a socket that connects before the first
    *  tick is sent no `coord` frame at all, because inventing `clear` there
@@ -3762,30 +3775,56 @@ export class FleetWatcher {
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
     const readAt = new Map<string, number>();   // the lane's own wall clock; rebuilt, so a purged row ages out
+    const conv = new Map<string, { sidecar: string | null; registry: string }>();
+    const unreadable = new Set<string>();   // F6: a failed read with no earlier reading to carry
     // A cold row (console speed S1) carries its entry, but only while that was read within the re-read bound.
     const readIds = hotIds === undefined ? undefined : usageReadIds(records, hotIds, this.usageReadAt, now);
     await Promise.all(records.map(async (r) => {
       if (readIds?.has(r.id) === false) {
         const kept = this.usage.get(r.id);
         if (kept) next.set(r.id, carriedUsage(kept, nowS));
+        const keptConv = this.usageConversation.get(r.id);
+        if (keptConv) conv.set(r.id, keptConv);
+        if (this.usageUnreadable.has(r.id)) unreadable.add(r.id);
         const at = this.usageReadAt.get(r.id);
         if (at !== undefined) readAt.set(r.id, at);
         return;
       }
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
-      if (read.kind === 'reading') next.set(r.id, read.usage);
+      if (read.kind === 'reading') { next.set(r.id, read.usage); conv.set(r.id, { sidecar: read.uuid, registry: r.uuid }); }
       else if (read.kind === 'unreadable') {
         const prev = this.usage.get(r.id);
-        if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S });
+        if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S }); else unreadable.add(r.id);
+        const prevConv = this.usageConversation.get(r.id);
+        if (prevConv) conv.set(r.id, prevConv);
         const at = this.usageReadAt.get(r.id);   // a failed read is no read: the row stays due
         if (at !== undefined) readAt.set(r.id, at);
         return;
       }
+      if (read.kind === 'malformed') unreadable.add(r.id);   // dropped, so never `none`: no reading stands for it
       readAt.set(r.id, now);
     }));
     this.usage = next;
     this.usageReadAt = readAt;
+    this.usageConversation = conv;
+    this.usageUnreadable = unreadable;
+    this.usageSwept = true;   // the forecast lane's spend arm waits for this (its boot guard)
   }
+
+  /** Whether `usagePass` has completed once in this process; `forecastSpendSince` is when the forecast lane's spend arm
+   *  first ran with it true (Overlord W2 forecasts B, `coord/forecastLane.ts#UsageRead`). */
+  private usageSwept = false;
+  private forecastSpendSince: number | null = null;
+  /** Per row, the reading's conversation (the sidecar's `session_id`) and the registry's current one, for the spend arm's
+   *  identity test (`programmeMeasures.ts#runSpendVerdict`). Rebuilt each pass, like `usage`. */
+  private usageConversation = new Map<string, { sidecar: string | null; registry: string }>();
+  /** Rows whose sidecar read failed this pass, unreadable with no earlier reading to carry or malformed (dropped): the
+   *  spend reads answer `unreadable` for them, never `none`, so a transient failure never records a permanent `absent`
+   *  (fix round 1, F6). Rebuilt each pass. */
+  private usageUnreadable = new Set<string>();
+  /** Per row with a reading, the turn marker's answer read by the forecast lane's last pass (fix round 1, F2):
+   *  `coord/forecastLane.ts#spendReadingOf`'s `turn`. Rebuilt each lane pass. */
+  private spendTurns = new Map<string, SpendTurnRead>();
 
   /** When each row's usage sidecar was last read (ms, `Date.now`), by `usagePass` alone. */
   private usageReadAt = new Map<string, number>();
@@ -6236,12 +6275,27 @@ export class FleetWatcher {
     await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
   }
 
-  /** The forecast lane (Overlord W2 forecasts A, `coord/forecastLane.ts`): one seal-and-score pass; a failure logs one line. */
+  /** The forecast lane (Overlord W2 forecasts A, `coord/forecastLane.ts`): one seal-and-score pass; a failure logs one line.
+   *  Before the pass it reads the turn marker of every row with a usage reading (fix round 1, F2), so the spend reads judge
+   *  freshness against the session's own turns. */
   async sweepForecasts(): Promise<void> {
     const port = this.deps.forecasts;
     if (!port) return;
-    await this.runLane('forecasts', () => {
-      const pass = runForecastLane(port, this.deps.time.clock.wall(), this.deps.time.entropy);
+    await this.runLane('forecasts', async () => {
+      if (this.usageSwept) this.spendTurns = await readSpendTurns((id, reg) =>
+        readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, reg, null), this.usageConversation);
+      const now = this.deps.time.clock.wall();
+      if (this.usageSwept) this.forecastSpendSince ??= now;
+      const usage = { ready: () => this.usageSwept, reading: (id: string) => {
+        const r = this.liveSpendReading(id);
+        return r.kind === 'not-ready' ? { kind: 'none' as const } : r;
+      } };
+      const notice = (program: string, v: HealthVerdict): void => {
+        noticeSink(this.deps)({ kind: 'coord', sessionId: '', runId: null, title: `Health · ${program}`, body: `${v.word} (${v.evidence.matched ?? 'steady'})` },
+          'record-only', { degraded: `programme ${program} health notice, feed archive degraded` });
+      };
+      const pass = runForecastLane(port, now, this.deps.time.entropy, { usage, spendSince: this.forecastSpendSince ?? now,
+        liveAsk: (c) => this.liveAskKey(c), liveSpend: (sid) => this.liveSpendReading(sid), notice });
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
       if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });

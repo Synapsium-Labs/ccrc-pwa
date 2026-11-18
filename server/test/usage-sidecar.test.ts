@@ -15,7 +15,7 @@ const row = (over: Record<string, unknown> = {}): string => JSON.stringify({
 
 describe('parseUsageSidecar', () => {
   it('reads a fresh row and derives the class from model.id', () => {
-    expect(parseUsageSidecar(row(), NOW)).toEqual({ kind: 'reading', usage: {
+    expect(parseUsageSidecar(row(), NOW)).toEqual({ kind: 'reading', uuid: 'u', usage: {
       ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, ctxTokens: null, ctxWindow: null, cost: 1.25, cacheExpiresAt: null,
       stale: false,
     } });
@@ -35,7 +35,7 @@ describe('parseUsageSidecar', () => {
     const r = parseUsageSidecar(row({ ctxTokens: 71_000, ctxWindow: 1_000_000 }), NOW);
     expect(r.kind === 'reading' && [r.usage.ctxTokens, r.usage.ctxWindow]).toEqual([71_000, 1_000_000]);
     const old = parseUsageSidecar(row(), NOW);
-    expect(old).toEqual({ kind: 'reading', usage: {
+    expect(old).toEqual({ kind: 'reading', uuid: 'u', usage: {
       ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: 'high', ctxPct: 12, ctxTokens: null, ctxWindow: null,
       cost: 1.25, cacheExpiresAt: null, stale: false,
     } });
@@ -76,10 +76,18 @@ describe('parseUsageSidecar', () => {
   });
   it('nulls ride through as nulls; strings where numbers belong are nulls too', () => {
     const r = parseUsageSidecar(row({ effort: null, cost: null, ctxPct: '12' }), NOW);
-    expect(r).toEqual({ kind: 'reading', usage: {
+    expect(r).toEqual({ kind: 'reading', uuid: 'u', usage: {
       ts: NOW - 10, model: 'claude-opus-5', class: 'opus', effort: null, ctxPct: null, ctxTokens: null, ctxWindow: null,
       cost: null, cacheExpiresAt: null, stale: false,
     } });
+  });
+  it('carries the sidecar\'s session id beside the usage, and a row without one (or a non-string one) reads null (Overlord W2 forecasts B)', () => {
+    const r = parseUsageSidecar(row({ uuid: 'sess-a-conversation' }), NOW);
+    expect(r.kind === 'reading' && r.uuid).toBe('sess-a-conversation');
+    for (const uuid of [undefined, null, 7]) {
+      const x = parseUsageSidecar(row({ uuid }), NOW);
+      expect(x.kind === 'reading' && x.uuid).toBeNull();
+    }
   });
   it.each([
     ['not json', '{'], ['an array', '[]'], ['no ts', row({ ts: undefined })], ['a string ts', row({ ts: '1' })],

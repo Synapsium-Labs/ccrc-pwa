@@ -302,3 +302,90 @@ export const CALIBRATION_STATES = Object.keys(CALIBRATION_STATE_MAP) as readonly
  *  `CALIBRATION_MIN_N`, never 0). */
 export interface CalibrationCut { readonly at: number; readonly n: number; readonly met: number; readonly share: number | null }
 export interface Calibration { readonly state: CalibrationState; readonly cuts: readonly CalibrationCut[] }
+
+// ── Health (plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-forecasts-health.md`, PR B) ──────────────────────────
+// A programme's health is one word with its evidence, first match wins (spec §5.6 H38), decided by
+// `server/src/coord/programmeHealth.ts#programmeHealth` in the forecast lane's health arm alone and recorded as a
+// `programme_health` row on a change; the portfolio shows the newest row. Durations are counts of days or hours, as
+// above: the server multiplies them by its own millisecond constants.
+
+/** §5.6's words, worst first: a word's index is its rank, and a lower index is worse. */
+export const PROGRAMME_HEALTH_WORD_MAP = {
+  'blocked-on-you': true, slipping: true, stalled: true, aging: true, churning: true, 'scope-growing': true, burning: true,
+  steady: true,
+} as const satisfies Record<string, true>;
+export type ProgrammeHealthWord = keyof typeof PROGRAMME_HEALTH_WORD_MAP;
+export const PROGRAMME_HEALTH_WORDS = Object.keys(PROGRAMME_HEALTH_WORD_MAP) as readonly ProgrammeHealthWord[];
+export const isProgrammeHealthWord = (v: unknown): v is ProgrammeHealthWord =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(PROGRAMME_HEALTH_WORD_MAP, v);
+
+/** The health limits (question 8, ruled as starting values, revisited after a month of `programme_health` rows). */
+/** `slipping`: the newest 85% date moved this many days later than the previous seal's. */
+export const HEALTH_SLIP_DAYS = 7;
+/** `stalled`: no state change of an open work run for this many hours while work is in progress. */
+export const HEALTH_STALLED_HOURS = 48;
+/** `aging`: the programme's own 85th percentile cycle is the reference from this many done waves, else the fleet's. */
+export const HEALTH_OWN_CYCLE_MIN = 5;
+/** `churning`: review rounds per closed wave above this (ruled `>`), over the window. */
+export const HEALTH_CHURN_ROUNDS = 2;
+/** `churning`: reworked waves above this (ruled `>`), over the window. */
+export const HEALTH_CHURN_REOPENS = 2;
+/** `scope-growing`: the range grew by at least this many waves since the window's oldest statement. */
+export const HEALTH_SCOPE_GROWTH_WAVES = 2;
+/** `burning`: the recent median spend per wave at least this many times the earlier one. */
+export const HEALTH_BURN_FACTOR = 2;
+/** `burning`: measured waves in each window. */
+export const HEALTH_BURN_MIN_WAVES = 3;
+/** The window churn, scope and spend read over; spend compares it with the window before it. */
+export const HEALTH_WINDOW_DAYS = 28;
+
+/** A `run_spend` row's state (`programmeMeasures.ts#runSpendVerdict` decides it): `measured`, a cost read in the run's own
+ *  conversation and window; `absent`, the run had no session, its session had no reading, or the reading carried no cost
+ *  figure; `outside`, a reading was there but failed a test: the window, freshness (a turn after it), a later dispatch of
+ *  the session, the dispatch conversation, or a refused `/clear`. */
+export const RUN_SPEND_STATE_MAP = { measured: true, absent: true, outside: true } as const satisfies Record<string, true>;
+export type RunSpendState = keyof typeof RUN_SPEND_STATE_MAP;
+export const RUN_SPEND_STATES = Object.keys(RUN_SPEND_STATE_MAP) as readonly RunSpendState[];
+export const isRunSpendState = (v: unknown): v is RunSpendState =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(RUN_SPEND_STATE_MAP, v);
+
+/** Whether a main-thread turn of the session started after a reading was rendered, from the session's turn marker
+ *  (fix round 1, F2: freshness is judged against the session's own turns, not the pass clock). `read`: the marker was read
+ *  and is this conversation's, `turnAt` its newest turn's start (epoch ms), null when no turn started since the `/clear`
+ *  that opened it; `background` the count of background work (agents, workflows, shells) its newest Stop left live, −1
+ *  when that Stop could not count it or no Stop was recorded since the `/clear` (fix round 2, F2-b: background work after
+ *  the render is spent unseen, so only 0 vouches). `unread`: the marker could not vouch (absent, unreadable, malformed,
+ *  another conversation's). */
+export type SpendTurnRead =
+  | { readonly kind: 'read'; readonly turnAt: number | null; readonly background: number }
+  | { readonly kind: 'unread' };
+/** A session's newest reading as a spend verdict judges it: `readAt` in epoch ms (the render); `sidecarUuid` the
+ *  conversation the reading was taken in (the sidecar's `session_id`); `conversationUuid` the registry's current one;
+ *  `turn` the marker's answer, read after the render. */
+export interface SpendReading {
+  readonly readAt: number; readonly cost: number | null; readonly class: string | null;
+  readonly sidecarUuid: string | null; readonly conversationUuid: string | null; readonly turn: SpendTurnRead;
+}
+
+/** One run_spend row as read; a state word this build cannot read is 'unreadable', read as unmeasured, never 0. */
+export interface RunSpendRow {
+  readonly runId: number; readonly at: number; readonly state: RunSpendState | 'unreadable';
+  readonly cost: number | null; readonly class: string | null; readonly readAt: number | null;
+}
+
+/** What a health word was decided from: the matched arm's name (`<word>:<arm>`, null for `steady`), its inputs by name,
+ *  and every input the facts could not measure. */
+export interface HealthEvidence {
+  readonly matched: string | null;
+  readonly values: Readonly<Record<string, number | string | boolean | null>>;
+  readonly unmeasured: readonly string[];
+}
+export interface HealthVerdict { readonly word: ProgrammeHealthWord; readonly evidence: HealthEvidence }
+
+/** One programme_health row as read: a word or evidence this build cannot read is 'unreadable', carried, never dropped. */
+export interface HealthRow {
+  readonly id: number; readonly program: string; readonly at: number;
+  readonly word: ProgrammeHealthWord | 'unreadable'; readonly evidence: HealthEvidence | 'unreadable';
+}
+/** The spend arm counts a reading taken up to this many minutes after its run's close (the worker's last render). */
+export const SPEND_READ_GRACE_MINUTES = 10;

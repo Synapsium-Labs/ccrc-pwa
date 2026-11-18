@@ -1625,11 +1625,12 @@ describe('the trigger table has one definition (Overlord §9.7)', () => {
       expect(holders).toEqual([HOME]);
     });
   }
-  it('TRIGGER_TABLE is derived from STALL_ARMS and OVERLORD_REFUSAL_WORDS, never a hand list', () => {
+  it('TRIGGER_TABLE is derived from STALL_ARMS, OVERLORD_REFUSAL_WORDS and PROGRAMME_HEALTH_WORDS, never a hand list', () => {
     const b = parsedFile(HOME).bindings.filter((x) => x.name === 'TRIGGER_TABLE');
     expect(b, 'one binding').toHaveLength(1);
     expect(b[0]!.init).toMatch(/\bSTALL_ARMS\b/);
     expect(b[0]!.init).toMatch(/\bOVERLORD_REFUSAL_WORDS\b/);
+    expect(b[0]!.init).toMatch(/\bPROGRAMME_HEALTH_WORDS\b/);
     // No row is spelled by hand: neither kind's name appears in the list as a string with a key beside it.
     expect(b[0]!.init).not.toMatch(/key:\s*['"]/);
   });
