@@ -8,7 +8,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { forecastProgramme } from '../src/coord/forecast.js';
 import { runForecastLane, type ForecastLanePort, type ForecastLive, type UsageRead } from '../src/coord/forecastLane.js';
-import type { SpendReading } from '../src/coord/programmeMeasures.js';
+import type { SpendReading } from '../../shared/programmeFacts.js';
 import { EDGE_CLEARING_SHIPPED, type HealthVerdict } from '../../shared/programmeFacts.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -187,23 +187,35 @@ describe('the score arm', () => {
 // hands the portfolio's facts.
 
 const spendRun = (c: CoordStore, o: { program?: string; wave?: number; kind?: string; openedAt: number; dispatchedAt: number | null;
-  closedAt: number | null; sessionId: string | null; reviews?: number | null }): number =>
+  closedAt: number | null; sessionId: string | null; reviews?: number | null; conversation?: string | null; resumed?: boolean;
+  clearedAt?: number | null }): number =>
   Number(c.db.prepare(
-    "INSERT INTO runs (program, wave, project, state, kind, reviews, openedAt, dispatchedAt, closedAt, sessionId, claimedBy) VALUES (?, ?, 'project-a', ?, ?, ?, ?, ?, ?, ?, 'lane-a-project-a')",
+    'INSERT INTO runs (program, wave, project, state, kind, reviews, openedAt, dispatchedAt, closedAt, sessionId, claimedBy, ' +
+    "dispatchConversation, resumed, clearedAt) VALUES (?, ?, 'project-a', ?, ?, ?, ?, ?, ?, ?, 'lane-a-project-a', ?, ?, ?)",
   ).run(o.program ?? 'prog-a', o.wave ?? 1, o.closedAt === null ? 'working' : 'done', o.kind ?? 'work', o.reviews ?? null, o.openedAt, o.dispatchedAt,
-    o.closedAt, o.sessionId).lastInsertRowid);
+    o.closedAt, o.sessionId, o.conversation === undefined ? 'conv-1' : o.conversation, o.resumed === true ? 1 : 0,
+    o.clearedAt ?? null).lastInsertRowid);
 const rowOf = (c: CoordStore, runId: number) => c.db.prepare('SELECT runId, at, state, cost, class, readAt, startCost FROM run_spend WHERE runId = ?').get(runId);
 const reading = (o: Partial<SpendReading> = {}): SpendReading =>
-  ({ readAt: T0 - HOUR - 5 * MIN, cost: 3.5, class: 'opus', stale: false, sidecarUuid: 'conv-1', conversationUuid: 'conv-1', ...o });
+  ({ readAt: T0 - HOUR - 5 * MIN, cost: 3.5, class: 'opus', sidecarUuid: 'conv-1', conversationUuid: 'conv-1',
+    turn: { kind: 'read', turnAt: T0 - 2 * HOUR }, ...o });
 
-interface Harness { live: ForecastLive; ready: { value: boolean }; readings: Map<string, SpendReading>; notice: ReturnType<typeof vi.fn> }
+interface Harness {
+  live: ForecastLive; ready: { value: boolean }; readings: Map<string, SpendReading>; unreadable: Set<string>;
+  notice: ReturnType<typeof vi.fn>;
+}
 const harness = (spendSince = T0 - DAY): Harness => {
   const ready = { value: true };
   const readings = new Map<string, SpendReading>();
-  const usage: UsageRead = { ready: () => ready.value, reading: (id) => readings.get(id) ?? null };
+  const unreadable = new Set<string>();
+  const usage: UsageRead = { ready: () => ready.value, reading: (id) => {
+    if (unreadable.has(id)) return { kind: 'unreadable' };
+    const r = readings.get(id);
+    return r === undefined ? { kind: 'none' } : { kind: 'reading', ...r };
+  } };
   const notice = vi.fn();
   const live: ForecastLive = { usage, spendSince, liveAsk: () => ({ kind: 'unmeasured' }), liveSpend: () => ({ kind: 'none' }), notice };
-  return { live, ready, readings, notice };
+  return { live, ready, readings, unreadable, notice };
 };
 
 describe('the spend arm', () => {
@@ -234,12 +246,61 @@ describe('the spend arm', () => {
     expect(rowOf(coord, r)).toMatchObject({ state: 'outside', cost: null, class: 'opus', readAt: T0 - 5 * HOUR - 1 });
   });
 
-  it('a stale reading gets outside', () => {
+  it('a reading with a main-thread turn started after it gets outside; one idle since its render is measured however old (F2)', () => {
+    const h = harness();
+    const after = closed(coord, 'sess-a', { wave: 1 });
+    const idle = closed(coord, 'sess-b', { wave: 2, dispatchedAt: T0 - 20 * HOUR, closedAt: T0 - HOUR });
+    h.readings.set('sess-a', reading({ turn: { kind: 'read', turnAt: T0 - HOUR - 4 * MIN } }));
+    h.readings.set('sess-b', reading({ readAt: T0 - 19 * HOUR, turn: { kind: 'read', turnAt: T0 - 19 * HOUR - MIN } }));
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, after)).toMatchObject({ state: 'outside', cost: null });
+    expect(rowOf(coord, idle)).toMatchObject({ state: 'measured', cost: 3.5 });
+  });
+
+  it('a marker that cannot vouch gets outside (F2)', () => {
     const h = harness();
     const r = closed(coord, 'sess-a');
-    h.readings.set('sess-a', reading({ stale: true }));
+    h.readings.set('sess-a', reading({ turn: { kind: 'unread' } }));
     runForecastLane(coord, T0, entropy(), h.live);
     expect(rowOf(coord, r)).toMatchObject({ state: 'outside', cost: null });
+  });
+
+  it('a run dispatched into another conversation, or with none recorded, gets outside (F3)', () => {
+    const h = harness();
+    const other = closed(coord, 'sess-a', { wave: 1 });
+    coord.db.prepare("UPDATE runs SET dispatchConversation = 'conv-0' WHERE id = ?").run(other);
+    const none = closed(coord, 'sess-b', { wave: 2 });
+    coord.db.prepare('UPDATE runs SET dispatchConversation = NULL WHERE id = ?').run(none);
+    h.readings.set('sess-a', reading());
+    h.readings.set('sess-b', reading());
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, other)).toMatchObject({ state: 'outside', cost: null });
+    expect(rowOf(coord, none)).toMatchObject({ state: 'outside', cost: null });
+  });
+
+  it('a resumed run whose /clear was refused gets outside; one whose /clear committed is measured (F10\')', () => {
+    const h = harness();
+    const refused = spendRun(coord, { wave: 1, openedAt: T0 - 6 * HOUR, dispatchedAt: T0 - 5 * HOUR, closedAt: T0 - HOUR,
+      sessionId: 'sess-a', resumed: true, clearedAt: null });
+    const cleared = spendRun(coord, { wave: 2, openedAt: T0 - 6 * HOUR, dispatchedAt: T0 - 5 * HOUR, closedAt: T0 - HOUR,
+      sessionId: 'sess-b', resumed: true, clearedAt: T0 - 5 * HOUR });
+    h.readings.set('sess-a', reading());
+    h.readings.set('sess-b', reading());
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, refused)).toMatchObject({ state: 'outside', cost: null });
+    expect(rowOf(coord, cleared)).toMatchObject({ state: 'measured', cost: 3.5 });
+  });
+
+  it('a failed read writes nothing this pass and is counted; the next pass with a reading records it (F6)', () => {
+    const h = harness();
+    const r = closed(coord, 'sess-a');
+    h.unreadable.add('sess-a');
+    expect(runForecastLane(coord, T0, entropy(), h.live)).toMatchObject({ spent: 0, spendUnreadable: 1, failed: [] });
+    expect(rowOf(coord, r)).toBeUndefined();
+    h.unreadable.delete('sess-a');
+    h.readings.set('sess-a', reading());
+    expect(runForecastLane(coord, T0 + MIN, entropy(), h.live)).toMatchObject({ spent: 1, spendUnreadable: 0 });
+    expect(rowOf(coord, r)).toMatchObject({ state: 'measured', cost: 3.5 });
   });
 
   it('a session dispatched to a later run gets outside for the earlier one, and the later run measures', () => {

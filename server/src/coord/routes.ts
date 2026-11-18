@@ -12,7 +12,7 @@ import { fleetCarriesRunsAttribution } from '../fleetstate.js';
 import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
-import { turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import { conversationAfterClearFor, turnReadDeps, turnVerdictFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -1713,6 +1713,9 @@ export function registerCoordRoutes(
       // D-5238: the live `/clear` gate's reads — `turnverdict.ts`, their one home, over the watcher this function
       // already receives (thunks: each call reads the watcher's newest pane-scraped pieces).
       turnVerdict: (rec, uuid) => turnVerdictFor(turnReads, rec, uuid),
+      // Overlord W2 forecasts B, fix round 1 (F3): the resumed worker's conversation id after its `/clear`, read from the
+      // live process by `turnverdict.ts`; the spend arm counts a reading only in the conversation the run was dispatched into.
+      conversationAfterClear: (rec, prior) => conversationAfterClearFor(turnReads, rec, prior),
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     // D-8182 (§5.6): a fresh work run for a ticket in a private project waits (outside `coordMutex`) for its issue and is

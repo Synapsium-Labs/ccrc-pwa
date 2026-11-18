@@ -9,6 +9,7 @@
  * read at call time, so a call never sees a snapshot captured when the deps object was built.
  */
 // D-5896: the pure join from its own module; through `config.ts` this file loaded `coord/db.ts` and `node:sqlite`.
+import { setTimeout as sleep } from 'node:timers/promises';
 import { configDirFor } from './configDir.js';
 import type { CcrcConfig } from './config.js';
 import type { Tmux } from './exec.js';
@@ -152,4 +153,32 @@ export async function turnMarkFor(d: TurnReadDeps, rec: SessionRecord): Promise<
   const live = await readLiveStateMeasured(d.io, cfgDir, pid);
   if (!live.ok) return { ok: false, reason: 'unmeasured' };
   return readTurnMarkMeasured(d.io, d.cfg.registryDir, rec.id, rec.uuid, { startedAt: live.state.startedAt });
+}
+
+/** How many times, and how far apart, `conversationAfterClearFor` reads a resumed worker's live process for the
+ *  conversation its `/clear` opened (Overlord W2 forecasts B, fix round 1, F3): at most about a second in all. */
+export const CONVERSATION_ROTATE_READS = 10;
+const CONVERSATION_ROTATE_STEP_MS = 100;
+
+/**
+ * The conversation id a resumed worker runs in after its `/clear` (F3): the live process's `sessionId`, the same file
+ * ccd's `_sync_uuid` mirrors into the registry, read until it names an id other than `prior` (the registry's id before
+ * the `/clear`), at most `reads` times. Null when the config dir, the pane or the live file cannot be read, or the id
+ * never moved: unmeasured, so the run's spend reads `outside`, never a guess. The wait is a bounded count of short
+ * sleeps inside this one call (L3), on `node:timers/promises`, so a caller's fake clock can neither stretch nor stall
+ * it. Decides nothing: the dispatch records what it answers.
+ */
+export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRecord, prior: string,
+  reads: number = CONVERSATION_ROTATE_READS): Promise<string | null> {
+  const cfgDir = configDirFor(d.cfg, rec.wrapper);
+  if (cfgDir === undefined) return null;
+  const pid = await d.tmux.panePid(rec.id);
+  if (pid === null) return null;
+  for (let i = 0; i < reads; i++) {
+    if (i > 0) await sleep(CONVERSATION_ROTATE_STEP_MS);
+    const live = await readLiveStateMeasured(d.io, cfgDir, pid);
+    if (!live.ok) return null;
+    if (live.state.sessionId !== '' && live.state.sessionId !== prior) return live.state.sessionId;
+  }
+  return null;
 }

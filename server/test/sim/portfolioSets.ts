@@ -75,17 +75,23 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-W2', old: "row.state === 'measured' && row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;", new: "row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;" },
   { id: 'P-FOR-W3', old: 'add(row.class, row.cost); else runsUnmeasured += 1;', new: 'add(row.class, row.cost); else add(null, 0);' },
   { id: 'P-FOR-W4', old: 'if (counted.has(l.sessionId)) continue;', new: '' },
-  { id: 'P-FOR-W5', old: "!l.reading.stale && l.reading.cost", new: 'l.reading.cost' },
-  { id: 'P-FOR-W6', old: 'if (fresh === null) { runsUnmeasured += 1; continue; }', new: 'if (fresh === null) continue;' },
-  { id: 'P-FOR-W7', old: 'if (!openSpend.has(l.runId)) continue;', new: 'if (!ids.has(l.runId)) continue;' },
-  { id: 'P-FOR-W8', old: 'r.dispatchedAt !== null && !liveIds', new: '!liveIds' },
-  { id: 'P-FOR-W9', old: '&& !liveIds.has(r.id)) runsUnmeasured += 1;', new: '&& false) runsUnmeasured += 1;' },
+  // Fix round 1 (F1): an open run's live reading is judged by `runSpendVerdict`, with the run's dispatch facts.
+  { id: 'P-FOR-W5', old: 'redispatched: l.redispatched,', new: 'redispatched: false,' },
+  { id: 'P-FOR-W6', old: "v.state !== 'measured' || v.cost === null) { runsUnmeasured += 1; continue; }", new: "v.state !== 'measured' || v.cost === null) { continue; }" },
+  { id: 'P-FOR-W7', old: 'if (!SPEND_KINDS.includes(r.kind) || !isOpenRun(r) || r.dispatchedAt === null) continue;', new: 'if (!isOpenRun(r) || r.dispatchedAt === null) continue;' },
+  { id: 'P-FOR-W8', old: '|| !isOpenRun(r) || r.dispatchedAt === null) continue;', new: '|| !isOpenRun(r)) continue;' },
+  { id: 'P-FOR-W9', old: 'resumed: l.resumed, clearedAt: l.clearedAt,', new: 'resumed: false, clearedAt: null,' },
   { id: 'P-FOR-W10', old: '...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),', new: '' },
   { id: 'P-FOR-W11', old: 'const forecast = forecastEntry(seals[seals.length - 1]);', new: 'const forecast = forecastEntry(seals[0]);' },
   { id: 'P-FOR-W12', old: "if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;", new: 'if (isOpenRun(r)) continue;' },
   // Clearing shipped (#3002): the entry's flag and the critical path's walk read it.
   { id: 'P-FOR-W13', old: 'clearingShipped: EDGE_CLEARING_SHIPPED },', new: 'clearingShipped: false },' },
   { id: 'P-FOR-W14', old: '      EDGE_CLEARING_SHIPPED),', new: '      false),' },
+  { id: 'P-FOR-W15', old: 'conversation: l.conversation }', new: "conversation: l.reading.kind === 'reading' ? l.reading.sidecarUuid : null }" },
+  { id: 'P-FOR-W16', old: 'dispatchedAt: r.dispatchedAt, closedAt: now,', new: 'dispatchedAt: r.dispatchedAt, closedAt: r.dispatchedAt,' },
+  // F7: the entry's blocking names its edges; F4: nothing measured is null, never 0.
+  { id: 'P-FOR-W17', old: '...(blockingEdges === null ? {} : { blocking: { ...blocking, edges: blockingEdges } }),', new: '' },
+  { id: 'P-FOR-W18', old: 'let total: number | null = null,', new: 'let total: number | null = 0,' },
 ]);
 
 export const PORTFOLIO_MUTANT_SETS: Record<string, MutantSet<never>> = {

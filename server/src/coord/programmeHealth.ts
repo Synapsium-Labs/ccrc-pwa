@@ -14,7 +14,9 @@ import {
   type HealthEvidence, type HealthRow, type HealthVerdict, type ProgrammeEdge, type ProgrammeHealthWord, type RemainingStatement,
   type RunSpendRow, type SealedForecast,
 } from '../../../shared/programmeFacts.js';
-import { isCalendarDate, type PortfolioEntry, type PortfolioFacts, type PortfolioRun, type ServiceClass } from '../../../shared/portfolio.js';
+import {
+  isCalendarDate, type PortfolioEntry, type PortfolioFacts, type PortfolioItem, type PortfolioRun, type ServiceClass,
+} from '../../../shared/portfolio.js';
 import { operatorShownAt } from '../../../shared/ledgers.js';
 import { percentile } from '../perf/stats.js';
 import { closedIn, doneCycles, wavesOf, waveSpend, type Wave } from './programmeMeasures.js';
@@ -32,8 +34,10 @@ export interface HealthFacts {
   readonly blockingEdges: number | null;
   readonly cls: ServiceClass;
   readonly fixedDate: string | null;
-  /** Null: no seal, or the newest is unforecastable; 'unmeasured': the newest forecast is unreadable. */
+  /** Null: no seal, or the newest is unforecastable with nothing left; 'unmeasured': the newest is unreadable, or
+   *  unforecastable for want of a remaining statement or of history (F9). */
   readonly newestP85At: Measured<number | null>;
+  /** The newest dated seal before the newest one; null with none; 'unmeasured' when an unreadable seal stands between. */
   readonly previousP85At: Measured<number | null>;
   readonly newestScoredMissed: Measured<boolean | null>;
   readonly wip: number;
@@ -53,7 +57,8 @@ export interface HealthExtras {
   /** The programme's seals, oldest first (by id). */
   readonly seals: readonly SealedForecast[];
   readonly statements: readonly RemainingStatement[];
-  /** The newest state change of an open work run, else that run's `openedAt`; null: no open work run. Never a statement. */
+  /** The newest state change of an open work run, else (for a run past `planned`) its dispatch, then its open; a `planned`
+   *  run's open is never a move (fix round 1, F5). Null: none. Never a statement. */
   readonly lastMoveAt: number | null;
   readonly fleetCycleP85Ms: number | null;
   readonly spend: ReadonlyMap<number, RunSpendRow>;
@@ -63,9 +68,38 @@ export interface HealthExtras {
   readonly clearingShipped: boolean;
 }
 
-/** A forecast's 85% date: null for an unforecastable seal, 'unmeasured' for one this build cannot read. */
-const p85Of = (s: SealedForecast): Measured<number | null> =>
-  s.forecast === 'unreadable' ? UNMEASURED : s.forecast.kind === 'forecast' ? s.forecast.p85At : null;
+/** A forecast's 85% date for the fixed-date and moved arms (fix round 1, F9, ruled): an unforecastable seal is unknown,
+ *  never steady. `nothing-left` reads null (measured: the programme has no work left to date); `no-remaining` and
+ *  `too-little-history` read 'unmeasured' (a date that could not be drawn), as an unreadable seal does. */
+const p85Of = (s: SealedForecast): Measured<number | null> => {
+  if (s.forecast === 'unreadable') return UNMEASURED;
+  if (s.forecast.kind === 'forecast') return s.forecast.p85At;
+  return s.forecast.reason === 'nothing-left' ? null : UNMEASURED;
+};
+
+/** The moved arm's previous date: the newest DATED seal before the newest one (F9), skipping unforecastable seals; an
+ *  unreadable one on the way is 'unmeasured' (it may have been dated); null with none. */
+function previousDated(seals: readonly SealedForecast[]): Measured<number | null> {
+  for (let i = seals.length - 2; i >= 0; i--) {
+    const f = seals[i]!.forecast;
+    if (f === 'unreadable') return UNMEASURED;
+    if (f.kind === 'forecast') return f.p85At;
+  }
+  return null;
+}
+
+/** The items shown to the operator at `now` (`operatorShownAt`): the set the edges arm of `blocked-on-you` reads. */
+export function shownItemIdsOf(items: readonly PortfolioItem[], now: number): ReadonlySet<number> {
+  return new Set(items.filter((i) => { const at = operatorShownAt(i); return at !== null && at <= now; }).map((i) => i.id));
+}
+
+/** The open `needs-decision` edges whose `operator-confirms` item is shown: the one count the edges arm of
+ *  `blocked-on-you` reads and the portfolio entry's `blocking.edges` shows (fix round 1, F7). Null while clearing is not
+ *  shipped. */
+export function blockingEdgesOf(edges: readonly ProgrammeEdge[], shown: ReadonlySet<number>, clearingShipped: boolean): number | null {
+  return !clearingShipped ? null : edges.filter((e) =>
+    e.state === 'open' && e.kind === 'needs-decision' && e.target?.predicate === 'operator-confirms' && shown.has(e.target.itemId)).length;
+}
 
 /** The first scored seal, newest first: `open` seals are skipped (an unforecastable seal stays `open` for ever). */
 function newestScoredMissed(seals: readonly SealedForecast[]): Measured<boolean | null> {
@@ -105,12 +139,11 @@ export function healthFactsOf(entry: PortfolioEntry, x: HealthExtras, now: numbe
     blockingItems: entry.blocking.items.length,
     blockingAsks: entry.blocking.asks,
     asksUnmeasured: entry.asksUnmeasured,
-    blockingEdges: !x.clearingShipped ? null : x.edges.filter((e) =>
-      e.state === 'open' && e.kind === 'needs-decision' && e.target?.predicate === 'operator-confirms' && x.shownItemIds.has(e.target.itemId)).length,
+    blockingEdges: blockingEdgesOf(x.edges, x.shownItemIds, x.clearingShipped),
     cls: entry.cls,
     fixedDate: entry.rank?.fixedDate ?? null,
     newestP85At: x.seals.length === 0 ? null : p85Of(x.seals[x.seals.length - 1]!),
-    previousP85At: x.seals.length < 2 ? null : p85Of(x.seals[x.seals.length - 2]!),
+    previousP85At: previousDated(x.seals),
     newestScoredMissed: newestScoredMissed(x.seals),
     wip: entry.wip.working + entry.wip.waiting,
     lastMoveAt: x.lastMoveAt,
@@ -143,7 +176,7 @@ export function healthExtrasFrom(facts: PortfolioFacts, slug: string, now: numbe
     fleetCycleP85Ms: fleet.length === 0 ? null : percentile(fleet, 85),
     spend: new Map((w2?.spend ?? []).map((r) => [r.runId, r] as const)),
     edges: (w2?.edges ?? []).filter((e) => e.program === slug),
-    shownItemIds: new Set(facts.items.filter((i) => { const at = operatorShownAt(i); return at !== null && at <= now; }).map((i) => i.id)),
+    shownItemIds: shownItemIdsOf(facts.items, now),
     clearingShipped,
   };
 }
@@ -245,7 +278,8 @@ export const CRITICAL_PATH_VISITS_MAX = 500;
  *  already on the chain are leaves. Nothing is followed while clearing is not shipped. Among branches the chain whose latest
  *  85% date is latest wins (a chain with no date is below any date), ties to the first branch in edge order. `cut` is true
  *  when a chain stopped at `CRITICAL_PATH_DEPTH_MAX` links with an edge left to follow, or the walk spent
- *  `CRITICAL_PATH_VISITS_MAX`. */
+ *  `CRITICAL_PATH_VISITS_MAX`. `unmeasured` names the chain's links with no seal, then every other programme the walk
+ *  reached with none (fix round 1, F8). */
 export function criticalPath(
   slug: string,
   edgesOf: (slug: string) => readonly ProgrammeEdge[],
@@ -256,6 +290,7 @@ export function criticalPath(
   let best: { chain: string[]; latest: number | null } | null = null;
   let cut = false;
   let visits = 0;
+  const visited = new Set<string>();
   const consider = (chain: string[]): void => {
     const dates = chain.map(sealOf).filter(isNum);
     const latest = dates.length === 0 ? null : Math.max(...dates);
@@ -263,6 +298,7 @@ export function criticalPath(
   };
   const walk = (chain: string[]): void => {
     const here = chain[chain.length - 1]!;
+    visited.add(here);
     const next: string[] = [];
     if (clearingShipped) {
       for (const e of edgesOf(here)) {
@@ -281,7 +317,11 @@ export function criticalPath(
   };
   walk([slug]);
   const { chain, latest } = best!;
-  return { chain, latestP85At: latest, unmeasured: chain.filter((p) => sealOf(p) === null), cut };
+  // F8: the chosen chain's unsealed links, then every other programme the walk reached with no seal, so an unsealed branch
+  // is named even when another chain was chosen.
+  const unsealed = chain.filter((p) => sealOf(p) === null);
+  for (const p of visited) if (!unsealed.includes(p) && sealOf(p) === null) unsealed.push(p);
+  return { chain, latestP85At: latest, unmeasured: unsealed, cut };
 }
 
 // ── healthChangeVerdict ─────────────────────────────────────────────────────────────────────────────────────────────

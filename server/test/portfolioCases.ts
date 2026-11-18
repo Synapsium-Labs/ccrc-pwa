@@ -3,7 +3,7 @@
 // `sim/portfolioSets.ts` against each mutant, so one list of cases is both the suite and the mutation floor's judge.
 import { expect } from 'vitest';
 import type {
-  LiveSpendReading, PortfolioAsk, PortfolioFacts, PortfolioItem, PortfolioProgramme, PortfolioRun, PortfolioW2Facts, RankRow, ServiceClass,
+  LiveSpendReading, LiveSpendRow, PortfolioAsk, PortfolioFacts, PortfolioItem, PortfolioProgramme, PortfolioRun, PortfolioW2Facts, RankRow, ServiceClass,
 } from '../../shared/portfolio.js';
 import type { Forecast, HealthRow, ProgrammeEdge, RunSpendRow, SealedForecast } from '../../shared/programmeFacts.js';
 import type * as Portfolio from '../src/coord/portfolio.js';
@@ -375,9 +375,15 @@ const edge = (id: number, o: Partial<ProgrammeEdge> = {}): ProgrammeEdge => ({
 });
 const spendRow = (runId: number, state: RunSpendRow['state'], cost: number | null, cls: string | null = 'opus'): RunSpendRow =>
   ({ runId, at: NOW - HOUR, state, cost, class: cls, readAt: NOW - HOUR });
-const reading = (cost: number | null, o: { stale?: boolean; cls?: string | null } = {}): LiveSpendReading =>
-  ({ kind: 'reading', cost, class: o.cls === undefined ? 'opus' : o.cls, stale: o.stale === true });
-const SPEND_ZERO = { total: 0, byClass: {}, perWaveMedian: null, wavesMeasured: 0, wavesUnmeasured: 0, runsUnmeasured: 0,
+/** A live reading that passes every spend test against `liveRow`'s defaults: rendered 10 minutes ago in `conv-1`, the
+ *  registry's conversation and the one the run was dispatched into, with its session's newest turn an hour old. */
+const reading = (cost: number | null, o: { cls?: string | null; readAt?: number; sidecar?: string | null; turnAt?: number | null | 'unread' } = {}): LiveSpendReading =>
+  ({ kind: 'reading', cost, class: o.cls === undefined ? 'opus' : o.cls, readAt: o.readAt ?? NOW - HOUR / 6,
+    sidecarUuid: o.sidecar === undefined ? 'conv-1' : o.sidecar, conversationUuid: 'conv-1',
+    turn: o.turnAt === 'unread' ? { kind: 'unread' } : { kind: 'read', turnAt: o.turnAt === undefined ? NOW - HOUR : o.turnAt } });
+const liveRow = (runId: number, sessionId: string, r: LiveSpendReading, o: Partial<LiveSpendRow> = {}): LiveSpendRow =>
+  ({ runId, sessionId, reading: r, redispatched: false, resumed: false, clearedAt: null, conversation: 'conv-1', ...o });
+const SPEND_ZERO = { total: null, byClass: {}, perWaveMedian: null, wavesMeasured: 0, wavesUnmeasured: 0, runsUnmeasured: 0,
   attributed: true, coordinatorExcluded: true, classAtClose: true };
 const w2entry = (m: PortfolioModule, f: Partial<PortfolioFacts>, w: Partial<PortfolioW2Facts>) => entry(m, { ...facts(f), w2: w2(w) });
 
@@ -391,6 +397,7 @@ export const W2_CASES: PortfolioCase[] = [
     expect(e).toStrictEqual({
       ...w1,
       edges: { list: [], clearingShipped: true },
+      blocking: { ...w1.blocking, edges: 0 },
       // The closed run has no row: unmeasured, never 0. The open run was dispatched and has no session, so no reading
       // speaks for it: unmeasured too.
       spend: { ...SPEND_ZERO, wavesUnmeasured: 1, runsUnmeasured: 2 },
@@ -402,10 +409,10 @@ export const W2_CASES: PortfolioCase[] = [
     expect(entry(m, { ...facts({ runs: [run({ id: 1 })] }), w2: w2() }).spend).toEqual({ ...SPEND_ZERO, runsUnmeasured: 1 });
     expect(entry(m, { ...facts({ runs: [run({ id: 1, state: 'planned', dispatchedAt: null })] }), w2: w2() }).spend).toEqual(SPEND_ZERO);
     // A live reading of a run outside the spend kinds is not this programme's spend.
-    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown' })] }), w2: w2({ live: [{ runId: 1, sessionId: 'sess-a', reading: reading(5) }] }) }).spend)
+    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown' })] }), w2: w2({ live: [liveRow(1, 'sess-a', reading(5))] }) }).spend)
       .toEqual(SPEND_ZERO);
     // A closed run outside the spend kinds is never recorded, so its missing row is not unmeasured spend.
-    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown', state: 'done' }), run({ id: 2, wave: 2, state: 'planned', dispatchedAt: null })] }), w2: w2() }).spend).toMatchObject({ runsUnmeasured: 0, total: 0 });
+    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown', state: 'done' }), run({ id: 2, wave: 2, state: 'planned', dispatchedAt: null })] }), w2: w2() }).spend).toMatchObject({ runsUnmeasured: 0, total: null });
   } },
 
   // ── the forecast ──
@@ -471,13 +478,13 @@ export const W2_CASES: PortfolioCase[] = [
     const edges = [edge(1, { state: 'target-ended', endedAt: NOW - HOUR }), edge(2, { state: 'target-unmeasurable', unmeasuredSince: NOW - HOUR })];
     const e = w2entry(m, {}, { edges, edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + DAY }] });
     expect(e.edges).toEqual({ list: edges, clearingShipped: true });
-    expect(e.blocking).toEqual(without.blocking);
+    expect(e.blocking).toEqual({ items: [], asks: 0, edges: 0 });
     expect(e.criticalPath).toEqual(without.criticalPath);
     expect(e.criticalPath!.chain).toEqual(['prog-a']);
   } },
   // Remaining work B shipped clearing (#3002), so an edge counts (F1's other side): an open needs-landed edge on another
-  // programme's run enters the critical path. A needs-decision edge is listed and walks nowhere; it blocks in the health
-  // facts (`healthFactsOf`'s edges arm), not in the entry's W1 `blocking`, which stays items and asks.
+  // programme's run enters the critical path. A needs-decision edge is listed and walks nowhere; it blocks once its item
+  // is shown, and the entry's `blocking.edges` counts it (fix round 1, F7).
   { name: 'with clearing shipped, an open needs-landed edge enters the critical path and a needs-decision edge does not', run: (m) => {
     const open = edge(1);
     const decision = edge(2, { kind: 'needs-decision', target: { predicate: 'operator-confirms', itemId: 7 } });
@@ -486,7 +493,12 @@ export const W2_CASES: PortfolioCase[] = [
     const e = w2entry(m, {}, { edges: [open, decision, other], edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + 5 * DAY }] });
     expect(e.edges).toEqual({ list: [open, decision], clearingShipped: true });
     expect(e.criticalPath).toEqual({ chain: ['prog-a', 'prog-b'], latestP85At: NOW + 5 * DAY, unmeasured: ['prog-a'], cut: false });
-    expect(e.blocking).toEqual(without.blocking);
+    // Item 7 is not in the facts, so it is not shown: the decision edge does not block yet.
+    expect(e.blocking).toEqual({ items: [], asks: 0, edges: 0 });
+    expect(without.blocking).toEqual({ items: [], asks: 0, edges: 0 });
+    // Shown, it blocks, and the entry says so beside the items and asks (F7).
+    const shown = w2entry(m, { items: [item({ id: 7 })] }, { edges: [decision] });
+    expect(shown.blocking).toEqual({ items: [], asks: 0, edges: 1 });
     // The decision edge alone walks nowhere.
     expect(w2entry(m, {}, { edges: [decision], edgeRuns: [{ runId: 900, program: 'prog-b' }] }).criticalPath!.chain).toEqual(['prog-a']);
   } },
@@ -512,34 +524,68 @@ export const W2_CASES: PortfolioCase[] = [
       spendRow(87, 'measured', 1),
     ] });
     expect(e.spend).toMatchObject({ total: 3, byClass: { opus: 3 }, runsUnmeasured: 5 });
-    // Nothing measured at all: the total is 0 and every run is unmeasured, which is not the same as costing 0.
+    // Nothing measured at all: the total is null, never 0 (F4), and every run is unmeasured.
     const none = w2entry(m, { runs, ranks: [rank('prog-a', 'standard', 1)] }, { spend: [spendRow(82, 'absent', 0, null)] });
-    expect(none.spend).toMatchObject({ total: 0, byClass: {}, runsUnmeasured: 7, perWaveMedian: null, wavesUnmeasured: 7 });
+    expect(none.spend).toMatchObject({ total: null, byClass: {}, runsUnmeasured: 7, perWaveMedian: null, wavesUnmeasured: 7 });
+    // A measured row of cost 0 is a measurement: the total is 0, not null.
+    expect(w2entry(m, { runs: [run({ id: 81, state: 'done' })], ranks: [rank('prog-a', 'standard', 1)] }, { spend: [spendRow(81, 'measured', 0)] }).spend).toMatchObject({ total: 0, runsUnmeasured: 0 });
   } },
   { name: 'spend adds an open run\'s fresh live reading, and counts a session shared by two open runs once', run: (m) => {
     const runs = [run({ id: 91, wave: 1 }), run({ id: 92, wave: 2 })];
     const e = w2entry(m, { runs }, { live: [
-      { runId: 91, sessionId: 'sess-a', reading: reading(2) }, { runId: 92, sessionId: 'sess-a', reading: reading(2) },
+      liveRow(91, 'sess-a', reading(2)), liveRow(92, 'sess-a', reading(2)),
     ] });
     expect(e.spend).toMatchObject({ total: 2, byClass: { opus: 2 }, runsUnmeasured: 0 });
     const two = w2entry(m, { runs }, { live: [
-      { runId: 91, sessionId: 'sess-a', reading: reading(2) }, { runId: 92, sessionId: 'sess-b', reading: reading(5, { cls: 'sonnet' }) },
+      liveRow(91, 'sess-a', reading(2)), liveRow(92, 'sess-b', reading(5, { cls: 'sonnet' })),
     ] });
     expect(two.spend).toMatchObject({ total: 7, byClass: { opus: 2, sonnet: 5 }, runsUnmeasured: 0 });
   } },
-  { name: 'spend leaves a stale live reading out and counts the run unmeasured; so for no reading, no cost and not-ready', run: (m) => {
-    const runs = [run({ id: 101, wave: 1 }), run({ id: 102, wave: 2 }), run({ id: 103, wave: 3 }), run({ id: 104, wave: 4 })];
+  { name: 'spend leaves out a live reading a turn started after, and counts the run unmeasured; so for no reading, no cost, unreadable and not-ready', run: (m) => {
+    const runs = [101, 102, 103, 104, 105, 106].map((id, i) => run({ id, wave: i + 1 }));
     const e = w2entry(m, { runs }, { live: [
-      { runId: 101, sessionId: 'sess-a', reading: reading(8, { stale: true }) }, { runId: 102, sessionId: 'sess-b', reading: { kind: 'none' } },
-      { runId: 103, sessionId: 'sess-c', reading: reading(null) }, { runId: 104, sessionId: 'sess-d', reading: { kind: 'not-ready' } },
+      liveRow(101, 'sess-a', reading(8, { turnAt: NOW - HOUR / 12 })), liveRow(102, 'sess-b', { kind: 'none' }),
+      liveRow(103, 'sess-c', reading(null)), liveRow(104, 'sess-d', { kind: 'not-ready' }), liveRow(105, 'sess-e', { kind: 'unreadable' }),
+      liveRow(106, 'sess-f', reading(8, { turnAt: 'unread' })),
     ] });
-    expect(e.spend).toMatchObject({ total: 0, byClass: {}, runsUnmeasured: 4 });
+    expect(e.spend).toMatchObject({ total: null, byClass: {}, runsUnmeasured: 6 });
+  } },
+  { name: 'spend judges an open run\'s live reading by the closed run\'s tests: a reused session\'s earlier wave is never counted again (F1)', run: (m) => {
+    // Wave 1 closed with a measured row on sess-a; wave 2 was dispatched on the same session an hour ago, and its reading is
+    // still wave 1's, rendered before that dispatch in wave 1's conversation.
+    const runs = [run({ id: 121, wave: 1, state: 'done' }), run({ id: 122, wave: 2, dispatchedAt: NOW - HOUR })];
+    const stale = reading(3, { readAt: NOW - 2 * HOUR, sidecar: 'conv-0' });
+    const e = w2entry(m, { runs }, { spend: [spendRow(121, 'measured', 3)], live: [liveRow(122, 'sess-a', stale, { resumed: true, clearedAt: NOW - HOUR })] });
+    expect(e.spend).toMatchObject({ total: 3, byClass: { opus: 3 }, runsUnmeasured: 1 });
+    // Once wave 2's own conversation renders, its reading counts.
+    const own = w2entry(m, { runs }, { spend: [spendRow(121, 'measured', 3)], live: [liveRow(122, 'sess-a', reading(1.5), { resumed: true, clearedAt: NOW - HOUR })] });
+    expect(own.spend).toMatchObject({ total: 4.5, runsUnmeasured: 0 });
+  } },
+  { name: 'spend: a session moved to another programme\'s run puts none of the first programme\'s spend on the second (F1)', run: (m) => {
+    const runs = [run({ id: 131, program: 'prog-b', wave: 1, dispatchedAt: NOW - HOUR / 2 })];
+    // The reading is the session's last one in prog-a's run: before prog-b's dispatch, in prog-a's conversation.
+    const prior = reading(7, { readAt: NOW - HOUR, sidecar: 'conv-a' });
+    const f = facts({ programmes: [prog('prog-a'), prog('prog-b')], runs: [run({ id: 130, wave: 1, state: 'done' }), run({ id: 132, wave: 2, state: 'planned', dispatchedAt: null }), ...runs] });
+    const view = m.portfolioFor({ ...f, w2: w2({ spend: [spendRow(130, 'measured', 7)], live: [liveRow(131, 'sess-a', prior, { conversation: 'conv-b' })] }) }, NOW);
+    expect(view.programmes.find((p) => p.slug === 'prog-b')!.spend).toMatchObject({ total: null, runsUnmeasured: 1 });
+    expect(view.programmes.find((p) => p.slug === 'prog-a')!.spend).toMatchObject({ total: 7 });
+  } },
+  { name: 'spend: an open run whose session went to a later run, one never dispatched, a refused /clear and an unrecorded conversation (F1)', run: (m) => {
+    const runs = [run({ id: 141, wave: 1 }), run({ id: 142, wave: 2, state: 'planned', dispatchedAt: null }), run({ id: 143, wave: 3 }), run({ id: 144, wave: 4 })];
+    const e = w2entry(m, { runs }, { live: [
+      liveRow(141, 'sess-a', reading(2), { redispatched: true }),
+      liveRow(142, 'sess-b', reading(2)),
+      liveRow(143, 'sess-c', reading(2), { resumed: true, clearedAt: null }),
+      liveRow(144, 'sess-d', reading(2), { conversation: null }),
+    ] });
+    // 142 was never dispatched: it has spent nothing and is not counted at all; the other three are unmeasured.
+    expect(e.spend).toMatchObject({ total: null, runsUnmeasured: 3 });
   } },
   { name: 'spend adds the measured rows and the live readings together, and another programme\'s runs are not counted', run: (m) => {
     const runs = [run({ id: 111, wave: 1, state: 'done' }), run({ id: 112, wave: 2 })];
     const e = w2entry(m, { runs }, {
       spend: [spendRow(111, 'measured', 3), spendRow(999, 'measured', 1000)],
-      live: [{ runId: 112, sessionId: 'sess-a', reading: reading(4) }, { runId: 998, sessionId: 'sess-z', reading: reading(1000) }],
+      live: [liveRow(112, 'sess-a', reading(4)), liveRow(998, 'sess-z', reading(1000))],
     });
     expect(e.spend).toMatchObject({ total: 7, byClass: { opus: 7 }, runsUnmeasured: 0 });
   } },

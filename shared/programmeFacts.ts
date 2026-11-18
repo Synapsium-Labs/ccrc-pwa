@@ -339,13 +339,28 @@ export const HEALTH_BURN_MIN_WAVES = 3;
 /** The window churn, scope and spend read over; spend compares it with the window before it. */
 export const HEALTH_WINDOW_DAYS = 28;
 
-/** A `run_spend` row's state: `measured` (a cost was read), `absent` (the run left no spend record) or `outside` (the run's
- *  spend is not this fleet's to read). */
+/** A `run_spend` row's state (`programmeMeasures.ts#runSpendVerdict` decides it): `measured`, a cost read in the run's own
+ *  conversation and window; `absent`, the run had no session, its session had no reading, or the reading carried no cost
+ *  figure; `outside`, a reading was there but failed a test: the window, freshness (a turn after it), a later dispatch of
+ *  the session, the dispatch conversation, or a refused `/clear`. */
 export const RUN_SPEND_STATE_MAP = { measured: true, absent: true, outside: true } as const satisfies Record<string, true>;
 export type RunSpendState = keyof typeof RUN_SPEND_STATE_MAP;
 export const RUN_SPEND_STATES = Object.keys(RUN_SPEND_STATE_MAP) as readonly RunSpendState[];
 export const isRunSpendState = (v: unknown): v is RunSpendState =>
   typeof v === 'string' && Object.prototype.hasOwnProperty.call(RUN_SPEND_STATE_MAP, v);
+
+/** Whether a main-thread turn of the session started after a reading was rendered, from the session's turn marker
+ *  (fix round 1, F2: freshness is judged against the session's own turns, not the pass clock). `read`: the marker was read
+ *  and is this conversation's, `turnAt` its newest turn's start (epoch ms), null when no turn started since the `/clear`
+ *  that opened it. `unread`: the marker could not vouch (absent, unreadable, malformed, another conversation's). */
+export type SpendTurnRead = { readonly kind: 'read'; readonly turnAt: number | null } | { readonly kind: 'unread' };
+/** A session's newest reading as a spend verdict judges it: `readAt` in epoch ms (the render); `sidecarUuid` the
+ *  conversation the reading was taken in (the sidecar's `session_id`); `conversationUuid` the registry's current one;
+ *  `turn` the marker's answer, read after the render. */
+export interface SpendReading {
+  readonly readAt: number; readonly cost: number | null; readonly class: string | null;
+  readonly sidecarUuid: string | null; readonly conversationUuid: string | null; readonly turn: SpendTurnRead;
+}
 
 /** One run_spend row as read; a state word this build cannot read is 'unreadable', read as unmeasured, never 0. */
 export interface RunSpendRow {

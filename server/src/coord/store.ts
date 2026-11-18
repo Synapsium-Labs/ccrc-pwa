@@ -3204,9 +3204,14 @@ export class CoordStore {
     /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
      *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
     intents?: readonly string[];
+    /** Overlord W2 forecasts B, fix round 1 (F3): the conversation id the run was dispatched into, after its `/clear`
+     *  (`runs.dispatchConversation`). Written on every dispatch, NULL when omitted, so a later dispatch never keeps an
+     *  earlier one's conversation; the spend reads count a reading only in it. */
+    conversation?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      this.db.prepare('UPDATE runs SET dispatchConversation = ? WHERE id = ?').run(input.conversation ?? null, input.runId);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
       // Written UNCONDITIONALLY once `briefQueued` is given, both columns
       // together: recording only the interesting branch would make an older row

@@ -8,7 +8,7 @@ import type { LiveAskRead } from '../src/coord/ports.js';
 import type { RankOrderEntry } from '../../shared/portfolio.js';
 import type { SpendUsageRead } from '../src/coord/portfolioStore.js';
 import { portfolioFor } from '../src/coord/portfolio.js';
-import type { Forecast } from '../../shared/programmeFacts.js';
+import type { Forecast, SpendReading } from '../../shared/programmeFacts.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const NOW = 1_790_000_000_000;
@@ -366,22 +366,33 @@ describe('portfolioFacts fills w2 (forecasts B)', () => {
     expect(w2().spend).toEqual([{ runId: a, at: NOW - HOUR, state: 'measured', cost: 2.5, class: 'opus', readAt: NOW - 2 * HOUR }]);
   });
 
-  it('live is each open run with a session, with the usage port\'s answer; a closed run and a run with no session have none', () => {
+  it('live is each open run with a session, with the usage port\'s answer and its dispatch facts; a closed run and a run with no session have none', () => {
     programme('prog-a');
     const withA = mk('prog-a', { wave: 1, sessionId: 'sess-a' });
     const withB = mk('prog-a', { wave: 2, kind: 'review', sessionId: 'sess-b' });
     mk('prog-a', { wave: 3 });
     mk('prog-a', { wave: 4, state: 'done', sessionId: 'sess-closed' });
+    coord.db.prepare("UPDATE runs SET resumed = 1, clearedAt = ?, dispatchConversation = 'conv-a' WHERE id = ?").run(NOW - DAY, withA);
+    const r: SpendReading = { readAt: NOW - HOUR, cost: 1.25, class: 'opus', sidecarUuid: 'conv-a', conversationUuid: 'conv-a', turn: { kind: 'read', turnAt: null } };
     const asked: string[] = [];
     const usage: SpendUsageRead = (id) => {
       asked.push(id);
-      return id === 'sess-a' ? { kind: 'reading', cost: 1.25, class: 'opus', stale: false } : { kind: 'not-ready' };
+      return id === 'sess-a' ? { kind: 'reading', ...r } : { kind: 'not-ready' };
     };
     expect(w2(usage).live).toEqual([
-      { runId: withA, sessionId: 'sess-a', reading: { kind: 'reading', cost: 1.25, class: 'opus', stale: false } },
-      { runId: withB, sessionId: 'sess-b', reading: { kind: 'not-ready' } },
+      { runId: withA, sessionId: 'sess-a', reading: { kind: 'reading', ...r }, redispatched: false, resumed: true, clearedAt: NOW - DAY, conversation: 'conv-a' },
+      { runId: withB, sessionId: 'sess-b', reading: { kind: 'not-ready' }, redispatched: false, resumed: false, clearedAt: null, conversation: null },
     ]);
     expect(asked).toEqual(['sess-a', 'sess-b']);
+  });
+
+  it('live marks an open run whose session a later run was dispatched to (F1: the same rule the spend arm reads)', () => {
+    programme('prog-a');
+    const early = mk('prog-a', { wave: 1, sessionId: 'sess-a', openedAt: NOW - 3 * DAY });
+    const later = mk('prog-a', { wave: 2, sessionId: 'sess-a', openedAt: NOW - DAY });
+    const live = w2(() => ({ kind: 'none' })).live;
+    expect(live.find((l) => l.runId === early)).toMatchObject({ redispatched: true });
+    expect(live.find((l) => l.runId === later)).toMatchObject({ redispatched: false });
   });
 
   it('statements are the listed programmes\' in the 28-day window, masked', () => {
@@ -395,7 +406,7 @@ describe('portfolioFacts fills w2 (forecasts B)', () => {
     expect(w2().statements.map((s) => s.id)).toEqual([inside, recent]);
   });
 
-  it('lastMoves: the newest state change of an open work run, else its open; null with no open work run; a statement never counts', () => {
+  it('lastMoves: the newest state change of an open work run, else its dispatch; null with no open work run; a statement never counts', () => {
     for (const s of ['prog-a', 'prog-b', 'prog-c', 'prog-d']) programme(s);
     const ev = coord.db.prepare("INSERT INTO run_events (runId, at, fromState, toState, causedBy) VALUES (?, ?, ?, ?, 'coordinator')");
     // prog-a: one run with state changes (the newest wins) and a non-change after them, one run with none (its open counts).
@@ -408,14 +419,30 @@ describe('portfolioFacts fills w2 (forecasts B)', () => {
     mk('prog-b', { wave: 1, kind: 'review' });
     const closed = mk('prog-b', { wave: 2, state: 'done' });
     ev.run(closed, NOW - 2 * HOUR, 'working', 'done');
-    // prog-c: an open work run that never changed state, and a statement made after its open.
+    // prog-c: an open work run that never changed state (its dispatch counts, a minute after its open), and a statement
+    // made after it.
     mk('prog-c', { openedAt: NOW - 4 * DAY });
     say('prog-c', NOW - MIN);
     // prog-d: a closed run only, and not ranked: not listed at all.
     mk('prog-d', { state: 'done' });
     coord.setPortfolioRank({ basedOn: 0, seen: [], order: [e('prog-b')] }, 'op-a', NOW);
     expect(w2().lastMoves).toEqual([
-      { program: 'prog-a', at: NOW - 5 * DAY }, { program: 'prog-b', at: null }, { program: 'prog-c', at: NOW - 4 * DAY },
+      { program: 'prog-a', at: NOW - 5 * DAY }, { program: 'prog-b', at: null }, { program: 'prog-c', at: NOW - 4 * DAY + MIN },
     ]);
+  });
+
+  it('lastMoves: a planned run\'s open is not a move, so a stuck wave beside a freshly opened next wave still reads its own last move (F5)', () => {
+    for (const s of ['prog-a', 'prog-b']) programme(s);
+    const ev = coord.db.prepare("INSERT INTO run_events (runId, at, fromState, toState, causedBy) VALUES (?, ?, ?, ?, 'coordinator')");
+    const planned = coord.db.prepare(
+      "INSERT INTO runs (program, wave, project, state, kind, openedAt, claimedBy) VALUES (?, ?, 'project-a', 'planned', 'work', ?, 'lane-a-project-a')");
+    // prog-a: wave 1 stuck since its last move three days ago; wave 2 opened an hour ago, still planned.
+    const stuck = mk('prog-a', { wave: 1, openedAt: NOW - 9 * DAY });
+    ev.run(stuck, NOW - 3 * DAY, 'dispatched', 'working');
+    planned.run('prog-a', 2, NOW - HOUR);
+    // prog-b: only a planned run, opened an hour ago: no move at all.
+    planned.run('prog-b', 1, NOW - HOUR);
+    coord.setPortfolioRank({ basedOn: 0, seen: [], order: [e('prog-b')] }, 'op-a', NOW);
+    expect(w2().lastMoves).toEqual([{ program: 'prog-a', at: NOW - 3 * DAY }, { program: 'prog-b', at: null }]);
   });
 });

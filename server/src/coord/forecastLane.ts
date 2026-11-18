@@ -13,7 +13,7 @@
 //   4. the SPEND arm (forecasts B): while the usage sweep has not completed a pass in this process it does nothing (the
 //      boot guard); then, for each run closed since its first pass (or since the newest `run_spend` row, whichever is
 //      earlier) with no row, `programmeMeasures.ts#runSpendVerdict` judges the session's reading and `recordRunSpend`
-//      writes it;
+//      writes it; a close whose session's read failed is left for a later pass (fix round 1, F6);
 //   5. the HEALTH arm (forecasts B): for each listed programme, `programmeHealth` over the portfolio's facts, a row on a
 //      change, and a record-only notice when the word is worse (at most one per programme and word a day).
 // It DECIDES NOTHING: every verdict is an L1 decider's. It is the only caller of the writers of `programme_forecasts`,
@@ -23,7 +23,8 @@
 import type { Entropy } from '../time/ports.js';
 import type { SessionUsage } from '../../../shared/api.js';
 import {
-  EDGE_CLEARING_SHIPPED, type HealthRow, type HealthVerdict, type ProgrammeEdge, type SealedForecast,
+  EDGE_CLEARING_SHIPPED, type HealthRow, type HealthVerdict, type ProgrammeEdge, type SealedForecast, type SpendReading,
+  type SpendTurnRead,
 } from '../../../shared/programmeFacts.js';
 import {
   forecastOutcome, forecastProgramme, sealBoundary, type ForecastHistory, type OutcomeFacts, type UnsealedClose,
@@ -31,8 +32,8 @@ import {
 import type { EdgeSettle, NewRunSpend, NewSeal, UnspentClose } from './programmeFactsStore.js';
 import { readTarget, type TargetReadPort } from './doneTestRead.js';
 import { edgeVerdict } from './edgeVerdict.js';
-import { runSpendVerdict, type SpendReading } from './programmeMeasures.js';
-import type { PortfolioFacts } from '../../../shared/portfolio.js';
+import { runSpendVerdict } from './programmeMeasures.js';
+import type { LiveSpendReading, PortfolioFacts } from '../../../shared/portfolio.js';
 import type { LiveAskRead } from './ports.js';
 import type { SpendUsageRead } from './portfolioStore.js';
 import { portfolioFor } from './portfolio.js';
@@ -56,23 +57,27 @@ export interface ForecastLanePort extends TargetReadPort {
   settleEdge(id: number, settle: EdgeSettle, now: number): { written: boolean };
 }
 
-/** The usage sweep's readings, declared here by their consumer and served by `FleetWatcher#currentUsage`: `ready` is
- *  false until the sweep has completed one pass in this process, so a restart never records a permanent `absent`
- *  (the boot guard); `reading` is a session's newest reading, or null when it has none. */
+/** The usage sweep's readings, declared here by their consumer and served by `FleetWatcher`: `ready` is false until the
+ *  sweep has completed one pass in this process, so a restart never records a permanent `absent` (the boot guard);
+ *  `reading` is a session's newest reading (with the turn marker's answer read after it), `none` when it has none, or
+ *  `unreadable` when the sweep's read of it failed and no earlier reading stands (fix round 1, F6): never folded into
+ *  `none`, so a transient failed read never becomes a permanent `absent`. */
 export interface UsageRead {
   ready(): boolean;
-  reading(sessionId: string): SpendReading | null;
+  reading(sessionId: string): Exclude<LiveSpendReading, { kind: 'not-ready' }>;
 }
 
-/** The watcher's two maps shaped into one reading: the usage sweep's `SessionUsage` (its `ts` in epoch seconds) and the
- *  conversation pair it was read beside. Null when the session has no reading. Shapes; judges nothing. */
+/** The watcher's three maps shaped into one reading: the usage sweep's `SessionUsage` (its `ts` in epoch seconds), the
+ *  conversation pair it was read beside, and the turn marker's answer. Null when the session has no reading. Shapes;
+ *  judges nothing. */
 export function spendReadingOf(
-  usage: Pick<SessionUsage, 'ts' | 'cost' | 'class' | 'stale'> | undefined,
+  usage: Pick<SessionUsage, 'ts' | 'cost' | 'class'> | undefined,
   conversation: { sidecar: string | null; registry: string } | undefined,
+  turn: SpendTurnRead,
 ): SpendReading | null {
   if (usage === undefined) return null;
-  return { readAt: usage.ts * 1000, cost: usage.cost, class: usage.class, stale: usage.stale,
-    sidecarUuid: conversation?.sidecar ?? null, conversationUuid: conversation?.registry ?? null };
+  return { readAt: usage.ts * 1000, cost: usage.cost, class: usage.class,
+    sidecarUuid: conversation?.sidecar ?? null, conversationUuid: conversation?.registry ?? null, turn };
 }
 
 /** What the spend and health arms need beyond the store, from the watcher. `spendSince` is when the spend arm first ran
@@ -93,8 +98,9 @@ export interface ForecastLive {
 export interface ForecastPass {
   readonly sealed: number; readonly waiting: number; readonly scored: number; readonly missed: number;
   readonly failed: readonly string[];
-  /** `run_spend` rows written; `spendWaiting` is true while the boot guard holds the arm. */
-  readonly spent: number; readonly spendWaiting: boolean;
+  /** `run_spend` rows written; `spendWaiting` is true while the boot guard holds the arm; `spendUnreadable` counts the
+   *  closes left for a later pass because their session's read failed (F6). */
+  readonly spent: number; readonly spendWaiting: boolean; readonly spendUnreadable: number;
   /** `programme_health` rows appended, and the record-only notices recorded with them. */
   readonly healthChanged: number; readonly notices: number;
   readonly edgesEnded: number; readonly edgesUnmeasured: number;
@@ -151,7 +157,7 @@ export function runForecastLane(
   } catch (err) {
     failed.push(`edges: ${message(err)}`);
   }
-  const spend = live === undefined ? { spent: 0, spendWaiting: false } : spendArm(port, live, now, failed);
+  const spend = live === undefined ? { spent: 0, spendWaiting: false, spendUnreadable: 0 } : spendArm(port, live, now, failed);
   const health = live === undefined ? { healthChanged: 0, notices: 0 } : healthArm(port, live, now, failed);
   return { sealed, waiting, scored, missed, failed, edgesEnded, edgesUnmeasured, ...spend, ...health };
 }
@@ -184,17 +190,21 @@ function healthArm(port: ForecastLanePort, live: ForecastLive, now: number, fail
   return { healthChanged, notices };
 }
 
-function spendArm(port: ForecastLanePort, live: ForecastLive, now: number, failed: string[]): { spent: number; spendWaiting: boolean } {
-  if (!live.usage.ready()) return { spent: 0, spendWaiting: true };
+function spendArm(port: ForecastLanePort, live: ForecastLive, now: number, failed: string[]):
+{ spent: number; spendWaiting: boolean; spendUnreadable: number } {
+  if (!live.usage.ready()) return { spent: 0, spendWaiting: true, spendUnreadable: 0 };
   let spent = 0;
+  let spendUnreadable = 0;
   for (const c of port.unspentClosesOf(live.spendSince)) {
     try {
-      const reading = c.sessionId === null ? null : live.usage.reading(c.sessionId);
-      const row = runSpendVerdict(c, reading);
+      const read = c.sessionId === null ? null : live.usage.reading(c.sessionId);
+      // F6: a failed read writes nothing this pass; the close stays unspent, so a later pass reads it again.
+      if (read?.kind === 'unreadable') { spendUnreadable += 1; continue; }
+      const row = runSpendVerdict(c, read?.kind === 'reading' ? read : null);
       if (port.recordRunSpend({ runId: c.runId, ...row }, now).written) spent += 1;
     } catch (err) {
       failed.push(`run ${c.runId}: ${message(err)}`);
     }
   }
-  return { spent, spendWaiting: false };
+  return { spent, spendWaiting: false, spendUnreadable };
 }

@@ -9,7 +9,7 @@
 import type { RunKind } from './api.js';
 import type {
   Calibration, Forecast, HealthEvidence, HealthRow, ProgrammeEdge, ProgrammeHealthWord, RemainingStatement, RunSpendRow,
-  SealedForecast, UnforecastableReason,
+  SealedForecast, SpendReading, UnforecastableReason,
 } from './programmeFacts.js';
 
 /** Table 5.6a's classes of service, in band order: the rank orders by class first, then by position inside the class. */
@@ -53,24 +53,32 @@ export interface PortfolioAsk {
   id: number; program: string; state: string; releasedAt: number | null;
   answeredAt: number | null; answeredBy: string | null; live: boolean | 'unmeasured' | null;
 }
-/** An open run's session reading for the spend read (Overlord W2 forecasts B): the usage sweep's newest reading, `none`
- *  when the session has none, or `not-ready` before the sweep's first pass in this process. Never 0 for "no reading". */
+/** A session's reading for the spend reads (Overlord W2 forecasts B): the usage sweep's newest reading with the turn
+ *  marker's answer, `none` when the session has none, `unreadable` when the sweep's read failed and no earlier reading
+ *  stands (fix round 1, F6), or `not-ready` before the sweep's first pass in this process. Never 0 for "no reading". */
 export type LiveSpendReading =
-  | { readonly kind: 'reading'; readonly cost: number | null; readonly class: string | null; readonly stale: boolean }
-  | { readonly kind: 'none' } | { readonly kind: 'not-ready' };
+  | ({ readonly kind: 'reading' } & SpendReading)
+  | { readonly kind: 'none' } | { readonly kind: 'unreadable' } | { readonly kind: 'not-ready' };
+/** An open run's session and reading, with what its dispatch recorded, so the spend read judges it as the spend arm judges
+ *  a closed one (fix round 1, F1): `programmeMeasures.ts#SpendRun`'s fields beside the run's own `dispatchedAt`. */
+export interface LiveSpendRow {
+  readonly runId: number; readonly sessionId: string; readonly reading: LiveSpendReading;
+  readonly redispatched: boolean; readonly resumed: boolean; readonly clearedAt: number | null; readonly conversation: string | null;
+}
 /** The facts `portfolioFor`'s W2 measures read (forecasts B), every list fleet-bounded by the facts read:
  *  `seals` the listed programmes' seals, oldest first; `scored` the seals scored in the calibration span, fleet-wide;
  *  `health` each listed programme's newest `programme_health` row; `edges` every edge not met, fleet-wide, with
  *  `edgeRuns` the programme of each `run-closed` target and `newestDated` each programme's newest seal's 85% date (null
  *  for an unforecastable or unreadable newest seal), so the critical path can cross programmes the portfolio does not
- *  list; `spend` the listed programmes' `run_spend` rows; `live` each open run's session reading; `statements` the
- *  listed programmes' statements in the health window; `lastMoves` each listed programme's newest state change of an
- *  open work run (else that run's open; null with none). */
+ *  list; `spend` the listed programmes' `run_spend` rows; `live` each open run's session reading with its dispatch
+ *  facts; `statements` the listed programmes' statements in the health window; `lastMoves` each listed programme's
+ *  newest state change of an open work run (else, for a run past `planned`, its dispatch, then its open: a `planned` run's open is no move, fix
+ *  round 1, F5; null with none). */
 export interface PortfolioW2Facts {
   seals: readonly SealedForecast[]; scored: readonly SealedForecast[]; health: readonly HealthRow[];
   edges: readonly ProgrammeEdge[]; edgeRuns: readonly { runId: number; program: string }[];
   newestDated: readonly { program: string; p85At: number | null }[];
-  spend: readonly RunSpendRow[]; live: readonly { runId: number; sessionId: string; reading: LiveSpendReading }[];
+  spend: readonly RunSpendRow[]; live: readonly LiveSpendRow[];
   statements: readonly RemainingStatement[]; lastMoves: readonly { program: string; at: number | null }[];
 }
 /** What the facts read hands `portfolioFor`. `revision` is 0 when the rank was never written. `w2` is absent only where
@@ -112,7 +120,10 @@ export interface PortfolioEntry {
   itemsUnmeasured: number;
   /** Asks that reached the operator and whose end no live signal shows. */
   asksUnmeasured: number;
-  blocking: { items: readonly { id: number; title: string }[]; asks: number };
+  /** What blocks on the operator: shown blocking items and live asks; `edges` (W2 forecasts B, fix round 1, F7) the open
+   *  `needs-decision` edges whose item is shown, the third cause of `blocked-on-you`. Absent while clearing is not shipped,
+   *  or from an older server; `programmeHealth.ts#blockingEdgesOf` is its one count. */
+  blocking: { items: readonly { id: number; title: string }[]; asks: number; edges?: number };
   // ── Overlord W2 (forecasts B): every field optional, so an older server's entry lacks them and the console reads the
   // absence as "not measured on this server". ──
   /** The newest `programme_health` row, as the forecast lane recorded it (never recomputed at a read). Absent: no row
@@ -127,12 +138,13 @@ export interface PortfolioEntry {
   /** Every edge not met: `open`, `target-ended` and `target-unmeasurable`. Only an `open` edge can block, and only once
    *  `clearingShipped` (remaining work B's edge arm) is true; until then every edge is listed as "clearing not shipped". */
   edges?: { list: readonly ProgrammeEdge[]; clearingShipped: boolean };
-  /** What the programme's runs cost (the index's question 22): `measured` `run_spend` rows plus the fresh live readings of
-   *  open runs' sessions, one per session, by model class. A run with no measured row or no fresh reading counts in
-   *  `runsUnmeasured`, never as 0. `perWaveMedian` is over the work waves closed in the window whose every run is
-   *  measured (`wavesUnmeasured` counts the rest). The coordinator's own spend is outside the total. */
+  /** What the programme's runs cost (the index's question 22): `measured` `run_spend` rows plus the live readings of open
+   *  runs' sessions that pass the closed run's tests (fix round 1, F1), one per session, by model class. A run with no
+   *  measured row or reading counts in `runsUnmeasured`, never as 0; `total` is null when nothing was measured (F4).
+   *  `perWaveMedian` is over the work waves closed in the window whose every run is measured (`wavesUnmeasured` counts the
+   *  rest). The coordinator's own spend is outside the total. */
   spend?: {
-    total: number; byClass: Readonly<Record<string, number>>; perWaveMedian: number | null; wavesMeasured: number;
+    total: number | null; byClass: Readonly<Record<string, number>>; perWaveMedian: number | null; wavesMeasured: number;
     wavesUnmeasured: number; runsUnmeasured: number; attributed: true; coordinatorExcluded: true; classAtClose: true;
   };
   /** The chain of open `needs-landed` edges through other programmes, with the latest 85% date on it. */

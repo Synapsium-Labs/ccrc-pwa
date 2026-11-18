@@ -3698,7 +3698,10 @@ export const MIGRATIONS: readonly string[] = [
   // a day. `run_spend`: one row per closed run, `measured` (a fresh reading inside the run's window), `absent` or
   // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
   // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
-  // of the forecast lane. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names them.
+  // of the forecast lane. `runs.dispatchConversation` (fix round 1, F3): the registry's conversation id the run was
+  // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
+  // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
+  // older build at this `user_version` takes rule 3 and never names them.
   // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95 and gates A (#2993) 96, so this is 97 by
   // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 96 before this entry is counted):
   //     git fetch origin main
@@ -3713,6 +3716,7 @@ export const MIGRATIONS: readonly string[] = [
     runId INTEGER PRIMARY KEY REFERENCES runs(id), at INTEGER NOT NULL, state TEXT NOT NULL, cost REAL, class TEXT,
     readAt INTEGER, startCost REAL
   );
+  ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
   `,
 ];
 

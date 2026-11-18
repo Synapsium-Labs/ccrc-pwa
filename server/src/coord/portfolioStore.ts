@@ -21,9 +21,9 @@ import {
 } from '../../../shared/portfolio.js';
 import { isRebuiltRun } from '../../../shared/programmes.js';
 import { CALIBRATION_CUT_STEP_DAYS, CALIBRATION_CUTS, CALIBRATION_WINDOW_DAYS, HEALTH_WINDOW_DAYS } from '../../../shared/programmeFacts.js';
-import type { LiveSpendReading, PortfolioW2Facts } from '../../../shared/portfolio.js';
+import type { LiveSpendReading, LiveSpendRow, PortfolioW2Facts } from '../../../shared/portfolio.js';
 import type { LiveAskRead } from './ports.js';
-import { forecastsOf, newestHealthOf, openEdgesOf, remainingSince, spendOf } from './programmeFactsStore.js';
+import { REDISPATCHED_SQL, forecastsOf, newestHealthOf, openEdgesOf, remainingSince, spendOf } from './programmeFactsStore.js';
 import { tx } from './tx.js';
 export type { LiveAskRead, PortfolioFacts, RankWrite };
 /** The usage sweep's reading of a session for the spend read, declared by this read: `not-ready` before the sweep's
@@ -148,16 +148,23 @@ function w2Facts(db: DatabaseSync, now: number, slugs: readonly string[], termin
     return r === undefined || r.program === null ? [] : [{ runId, program: r.program }];
   });
   const newestDated = (db.prepare(
-    'SELECT f.program AS program, f.p85At AS p85At FROM programme_forecasts f ' +
+    // N2: only a dated seal's p85At is a date; an unforecastable or unreadable newest seal reads null.
+    "SELECT f.program AS program, CASE WHEN f.kind = 'forecast' THEN f.p85At END AS p85At FROM programme_forecasts f " +
     'WHERE f.id = (SELECT MAX(g.id) FROM programme_forecasts g WHERE g.program = f.program) ORDER BY f.program',
   ).all() as unknown as { program: string; p85At: number | null }[]);
   const marks = slugs.map(() => '?').join(', ');
   const live = slugs.length === 0 ? [] : (db.prepare(
-    `SELECT id AS runId, sessionId FROM runs WHERE program IN (${marks}) AND state NOT IN ${terminal} AND sessionId IS NOT NULL ORDER BY id`,
-  ).all(...slugs) as unknown as { runId: number; sessionId: string }[]).map((r) => ({ ...r, reading: usage(r.sessionId) }));
+    `SELECT r.id AS runId, r.sessionId AS sessionId, ${REDISPATCHED_SQL} AS redispatched, r.resumed AS resumed, ` +
+    `r.clearedAt AS clearedAt, r.dispatchConversation AS conversation FROM runs r ` +
+    `WHERE r.program IN (${marks}) AND r.state NOT IN ${terminal} AND r.sessionId IS NOT NULL ORDER BY r.id`,
+  ).all(...slugs) as unknown as (Omit<LiveSpendRow, 'reading' | 'redispatched' | 'resumed'> & { redispatched: number; resumed: number | null })[])
+    .map((r) => ({ ...r, redispatched: r.redispatched === 1, resumed: r.resumed === 1, reading: usage(r.sessionId) }));
   const statements = remainingSince(db, slugs, now - HEALTH_WINDOW_DAYS * DAY_MS);
+  // F5: a `planned` run's open is not a move (opening wave N+1 before closing N is routine), so it has no fallback; a run
+  // that left `planned` and never changed state since falls back to its dispatch, then its open.
   const lastMove = db.prepare(
-    `SELECT MAX(COALESCE((SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.fromState <> e.toState), r.openedAt)) AS at ` +
+    'SELECT MAX(COALESCE((SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.fromState <> e.toState), ' +
+    `CASE WHEN r.state <> 'planned' THEN COALESCE(r.dispatchedAt, r.openedAt) END)) AS at ` +
     `FROM runs r WHERE r.program = ? AND r.kind = 'work' AND r.state NOT IN ${terminal}`,
   );
   const lastMoves = slugs.map((program) => ({ program, at: (lastMove.get(program) as { at: number | null }).at }));

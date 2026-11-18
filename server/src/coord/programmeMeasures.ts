@@ -7,7 +7,7 @@
 // file imports neither of them, so there is no cycle.
 import { TERMINAL_RUN_STATES, isRunState } from '../../../shared/api.js';
 import type { PortfolioRun } from '../../../shared/portfolio.js';
-import { SPEND_READ_GRACE_MINUTES, type RunSpendRow, type RunSpendState } from '../../../shared/programmeFacts.js';
+import { SPEND_READ_GRACE_MINUTES, type RunSpendRow, type RunSpendState, type SpendReading } from '../../../shared/programmeFacts.js';
 import { WAVE_BUCKET, countsAsWave, waveRepresentative, type WaveBucket } from '../../../shared/programmes.js';
 import { percentile } from '../perf/stats.js';
 
@@ -86,25 +86,28 @@ export function waveSpend(
 
 // ── What a closed run cost (forecasts B, Task 7; question 10, ruled) ─────────────────────────────────────────────────
 
-/** A session's newest reading as the spend arm sees it: `readAt` in epoch ms; `sidecarUuid` the conversation the reading
- *  was taken in (the sidecar's `session_id`), `conversationUuid` the registry's current one for the session. */
-export interface SpendReading {
-  readonly readAt: number; readonly cost: number | null; readonly class: string | null; readonly stale: boolean;
-  readonly sidecarUuid: string | null; readonly conversationUuid: string | null;
-}
-/** The closed run the verdict judges. */
+/** The run a spend verdict judges: a closed run, or an open one judged as of now (`closedAt` = now, fix round 1, F1).
+ *  `redispatched`: a later run names the same session with a later `dispatchedAt`. `resumed` and `clearedAt`: whether the
+ *  dispatch resumed an existing session, and when its `/clear` committed (null: refused or never typed). `conversation`:
+ *  the registry's conversation id recorded at dispatch, after the `/clear` (F3); null when it was not measured. */
 export interface SpendRun {
   readonly sessionId: string | null; readonly dispatchedAt: number | null; readonly closedAt: number; readonly redispatched: boolean;
+  readonly resumed: boolean; readonly clearedAt: number | null; readonly conversation: string | null;
 }
+export type { SpendReading } from '../../../shared/programmeFacts.js';
 
 const GRACE_MS = SPEND_READ_GRACE_MINUTES * 60_000;
 
-/** What one closed run cost, first match: `absent` with no session, no reading, or a reading with no cost figure;
- *  `measured` only when the reading lies in the run's window (`[dispatchedAt, closedAt + SPEND_READ_GRACE_MINUTES]`), is
- *  not stale, the session was not dispatched to a later run since, and the reading was taken in the session's current
- *  conversation (the coordinator's condition on Step 1, `clear-restarts-cost-by-session-id`: cost restarts with the
- *  session id a `/clear` mints, so a reading under another id, or under none, is another conversation's); else
- *  `outside`. Cost is kept on `measured` alone; the reading's class and time are kept as evidence. */
+/** What one run cost, first match: `absent` with no session, no reading, or a reading with no cost figure; `measured` only
+ *  when every test holds, else `outside`:
+ *  - the window: the reading lies in `[dispatchedAt, closedAt + SPEND_READ_GRACE_MINUTES]`;
+ *  - freshness (F2, ruled): no main-thread turn of the session started after the reading was rendered, so nothing was
+ *    spent since it; a marker that could not vouch fails it;
+ *  - the session was not dispatched to a later run since;
+ *  - the conversation (F3, ruled; `clear-restarts-cost-by-session-id`): the reading was taken in the registry's current
+ *    conversation AND in the one the run was dispatched into, so a mid-run `/clear` (a partial cost) reads outside;
+ *  - the `/clear` (F10'): a resumed run whose `/clear` was refused still runs in the previous wave's conversation.
+ *  Cost is kept on `measured` alone; the reading's class and time are kept as evidence. */
 export function runSpendVerdict(
   run: SpendRun, reading: SpendReading | null,
 ): { state: RunSpendState; cost: number | null; class: string | null; readAt: number | null } {
@@ -112,7 +115,10 @@ export function runSpendVerdict(
   const evidence = { class: reading.class, readAt: reading.readAt };
   if (reading.cost === null) return { state: 'absent', cost: null, ...evidence };
   const inWindow = run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt && reading.readAt <= run.closedAt + GRACE_MS;
-  const sameConversation = reading.sidecarUuid !== null && reading.sidecarUuid === reading.conversationUuid;
-  if (inWindow && !reading.stale && !run.redispatched && sameConversation) return { state: 'measured', cost: reading.cost, ...evidence };
+  const fresh = reading.turn.kind === 'read' && (reading.turn.turnAt === null || reading.turn.turnAt <= reading.readAt);
+  const sameConversation = reading.sidecarUuid !== null && reading.sidecarUuid === reading.conversationUuid
+    && reading.sidecarUuid === run.conversation;
+  const cleared = !run.resumed || run.clearedAt !== null;
+  if (inWindow && fresh && !run.redispatched && sameConversation && cleared) return { state: 'measured', cost: reading.cost, ...evidence };
   return { state: 'outside', cost: null, ...evidence };
 }

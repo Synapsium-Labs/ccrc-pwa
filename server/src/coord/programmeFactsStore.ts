@@ -393,26 +393,33 @@ export function recordRunSpend(db: DatabaseSync, row: NewRunSpend, now: number):
 
 /** One closed run the spend arm has not recorded: its session (null when dispatch never minted one), its window, and
  *  whether a later run took the session. */
+/** The one SQL spelling of "a later run names this run's session with a later dispatch", over `runs r`: the spend arm's
+ *  closed runs and the portfolio's open ones read it alike (fix round 1, F1). */
+export const REDISPATCHED_SQL =
+  '(EXISTS (SELECT 1 FROM runs l WHERE l.sessionId = r.sessionId AND l.id <> r.id AND l.dispatchedAt > r.dispatchedAt))';
+
 export interface UnspentClose {
   readonly runId: number; readonly sessionId: string | null; readonly dispatchedAt: number | null; readonly closedAt: number;
-  readonly redispatched: boolean;
+  readonly redispatched: boolean; readonly resumed: boolean; readonly clearedAt: number | null; readonly conversation: string | null;
 }
 
 /** The spend arm's read: every run (work or review) closed at or after `since` with no `run_spend` row, oldest close
  *  first, where `since` is the earlier of `firstPassAt` (the arm's first pass in this process) and the newest row's
  *  `at` (no backfill at deploy, and a restart misses nothing a previous process would have read). `redispatched`: a
  *  later run names the same session with a `dispatchedAt` after this run's, so the session's reading is no longer
- *  this run's. `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
+ *  this run's. `resumed`, `clearedAt` and `conversation` (`runs.dispatchConversation`) are what the dispatch recorded (fix
+ *  round 1, F3 and F10'). `terminal` is the store's one SQL spelling of `TERMINAL_RUN_STATES`. */
 export function unspentClosesOf(db: DatabaseSync, firstPassAt: number, terminal: string): UnspentClose[] {
   const newest = (db.prepare('SELECT MAX(at) AS at FROM run_spend').get() as { at: number | null }).at;
   const since = newest === null ? firstPassAt : Math.min(firstPassAt, newest);
   return (db.prepare(
     'SELECT r.id AS runId, r.sessionId AS sessionId, r.dispatchedAt AS dispatchedAt, r.closedAt AS closedAt, ' +
-    'EXISTS (SELECT 1 FROM runs l WHERE l.sessionId = r.sessionId AND l.id <> r.id AND l.dispatchedAt > r.dispatchedAt) AS redispatched ' +
+    'r.resumed AS resumed, r.clearedAt AS clearedAt, r.dispatchConversation AS conversation, ' +
+    `${REDISPATCHED_SQL} AS redispatched ` +
     `FROM runs r WHERE r.kind IN ('work', 'review') AND r.state IN ${terminal} AND r.closedAt IS NOT NULL AND r.closedAt >= ? ` +
     'AND NOT EXISTS (SELECT 1 FROM run_spend s WHERE s.runId = r.id) ORDER BY r.closedAt, r.id',
-  ).all(since) as unknown as (Omit<UnspentClose, 'redispatched'> & { redispatched: number })[])
-    .map((r) => ({ ...r, redispatched: r.redispatched === 1 }));
+  ).all(since) as unknown as (Omit<UnspentClose, 'redispatched' | 'resumed'> & { redispatched: number; resumed: number | null })[])
+    .map((r) => ({ ...r, redispatched: r.redispatched === 1, resumed: r.resumed === 1 }));
 }
 
 interface SpendRaw { runId: number; at: number; state: string; cost: number | null; class: string | null; readAt: number | null }

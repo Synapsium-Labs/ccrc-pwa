@@ -238,6 +238,12 @@ export function healthCases(runs: number): Case<HealthModule>[] {
       (f) => ({ ...f, newestScoredMissed: f.newestScoredMissed === 'unmeasured' ? f.newestScoredMissed : true }),
       (f) => ({ ...f, reworkedWaves: f.reworkedWaves + 1 }),
       (f) => ({ ...f, spendRecent: typeof f.spendRecent === 'number' ? f.spendRecent * 2 + 1 : f.spendRecent }),
+      // Review 2458 N3: the other inputs too.
+      (f) => ({ ...f, blockingEdges: f.blockingEdges === null ? null : f.blockingEdges + 1 }),
+      (f) => ({ ...f, wip: f.wip + 1 }),
+      (f) => ({ ...f, oldestOpenMs: f.oldestOpenMs === null ? null : f.oldestOpenMs + 5 }),
+      (f) => ({ ...f, roundsPerWave: f.roundsPerWave === null ? null : f.roundsPerWave + 1 }),
+      (f) => ({ ...f, scope: f.scope === null ? null : { ...f.scope, newestHi: f.scope.newestHi + 1 } }),
     ];
     for (let i = 0; i < runs; i++) {
       const g = genFacts(r);
@@ -254,6 +260,14 @@ export function healthCases(runs: number): Case<HealthModule>[] {
       const u = { ...g, [k]: 'unmeasured' } as HealthFacts;
       expect(rank(word(m, u)), `${k} ${JSON.stringify(g)}`).toBeGreaterThanOrEqual(rank(word(m, g)));
       expect(m.programmeHealth(u, NOW).evidence.unmeasured).toContain(k);
+    }
+  });
+  add(`properties: an unmeasured count of asks or of open waves never yields a worse word, over ${runs} generated facts (N3)`, (m) => {
+    const r = mulberry32(8104);
+    for (let i = 0; i < runs; i++) {
+      const g = genFacts(r);
+      const u = pick(r, [{ ...g, asksUnmeasured: g.asksUnmeasured + 1 }, { ...g, oldestOpenUnmeasured: g.oldestOpenUnmeasured + 1 }]);
+      expect(rank(word(m, u)), JSON.stringify(g)).toBeGreaterThanOrEqual(rank(word(m, g)));
     }
   });
 
@@ -289,13 +303,30 @@ export function healthCases(runs: number): Case<HealthModule>[] {
     expect(word(m, m.healthFactsOf(entry(), ex(false), NOW))).toBe('steady');
     expect(word(m, m.healthFactsOf(entry(), ex(true), NOW))).toBe('blocked-on-you');
   });
-  add('healthFactsOf: the newest and previous 85% dates, an unforecastable newest seal reading null, an unreadable one unmeasured', (m) => {
+  add('healthFactsOf: the newest and previous 85% dates; an unreadable seal, or one unforecastable for want of a remaining statement or history, unmeasured; nothing-left null (F9)', (m) => {
     const p = (seals: SealedForecast[]) => m.healthFactsOf(entry(), extras({ seals }), NOW);
     expect(p([seal(1, forecast(NOW + DAY)), seal(2, forecast(NOW + 5 * DAY))])).toMatchObject({ newestP85At: NOW + 5 * DAY, previousP85At: NOW + DAY });
     expect(p([seal(1, forecast(NOW + DAY))])).toMatchObject({ newestP85At: NOW + DAY, previousP85At: null });
-    expect(p([seal(1, forecast(NOW + DAY)), seal(2, { kind: 'unforecastable', reason: 'no-remaining' })])).toMatchObject({ newestP85At: null, previousP85At: NOW + DAY });
+    expect(p([seal(1, forecast(NOW + DAY)), seal(2, { kind: 'unforecastable', reason: 'no-remaining' })])).toMatchObject({ newestP85At: 'unmeasured', previousP85At: NOW + DAY });
+    expect(p([seal(1, forecast(NOW + DAY)), seal(2, { kind: 'unforecastable', reason: 'too-little-history' })])).toMatchObject({ newestP85At: 'unmeasured', previousP85At: NOW + DAY });
+    expect(p([seal(1, forecast(NOW + DAY)), seal(2, { kind: 'unforecastable', reason: 'nothing-left' })])).toMatchObject({ newestP85At: null, previousP85At: NOW + DAY });
     expect(p([seal(1, 'unreadable'), seal(2, forecast(NOW + DAY))])).toMatchObject({ newestP85At: NOW + DAY, previousP85At: 'unmeasured' });
     expect(p([seal(1, forecast(NOW + DAY)), seal(2, 'unreadable')])).toMatchObject({ newestP85At: 'unmeasured', previousP85At: NOW + DAY });
+  });
+  add('healthFactsOf: the moved arm compares with the last DATED seal, skipping unforecastable ones between (F9)', (m) => {
+    const p = (seals: SealedForecast[]) => m.healthFactsOf(entry(), extras({ seals }), NOW);
+    const between: Forecast = { kind: 'unforecastable', reason: 'too-little-history' };
+    const f = p([seal(1, forecast(NOW + DAY)), seal(2, between), seal(3, forecast(NOW + 21 * DAY))]);
+    expect(f).toMatchObject({ newestP85At: NOW + 21 * DAY, previousP85At: NOW + DAY });
+    expect(m.programmeHealth(f, NOW).evidence.matched).toBe('slipping:moved');
+    expect(p([seal(1, between), seal(2, forecast(NOW + DAY))])).toMatchObject({ previousP85At: null });
+    expect(p([seal(1, 'unreadable'), seal(2, between), seal(3, forecast(NOW + DAY))])).toMatchObject({ previousP85At: 'unmeasured' });
+  });
+  add('healthFactsOf: a fixed-date programme whose newest seal could not be dated is never steady with nothing unmeasured (F9)', (m) => {
+    const f = m.healthFactsOf(entry({ cls: 'fixed-date', rank: { position: 1, cls: 'fixed-date', fixedDate: '2026-12-01' } }),
+      extras({ seals: [seal(1, { kind: 'unforecastable', reason: 'too-little-history' })] }), NOW);
+    const v = m.programmeHealth(f, NOW);
+    expect(v.evidence.unmeasured).toContain('newestP85At');
   });
   add('healthFactsOf: newestScoredMissed skips every open seal, an unforecastable one included, and reads the first scored', (m) => {
     const miss = (seals: SealedForecast[]) => m.healthFactsOf(entry(), extras({ seals }), NOW).newestScoredMissed;
@@ -308,9 +339,9 @@ export function healthCases(runs: number): Case<HealthModule>[] {
     expect(miss([seal(1, forecast(NOW))])).toBeNull();
     expect(miss([])).toBeNull();
   });
-  add('healthFactsOf: an open unforecastable newest seal gives newestP85At null and is skipped by newestScoredMissed', (m) => {
+  add('healthFactsOf: an open unforecastable newest seal gives newestP85At unmeasured (F9) and is skipped by newestScoredMissed', (m) => {
     const f = m.healthFactsOf(entry(), extras({ seals: [seal(1, forecast(NOW), 'missed'), seal(2, { kind: 'unforecastable', reason: 'no-remaining' })] }), NOW);
-    expect(f.newestP85At).toBeNull();
+    expect(f.newestP85At).toBe('unmeasured');
     expect(f.newestScoredMissed).toBe(true);
   });
   add('healthFactsOf: the reference cycle is the programme\'s own from HEALTH_OWN_CYCLE_MIN done waves, else the fleet\'s', (m) => {
@@ -409,6 +440,13 @@ export function pathCases(): Case<HealthModule>[] {
       .toEqual({ chain: ['a', 'b', 'c'], latestP85At: 7, unmeasured: ['b'], cut: false });
     expect(m.criticalPath('a', g.edgesOf, g.programOfRun, seals({}), true))
       .toEqual({ chain: ['a', 'b', 'c'], latestP85At: null, unmeasured: ['a', 'b', 'c'], cut: false });
+  });
+  add('criticalPath: an unsealed branch is named in unmeasured even when another chain is chosen (F8)', (m) => {
+    const g = graph({ a: ['b', 'c'], b: [], c: ['d'], d: [] });
+    expect(m.criticalPath('a', g.edgesOf, g.programOfRun, seals({ a: 1, b: 9, d: 3 }), true))
+      .toEqual({ chain: ['a', 'b'], latestP85At: 9, unmeasured: ['c'], cut: false });
+    expect(m.criticalPath('a', g.edgesOf, g.programOfRun, seals({ a: 1, b: 9 }), true))
+      .toEqual({ chain: ['a', 'b'], latestP85At: 9, unmeasured: ['c', 'd'], cut: false });
   });
   add('criticalPath: a cycle a -> b -> a answers [a, b] and stops', (m) => {
     const g = graph({ a: ['b'], b: ['a'] });
@@ -561,16 +599,21 @@ export function measuresCases(): Case<MeasuresModule>[] {
   const GRACE = 10 * 60_000;
   const DISPATCHED = NOW - 3 * HOUR;
   const CLOSED = NOW - HOUR;
-  const spendRun = (o: Partial<{ sessionId: string | null; dispatchedAt: number | null; closedAt: number; redispatched: boolean }> = {}) =>
-    ({ sessionId: 'sess-a', dispatchedAt: DISPATCHED, closedAt: CLOSED, redispatched: false, ...o });
-  const reading = (o: Partial<{ readAt: number; cost: number | null; class: string | null; stale: boolean; sidecarUuid: string | null; conversationUuid: string | null }> = {}) =>
-    ({ readAt: CLOSED - 5 * 60_000, cost: 4.25, class: 'opus', stale: false, sidecarUuid: 'conv-1', conversationUuid: 'conv-1', ...o });
+  type SpendRunIn = Parameters<MeasuresModule['runSpendVerdict']>[0];
+  type SpendReadingIn = NonNullable<Parameters<MeasuresModule['runSpendVerdict']>[1]>;
+  const spendRun = (o: Partial<SpendRunIn> = {}): SpendRunIn =>
+    ({ sessionId: 'sess-a', dispatchedAt: DISPATCHED, closedAt: CLOSED, redispatched: false, resumed: false, clearedAt: null,
+      conversation: 'conv-1', ...o });
+  const reading = (o: Partial<SpendReadingIn> = {}): SpendReadingIn =>
+    ({ readAt: CLOSED - 5 * 60_000, cost: 4.25, class: 'opus', sidecarUuid: 'conv-1', conversationUuid: 'conv-1',
+      turn: { kind: 'read', turnAt: CLOSED - 30 * 60_000 }, ...o });
   const OUTSIDE = (r: { class: string | null; readAt: number }) => ({ state: 'outside', cost: null, class: r.class, readAt: r.readAt });
 
   add('runSpendVerdict: an in-window, fresh, same-conversation reading is measured, with its cost, class and time', (m) => {
     const r = reading();
     expect(m.runSpendVerdict(spendRun(), r)).toEqual({ state: 'measured', cost: 4.25, class: 'opus', readAt: r.readAt });
-    expect(m.runSpendVerdict(spendRun(), reading({ readAt: DISPATCHED }))).toMatchObject({ state: 'measured', readAt: DISPATCHED });
+    expect(m.runSpendVerdict(spendRun(), reading({ readAt: DISPATCHED, turn: { kind: 'read', turnAt: DISPATCHED - 1 } })))
+      .toMatchObject({ state: 'measured', readAt: DISPATCHED });
   });
   add('runSpendVerdict: a reading older than the run\'s dispatch is outside, with no cost (the earlier wave\'s conversation)', (m) => {
     const r = reading({ readAt: DISPATCHED - 1 });
@@ -581,9 +624,35 @@ export function measuresCases(): Case<MeasuresModule>[] {
     expect(m.runSpendVerdict(spendRun(), late)).toEqual(OUTSIDE(late));
     expect(m.runSpendVerdict(spendRun(), reading({ readAt: CLOSED + GRACE }))).toMatchObject({ state: 'measured', cost: 4.25 });
   });
-  add('runSpendVerdict: a stale reading is outside', (m) => {
-    const r = reading({ stale: true });
+  add('runSpendVerdict: a turn that started after the render makes the reading outside; one at the render or before does not (F2)', (m) => {
+    const r = reading();
+    const after = reading({ turn: { kind: 'read', turnAt: r.readAt + 1 } });
+    expect(m.runSpendVerdict(spendRun(), after)).toEqual(OUTSIDE(after));
+    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: r.readAt } }))).toMatchObject({ state: 'measured', cost: 4.25 });
+  });
+  add('runSpendVerdict: no turn since the /clear is fresh; a reading idle for hours in the queue is still measured (F2)', (m) => {
+    expect(m.runSpendVerdict(spendRun(), reading({ turn: { kind: 'read', turnAt: null } }))).toMatchObject({ state: 'measured', cost: 4.25 });
+    const idle = reading({ readAt: DISPATCHED + 1, turn: { kind: 'read', turnAt: DISPATCHED } });
+    expect(m.runSpendVerdict(spendRun({ closedAt: DISPATCHED + 9 * HOUR }), idle)).toMatchObject({ state: 'measured', cost: 4.25 });
+  });
+  add('runSpendVerdict: a marker that could not vouch is outside (F2)', (m) => {
+    const r = reading({ turn: { kind: 'unread' } });
     expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a reading in another conversation than the one the run was dispatched into is outside (F3, a mid-run /clear)', (m) => {
+    const r = reading({ sidecarUuid: 'conv-2', conversationUuid: 'conv-2' });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+    expect(m.runSpendVerdict(spendRun({ conversation: 'conv-2' }), r)).toMatchObject({ state: 'measured', cost: 4.25 });
+  });
+  add('runSpendVerdict: a run whose dispatch conversation was not measured is outside (F3)', (m) => {
+    const r = reading();
+    expect(m.runSpendVerdict(spendRun({ conversation: null }), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a resumed run whose /clear was refused is outside; once it committed, measured (F10\')', (m) => {
+    const r = reading();
+    expect(m.runSpendVerdict(spendRun({ resumed: true, clearedAt: null }), r)).toEqual(OUTSIDE(r));
+    expect(m.runSpendVerdict(spendRun({ resumed: true, clearedAt: DISPATCHED }), r)).toMatchObject({ state: 'measured', cost: 4.25 });
+    expect(m.runSpendVerdict(spendRun({ resumed: false, clearedAt: null }), r)).toMatchObject({ state: 'measured', cost: 4.25 });
   });
   add('runSpendVerdict: a run whose session was dispatched to a later run is outside', (m) => {
     const r = reading();
@@ -598,6 +667,8 @@ export function measuresCases(): Case<MeasuresModule>[] {
     expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
     const r2 = reading({ sidecarUuid: null, conversationUuid: 'conv-1' });
     expect(m.runSpendVerdict(spendRun(), r2)).toEqual(OUTSIDE(r2));
+    // Even when the dispatch recorded none either: three nulls are no conversation, never a match.
+    expect(m.runSpendVerdict(spendRun({ conversation: null }), r)).toEqual(OUTSIDE(r));
   });
   add('runSpendVerdict: no session or no reading is absent, with no cost, class or time', (m) => {
     const absent = { state: 'absent', cost: null, class: null, readAt: null };
@@ -644,7 +715,7 @@ export const PROGRAMME_HEALTH_SET = healthSet(only('programmeHealth', healthCase
 export const HEALTH_FACTS_SET = healthSet(only('healthFactsOf', healthCases(PROPERTY_RUNS)), [
   // The plan's red checks: edges counted while clearing is not shipped; `open` seals not skipped; the own cycle reference
   // read from 4 done waves.
-  { id: 'HF-1', old: '!x.clearingShipped ? null : x.edges.filter((e) =>', new: 'x.edges.filter((e) =>' },
+  { id: 'HF-1', old: 'return !clearingShipped ? null : edges.filter((e) =>', new: 'return edges.filter((e) =>' },
   { id: 'HF-2', old: "if (s.outcome === 'open') continue;\n", new: '' },
   { id: 'HF-3', old: 'entry.cycle.n >= HEALTH_OWN_CYCLE_MIN', new: 'entry.cycle.n >= 4' },
   { id: 'HF-4', old: 'w.rep.closedAt > oldest.at && w.rep.closedAt <= newest.at', new: 'w.rep.closedAt >= oldest.at && w.rep.closedAt <= newest.at' },
@@ -652,7 +723,12 @@ export const HEALTH_FACTS_SET = healthSet(only('healthFactsOf', healthCases(PROP
   { id: 'HF-6', old: 'spendIn(waves, x, now - 2 * window, now - window - 1)', new: 'spendIn(waves, x, now - 2 * window, now - window)' },
   { id: 'HF-7', old: 'return s.unmeasured > 0 ? UNMEASURED : null;', new: 'return null;' },
   { id: 'HF-8', old: 'closed.filter((w) => w.runs.length >= 2).length', new: 'closed.filter((w) => w.runs.length >= 3).length' },
-  { id: 'HF-9', old: "s.forecast === 'unreadable' ? UNMEASURED : s.forecast.kind === 'forecast' ? s.forecast.p85At : null;", new: "s.forecast === 'unreadable' ? null : s.forecast.kind === 'forecast' ? s.forecast.p85At : null;" },
+  { id: 'HF-9', old: "if (s.forecast === 'unreadable') return UNMEASURED;", new: "if (s.forecast === 'unreadable') return null;" },
+  // F9 (ruled): an unforecastable seal read as null again ("measured, nothing to compare") is the pre-ruling reading.
+  { id: 'HF-10', old: "return s.forecast.reason === 'nothing-left' ? null : UNMEASURED;", new: 'return null;' },
+  { id: 'HF-11', old: "return s.forecast.reason === 'nothing-left' ? null : UNMEASURED;", new: 'return UNMEASURED;' },
+  { id: 'HF-12', old: 'previousP85At: previousDated(x.seals),', new: 'previousP85At: x.seals.length < 2 ? null : p85Of(x.seals[x.seals.length - 2]!),' },
+  { id: 'HF-13', old: "    if (f === 'unreadable') return UNMEASURED;\n    if (f.kind === 'forecast') return f.p85At;", new: "    if (f === 'unreadable') continue;\n    if (f.kind === 'forecast') return f.p85At;" },
 ]);
 
 export const CRITICAL_PATH_SET = healthSet(only('criticalPath', pathCases()), [
@@ -663,6 +739,7 @@ export const CRITICAL_PATH_SET = healthSet(only('criticalPath', pathCases()), [
   { id: 'CP-4', old: 'latest > best.latest', new: 'latest >= best.latest' },
   { id: 'CP-5', old: 'if (clearingShipped) {', new: 'if (true) {' },
   { id: 'CP-6', old: 'export const CRITICAL_PATH_VISITS_MAX = 500;', new: 'export const CRITICAL_PATH_VISITS_MAX = 5000;' },
+  { id: 'CP-7', old: 'for (const p of visited) if', new: 'for (const p of [] as string[]) if' },
 ]);
 
 export const HEALTH_CHANGE_SET = healthSet(only('healthChangeVerdict', pathCases()), [
@@ -714,10 +791,10 @@ export const WAVES_SET: MutantSet<MeasuresModule> = {
 export const RUN_SPEND_VERDICT_SET: MutantSet<MeasuresModule> = {
   modulePath: MEASURES_TS, suite: suiteOf(measuresCases().filter((c) => c.name.startsWith('runSpendVerdict'))),
   mutants: [
-    { id: 'RS-1', old: 'if (inWindow && !reading.stale', new: 'if (!reading.stale' },
-    { id: 'RS-2', old: '&& !reading.stale &&', new: '&&' },
+    { id: 'RS-1', old: 'if (inWindow && fresh', new: 'if (fresh' },
+    { id: 'RS-2', old: '&& fresh &&', new: '&&' },
     { id: 'RS-3', old: '&& !run.redispatched &&', new: '&&' },
-    { id: 'RS-4', old: '&& sameConversation)', new: ')' },
+    { id: 'RS-4', old: '!run.redispatched && sameConversation', new: '!run.redispatched' },
     { id: 'RS-5', old: 'reading.readAt <= run.closedAt + GRACE_MS', new: 'reading.readAt < run.closedAt + GRACE_MS' },
     { id: 'RS-6', old: "if (reading.cost === null) return { state: 'absent', cost: null, ...evidence };", new: "if (reading.cost === null) return { state: 'absent', cost: 0, ...evidence };" },
     { id: 'RS-7', old: "return { state: 'absent', cost: null, class: null, readAt: null };", new: "return { state: 'absent', cost: 0, class: null, readAt: null };" },
@@ -725,6 +802,11 @@ export const RUN_SPEND_VERDICT_SET: MutantSet<MeasuresModule> = {
     { id: 'RS-9', old: 'reading.readAt >= run.dispatchedAt', new: 'reading.readAt > run.dispatchedAt' },
     { id: 'RS-10', old: 'run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt', new: 'reading.readAt >= (run.dispatchedAt ?? 0)' },
     { id: 'RS-11', old: "return { state: 'measured', cost: reading.cost, ...evidence };", new: "return { state: 'measured', cost: null, ...evidence };" },
+    { id: 'RS-12', old: 'reading.turn.turnAt <= reading.readAt', new: 'reading.turn.turnAt <= reading.readAt + 60_000' },
+    { id: 'RS-13', old: "reading.turn.kind === 'read' && (", new: '(reading.turn.kind !== \'read\' || ' },
+    { id: 'RS-14', old: '\n    && reading.sidecarUuid === run.conversation;', new: ';' },
+    { id: 'RS-15', old: '&& sameConversation && cleared)', new: '&& sameConversation)' },
+    { id: 'RS-16', old: 'const cleared = !run.resumed || run.clearedAt !== null;', new: 'const cleared = true;' },
   ],
 };
 

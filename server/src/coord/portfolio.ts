@@ -18,11 +18,13 @@ import {
 } from '../../../shared/portfolio.js';
 import { NEVER_STARTED_DETAIL } from '../../../shared/programmes.js';
 import { percentile } from '../perf/stats.js';
-import { doneCycles, earliestDispatch, isOpenRun, rebuiltWave, waveSpend, wavesOf, type Wave } from './programmeMeasures.js';
+import {
+  doneCycles, earliestDispatch, isOpenRun, rebuiltWave, runSpendVerdict, waveSpend, wavesOf, type Wave,
+} from './programmeMeasures.js';
 import { EDGE_CLEARING_SHIPPED, type ProgrammeEdge, type RunSpendRow, type SealedForecast } from '../../../shared/programmeFacts.js';
 import type { PortfolioW2Facts } from '../../../shared/portfolio.js';
 import { forecastCalibration, type ScoredSeal } from './forecast.js';
-import { criticalPath } from './programmeHealth.js';
+import { blockingEdgesOf, criticalPath, shownItemIdsOf } from './programmeHealth.js';
 
 const DAY_MS = 24 * 3_600_000;
 const WINDOW_MS = PORTFOLIO_WINDOW_DAYS * DAY_MS;
@@ -196,40 +198,45 @@ function forecastEntry(seal: SealedForecast | undefined): PortfolioEntry['foreca
 
 const SPEND_KINDS: readonly string[] = ['work', 'review'];
 
-/** The index's question 22 over one programme (question 10, ruled): measured `run_spend` rows, plus each open run's
- *  session's fresh live reading once per session. A closed run with no measured row, an open run whose session has no fresh
- *  reading, and a dispatched open run with no session count in `runsUnmeasured`, never as 0. */
+/** The index's question 22 over one programme (question 10, ruled): measured `run_spend` rows, plus each open run's live
+ *  reading judged as the spend arm judges a closed run, by `runSpendVerdict` as of now (fix round 1, F1: the window, the
+ *  session's turns, a later dispatch, the dispatch conversation and the `/clear`), once per session. A run never dispatched
+ *  has spent nothing and is skipped. A closed run with no measured row, a dispatched open run with no session, and an open
+ *  run whose reading is not `measured` count in `runsUnmeasured`, never as 0. `total` is null when nothing was measured
+ *  (F4), never 0. */
 function spendEntry(runs: readonly PortfolioRun[], waves: readonly Wave[], w2: PortfolioW2Facts, now: number): NonNullable<PortfolioEntry['spend']> {
   const ids = new Set(runs.map((r) => r.id));
   const rows = new Map<number, RunSpendRow>(w2.spend.filter((r) => ids.has(r.runId)).map((r) => [r.runId, r] as const));
   const byClass: Record<string, number> = {};
-  let total = 0, runsUnmeasured = 0;
-  const add = (cls: string | null, cost: number): void => { total += cost; const k = cls ?? 'unknown'; byClass[k] = (byClass[k] ?? 0) + cost; };
+  let total: number | null = null, runsUnmeasured = 0;
+  const add = (cls: string | null, cost: number): void => { total = (total ?? 0) + cost; const k = cls ?? 'unknown'; byClass[k] = (byClass[k] ?? 0) + cost; };
   for (const r of runs) {
     if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;
     const row = rows.get(r.id);
     if (row !== undefined && row.state === 'measured' && row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;
   }
   const counted = new Set<string>();
-  const openSpend = new Set(runs.filter((r) => SPEND_KINDS.includes(r.kind) && isOpenRun(r)).map((r) => r.id));
-  const liveIds = new Set(w2.live.map((l) => l.runId));
-  // A dispatched open run with no session has no reading: unmeasured. One never dispatched has run no session yet.
-  for (const r of runs) if (openSpend.has(r.id) && r.dispatchedAt !== null && !liveIds.has(r.id)) runsUnmeasured += 1;
-  for (const l of w2.live) {
-    if (!openSpend.has(l.runId)) continue;
-    const fresh = l.reading.kind === 'reading' && !l.reading.stale && l.reading.cost !== null ? l.reading : null;
-    if (fresh === null) { runsUnmeasured += 1; continue; }
+  const live = new Map(w2.live.map((l) => [l.runId, l] as const));
+  for (const r of runs) {
+    if (!SPEND_KINDS.includes(r.kind) || !isOpenRun(r) || r.dispatchedAt === null) continue;
+    const l = live.get(r.id);
+    const reading = l?.reading.kind === 'reading' ? l.reading : null;
+    const v = l === undefined ? null : runSpendVerdict({ sessionId: l.sessionId, dispatchedAt: r.dispatchedAt, closedAt: now,
+      redispatched: l.redispatched, resumed: l.resumed, clearedAt: l.clearedAt, conversation: l.conversation }, reading);
+    if (l === undefined || v === null || v.state !== 'measured' || v.cost === null) { runsUnmeasured += 1; continue; }
     if (counted.has(l.sessionId)) continue;
     counted.add(l.sessionId);
-    add(fresh.class, fresh.cost!);
+    add(v.class, v.cost);
   }
   const perWave = waveSpend(waves, runs, rows, now - WINDOW_MS, now);
   return { total, byClass, perWaveMedian: perWave.medianPerWave, wavesMeasured: perWave.measured, wavesUnmeasured: perWave.unmeasured,
     runsUnmeasured, attributed: true, coordinatorExcluded: true, classAtClose: true };
 }
 
-/** The W2 fields of one entry. */
-function w2Entry(slug: string, runs: readonly PortfolioRun[], w2: PortfolioW2Facts, now: number): Partial<PortfolioEntry> {
+/** The W2 fields of one entry. `blocking` gains the count of open edges that block (fix round 1, F7), so
+ *  `blocked-on-you` always has a cause in it; omitted while clearing is not shipped. */
+function w2Entry(slug: string, runs: readonly PortfolioRun[], w2: PortfolioW2Facts, now: number,
+  blocking: PortfolioEntry['blocking'], shown: ReadonlySet<number>): Partial<PortfolioEntry> {
   const health = w2.health.find((h) => h.program === slug);
   const seals = w2.seals.filter((x) => x.program === slug);
   const edgesBy = new Map<string, ProgrammeEdge[]>();
@@ -237,7 +244,9 @@ function w2Entry(slug: string, runs: readonly PortfolioRun[], w2: PortfolioW2Fac
   const runProgram = new Map(w2.edgeRuns.map((r) => [r.runId, r.program] as const));
   const dated = new Map(w2.newestDated.map((d) => [d.program, d.p85At] as const));
   const forecast = forecastEntry(seals[seals.length - 1]);
+  const blockingEdges = blockingEdgesOf(edgesBy.get(slug) ?? [], shown, EDGE_CLEARING_SHIPPED);
   return {
+    ...(blockingEdges === null ? {} : { blocking: { ...blocking, edges: blockingEdges } }),
     ...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),
     ...(forecast === undefined ? {} : { forecast }),
     edges: { list: edgesBy.get(slug) ?? [], clearingShipped: EDGE_CLEARING_SHIPPED },
@@ -259,11 +268,12 @@ export function portfolioFor(facts: PortfolioFacts, now: number): PortfolioView 
   const runsOf = group(facts.runs), itemsOf = group(facts.items), asksOf = group(facts.asks);
   const shown = facts.programmes.filter((p) => listed(p, runsOf.get(p.slug) ?? [], rankOf.has(p.slug), now));
   const bySlug = new Map(shown.map((p) => [p.slug, p] as const));
+  const shownItems = facts.w2 === undefined ? new Set<number>() : shownItemIdsOf(facts.items, now);
   const programmes = portfolioOrder(facts.ranks, shown).map((slug) => {
     const p = bySlug.get(slug)!;
     const runs = runsOf.get(slug) ?? [];
     const entry = entryOf(p, rankOf.get(slug), runs, itemsOf.get(slug) ?? [], asksOf.get(slug) ?? [], now);
-    return facts.w2 === undefined ? entry : { ...entry, ...w2Entry(slug, runs, facts.w2, now) };
+    return facts.w2 === undefined ? entry : { ...entry, ...w2Entry(slug, runs, facts.w2, now, entry.blocking, shownItems) };
   });
   if (facts.w2 === undefined) return { at: now, revision: facts.revision, programmes };
   const scored = facts.w2.scored.flatMap((x): ScoredSeal[] =>
