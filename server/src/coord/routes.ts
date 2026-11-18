@@ -74,7 +74,7 @@ import { dispatchAbandonViewOf } from './deadDispatch.js';
 import { isDispatchAbandonChoice } from '../../../shared/dispatch-abandon.js';
 import { decideLaneArmBody, decideLaneArmPost, laneArmChangeLine, laneArmRowViewOf, laneArmViewOf, rosterCardFieldOf } from './laneArm.js';
 import { LANE_ARM_FEED_TITLE, LANE_ARM_TEXT, ROSTER_CARD_LANE, RUNS_ROSTER_CARD_FIELD } from '../../../shared/lane-arm.js';
-import { quizBaselineRead } from '../continuity/quizStore.js';
+import { quizBaselineRead, quizCardReads } from '../continuity/quizStore.js';
 import { isRunCloseChoice, isRunCloseGroup, type RunCloseView } from '../../../shared/run-close.js';
 import { RUN_CLOSE_TALLY_MS, closedByGroup, runCloseHeldOf, runCloseViewOf } from './runCloseSwitch.js';
 import { childBindGate } from './childBind.js';
@@ -2942,7 +2942,7 @@ export function registerCoordRoutes(
   app.get('/api/coord/lane-arm', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
-    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane)) });
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((lane) => coord.laneArmSetting(lane), quizCardReads(coord.db)) });
   });
 
   app.post('/api/coord/lane-arm', async (req, reply) => {
@@ -2966,7 +2966,7 @@ export function registerCoordRoutes(
       notice({ kind: 'coord', sessionId: '', title: LANE_ARM_FEED_TITLE.changed, body: change, runId: null },
         'record-only', { degraded: 'shadow lane switch written, feed archive degraded' });
     }
-    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l)) });
+    return reply.code(200).send({ ok: true, ...laneArmViewOf((l) => coord.laneArmSetting(l), quizCardReads(coord.db)) });
   });
 
   /** `GET`/`POST /api/coord/run-close` (D-8077; spec 2026-11-04 §12.3, A15; the runs rebuild, Task 26): the operator's three-state

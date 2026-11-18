@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, eighty-eight rows, and nothing else; the
+#   * The route comes from ROUTES below, eighty-nine rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -94,7 +94,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Eighty-eight rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Eighty-nine rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -271,6 +271,11 @@ declare -A ROUTES=(
   # one JSON report, as the hook builds it or keeps it on one line of its spool.
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   [sessions.loads]='POST|/api/sessions/{id}/start/loads|yes|-'
+  # The replay quiz's record (Overlord W1a quiz record, plan 2026-11-17 §5): the operator's `ccrc quiz-record` posts one
+  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`) on stdin (`--json -`). The run is recorded
+  # pending: only the operator's confirmation on the Shadow lanes card, behind a session and a step-up, makes it count, so a
+  # session calling this row records nothing that counts (coordinator ruling, slug quiz-record-posts-through-the-client).
+  [quiz.record]='POST|/api/continuity/quiz-runs|no|-'
   # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
   # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
   # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of

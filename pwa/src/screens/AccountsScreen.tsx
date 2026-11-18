@@ -53,6 +53,8 @@ import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
 import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
+import { ModelsSheet } from '../accounts/ModelsSheet';
+import { MODELS_ACT } from '../accounts/modelsSheetWords';
 import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
@@ -359,6 +361,9 @@ export function AccountsScreen(): ReactNode {
   const openRemove = (id: string): void => setRemoving({ id, gen: ++sheetGen.current });
   const openReplace = (id: string): void => setReplacing({ id, gen: ++sheetGen.current });
   const readRoster = (): readonly RosterWire[] => useFleetStore.getState().roster;
+  // The Models sheet (model-class-advance R4): one lane's classes, keyed per opening like the sheets above.
+  const [modelling, setModelling] = useState<{ id: string; gen: number } | null>(null);
+  const openModels = (id: string): void => setModelling({ id, gen: ++sheetGen.current });
 
   // The method switches and resume (accounts plan Task A23, D-7871): the switch sheet, and the connect sheet reopened on
   // an attempt this session started on a lane it added. Each keyed per opening, as above.
@@ -708,6 +713,17 @@ export function AccountsScreen(): ReactNode {
                       {SIGN_IN_AGAIN}
                     </Button>
                   )}
+                  {/* A Codex lane's Models (model-class-advance R4, Task 20): its classes, holds and Revert, in one sheet. */}
+                  {entry?.kind === 'codex' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      aria-label={`${MODELS_ACT} for ${wrapper}`}
+                      onClick={() => openModels(wrapper)}
+                    >
+                      {MODELS_ACT}
+                    </Button>
+                  )}
                   {tokenLane && (
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
@@ -812,6 +828,17 @@ export function AccountsScreen(): ReactNode {
           {...(reauthing.resume !== undefined ? { resume: reauthing.resume } : {})}
           {...(reauthing.method === 'setup-token'
             ? { onPaste: () => { const id = reauthing.id; setReauthing(null); openReplace(id); } } : {})}
+        />
+      )}
+
+      {modelling !== null && (
+        <ModelsSheet
+          key={`models-${modelling.gen}`}
+          lane={modelling.id}
+          open
+          onClose={() => setModelling(null)}
+          offline={blocked}
+          act={(lane, body) => api.laneModelsAct(lane, body)}
         />
       )}
 

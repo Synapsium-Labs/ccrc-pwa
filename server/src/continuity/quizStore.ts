@@ -1,48 +1,75 @@
 // L3 adapter: the replay quiz's record, `continuity_quiz_runs` (Overlord spec §3.3.9 C52; W1a, the replay quiz piece, plan
-// `w1a-replay-quiz.md` Task 1). Its own module, so the quiz lane shares no store file with the server spine. ONE writer,
-// `insertQuizRun`, which asks the baseline rule (`quiz.ts#quizBaseline`) inside its own transaction, over the rows already
-// recorded and the W1a lane-arm rows read through the reader its caller hands it (`CoordStore.laneArmSetting`, the one reader
-// of `lane_arm_settings`). Two reads: `quizRuns` and `quizBaselineRead` (the lane-arm door's fact). Nothing here decides
-// beyond asking that rule, and no read folds a failure into an answer: each tells a failed read apart.
+// `w1a-replay-quiz.md` Task 1, and the record path, plan `2026-11-17-overlord-quiz-record.md` Task 7). Its own module, so the
+// quiz lane shares no store file with the server spine. ONE inserter, `insertQuizRun`, which records a run as `pending` with
+// no baseline (slug quiz-run-pending-until-confirmed); ONE ruler, `ruleQuizRun`, the one writer of `state`, `ruledAt`,
+// `ruledBy` and `baseline`, which asks `quiz.ts#quizRuleVerdict` inside its own transaction over the rows already recorded and
+// the W1a lane-arm rows read through the reader its caller hands it (`CoordStore.laneArmSetting`, the one reader of
+// `lane_arm_settings`). Reads: `quizRuns`, `quizRecordedAts` and `quizPendingWaits` (the lane's: confirmed rows, and whether
+// any run is pending), `quizBaselineRead` (the lane-arm door's fact, confirmed rows only, with the baseline's date),
+// `quizPendingRead` (the card's) and `quizPendingCount` (the record door's). Nothing here decides
+// beyond asking those rules, and no read folds a failure into an answer: each tells a failed read apart.
 import type { DatabaseSync } from 'node:sqlite';
-import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
+import type { LaneArmQuizReads, LaneArmRead } from '../coord/laneArm.js';
 import { tx } from '../coord/tx.js';
 import type { CoordStore } from '../coord/store.js';
 import { itemRaisedWithTitle } from '../coord/ledgersStore.js';
-import { QUIZ_ITEM_PROGRAMME, W1A_ARM_ROWS, quizBaseline, type QuizArmed, type QuizReport, type W1aArmRow } from './quiz.js';
+import { QUIZ_SHA_PREFIX, type LaneArmQuizPending } from '../../../shared/lane-arm.js';
+import {
+  QUIZ_ITEM_PROGRAMME, QUIZ_RUN_STATES, W1A_ARM_ROWS, quizRuleVerdict, type QuizArmed, type QuizReport, type QuizRuleAction, type QuizRunExtra,
+  type QuizRunState, type W1aArmRow,
+} from './quiz.js';
 import type { QuizLanePort } from './quizLane.js';
 
-/** What the writer records: the report as `validQuizReport` read it, who recorded it, and when. */
+/** What the inserter records: the report and its extra columns as `quizRecordVerdict` read them, who recorded it, and when. */
 export interface QuizRunInsert {
   report: QuizReport;
+  extra: QuizRunExtra;
   recordedBy: string;
   recordedAt: number;
 }
 
-/** One recorded run. */
+/** One recorded run. The extra columns are null on a row an older build wrote (none exist live: the record door never shipped
+ *  before them). */
 export interface QuizRunRow extends QuizReport {
   id: number;
   recordedAt: number;
   recordedBy: string;
   baseline: boolean;
+  state: QuizRunState | 'unknown';
+  ruledAt: number | null;
+  ruledBy: string | null;
+  answered: number | null;
+  runFailed: number | null;
+  absent: number | null;
 }
 
-/** `fresh: false` is a resend that met the unique `reportSha`: the first row stands, and its id and baseline are answered. A
- *  statement that fails answers `write-failed`, never a throw. */
+/** `fresh: false` is a resend that met the unique `reportSha`: the first row stands, and its id and state are answered (a
+ *  discarded report's bytes are never recorded again). A statement that fails answers `write-failed`, never a throw. */
 export type QuizRunInsertResult =
-  | { ok: true; id: number; fresh: boolean; baseline: boolean }
+  | { ok: true; id: number; fresh: boolean; state: QuizRunState | 'unknown' }
   | { ok: false; kind: 'write-failed' };
 export type QuizRunsRead = { ok: true; rows: QuizRunRow[] } | { ok: false; detail: string };
-/** Whether a baseline row exists, or the read failed: never folded into `exists: false`. */
-export type QuizBaselineRead = LaneArmBaseline;
+/** Whether a confirmed baseline row exists, with its `recordedAt`, or the read failed: never folded into `exists: false`.
+ *  Assignable to `LaneArmBaseline`, so the lane-arm door and the lane read it unchanged (slug baseline-read-carries-its-date). */
+export type QuizBaselineRead =
+  | { ok: true; exists: true; at: number } | { ok: true; exists: false; at: null } | { ok: false; detail: string };
+export type QuizPendingRead = { ok: true; runs: LaneArmQuizPending[] } | { ok: false; detail: string };
+export type QuizRuleResult =
+  | { ok: true; id: number; state: Exclude<QuizRunState, 'pending'>; baseline: boolean }
+  | { ok: false; kind: 'bad-request'; detail: string }
+  | { ok: false; kind: 'write-failed' };
+
+const stateOf = (v: unknown): QuizRunState | 'unknown' =>
+  (typeof v === 'string' && (QUIZ_RUN_STATES as readonly string[]).includes(v) ? v as QuizRunState : 'unknown');
 
 const COLS = 'id, measuredAt, recordedAt, recordedBy, reportSha, questionsSha, questions, families, score, lo, hi, judgeModel, '
-  + 'ccrcRelease, claudeBuilds, steerArmed, agentsOnArmed, baseline';
+  + 'ccrcRelease, claudeBuilds, steerArmed, agentsOnArmed, baseline, state, ruledAt, ruledBy, answered, runFailed, absent';
 
 interface RawRow {
   id: number; measuredAt: number; recordedAt: number; recordedBy: string; reportSha: string; questionsSha: string;
   questions: number; families: number; score: number; lo: number; hi: number; judgeModel: string; ccrcRelease: string;
-  claudeBuilds: string; steerArmed: string; agentsOnArmed: string; baseline: number;
+  claudeBuilds: string; steerArmed: string; agentsOnArmed: string; baseline: number; state: string; ruledAt: number | null;
+  ruledBy: string | null; answered: number | null; runFailed: number | null; absent: number | null;
 }
 
 /** The row's JSON column is written by `insertQuizRun` alone, from a typed array, so a value that does not parse as one is a
@@ -55,29 +82,56 @@ function rowOf(r: RawRow): QuizRunRow {
     questionsSha: r.questionsSha, questions: r.questions, families: r.families, score: r.score, lo: r.lo, hi: r.hi,
     judgeModel: r.judgeModel, ccrcRelease: r.ccrcRelease, claudeBuilds: builds as string[],
     steerArmed: r.steerArmed as QuizArmed, agentsOnArmed: r.agentsOnArmed as QuizArmed, baseline: r.baseline === 1,
+    state: stateOf(r.state), ruledAt: r.ruledAt, ruledBy: r.ruledBy, answered: r.answered, runFailed: r.runFailed, absent: r.absent,
   };
 }
 
-/** THE TABLE'S ONE WRITER. In one transaction: a resend (the same `reportSha`) writes nothing and answers the stored row;
- *  otherwise the W1a rows are read through `readLane`, the baseline rule decides over them and the rows already recorded,
- *  and the row is inserted with its answer. */
-export function insertQuizRun(db: DatabaseSync, input: QuizRunInsert, readLane: (lane: W1aArmRow) => LaneArmRead): QuizRunInsertResult {
+/** THE TABLE'S ONE INSERTER. In one transaction: a resend (the same `reportSha`) writes nothing and answers the stored row;
+ *  otherwise the row is inserted `pending`, with no baseline: only the operator's confirmation (`ruleQuizRun`) can make one. */
+export function insertQuizRun(db: DatabaseSync, input: QuizRunInsert): QuizRunInsertResult {
   try {
     return tx(db, () => {
-      const dup = db.prepare('SELECT id, baseline FROM continuity_quiz_runs WHERE reportSha = ?').get(input.report.reportSha) as
-        { id: number; baseline: number } | undefined;
-      if (dup !== undefined) return { ok: true as const, id: dup.id, fresh: false, baseline: dup.baseline === 1 };
-      const earlier = (db.prepare('SELECT baseline FROM continuity_quiz_runs').all() as { baseline: number }[])
-        .map((r) => ({ baseline: r.baseline === 1 }));
-      const choices = Object.fromEntries(W1A_ARM_ROWS.map((lane) => [lane, readLane(lane)])) as Record<W1aArmRow, LaneArmRead>;
-      const baseline = quizBaseline(earlier, choices);
+      const dup = db.prepare('SELECT id, state FROM continuity_quiz_runs WHERE reportSha = ?').get(input.report.reportSha) as
+        { id: number; state: string } | undefined;
+      if (dup !== undefined) return { ok: true as const, id: dup.id, fresh: false, state: stateOf(dup.state) };
       const r = input.report;
+      const x = input.extra;
       const res = db.prepare(
         'INSERT INTO continuity_quiz_runs (measuredAt, recordedAt, recordedBy, reportSha, questionsSha, questions, families, score, '
-        + 'lo, hi, judgeModel, ccrcRelease, claudeBuilds, steerArmed, agentsOnArmed, baseline) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        + 'lo, hi, judgeModel, ccrcRelease, claudeBuilds, steerArmed, agentsOnArmed, baseline, state, answered, correct, runFailed, '
+        + 'absent, arm, settingsMode, pilot, ci, method, bootstrapB, inputs) '
+        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       ).run(r.measuredAt, input.recordedAt, input.recordedBy, r.reportSha, r.questionsSha, r.questions, r.families, r.score, r.lo,
-        r.hi, r.judgeModel, r.ccrcRelease, JSON.stringify(r.claudeBuilds), r.steerArmed, r.agentsOnArmed, baseline ? 1 : 0);
-      return { ok: true as const, id: Number(res.lastInsertRowid), fresh: true, baseline };
+        r.hi, r.judgeModel, r.ccrcRelease, JSON.stringify(r.claudeBuilds), r.steerArmed, r.agentsOnArmed, x.answered, x.correct,
+        x.runFailed, x.absent, x.arm, x.settingsMode, x.pilot, x.ci, x.method, x.bootstrapB, JSON.stringify(x.inputs));
+      return { ok: true as const, id: Number(res.lastInsertRowid), fresh: true, state: 'pending' as const };
+    });
+  } catch {
+    return { ok: false, kind: 'write-failed' };
+  }
+}
+
+/** THE TABLE'S ONE RULER (F3): the one writer of `state`, `ruledAt`, `ruledBy` and `baseline`. In one transaction it reads the
+ *  run's state, every row's state and baseline, and the W1a rows through `readLane`, asks `quizRuleVerdict`, and writes its
+ *  answer; a refusal writes nothing. */
+export function ruleQuizRun(
+  db: DatabaseSync, input: { id: number; action: QuizRuleAction; at: number; by: string }, readLane: (lane: W1aArmRow) => LaneArmRead,
+): QuizRuleResult {
+  try {
+    return tx(db, (): QuizRuleResult => {
+      const all = (db.prepare('SELECT id, state, baseline FROM continuity_quiz_runs ORDER BY id').all() as
+        { id: number; state: string; baseline: number }[]);
+      const self = all.find((r) => r.id === input.id);
+      const runs = all.filter((r) => r.id !== input.id).flatMap((r) => {
+        const state = stateOf(r.state);
+        return state === 'unknown' ? [] : [{ state, baseline: r.baseline === 1 }];
+      });
+      const w1aChoices = Object.fromEntries(W1A_ARM_ROWS.map((lane) => [lane, readLane(lane)])) as Record<W1aArmRow, LaneArmRead>;
+      const v = quizRuleVerdict({ id: input.id, state: self === undefined ? null : stateOf(self.state), action: input.action, runs, w1aChoices });
+      if (v.kind === 'refuse') return { ok: false, kind: 'bad-request', detail: v.detail };
+      db.prepare('UPDATE continuity_quiz_runs SET state = ?, baseline = ?, ruledAt = ?, ruledBy = ? WHERE id = ?')
+        .run(v.state, v.baseline ? 1 : 0, input.at, input.by, input.id);
+      return { ok: true, id: input.id, state: v.state, baseline: v.baseline };
     });
   } catch {
     return { ok: false, kind: 'write-failed' };
@@ -94,25 +148,71 @@ export function quizRuns(db: DatabaseSync): QuizRunsRead {
   }
 }
 
-/** When each recorded run was recorded, oldest first: the quiz lane's read (review 2121 F2). It selects that column alone, so
- *  a corrupt value in another column never makes the lane's read fail. */
+/** When each CONFIRMED run was recorded, oldest first: the quiz lane's read. Review 2442 F2 replaced review 2121 F2's rule
+ *  (a pending run held the week): a pending run never silences the week's item, and a discarded one counts for nothing. It
+ *  selects that column alone, so a corrupt value in another column never makes the lane's read fail. */
 export function quizRecordedAts(db: DatabaseSync): { ok: true; value: number[] } | { ok: false; detail: string } {
   try {
-    const rows = db.prepare('SELECT recordedAt FROM continuity_quiz_runs ORDER BY id').all() as { recordedAt: number }[];
+    const rows = db.prepare("SELECT recordedAt FROM continuity_quiz_runs WHERE state = 'confirmed' ORDER BY id").all() as { recordedAt: number }[];
     return { ok: true, value: rows.map((r) => r.recordedAt) };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
 }
 
-/** Whether a baseline row exists: the lane-arm door's fact (`decideLaneArmPost`) and the quiz lane's title. */
-export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
+/** Whether any recorded run waits for the operator's ruling: the quiz lane's read, so the week's item says so. */
+export function quizPendingWaits(db: DatabaseSync): { ok: true; value: boolean } | { ok: false; detail: string } {
   try {
-    const hit = db.prepare('SELECT 1 AS one FROM continuity_quiz_runs WHERE baseline = 1 LIMIT 1').get();
-    return { ok: true, exists: hit !== undefined };
+    return { ok: true, value: db.prepare("SELECT 1 FROM continuity_quiz_runs WHERE state = 'pending' LIMIT 1").get() !== undefined };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** How many runs are pending, leaving out a row with `exceptSha` (a resend of that report): the record door's count for the
+ *  pending cap. It throws on a failed read, and the door answers `write-failed`. */
+export function quizPendingCount(db: DatabaseSync): number {
+  return (db.prepare("SELECT count(*) AS n FROM continuity_quiz_runs WHERE state = 'pending'").get() as { n: number }).n;
+}
+
+/** Whether a report with this sha is already recorded, in any state (review 2449 F3: its resend answers its own row before the
+ *  pending cap). Throws on a failed read, as `quizPendingCount` does. */
+export function quizReportRecorded(db: DatabaseSync, reportSha: string): boolean {
+  return db.prepare('SELECT 1 FROM continuity_quiz_runs WHERE reportSha = ?').get(reportSha) !== undefined;
+}
+
+/** Whether a confirmed baseline row exists, and when it was recorded: the lane-arm door's fact (`decideLaneArmPost`), the quiz
+ *  lane's title and the card's line. */
+export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
+  try {
+    const hit = db.prepare("SELECT recordedAt FROM continuity_quiz_runs WHERE baseline = 1 AND state = 'confirmed' ORDER BY id LIMIT 1")
+      .get() as { recordedAt: number } | undefined;
+    return hit === undefined ? { ok: true, exists: false, at: null } : { ok: true, exists: true, at: hit.recordedAt };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The runs waiting for the operator's ruling, in id order (the order they were recorded, never a field inside a report):
+ *  the card's read, with what the operator matches before a Confirm (review 2442 F1). */
+export function quizPendingRead(db: DatabaseSync): QuizPendingRead {
+  try {
+    const rows = db.prepare('SELECT id, recordedAt, reportSha, recordedBy, measuredAt, score, lo, hi, questions, families, answered, '
+      + "runFailed, absent FROM continuity_quiz_runs WHERE state = 'pending' ORDER BY id").all() as unknown as
+      (Omit<LaneArmQuizPending, 'reportShaPrefix'> & { reportSha: string } & Record<string, number | null>)[];
+    return { ok: true, runs: rows.map((r) => ({
+      id: r.id, recordedAt: r.recordedAt, reportShaPrefix: r.reportSha.slice(0, QUIZ_SHA_PREFIX), recordedBy: r.recordedBy,
+      measuredAt: r.measuredAt, score: r.score, lo: r.lo, hi: r.hi, questions: r.questions, families: r.families,
+      answered: r.answered ?? 0, runFailed: r.runFailed ?? 0, absent: r.absent ?? 0,
+    })) };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The Shadow lanes card's two quiz reads (`laneArm.ts#laneArmViewOf`), each its own failure. */
+export function quizCardReads(db: DatabaseSync): LaneArmQuizReads {
+  return { baseline: quizBaselineRead(db), pending: quizPendingRead(db) };
 }
 
 /** The quiz lane's port (`quizLane.ts#QuizLanePort`) over the store, built once in the composition root. */
@@ -120,6 +220,7 @@ export function quizLanePortOf(coord: Pick<CoordStore, 'db' | 'raiseItem'>, reco
   return {
     recordReady,
     recordedAts: () => quizRecordedAts(coord.db),
+    pendingWaits: () => quizPendingWaits(coord.db),
     baseline: () => quizBaselineRead(coord.db),
     itemRaised: (titles) => {
       try {

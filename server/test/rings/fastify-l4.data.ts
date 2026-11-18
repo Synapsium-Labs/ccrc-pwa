@@ -28,6 +28,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/programmeRemainingRoute.ts': { reason: "the coordinator's remaining-work door (Overlord W2 remaining work A)", since: '2026-11-16' },
   'server/src/coord/decisionModelRoutes.ts': { reason: "the operator's decision-model doors: the read, arm, off, ceiling and the key's PUT and DELETE (Overlord W2, decision model B)", since: '2026-11-17' },
   'server/src/operatorModel/nameListRoutes.ts': { reason: "the private-name list's upload door and status read (Overlord W2, private names B)", since: '2026-11-17' },
+  'server/src/continuity/quizRoutes.ts': { reason: "the replay quiz's record door and its rule door (Overlord W1a quiz record)", since: '2026-11-17' },
   'server/src/docs/routes.ts': { reason: "the docs context's HTTP routes", since: '2026-10-20' },
   'server/src/docs/hooks.ts': { reason: "the docs plugin's request and response hooks (L4 by its header)", since: '2026-10-20' },
   'server/src/token/routes.ts': { reason: "the box token's HTTP routes", since: '2026-10-20' },
@@ -40,5 +41,6 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/readerLab/routes.ts': { reason: "the reader lab door's counter hook and HTTP routes (the reader lab plan, Task 3)", since: '2026-11-04' },
   'server/src/face/routes.ts': { reason: "the character choice's two HTTP routes (the face plan, Task 6)", since: '2026-11-13' },
   'server/src/coord/overlordRoutes.ts': { reason: "the Overlord's designation doors (Overlord W1 designation A): the read, Start and retire", since: '2026-11-16' },
+  'server/src/laneModelsRoutes.ts': { reason: "the Models sheet's write door, POST /api/models/:lane (hold, release, revert of a class; model-class-advance R4)", since: '2026-11-18' },
   'server/src/responses/routes.ts': { reason: 'the receipts door, POST /api/responses/receipts (Overlord W1 responses A)', since: '2026-11-16' },
 };

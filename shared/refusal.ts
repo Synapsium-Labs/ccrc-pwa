@@ -206,6 +206,10 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The replay quiz's record door's own word (W1a quiz record, review 2442 F3): five recorded runs already wait for the
+ *  operator's Confirm or Discard, so a sixth is refused rather than added. Box-facing: `ccrc quiz-record` prints it. */
+export const QUIZ_RECORD_REFUSALS = { pendingFull: 'quiz-pending-full' } as const;
+export type QuizRecordRefusal = (typeof QUIZ_RECORD_REFUSALS)[keyof typeof QUIZ_RECORD_REFUSALS];
 /** The loads door's own word (Overlord W1 sandbox, Task 5): a report whose `reportId` names no start the server has recorded
  *  for that session yet. 404, and the hook keeps the report and resends it, as it does for the start report's door. */
 export const START_LOADS_REFUSALS = { unknownStart: 'unknown-start' } as const;
@@ -374,6 +378,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The replay quiz's record door: its one word of its own.
+  | QuizRecordRefusal
   // The loads door (Overlord W1 sandbox): its one word of its own.
   | StartLoadsRefusal
   // The note door (Overlord W1a): its five words of its own.
@@ -593,6 +599,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The replay quiz's record door: CHOSEN, not measured. 409, as `timer-cap`: the cap is a state of the box, not a fault in the
+  // body; a Confirm or a Discard on the card frees a place.
+  [QUIZ_RECORD_REFUSALS.pendingFull]: 409,
   // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
   // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
   [START_LOADS_REFUSALS.unknownStart]: 404,

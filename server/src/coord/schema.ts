@@ -3784,6 +3784,39 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 100: user_version 99 -> 100 ───────────────────────────────────────────
+  // The replay quiz's record path (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` Task 7, §5; slug
+  // quiz-run-pending-until-confirmed): `continuity_quiz_runs` gains the run's state, the single-arm report's counts, its mode
+  // and the interval's method, and the operator's ruling. `continuity/quizStore.ts#insertQuizRun` (the one inserter, from the
+  // record door) writes `pending` with no baseline; `continuity/quizStore.ts#ruleQuizRun` is the ONE writer of `state`,
+  // `ruledAt`, `ruledBy` and `baseline`. An existing row reads `confirmed` (none exist live: the record door never shipped
+  // before this entry), and the new count columns are NULL on it.
+  // COLUMNS ON AN EXISTING TABLE, nullable or defaulted: an older build opening a file at `user_version 100` takes rule 3 (it
+  // warns, reads as-is and migrates nothing), never names them, and boots. Its `quizBaselineRead` reads `baseline = 1` alone,
+  // and a pending row carries 0 there, so it still never counts an unconfirmed run. Done tests A (#2964) landed 92, the
+  // programme's phases (#2974) 93, forecasts A (#2987) 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96,
+  // the renewal hand-offs (#2934) 97, decision model B (#2990) 98 and the ladder (#2994) 99, so this is 100 by position
+  // (the coordinator's standing renumber license); whoever lands second renumbers.
+  // RE-MEASURE the slot before the PR and before merge (it must print 99 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE continuity_quiz_runs ADD COLUMN state TEXT NOT NULL DEFAULT 'confirmed';   -- pending | confirmed | discarded
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledAt INTEGER;      -- wall ms of the operator's confirm or discard
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ruledBy TEXT;         -- the operator's device actor
+  ALTER TABLE continuity_quiz_runs ADD COLUMN answered INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN correct INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN runFailed INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN absent INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN arm TEXT;             -- treatment: recall on, the one arm run
+  ALTER TABLE continuity_quiz_runs ADD COLUMN settingsMode TEXT;    -- restricted | fallback
+  ALTER TABLE continuity_quiz_runs ADD COLUMN pilot TEXT;           -- skipped-by-ruling
+  ALTER TABLE continuity_quiz_runs ADD COLUMN ci INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN method TEXT;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN bootstrapB INTEGER;
+  ALTER TABLE continuity_quiz_runs ADD COLUMN inputs TEXT;          -- the report's four input shas, a JSON object
+  `,
+
+  // ── 101: user_version 100 -> 101 ──────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3799,11 +3832,12 @@ export const MIGRATIONS: readonly string[] = [
   // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
   // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 100` warns, reads as-is, names none of these and boots
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 101` warns, reads as-is, names none of these and boots
   // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
-  // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98 and the Overlord's ladder (#2994) took 99, so this, the
-  // fifth lander, takes 100. RE-MEASURE the slot before the PR and before merge (it must print 99 before this entry is counted):
+  // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99 and the quiz
+  // record (#2991) took 100, so this, the sixth lander, takes 101. RE-MEASURE the slot before the PR and before merge (it must
+  // print 100 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
