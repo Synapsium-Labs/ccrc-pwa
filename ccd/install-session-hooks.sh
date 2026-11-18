@@ -218,6 +218,54 @@ if [[ "$MODE" != remove ]]; then
   fi
 fi
 
+# THE DENY FILE'S DIGEST HISTORY (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1). Every child
+# records the digest of the deny file it was spawned with (`$REG/<id>.deny-settings`), and a running Claude Code pins a
+# `--settings` file's content at start, so a child spawned before a changed list carries the older digest for life. This
+# file lists every digest the managed file has had, one `<digest> <epoch ms>` line each, newest last, at most
+# CHILD_DENY_DIGESTS_MAX lines (`server/src/coord/approvalDenyFloor.ts` holds the reader's copy of both names). The hook
+# routes a child whose digest the history names, and the server holds its prompt with its allow capped at `escalate`.
+# THIS IS ITS ONE WRITER. A line is added when the managed file's digest is not the last line already: the run that wrote
+# a changed file, and once on a box whose file predates the history, so its children are named before the next change.
+# An unchanged file writes nothing. Lines not of the shape are dropped when it rewrites. Written to a temporary file and
+# renamed over, so a symlink at the name is replaced, never followed. With no sha256 tool, no line is written: those
+# children are refused as before, the safe direction. `--remove` leaves it, as it leaves the deny file (D-5392).
+CHILD_DENY_DIGESTS="$HOME/.cc-sessions/child-deny.digests"
+CHILD_DENY_DIGESTS_MAX=32
+_child_deny_sha256() {   # <file> -> 64 lowercase hex on stdout; rc 1 with no tool or an unreadable file
+  local s=""
+  if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum < "$1" 2>/dev/null) || return 1
+  elif command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 < "$1" 2>/dev/null) || return 1
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' < "$1" 2>/dev/null) || return 1
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+_child_deny_epoch_ms() {
+  local e="${EPOCHREALTIME:-}" s f
+  if [[ -n "$e" ]]; then s="${e%%[.,]*}" f="${e#*[.,]}000"; printf '%s%s' "$s" "${f:0:3}"; else printf '%s000' "$(date +%s)"; fi
+}
+if [[ "$MODE" != remove && -f "$CHILD_DENY_FILE" && ! -L "$CHILD_DENY_FILE" ]]; then
+  if ! deny_sum=$(_child_deny_sha256 "$CHILD_DENY_FILE"); then
+    echo "install-session-hooks: could not take the sha256 of $CHILD_DENY_FILE; $CHILD_DENY_DIGESTS is not updated" >&2
+  else
+    deny_hist=() deny_line=""
+    if [[ -f "$CHILD_DENY_DIGESTS" && ! -L "$CHILD_DENY_DIGESTS" ]]; then
+      while IFS= read -r deny_line || [[ -n "$deny_line" ]]; do
+        [[ "$deny_line" =~ ^[0-9a-f]{64}\ [0-9]{1,16}$ ]] && deny_hist+=("$deny_line")
+      done < "$CHILD_DENY_DIGESTS"
+    fi
+    deny_last=""; (( ${#deny_hist[@]} == 0 )) || deny_last="${deny_hist[${#deny_hist[@]}-1]}"
+    if [[ "${deny_last%% *}" != "$deny_sum" ]]; then
+      deny_hist+=("$deny_sum $(_child_deny_epoch_ms)")
+      (( ${#deny_hist[@]} <= CHILD_DENY_DIGESTS_MAX )) || deny_hist=("${deny_hist[@]: -CHILD_DENY_DIGESTS_MAX}")
+      deny_hist_tmp="$CHILD_DENY_DIGESTS.tmp.$$"
+      printf '%s\n' "${deny_hist[@]}" > "$deny_hist_tmp" && mv -f "$deny_hist_tmp" "$CHILD_DENY_DIGESTS" \
+        || { rm -f "$deny_hist_tmp"; echo "install-session-hooks: could not write $CHILD_DENY_DIGESTS" >&2; rc=1; }
+    fi
+  fi
+fi
+
 # THE ACCOUNT DENY FILE (D-6202; accounts plan Task A9, spec §3.1). The box's second managed file,
 # `~/.cc-sessions/account-deny.settings.json`, whose `permissions.deny` is `ACCOUNT_DENY_RULES`
 # (`shared/api.ts`): the mutating `ccrc account` subs, `seed`, `openrouter-management` with every sub,
