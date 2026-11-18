@@ -276,7 +276,7 @@ Each row reads the frame's computed values through the existing harness's frame 
     - the radii of a control, a pill and a popover equal `--r-md`, `--r-sm` and `--r-lg`;
     - the Aa group heading's `font-family` role, `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the host's section-label tokens.
 
-    And per skin, the frame bar's height, the measure, the prose size, the gutters and the title block's sizes equal BASE.
+    And per skin, the frame bar's height, the measure, the prose size, the gutters and the title block's sizes equal BASE. Each is compared as a computed length in px, or as an element's `getBoundingClientRect()` height for the bar and the title block, never as a token's text. BASE is taken in the library's own faces and a hosted open is in ccrc's, so the fixture's title and byline each fit on one line in both faces at every tested width: a face change then cannot wrap them and move a box.
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** cycle every palette, flip the system mode and switch skin while open; same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn.
