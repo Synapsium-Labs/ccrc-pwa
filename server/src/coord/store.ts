@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
@@ -7208,6 +7209,20 @@ export class CoordStore {
       'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
     ).get(fromId, runId, toId, subject);
     return row !== undefined;
+  }
+
+  /** Whether a mail with this (fromId, toId, subject) has a delivery ACKED, over every delivery state of the others (the boot
+   *  pass's check that a queued operator message's nudge was typed and acked; F3). */
+  hasAckedMailWithSubject(fromId: string, toId: string, subject: string): boolean {
+    return this.db.prepare("SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? AND m.toId = ? AND m.subject = ? AND d.state = 'acked' LIMIT 1")
+      .get(fromId, toId, subject) !== undefined;
+  }
+
+  /** The largest `n` of any `operator-message:<n>` mail from `operator`, over every delivery state, or `none` (the boot
+   *  pass's check against the private store's highest id, Overlord W1 private store B). */
+  highestOperatorMessageMail(): number | 'none' {
+    const rows = this.db.prepare("SELECT subject FROM mail WHERE fromId = 'operator' AND subject LIKE 'operator-message:%'").all() as { subject: string }[];
+    return rows.reduce<number | 'none'>((hi, r) => { const n = operatorMessageIdOf(r.subject); return n !== null && (hi === 'none' || n > hi) ? n : hi; }, 'none');
   }
 
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
