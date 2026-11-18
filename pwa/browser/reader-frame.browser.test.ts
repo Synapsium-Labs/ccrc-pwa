@@ -29,12 +29,13 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { crc32 } from 'node:zlib';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { chromium, type Browser, type Frame, type Page } from 'playwright-core';
-import { REFINED } from '@ccrc/ui';
+import { chromium, type Browser, type BrowserContext, type Frame, type Page, type Route } from 'playwright-core';
+import { INSTRUMENT, REFINED } from '@ccrc/ui';
 import { FRAME_MANIFEST, frameCsp } from '@synapsium-labs/docserver/frame';
 import {
   DOC_SECTION_SLUGS, DOCS_MAX_IMAGES_PER_PAGE, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, sniffRaster,
 } from '../../shared/docs';
+import { DOCS_HEAD_TEXT } from '../src/docs/docsText';
 import { READER_E17_MERMAID, docsDrawFor } from '../src/docs/reader/policy';
 import { READER_FALLBACK_NOTE } from '../src/docs/reader/readerText';
 import { LAB_BATTERY_CHANNELS } from '../../shared/readerLab';
@@ -55,6 +56,11 @@ const SCRIPT_CLOSE = '</' + 'script><' + 'script>';
 const HOSTILE_PAYLOAD = 'ccrc-hostile-payload';
 const HOSTILE_FILL = 'rgb(255, 0, 255)';
 const COOKIE = { name: 'ccrc_session', value: 'demo-session' } as const;
+
+/** The directory counts of the deep leaves the mount-focus rows open (docs-compact-head's `DEEPER_CASES`): five directories are
+ *  nine crumbs unfolded and seven are eleven, wider than the head's row at 600 and 900. */
+const DEEP_DIRS = [5, 7] as const;
+const deepPath = (dirs: number): string => [...Array.from({ length: dirs }, (_, i) => `dir-${String.fromCharCode(97 + i)}`), 'deep.md'].join('/');
 
 const fence = (body: string): string => '```mermaid\n' + body + '\n```\n\n';
 
@@ -152,6 +158,8 @@ function fixtureFiles(o: Origins): Map<string, Body> {
   files.set('small.md', `# Small page\n\nRead [the other page](./other.md), the [external link](https://a.example/p) and the `
     + `[popup link](${o.a}/popup).\n\n![pixel](pix.png)\n\n\`\`\`text\ncopy me ${ESC} here\n\`\`\`\n`);
   files.set('other.md', '# Other page\n\nSecond.\n');
+  for (const dirs of DEEP_DIRS) files.set(deepPath(dirs), `# Deep page\n\nA leaf under ${dirs} directories.\n\n${'A paragraph of the deep page.\n\n'.repeat(12)}`);
+  files.set('fig.md', `# One figure\n\nA page with a single Mermaid fence.\n\n${FLOWCHART}`);
   let long = '# Long page\n\n';
   for (let i = 0; i < 120; i += 1) long += `## Part ${i}\n\nA paragraph of the long page, number ${i}, with enough words to fill a line or two of the frame.\n\n`;
   files.set('long.md', long);
@@ -447,6 +455,11 @@ interface ApiHit {
 }
 
 interface SessionOptions {
+  /** The width the context is opened at, when it differs from `width` (the viewport it is then resized to): a fine pointer
+   *  opened at a desk width and narrowed, as docs-compact-head's `openView` does. */
+  readonly openWidth?: number;
+  /** The skin (Refined by default). */
+  readonly skin?: string;
   readonly width?: number;
   readonly height?: number;
   readonly hook?: HookConfig;
@@ -472,7 +485,7 @@ afterEach(async () => {
 const SHELL_META = /<meta[^>]*http-equiv="Content-Security-Policy"[^>]*>/i;
 
 async function openSession(opts: SessionOptions = {}, using: Browser = browser): Promise<Session> {
-  const app = await openApp(using, { width: opts.width ?? 1280, skin: REFINED, theme: 'light' }, { api: {}, fleetFrames: [] });
+  const app = await openApp(using, { width: opts.openWidth ?? opts.width ?? 1280, skin: opts.skin ?? REFINED, theme: 'light' }, { api: {}, fleetFrames: [] });
   sessions.push(app);
   const { ctx, page } = app;
   if (opts.width !== undefined || opts.height !== undefined) {
@@ -698,6 +711,89 @@ function summariseSrcdoc(page: Page, n: number): Promise<SrcdocSummary> {
     };
   }, n);
 }
+
+// ---- the reader's lazy chunks, held (D-8729, completion plan Task 13) --------------------------------------------------
+
+/** The built app's chunk for `./reader/bridge` (`ReaderFrame.tsx#lazyMountReader`'s first `import()`): the emitted file is
+ *  `assets/<module name>-<hash>.js`, the name the build gives a dynamic import's chunk (`test/reader-built.test.ts` finds the
+ *  render job's the same way). A request for none fails by name in `arrival`, listing the script requests that did arrive. */
+const BRIDGE_CHUNK = /\/assets\/bridge-[^/]+\.js$/;
+/** The Mermaid text's chunk (`./reader/assets`' `loadMermaidAsset`; `test/reader-built.test.ts` pins exactly one emitted). */
+const MERMAID_CHUNK = /\/assets\/mermaid\.frame-[^/]+\.js$/;
+
+interface HeldChunk {
+  /** Resolves once a request for the chunk has arrived and is parked (bounded; the failure names the chunk and the script
+   *  requests seen). */
+  arrival(): Promise<void>;
+  /** Lets every parked request, and every later one, through. */
+  release(): Promise<void>;
+}
+
+/** Parks the browser's request for the chunk `pattern` names until the case calls `release()`. Routed on the context, before
+ *  the page loads; any other request falls through to the routes `openApp` and the session set up. */
+async function holdChunk(ctx: BrowserContext, label: string, pattern: RegExp): Promise<HeldChunk> {
+  const parked: Route[] = [];
+  const scripts: string[] = [];
+  let released = false;
+  await ctx.route((u) => u.pathname.includes('/assets/') && u.pathname.endsWith('.js'), async (route) => {
+    const { pathname } = new URL(route.request().url());
+    scripts.push(pathname);
+    if (released || !pattern.test(pathname)) {
+      await route.fallback();
+      return;
+    }
+    parked.push(route);
+  });
+  return {
+    async arrival() {
+      const deadline = Date.now() + 60_000;
+      while (parked.length === 0) {
+        if (Date.now() > deadline) throw new Error(`no request for the ${label} chunk (${String(pattern)}) arrived in 60 s; script requests seen: ${scripts.join(', ') || 'none'}`);
+        await sleep(25);
+      }
+    },
+    async release() {
+      released = true;
+      for (const route of parked.splice(0)) await route.fallback();
+    },
+  };
+}
+
+/** Keyboard focus onto the element `selector` names, the way a reader of the page gets there: Tab (or Shift+Tab) from where
+ *  focus stands, until it lands, at most `max` presses. The failure names the selector and the stops passed. */
+async function tabTo(page: Page, selector: string, key: 'Tab' | 'Shift+Tab', max = 60): Promise<void> {
+  const passed: string[] = [];
+  for (let i = 0; i < max; i += 1) {
+    await page.keyboard.press(key);
+    const here = await page.evaluate((sel) => {
+      const a = document.activeElement;
+      return { hit: a !== null && a.matches(sel), name: a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}` };
+    }, selector);
+    if (here.hit) return;
+    passed.push(here.name);
+  }
+  throw new Error(`${key} did not reach ${selector} in ${max} presses (stops: ${passed.join(' > ')})`);
+}
+
+/** What holds focus, in the parent document. */
+const activeOf = (page: Page): Promise<{ readonly onFrame: boolean; readonly cls: string; readonly tag: string }> => page.evaluate(() => {
+  const a = document.activeElement;
+  return { onFrame: a !== null && a === document.querySelector('.docs-reader iframe'), cls: a === null ? '' : String(a.className), tag: a === null ? 'null' : a.tagName.toLowerCase() };
+});
+
+const insertFocus = async (page: Page): Promise<boolean[]> => (await framesSeen(page)).map((f) => f.focusedAtInsert);
+
+/** The element Tab goes to next from the control `selector` names: the next focusable, visible element after it in document
+ *  order (a tabindex of -1, a disabled control, anything not drawn or inside a hidden region does not count). */
+const nextStopAfter = (page: Page, selector: string): Promise<string> => page.evaluate((sel) => {
+  const from = document.querySelector(sel);
+  if (from === null) return 'no such control';
+  const stops = [...document.querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, iframe, [tabindex]')]
+    .filter((e) => e.tabIndex >= 0 && !(e as HTMLButtonElement).disabled && e.checkVisibility({ visibilityProperty: true }));
+  const i = stops.indexOf(from as HTMLElement);
+  const next = stops[i + 1];
+  return i < 0 || next === undefined ? 'none' : `${next.tagName.toLowerCase()}.${String(next.className)}`;
+}, selector);
 
 // ---- the rows ---------------------------------------------------------------------------------------------------------
 
@@ -1382,4 +1478,136 @@ describe('W8a reader frame in Chrome', () => {
     expect(painted.decoded, 'and all 30 decode in the frame').toBe(DOCS_MAX_IMAGES_PER_PAGE);
     expect(m.readyMs, 'ready arrived').toBeGreaterThan(0);
   }, 300_000);
+
+  // ---- the mount's focus yields to a host control (D-8729, completion plan Task 13) ---------------------------------------
+  // The defect (desktop polish c16, fix round 2; c18's correction): a lazily loaded reader took focus from a head control the
+  // reader of the page had already moved to, and the next Tab jumped from the frame to an unrelated stop. The bridge chunk
+  // is held here, so "the page's reader moves focus before the mount" is a fact the case makes, not a race it hopes for. No
+  // case focuses anything after the reader mounted and then claims focus was kept: every focus move is before the release.
+  describe('the mount yields focus to a host control, and takes it when no one owns it (D-8729)', () => {
+    /** docs-compact-head's `DEEPER_CASES`: both skins, 5 and 7 directories, 600 x 960 and 900 x 800, under a fine pointer. */
+    const DESK_CASES = [INSTRUMENT, REFINED].flatMap((skin) => DEEP_DIRS.flatMap((dirs) =>
+      ([[600, 960], [900, 800]] as const).map(([w, h]) => [skin, dirs, w, h] as const)));
+
+    it.each(DESK_CASES)('desk-born, %s, %i directories, %i x %i: back keeps the focus a reader of the page gave it, the frame is not focused at insertion, and the first Tab stop is the first crumb, seen whole', async (skin, dirs, width, height) => {
+      const s = await openSession({ openWidth: Math.max(width, 900), width, height, skin });
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl(deepPath(dirs)));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      // Unfold the crumbs (the compact-head case's setup), then go to back by KEYBOARD: Shift+Tab from where the click left focus.
+      await s.page.locator('.docs-full .docs-crumbs-more').click({ timeout: 30_000 });
+      await tabTo(s.page, '.docs-full .docs-back', 'Shift+Tab');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      expect(await activeOf(s.page), 'back still holds the focus at ready (nothing focused after the mount)').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      await s.page.keyboard.press('Tab');
+      const first = await s.page.evaluate(() => {
+        const a = document.activeElement as HTMLElement;
+        const nav = document.querySelector('.docs-full .docs-crumbs')!.getBoundingClientRect();
+        const b = a.getBoundingClientRect();
+        return { text: a.textContent ?? '', seen: Math.max(0, Math.min(b.right, nav.right) - Math.max(b.left, nav.left)), w: b.width };
+      });
+      expect(first.text, 'the first Tab stop after back is the first crumb').toBe(DOCS_HEAD_TEXT.index);
+      expect(first.seen, 'it is seen whole').toBeGreaterThanOrEqual(first.w - 0.5);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 180_000);
+    /** Phone-born: the leaf opens at 412 x 915, so the mount asks for ccrc's one bar (`docs/readerBar.ts`). */
+    const PHONE_VIEW = { width: 412, height: 915 } as const;
+    /** ccrc's phone bar: its doors are outside the Docs head and outside the reader, and the head's swap does not touch them. */
+    const PHONE_DOOR = '.phone-bar-door';
+
+    it('phone-born, a phone bar door: it keeps the focus a reader of the page gave it, the frame is not focused at insertion, and Tab goes to the next stop of the host, not into the frame', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect((await framesSeen(s.page)).length, 'held: no frame yet').toBe(0);
+      // By KEYBOARD: Tab from the top of the page to the bar's first door (the skip link and the compact head come first).
+      await tabTo(s.page, PHONE_DOOR, 'Tab');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await s.page.evaluate(() => document.querySelector('.docs-head')?.classList.contains('docs-one-bar')), 'on ccrc\'s one bar').toBe(true);
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      const door = await s.page.evaluate((sel) => document.activeElement?.matches(sel) === true, PHONE_DOOR);
+      expect(door, 'the door still holds the focus at ready (nothing focused after the mount)').toBe(true);
+      const next = await nextStopAfter(s.page, ':focus');
+      expect(next, 'the host has a stop after the door, and it is not the frame').toMatch(/^button\./);
+      await s.page.keyboard.press('Tab');
+      const landed = await s.page.evaluate(() => {
+        const a = document.activeElement;
+        return a === null ? 'null' : `${a.tagName.toLowerCase()}.${String(a.className)}`;
+      });
+      expect(landed, 'Tab goes to the next stop after the door in the host\'s own DOM order, not into the frame and not to body').toBe(next);
+      expect(s.app.errors, 'no page error').toEqual([]);
+    }, 120_000);
+
+    it('phone-born, back: the frame is not focused at insertion or at ready, and Tab stays in the host (the one bar replaces the compact row, so back is a new element: the head swap, not the mount, drops the focus to body)', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      await tabTo(s.page, '.docs-compact .docs-back', 'Tab');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+      expect((await activeOf(s.page)).onFrame, 'and the frame does not hold the focus at ready').toBe(false);
+      await s.page.keyboard.press('Tab');
+      const landed = await s.page.evaluate(() => {
+        const a = document.activeElement;
+        return { inFrame: a !== null && a === document.querySelector('.docs-reader iframe'), inHead: a?.closest('.docs-head') != null };
+      });
+      expect(landed, 'Tab goes to a control of the host\'s own head, not into the frame').toEqual({ inFrame: false, inHead: true });
+    }, 120_000);
+
+    it('nothing owns focus when the reader mounts, phone-born: the frame IS focused at insertion and at ready (M8.1 kept; the 1280 case is "M8.1 live")', async () => {
+      const s = await openSession(PHONE_VIEW);
+      const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+      await s.goto(leafUrl('small.md'));
+      await bridge.arrival();
+      expect((await activeOf(s.page)).tag, 'held, with nothing focused').toBe('body');
+      await bridge.release();
+      expect(await settle(s.page), 'the reader came up').toBe('ready');
+      expect(await insertFocus(s.page), 'the library focused the iframe right after inserting it').toEqual([true]);
+      expect((await activeOf(s.page)).onFrame, 'and it holds focus at ready').toBe(true);
+    }, 120_000);
+
+    // The Mermaid wait: on request (E17 does not hold), a document whose figures the gate inlines makes the bridge load the
+    // Mermaid text before it mounts. The decision reads focus once, after that last await, so a focus move DURING the wait
+    // counts and one BEFORE it that ended inside the wait does not.
+    describe.skipIf(DRAW !== 'on-request')('the focus is read after the bridge\'s last wait (the held Mermaid chunk)', () => {
+      it('a head control focused while the Mermaid text is held keeps its focus; the frame is not focused at insertion', async () => {
+        const s = await openSession({ width: 1280, height: 800 });
+        const mermaid = await holdChunk(s.app.ctx, 'Mermaid text', MERMAID_CHUNK);
+        await s.goto(leafUrl('fig.md'));
+        await mermaid.arrival();
+        expect((await framesSeen(s.page)).length, 'held on the Mermaid wait: no frame yet').toBe(0);
+        await tabTo(s.page, '.docs-full .docs-back', 'Tab');
+        await mermaid.release();
+        expect(await settle(s.page), 'the reader came up').toBe('ready');
+        expect(await insertFocus(s.page), 'one frame, not focused when it was inserted').toEqual([false]);
+        expect(await activeOf(s.page), 'back still holds the focus at ready').toMatchObject({ onFrame: false, cls: 'docs-back' });
+      }, 120_000);
+
+      it('a head control focused BEFORE the Mermaid wait, then blurred while it is held: the frame IS focused at insertion', async () => {
+        const s = await openSession({ width: 1280, height: 800 });
+        const bridge = await holdChunk(s.app.ctx, 'reader bridge', BRIDGE_CHUNK);
+        const mermaid = await holdChunk(s.app.ctx, 'Mermaid text', MERMAID_CHUNK);
+        await s.goto(leafUrl('fig.md'));
+        await bridge.arrival();
+        await tabTo(s.page, '.docs-full .docs-back', 'Tab');
+        await bridge.release();
+        await mermaid.arrival();
+        expect((await framesSeen(s.page)).length, 'held on the Mermaid wait: no frame yet').toBe(0);
+        expect((await activeOf(s.page)).cls, 'back still holds the focus while the Mermaid text is held').toBe('docs-back');
+        await s.page.evaluate(() => (document.activeElement as HTMLElement).blur());
+        expect((await activeOf(s.page)).tag, 'focus is on body').toBe('body');
+        await mermaid.release();
+        expect(await settle(s.page), 'the reader came up').toBe('ready');
+        expect(await insertFocus(s.page), 'no one owned focus when the mount read it, so the frame was focused when inserted').toEqual([true]);
+        expect((await activeOf(s.page)).onFrame, 'and it holds focus at ready').toBe(true);
+      }, 120_000);
+    });
+  });
 });
