@@ -3,6 +3,12 @@
 // queue, so each writer's record, its order against the row write, its `from` and its reaction to every row of the journal's
 // decision table are pinned without a journal file.
 import { describe, it, expect, afterEach } from 'vitest';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { actorOf } from '../src/accounts/audit.js';
+const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
+const operator = identity.operator(actorOf('operator-a', ''));
+const lane = identity.operator(actorOf('lane-a', ''));
+
 import { DatabaseSync } from 'node:sqlite';
 import { tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -75,12 +81,12 @@ const putLatch = (db: DatabaseSync, cause: string, cap: string, seq: number | nu
 const setRung = (db: DatabaseSync, f: Fake, to: Rung, over: { opKey?: string; actor?: string } = {}): ReturnType<typeof setRungInTx> => {
   const read = ladderRungRead(db);
   const from = read.kind !== 'current' || read.current.kind === 'unreadable' ? 'full' : read.current.kind === 'default' ? 'chat' : read.current.rung;
-  return tx(db, () => setRungInTx(db, f, { from, to, actor: over.actor ?? 'operator-a', at: NOW, opKey: over.opKey ?? 'op-1' }));
+  return tx(db, () => setRungInTx(db, f, { from, to, actor: over.actor === undefined ? operator : identity.console(true, over.actor.replace(/^device:/, '')), at: NOW, opKey: over.opKey ?? 'op-1' }));
 };
 const raise = (db: DatabaseSync, f: Fake, cause = 'latch-a', cap: Rung = 'chat', opKey = 'op-r'): ReturnType<typeof raiseLatchInTx> =>
-  tx(db, () => raiseLatchInTx(db, f, { cause, cap, detail: 'why', raisedBy: 'lane-a', at: NOW, opKey }));
+  tx(db, () => raiseLatchInTx(db, f, { cause, cap, detail: 'why', raisedBy: lane, at: NOW, opKey }));
 const clear = (db: DatabaseSync, f: Fake, cause = 'latch-a', opKey = 'op-c'): LadderWrite =>
-  tx(db, () => clearLatchInTx(db, f, { cause, actor: 'operator-a', at: NOW, opKey }));
+  tx(db, () => clearLatchInTx(db, f, { cause, actor: operator, at: NOW, opKey }));
 
 describe('the reads', () => {
   it('with no row ladderRows answers rung null, and after a write the row', () => {
@@ -90,7 +96,7 @@ describe('the reads', () => {
     setRung(db, fake(db), 'off');
     expect(ladderRows(db)).toEqual({
       kind: 'measured', standing: [],
-      rung: { operatorRung: 'off', actor: 'operator-a', updatedAt: NOW, recordSequence: 101, journalled: true, narrowedAt: NOW },
+      rung: { operatorRung: 'off', actor: 'operator-a 00000000', updatedAt: NOW, recordSequence: 101, journalled: true, narrowedAt: NOW },
     });
     expect(ladderRungRead(db)).toEqual({ kind: 'current', current: { kind: 'rung', rung: 'off' } });
   });
@@ -137,13 +143,13 @@ describe('the reads', () => {
 describe('setRungInTx', () => {
   it('refuses a non-off target over an unknown word even when its normalized origin is full', () => {
     const db = openDb(); const journal = fake(db); put(db, 'future');
-    expect(tx(db, () => setRungInTx(db, journal, { from: 'full', to: 'chat', actor: 'actor', at: NOW, opKey: 'race' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'full', to: 'chat', actor: operator, at: NOW, opKey: 'race' })))
       .toEqual({ ok: false, error: 'row-changed' });
     expect(journal.seen).toEqual([]); expect(rungRow(db)).toMatchObject({ operatorRung: 'future' });
   });
   it('refuses a classified origin that changed before its transaction', () => {
     const db = openDb(); const journal = fake(db); put(db, 'off');
-    const result = tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'chat', actor: 'actor', at: NOW, opKey: 'race' }));
+    const result = tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'chat', actor: operator, at: NOW, opKey: 'race' }));
     expect(result).toEqual({ ok: false, error: 'row-changed' });
     expect(journal.seen).toEqual([]);
     expect(rungRow(db)).toMatchObject({ operatorRung: 'off' });
@@ -310,7 +316,7 @@ describe('raiseLatchInTx', () => {
     expect(raise(db, f, 'latch-a', 'advise')).toEqual({ ok: true, changed: true, journalled: true, recordSequence: 101, notice: 'none' });
     expect(f.seen.map((s) => s.entry)).toEqual([{ kind: 'authority-latch-raise', opKey: 'op-r', cause: 'latch-a', cap: 'advise' }]);
     expect(f.seen[0]!.latches).toBe(0);
-    expect(latchRows(db)).toMatchObject([{ cause: 'latch-a', cap: 'advise', detail: 'why', raisedAt: NOW, raisedBy: 'lane-a', raiseSequence: 101, clearedAt: null }]);
+    expect(latchRows(db)).toMatchObject([{ cause: 'latch-a', cap: 'advise', detail: 'why', raisedAt: NOW, raisedBy: 'lane-a 00000000', raiseSequence: 101, clearedAt: null }]);
   });
 
   it('a second raise of a standing cause answers changed:false, appends nothing and never moves the stored cap', () => {
@@ -355,7 +361,7 @@ describe('clearLatchInTx', () => {
     putLatch(db, 'latch-a', 'chat');
     expect(clear(db, f)).toEqual({ ok: true, changed: true, journalled: true, recordSequence: 101 });
     expect(f.seen.map((s) => s.entry)).toEqual([{ kind: 'authority-latch-clear', opKey: 'op-c', cause: 'latch-a' }]);
-    expect(latchRows(db)).toMatchObject([{ clearedAt: NOW, clearedBy: 'operator-a', clearSequence: 101 }]);
+    expect(latchRows(db)).toMatchObject([{ clearedAt: NOW, clearedBy: 'operator-a 00000000', clearSequence: 101 }]);
   });
 
   it('a cause with no standing row answers changed:false and appends nothing', () => {
@@ -458,16 +464,16 @@ describe('catch-up through the real authority journal', () => {
 
   it('replays pending narrowings with a 128-character shared operation key, folds to the rows, and never appends twice', () => {
     const { db, journal, setState } = realJournal();
-    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'advise', actor: 'operator-a', at: NOW, opKey: 'original' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'advise', actor: operator, at: NOW, opKey: 'original' })))
       .toMatchObject({ ok: true, journalled: true, recordSequence: 1 });
     setState({ kind: 'unmeasured', why: 'journal' });
-    expect(tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'off', actor: 'operator-a', at: NOW, opKey: 'narrow' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'advise', to: 'off', actor: operator, at: NOW, opKey: 'narrow' })))
       .toMatchObject({ ok: true, journalled: false });
-    expect(tx(db, () => raiseLatchInTx(db, journal, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: 'lane-a', at: NOW, opKey: 'raise' })))
+    expect(tx(db, () => raiseLatchInTx(db, journal, { cause: 'latch-a', cap: 'chat', detail: 'why', raisedBy: lane, at: NOW, opKey: 'raise' })))
       .toMatchObject({ ok: true, journalled: false });
     setState({ kind: 'coherent' });
     const opKey = 'x'.repeat(128);
-    expect(tx(db, () => raiseLatchInTx(db, journal, { cause: 'latch-b', cap: 'off', detail: 'why', raisedBy: 'lane-a', at: NOW, opKey })))
+    expect(tx(db, () => raiseLatchInTx(db, journal, { cause: 'latch-b', cap: 'off', detail: 'why', raisedBy: lane, at: NOW, opKey })))
       .toMatchObject({ ok: true, journalled: true, recordSequence: 4 });
     const read = journal.readVerified();
     expect(read.kind).toBe('records');
@@ -490,7 +496,7 @@ describe('catch-up through the real authority journal', () => {
 
   it('the real appender refuses an ordinary move that lies about from to disguise a widening', () => {
     const { db, journal, failures } = realJournal();
-    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'off', actor: 'operator-a', at: NOW, opKey: 'initial' })))
+    expect(tx(db, () => setRungInTx(db, journal, { from: 'chat', to: 'off', actor: operator, at: NOW, opKey: 'initial' })))
       .toMatchObject({ ok: true, journalled: true });
     const answer = tx(db, () => journal.appendInTx(db, { kind: 'authority-rung', opKey: 'lying', from: 'full', to: 'chat' }));
     expect(answer).toMatchObject({ ok: false, error: 'authority-rolled-back' });

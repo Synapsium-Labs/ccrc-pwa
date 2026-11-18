@@ -8,7 +8,7 @@
 // reports, the sandbox and the ladder). `overlord-doors-census.test.ts` reads the table against the routes files in both
 // directions: every row is registered in its file, and every registration of `coord/overlordRoutes.ts` and
 // `continuity/routes.ts` has a row or a `NOT_OVERLORD_DOORS` entry. DEPARTURE: the ladder's two columns (`ladderClass`, `act`)
-// are not here, because the ladder is not on main yet; gates B adds them with its rows.
+// are not here yet; gates B adds them for the Overlord's own doors. The ladder's operator doors are listed below.
 import type { VerbClass } from '../../../shared/overlord-identity.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -52,6 +52,10 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
   model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
   'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),
+  ladder: operator('GET', '/api/overlord/ladder', OVERLORD, 'view'),
+  rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
+  pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
+  'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
   'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),

@@ -25,7 +25,7 @@ import {
 import type { Roster } from '../../../shared/roster.js';
 import { workspaceId } from '../../../shared/slug.js';
 import type { AccountGate } from '../accounts/gate.js';
-import type { CallerIdentity, RecordedActor } from '../auth/callerIdentity.js';
+import type { CallerIdentity, ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
 import type { ActorFlags } from '../ccdargv.js';
 import { launchDigestOf } from '../continuity/launchProfile.js';
 import type { SessionHost } from '../continuity/sessionHost.js';
@@ -97,12 +97,12 @@ export interface OverlordRouteDeps {
   /** The account gate (D-5511): its `actor` is the row's, recorded through `identity` (gates A). */
   readonly gate: AccountGate;
   /** The caller identity port (gates A, Q17): the gate's actor minted at `operator` strength, the one actor a writer takes. */
-  readonly identity: Pick<CallerIdentity, 'operator'>;
+  readonly identity: Pick<CallerIdentity, 'operator' | 'console'>;
   /** The coordination serialiser: every write door's body runs inside it, so a designate and a retire never interleave. */
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
   readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
-  readonly loweringActor?: (req: FastifyRequest) => string;
+  readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
   readonly body: OverlordBody;
@@ -411,6 +411,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   // The ladder's operator doors share the serialiser and the store used by its read.
   const ladderUnavailable = (reply: FastifyReply): FastifyReply => refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
   const ladderRefusal = (reply: FastifyReply, result: Extract<LadderWrite, { ok: false }>): FastifyReply => {
+    if ('reason' in result) return refuseRoute(reply, 'internal', { detail: 'the door handed the writer an actor the identity port did not mint' });
     const state = facts.authority?.();
     const detail = state?.kind === 'rolled-back' ? state.cause : state?.kind === 'unmeasured' ? state.why : result.error;
     return refuseRoute(reply, LADDER_AUTHORITY_REFUSAL[result.error], { detail });
@@ -425,15 +426,16 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const verdict = rungMoveVerdict(current.current, ask, ladder.serverCaps);
     if (verdict.kind === 'same') return { ok: true, changed: false, rung: verdict.rung };
     if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, RUNG_REFUSAL_DETAIL[verdict.word](verdict));
-    let actor: string;
+    let actor: RecordedActor | ConsoleCaller;
     if (verdict.kind === 'raise') {
       const g = deps.gate(req, reply, { cap: null, stepUp: true });
       if (!g.pass) return reply;
-      actor = String(g.actor);
+      actor = deps.identity.operator(g.actor);
       if (!measuredLadder(ladder)) return ladderUnavailable(reply);
     } else {
-      if (deps.loweringActor === undefined) return ladderUnavailable(reply);
-      actor = deps.loweringActor(req);
+      if (deps.consoleFacts === undefined) return ladderUnavailable(reply);
+      const facts = deps.consoleFacts(req);
+      actor = deps.identity.console(facts.armed, facts.device);
     }
     // W1 Pause and off change only the rung. W2 cancels undelivered mail/kickoffs and nudges,
     // moves requests to needs-you and settles pending acts; W3 releases holds with one push.
@@ -460,7 +462,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     return deps.serial(async () => {
       const ladder = deps.ladder;
       if (ladder === undefined || !measuredLadder(ladder)) return ladderUnavailable(reply);
-      const result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: String(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
+      const result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: deps.identity.operator(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
       if (!result.ok) return ladderRefusal(reply, result);
       return result;
     });

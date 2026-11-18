@@ -26,7 +26,9 @@
 // measuring (W2, Table 10.1b).
 import type { DatabaseSync } from 'node:sqlite';
 import type { AuthorityAppend, AuthorityAppendError } from './overlordAuthorityJournal.js';
-import type { AuthorityAppender } from './overlordDesignationStore.js';
+import type { ActorRefused, AuthorityAppender } from './overlordDesignationStore.js';
+import type { ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
+import { isRecordedActor } from '../auth/attributionIdentity.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
 import type { CurrentRung, LadderWriterRefusal } from './overlordLadder.js';
 import {
@@ -55,12 +57,35 @@ export type LadderRungRead =
 export type LadderWrite =
   | { readonly ok: true; readonly changed: false }
   | { readonly ok: true; readonly changed: true; readonly journalled: boolean; readonly recordSequence: number | null }
-  | { readonly ok: false; readonly error: AuthorityAppendError | LadderWriterRefusal };
+  | { readonly ok: false; readonly error: AuthorityAppendError | LadderWriterRefusal }
+  | ActorRefused;
 
-export interface RungMoveInput { from: Rung; to: Rung; actor: string; at: number; opKey: string }
-export interface LatchRaiseInput { cause: string; cap: Rung; detail: string; raisedBy: string; at: number; opKey: string }
-export interface LatchClearInput { cause: string; actor: string; at: number; opKey: string }
+export type BrakeActor = RecordedActor | ConsoleCaller;
+export interface RungMoveInput { from: Rung; to: Rung; actor: BrakeActor; at: number; opKey: string }
+export interface LatchRaiseInput { cause: string; cap: Rung; detail: string; raisedBy: BrakeActor; at: number; opKey: string }
+export interface LatchClearInput { cause: string; actor: RecordedActor; at: number; opKey: string }
+
+/** One actor validation owner for both the pre-transaction and the in-transaction checks.
+ * Brakes accept a minted actor or the console's full result; widening requires the account gate. */
+export function ladderActor(actor: unknown, direction: 'brake' | 'widen'): { ok: true; subject: string } | ActorRefused {
+  if (isRecordedActor(actor)) {
+    if (direction === 'widen' && (actor.kind !== 'operator' || actor.issuer !== 'account-gate' || actor.strength !== 'operator'))
+      return { ok: false, reason: 'actor' };
+    return { ok: true, subject: actor.subject };
+  }
+  if (direction === 'brake' && typeof actor === 'object' && actor !== null && 'kind' in actor) {
+    if (actor.kind === 'dark') return { ok: true, subject: 'flag-off' };
+    if (actor.kind === 'device-unmeasured') return { ok: true, subject: 'unmeasured' };
+    if (actor.kind === 'signed-in' && 'actor' in actor && isRecordedActor(actor.actor)) return { ok: true, subject: actor.actor.subject };
+  }
+  return { ok: false, reason: 'actor' };
+}
 export interface StricterLadder { operatorRung: Rung; latches: readonly { cause: string; cap: Rung }[] }
+
+export function rungActorBefore(move: RungMoveInput): { ok: true; subject: string } | ActorRefused {
+  const direction = isRung(move.from) && isRung(move.to) && rungRank(move.to) > rungRank(move.from) ? 'widen' : 'brake';
+  return ladderActor(move.actor, direction);
+}
 
 type Raw = Record<string, unknown>;
 const isSafeInt = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v);
@@ -200,6 +225,8 @@ export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: 
   if (!isRung(wordBefore) && move.to !== 'off') return { ok: false, error: 'row-changed' };
   const origin = isRung(wordBefore) ? wordBefore : 'full';
   if (origin !== move.from) return { ok: false, error: 'row-changed' };
+  const actor = ladderActor(move.actor, rungRank(move.to) > rungRank(origin) ? 'widen' : 'brake');
+  if (!actor.ok) return actor;
   journalPendingInTx(db, journal, move.opKey);
   const held = heldRung(db);
   const word = held === null ? LADDER_DEFAULT_RUNG : held.operatorRung;
@@ -220,7 +247,7 @@ export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: 
     VALUES (1, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET operatorRung = excluded.operatorRung, actor = excluded.actor, updatedAt = excluded.updatedAt,
       recordSequence = excluded.recordSequence, recordFrom = excluded.recordFrom, narrowedAt = excluded.narrowedAt`)
-    .run(move.to, move.actor, move.at, sequence, recordFrom, narrowing ? move.at : null);
+    .run(move.to, actor.subject, move.at, sequence, recordFrom, narrowing ? move.at : null);
   return { ok: true, changed: true, journalled: sequence !== null, recordSequence: sequence };
 }
 
@@ -230,6 +257,8 @@ export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: 
  *  with nothing appended or written. A standing latch of the cause answers `changed: false` (a second raise never moves the
  *  stored cap). Echoes the cause table's notice for its raiser (`none` for a cause this build does not know). */
 export function raiseLatchInTx(db: DatabaseSync, journal: AuthorityAppender, latch: LatchRaiseInput): LadderWrite & { notice?: LadderNotice } {
+  const actor = ladderActor(latch.raisedBy, 'brake');
+  if (!actor.ok) return actor;
   if (!isLadderCauseKey(latch.cause) || !isRung(latch.cap)) return { ok: false, error: 'bad-entry' };
   journalPendingInTx(db, journal, latch.opKey);
   const standing = db.prepare('SELECT 1 AS one FROM overlord_latches WHERE cause = ? AND clearedAt IS NULL').get(latch.cause);
@@ -241,7 +270,7 @@ export function raiseLatchInTx(db: DatabaseSync, journal: AuthorityAppender, lat
   if (a.kind === 'row-only' && !narrows(entry)) return { ok: false, error: 'authority-rolled-back' };
   const sequence = a.kind === 'appended' ? a.record.sequence : null;
   db.prepare(`INSERT INTO overlord_latches (cause, cap, detail, raisedAt, raisedBy, raiseSequence) VALUES (?, ?, ?, ?, ?, ?)`)
-    .run(latch.cause, latch.cap, latch.detail, latch.at, latch.raisedBy, sequence);
+    .run(latch.cause, latch.cap, latch.detail, latch.at, actor.subject, sequence);
   const notice = Object.hasOwn(LADDER_CAUSE_MAP, latch.cause) ? LADDER_CAUSE_MAP[latch.cause as keyof typeof LADDER_CAUSE_MAP].notice : 'none';
   return { ok: true, changed: true, journalled: sequence !== null, recordSequence: sequence, notice };
 }
@@ -251,6 +280,8 @@ export function raiseLatchInTx(db: DatabaseSync, journal: AuthorityAppender, lat
 /** The operator's clear of one cause, a widening: no row is written unless the record is `appended`. No standing row answers
  *  `changed: false` and appends nothing. */
 export function clearLatchInTx(db: DatabaseSync, journal: AuthorityAppender, clear: LatchClearInput): LadderWrite {
+  const actor = ladderActor(clear.actor, 'widen');
+  if (!actor.ok) return actor;
   journalPendingInTx(db, journal, clear.opKey);
   const standing = db.prepare('SELECT id FROM overlord_latches WHERE cause = ? AND clearedAt IS NULL').get(clear.cause) as
     { id: number } | undefined;
@@ -259,7 +290,7 @@ export function clearLatchInTx(db: DatabaseSync, journal: AuthorityAppender, cle
   if (!a.ok) return { ok: false, error: a.error };
   if (a.kind !== 'appended') return { ok: false, error: 'authority-rolled-back' };
   db.prepare('UPDATE overlord_latches SET clearedAt = ?, clearedBy = ?, clearSequence = ? WHERE id = ? AND clearedAt IS NULL')
-    .run(clear.at, clear.actor, a.record.sequence, standing.id);
+    .run(clear.at, actor.subject, a.record.sequence, standing.id);
   return { ok: true, changed: true, journalled: true, recordSequence: a.record.sequence };
 }
 

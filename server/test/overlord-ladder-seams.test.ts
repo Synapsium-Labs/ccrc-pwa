@@ -1,3 +1,6 @@
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { actorOf } from '../src/accounts/audit.js';
+const ladderActor = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }).operator(actorOf('actor', ''));
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS } from '../src/coord/schema.js';
@@ -112,13 +115,13 @@ describe('ladder latch seam', () => {
       : entry.kind === 'authority-latch-raise' ? { ok: true, kind: 'row-only', state: { kind: 'rolled-back', cause: 'diverged' } } as any
         : { ok: false, error: 'authority-rolled-back', detail: 'fixture' } };
     const deps = { coord, journal, causeTable: causes, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' } };
-    expect(raiseLatch(deps, 'restore-detected', 'detail', 'system')).toMatchObject({ changed: true, journalled: false });
-    expect(raiseLatch(deps, 'restore-detected', 'detail', 'system')).toMatchObject({ changed: false });
-    expect(coord.clearLatch(journal, { cause: 'restore-detected', actor: 'actor', at: 10, opKey: 'clear-a' })).toMatchObject({ ok: false, error: 'authority-rolled-back' });
+    expect(raiseLatch(deps, 'restore-detected', 'detail', ladderActor)).toMatchObject({ changed: true, journalled: false });
+    expect(raiseLatch(deps, 'restore-detected', 'detail', ladderActor)).toMatchObject({ changed: false });
+    expect(coord.clearLatch(journal, { cause: 'restore-detected', actor: ladderActor, at: 10, opKey: 'clear-a' })).toMatchObject({ ok: false, error: 'authority-rolled-back' });
     tx(db, () => applyRestoreInTx(db, { operatorRung: 'off', latches: [] }, 11, 10));
     expect(db.prepare('SELECT cap,raiseSequence,clearedAt FROM overlord_latches').get()).toMatchObject({ cap: 'chat', raiseSequence: 11, clearedAt: null });
     coherent = true;
-    expect(coord.clearLatch(journal, { cause: 'restore-detected', actor: 'actor', at: 10, opKey: 'clear-b' })).toMatchObject({ ok: true, changed: true, recordSequence: 12 });
+    expect(coord.clearLatch(journal, { cause: 'restore-detected', actor: ladderActor, at: 10, opKey: 'clear-b' })).toMatchObject({ ok: true, changed: true, recordSequence: 12 });
     db.close();
   });
   it('uses the fixture table cap and notice and keeps a standing latch', () => {
@@ -127,9 +130,9 @@ describe('ladder latch seam', () => {
     const coord = new CoordStore(db);
     const deps = { coord, causeTable: causes, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
       journal: { appendInTx: () => ({ ok: true as const, kind: 'row-only' as const, state: { kind: 'rolled-back' as const, cause: 'diverged' as const } }) } };
-    expect(raiseLatch(deps, 'restore-detected', 'detail', 'system')).toMatchObject({ ok: true, changed: true, journalled: false, notice: 'push' });
+    expect(raiseLatch(deps, 'restore-detected', 'detail', ladderActor)).toMatchObject({ ok: true, changed: true, journalled: false, notice: 'push' });
     expect(db.prepare('SELECT cap FROM overlord_latches').get()).toMatchObject({ cap: 'chat' });
-    expect(raiseLatch(deps, 'restore-detected', 'detail', 'system')).toMatchObject({ ok: true, changed: false });
+    expect(raiseLatch(deps, 'restore-detected', 'detail', ladderActor)).toMatchObject({ ok: true, changed: false });
     db.close();
   });
 });

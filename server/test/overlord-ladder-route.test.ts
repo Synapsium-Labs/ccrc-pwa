@@ -1,3 +1,7 @@
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { actorOf } from '../src/accounts/audit.js';
+const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
+const accountActor = actorOf('device:lane-a', '');
 import { describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { DatabaseSync } from 'node:sqlite';
@@ -19,7 +23,7 @@ function rig(witness?: NarrowingWitness) {
   db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
   const coord = new CoordStore(db);
   const app = Fastify();
-  registerOverlordRoutes(app, {
+  registerOverlordRoutes(app, { identity,
     coord, gate: () => { throw Error('ladder must not ask account gate'); }, serial: () => { throw Error('ladder must not serialize'); },
     facts: { serverWords: [] }, ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, witness, serverCaps: [] },
   } as unknown as OverlordRouteDeps);
@@ -34,18 +38,18 @@ describe('ladder write doors', () => {
     const coord = new CoordStore(db);
     const asks: unknown[] = [];
     const app = Fastify();
-    registerOverlordRoutes(app, {
+    registerOverlordRoutes(app, { identity,
       coord, facts: {}, serial: async (f: () => unknown) => f(),
-      gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: 'device:lane-a' }; },
+      gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: accountActor }; },
       ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
       journal: { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 7 } }) },
-      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, loweringActor: () => 'flag-off',
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: false, device: null }),
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/latches/latch-a/clear' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ changed: true, journalled: true, recordSequence: 7 });
     expect(asks).toEqual([{ cap: null, stepUp: true }]);
-    expect(db.prepare('SELECT clearedBy FROM overlord_latches').get()).toMatchObject({ clearedBy: 'device:lane-a' });
+    expect(db.prepare('SELECT clearedBy FROM overlord_latches').get()).toMatchObject({ clearedBy: 'device:lane-a 00000000' });
     await app.close(); db.close();
   });
 
@@ -55,12 +59,12 @@ describe('ladder write doors', () => {
     const coord = new CoordStore(db);
     const asks: unknown[] = [];
     const app = Fastify();
-    registerOverlordRoutes(app, {
+    registerOverlordRoutes(app, { identity,
       coord, facts: {}, serial: async (f: () => unknown) => f(),
-      gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: 'device:lane-a' }; },
+      gate: (_req: unknown, _reply: unknown, ask: unknown) => { asks.push(ask); return { pass: true, actor: accountActor }; },
       ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
       journal: { appendInTx: () => ({ ok: true, kind: 'appended', record: { sequence: 7 } }) },
-      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, loweringActor: () => 'flag-off',
+      clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: false, device: null }),
     } as unknown as OverlordRouteDeps);
     const lower = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'off' } });
     expect(lower.statusCode).toBe(200);
@@ -69,7 +73,7 @@ describe('ladder write doors', () => {
     const raise = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'chat' } });
     expect(raise.statusCode).toBe(200);
     expect(asks).toEqual([{ cap: null, stepUp: true }]);
-    expect(db.prepare('SELECT actor FROM overlord_ladder').get()).toMatchObject({ actor: 'device:lane-a' });
+    expect(db.prepare('SELECT actor FROM overlord_ladder').get()).toMatchObject({ actor: 'device:lane-a 00000000' });
     await app.close(); db.close();
   });
 });
@@ -80,16 +84,16 @@ function writeRig(options: { gateError?: string; actor?: string; caps?: string[]
   const coord = new CoordStore(db);
   const app = Fastify();
   const asks: unknown[] = [], entries: any[] = [];
-  registerOverlordRoutes(app, {
+  registerOverlordRoutes(app, { identity,
     coord, facts: { authority: () => options.authority }, serial: async (f: () => unknown) => f(),
     gate: (_req: unknown, reply: any, ask: unknown) => {
       asks.push(ask);
       if (options.gateError) { reply.code(403).send({ ok: false, error: options.gateError }); return { pass: false }; }
-      return { pass: true, actor: 'gate-actor' };
+      return { pass: true, actor: accountActor };
     },
     ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, witness: options.witness, serverCaps: options.caps ?? [] },
     journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return options.journalAnswer ?? { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
-    clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, loweringActor: () => options.actor ?? 'flag-off',
+    clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, consoleFacts: () => ({ armed: options.actor !== undefined && options.actor !== 'flag-off', device: options.actor?.replace(/^device:/, '') ?? null }),
   } as unknown as OverlordRouteDeps);
   const post = (path: string, payload?: unknown) => app.inject({ method: 'POST', url: `/api/overlord/${path}`, ...(payload === undefined ? {} : { payload: payload as object }) });
   const put = (rung: string) => db.prepare("INSERT OR REPLACE INTO overlord_ladder VALUES (1, ?, 'old', 1, 1, NULL, NULL)").run(rung);
@@ -104,7 +108,7 @@ describe('ladder write safeguards', () => {
     const coord = new CoordStore(db); const app = Fastify(); const entries: unknown[] = [];
     const ladderCoord = { ladderRows: () => coord.ladderRows(), setRung: coord.setRung.bind(coord), clearLatch: coord.clearLatch.bind(coord),
       ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'future'"); return read; } };
-    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(), loweringActor: () => 'flag-off',
+    registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), consoleFacts: () => ({ armed: false, device: null }),
       journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
       clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
@@ -119,7 +123,7 @@ describe('ladder write safeguards', () => {
     const coord = new CoordStore(db); const app = Fastify(); const entries: unknown[] = [];
     const ladderCoord = { ladderRows: () => coord.ladderRows(), setRung: coord.setRung.bind(coord), clearLatch: coord.clearLatch.bind(coord),
       ladderRungRead: () => { const read = coord.ladderRungRead(); db.exec("UPDATE overlord_ladder SET operatorRung = 'off'"); return read; } };
-    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(), loweringActor: () => 'flag-off',
+    registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), consoleFacts: () => ({ armed: false, device: null }),
       journal: { appendInTx: (_db: unknown, entry: unknown) => { entries.push(entry); return { ok: true, kind: 'appended', record: { sequence: 7 } }; } },
       clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' }, ladder: { coord: ladderCoord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
@@ -131,7 +135,7 @@ describe('ladder write safeguards', () => {
   it('refuses a lowering with a ladder but no actor port', async () => {
     const db = new DatabaseSync(':memory:'); db.exec(MIGRATIONS.find((m) => m.includes('CREATE TABLE overlord_ladder'))!);
     const coord = new CoordStore(db); const app = Fastify();
-    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(),
+    registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(),
       ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/rung', payload: { rung: 'off' } });
@@ -248,8 +252,8 @@ describe('ladder write safeguards', () => {
       return entries.length === 1 ? { ok: true, kind: 'appended', record: { sequence: 7 } } : { ok: false, error: 'journal-append', detail: 'failed' };
     } };
     const app = Fastify();
-    registerOverlordRoutes(app, { coord, journal, facts: {}, serial: async (f: () => unknown) => f(),
-      gate: () => ({ pass: true, actor: 'gate-actor' }), clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
+    registerOverlordRoutes(app, { identity, coord, journal, facts: {}, serial: async (f: () => unknown) => f(),
+      gate: () => ({ pass: true, actor: accountActor }), clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
       ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'POST', url: '/api/overlord/latches/latch-a/clear' });
@@ -312,7 +316,7 @@ describe('ladder write safeguards', () => {
     db.exec("INSERT INTO overlord_ladder VALUES (1, 'off', 'actor', 1, 1, NULL, 1)");
     db.exec("INSERT INTO overlord_latches (cause,cap,detail,raisedAt,raisedBy,raiseSequence) VALUES ('latch-a','chat','detail',1,'actor',1)");
     const coord = new CoordStore(db); const app = Fastify();
-    registerOverlordRoutes(app, { coord, facts: {}, serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: 'gate-actor' }),
+    registerOverlordRoutes(app, { identity, coord, facts: {}, serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: accountActor }),
       journal: NO_LADDER_AUTHORITY, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
       ladder: { coord, journal: NO_LADDER_AUTHORITY, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
     } as unknown as OverlordRouteDeps);
@@ -324,8 +328,8 @@ describe('ladder write safeguards', () => {
   });
   it('fails closed for designation-only harnesses without ladder dependencies', async () => {
     const app = Fastify();
-    registerOverlordRoutes(app, { coord: {}, facts: {}, serial: async (f: () => unknown) => f(),
-      gate: () => ({ pass: true, actor: 'gate-actor' }) } as unknown as OverlordRouteDeps);
+    registerOverlordRoutes(app, { identity, coord: {}, facts: {}, serial: async (f: () => unknown) => f(),
+      gate: () => ({ pass: true, actor: accountActor }) } as unknown as OverlordRouteDeps);
     for (const [url, payload] of [['/api/overlord/rung', { rung: 'off' }], ['/api/overlord/pause', undefined], ['/api/overlord/latches/latch-a/clear', undefined]] as const) {
       const res = await app.inject({ method: 'POST', url, ...(payload === undefined ? {} : { payload }) });
       expect(res.statusCode).toBe(503);
@@ -363,7 +367,7 @@ describe('ladder GET', () => {
   });
   it('reads an actual designated degraded generation and binds the condition', async () => {
     const db = new DatabaseSync(':memory:');
-    for (const name of ['CREATE TABLE lane_arm_settings', 'CREATE TABLE continuity_starts', 'CREATE TABLE continuity_generations', 'ADD COLUMN prevLane', 'CREATE TABLE overlord_designation', 'CREATE TABLE overlord_ladder']) {
+    for (const name of ['CREATE TABLE lane_arm_settings', 'CREATE TABLE continuity_starts', 'CREATE TABLE continuity_generations', 'ADD COLUMN prevLane', 'CREATE TABLE overlord_designation', 'ALTER TABLE overlord_designation ADD COLUMN actorKind', 'CREATE TABLE overlord_ladder']) {
       db.exec(MIGRATIONS.find((m) => m.includes(name))!);
     }
     db.exec(`INSERT INTO overlord_designation (id, sessionId, generation, term, designatedTerm, model, accountPools, actor, updatedAt)
@@ -376,7 +380,7 @@ describe('ladder GET', () => {
     const coord = new CoordStore(db);
     const caps = ['overlord-route-v1', 'overlord-answer-v1'];
     const app = Fastify();
-    registerOverlordRoutes(app, { coord, facts: {}, ladder: { coord, inputs: ladderConditionInputs({ coord, serverCaps: caps, continuityGate: () => null }), serverCaps: caps } } as unknown as OverlordRouteDeps);
+    registerOverlordRoutes(app, { identity, coord, facts: {}, ladder: { coord, inputs: ladderConditionInputs({ coord, serverCaps: caps, continuityGate: () => null }), serverCaps: caps } } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'GET', url: '/api/overlord/ladder' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ operatorRung: 'full', effectiveRung: 'chat', binding: [{ cause: 'generation-degraded', reading: 'standing' }], conditions: expect.arrayContaining([expect.objectContaining({ cause: 'generation-degraded', reading: 'standing' })]) });
@@ -412,7 +416,7 @@ describe('ladder GET', () => {
   });
   it('fails closed when a designation-only harness omits ladder dependencies', async () => {
     const app = Fastify();
-    registerOverlordRoutes(app, { coord: {}, facts: {} } as unknown as OverlordRouteDeps);
+    registerOverlordRoutes(app, { identity, coord: {}, facts: {} } as unknown as OverlordRouteDeps);
     const res = await app.inject({ method: 'GET', url: '/api/overlord/ladder' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ detail: 'the ladder could not be read' });

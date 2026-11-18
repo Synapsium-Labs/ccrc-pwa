@@ -6,22 +6,22 @@ import { degradedReading, effectiveRung, latchKnown, narrowingState, rungAvailab
 import type { LadderRowsRead } from './overlordLadderStore.js';
 import type { CoordStore } from './store.js';
 import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/overlord-ladder.js';
-import type { AuthorityAppender, LadderWrite } from './overlordLadderStore.js';
+import type { AuthorityAppender, BrakeActor, LadderWrite } from './overlordLadderStore.js';
 import type { Clock, Entropy } from '../time/ports.js';
 
 type LatchTable = Readonly<Record<string, LadderCauseRow & { readonly kind: 'latch'; readonly effect: { readonly kind: 'cap'; readonly cap: Rung } }>>;
 /** The only delivery-facing latch raise: cap and notice belong to the cause row, not the caller. */
 export function raiseLatch<T extends LatchTable>(
   deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable: T },
-  cause: keyof T & string, detail: string, raisedBy: string,
+  cause: keyof T & string, detail: string, raisedBy: BrakeActor,
 ): LadderWrite & { notice: LadderCauseRow['notice'] };
 export function raiseLatch(
   deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable?: LatchTable },
-  cause: LadderLatchCause, detail: string, raisedBy: string,
+  cause: LadderLatchCause, detail: string, raisedBy: BrakeActor,
 ): LadderWrite & { notice: LadderCauseRow['notice'] };
 export function raiseLatch(
   deps: { coord: Pick<CoordStore, 'raiseLatch'>; journal: AuthorityAppender; clock: Pick<Clock, 'wall'>; entropy: Pick<Entropy, 'hex'>; causeTable?: LatchTable },
-  cause: string, detail: string, raisedBy: string,
+  cause: string, detail: string, raisedBy: BrakeActor,
 ): LadderWrite & { notice: LadderCauseRow['notice'] } {
   const table: Readonly<Record<string, LadderCauseRow>> = deps.causeTable ?? LADDER_CAUSE_MAP;
   const row = table[cause];

@@ -601,7 +601,7 @@ describe('the rejection table is total, in both directions', () => {
     }
     const self = readFileSync(fileURLToPath(import.meta.url), 'utf8');
     expect(self).toContain('|| isOverlordDoorWordHere(tok, outsideDoors)');
-    expect(self).toContain('|| isActorIssuerWordHere(tok, outsideIssuers)');
+    expect(self).toContain("|| isActorIssuerWordHere(tok, tok === 'account-gate' ? outsideAccountGate : outsideIssuers)");
   });
 
   it('every declared INGRESS/DONE-AUTHORITY code is emitted somewhere in server/src/coord', () => {
@@ -921,6 +921,7 @@ describe('the rejection table is total, in both directions', () => {
     const elsewhere = outsideDoneTests();
     const outsideDoors = outsideIdentityHome('overlordDoors.ts');
     const outsideIssuers = outsideIdentityHome('schema.ts', 'overlordDesignationStore.ts');
+    const outsideAccountGate = outsideIdentityHome('schema.ts', 'overlordDesignationStore.ts', 'overlordLadderStore.ts');
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
       if (NOT_CODES.has(tok)) continue;
@@ -1255,8 +1256,8 @@ describe('the rejection table is total, in both directions', () => {
         || isUnforecastableReason(tok)
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
-        // Actor issuers are stored in schema.ts and checked in overlordDesignationStore.ts, not mail or run refusal codes.
-        || isActorIssuerWordHere(tok, outsideIssuers),
+        // Actor issuers are stored in schema.ts and checked by the designation and ladder writers, not mail or run refusal codes.
+        || isActorIssuerWordHere(tok, tok === 'account-gate' ? outsideAccountGate : outsideIssuers),
         `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, Overlord refusal, designation word or unforecastable reason`).toBe(true);
     }
   });

@@ -5442,9 +5442,18 @@ export class CoordStore {
   /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
   ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
   ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
-  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite { return tx(this.db, () => ladder.setRungInTx(this.db, j, move)); }
-  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> { return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch)); }
-  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite { return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear)); }
+  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
+    const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+  }
+  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
+    const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+  }
+  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
+    const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+  }
   /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
   applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */

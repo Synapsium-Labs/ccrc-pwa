@@ -49,6 +49,7 @@ This is W1's ladder only: no holds, pending acts, queued mail or follow-up effec
   latch threw in SQLite's default decoder before validation, blocking a brake. Catch-up now reads BigInts and
   converts only safe values; malformed rows stay distinguishable and are skipped. The held-rung metadata read uses
   the same boundary. Composed reads and widenings remain fail-closed, and no journal or transaction order changes.
+- **`brakes-record-console-result-union` — rulings 562/563.** Brakes take the identity port's full console result without asking the account gate: dark records `flag-off`, an unmeasured device records `unmeasured`, and a signed-in actor records its minted subject. Latch raises may also use that result or any minted actor, as authority narrowing; widening a rung or clearing a latch requires a minted account-gate operator at operator strength. The store validates before its transaction where possible and repeats direction-sensitive validation against the held row before catch-up. The existing text columns carry subjects; restore and catch-up attribution are unchanged.
 - **`rung-step-cell-test-seam`.** `rungStep` accepts an optional cell-table argument, defaulting to `RUNG_CELLS`, so
   tests can exercise refusal cells before W2 adds acts that use them. Production still reads one table.
 
@@ -77,6 +78,7 @@ Fix round 1 absorbs main again under the coordinator's explicit new ruling, afte
 | Tasks 4–5 | Implementer measured route 35, seams 8, read 6, policy 67, auth gate 347 and box-token 60 passing; seven door/helper mutants and a third-writer injection killed |
 | Task review fix round 1 | Missing-journal fallback now preserves row-only brakes without changing designation's fallback; quoted SQL census and fake Confirm append ordering covered. Reversed fallback direction and missed quoted rung assignment each killed by a test |
 | Integrated guards, first run | 1,911 passed, two failed: a new literal-source pin and the witness name colliding with the claimant census. Parser-based policy tests addressed the first; the initial record-specific rename was superseded in branch review by the planned `heldFor` seam and a receiver-aware claimant census |
+| Identity integration | The actor/console regression file was red before integration (13 failed, one passed); the six scoped ladder and door files passed 206 cases after integration. Twelve serial guard mutations were killed, covering provenance, each widening term, direction and pre-/in-transaction checks. A direction mutant survived the first pass and was killed after adding an in-transaction test. Scoped source and fixture typechecks passed; the parent owns the final integrated checks. |
 | Whole-branch review fixes | The restore and origin-race tests were red first (three failures). Scoped review then found that readable `full` and an unknown word shared the normalized origin; a second red-first case now prevents Pause from writing `chat` after that change. Store 114 and route 42 passed, and the scoped recheck accepted F1–F7. Confirm preserves the lower stored rung, and the rung writer checks the verdict's normalized origin before catch-up, returning its own `row-changed` error if it changed. The planned witness method `heldFor` is restored; the syntax-aware claimant census excludes only the ladder's typed witness receivers, while checking every other receiver and bare call. The actor-port guard mutant returned 500 instead of 503; the claimant member-call guard mutant and unknown-condition-cap mutant were killed. Policy 67, read 6, seams 8, claimant census 183, auth gate 347 and all ten selected ladder mutation floors passed; the bounded unknown-cause enumeration samples known-condition combinations to keep the floor practical. Source typecheck passed; final test-typecheck attempts at 3072 and 2048 MiB were killed by the shared memory cap (137), after an earlier test-typecheck passed |
 
 ## Fix round 1: integrated evidence
@@ -88,6 +90,32 @@ The review's integrated list passed ladder policy 67, store 114, read six, route
 Final source, test, PWA and agent typing passed with `GOMAXPROCS=2 GOMEMLIMIT=2GiB`. The installed TypeScript 7 wrapper launches its native compiler, so earlier Node heap limits did not constrain that compiler; the successful final runs bound native concurrency and memory instead. The previous exit-137 attempts remain recorded, not relabelled as passing.
 
 The masking file still has the ordinary-text streaming timeout at 20 seconds: 95 passed and one skipped. Review reproduced the same case at the earlier merge base as well as the reviewed tip; no masker or timeout change belongs to this fix round. Exact-tip CI remains due after the single completed-round push. The first full-run signal stays `suite: red`, `failure: unclear` even if that CI is green.
+
+## Identity integration after gates A
+
+The coordinator authorized one absorption of main after gates A landed, followed by the ladder's identity conversion.
+Main's migrations through 96 are retained and the ladder takes measured positional slot 97. The combined route census
+is 269 registrations: 266 HTTP and three websocket upgrades, with 98 exempt HTTP and 167 gated. All additive floor and
+writer rows are retained, and the shared decision-model record case is unchanged from main. No further absorption is
+part of this integration round; a later landing renumber belongs to its coordinator-authorized round.
+
+The four ladder doors now join `OVERLORD_DOORS`, operator/view for the GET and operator/admin for the three writes.
+Raises and clears call `identity.operator`; runtime provenance, operator kind, account-gate issuer and operator strength
+are checked before a transaction and again in the in-transaction writer. Brakes keep the console-result union under
+rulings 562/563, as the departure above states. The actual rung and classified origin are checked before catch-up, so a
+claimed lowering cannot authorize a raise. Invalid actor inputs map to a fixed internal error without echoing them.
+The identity port, its vocabulary, restore attribution and authority-journal semantics are unchanged.
+
+Independent integrated verification passed 63 files and 2,466 cases, including all single-definition and ring files,
+the full mail/writer censuses, authentication, box-token, run-close, ladder, registry, designation and Settings doors.
+The database file ran alone and passed 149/149 in 617.70 seconds. Full server source and tests-inclusive typing both
+passed with bounded native compiler resources. The mutation-floor, deviation-reference, anchor and citation checks
+passed four files and 246 cases; the run waited 587 seconds for a fleet test slot before executing. The implementer's
+12 guard mutants were killed and source hashes independently matched the restored files. These measurements add to,
+not replace, the earlier local masking limitation and the first full-run `red` / `unclear` signal.
+
+Exact-tip CI and actual CodeQL remain the post-push handoff gate. The coordinator also requires a short review of
+this identity integration before landing; the worker does not merge or enqueue its own PR.
 
 ## Where things stand
 
