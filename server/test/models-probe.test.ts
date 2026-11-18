@@ -1351,6 +1351,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     ['a JSON array', () => JSON.stringify([NEWER])],
     ['undecodable bytes', () => Buffer.from([0xff, 0xfe, 0x20])],
     ['an answer over the size cap', () => npm(NEWER, { padding: 'x'.repeat(300_000) })],
+    // A good object padded past the cap: cut at the cap it would still parse, so only the size check refuses it.
+    ['a good answer padded past the size cap', () => npm(NEWER) + ' '.repeat(300_000)],
   ])('%s is refused as a failed lookup: no cache, the floor asked as, the reason kept', (_name, body) => {
     const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('refused', body()) });
     expect(r.code, r.stderr).toBe(0);
@@ -1359,6 +1361,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     expect(c).not.toHaveProperty('version');
     expect(typeof c['lastError']).toBe('string');
     expect((c['lastError'] as string).length).toBeLessThanOrEqual(200);
+    if (_name.includes('size cap')) expect(c['lastError']).toMatch(/over \d+ bytes/);
     expect(c['triedAt']).toBeGreaterThanOrEqual(now() - 60);
   });
 

@@ -129,7 +129,31 @@ drops unknown fields.
 | catalogue records the version | drop `clientVersion` | catalogue case |
 | no credential to npm | drop `-q` | network-argv case |
 
-Measured results are recorded in this plan's `## Mutation results` before the PR leaves draft.
+Measured results are below.
+
+## Mutation results
+
+Measured 2026-11-18 on this branch. Each row applied one exact replacement to the named file, ran
+`server/test/models-probe.test.ts` through `ccrc test`, and restored the file from its saved bytes. The coordinator's
+`mutation-run.py` mutates a Python module in memory, and these guards live in a bash script (with embedded Python)
+driven by vitest, so the rows ran through a small script that does the same save, mutate, run and restore by hand.
+
+| Row | File | Mutation | Result |
+|---|---|---|---|
+| M1 | probe | the release is used even below the floor | killed (2 cases) |
+| M2 | probe | any version string is accepted | killed (5) |
+| M3 | probe | the size cap is removed | survived at first: cutting the read at the cap already broke the JSON. A case with a good object padded past the cap was added; then killed (2) |
+| M4 | probe | a lookup on every run | killed (3) |
+| M5 | probe | a failed lookup drops the cached release | killed (1) |
+| M6 | probe | the user-agent back to `0.0.0` | killed (20) |
+| M7 | probe | the catalogue does not record the version | killed (2) |
+| M8 | probe | `curl` without `-q` (reads `.curlrc`) | killed (1) |
+| M9 | probe | no lock wait | killed (1) |
+| M10 | probe | a try stamped in the future is trusted | killed (1) |
+| M11 | `shared/models.mjs` | `parseCatalogue` keeps any `clientVersion` | killed (1) |
+| M12 | probe | the request asks as the floor | killed (6) |
+| M13 | `server/test/ccdWsHelpers.ts` | contained envs leave the release seam empty | killed (1) |
+| M14 | probe | a failed try is not recorded | killed (12) |
 
 ## Deviations found
 
