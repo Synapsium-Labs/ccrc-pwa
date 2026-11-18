@@ -29,13 +29,55 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 5b | parity: six sections/history service (B1), then version pages/history loader (B2) | #2350 (plan), #2860, #2886 | **merged** 2026-11-16 (B1 `3be6ede40`, B2 `de1cbc963`). Approved item 50: Q1 a, Q2 a, two runs; the plan merged 2026-11-09. B1 is run 2124, opened 2026-11-15 at `planned` with block 8642-8646 (D-8642 and D-8643 defined; Decisions, 2026-11-15), dispatched from `main` after #2806 merges; B2 opens after B1 merges. B1's wave-done was verified at `b4a08dcf8` (#2860) except its CodeQL line; review run 2153 confirmed 2 important findings, and fix round 1, with one merge of `main` after #2842, was dispatched 2026-11-15 (Decisions, 2026-11-15). Fix round 1 was verified at `f9c82dea8`; review run 2172 found nothing critical or important, and B1 was accepted and enqueued on 2026-11-15, with the review's four minors carried into B2's first item (Decisions, 2026-11-15). B1 merged on 2026-11-15 as `3be6ede40`, bound to `f9c82dea8`. B2 is run 2178, opened at `planned` with block 8648-8655. B2's wave-done at `c16276de2` (#2886) was verified on 2026-11-16; review run 2201 confirmed two important findings, and fix round 1 was sent the same day (Decisions, 2026-11-16). Review runs 2204 and 2208 read fix rounds 1 and 2; B2 was accepted at `c67064bed` and merged on 2026-11-16 as `de1cbc963` (Decisions, 2026-11-16). The first rollout containing B1 is server-first, even in a later bundled tag (Carried constraints) |
 | 6 | mockups, asset reservations and static mockup Export | #2915 (C1), #2969 (C2) | **merged.** C1 2026-11-16 (`8d7189ce1`): completion Tasks 5-7, run 2209, D-8659 to D-8663, D-8671 and D-8695. C2 2026-11-17 (`62c1565d2`): Tasks 8-10, run 2342, three review rounds, D-8711 and D-8712, 8713 unspent (Decisions, 2026-11-17) |
 | 7 | finite carry closure, docs, whole-programme review; release and deployed evidence | — | completion E Tasks 15–16 after D and required extensions, F Task 17; operator retirement Task 18 remains separately gated |
-| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a), #2989 (D1) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) W8b (completion D, Tasks 11-14) runs as two serial runs (coordinator, 2026-11-17): D1 (Tasks 11-12 and C2's carried findings) is run 2380, **merged** 2026-11-18 (`8a6f62309`, #2989; three review rounds; reserve 8716-8718 unspent); D2 (Task 13, Task 14, lab 10 and D1's carried findings) is run 2436, opened 2026-11-18 at `planned` with D-8729 defined and reserve 8730-8732 (Decisions, 2026-11-18) |
+| 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a), #2989 (D1), #3026 (D2) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) W8b (completion D, Tasks 11-14) runs as two serial runs (coordinator, 2026-11-17): D1 (Tasks 11-12 and C2's carried findings) is run 2380, **merged** 2026-11-18 (`8a6f62309`, #2989; three review rounds; reserve 8716-8718 unspent); D2 (Task 13, Task 14, lab 10 and D1's carried findings) is run 2436, **merged** 2026-11-18 (`839c05e46`, #3026; three review rounds; D-8729 and D-8730 defined, 8731-8732 unspent). D is closed (Decisions, 2026-11-18) |
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
-| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A |
-| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks |
+| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **Design wave X1 is run 2631 (wave 24), dispatched 2026-11-18, reserve 8759-8761** |
+| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **Design waves X2 (#1418 parity, run 2632, wave 25, reserve 8762-8764) and X3 (#1420 draft review, run 2633, wave 26, reserve 8765-8767), dispatched 2026-11-18** |
 
 ## Decisions & deviations
+- **2026-11-18: D2 accepted and landed (#3026, `839c05e46`); D closes; the three required-extension design waves X1, X2 and X3 opened as runs 2631, 2632 and 2633 (coordinator; in-plan rulings).**
+  - D2 ran as run 2436. Its first item closed review run 2432's carries. Task 13 delivered the D-8729 focus contract, lab 10, the same-page link, the phone-head shell and the reader residue. Task 14 closed D. D-8730, phone-head-swap-keeps-back-only, was defined from the reserve at ask 555. 8731 and 8732 are unspent.
+  - Coordinator rulings on D2's asks, none needing a further number:
+    - Ask 551, option 0: lab 10 is measured through an opt-in service-worker field in `pwa/browser/app.ts`. The default `block` is unchanged and pinned red. A positive control proves that the built worker controls the console page before the srcdoc child is asserted uncontrolled.
+    - Ask 553, option 0: a same-document link with a fragment remounts at `initialHash`, with no body read. A bare `#id` stays in the frame.
+      - Its known cost, a limit of the released library 1.1.0, which has no host scroll operation: after such a jump, the "Changed since your last visit" notice does not reappear, and open folds and change marks reset.
+      - A library-owner note records the wanted host scroll operation.
+    - Asks 554 and 555, option 0: one phone-head shell owns the header, the row and back, so back stays the same element across the swap, with identical DOM in both states and no CSS change. Both 2026-11-06 phone blocks are byte for byte. D-8730 records what is not retained: focus on Share, Export or Page details drops at the swap.
+    - Ask 559 (re-asked from 556 and 557), option 0: the four W8a residue items are fixed at their smallest, outside Task 13's list.
+  - Review run 2480 (round 1, at `3145d75c6`) found one important item: only the crumbs half of the panel key was pinned.
+    - It was fixed with truth-line cases and their own mutation row.
+    - The lab census scan's comment-order gap was fixed in D2, after its holder released the file. The corrected scan reds no existing lab file.
+    - Minors A1 to A8 were fixed or recorded as ruled. The commands clause was added to the §6 Keys and M8.1 amendments.
+  - Review run 2557 (round 2, at `36a11a4bb`) found two important items:
+    - the census scan's single-quote and template arms had no planted control. Fixed: one control and one row per arm, each control in its own case.
+    - the end-state row table did not meet its own definition. The coordinator ruled to complete it rather than narrow the text. Twenty-five rows were added and run red.
+    - `W4-T9-M7`, stale since an earlier wave's rename, was re-recorded red as `NDR-D2-RP-W4-T9-M7`.
+    - The worker measured 71 earlier rows that do not apply, where the coordinator had named 91, and showed the derivation (68 + 3). The measured figure stands. The table holds 592 rows.
+    - The minors: §4.1's clause now matches §6 and M8.1 word for word, without "synchronously". That is a coordinator ruling: the three spec rows say less than Task 13 and D-8729, not otherwise, so no number is needed. M8.1 says the clause is the library's behaviour in 1.1.0 and that no row reds it. D-8730 gets no new reds: it is a recorded departure, not a guarantee.
+  - Review run 2610 (round 3, the cap, at `18fc6ed6d`) found nothing important and nothing that blocks landing. Round 2's items are closed, and the 592 and the 71 reproduce.
+    - Two minors carry to X1's first item: row `W4-T10-M10`'s recorded count (3 failed, measured 2, still red), and D-8730's two clauses that neither F4 list names.
+    - The commit-grouping minor stands as written.
+    - A watchdog fallback is a failure by the browser file's contract. The reviewer measured 5 of 5 runs at 54 of 54, at loads up to 21.6.
+  - Hosted evidence: full runs 44283246987, 44340629075 and 44382139744 were green on each reviewed tip. Two fast-run server shards failed once each on timeouts in files D2 does not touch (`retire-executors-pin`, `ccrc-install-tree`), and their re-runs were green: load flakes.
+  - The census file was also changed by #2991 (merged before fix round 2), #3034 and approvals PR 1. Each worker consented to keeping both sides, and the merge queue re-tests the combined code.
+  - Landing: run 2436 went to `merging` with landing entry 407 pinned at `18fc6ed6d`. It was enqueued with `gh pr merge 3026 --match-head-commit 18fc6ed6d` and merged at 21:24:27Z as `839c05e46`. The successors were opened before run 2436 closed done, final.
+  - Panel identity: every round ran three lenses on `claude-opus-5-5` and refuters on `claude-sonnet-5-5`, at the script's literal effort `high`, none dead.
+  - **Next: the required extensions are designed before E.** The Waves order puts them after D and before E. E's README must describe the shipped extensions, so E waits.
+    - Three docs-only design waves run side by side on disjoint files. "Docs workers remain serial" was a coordinator call against shared-file collisions; design waves share no file.
+    - X1, native appearance continuity, is run 2631 (wave 24), with reserve 8759-8761. Its first item is round 3's two carries.
+    - X2, the #1418 parity inventory and design, is run 2632 (wave 25), with reserve 8762-8764. It owns the rich-docs parity table's amendment.
+    - X3, #1420 private draft-review sharing, is run 2633 (wave 26), with reserve 8765-8767.
+    - Each wave delivers a design spec and a leaf plan whose acceptance rows map onto Task 17's matrix. Implementation waits for the operator's approval.
+    - A library change is designed in X1 (appearance) and X2 (figure images for print), and built later as one library wave and one release. The release and its signed tag are the operator's.
+  - Coordinator rulings on the design waves' first asks:
+    - Ask 594 (X1), option 0: while hosted, Aa shows a static line where its theme row was. There is no Settings button, which would need a new host command; outside ccrc, Aa keeps its theme row.
+    - Ask 597 (X2, print), option 1: design figure images, staged. Stage 1 is a print view from ccrc's own window, with figures as source. Stage 2 adds drawn figures through a library operation that returns capped PNG only, checked by the console, over the existing bridge vocabulary. Parity needs stage 2. A large cost goes to the operator as a possible waiver.
+  - For the operator, carried in the specs' Waiting on you with a recommendation each:
+    - Ask 595 (X3): the draft-review access model. Released to the operator.
+    - Ask 596 (X2): old-origin reading state, fresh start or an opt-in import follow-on.
+    - Ask 598 (X2): HTML pages beyond the mockup frame's walls. Keep the walls, or commission a separately reviewed widening design.
+  - Routing for the design waves: an Opus · high main loop, xhigh at each design decision, and Sonnet · medium fact-check subagents. One Opus · high adversarial pass over the spec before wave-done. Workflow off.
 - **2026-11-18: D1 accepted and landed (#2989, `8a6f62309`); D2 opened as run 2436 (wave 23) with D-8729 defined and reserve 8730-8732 (coordinator; in-plan rulings).**
   - D1 ran as run 2380. Its first item closed review run 2378's C2 carries. Tasks 11 and 12 built the bounded client diff (`reader/diff.ts`) and the history seed, changes adapter and version state. No departure was defined, and the reserve 8716-8718 is unspent.
   - Coordinator rulings during the wave, none needing a number:
@@ -835,7 +877,143 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Current next-wave brief — D2, run 2436
+## Current next-wave briefs — X1, X2 and X3, runs 2631, 2632 and 2633
+
+Dispatched 2026-11-18 as written below, each as its wave's section followed by the common section (Decisions, 2026-11-18). The coordinator's rulings on their asks are in Decisions.
+
+### X1 — run 2631
+
+Programme `native-docs-reader`, wave 24 = X1, native appearance continuity design, run 2631. Deviation block Issued: 8759, 8760 and 8761 (a reserve; none defined yet).
+
+First item, one commit, in the completion plan's Results "D2" section, marked as X1's correction. These are review run 2610's two carries; its report is at `/tmp/native-docs-d/review-2610-18fc6ed6.md`.
+- Row `W4-T10-M10`: its recorded count is 3 failed, but it measures 2 failed | 74 passed (76) twice. Re-measure it once, record your count, and drop the third red name from the row and from any Results sentence that quotes it.
+- D-8730's two clauses, "the next Tab follows the one bar's order" and "the one bar's layout and order are unchanged", appear in neither of fix round 2's F4 lists. Name each as pinned (say by which row) or as descriptive only. Do not change D-8730's text.
+
+The design. The operator's requirement is the ledger's "Operator amendment — native visual continuity and legacy decoupling (2026-11-10)" and the Carried constraint "Required native appearance continuity". Read both in full. In short:
+- The reader opens with ccrc's selected appearance and follows host changes while open (the coordinator's default).
+- It uses the same skin and theme catalogue: today Refined and Instrument, and twelve named palettes plus Follow the system. There is no second hand-kept list, and no colour-mode-only approximation.
+- Native visual language: surfaces, text, accent and semantic colours, typography, borders, focus, controls and density. Reading layout, figures, tables and accessibility are kept.
+- Rendering styles and any checked-preference extension belong to the shared library. ccrc owns the preference and the adapter. The existing checked bridge carries it, with no stylesheet injection.
+- One frame Aa. While hosted, its global appearance follows ccrc; width, font and fold choices stay reader-local. A stale reader preference never overrides the host.
+
+Measure first: where ccrc's canonical skin and theme catalogue and its preference source live, how the current adapter collapses named palettes to light, dark and auto and sends no skin, what library 1.1.0's bridge and `HostAdapters` accept, and how the reader's lazy start and the lab profile draw.
+
+Decide and argue, with alternatives in a table:
+- The library interface: a token contract, or a catalogue the host passes. Version negotiation with an older library, and fail-safe behaviour on an unknown skin.
+- The catalogue-sharing mechanism that keeps one source of truth, with a scan that reds a second copy.
+- Changes during lazy start and while open, and readable Mermaid, code and tables in every palette, with contrast and focus.
+- The budgets you keep, with numbers.
+
+The library side: write a section the library programme can plan from, with the interface, its tests and its compatibility. Name the library by role. The operator is still deciding a rename of the library; do not use or propose a new name. Its release and re-pin come later and are the operator's.
+
+Acceptance: map the design onto Task 17's Appearance row: both skins, all twelve palettes and Follow the system, ordinary and lazy open, changes while open, and the geometry budgets.
+
+Files: the first item's plan edit; your new spec and leaf plan. Claim the completion plan only for the first item, and release it when that commit is in.
+
+### X2 — run 2632
+
+Programme `native-docs-reader`, wave 25 = X2, full parity inventory and design (#1418), run 2632. Deviation block Issued: 8762, 8763 and 8764 (a reserve; none defined yet).
+
+The operator's rulings, recorded in the ledger and not to be re-asked:
+- "Retirement drops no feature" (2026-10-25, #1418 and #1420). Full parity is required, not Later or Dropped. That covers outside non-repo folders, layout variants, large files, PDFs and configured tracker links. Outside folders need not become Git repositories.
+- "Parity inventory reconciliation". Read #1418 and its comments.
+
+Older Later or Dropped labels are not waivers. Current safety caps and auth boundaries stay until a reviewed design replaces them. Never fake parity with an unsafe cap lift or an unauthenticated live working-tree read.
+
+1. The inventory first. Build a side-by-side table of every capability the standalone reader has, from its source and its served pages on this box, not from older lists. For each: the user's action, the standalone result, the native status at `main` (present, partial or missing, with the source that proves it), and a disposition (already native, required gap, or a conflict needing an operator ruling). Include at least print, figure-overlay Back-to-close and old-origin state. Old-origin state starts fresh under the rich-docs state contract: reconcile that recorded choice with the no-feature-loss promise explicitly, and authorise no migration. A genuine conflict goes to me as an ask, never resolved in prose.
+2. Design every required gap, each with alternatives in a table and its test strategy:
+   - outside folders: Settings add and remove, the not-in-a-repo label, last-modified truth, no fabricated history or ref, read-only containment, redaction, and refusal of an escaping symlink;
+   - layout variants: every kept variant, including classic, A, B, C and the AB default, its persistence, and its use on phone, laptop and wide views;
+   - large files above 2 MiB: bounded streaming or paging, the below, at and above ceiling cases, truthful output over the ceiling, and the overlay-cap decision;
+   - PDFs: list, an isolated inline viewer and download, self-hosted assets with no CDN, phone and desktop. A PDF surface is designed as its own isolated surface and never widens the reader frame's sandbox or the shell CSP;
+   - tracker links: generic regex and URL templates in Settings, with matches resolved, non-matches left as text, and no tracker hardcoded;
+   - print and figure-overlay Back-to-close, without `allow-modals`.
+3. Amend the rich-docs spec's parity table row by row, each change marked "(amended 2026-11-18; X2 parity design)". Change no other section of that spec. If another section must change, ask.
+4. New server surfaces (a root registry, a stream, a PDF route) name their gate under the box-token census rules in the project CLAUDE.md, and their ring placement. A new storage owner or endpoint is designed here, not built.
+
+Your leaf plan may split implementation into several waves. Order them so that each is independently reviewable, and name file ownership that is disjoint from the appearance wave (X1) and the draft-review wave (X3), which run beside you. If the whole inventory and design do not fit one context, stop after the inventory and design, and tell me. I then dispatch the leaf plans as their own wave.
+
+Acceptance: map onto Task 17's Outside folders, Layout variants, Large files, PDFs, Tracker links and Complete parity inventory rows.
+
+Files: your new spec, your leaf plan or plans, and the rich-docs spec's parity table. Claim them first.
+
+### X3 — run 2633
+
+Programme `native-docs-reader`, wave 26 = X3, private draft-review sharing and its lifecycle (#1420), run 2633. Deviation block Issued: 8765, 8766 and 8767 (a reserve; none defined yet).
+
+The operator's rulings, recorded in the ledger and not to be re-asked:
+- #1420's 2026-10-25 comment: a frozen snapshot at share time, a "newer draft available" notice with re-share after later edits, and no live reads through the link.
+- "Retirement drops no feature" makes draft review required before retirement.
+- The current Share (a GitHub permalink) and Export (a self-contained file) are not the draft store.
+
+Read #1420 and its comments, and the ledger's "Recorded draft decision" in full.
+
+Still open, and yours to design, with alternatives in a table and a recommendation:
+- Access: a capability link, or signed-in access, or both. Reconcile the recorded no-session acceptance criterion with the model you choose. Do not silently drop it.
+- Reviewer comments: whether to adopt them at all. If adopted, they never count as merge approval.
+- Revocation storage and retention.
+- Hidden referenced assets: images, mockups and links the snapshot refers to.
+
+The lifecycle to design, from Task 17's Draft review row:
+- share, the draft banner, and shared bytes that do not change after edits;
+- the newer-draft notice and re-share;
+- a time-to-live from the last view, and early removal when the same file's branch commits;
+- Pin and Revoke in the UI, and retention;
+- an immediate 404 once revoked, and unreadable after expiry.
+
+The threat model comes first in the spec, as its own section:
+- who can read, and how a link can leak;
+- enumeration and guessing;
+- exposure of private content through an origin reachable from outside;
+- behaviour with the console's auth gate armed and unarmed;
+- what a snapshot may and may not carry (secrets, other files, live reads);
+- denial of service through snapshot size and count.
+
+Every new route names its gate under the box-token census rules in the project CLAUDE.md. A new storage owner names its durability, backup and purge. Nothing is built in this wave.
+
+Measure first: how Share and Export build their bytes today, how the docs routes read committed and draft content, and what the auth gate exempts. Reuse what exists rather than adding a second path.
+
+Raise to me as asks only the choices the operator must make: access model and comments are likely ones. Your spec's Waiting on you lists them with your recommendation.
+
+Acceptance: map onto Task 17's Draft review row, including the no-session criterion.
+
+Files: your new spec and leaf plan, with file ownership disjoint from the appearance wave (X1) and the parity wave (X2), which run beside you. Claim them first.
+
+### Common to X1, X2 and X3
+
+Common to the three extension design waves (appearance, parity, drafts), which run side by side:
+- Plan: completion plan `docs/superpowers/plans/2026-11-07-native-docs-reader-completion.md`: the "Required follow-ons" row of Delivery units, Task 16 steps 1-2, and Task 17's "Required extension acceptance matrix" (your design must make its rows executable).
+- Specs: completion design `docs/superpowers/specs/2026-11-07-native-docs-reader-completion-design.md`; rich-docs `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md`; base `docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`.
+- Ledger: `docs/superpowers/programs/native-docs-reader.md`, Carried constraints and the operator rulings named in your wave's section. Waves A to D are merged; read shipped source, not plan anchors.
+- Base: `main` as your fresh workspace finds it.
+
+What you deliver, in one PR:
+1. A design spec, `docs/superpowers/specs/2026-11-18-native-docs-<topic>-design.md`. Start from `~/.claude/templates/superpowers-spec.md` and follow its header rules: In short, numbered sections, Mermaid figures each with an italic caption, decision tables, and a closing Where things stand. The operator reads for outcomes and direction, not detail: keep Waiting on you to the genuine product choices, each with your recommendation.
+2. A leaf implementation plan, `docs/superpowers/plans/2026-11-18-native-docs-<topic>.md`, written with the writing-plans skill. Name the implementation waves, their order, the files each owns, the interfaces and the mutation rows. Its acceptance rows must map one to one onto Task 17's matrix rows for your capability.
+3. Results: a short section at the end of your leaf plan with what you measured and read, the commands you ran, and your asks.
+
+Routing (clause 13): main loop Opus · high, xhigh at each design decision. Sonnet · medium Agent subagents for fact checks against source. Every Agent call names model and effort literally, never Fable. Workflow off. Before your wave-done, run one Opus · high Agent pass over your own spec as an adversarial reader (boundaries, threat model, testability), and fix or record what it finds.
+
+Standing boundaries (not re-opened by a design):
+- Reader sandbox exactly `allow-scripts`, shell CSP `frame-src 'none'`, no parent-DOM access and no extra message channel. A design that needs any of these widened is a stop-and-ask, never a proposal.
+- Both 2026-11-06 phone blocks stay byte for byte, and the existing tap, one-bar and desktop-fit budgets stand.
+- `@synapsium-labs/docserver` stays exactly 1.1.0 in this wave. A library change is designed here, not made, and its release and signed tag are the operator's.
+- No live service, unit, proxy or config is touched or read for its private values. The standalone reader is retired only by the operator, later.
+
+Public repository. Nothing private, ever:
+- Describe the standalone reader by role, as "the standalone reader". Never give its host, port, path, service, unit or directory name, or a URL to it.
+- You may read its source on this box to learn what it does. Cite behaviour, never its location.
+- Private-name scan every file before each commit, and again before your push.
+
+Asks: put each genuine product choice to me as a structured ask, with options and your recommendation. I answer what the ledger and the operator's rulings already decide, and pass the rest to the operator. A technical choice is yours: decide it and record why. Never re-ask a recorded operator ruling.
+
+Deviations: a departure from the completion design, the rich-docs spec or an operator ruling gets the next number of your issued block. Define it in your leaf plan's `## Deviations found`, quote the sentence it departs from, and tell me. A departure from an operator ruling is not yours to define: ask. Block spent: write `D-TBD-<slug>` and ask.
+
+Stop and ask: any source edit (this is a docs-only wave), any widening above, a library repo edit, any new storage owner or endpoint you cannot argue against the box-token census rules, or a refusal from any tool, hook or route.
+
+Commit on `ws/<your slug>` only, never a separate feature branch. Claim your files first. One PR. List mail before your push, push once, get the exact-tip `ci` and `CodeQL` check green, then send wave-done with the fingerprint JSON and the suite and failure lines. Never enqueue or arm auto-merge.
+
+## Earlier brief — D2, run 2436 (landed in #3026)
 
 Dispatched as written below once this ledger PR merges; the issued block (D-8729 defined, 8730-8732 in reserve), the carried findings and the routing are in Decisions, 2026-11-18.
 
