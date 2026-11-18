@@ -1026,6 +1026,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
     laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
+    /** `POST /api/models/:lane` (model-class-advance R4): Hold, Release or Revert one class on the lane. Unknown on purpose:
+     *  the Models sheet's readers (`accounts/modelsSheetWords.ts`) read the 200 and a refusal's body. `postJson`, so a
+     *  non-2xx rejects with `ApiError` and the sheet never moves a row before the server's answer. */
+    laneModelsAct: (lane: string, body: { action: 'hold' | 'release' | 'revert'; class: string }) =>
+      postJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, body),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored

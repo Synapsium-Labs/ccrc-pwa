@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ROUTE_WRITABLE_FIELDS } from '../../shared/api';
 import type { LaneModelsRead } from '../../shared/models';
 import { EFFORT_LADDER } from '../../shared/routing-ladder';
+import { CANARY_RESULTS, HOLD_BY, HOWS } from '../../shared/model-advance.mjs';
 import {
   asLaneModelsRead, classWord, effortOptions, laneClassLabel, liveModelNames, modelOptions, modelReadbackFor,
   type PickOption,
@@ -264,5 +265,114 @@ describe('effortOptions', () => {
     expect(effortOptions('gpt', undefined, null, null, false).map((o) => o.label)).toEqual([
       'Low', 'Medium', 'High', 'Xhigh', 'Max', 'Auto',
     ]);
+  });
+});
+
+// ── the advance half of the read (model-class-advance wave R4; D-8686, D-5228, D-8693) ──
+describe('asLaneModelsRead: the advance key', () => {
+  const baseRead = GPT_LANE as Extract<LaneModelsRead, { kind: 'read' }>;
+  const classAdv = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    family: 'gamma', hold: null, previous: null, revertable: false, lastMove: null, ...over,
+  });
+  const okAdvance = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    state: 'ok', detail: null, pending: null,
+    classes: { haiku: classAdv(), sonnet: classAdv(), opus: classAdv({
+      hold: { at: '2026-11-18T08:00:00Z', by: 'hand' }, previous: { model: 'model-6-gamma', effort: 'high' }, revertable: true,
+      lastMove: { at: '2026-11-17T09:00:00Z', how: 'advance', from: 'model-6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'passed', cause: 'newer' },
+    }), fable: classAdv({ family: null }) },
+    ...over,
+  });
+  const answer = (advance?: unknown): unknown => ({ ok: true, lane: 'lane-a', models: { ...baseRead, ...(advance === undefined ? {} : { advance }) } });
+
+  it('an ABSENT advance key stays absent: the advance file was not read, which is not `unreported`', () => {
+    const r = asLaneModelsRead(answer());
+    expect(r?.kind).toBe('read');
+    expect(r !== null && 'advance' in r).toBe(false);
+  });
+
+  it('reads an ok advance whole: family, hold, previous, revertable and the last move, per class', () => {
+    const r = asLaneModelsRead(answer(okAdvance())) as Extract<LaneModelsRead, { kind: 'read' }>;
+    expect(r.advance?.state).toBe('ok');
+    const opus = r.advance?.classes?.opus;
+    expect(opus?.hold).toEqual({ at: '2026-11-18T08:00:00Z', by: 'hand' });
+    expect(opus?.previous).toEqual({ model: 'model-6-gamma', effort: 'high' });
+    expect(opus?.revertable).toBe(true);
+    expect(opus?.lastMove?.to).toBe('model-6.1-gamma');
+    expect(r.advance?.classes?.fable.family).toBeNull();
+    expect(r.advance?.pending).toBeNull();
+  });
+
+  it('reads each of the four non-ok states, `detail` for unreadable and invalid, with no classes', () => {
+    for (const state of ['absent', 'unreported'] as const) {
+      const r = asLaneModelsRead(answer({ state, detail: null, pending: null, classes: null })) as Extract<LaneModelsRead, { kind: 'read' }>;
+      expect(r.advance).toEqual({ state, detail: null, pending: null, classes: null });
+    }
+    for (const state of ['unreadable', 'invalid'] as const) {
+      const r = asLaneModelsRead(answer({ state, detail: 'bad bytes', pending: null, classes: null })) as Extract<LaneModelsRead, { kind: 'read' }>;
+      expect(r.advance).toEqual({ state, detail: 'bad bytes', pending: null, classes: null });
+    }
+  });
+
+  it('reads a pending intent', () => {
+    const pending = { how: 'hand', class: 'opus', from: 'model-6-gamma', to: null, emptied: [], at: '2026-11-18T08:00:00Z' };
+    const r = asLaneModelsRead(answer(okAdvance({ pending }))) as Extract<LaneModelsRead, { kind: 'read' }>;
+    expect(r.advance?.pending?.class).toBe('opus');
+    expect(r.advance?.pending?.to).toBeNull();
+  });
+
+  it('ignores an unknown key (the wire is additive)', () => {
+    const adv = okAdvance({ later: 1 });
+    (adv.classes as Record<string, Record<string, unknown>>).haiku!.later = true;
+    expect(asLaneModelsRead(answer(adv))?.kind).toBe('read');
+  });
+
+  const INVALID = { state: 'invalid', detail: null, pending: null, classes: null };
+  it('an advance off the grammar reads as `invalid`, and the lane\'s classes stay (F8): only the advance is distrusted', () => {
+    const cls = (adv: Record<string, unknown>, name: string, over: Record<string, unknown>): Record<string, unknown> =>
+      ({ ...adv, classes: { ...(adv.classes as object), [name]: { ...classAdv(), ...over } } });
+    const ok = okAdvance();
+    const bad: unknown[] = [
+      null, 'ok', { ...ok, state: 'later' }, { ...ok, classes: null }, { ...ok, detail: 4 },
+      { state: 'unreadable', detail: 4, pending: null, classes: null },
+      cls(ok, 'haiku', { family: 4 }), cls(ok, 'haiku', { hold: { at: 'x', by: 'robot' } }), cls(ok, 'haiku', { hold: { by: 'hand' } }),
+      cls(ok, 'haiku', { previous: { model: 4, effort: null } }), cls(ok, 'haiku', { revertable: 'yes' }),
+      cls(ok, 'haiku', { lastMove: { at: 'x', how: 'magic', from: null, to: null, ok: true, canary: 'passed' } }),
+      cls(ok, 'haiku', { lastMove: { at: 'x', how: 'advance', from: 3, to: null, ok: true, canary: 'passed' } }),
+      cls(ok, 'haiku', { lastMove: { at: 'x', how: 'advance', from: null, to: null, ok: 'true', canary: 'passed' } }),
+      cls(ok, 'haiku', { lastMove: { at: 'x', how: 'advance', from: null, to: null, ok: true, canary: 'sometimes' } }),
+      { ...ok, pending: { class: 'wizard', to: 'm', at: 'x' } }, { ...ok, pending: { class: 'opus', to: 3, at: 'x' } },
+      { ...ok, pending: { class: 'opus', to: null } }, { ...ok, pending: 'soon' },
+      { ...ok, classes: { haiku: classAdv(), sonnet: classAdv(), opus: classAdv() } }, // a class missing
+    ];
+    for (const adv of bad) {
+      const r = asLaneModelsRead(answer(adv)) as Extract<LaneModelsRead, { kind: 'read' }> | null;
+      expect(r?.kind, JSON.stringify(adv)).toBe('read');
+      expect(r?.classes, JSON.stringify(adv)).toEqual(baseRead.classes);
+      expect(r?.advance, JSON.stringify(adv)).toEqual(INVALID);
+    }
+  });
+
+  it('a pending intent\'s `how` is held to its grammar: absent is an automatic advance, `hand` a hand move, anything else is off it', () => {
+    const at = '2026-11-18T08:00:00Z';
+    const auto = { class: 'opus', from: 'model-6-gamma', to: 'model-6.1-gamma', effortFrom: null, effortTo: null, at };
+    const hand = { how: 'hand', class: 'opus', from: 'model-6-gamma', to: null, emptied: [], at };
+    const pendingOf = (p: unknown): unknown => (asLaneModelsRead(answer(okAdvance({ pending: p }))) as Extract<LaneModelsRead, { kind: 'read' }>).advance;
+    expect((pendingOf(auto) as { state: string }).state).toBe('ok');
+    expect((pendingOf(hand) as { state: string }).state).toBe('ok');
+    for (const how of ['advance', 'revert', 'magic', 3, null]) {
+      expect(pendingOf({ ...auto, how }), `how ${String(how)}`).toEqual(INVALID);
+    }
+  });
+
+  it('every word list of the advance grammar is the shared module\'s own, not a copy', () => {
+    // a hold by, a history `how` and a canary result the shared grammar names are read; one it does not name is not
+    const move = (over: Record<string, unknown>): Record<string, unknown> => ({ at: 'x', how: 'advance', from: null, to: null, ok: true, canary: 'passed', ...over });
+    const state = (adv: Record<string, unknown>): unknown => (asLaneModelsRead(answer(adv)) as Extract<LaneModelsRead, { kind: 'read' }>).advance?.state;
+    const ok = okAdvance();
+    const withHaiku = (over: Record<string, unknown>): Record<string, unknown> => ({ ...ok, classes: { ...(ok.classes as object), haiku: { ...classAdv(), ...over } } });
+    for (const by of HOLD_BY) expect(state(withHaiku({ hold: { at: 'x', by } })), by).toBe('ok');
+    for (const how of HOWS) expect(state(withHaiku({ lastMove: move({ how }) })), how).toBe('ok');
+    for (const canary of CANARY_RESULTS) expect(state(withHaiku({ lastMove: move({ canary }) })), canary).toBe('ok');
+    expect(state(withHaiku({ hold: { at: 'x', by: 'later' } }))).toBe('invalid');
   });
 });
