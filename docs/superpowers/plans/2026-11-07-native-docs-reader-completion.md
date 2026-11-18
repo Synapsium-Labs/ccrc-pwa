@@ -2022,8 +2022,9 @@ sentences of fix round 1's block in place.
   - (b) the later held load listener calls (the library's 'navigated' fallback, which removes the frame) wait until the
     reader's port has received every op the child sends, so they can drop neither the hello nor the parent's answer; the
     comment that said the answer came "before any held call can remove the frame" now says this. What can still remove the
-    frame before the ops arrive is the reader's own 2 s watchdog, and then the control fails naming `timeout`: no ordering
-    passes with nothing checked.
+    frame before the ops arrive is the reader's own 2 s watchdog, and then the control fails on the child's word or on the
+    port record (`[]`), which it checks before it polls the fallback's reason: no ordering passes with nothing checked
+    (corrected in place at D2's first item, review 2432's A1: this said the control fails naming `timeout`).
   - (c) a second control, "load first", forces that ordering at its worst: the srcdoc navigates only once the parent hook
     has taken its own load call, and the parent answers the child's word only once it holds the child's load call too, so
     the 'navigated' fallback is pending before the child can speak. It asserts the two held load calls, then everything
