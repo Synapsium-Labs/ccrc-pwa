@@ -16,11 +16,11 @@ describe('SessionRole today (characterization, before the role vocabulary)', () 
   });
   it('under coordinators, the roll lane takes exactly the coordinator answer', () => {
     for (const [mark, want] of MARKS) {
-      expect(rollTargetVerdict('coordinators', sessionRoleOf(mark)))
+      expect(rollTargetVerdict('coordinators', sessionRoleOf(mark), false, false))
         .toEqual(want === 'coordinator' ? { take: true } : { take: false, skip: 'not-coordinator' });
     }
   });
   it('under all (D-8276, the default), the roll lane takes every role', () => {
-    for (const [mark] of MARKS) expect(rollTargetVerdict('all', sessionRoleOf(mark))).toEqual({ take: true });
+    for (const [mark] of MARKS) expect(rollTargetVerdict('all', sessionRoleOf(mark), false, false)).toEqual({ take: true });
   });
 });

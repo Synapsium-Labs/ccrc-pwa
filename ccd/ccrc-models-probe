@@ -62,7 +62,7 @@ PROG="ccrc-models-probe"
 # bumped deliberately (§5): OpenAI's backend keys what it advertises on it, so
 # tracking it automatically would change this box's model set without anybody
 # deciding to.
-CODEX_CLIENT_VERSION="0.160.0"
+CODEX_CLIENT_VERSION="0.170.0"
 # `shared/roster.ts`'s ID_RE, in bash. An account id becomes a filename here.
 ID_RE='^[a-z][a-z0-9-]{0,31}$'
 

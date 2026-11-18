@@ -6,8 +6,13 @@ import {
   hibernateAfterMs, type HibernateLive, type HibernateMark, type HibernateStoreRead,
 } from './coord/hibernate.js';
 import {
-  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, rollTargetVerdict, type AutoRollVerdict,
+  NO_ROLL_SUFFIX, ROLL_QUIET_MS, ROLL_SWEEP_ACTOR, autoRollVerdict, longLivedOf, rollTargetVerdict, type AutoRollVerdict,
 } from './coord/rollTarget.js';
+import { laneArmRowViewOf } from './coord/laneArm.js';
+import { roleFactsOf, roleOf } from './roleOf.js';
+import { CONTINUITY_LANE, laneArmGate } from '../../shared/lane-arm.js';
+import type { CoordStore } from './coord/store.js';
+import type { RunKind } from '../../shared/api.js';
 import { AFTER_UNMEASURED, designationOfCoord, idleHoursBindings, laneVerb, sleepPass, overlordOf, type IdleHoursCoordPort, type SleepActPort, type SleepLane } from './sleepLane.js';
 import { readSwitches } from '../../shared/switches.js';
 import type { FleetSession } from '../../shared/api.js';
@@ -81,6 +86,9 @@ export interface RollSweepDeps {
   readonly now: () => number;
   /** Null: the lane journals what it would roll and rolls nothing. */
   readonly act: SleepActPort<FleetSession> | null;
+  /** The hand-off's reads (Overlord W1a, the renewal hand-offs, Task 5): the `continuity` row, the live generations and the
+   *  role facts. Absent: the row reads shadow, and every session is judged as before the hand-off. */
+  readonly continuity?: Pick<CoordStore, 'laneArmSetting' | 'liveGenerations' | 'openCoordinatorIds' | 'run'>;
 }
 
 /** The node's install record, read for the roll. `none`: no completed install stands (a working-tree deploy, which
@@ -154,6 +162,40 @@ interface Pass {
   readonly latest: string | null;
   readonly lanes: ReadonlyMap<string, string | null>;
   readonly builtFor: ReadonlyMap<string, string>;
+  /** The hand-off (Task 5): the `continuity` row is live, and each recorded id's long-life (`longLivedOf`), read only then. */
+  readonly continuityLive: boolean;
+  readonly longLived: ReadonlyMap<string, boolean | null>;
+}
+
+/** The hand-off's facts for one pass: the `continuity` row as the generations lane reads it, and, only while it is live, each
+ *  recorded id's long-life from its role facts (`roleFactsOf`, intent unread as the generations lane reads it, the pass's
+ *  designation) and whether the renewal lane holds a live generation for it. A read that fails leaves the id unread (null),
+ *  which holds it while live; so does an unmeasured designation, for every id, as the generations lane fails closed on it. */
+function handoffOf(c: RollSweepDeps['continuity'], records: readonly SessionRecord[], designation: DesignationFact | 'unmeasured'):
+  Pick<Pass, 'continuityLive' | 'longLived'> {
+  const longLived = new Map<string, boolean | null>();
+  if (c === undefined || !continuityLiveOf(c)) return { continuityLive: false, longLived };
+  if (designation === 'unmeasured') return { continuityLive: true, longLived };
+  const gens = c.liveGenerations();
+  const owned = gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null;
+  let openCoordinators: ReadonlySet<string> | 'unmeasured';
+  try { openCoordinators = new Set(c.openCoordinatorIds()); } catch { openCoordinators = 'unmeasured'; }
+  for (const rec of records) {
+    const childRunKind = ((): RunKind | 'unmeasured' => {
+      if (rec.child.kind !== 'child') return 'unmeasured';
+      try { const r = c.run(rec.child.runId); return r.ok && r.run !== null ? r.run.kind : 'unmeasured'; } catch { return 'unmeasured'; }
+    })();
+    const role = roleOf(roleFactsOf(rec.id, { child: rec.child, childRunKind, openCoordinators, intentDeclared: 'unmeasured', designation }));
+    longLived.set(rec.id, longLivedOf(role, owned === null ? 'unmeasured' : owned.has(rec.id)));
+  }
+  return { continuityLive: true, longLived };
+}
+
+/** The `continuity` row as the generations lane reads it: live or not. The pass reads it once, and the act-time re-check and
+ *  `afterAct` read it again (review 2312 F6), so a row armed while the pass ran never rolls a session the pass judged in
+ *  shadow: its long-life was not read (null), which holds it while live. */
+function continuityLiveOf(c: RollSweepDeps['continuity']): boolean {
+  return c !== undefined && laneArmRowViewOf(CONTINUITY_LANE, c.laneArmSetting(CONTINUITY_LANE), laneArmGate(CONTINUITY_LANE)).live;
 }
 
 /** The pass's facts the executor's asks read, carried on the deps it is handed. */
@@ -170,7 +212,8 @@ function ask(deps: RollSweepDeps, p: Pass, names: readonly string[], row: FleetS
   live: HibernateLive, startedAt: number | null, now: number): RollAnswer {
   const overlord = overlordOf(p.designation, row.id);
   return answerOf(autoRollVerdict({
-    targets: p.targets, role: row.role, release: p.release, startedAt, overlord: overlord ?? 'unmeasured',
+    targets: p.targets, role: row.role, longLived: p.longLived.get(row.id) ?? null, continuityLive: p.continuityLive, release: p.release, startedAt,
+    overlord: overlord ?? 'unmeasured',
     build: claudeBuildOf(row, p.latest, p.lanes.get(row.wrapper) ?? null), rolledFor: p.builtFor.get(row.id) ?? null,
     optedOut: { roll: names.includes(`${row.id}.${NO_ROLL_SUFFIX}`), hibernate: names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`) },
     hibernation: p.hibernation, statusUpdatedAt: row.statusUpdatedAt,
@@ -211,7 +254,8 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
     },
     atAct: async (deps, f, row, rec) => {
       const { live, startedAt } = await liveOf(deps, rec);
-      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()), designation: designationOfCoord(deps.coord) };
+      const p: Pass = { ...deps.pass, targets: deps.targets(), release: releaseAt(await deps.release()), continuityLive: continuityLiveOf(deps.continuity),
+        designation: designationOfCoord(deps.coord) };
       const at = deps.now();
       const store = idleHoursBindings(deps)(row.id);
       return { v: ask(deps, p, f.names, row, store, live, startedAt, at), store };
@@ -223,7 +267,7 @@ export const ROLL_LANE: SleepLane<RollLaneDeps, RollSweepMemory, FleetSession, H
       if (targets === null) return 'setting-unreadable';
       const fresh = deps.act === null ? { ok: false as const } : await deps.act.rowAtAct(rec);
       if (!fresh.ok) return AFTER_UNMEASURED;
-      const t = rollTargetVerdict(targets, fresh.row.role);
+      const t = rollTargetVerdict(targets, fresh.row.role, deps.pass.longLived.get(rec.id) ?? null, continuityLiveOf(deps.continuity));
       return t.take ? null : t.skip;
     },
   },
@@ -297,7 +341,9 @@ export async function rollPass(
   const latest = fleetClaudeLatest(sessions);
   const lanes = new Map<string, string | null>();
   for (const s of sessions) if (!lanes.has(s.wrapper)) lanes.set(s.wrapper, laneClaudeLatest(sessions, s.wrapper));
-  const pass: Pass = { targets, release, designation: designationOfCoord(deps.coord), hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor };
+  const designation = designationOfCoord(deps.coord);
+  const pass: Pass = { targets, release, designation, hibernation: { armed, afterMs }, latest, lanes, builtFor: mem.builtFor,
+    ...handoffOf(deps.continuity, records, designation) };
   mem.lastAt.delete('*');
   const actArmed = deps.act !== null && deps.act.serial !== null && laneVerb(ROLL_LANE.then, deps.act.fleetState);
   const out = (await sleepPass(ROLL_LANE, { ...deps, pass }, mem, sessions, records, names))

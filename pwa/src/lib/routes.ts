@@ -80,6 +80,13 @@ export const ROUTES: readonly Route[] = [
   // never a blank pane (carry C, D-7951; review 1388 F1). `top: false` and `path: null`: no current door (only `session` is
   // carried under Fleet, `topRouteOf`), no "Go to" row.
   { id: 'programme', pattern: /^\/programmes\/([^/]+)\/?$/, title: 'Programme', top: false, path: null, accepts: isProgrammeSlug },
+  // One epic of a programme's plan (Linear hierarchy §11.2, D-8184): the slug is the owner's grammar (`isProgrammeSlug`); the
+  // epic key is the page's to judge, so a key the plan lacks says "No such epic in this programme", never the fleet. Two
+  // captures: the second rides `RouteMatch.rest`.
+  { id: 'epic', pattern: /^\/programmes\/([^/]+)\/epics\/([^/]+)\/?$/, title: 'Epic', top: false, path: null, accepts: isProgrammeSlug },
+  // A project's Upkeep epic (§7.6, §11.2), reached from the project linking card. Any project segment: the page's read answers
+  // a project the box does not know.
+  { id: 'upkeep', pattern: /^\/projects\/([^/]+)\/upkeep\/?$/, title: 'Upkeep', top: false, path: null },
 ];
 
 /** Whether a string is a run's number as a path carries it: plain decimal digits, no leading zero, a positive safe
@@ -189,6 +196,16 @@ export function programmeIsOpenable(slug: string): boolean {
   return at !== null && at.route.id === 'programme' && at.param === slug;
 }
 
+/** The one builder of an epic's path, `/programmes/<slug>/epics/<key>`, which the `epic` row parses. Both segments are encoded. */
+export function epicPath(slug: string, key: string): string {
+  return `/programmes/${encodeURIComponent(slug)}/epics/${encodeURIComponent(key)}`;
+}
+
+/** The one builder of a project's Upkeep path, `/projects/<project>/upkeep`, which the `upkeep` row parses. */
+export function upkeepPath(project: string): string {
+  return `/projects/${encodeURIComponent(project)}/upkeep`;
+}
+
 /** The accounts route's one query (T2c, D-6329): a lane card is a per-row door to its lane, so it rides a query on the
  *  existing `accounts` route, as the digest's `?day=` does, with no new route and no registry command. */
 export const ACCOUNTS_LANE_QUERY = 'lane';
@@ -244,6 +261,9 @@ export interface RouteMatch {
   readonly route: Route;
   /** The pattern's first capture, decoded: the session id on `/s/:id`; null where the pattern captures nothing. */
   readonly param: string | null;
+  /** The pattern's LATER captures, decoded, in order: the epic key on `/programmes/:slug/epics/:key`. Empty for a row with one
+   *  capture or none. */
+  readonly rest: readonly string[];
 }
 
 /** The decoded capture, or `undefined` for a malformed percent escape (`/s/%zz`), which `decodeURIComponent` throws on. */
@@ -262,11 +282,17 @@ export function matchRoute(path: string): RouteMatch | null {
   for (const route of ROUTES) {
     const m = route.pattern.exec(path);
     if (m === null) continue;
-    if (m[1] === undefined) return { route, param: null };
+    if (m[1] === undefined) return { route, param: null, rest: [] };
     const param = decodeParam(m[1]);
     if (param === undefined) return null;
+    const rest: string[] = [];
+    for (const raw of m.slice(2)) {
+      const later = decodeParam(raw);
+      if (later === undefined) return null;
+      rest.push(later);
+    }
     if (route.accepts !== undefined && !route.accepts(param)) continue;
-    return { route, param };
+    return { route, param, rest };
   }
   return null;
 }

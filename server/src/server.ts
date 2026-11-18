@@ -68,6 +68,7 @@ import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
@@ -88,18 +89,23 @@ import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
+import { liveStateOf, markOperatorPrompt } from './continuity/promptHandoffs.js';
+import { promptRenewing } from './continuity/renewNow.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactRefusal } from './continuity/compactOwner.js';
 import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
+import { attributionIdentity } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { ladderConditionInputs } from './coord/overlordLadderRead.js';
+import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
@@ -271,7 +277,7 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio',
+  '/api/portfolio', '/api/overlord/ladder',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2189,6 +2195,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState,
   });
+  // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
+  const identity = attributionIdentity({
+    attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
+    incarnation: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+  });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
@@ -2206,6 +2217,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    operatorActor: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
+    notice,
     masker: deps.masker,
   });
   // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
@@ -2290,7 +2303,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
-    gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    ladder: deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY },
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({
@@ -2605,12 +2619,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // The renewal hand-offs (Overlord W1a, Tasks 2 and 3): a session between conversations answers `renewing` and the console
+    // keeps the draft; a prompt typed marks the programmes the session coordinates or serves (`operator-at-programme`).
+    if (deps.coord !== undefined && promptRenewing(liveStateOf(deps.coord, id))) return refuseRoute(reply, 'renewing');
     // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
     const res = await sendPrompt(sendDeps, id, body.text, {
       onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
       ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
     });
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
+    else if (deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -2691,14 +2709,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
-  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, identity, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerDecisionModelRoutes(app, {
+    store: () => deps.decisions?.store, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, notice,
+    actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
+    registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered',
+    resolve: (h) => deps.decisions?.resolve(h) ?? Promise.resolve([]),
+  });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
   // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
   // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
-    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, identity, ccrcDir: deps.cfg.ccrcDir,
     // The operator's act on an end-request item runs the abandon arm in the same hold the abandon route uses (D-8076).
     withAbandon: coordRoutes.withAbandon, sendClose: sendCloseOutcome,
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,

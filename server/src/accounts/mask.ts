@@ -81,12 +81,13 @@ const DRAWER_HELD_MAX = RUN_MAX_BYTES + 1024;
  *  and an indent on every row (an 8,192-byte key at 118 columns in tmux's form spans about 10.5 KB). A key's rows that
  *  run past it are read again over the whole text (`WHOLE_HELD_MAX`, review 2370 F2). */
 const CHAIN_HELD_MAX = 2 * DRAWER_HELD_MAX;
-/** The most a drawer holds for a key's rows that run past `CHAIN_HELD_MAX` bytes (review 2370 F2): a key at the run
- *  ceiling coloured character by character (an 8,192-byte key in 150 KiB) fits, and a held text this long costs a push
- *  well under the 25 ms bound (measured: 6.2 ms at worst with 152 KB held). Past it the text is sent with the chain's
- *  rows masked, and the rows that go on with it too (`chainRowsBack`, `chainRowsOn`): failing closed, as pane history's
- *  lookahead does at the same cap. */
-const WHOLE_HELD_MAX = 256 * 1024;
+/** The most a drawer holds for a key's rows that run past `CHAIN_HELD_MAX` bytes (review 2370 F2), and the most pane
+ *  history's lookahead grows and each window `chainRowsOn` reads: 64 KiB (desktop polish C44, D-8728; 256 KiB before,
+ *  whose re-reads cost 26 to 37 ms a slice on hostile key-free panes, review 2411 F4). A key at the run ceiling coloured
+ *  character by character (an 8,192-byte key in 150 KiB) no longer fits, and is masked as below. Past it the text is
+ *  sent with the chain's rows masked, and the rows that go on with it too (`chainRowsBack`, `chainRowsOn`): failing
+ *  closed, as pane history's lookahead does at the same cap. */
+const WHOLE_HELD_MAX = 64 * 1024;
 /** The re-key's backoff, and the most previous box tokens kept at once (D-5995). A previous token is kept only while its
  *  generation holds rows (`syncKeys`), so this caps the generations holding rows, not the rotations (review 1426 F-C). */
 const REKEY_FIRST_MS = 1_000;
@@ -210,6 +211,10 @@ function runStartBefore(t: string, e: number, fine: boolean, max: number): numbe
 const LINE_BREAK = new RegExp(ROW_BREAK, 'g');
 const ROW_INDENT_OPT = /(?:[ \t\0]|│|┃|\|)*/y;
 const LEADING_BREAK = new RegExp(String.raw`^(?:${ROW_BREAK})?`);
+/** One row break at `lastIndex`, as `ROW_BREAK` reads it (C44, review 2430 F1). */
+const BREAK_AT = new RegExp(ROW_BREAK, 'y');
+/** The most a slice's end moves past a LF to end the row break it begins (C44): blanks between a LF and its CR. */
+const BREAK_CUT_MAX = 64;
 /** The first index of view `v` whose original index is `i` or later. */
 function viewIndexOf(v: View, i: number): number {
   if (v.map === null) return i;
@@ -308,7 +313,7 @@ export interface MaskOpts {
   /** The drawer and pane history (D-8710, review 2370 F1 and F2): spans of this text masked whatever it matches: those
    *  a match in the last text's lookahead reached into (`ahead`), masked as one text would have masked them, since this
    *  text is read with too little of the text before it to find that key again (the drawer keeps 1 KiB, a slice 18 KiB);
-   *  and in pane history, a chain's rows that no slice could read whole (`chainRowsAcross`). */
+   *  and in pane history, a chain's rows that no slice could read whole (`chainRowsBack`, `chainRowsOn`). */
   readonly ahead?: readonly (readonly [number, number])[];
   /** The drawer: what each masked run reads as, in place of `SECRET_MASK` (`DRAWER_SECRET_MASK`, D-8694). */
   readonly mark?: string;
@@ -336,7 +341,9 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
   for (let grown = false; ; grown = true) {
     if (grown) {
       const nl = text.indexOf('\n', le);
-      le = nl < 0 || nl >= cap ? cap : nl;   // a grown lookahead ends at the end of a row
+      // A grown lookahead ends at the end of a row: at the start of the row break its LF ends, read back as `ROW_BREAK`
+      // reads it, so a CR LF's CR is not read as an empty last row that ends every key's rows (C44, review 2430 F3).
+      le = nl < 0 || nl >= cap ? cap : breakStartAt(text, nl + 1)!;
     }
     // The walk starts at the leading run of the row the lookahead ends in: a key's rows that reach that row lead it,
     // whatever follows the key on its last row or wherever in the row the lookahead ends.
@@ -345,9 +352,16 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
     while (i > 0 && t[i - 1] !== '\n' && t[i - 1] !== '\r') i--;
     let r = i;
     while (r < t.length && ROW_LEAD.includes(t[r]!)) r++;
-    if (r === t.length && !grown && i > 0) {
-      // The first read ends inside a row's indent or escapes, before its run: start from the row before.
-      while (i > 0 && (t[i - 1] === '\n' || t[i - 1] === '\r')) i--;
+    const blank = i === 0 && r === t.length;   // the read is all one row's indent and escapes
+    if (r === t.length && i > 0 && (!grown || le >= cap)) {
+      // The first read, or a read the cap stopped, ends inside a row's indent or escapes, before its run: start from the
+      // row before. At the cap, answering "no cut" there sent the chain's rows on both sides raw (review 2411 F2: an
+      // 8,192-byte key with 2,600 blanks of indent a row, whole at 15 of 16 placements). A grown read below the cap ends
+      // at a row break, so its last row is whole, and a row with no run ends every key's rows.
+      // Back over the row break as `ROW_BREAK` reads it: a move down then a CR (CUD+CR, IND+CR) is one break, viewed as a
+      // LF, a NUL and a CR, and stepping back over LF and CR alone stopped at the NUL, read an empty row and answered "no
+      // cut" (review 2430 F1: a 2,000-byte key whole in pane history where main masked it).
+      for (let s = breakStartAt(t, i); s !== null; s = breakStartAt(t, i)) i = s;
       while (i > 0 && t[i - 1] !== '\n' && t[i - 1] !== '\r') i--;
       r = i;
       while (r < t.length && ROW_LEAD.includes(t[r]!)) r++;
@@ -361,8 +375,17 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
       if (n0 === j || n0 >= t.length || OPEN_DELIM.test(t[n0]!)) break;
       j = n0;
     }
-    if (i === j) return { end: le, cut: false };   // the row holds no leading run: no key's rows run through it
-    const c = chainBack(t, i, Buffer.byteLength(t.slice(i, j).replace(/\0/g, ''), 'utf8'), fpMax, () => true, -1, true);
+    if (i === j) {
+      // The row holds no leading run: no key's rows run through it, so a key that crosses the cut ends inside the read.
+      // Unless the read is all one row's indent (no row break, nothing but blanks and escapes): a key's next row may come
+      // after it, so the read grows as for a chain across the cut, and at the cap the rows fail closed
+      // (`chainRowsBack`, `chainRowsOn`). Answering "no cut" sent a key's rows after an indent wider than the read raw (C44).
+      if (!blank) return { end: le, cut: false };
+      if (le >= cap) return { end: le, cut: le < text.length };
+      le = Math.min(cap, end + 2 * (le - end));
+      continue;
+    }
+    const c = chainBack(t, i, Buffer.byteLength(t.slice(i, j).replace(/\0/g, ''), 'utf8'), fpMax, 0, -1, true);
     let k = c.at;
     while (k > 0 && ROW_LEAD.includes(t[k - 1]!)) k--;
     if (c.long || k > 0) return { end: le, cut: false };   // the chain read back from here starts after the cut
@@ -370,8 +393,26 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
     le = Math.min(cap, end + 2 * (le - end));
   }
 }
-/** What a chain of key rows still may fill on from where it was cut (review 2370 F2): rows and units left. */
-interface ChainLeft { rows: number; units: number }
+/** What a chain of key rows still may fill on from where it was cut (review 2370 F2): rows and units left, and `cont`: the
+ *  last text read ended inside a row, so the next text begins with the rest of that row (C44). */
+interface ChainLeft { rows: number; units: number; cont?: boolean }
+/** Whether the row break that ends view `t` at `k` may be completed, or read again, by what comes after it (C44, review
+ *  2430 F1): a CR (a LF after it makes CR LF) or a LF no CR comes before (blanks and a CR after it make one move down). */
+function breakMayGoOn(t: string, k: number): boolean {
+  return t[k - 1] === '\r' || (t[k - 1] === '\n' && t[k - 2] !== '\r');
+}
+/** Whether `text` ends inside a row: after its last row break, something but blanks and escapes (C44); or inside a row
+ *  break, or right after one the next text may complete (`breakMayGoOn`): a push cut between CR and LF, or between a move
+ *  down and its CR, began the next text with the rest of the break, read as an empty row that ended the chain (review 2430
+ *  F1). Unread (all blanks and escapes in its last 4 KiB) answers true, so a chain is never ended by a row it could not
+ *  see begin. */
+function endsInRow(text: string): boolean {
+  const t = viewOf(text.slice(-4096), '\0').t;
+  let k = t.length;
+  while (k > 0 && (t[k - 1] === '\0' || t[k - 1] === ' ' || t[k - 1] === '\t')) k--;
+  if (k === 0 || (t[k - 1] !== '\n' && t[k - 1] !== '\r')) return true;
+  return breakMayGoOn(t, k) && (k === t.length || t[k - 1] === '\n');
+}
 /** The leading run of each row of `v` from `from` (joined across escapes as `joinBack` joins one), as spans of the text
  *  `v` views plus `base`, while `left` has rows and units (D-8710, review 2370 F2). `alone`: the rows on from a cut,
  *  where the chain ends at a row that holds more than its indent and one run, or none: the answer is where it ended
@@ -383,6 +424,11 @@ function chainRowSpans(
   for (let a = from; a < to && left.rows > 0 && left.units > 0;) {
     let b = a;
     while (b < to && t[b] !== '\n' && t[b] !== '\r') b++;
+    // The rest of a row the last text ended inside (`cont`): its run, if any, goes on with the chain's, and blanks and
+    // escapes before its break end nothing. Read as a row of its own, the tail of a key's row left after a push that ended
+    // inside it ended the chain, and the key's later rows went out raw (C44, measured at a 64 KiB hold).
+    const cont = left.cont === true && a === from;
+    left.cont = false;
     let s0 = a;
     while (s0 < b && ROW_LEAD.includes(t[s0]!)) s0++;
     let e0 = s0;
@@ -396,13 +442,25 @@ function chainRowSpans(
     if (e0 > s0) {
       const [x, y] = spanIn(v, s0, e0);
       spans.push([base + x, base + y]);
-      left.rows--;
-      left.units -= e0 - s0;
+      if (!cont) left.rows--;
+      // The run's own units, never the NUL each escape inside it reads as: a key coloured per character is twice its
+      // length in the view, and counting the NULs stopped its rows half way (review 2411 F3).
+      let nul = 0;
+      for (let q = s0; q < e0; q++) if (t.charCodeAt(q) === 0) nul++;
+      left.units -= e0 - s0 - nul;
     }
-    if (b === to) return to;   // the text ends inside this row: the next text goes on with it
-    if (alone && (rowTextEnd(t, b) > e0 || e0 === s0)) return a;
+    if (b === to) { left.cont = true; return to; }   // the text ends inside this row: the next text goes on with it
+    if (alone && (rowTextEnd(t, b) > e0 || (e0 === s0 && !cont))) return a;
+    // On past the row break (and any that follow it, as blank rows), read as `ROW_BREAK` reads it: skipping LF and CR
+    // alone stopped inside a move down then a CR (viewed LF, NUL, CR), read the NUL as an empty row and ended the chain,
+    // so a key's later rows went out raw (review 2430 F1). A text that ends at a break the next may complete hands it on.
     a = b;
-    while (a < to && (t[a] === '\n' || t[a] === '\r')) a++;
+    for (let br = true; br && a < to;) {
+      BREAK_AT.lastIndex = a;
+      const m = BREAK_AT.exec(t);
+      if (m === null) br = false; else a += m[0].length;
+    }
+    if (a >= to && breakMayGoOn(t, to)) left.cont = true;
   }
   return left.rows > 0 && left.units > 0 ? to : from;
 }
@@ -416,34 +474,38 @@ function chainRowsBack(text: string, fpMax: number): [number, number][] {
   let i = j;
   while (i > 0 && !OPEN_DELIM.test(v.t[i - 1]!)) i--;
   if (i === j) return spans;
-  const c = chainBack(v.t, i, Buffer.byteLength(v.t.slice(i, j), 'utf8'), fpMax, () => true, -1, true);
+  const c = chainBack(v.t, i, Buffer.byteLength(v.t.slice(i, j), 'utf8'), fpMax, 0, -1, true);
   chainRowSpans(v, c.at, j, 0, { rows: KEY_ROWS_MAX, units: Infinity }, false, spans);
   return spans;
 }
-/** The rows on from `from` that a chain of key rows cut there still fills, as spans of `text`, read a hold's length at a
- *  time; `left` is spent as they are taken. True in `open`: the chain may go on past `text`. */
-function chainRowsOn(text: string, from: number, left: ChainLeft, spans: [number, number][]): boolean {
-  while (from < text.length && left.rows > 0 && left.units > 0) {
-    const to = Math.min(text.length, from + WHOLE_HELD_MAX);
-    const nl = to < text.length ? text.lastIndexOf('\n', to - 1) : to;
-    const stop = nl > from ? nl : to;
+/** The rows on from `from` that a chain of key rows cut there still fills, as spans of `text`, read up to `limit` a hold's
+ *  length at a time; `left` is spent as they are taken. True: the chain may go on past `limit`. A window with no row break
+ *  ends outside an escape (`outsideEscape`): one cut inside an escape began the next window with the escape's tail, read
+ *  as a run of its own, and the chain stopped there (review 2411 F3). */
+function chainRowsOn(text: string, from: number, left: ChainLeft, spans: [number, number][], limit = text.length): boolean {
+  while (from < limit && left.rows > 0 && left.units > 0) {
+    const to = Math.min(limit, from + WHOLE_HELD_MAX);
+    const nl = to < limit ? text.lastIndexOf('\n', to - 1) : to;
+    const stop = nl > from ? nl : to < limit ? outsideEscape(text, to, from + 1) : to;
     const v = viewOf(text.slice(from, stop), '\0');
     const reached = chainRowSpans(v, 0, v.t.length, from, left, true, spans);
     if (reached < v.t.length) return false;
-    if (stop >= text.length) return true;
+    if (stop >= limit) return true;
     from = text[stop] === '\n' ? stop + 1 : stop;   // the next window starts at the row after the break
   }
   return left.rows > 0 && left.units > 0;
 }
-/** The rows of a chain of key rows on either side of a slice cut at `end` that the lookahead's cap stopped reading
- *  (review 2370 F2, the coordinator's ruling: such rows go out masked, never raw): back from the cut as far as a key
- *  that crosses it can start, and on from it through every row that holds nothing but its indent and one run, until
- *  those hold a key's own bytes or `KEY_ROWS_MAX` rows. Spans of `text`. */
-function chainRowsAcross(text: string, at: number, end: number, fpMax: number): [number, number][] {
-  const spans = chainRowsBack(text.slice(at, end), fpMax).map(([a, b]): [number, number] => [at + a, at + b]);
-  chainRowsOn(text, end, { rows: KEY_ROWS_MAX, units: fpMax + 2 * TRIM_MAX }, spans);
-  return spans;
+/** `i`, or where the escape that `i` falls inside begins, never before `min` (review 2411 F3): an escape begun before `i`
+ *  and not ended by it. A cut there leaves its head as text at the end of what is read before it and its tail as text at
+ *  the start of what is read after. Read back over `ESC_CUT_BACK` units: an escape longer than that is cut where it is. */
+function outsideEscape(text: string, i: number, min: number): number {
+  const from = Math.max(min, i - ESC_CUT_BACK);
+  const e = text.lastIndexOf('\x1b', i - 1);
+  if (e < from) return i;
+  const u = UNFINISHED_ESC.exec(text.slice(from, i));
+  return u === null ? i : Math.max(min, from + u.index);
 }
+const ESC_CUT_BACK = 4096;
 
 /** Masks `text` for every egress of session-derived text. */
 export class SecretMasker {
@@ -1130,12 +1192,43 @@ export class SecretMasker {
     const out: string[] = [];
     let carry = false;
     let ahead: [number, number][] = [];
+    /** A chain of key rows cut at an earlier slice's cap: what it may still fill on from this slice's start. */
+    let open: ChainLeft | null = null;
     for (let at = 0; at < text.length;) {
       let end = Math.min(text.length, at + SLICE_UNITS);
-      if (end < text.length) { const nl = text.lastIndexOf('\n', end - 1); if (nl > at) end = nl + 1; }
+      if (end < text.length) {
+        const nl = text.lastIndexOf('\n', end - 1);
+        // A slice ends at a row break, or else outside an escape: a cut inside one read its tail as a run of its own
+        // after the cut and its head as text before it, so neither side could follow the row (review 2411 F3).
+        if (nl > at) {
+          // At the end of the row break that LF is in, as `ROW_BREAK` reads it: a LF then a CR is one row down, and a cut
+          // between them began the next slice with the CR, an empty row that ended the key's rows (C44). Read within
+          // `BREAK_CUT_MAX` bytes of the LF only, so blanks between it and a CR never stretch a slice or its read; a break
+          // that reaches that far is cut after the LF, as before.
+          const b0 = breakStartAt(text, nl + 1)!;
+          const near = text.slice(b0, nl + 1 + BREAK_CUT_MAX + 1);
+          BREAK_AT.lastIndex = 0;
+          const br = BREAK_AT.exec(near);
+          end = br !== null && br[0].length < near.length ? Math.max(nl + 1, b0 + br[0].length) : nl + 1;
+        } else {
+          end = outsideEscape(text, end, at + 1);
+        }
+      }
       const la = end < text.length ? lookaheadEnd(text, end, fpMax) : { end, cut: false };
-      // Past the cap, with the chain still across the cut: its rows go out masked on both sides (review 2370 F2).
-      if (la.cut && fpMax !== null) for (const [a, b] of chainRowsAcross(text, at, end, fpMax)) ahead.push([a - at, b - at]);
+      // The rows of a chain an earlier cap cut, on through this slice: masked, never raw (review 2370 F2), however many
+      // slices the chain runs through (review 2411 F3: carried one window only, the rest of a key coloured per character
+      // on one joined row went out raw). Read over this slice only, so the cost stays a slice's.
+      if (open !== null) {
+        const spans: [number, number][] = [];
+        if (!chainRowsOn(text, at, open, spans, end)) open = null;
+        for (const [a, b] of spans) ahead.push([a - at, b - at]);
+      }
+      // Past the cap, with the chain still across the cut: its rows go out masked on both sides (review 2370 F2), back
+      // from the cut here and on from it in the slices after.
+      if (la.cut && fpMax !== null) {
+        for (const [a, b] of chainRowsBack(text.slice(at, end), fpMax)) ahead.push([a, b]);
+        open = { rows: KEY_ROWS_MAX, units: fpMax + 2 * TRIM_MAX, cont: endsInRow(text.slice(at, end)) };
+      }
       const r = this.maskWithCarry(text.slice(at, end), {
         rows: opts.rows, leadingWrap: carry, budget, ahead,
         context: text.slice(Math.max(0, at - SLICE_OVERLAP), at), lookahead: text.slice(end, la.end),
@@ -1219,9 +1312,9 @@ const ROW_LEAD = ' \t\0│┃|';
  *  reaches the next rows starts within that much of the end, so every row it can touch is held, and the rows sent
  *  before the hold are masked with the held rows read after them (`DrawerMask.out`'s lookahead). Holding only the last
  *  row's run sent the rows before it alone, unjoined, and drew a key's first row in full even on two rows (measured,
- *  through a real tmux). `ok(i)`: a hold may start at `i` (never inside text already sent). */
+ *  through a real tmux). `floor`: the first index a hold may start at (never inside text already sent). */
 function rowTailAt(
-  t: string, fpMax: number | null, ok: (i: number) => boolean = () => true, head = -1, open = false,
+  t: string, fpMax: number | null, floor = 0, head = -1, open = false,
 ): { at: number; proven: boolean } | null {
   let j = t.length;
   while (j > 0 && ROW_LEAD.includes(t[j - 1]!)) j--;
@@ -1239,15 +1332,19 @@ function rowTailAt(
   let i = j;
   while (i > 0 && j - i <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[i - 1]!)) i--;
   if (i === j) return null;
+  // A run sent whole before `floor` is not held again: a row end alone never delays (an Enter's echo). One that reaches
+  // past it is held from it, never from where it began: text a BEL-ended hyperlink's tail left in the 64 bytes of sent
+  // text reads as the start of the key's row, and that row went out unheld (review 2411 F1).
+  if (j <= floor) return null;
   const run = t.slice(i, j);
   const sh = SHAPE_STARTED.exec(run);
   // A run that already matches a shape is masked on its own, and its wrapped next row by the shape's carry.
-  if (sh !== null) return matchesShape(run) ? null : { at: i + sh.index, proven: true };
+  if (sh !== null) return matchesShape(run) ? null : { at: Math.max(floor, i + sh.index), proven: true };
   if (fpMax === null) return null;
   const n = Buffer.byteLength(run, 'utf8');
   if (n > fpMax + TRIM_MAX) return null;
-  const c = chainBack(t, i, n, fpMax, ok, head, open);
-  return c.bytes >= ROW_TAIL_MIN_BYTES && !c.long ? c : null;
+  const c = chainBack(t, i, n, fpMax, floor, head, open);
+  return c.bytes >= ROW_TAIL_MIN_BYTES && !c.long ? { ...c, at: Math.max(c.at, floor) } : null;
 }
 
 /** Where a hold of the run at `at` (`n` bytes) starts once the rows that run continues are held with it (D-8710): back
@@ -1259,13 +1356,18 @@ function rowTailAt(
  *  could not read whether the chain goes on (the window's first row, or a run joined across escapes past one run's
  *  hold); the caller reads the whole text again (`open`). `long`: the run is joined across escapes past any key. */
 function chainBack(
-  t: string, at: number, n: number, fpMax: number, ok: (i: number) => boolean, head = -1, open = false,
+  t: string, at: number, n: number, fpMax: number, floor: number, head = -1, open = false,
 ): { at: number; bytes: number; proven: boolean; long?: true } {
   const bound = fpMax + 2 * TRIM_MAX;
   let rows = 1;
   const joined = joinBack(t, at, open ? bound : null);
   if (joined.long) return { at, bytes: n, proven: true, long: true };
-  if (joined.at < at && ok(joined.at)) { n += Buffer.byteLength(t.slice(joined.at, at).replace(/\0/g, ''), 'utf8'); at = joined.at; }
+  // A run joined back past `floor` into text already sent is held from `floor`, the first byte not sent: what was sent
+  // before it may be the tail of an escape the 64 bytes of sent text cut (the drawer's `lead`), read as a run, and a
+  // stop there sent the held text's first row (review 2411 F1). Nothing before `floor` can be held, so the walk ends.
+  const from = Math.max(joined.at, floor);
+  if (from < at) { n += Buffer.byteLength(t.slice(from, at).replace(/\0/g, ''), 'utf8'); at = from; }
+  if (joined.at < floor) return { at, bytes: n, proven: true };
   if (!joined.whole) return { at, bytes: n, proven: false };
   // `head`: the window's first row break (-1: the text is whole). The row before it began before the window, so nothing
   // read in it proves where the chain starts: an escape the window cut reads as text before a run, its tail as a run of
@@ -1288,10 +1390,14 @@ function chainBack(
     while (ps > 0 && pe - ps <= DRAWER_HELD_MAX && !OPEN_DELIM.test(t[ps - 1]!)) ps--;
     if (ps === pe) break;   // the row before ends in no run
     const pj = joinBack(t, ps, open ? bound : null);
-    if (pj.long || !ok(pj.at)) break;   // a run past any key, or already sent
-    n += Buffer.byteLength(t.slice(pj.at, pe).replace(/\0/g, ''), 'utf8');
-    at = pj.at;
+    if (pj.long || pe <= floor) break;   // a run past any key, or a row already sent
+    // The row before joins back into text already sent (review 2411 F1): held from the first byte not sent, where the walk
+    // ends. Stopping short of it sent this row, unjoined, before the key's later rows came, a row a push.
+    const from = Math.max(pj.at, floor);
+    n += Buffer.byteLength(t.slice(from, pe).replace(/\0/g, ''), 'utf8');
+    at = from;
     rows++;
+    if (pj.at < floor) return { at, bytes: n, proven: true };
     if (!pj.whole) return { at, bytes: n, proven: false };
     if (at === 0 || pe - at < WRAP_ROW_MIN) break;   // a row the join never runs through: it can only begin the key's rows
   }
@@ -1340,6 +1446,8 @@ function openTailAt(
   const esc = UNFINISHED_ESC.exec(w);
   const bodyEnd = esc === null ? w.length : esc.index;
   const v = viewOf(w.slice(0, bodyEnd), '\0');
+  /** The first index of the view a hold may start at: never inside the lead, which was sent. */
+  const floor = viewIndexOf(v, lead.length);
   // The window's first row break: the row before it began before the window (-1: the window is the whole text). A window
   // with no row break is all one row that began before it (review 2370 F3: read as the whole text, its first byte
   // proved where a run joined across escapes started, and a key coloured per character was drawn).
@@ -1354,11 +1462,13 @@ function openTailAt(
   const run = v.t.slice(i);
   let hold: number | null = null;
   let proven = true;
+  /** The hold is a run that ends its row (`rowTailAt`), not the text's open tail. */
+  let rowHold = false;
   if (run !== '') {
     if (fingerprints) {
       // The open run, with the rows it continues (D-8710): holding the run alone sent the rows before it unjoined.
       if (runTooLong) return null;
-      const c = chainBack(v.t, i, Buffer.byteLength(run, 'utf8'), fpMax, (k) => origin(v, k) >= lead.length, head, whole);
+      const c = chainBack(v.t, i, Buffer.byteLength(run, 'utf8'), fpMax, floor, head, whole);
       if (c.long) return null;   // no key's, as a run past one run's hold
       hold = c.at;
       proven = c.proven;
@@ -1369,13 +1479,18 @@ function openTailAt(
   }
   if (run === '' && rowTail) {
     // A run that ends its row, held only when it lies in this text: a row end alone never delays (an Enter's echo).
-    const rt = rowTailAt(v.t, fpMax, (k) => origin(v, k) >= lead.length, head, whole);
-    if (rt !== null && origin(v, rt.at) >= lead.length) { hold = rt.at; proven = rt.proven; }
+    const rt = rowTailAt(v.t, fpMax, floor, head, whole);
+    if (rt !== null && origin(v, rt.at) >= lead.length) { hold = rt.at; proven = rt.proven; rowHold = true; }
   }
   if (!proven) return openTailAt(s, fpMax, ctx, rowTail, true);
   const cx = codexValueOpenAt(v.t);
-  if (cx !== null && (hold === null || cx < hold)) hold = cx;
-  if (hold === 0 && base > 0) return null;
+  if (cx !== null && (hold === null || cx < hold)) { hold = cx; rowHold = false; }
+  // An open tail that starts at the window's first byte is longer than the window: it goes now, the open tail failing
+  // closed (`out`'s `failClosedTail`), masked in the push itself (review 2411 F7). Never a run that ends its row: the
+  // fail-closed tail masks only the text's open tail, and a begun shape at the window's first byte that ends its row
+  // before more than 9 KB of blanks went out raw, so its next row, drawn later, was matched by nothing (C44: 98 bytes
+  // of a 108-byte shape key whose row ended after `sk-ant-api`). That hold starts at the window's first byte instead.
+  if (hold === 0 && base > 0 && !rowHold) return null;
   const cut = Math.max(0, base + (hold === null ? bodyEnd : origin(v, hold)) - lead.length);
   // Past the most a drawer holds: the text up to its unfinished escape goes out with the chain's rows masked.
   return whole && s.length - cut > WHOLE_HELD_MAX ? { past: Math.max(0, base + bodyEnd - lead.length) } : cut;
@@ -1527,12 +1642,13 @@ export class DrawerMask {
     const fpMax = this.masker.fingerprintMax();
     let p = failClosedStart(v.t, fpMax, this.heldTyped ? RUN_MIN_BYTES : 1);
     // With the rows that run continues (D-8710).
-    if (p !== null && fpMax !== null) p = chainBack(v.t, p, Buffer.byteLength(v.t.slice(p), 'utf8'), fpMax, (k) => origin(v, k) >= lead.length, -1, true).at;
+    const floor = viewIndexOf(v, lead.length);
+    if (p !== null && fpMax !== null) p = chainBack(v.t, p, Buffer.byteLength(v.t.slice(p), 'utf8'), fpMax, floor, -1, true).at;
     // A run held at its row end (D-5995): withheld, and settled after the row settle when no
     // wrapped next row follows. Also when an escape has begun after it (D-8710): that escape may be the move to the
     // key's next row (a cursor position cut after its ESC), and drawing the run then showed a key's first row whole
     // after a gap of one hold (measured in the fix round of review 2352).
-    const rowEnded = p === null ? rowTailAt(v.t, fpMax, (k) => origin(v, k) >= lead.length, -1, true)?.at ?? null : null;
+    const rowEnded = p === null ? rowTailAt(v.t, fpMax, floor, -1, true)?.at ?? null : null;
     if (rowEnded !== null && origin(v, rowEnded) >= lead.length) p = rowEnded;
     // A start inside the context: the run began before the held text, which is all of it.
     const cut = p === null ? null : Math.max(0, origin(v, p) - lead.length);
@@ -1582,7 +1698,7 @@ export class DrawerMask {
       const sent = s.slice(0, cut.past);
       for (const span of chainRowsBack(sent, fpMax!)) this.ahead.push(span);
       this.out(sent, true, s.slice(cut.past));
-      this.chain = { rows: KEY_ROWS_MAX, units: fpMax! + 2 * TRIM_MAX };
+      this.chain = { rows: KEY_ROWS_MAX, units: fpMax! + 2 * TRIM_MAX, cont: endsInRow(sent) };
       this.held = s.slice(cut.past);
       if (this.held !== '' && this.timer === null) this.timer = setTimeout(() => { this.timer = null; this.flush(); }, this.holdMs);
       return;
@@ -1621,16 +1737,22 @@ export class DrawerMask {
     this.ahead = [...later, ...r.ahead];
     this.carry = r.carry;
     const tv = viewOf(text, '').t;
+    // What the output draws, its escapes read away (C44): a mark at the end or the start of a text is so whatever escapes
+    // follow or precede it, as a key coloured per character masked across pushes has (one mark a push, measured, before).
+    const rv = r.text.includes(DRAWER_SECRET_MASK) ? viewOf(r.text, '') : null;
     // The tainted leading run is the run the last text's mark already stands for: no second mark for it, so a run that
     // many chunks carry is one mark, as one chunk would have drawn it (D-8694's one mark per run on a row; D-8710).
-    const shown = this.taint && tv !== '' && !OPEN_DELIM.test(tv[0]!) && r.text.startsWith(DRAWER_SECRET_MASK)
-      ? r.text.slice(DRAWER_SECRET_MASK.length) : r.text;
+    let shown = r.text;
+    if (this.taint && tv !== '' && !OPEN_DELIM.test(tv[0]!) && rv !== null && rv.t.startsWith(DRAWER_SECRET_MASK)) {
+      const k = rv.map === null ? 0 : rv.map[0]!;
+      shown = r.text.slice(0, k) + r.text.slice(k + DRAWER_SECRET_MASK.length);
+    }
     // A mask that reaches the text's end inside a run taints the next text's leading run (D-5995), and so on for as long
     // as the run goes on (D-8710, review 2326 O1): the next text's leading run continues it, whatever masked it (a shape,
     // a key, a fail-closed tail or this taint). Only a fail-closed tail used to taint, and only for one text, so a shape
     // key longer than a drawer holds was masked once and then drawn from the next chunk on, once the context no longer
     // held its start.
-    this.taint = r.text.endsWith(DRAWER_SECRET_MASK) && tv !== '' && !OPEN_DELIM.test(tv[tv.length - 1]!);
+    this.taint = rv !== null && rv.t.endsWith(DRAWER_SECRET_MASK) && tv !== '' && !OPEN_DELIM.test(tv[tv.length - 1]!);
     this.ctx = (this.ctx + text).slice(-DRAWER_CONTEXT);
     if (shown !== '') this.emit(shown);
   }

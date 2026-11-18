@@ -259,6 +259,45 @@ number from `POST /api/ledger/deviations`.
   two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
   whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
   N2). Record: the wave 4 note (review run 2386 A6).
+- **D-8724 (2026-11-18)** — w4-names-and-pass-word: wave 4 names two of Task 4.1's deciders differently and adds a
+  fifth pass word. `notDrift` is built as `graceVerdict` and `graceRereads`, and `restoredLines` as
+  `restoredDescription` over `composeRestored`; the interface lines above are amended to the built names, and the rules
+  they decide are unchanged. `LINEAR_CCRC_PASSES` (`policy.ts`) gains `inbound`, the drift lane's close of an inbound
+  issue (its comment and its cancel), beyond the four of §8.3 and Task 1.2, so that close is attributed as ccrc's own
+  like every other ccrc write. Record: review run 2427 A3 and A4, the wave 4 note's rulings table.
+- **D-8725 (2026-11-18)** — w4-carried-gaps: wave 4 (#2982) landed with gaps that its reviews carried to a follow-up run
+  of the same epic, ruled to land before wave 7 touches any team beyond the programme's own. A restore does not yet
+  wait on a held programme or workspace, and the drift pass's reads do not yet honour a refused key's block (review run
+  2443 P3). A bound issue moved out of a managed team, or a milestone moved into a project ccrc does not bind, is not
+  read again (2443 P2). A page-capped changed* read keeps its old watermark (review run 2408 F3). A stored inbound row
+  whose issue later completes or is canceled is not retired (review run 2427 F1). A create whose reply was lost can
+  read as inbound, and a take or triage can then bind a second ticket to that issue (review run 2435 F2). The drift
+  pass reads Linear before ccrc's own record, so a sync write landing between the two reads is restored (2435 F1). None
+  of them deletes or adopts anything in Linear. Separately, the linear skill's refusal table lists no
+  `linear-text-public` row for the `linear` verbs, because the proxy never answers that word there (fix round 3 A-8,
+  departing from Task 4.4's skill row). Record: the wave 4 note's Follow-ups and the ledger.
+- **D-8737 (2026-11-18)** — map-shapes-early: no read on the wire carries a migration map's or report's contents before
+  wave 7, so wave 5 adds Task 7.1's `MAP_CLASSES`, `MapEntry` and `MapCounts` to `shared/plan.ts`, verbatim from Task
+  7.1's text, and builds the map and report bodies as one component over them. `ItemView` renders the body when it is
+  handed one; until wave 7 adds the read that hands it (and the map and report arms of the item act route), a map or
+  report item shows its why and how text with its controls, and those controls answer the refusal's fixed sentence.
+  Wave 7 imports these shapes and defines them nowhere else; if its capture or build finds a shape must change, it
+  changes it in `shared/plan.ts` and amends this entry. The body draws the counts and the class groups only: spec
+  §11.3's section of each programme's epics and checkpoints is not drawn, since the three shapes do not carry it, and
+  wave 7 adds that section together with the read it needs (amended in review round 2, the coordinator's ruling).
+  Record: the wave 5 note (the coordinator's ruling, run 2447).
+- **D-8738 (2026-11-18)** — owner-now-wire: wave 5 is a PWA wave, but the project linking card's Linear owner select
+  needs two facts the hierarchy read (`GET /api/hierarchy`) did not carry, so its `ownerNow` gains two optional fields,
+  both decided on the server by the owner rule's own functions and read in the PWA through one reader (`ownerFrom`,
+  `pwa/src/fleet/hierarchyWords.ts`). `project` is the project the owner was decided for (`linearOwnerOfProject`): a
+  project whose shared team key another project owns names that project, so the card can say where its owner comes
+  from and that its own owner setting is not used meanwhile (review round 1). `ifUnnamed` is the coordinator the
+  default rule picks with no named owner, and whether it is live (`linearOwnerOf` with no named owner), so the select's
+  empty option names who the operator gets by choosing it, not the named owner it would clear (review round 2); for a
+  shared-key sibling, whose owner comes from the project that owns the key, it names the sibling's own default, which
+  applies once the key is no longer shared, and the note under the select names the owner now. Both are
+  additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
+  the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
 
 ## Global Constraints
 
@@ -1484,25 +1523,28 @@ whose `before` would be the post-move state (Task 7.3).
     an issue's state is its **type**, never its name; labels only those ccrc set).
   - `driftVerdict(owned: OwnedFields, planned: OwnedFields, lastWritten: string | null): 'match' | 'catch-up' | 'drift'`
     — `catch-up` when `fingerprintOf(owned) === lastWritten` (ccrc wrote the current value; the plan moved on).
-  - `notDrift(field: string, before: unknown, after: unknown, ctx: { prMerged: boolean; gracePasses: number }): boolean`
-    — same state category; an issue `completed` by an integration with the merge recorded, or within one pass of
-    grace; any field ccrc does not own (§6.2).
+  - `graceVerdict(o: { drifted: readonly string[]; linearState: unknown; prMerged: boolean; driftSince: number | null }): GraceVerdict`
+    and `graceRereads(graced: readonly string[], read: ReadonlySet<string>): string[]` (built in place of the plan's
+    `notDrift(field, before, after, { prMerged, gracePasses })`; D-8724) — same state category; an issue `completed`
+    after its run's PR merged (D-8703: any actor), or within one pass of grace; any field ccrc does not own (§6.2).
   - `isPersistent(restores: readonly number[], now: number): boolean` — three within seven days
     (`DRIFT_PERSIST = { restores: 3, windowMs: 7 * 86_400_000 }`).
   - `restoreComment(kind, field, planned: string, was: string, at: number): string` — §7.2's sentence;
-    `restoredLines(description: string, line: string): string` — keeps the last three "Restored" lines.
+    `restoredDescription(planned: string, linearDescription: string | null, line: string): string`, over the private
+    `composeRestored` (built in place of the plan's `restoredLines(description, line)`; D-8724) — keeps the last three
+    "Restored" lines.
   - `isInbound(issue: { linearId: string; teamKey: string }, bound: ReadonlySet<string>, viaFleet: ReadonlySet<string>, managed: ReadonlySet<string>): boolean`
   - planStore: `managedTeams(db): { workspaceId: string; teamKey: string }[]` (`state = 'applied'`), `recordDrift`,
     `driftRestoresOf(db, bindingId, since)`, `upsertInbound`, `inboundWaiting(db, project)`.
 
-- [ ] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
+- [x] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
   `completed with no merge recorded waits one pass`, `a moved project is drift`, `a value ccrc wrote is catch-up`,
   `three restores in seven days is persistent, three in eight is not`, `restoredLines keeps three`,
   `an issue created through the journal is not inbound`; migration 58 applies after 57.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
 
 ### Task 4.2: The drift pass and persistent drift
 
@@ -1531,15 +1573,15 @@ Test `server/test/drift-pass.test.ts`.
   - Acts: `hand` mails the programme's coordinator (`planOwnerOf`) with the drift record and closes the item; `keep`
     closes it and restoring goes on.
 
-- [ ] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
+- [x] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
   `the third restore in a week raises the item`; `with the item open, two edits in one pass restore once and comment once a day`;
   `a restore refused linear-forbidden raises the item at once` (Review Focus 5); `an unmanaged team is never read`;
   `hand mails the coordinator`; `a restore waits for the sync pass in flight and, when that pass wrote the newer
   planned value, writes nothing and raises no drift`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
-- [ ] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
-- [ ] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
+- [x] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
+- [x] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
 
 ### Task 4.3: The inbound path, the Upkeep epic and the Linear owner item
 
@@ -1564,17 +1606,17 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   - `GET /api/projects/:project/upkeep` → the Upkeep epic's `EpicView` (session-gated, in `MASKED_GET_ROUTES`), for the
     console's Upkeep page (Task 5.3).
 
-- [ ] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
+- [x] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
   `triage by another coordinator is not-linear-owner`; `hand to the owner's own programme takes it at once`;
   `upkeep creates the Upkeep epic once and places the ticket`; `take moves an Upkeep ticket into the programme's epic`;
   `raise makes a decide item for the operator`; `no live owner raises one item per project and it settles when an owner is named and live`;
   `a hibernated owner is mailed, and no item is raised`; `an unmeasured owner raises no item`;
   `the Upkeep project is created once, outside any initiative, and never closed`; `GET upkeep answers its tickets, masked`;
   the client rows' identity and count pins.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
 
 ### Task 4.4: Session writes in managed teams
 
@@ -1588,12 +1630,12 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   through `ccrc-api plan ticket-add`", after routing and before the policy point, journaled `refused`. In an unmanaged
   team, unchanged; `comment`, `link` and reads unchanged.
 
-- [ ] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
+- [x] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
   `create in an unmanaged team passes`; `comment on a bound issue passes`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
-- [ ] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
-- [ ] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
+- [x] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
+- [x] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
 
 ---
 
@@ -1624,15 +1666,17 @@ Every task here adds jsdom tests (`pwa/test/*.test.tsx`) and a browser file run 
 | 1280, 1470 | The row's first line holds name, key and visibility; the second the owner select, toggle and state |
 | 1920 | One grid line per row; the state line wraps under the row only when long |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
+- [x] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
   `the owning-project control shows only for a shared key`, `the state line links the map item`, `a refusal shows its fixed sentence`;
   browser: no sideways scroll, no clipped text with a long project name, the table above, all twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement**; words in `hierarchyWords.ts`.
-- [ ] **Step 4: Run to pass** — both.
-- [ ] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
+- [x] **Step 3: Implement**; words in `hierarchyWords.ts`.
+- [x] **Step 4: Run to pass** — both.
+- [x] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
 
 ### Task 5.2: The programme page's Plan section
+
+Not built: the work map's Work card (desktop-polish) replaces this section, by the ledger's ruling of 2026-11-16. Its boxes stay unticked.
 
 **Files:** Create `pwa/src/ledgers/PlanSection.tsx`, `pwa/src/ledgers/planWords.ts`; Modify
 `pwa/src/ledgers/ProgrammeScreen.tsx`, `pwa/src/ledgers/ledgers.css`, `pwa/src/lib/api.ts` (`plan(slug)`);
@@ -1678,14 +1722,14 @@ is Task 4.3's); Test `pwa/test/epic-screen.test.tsx`, `pwa/browser/epic-page.bro
 | 1280, 1470 | Checkpoints and tickets side by side |
 | 1920 | The same, each ticket's run state inline |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
+- [x] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
   `a ticket with a run links /runs/<id>`, `an unknown epic key says "No such epic in this programme"`,
   `the Upkeep page lists its tickets and no checkpoints`, `matchRoute parses both new paths and refuses a bad slug`;
   browser (`epic-page.browser.test.ts`): the table above in twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
-- [ ] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
-- [ ] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
+- [x] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
+- [x] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
 
 ### Task 5.4: The five hierarchy items' controls
 
@@ -1710,15 +1754,15 @@ dispatches a linear action to it; `carriesControls`), `pwa/src/ledgers/ItemView.
 
 The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DOOR_WORDS['hand-to-coordinator']`).
 
-- [ ] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
+- [x] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
   `{act:'return', note}`, `{act:'put-back'}`, `{act:'done'}`, `{act:'hand'}`, `{act:'keep'}`, `{act:'check-again'}`,
   `{act:'name', owner}`); `an act the server refuses shows its fixed sentence`; `the map's counts come before its groups`;
   browser (`linear-items.browser.test.ts`): the table above in twenty views, the act bar visible at 360 with a
   200-issue map scrolled to its middle.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
-- [ ] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
-- [ ] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
+- [x] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
+- [x] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
 
 ---
 

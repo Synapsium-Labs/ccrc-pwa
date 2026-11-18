@@ -646,8 +646,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
-  and `POST /api/sessions/:id/timers/:timerId/cancel`, and the operator's daily backstop setting (Overlord W1, the renewal readings),
-  `GET` and `POST /api/continuity/renewal-backstop`, consult no box token either and are session-gated when armed; they register
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, the operator's daily backstop setting (Overlord W1, the renewal readings),
+  `GET` and `POST /api/continuity/renewal-backstop`, the operator's Renew now, `POST /api/sessions/:id/renew`, and the Setting
+  "when soft renewals happen", `GET`/`POST /api/coord/renewal-mode` (the renewal hand-offs), consult no box token either and are
+  session-gated when armed; they register
   from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
   door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The operator's private-name list doors (Overlord W2, private names B),
   `PUT /api/overlord/private-names` (the upload, which replaces the list, behind the account gate's step-up, so it refuses while
@@ -657,8 +659,11 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
-  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). They register from `server/src/coord/overlordRoutes.ts`
-  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The replay quiz's
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
+  session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
+  takes the step-up. Both sets of doors register from `server/src/coord/overlordRoutes.ts`
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The replay quiz's
 rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
 run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
 either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is

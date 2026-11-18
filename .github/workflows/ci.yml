@@ -1608,6 +1608,7 @@ jobs:
           test/history-rss-preload.test.ts
           test/history-redact-profiles.test.ts
           test/history-touched.test.ts
+          test/history-fts-fold.test.ts
           test/history-quiz-single-characterization.test.ts
           test/history-quiz-single.test.ts
           EOF

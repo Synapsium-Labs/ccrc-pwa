@@ -423,3 +423,67 @@
   .pg-goals .pg-goals-mod { grid-template-columns: minmax(0, 1fr); }
   .pg-goals .pg-goals-mod > :not(.pg-goals-date) { grid-column: 1; }
 }
+
+/* The epic page and the Upkeep page (Linear hierarchy design §11.2, D-8184): one head, then the checkpoints and the tickets.
+   GROUNDS: the head and each row state their own ground and ink. WIDTHS (the table of the plan's Task 5.3): under 1280 the
+   checkpoints are a list with the tickets below; from 1280 the two sit side by side; from 1700 (the 1920 view) each ticket's
+   state and links share the line with its title. Every text wraps anywhere, so a very long title is never clipped. */
+.ep-head {
+  display: flex; align-items: center; gap: var(--sp-1) var(--sp-2); flex-wrap: wrap; min-width: 0; padding: var(--sp-2);
+  border-left: 4px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-surface); color: var(--ink-primary);
+}
+.ep-head .ep-kicker { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-head .ep-name { margin: 0; min-width: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
+.ep-head .ep-summary { flex: 1 1 100%; margin: 0; min-width: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.ep-head .ep-link { min-width: 0; overflow-wrap: anywhere; }
+.ep-cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }
+@media (min-width: 1280px) { .ep-cols[data-cols='two'] { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } }
+.ep-col { display: grid; gap: var(--sp-1); min-width: 0; align-content: start; background: var(--bg-page); color: var(--ink-primary); }
+.ep-col .ep-h { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-list { display: grid; gap: var(--sp-1); margin: 0; padding: 0; list-style: none; min-width: 0; }
+.ep-row {
+  display: grid; gap: var(--sp-1); min-width: 0; padding: var(--sp-2); border-radius: var(--r-md);
+  background: var(--bg-surface); color: var(--ink-primary);
+}
+.ep-row .ep-title { min-width: 0; color: var(--ink-primary); overflow-wrap: anywhere; }
+.ep-row .ep-meta {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--ink-secondary);
+}
+.ep-row .ep-meta > * { min-width: 0; overflow-wrap: anywhere; }
+.ep-head .ep-state,
+.ep-row .ep-state { font-family: var(--family-mono); font-size: var(--fs-xs); font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-row .ep-run-state { display: none; }
+@media (min-width: 1920px) { .ep-row .ep-run-state { display: inline; } }
+@media (min-width: 1700px) {
+  .ep-tk { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
+  .ep-tk .ep-meta { justify-content: flex-end; }
+}
+
+/* The hierarchy items' controls and the map and report body (Linear hierarchy §11.3 and §11.4, D-8184, Task 5.4). Counts first,
+   then one group per class. 360 and 390: groups collapsed (the component opens them from 1280), the act bar sticky at the item's
+   foot, on the card's own ground; 1280 and 1470: groups open in two columns; 1920: one table. Names are plain text and wrap. */
+.wl-linear { align-items: stretch; justify-content: flex-start; }
+.wl-linear .wi-field { flex: 1 1 100%; }
+.wl-linear .wl-linear-said { flex: 1 1 100%; margin: 0; }
+.wm { display: grid; gap: var(--sp-2); min-width: 0; }
+.wi-card .wm-counts { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); font-size: var(--fs-meta); color: var(--ink-primary); }
+.wi-card .wm-counts b { font-weight: var(--weight-medium); }
+.wm-group { border: 1px solid var(--edge-subtle); border-radius: var(--r-md); padding: var(--sp-1) var(--sp-2); min-width: 0; }
+.wi-card .wm-sum { cursor: pointer; font-weight: var(--weight-medium); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wi-card .wm-n { color: var(--ink-secondary); font-weight: var(--weight-regular, 400); }
+.wm-list { list-style: none; margin: var(--sp-1) 0 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--sp-1); }
+.wi-card .wm-issue { min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+.wm-id { font-family: var(--family-mono); overflow-wrap: anywhere; }
+.wi-card .wm-target { color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wm-table { display: none; width: 100%; border-collapse: collapse; table-layout: fixed; font-size: var(--fs-meta); }
+.wi-card .wm-table th { text-align: left; color: var(--ink-secondary); font-weight: var(--weight-medium); }
+.wm-table th, .wm-table td { padding: var(--sp-1) var(--sp-2); border-bottom: 1px solid var(--edge-subtle); vertical-align: top; overflow-wrap: anywhere; }
+@media (min-width: 1280px) { .wm-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1700px) {
+  .wm-group { display: none; }
+  .wm-table { display: table; }
+}
+@media (max-width: 899.98px) {
+  /* Stuck above the phone bar (`--phone-bar-h`, shell.css, on the root only while the bar is mounted), never under it. */
+  .wi-act[data-sticky='foot'] { position: sticky; bottom: var(--phone-bar-h, 0px); z-index: var(--z-header); }
+}

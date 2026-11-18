@@ -25,6 +25,7 @@ import {
 import type { Roster } from '../../../shared/roster.js';
 import { workspaceId } from '../../../shared/slug.js';
 import type { AccountGate } from '../accounts/gate.js';
+import type { CallerIdentity, ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
 import type { ActorFlags } from '../ccdargv.js';
 import { launchDigestOf } from '../continuity/launchProfile.js';
 import type { SessionHost } from '../continuity/sessionHost.js';
@@ -42,7 +43,11 @@ import {
   accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, retireVerdict, routeOf,
   type AccountFacts,
 } from './overlordDesignation.js';
-import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
+import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
+import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
+import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
+import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
+import type { LadderWrite } from './overlordLadderStore.js';
 
 // ── the port ──────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -89,11 +94,15 @@ export type OverlordCoord = Pick<CoordStore,
   | 'setModelClass' | 'setAccountSet'>;
 
 export interface OverlordRouteDeps {
-  /** The account gate (D-5511): its `actor` is the row's. */
+  /** The account gate (D-5511): its `actor` is the row's, recorded through `identity` (gates A). */
   readonly gate: AccountGate;
+  /** The caller identity port (gates A, Q17): the gate's actor minted at `operator` strength, the one actor a writer takes. */
+  readonly identity: Pick<CallerIdentity, 'operator' | 'console'>;
   /** The coordination serialiser: every write door's body runs inside it, so a designate and a retire never interleave. */
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
+  readonly ladder?: { readonly coord: Pick<CoordStore, 'ladderRows' | 'ladderRungRead' | 'setRung' | 'clearLatch'>; readonly inputs: LadderConditionInputs; readonly witness?: NarrowingWitness; readonly serverCaps: readonly string[]; readonly journal?: AuthorityAppender };
+  readonly consoleFacts?: (req: FastifyRequest) => { readonly armed: boolean; readonly device: string | null };
   /** The authority journal (`AuthorityAppender`), handed to the writers that append. */
   readonly journal: AuthorityAppender;
   readonly body: OverlordBody;
@@ -150,10 +159,19 @@ const AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError, 'authority-rolled
   'journal-append': 'journal-unreadable',
 };
 
+const LADDER_AUTHORITY_REFUSAL: Readonly<Record<AuthorityAppendError | LadderWriterRefusal, 'authority-rolled-back' | 'journal-unreadable' | 'unavailable'>> = {
+  'row-changed': 'unavailable',
+  'authority-rolled-back': 'authority-rolled-back', 'authority-unmeasured': 'authority-rolled-back',
+  'bad-entry': 'journal-unreadable', 'not-in-transaction': 'journal-unreadable', 'journal-append': 'journal-unreadable',
+};
+const RUNG_REFUSAL_DETAIL = {
+  'capability-missing': (v: Extract<ReturnType<typeof rungMoveVerdict>, { kind: 'refuse' }>) => ({ detail: `the rung needs ${'needs' in v ? v.needs : ''}`, ...('needs' in v ? { needs: v.needs } : {}) }),
+  unavailable: () => ({ detail: "the operator's rung could not be read: only off lands" }),
+};
 const UNREADABLE = 'the designation row could not be read';
 
 /** What a row writer refuses with: the journal's refusal, a row it cannot narrow, or a row that already holds an attempt. */
-type Failure = AuthorityRefused | RowUnreadable | { readonly ok: false; readonly reason: 'exists' | 'not-found' };
+type Failure = AuthorityRefused | RowUnreadable | ActorRefused | { readonly ok: false; readonly reason: 'exists' | 'not-found' };
 
 // ── the drain ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -217,6 +235,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   const writerRefusal = (reply: FastifyReply, r: Failure): FastifyReply => {
     if ('authority' in r) return authorityRefusal(reply, r);
     if (r.reason === 'exists') return refuseRoute(reply, 'overlord-exists', { detail: 'an Overlord is already designated or being started' });
+    if (r.reason === 'actor') return refuseRoute(reply, 'internal', { detail: 'the door handed the writer an actor the identity port did not mint' });
     if (r.reason === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord designation row' });
     return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
   };
@@ -247,12 +266,12 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (!g.pass) return reply;
     const parsed = parseDesignateBody(req.body);
     if (parsed === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     const dec = deps.dec(req);
     return deps.serial(() => designate(reply, parsed, actor, dec));
   });
 
-  async function designate(reply: FastifyReply, parsed: DesignateBody, actor: string, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+  async function designate(reply: FastifyReply, parsed: DesignateBody, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
     // A re-designate over a retired row journals both records as narrowings while the journal is not coherent, and builds a body
     // that cannot go live: refuse before any row write or ccd call (review 2349 F9).
     const auth = facts.authority?.() ?? { kind: 'coherent' };
@@ -359,7 +378,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   app.delete('/api/overlord/designate', async (req, reply) => {
     const g = deps.gate(req, reply, { cap: null, stepUp: true });
     if (!g.pass) return reply;
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       const verdict = retireVerdict(coord.designationRead());
       if (verdict.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
@@ -378,6 +397,74 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
       const owedIds = standing.kind === 'unmeasured' || standing.row === null ? r.owed : standing.row.stopsOwed;
       const drained = await drainOwedStops(deps, owedIds);
       return { ok: true, changed: true, term: r.term, stopped: drained.stopped, owed: drained.owed };
+    });
+  });
+
+  app.get('/api/overlord/ladder', async (_req, reply) => {
+    const ladder = deps.ladder;
+    if (ladder === undefined) return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+    const read = ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps);
+    if (read.kind === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+    return ladderWire(read, ladder.serverCaps);
+  });
+
+  // The ladder's operator doors share the serialiser and the store used by its read.
+  const ladderUnavailable = (reply: FastifyReply): FastifyReply => refuseRoute(reply, 'unavailable', { detail: 'the ladder could not be read' });
+  const ladderRefusal = (reply: FastifyReply, result: Extract<LadderWrite, { ok: false }>): FastifyReply => {
+    if ('reason' in result) return refuseRoute(reply, 'internal', { detail: 'the door handed the writer an actor the identity port did not mint' });
+    const state = facts.authority?.();
+    const detail = state?.kind === 'rolled-back' ? state.cause : state?.kind === 'unmeasured' ? state.why : result.error;
+    return refuseRoute(reply, LADDER_AUTHORITY_REFUSAL[result.error], { detail });
+  };
+  const measuredLadder = (ladder: NonNullable<OverlordRouteDeps['ladder']>): boolean =>
+    ladderRead(ladder.coord, ladder.inputs, ladder.witness ?? NO_WITNESS_YET, ladder.serverCaps).kind === 'measured';
+  const moveRung = (req: FastifyRequest, reply: FastifyReply, ask: { kind: 'set'; to: Rung } | { kind: 'pause' }) => deps.serial(async () => {
+    const ladder = deps.ladder;
+    if (ladder === undefined) return ladderUnavailable(reply);
+    const current = ladder.coord.ladderRungRead();
+    if (current.kind === 'unmeasured') return ladderUnavailable(reply);
+    const verdict = rungMoveVerdict(current.current, ask, ladder.serverCaps);
+    if (verdict.kind === 'same') return { ok: true, changed: false, rung: verdict.rung };
+    if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, RUNG_REFUSAL_DETAIL[verdict.word](verdict));
+    let actor: RecordedActor | ConsoleCaller;
+    if (verdict.kind === 'raise') {
+      const g = deps.gate(req, reply, { cap: null, stepUp: true });
+      if (!g.pass) return reply;
+      actor = deps.identity.operator(g.actor);
+      if (!measuredLadder(ladder)) return ladderUnavailable(reply);
+    } else {
+      if (deps.consoleFacts === undefined) return ladderUnavailable(reply);
+      const facts = deps.consoleFacts(req);
+      actor = deps.identity.console(facts.armed, facts.device);
+    }
+    // W1 Pause and off change only the rung. W2 cancels undelivered mail/kickoffs and nudges,
+    // moves requests to needs-you and settles pending acts; W3 releases holds with one push.
+    const result = ladder.coord.setRung(ladder.journal ?? deps.journal, { from: verdict.from, to: verdict.to, actor, at: deps.clock.wall(), opKey: `rung-${deps.entropy.hex(16)}` });
+    if (!result.ok) return ladderRefusal(reply, result);
+    if (!result.changed) return { ok: true, changed: false, rung: verdict.to };
+    let held: 'held' | 'not-yet' | 'unmeasured' = 'not-yet';
+    if (verdict.kind === 'lower' && result.recordSequence !== null) {
+      try { held = (ladder.witness ?? NO_WITNESS_YET).heldFor(result.recordSequence); } catch { held = 'unmeasured'; }
+    }
+    return { ...result, rung: verdict.to, narrowing: verdict.kind === 'lower' ? narrowingState(result.recordSequence, held) : null };
+  });
+  app.post('/api/overlord/rung', async (req, reply) => {
+    const body = req.body as { rung?: unknown } | null;
+    if (body === null || typeof body !== 'object' || !isRung(body.rung)) return refuseRoute(reply, 'bad-request', { detail: 'rung' });
+    return moveRung(req, reply, { kind: 'set', to: body.rung });
+  });
+  app.post('/api/overlord/pause', async (req, reply) => moveRung(req, reply, { kind: 'pause' }));
+  app.post('/api/overlord/latches/:cause/clear', async (req, reply) => {
+    const { cause } = req.params as { cause: string };
+    if (!isLadderCauseKey(cause)) return refuseRoute(reply, 'bad-request', { detail: 'cause' });
+    const g = deps.gate(req, reply, { cap: null, stepUp: true });
+    if (!g.pass) return reply;
+    return deps.serial(async () => {
+      const ladder = deps.ladder;
+      if (ladder === undefined || !measuredLadder(ladder)) return ladderUnavailable(reply);
+      const result = ladder.coord.clearLatch(ladder.journal ?? deps.journal, { cause, actor: deps.identity.operator(g.actor), at: deps.clock.wall(), opKey: `latch-clear-${deps.entropy.hex(16)}` });
+      if (!result.ok) return ladderRefusal(reply, result);
+      return result;
     });
   });
 
@@ -402,7 +489,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const g = deps.gate(req, reply, { cap: null, stepUp: model === null || modelStepUp(model) });
     if (!g.pass) return reply;
     if (model === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       let f: AccountFacts;
       try { f = await accountFactsOf(); } catch (err) {
@@ -430,7 +517,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const g = deps.gate(req, reply, { cap: null, stepUp: stepped });
     if (!g.pass) return reply;
     if (next === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       let f: AccountFacts;
       try { f = await accountFactsOf(); } catch (err) {

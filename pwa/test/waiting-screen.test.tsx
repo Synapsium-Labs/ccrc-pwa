@@ -406,6 +406,23 @@ describe('the controls on /waiting (Task 24)', () => {
     expect(css).toMatch(/@media \(max-width: 639\.98px\) \{\s*\.wl-li\[data-acts='true'\] \{ grid-template-columns: minmax\(0, 1fr\); \}/);
   });
 
+  it('a plain item\'s row carries no controls and no data-acts; a hierarchy row carries only the light acts', () => {
+    const linear = (id: number, action: object) => itemView({ id, program: 'port-api', action: action as never });
+    open({ runs: [], view: waitingView({ items: [
+      itemView({ id: 40, program: 'port-api' }),
+      linear(41, { verb: 'linear-drift', bindingId: 8 }), linear(42, { verb: 'linear-initiatives', workspaceId: 'AAA' }),
+      linear(43, { verb: 'linear-map', migrationId: 3 }), linear(44, { verb: 'linear-report', migrationId: 3 }),
+      linear(45, { verb: 'linear-owner', project: 'project-a' }),
+    ] }) });
+    expect(rowOf(40).getAttribute('data-acts')).toBeNull();
+    expect(within(rowOf(41)).getAllByRole('button').map((b) => b.textContent)).toEqual(expect.arrayContaining(['Hand to a coordinator', 'Keep the plan']));
+    expect(within(rowOf(42)).getByRole('button', { name: 'Check again' })).toBeTruthy();
+    for (const id of [43, 44, 45]) {
+      expect(rowOf(id).getAttribute('data-acts'), `row ${id}`).toBeNull();
+      expect(rowOf(id).querySelector('[data-linear]'), `row ${id}`).toBeNull();
+    }
+  });
+
   it('Abandon run opens the single sheet and calls act', async () => {
     const act = vi.spyOn(api, 'actItem').mockResolvedValue({ released: true });
     const abandon = vi.spyOn(api, 'abandonRun');

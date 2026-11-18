@@ -149,7 +149,9 @@ export type RenewalAct =
   | { readonly kind: 'assemble-checkpoint' }
   | { readonly kind: 'raise-item'; readonly why: string; readonly about?: ItemAbout }
   | { readonly kind: 'set-hold-off' }
-  | { readonly kind: 'spot-probe' };
+  | { readonly kind: 'spot-probe' }
+  // The PreCompact arm's route field (the renewal hand-offs, Task 6): planned only on a change, live only.
+  | { readonly kind: 'precompact-field'; readonly value: 'refuse' | 'allow' };
 
 /** What an item says the session is doing now: the `renew` answer the renewal ended on, when it was one that left the
  *  session other than on its current conversation (review 2149 F5), or a stop that did not end it (exit 6, F4). */

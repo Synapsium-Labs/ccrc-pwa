@@ -1667,6 +1667,9 @@ export interface StallSessionInput {
   readonly notices: readonly StallNotice[];  // worker: runEvents(run.id); else []
   readonly arming: StallArming;
   readonly coordinationPaused: boolean;
+  /** The session's role is long-lived (Table 3.3.9a, from `roleFactsOf`): the restarted arm's rung 1 reaches it run-less too
+   *  (Overlord W1a, the renewal hand-offs, Task 7). Absent: not long-lived. */
+  readonly longLived?: boolean;
 }
 
 /** The one gate word mail-stuck reads. It is typed against Task 10's Record, so a rename there is a compile error
@@ -1828,7 +1831,7 @@ function stallRestartedInner(input: StallSessionInput, now: number): StallVerdic
  *  text (it names what the worker was told was lost) would no longer be readable. Once rung 1 is recorded, rung 2
  *  alone is judged, for as long as the marker still reads as the candidate. */
 function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdict[] {
-  if (!stallRunBound(input)) return [VERDICT_NONE];
+  if (!stallRunBound(input)) return stallRestartedRunLess(input, now);
   const held = stallSessionHold(input, now);
   if (held !== null) return [held];
   const m = stallCurrentMark(input);
@@ -1843,6 +1846,24 @@ function stallRestartedRungs(input: StallSessionInput, now: number): StallVerdic
   if (r === null || r.claimedBy === null || input.coordinationPaused) return out.length > 0 ? out : [VERDICT_NONE];
   out.push({ act: 'notify', arm: 'restarted', rung: 2, key, to: 'coordinator', coordinatorId: r.claimedBy });
   return out;
+}
+
+/** Restarted for a long-lived session that is no run's worker (Overlord W1a, the renewal hand-offs, Task 7; W0-21, Proposal
+ *  12; slug lost-task-nudge-is-the-d5-arm): a resumed coordinator takes no turn on Claude Code's notice that its background
+ *  tasks did not survive, so the arm tells it, as it tells a run worker. Rung 1 only, run-less: keyed on its mail subject
+ *  (`stallRestartedSubject`, one per restart), so a second sweep sends nothing; no heads-up, since it has no claimant. A
+ *  session that is not long-lived gets none, and a run worker keeps its own two rungs above, so a child is never mailed
+ *  twice. The arm's markers decide shadow or live, unchanged (`stallNotifyDelivery`). */
+function stallRestartedRunLess(input: StallSessionInput, now: number): StallVerdict[] {
+  if (input.longLived !== true || input.role === 'worker') return [VERDICT_NONE];
+  const held = stallSessionHold(input, now);
+  if (held !== null) return [held];
+  const m = stallCurrentMark(input);
+  if (m === null || !stallOrphanDCandidate(m) || m.restartAt === null || now - m.restartAt > BACKLOG_HORIZON_MS) return [VERDICT_NONE];
+  if (stallSessionLive(input) === null) return [VERDICT_NONE];
+  const key = m.restartAt;
+  if (stallSelfRungDone(input, 'restarted', key, stallRestartedSubject(key))) return [VERDICT_NONE];
+  return [{ act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' }];
 }
 
 /** The first restarted verdict of this sweep only (rung 1 while it is unrecorded, else rung 2). The lane calls

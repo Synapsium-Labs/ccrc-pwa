@@ -73,6 +73,10 @@ const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
  *  door, `POST /api/continuity/quiz-runs`, whose caller is the operator's shell on the fleet box (`ccrc quiz-record`), gated
  *  in its own onRequest; its rule door is the operator's, session-gated with a step-up: `QUIZ_SESSION_DOORS`. */
 const QUIZ_SRC = read('server/src/continuity/quizRoutes.ts');
+/** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
+ *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
+ *  `DECISION_MODEL_DOORS`. */
+const DECISION_MODEL_SRC = read('server/src/coord/decisionModelRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -160,7 +164,10 @@ const LEDGER_OPERATOR_DOORS = ['/api/waiting', '/api/items/:id', '/api/items/:id
  *  each registration to the next, no helper that calls `checkMailToken(` may sit below the file's last registration. */
 // The renewal backstop's two doors (Overlord W1 renewal readings A): one path, listed once per registration (GET and POST).
 const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id/timers/:timerId/cancel',
-  '/api/continuity/renewal-backstop', '/api/continuity/renewal-backstop'];
+  '/api/continuity/renewal-backstop', '/api/continuity/renewal-backstop',
+  // The renewal hand-offs (Overlord W1a, Tasks 1 and 4): the operator's Renew now, and the Setting "when soft renewals happen".
+  // `/api/coord/renewal-mode` twice: its GET and its POST are two registrations of the one path.
+  '/api/sessions/:id/renew', '/api/coord/renewal-mode', '/api/coord/renewal-mode'];
 
 /** The Overlord's designation doors (Overlord W1 designation A and C, `coord/overlordRoutes.ts`): the read, and Start and retire on the
  *  one path (`POST` and `DELETE /api/overlord/designate`). The operator's, behind the account gate and a step-up on the two writes, no
@@ -168,7 +175,8 @@ const CONTINUITY_SESSION_DOORS = ['/api/sessions/:id/timers', '/api/sessions/:id
  *  registrations and compares in both directions. */
 const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/designate',
   // the Settings doors (Overlord W1 designation C): the model class and the account set, the same gate, a step-up for `fable` and a widening
-  '/api/overlord/model', '/api/overlord/account-set'];
+  '/api/overlord/model', '/api/overlord/account-set',
+  '/api/overlord/ladder', '/api/overlord/rung', '/api/overlord/pause', '/api/overlord/latches/:cause/clear'];
 
 /** The private-name list's doors (Overlord W2, private names B), one path registered twice, `PUT` and `GET`: hand-kept for the
  *  NAMES only, compared with the file's registrations in both directions below. Neither consults the box token or sits in
@@ -180,9 +188,15 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
  *  below; it consults no box token and does not sit in EXEMPT. */
 const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
 
+/** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
+ *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
+const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
+  '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
+  ...DECISION_MODEL_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -426,7 +440,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect([...new Set(regs.map((k) => k.slice(k.indexOf(' ') + 1)))].sort(),
       'overlordRoutes.ts and OVERLORD_OPERATOR_DOORS disagree — a door was registered, or a name listed, on one side only')
       .toEqual([...OVERLORD_OPERATOR_DOORS].sort());
-    expect(regs.length, 'the designation doors file registers its five routes (designation C adds the two Settings doors)').toBe(5);
+    expect(regs.length, 'the Overlord doors file registers nine routes (five designation and four ladder)').toBe(9);
     expect(lanesIn(OVERLORD_SRC), 'a designation door consults the box token — they are the operator\'s').toEqual([]);
     for (const key of regs) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     for (const door of OVERLORD_OPERATOR_DOORS) {
@@ -449,6 +463,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       .toEqual([...QUIZ_SESSION_DOORS].sort());
     for (const key of rest) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
     expect(GATE_SRC, 'the record door is a box-token lane in EXEMPT').toContain(`  ['POST /api/continuity/quiz-runs',`);
+  });
+
+  it('DECISION_MODEL_DOORS is exactly what the decision-model file registers, in both directions; none is a lane or EXEMPT (decision model B)', () => {
+    const keys = registrationsIn(DECISION_MODEL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'decisionModelRoutes.ts and DECISION_MODEL_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...DECISION_MODEL_DOORS].sort());
+    expect(lanesIn(DECISION_MODEL_SRC), 'a decision-model door consults the box token — all are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {
