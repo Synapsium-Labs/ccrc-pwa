@@ -3,7 +3,7 @@
 // `example-org/example-repo`); control characters are built with `String.fromCharCode`, never written raw.
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import ts from 'typescript';
+import { ts } from '../../server/test/scan/parse';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
