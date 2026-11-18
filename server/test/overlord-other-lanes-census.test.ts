@@ -266,6 +266,7 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/testbox/tools-sync': ['launch-profile', 'no body, box token or a session; it sends the box only the fleet host\'s own versions'],
   'POST /api/token/claim': ['launch-profile', 'a single-use code sent over the agent link; no session holds one'],
   'POST /api/reader-lab/probe/:nonce/:name': ['launch-profile', 'a counter that never reads its body; no caller identity'],
+  'POST /api/continuity/quiz-runs': ['launch-profile', 'box token only, from the operator\'s `ccrc quiz-record` through `ccrc-api`; a session holding the token could post a pending run, but only the operator\'s session-gated Confirm makes it count'],
   'POST /api/mail/:id/ack': ['stays-open', 'the Overlord acks its own deliveries: its timer mail reaches it as mail (question 5)'],
   'POST /api/linear/proxy/search': ['stays-open', 'a read sent as a POST (question 7)'],
   'POST /api/auth/login': ['operator-sign-in', 'the operator\'s sign-in door; no session identity rides it'],

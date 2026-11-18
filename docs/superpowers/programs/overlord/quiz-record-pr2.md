@@ -63,6 +63,10 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   a ten-question fixture, writes it as PR 1's `report` subcommand does (`canonicalJson` and a newline), posts it through the
   record door and reads the row back field for field; it also pins the kind and the field list equal. Dropping `inputs` from
   the door's field list reds both cases.
+- **A second absorption** (the coordinator's word, after the first CI on 761f1ff5e): other lanes A (#2996) landed a census
+  that places every write door in one class, and the record door had none. Main was merged once more and the door took a
+  `launch-profile` row in `overlord-other-lanes-census.test.ts`'s `NOT_REFUSED` (box token only; a session holding the token
+  could post a pending run, but only the operator's session-gated Confirm makes it count). The census reds without it.
 
 ## For PR 1's runbook
 
