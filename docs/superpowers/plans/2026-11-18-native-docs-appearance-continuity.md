@@ -106,6 +106,8 @@ export const READER_APPEARANCE_CONTRACTS: readonly number[]; // [1]
 export const READER_APPEARANCE_LABEL = 'Appearance follows ccrc Settings'; // the contract's label, ruled copy (ask 594)
 export type ReaderAppearanceOutcome =
   | { readonly kind: 'appearance'; readonly value: Appearance;
+      /** The library verdict's own list: each key it left out, and why. */
+      readonly refused: readonly { readonly key: string; readonly why: string }[];
       /** `null`: every colour applied. Otherwise the colour group was dropped (spec §7). */
       readonly dropped: null | { readonly why: 'colour-unreadable' | 'scheme-unreadable'; readonly token: string } }
   | { readonly kind: 'mode-only'; readonly why: 'contract-unsupported' };
@@ -123,7 +125,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 - [ ] **Step 1: Write the failing pure rows** in `reader-appearance.test.ts`:
   - `readerAppearanceOf` builds the raw contract (each value the token's computed text, trimmed) and returns `parseAppearance`'s verdict. It checks no range or grammar of its own:
   - `readerAppearanceOf`:
-    - with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`, its `label` is `READER_APPEARANCE_LABEL`, and `parseAppearance` of its value is `ok`;
+    - **every mapped token:** with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`. The keys of its value's `colour` equal `APPEARANCE_SLOTS.colour`, and the keys of its `skin` equal `APPEARANCE_SLOTS.skin`, both ways. Its `refused` list is empty, `dropped` is `null`, and its `label` is `READER_APPEARANCE_LABEL`;
     - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
     - an unreadable skin token keeps every colour, leaves that slot out, and has `dropped: null`;
     - contract `'none'` (a library without the contract) and contract `2` (one newer than ccrc knows) each give `{kind:'mode-only', why:'contract-unsupported'}`;
@@ -329,7 +331,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M12 | The lab profile passes `appearance` | Task 4 "the lab" |
 | AP-M13 | A hosted mount sends neither `appearance` nor `prefs.theme`, so the stored theme rules | Task 6 AP-3 (stale stored theme) |
 | AP-M14 | A dropped colour group sends `setPrefs({theme})` instead of an appearance with no colours | Task 4 "while open, hosted" |
-| AP-M15 | `readerAppearanceOf` leaves the skin group out | Task 2 "every mapped token" row; AP-1 skin assertions |
+| AP-M15 | `readerAppearanceOf` leaves the skin group out | Task 2 "every mapped token" row (its `skin` keys no longer equal `APPEARANCE_SLOTS.skin`); AP-1 skin assertions |
 | AP-M16 | `bridge.ts` never passes `fonts` | Task 4 "an outcome of kind `appearance`"; AP-1 face assertion |
 | AP-M17 | `sectionFamily` answers `sans` where `--family-section` equals `--family-mono` | Task 2 section-family row; AP-1 heading family under Instrument |
 | AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
