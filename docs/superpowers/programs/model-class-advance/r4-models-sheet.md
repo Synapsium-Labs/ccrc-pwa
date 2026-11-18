@@ -10,15 +10,24 @@ defined in the plan's "Deviations found" as D-8752 to D-8756, and cited here.
 - `POST /api/models/:lane`, body exactly `{action: 'hold' | 'release' | 'revert', class}`, registered from its own
   file, `server/src/laneModelsRoutes.ts` (L4, D-8754). Every decision is in `server/src/laneModelsAct.ts` (L1, pure).
   It is session-gated by the global gate (no EXEMPT row) and takes no box token. The box-token census reads its file as
-  a door family of its own (`MODELS_DOORS`, both directions). The route count moved 268 -> 269, after merging `main`,
-  whose renewal doors took it to 268.
+  a door family of its own (`MODELS_DOORS`, both directions). The route count moved 274 -> 275 (HTTP 271 -> 272, gated
+  173 -> 174, exempt 98, twenty-four route files), recounted from the merged list after the second merge of `main`, whose
+  renewal and decision-model doors took it to 274.
 - The answer to a done act carries the lane's `LaneModelsRead`, from a `show` started after the act: it never joins a
-  `show` already in flight (D-8756).
+  `show` already in flight (D-8756). It starts a show of its own rather than invalidating the in-flight map when an act
+  ends, which is simpler and holds on both arms (the local arm has no gate, so a joined show may predate the act's write).
+  On the agent arm a GET's show still running makes the agent's one models gate answer `busy`, so the after-act read falls
+  back to the files and the 200 carries no `advance`; the sheet reads the lane again after every act, and that read
+  recovers it (review 2523 F3).
 - One audit line per op asked, once the op has answered, naming the device the gate measured (`device:<label>`,
   D-5229), never a session id: `ccrc-server: models: <action> <lane> <class> by <actor> -> <outcome>` (D-8753).
 - The Models sheet (`pwa/src/accounts/ModelsSheet.tsx`), drawn in the `AccountSheet` shell, opens from a "Models" act
   in a Codex lane card's fold (D-8752), and reads through `useLaneModels`. `asLaneModelsRead` now reads `advance` (R3
-  left it to this wave). The sheet reads the lane again after every act, whatever its outcome, and says "nothing was
+  left it to this wave). An advance block the PWA cannot parse reads as `invalid` with the lane's classes kept, ahead of
+  R3b's server change; this is consistent with D-8693, which rules the server's reader (still `unreadable` for the whole
+  lane on such a block until R3b), and a same-build server never sends one (review 2523 F1). When an act's 200 arrives
+  the sheet supersedes every read of its hook still in flight, so a read issued before the act can never land between
+  the 200 and the read asked for after it (review 2523 F2). The sheet reads the lane again after every act, whatever its outcome, and says "nothing was
   changed" only where the verb never ran.
 - The hold behind a held lane lock: `server/test/lane-models-hold-race.test.ts`, the real `ccrc` and a real `flock`
   holder, skipped where `flock --version` fails, never passed.
