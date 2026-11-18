@@ -6,11 +6,13 @@
 // `refreshManual`. Every draft word is `entryView`'s through `ENTRY_BADGE_TEXT`, the one badge function the rows use
 // too (M4.T7). Share (spec 4.16) opens ShareSheet over shareTargetFor's answer and makes no request either; Export
 // (spec 4.17) follows Share on a leaf: exportStateFor decides, and ExportSheet builds and saves.
-// Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the compact head instead (the phone-header plan of 2026-11-03):
-// one row of back, where and what, Share and Export as icons, and Page details, which opens a panel holding the crumbs,
-// the truth line and the link actions (`CompactHead`). A leaf whose reader frame is ready on ccrc's bar draws the one bar
-// (`OneBar`, the library 1.1 take-up plan): back, the title opening that panel with worded actions, the reader's tools,
-// and the reading line; this phone-born bar remains on widening. Other pages retain the existing header: at a wider
+// Under DOCS_COMPACT_QUERY (600 CSS px) a leaf page draws the phone head instead, `PhoneHead`, one shell in two states at
+// the same place. The compact row (the phone-header plan of 2026-11-03): back, where and what, Share and Export as icons,
+// and Page details, which opens a panel holding the crumbs, the truth line and the link actions (`CompactControls`,
+// `CompactPanelTail`). Once the leaf's reader frame is ready on ccrc's bar, the one bar (`OneBarControls`, the library 1.1
+// take-up plan): back, the title opening that panel with worded actions, the reader's tools, and the reading line; this
+// phone-born bar remains on widening. While the tree is not `ok` the compact width draws back and the crumbs
+// (`CompactHead`). Other pages retain the existing header: at a wider
 // viewport, one row and one dense line (desk-nav Part B, D-8101), with back, crumbs and actions sharing `HeadRow`, action
 // words giving way first, and the dense truth line below. A desktop-born reader keeps its frame bar on narrowing.
 import {
@@ -369,7 +371,8 @@ export function freshnessChip(
 }
 
 /** The compact head's width (phone-header refinement (b)): under 600 CSS px, the compact window class. A leaf page draws one row there
- *  (`CompactHead`); a tablet, a desktop, and every other page at any width keep the header as it was. Spelled once, here:
+ *  (`PhoneHead`; `CompactHead` while the tree is not `ok`); a tablet, a desktop, and every other page at any width keep the
+ *  header as it was. Spelled once, here:
  *  docs.css keys the row's rules on its own classes, never on a width (docs-compact-css.test.ts holds that half; docs-compact-head.test.tsx
  *  holds the other, that DocsHead.tsx alone spells it under pwa/src). */
 export const DOCS_COMPACT_QUERY = '(max-width: 599.98px)';
