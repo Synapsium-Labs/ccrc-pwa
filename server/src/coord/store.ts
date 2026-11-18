@@ -11322,6 +11322,8 @@ export class CoordStore {
   remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
   openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
   edgeTargetCheck(slug: string, target: programmeFacts.EdgeTarget): { ok: true } | { ok: false; detail: string } { return programmeFacts.edgeTargetCheck(this.db, slug, target); }
+  openEdgesToMeasure(): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesToMeasure(this.db); }
+  settleEdge(id: number, settle: programmeFacts.EdgeSettle, now: number): { written: boolean } { return programmeFacts.settleEdge(this.db, id, settle, now); }
   sealForecast(seal: programmeFacts.NewSeal, now: number): { written: boolean } { return programmeFacts.sealForecast(this.db, seal, now); }
   scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean } { return programmeFacts.scoreForecast(this.db, id, outcome, now); }
   forecastsOf(q: { program: string } | { dueBy: number }): programmeFacts.SealedForecast[] { return programmeFacts.forecastsOf(this.db, q); }

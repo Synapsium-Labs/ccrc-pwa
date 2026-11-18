@@ -119,9 +119,10 @@ export const EDGE_EVIDENCE_MAX = 300;
  *  that a target nothing can read stops holding the forecast within a week. Its own fact, not any other week: it only
  *  shares the number (`token-shared.test.ts` names it in a row of its own). This block's one millisecond count. */
 export const EDGE_UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
-/** Whether the edge arm that clears edges has shipped. Remaining work B sets it true; until then the forecast counts no
- *  edge in `blocking` or health, and lists edges as "clearing not shipped" (review 2265, F1). */
-export const EDGE_CLEARING_SHIPPED = false as boolean;
+/** Whether the edge arm that clears edges has shipped. Remaining work B shipped it (the forecast lane's edge arm,
+ *  `forecastLane.ts`), so the forecast counts edges in `blocking` and health; while it was false it counted none and
+ *  listed edges as "clearing not shipped" (review 2265, F1). Typed `boolean` so a reader's other branch still compiles. */
+export const EDGE_CLEARING_SHIPPED = true as boolean;
 
 export type EdgeKind = 'needs-landed' | 'needs-decision';
 const EDGE_KIND_MAP: Record<EdgeKind, true> = { 'needs-landed': true, 'needs-decision': true };
@@ -151,6 +152,7 @@ export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> =
 export type EdgeState = 'open' | 'met' | 'target-ended' | 'target-unmeasurable';
 const EDGE_STATE_MAP: Record<EdgeState, true> = { open: true, met: true, 'target-ended': true, 'target-unmeasurable': true };
 export const EDGE_STATES = Object.keys(EDGE_STATE_MAP) as readonly EdgeState[];
+export const isEdgeState = (w: string): w is EdgeState => Object.prototype.hasOwnProperty.call(EDGE_STATE_MAP, w);
 
 /** Why the store refused a statement whose body was good: it would take the programme past `OPEN_EDGES_PER_PROGRAMME_MAX`
  *  open edges. It rides the door's 400 `detail`, never a `refused` or `reject.code`. */

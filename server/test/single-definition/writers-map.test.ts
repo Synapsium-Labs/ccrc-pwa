@@ -421,9 +421,9 @@ describe(TABLES_PIN, () => {
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the
-      // remaining-work door. Remaining work B adds `settleEdge` to `programme_edges` (its state columns) alone.
+      // remaining-work door; remaining work B's `settleEdge` writes `programme_edges`' state columns alone.
       programme_remaining: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
-      programme_edges: ['server/src/coord/programmeFactsStore.ts#insertRemaining'],
+      programme_edges: ['insertRemaining', 'settleEdge'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
       // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
       // score arm's outcome write, each reached only from its arm of the forecast lane.
       programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
@@ -566,6 +566,22 @@ describe(TABLES_PIN, () => {
     expect(remainingCallSites(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
       'server/src/coord/programmeRemainingRoute.ts#registerProgrammeRemainingRoute @ POST /api/coord/programmes/:slug/remaining',
       `${S}insertRemaining`,
+    ]);
+  });
+  // Remaining work B (plan w2-remaining-work.md Task 5): an edge's state columns have one writer, `settleEdge`, reached only
+  // from the forecast lane's edge arm, and it writes only a row still open. No coordinator path clears an edge.
+  it('settleEdge is called exactly once outside the store, inside the forecast lane', () => {
+    expect(callSitesOf('settleEdge')(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      'server/src/coord/forecastLane.ts#runForecastLane',
+      `${S}settleEdge`,
+    ]);
+  });
+  it('settleEdge\'s UPDATEs set the state columns alone, and only on a row still open', () => {
+    const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
+    const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_edges\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
+    expect(updates.map((m) => [m[1], m[2]])).toEqual([
+      ['state = ?, endedAt = ?, evidence = ?', "id = ? AND state = 'open'"],
+      ['unmeasuredSince = ?', "id = ? AND state = 'open' AND unmeasuredSince IS NOT ?"],
     ]);
   });
   // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): each writer is reached only from its

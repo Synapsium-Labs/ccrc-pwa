@@ -118,15 +118,16 @@ every recommendation unless the coordinator rules otherwise.
      | Edge kind | Target | Measured by (Table 5.5a) |
      |---|---|---|
      | `needs-landed` | `{ predicate: 'run-closed', runId }`, a run of another programme | `run-closed`: the run closed and merged |
-     | `needs-landed` | `{ predicate: 'pr-merged', runId, pr }`, a pull request that run's recorded lineage names | `pr-merged`: "a pull request in a linked run's record merged" |
+     | `needs-landed` | `{ predicate: 'pr-merged', runId, pr }`, a run that exists, of any programme, and a pull request number | `pr-merged`: the run's own close record (`runs.closePr`) names that pull request, merged |
      | `needs-decision` | `{ predicate: 'operator-confirms', itemId }`, an open operator item of this programme | `operator-confirms`: the operator answered the item |
 
-   - **Every target is tied to a row of this tree** (review 2265, F5 and F6). A `pr-merged` target names the run whose
-     recorded lineage (`runs.prLineage`, folded from `.prhistory` at close; `server/src/coord/store.ts#PrLineageEntry`
-     carries `pr`) lists that pull request, so the target is Table 5.5a's own word and a mistyped number is refused at
-     the door, not left as a block nothing can measure. The lineage records no repository, so the target carries none:
-     the run's project names it. An `operator-confirms` item must belong to this programme (`operator_items.program`),
-     so a programme cannot take another programme's block onto its own entry.
+   - **Every target is tied to a row of this tree** (review 2265, F5 and F6; revised by review 2381 N1, ruled in remaining
+     work B). A `pr-merged` target names a run that exists, and admission asks nothing more: the run's recorded lineage
+     cannot say whose a pull request is, so the edge clears only through the run's own close record (`runs.closePr`)
+     naming that pull request, merged, read by done tests' reader. A number the run never closed with is answered
+     `unmeasurable` (`not-this-runs-pr` or `lineage-unattributed`) and ends the block as `target-unmeasurable`. The run
+     names the repository, so the target carries none. An `operator-confirms` item must belong to this programme
+     (`operator_items.program`), so a programme cannot take another programme's block onto its own entry.
 
    - PR A writes these three words in `shared/programmeFacts.ts` as `EDGE_PREDICATES`, with a comment naming done tests
      as the owner to come. PR B replaces that list with a type-checked pick from done tests' vocabulary, in a move
@@ -290,7 +291,7 @@ Measured on `main` at `9cf263d44` (2026-11-16).
 2. **Append-only means append-only.** No path updates or deletes a statement, and no coordinator path clears an edge.
 3. **An edge is never cleared on a guess.** Only a measured `met` clears it; unmeasured stays open and says so, and
    after 7 days stops blocking as `target-unmeasurable`, never as met.
-4. **Every target is tied to a row.** A `pr-merged` target names a run whose lineage lists the pull request, a
+4. **Every target is tied to a row.** A `pr-merged` target names a run that exists (review 2381 N1), a
    `run-closed` target another programme's run, an `operator-confirms` target an open item of this programme.
 5. **Every census site of a new lane source moves in PR A**, and each count word is re-derived after merging `main`.
 
@@ -343,7 +344,7 @@ export type EdgePredicate = keyof typeof EDGE_PREDICATE_MAP;
 export const EDGE_PREDICATES = Object.keys(EDGE_PREDICATE_MAP) as EdgePredicate[];
 export type EdgeTarget =
   | { readonly predicate: 'run-closed'; readonly runId: number }
-  | { readonly predicate: 'pr-merged'; readonly runId: number; readonly pr: number }   // a PR that run's lineage lists
+  | { readonly predicate: 'pr-merged'; readonly runId: number; readonly pr: number }   // that run's own PR
   | { readonly predicate: 'operator-confirms'; readonly itemId: number };
 const EDGE_STATE_MAP = { open: true, met: true, 'target-ended': true, 'target-unmeasurable': true } as const;
 export type EdgeState = keyof typeof EDGE_STATE_MAP;
@@ -527,7 +528,7 @@ F13):
 | 6 | attribution (`byUuid`) | the verdict's own word |
 | 7 | `claimsProgramme(byId, slug)` | 403 `not-your-programme`, or 503 `run-unreadable` on a throw |
 | 8 | a `runId` belongs to this programme | 403 `not-your-programme` |
-| 9 | `edgeTargetCheck` for each edge: a `run-closed` run of another programme; a `pr-merged` pull request the named run's lineage lists; an open `operator-confirms` item whose `program` is this slug | 400 `bad-request`, naming the edge |
+| 9 | `edgeTargetCheck` for each edge: a `run-closed` run of another programme; a `pr-merged` run that exists (review 2381 N1); an open `operator-confirms` item whose `program` is this slug | 400 `bad-request`, naming the edge |
 | 10 | `insertRemaining` | 400 `bad-request` on `too-many-open-edges`; 503 `run-unreadable` on a throw |
 | 11 | none | 200 `RemainingAnswer` |
 
@@ -647,8 +648,9 @@ the numbers.
   does not list (question 6).
 - **`edge-target-unmeasurable`**: an edge unmeasured for 7 days moves to a fourth state, `target-unmeasurable`, set by
   the server, which stops it blocking (question 3, ruled).
-- **`edge-targets-tied-to-rows`**: a `pr-merged` target names the run whose lineage lists the pull request, and an
-  `operator-confirms` item must be the programme's own (question 2; review 2265, F5 and F6).
+- **`edge-targets-tied-to-rows`**: a `pr-merged` target names a run that exists, and clears only through that run's own
+  close record naming the pull request, merged (review 2381 N1); an `operator-confirms` item must be the programme's own
+  (question 2; review 2265, F5 and F6).
 - **`edge-clearing-shipped-switch`**: a constant, `EDGE_CLEARING_SHIPPED`, tells forecasts B whether edges can clear
   yet, so no edge blocks before the arm that clears it exists (question 5; review 2265, F1).
 - **`open-edges-capped`**: at most 20 open edges per programme (review 2265, F14).

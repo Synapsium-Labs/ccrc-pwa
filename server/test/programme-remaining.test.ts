@@ -4,7 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { edgeTargetVerdict, remainingBodyOf } from '../src/coord/programmeRemaining.js';
 import {
-  EDGE_KIND_OF_PREDICATE, EDGE_KINDS, EDGE_PREDICATES, EDGE_STATES, EDGE_WHY_MAX, EDGES_PER_STATEMENT_MAX, REMAINING_REASON_MAX,
+  EDGE_CLEARING_SHIPPED, EDGE_KIND_OF_PREDICATE, EDGE_KINDS, EDGE_PREDICATES, EDGE_STATES, EDGE_WHY_MAX, EDGES_PER_STATEMENT_MAX, REMAINING_REASON_MAX,
   REMAINING_WAVES_MAX, edgeTargetKey, isEdgePredicate, parseEdgeTarget, type EdgeKind, type EdgePredicate,
 } from '../../shared/programmeFacts.js';
 import {
@@ -22,6 +22,10 @@ describe('the remaining-work vocabulary', () => {
     expect(Object.keys(cover).sort()).toEqual([...EDGE_PREDICATES].sort());
     for (const k of Object.values(cover)) expect(EDGE_KINDS).toContain(k);
     expect(EDGE_STATES).toEqual(['open', 'met', 'target-ended', 'target-unmeasurable']);
+  });
+
+  it('the edge arm has shipped, so EDGE_CLEARING_SHIPPED is true (review 2265 F1; remaining work B)', () => {
+    expect(EDGE_CLEARING_SHIPPED).toBe(true);
   });
 
   it('CHARACTERIZATION (remaining work B\'s move): the edge predicates, their order, their kinds and their guard', () => {
