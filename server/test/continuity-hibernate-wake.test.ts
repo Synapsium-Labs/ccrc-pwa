@@ -18,7 +18,7 @@ const COORD = 'lane-a-project-a';
 const U1 = '11111111-1111-4111-8111-111111111111';
 const WINDOW = 1_000_000;
 const HALF = hardCapTokens(WINDOW) * RESUMED_LONG_FRACTION;
-const usage = (ctxTokens: number): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow: WINDOW, cost: null, cacheExpiresAt: null, stale: false,
 } });
 

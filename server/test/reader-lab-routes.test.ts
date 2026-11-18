@@ -6,7 +6,7 @@
 // preflight to the probe is never approved.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
@@ -21,8 +21,26 @@ import {
 import { READER_LAB_PROBE_BODY_MAX, labOwnerOf } from '../src/readerLab/routes.js';
 import { READER_LAB_RUN_HITS_MAX, READER_LAB_RUN_TTL_MS } from '../src/readerLab/runs.js';
 import { testDeps } from './helpers.js';
+import { walkSrc } from './rings/walkSrc.js';
+import { ts } from './scan/parse.js';
 import { callsIn, parsedFile, sourceOfSymbol, symbolOf } from './scan/symbols.js';
 import { mkTmp } from './tmpHelpers.js';
+
+/** What the nonce case below feeds `randomBytes(16)`: the hoisted state of its `node:crypto` mock. A request that asks for
+ *  16 bytes while `queue` holds some is handed the next one, and every other call is the real function. */
+const forced = vi.hoisted(() => ({ queue: [] as Buffer[], handed: 0 }));
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  const real = actual.randomBytes as (...a: unknown[]) => Buffer;
+  const randomBytes = ((size: number, ...rest: unknown[]): Buffer => {
+    if (size === 16 && forced.queue.length > 0) {
+      forced.handed += 1;
+      return forced.queue.shift()!;
+    }
+    return real(size, ...rest);
+  }) as typeof actual.randomBytes;
+  return { ...actual, randomBytes };
+});
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 /** A cheap scrypt line verifies through the identical code path (auth-gate.test.ts' FAST_PARAMS). */
@@ -32,36 +50,187 @@ const PASSPHRASE = 'correct horse battery staple';
 const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
 const UNKNOWN = 'ZZZZZZZZZZZZZZZZZZZZZZ';
 
-/** A body read in the door's source: the word `body`, `raw` or `stream` outside a comment (`bodyLimit` is not the word
- *  `body`). KNOWN MISS: a deliberately computed key (`req['bo' + 'dy']`) is not seen; hiding a read takes that rewrite. */
-const readsBody = (s: string): boolean => /\b(body|raw|stream)\b/.test(
-  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1'));
+/** The source with its comments blanked, so a sentence about a body is never a read of one. */
+const stripComments = (s: string): string =>
+  s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
 
-/** Every piece of `file`'s source a probe request runs through, keyed on the parser (scan/symbols.ts), not on a line of
- *  text: the counter hook, each probe registration (a call `app.<verb>` in `registerReaderLabRoutes` whose first argument
- *  is the probe route, with its options and so its errorHandler) and, transitively, every function symbol of the file any
- *  of those names (a handler or errorHandler pulled out into a named const, `probeAnswer`, any helper). */
+/** Words that read the request's body or its connection when they appear in code (`bodyLimit` is not the word `body`). */
+const READ_WORDS = /\b(body|raw|stream|socket)\b/;
+/** Members that read it too, named as a member (`req.file()`), a literal key (`req['parts']`) or a destructured key: the
+ *  multipart readers, which consume the stream as surely as `body` does. */
+const READ_MEMBERS: ReadonlySet<string> = new Set(['file', 'files', 'parts', 'saveRequestFiles']);
+
+/** A read of the request in one piece of the door's source: the words above outside a comment; a multipart reader; or any
+ *  computed key (`req['bo' + 'dy']`, `req[k]`, `const { [k]: v } = req`), because a key built at run time can be any
+ *  member, the body included. A literal key (`req.headers['cookie']`) is a member named as written and is judged so.
+ *  KNOWN WIDTH: a read the source does not name (code in a package, a member reached through a type, `eval`), and a
+ *  handler reached by `import()` or `require()`, are not seen; hiding a read from this scan takes one of those. */
+function readsRequest(text: string): boolean {
+  if (READ_WORDS.test(stripComments(text))) return true;
+  const sf = ts.createSourceFile('piece.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  let found = false;
+  const keyRead = (key: ts.Node | undefined): void => {
+    if (key === undefined) return;
+    if (ts.isComputedPropertyName(key)) found = true;
+    else if ((ts.isIdentifier(key) || ts.isStringLiteralLike(key)) && READ_MEMBERS.has(key.text)) found = true;
+  };
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isPropertyAccessExpression(n)) keyRead(n.name);
+    else if (ts.isElementAccessExpression(n)) {
+      const k = n.argumentExpression;
+      if (ts.isStringLiteralLike(k)) keyRead(k);
+      else if (!ts.isNumericLiteral(k)) found = true;
+    } else if (ts.isBindingElement(n)) keyRead(n.propertyName ?? n.name);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/** One module of the door's graph, read for the names it declares at the top level, what it imports and what it re-exports. */
+interface ModuleFacts {
+  /** Each top-level name to the whole statement that declares it, whatever the shape of its initialiser (`as`,
+   *  `satisfies`, a call, an object whose members are handlers). */
+  decls: Map<string, string>;
+  defaultText: string | null;
+  imports: Map<string, { from: string; name: string }>;
+  /** `export { a as b } from './m.js'` by its exported name `b`; and the modules of an `export * from`. */
+  reexports: Map<string, { from: string; name: string }>;
+  stars: string[];
+}
+
+function moduleFacts(file: string): ModuleFacts {
+  const text = readFileSync(file, 'utf8');
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const facts: ModuleFacts = { decls: new Map(), defaultText: null, imports: new Map(), reexports: new Map(), stars: [] };
+  const names = (b: ts.BindingName): string[] => (ts.isIdentifier(b) ? [b.text]
+    : b.elements.flatMap((e) => (ts.isOmittedExpression(e) ? [] : names(e.name))));
+  for (const st of sf.statements) {
+    const isDefault = ts.canHaveModifiers(st) && (ts.getModifiers(st) ?? []).some((m) => m.kind === ts.SyntaxKind.DefaultKeyword);
+    if ((ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) && st.name !== undefined) {
+      facts.decls.set(st.name.text, st.getText(sf));
+      if (isDefault) facts.defaultText = st.getText(sf);
+    } else if (ts.isFunctionDeclaration(st) || ts.isClassDeclaration(st)) {
+      if (isDefault) facts.defaultText = st.getText(sf);
+    } else if (ts.isVariableStatement(st)) {
+      for (const d of st.declarationList.declarations) for (const n of names(d.name)) facts.decls.set(n, st.getText(sf));
+    } else if (ts.isExportAssignment(st)) {
+      facts.defaultText = st.getText(sf);
+    } else if (ts.isImportDeclaration(st) && ts.isStringLiteral(st.moduleSpecifier) && st.importClause?.isTypeOnly !== true) {
+      const from = st.moduleSpecifier.text;
+      const c = st.importClause;
+      if (c?.name !== undefined) facts.imports.set(c.name.text, { from, name: 'default' });
+      if (c?.namedBindings !== undefined && ts.isNamespaceImport(c.namedBindings)) facts.imports.set(c.namedBindings.name.text, { from, name: '*' });
+      else if (c?.namedBindings !== undefined) {
+        for (const e of c.namedBindings.elements) if (!e.isTypeOnly) facts.imports.set(e.name.text, { from, name: (e.propertyName ?? e.name).text });
+      }
+    } else if (ts.isExportDeclaration(st) && st.moduleSpecifier !== undefined && ts.isStringLiteral(st.moduleSpecifier)) {
+      const from = st.moduleSpecifier.text;
+      if (st.exportClause === undefined) facts.stars.push(from);
+      else if (ts.isNamedExports(st.exportClause)) {
+        for (const e of st.exportClause.elements) facts.reexports.set(e.name.text, { from, name: (e.propertyName ?? e.name).text });
+      }
+    }
+  }
+  return facts;
+}
+
+/** The file a relative specifier names (`./x.js` is `x.ts`, as the server's own imports spell it), or null for a package,
+ *  a `node:` module or a file that is not there. */
+function resolveModule(from: string, specifier: string): string | null {
+  if (!specifier.startsWith('.')) return null;
+  const base = path.resolve(path.dirname(from), specifier);
+  for (const c of [base.replace(/\.js$/, '.ts'), `${base}.ts`, path.join(base, 'index.ts')]) if (existsSync(c)) return c;
+  return null;
+}
+
+/** The identifiers in a piece of source, outside strings and comments. */
+function identifiersIn(text: string): Set<string> {
+  const sf = ts.createSourceFile('piece.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const out = new Set<string>();
+  const visit = (n: ts.Node): void => {
+    if (ts.isIdentifier(n)) out.add(n.text);
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** Every piece of `file`'s source (and of the modules it imports) a probe request runs through, keyed on the parser, not
+ *  on a line of text: the counter hook, each probe registration (a call `app.<verb>` in `registerReaderLabRoutes` whose
+ *  first argument is the probe route, with its options and so its errorHandler) and, transitively, every top-level
+ *  declaration any of those names, whatever shape it is bound in (a function, an arrow, a call's result, `as` or
+ *  `satisfies`, an object that holds the handler as a member), in the file or in a relative module it imports by name,
+ *  as a namespace or through a re-export. A declaration is the whole statement, so an object's sibling members are scanned
+ *  with the handler: the scan reads more than it must, never less. */
 function probePathSources(file: string): { verbs: string[]; pieces: { what: string; text: string }[] } {
   const parsed = parsedFile(file);
   const regs = callsIn(symbolOf(file, 'registerReaderLabRoutes'))
     .filter((c) => /^app\.\w+$/.test(c.callee) && c.args[0]?.kind === 'string' && c.args[0].text === READER_LAB_PROBE_ROUTE);
-  const pieces = [{ what: 'installReaderLabCounter', text: sourceOfSymbol(file, 'installReaderLabCounter') },
-    ...regs.map((c) => ({ what: c.callee, text: parsed.text.slice(c.start, c.end) }))];
-  const seen = new Set<string>(['installReaderLabCounter', 'registerReaderLabRoutes']);
-  for (let i = 0; i < pieces.length; i += 1) {
-    for (const id of new Set(pieces[i]!.text.match(/[A-Za-z_$][\w$]*/g) ?? [])) {
-      for (const sym of parsed.symbols) {
-        if (seen.has(sym.name) || (sym.name !== id && !sym.name.endsWith(`.${id}`))) continue;
-        seen.add(sym.name);
-        pieces.push({ what: sym.name, text: parsed.text.slice(sym.start, sym.end) });
-      }
+  const root = parsed.path;
+  const work: { what: string; text: string; file: string }[] = [
+    { what: 'installReaderLabCounter', text: sourceOfSymbol(file, 'installReaderLabCounter'), file: root },
+    ...regs.map((c) => ({ what: c.callee, text: parsed.text.slice(c.start, c.end), file: root })),
+  ];
+  const facts = new Map<string, ModuleFacts>();
+  const factsOf = (f: string): ModuleFacts => {
+    let m = facts.get(f);
+    if (m === undefined) facts.set(f, (m = moduleFacts(f)));
+    return m;
+  };
+  const seen = new Set<string>([`${root}#installReaderLabCounter`, `${root}#registerReaderLabRoutes`]);
+  const take = (f: string, name: string, text: string): void => {
+    if (!seen.has(`${f}#${name}`)) {
+      seen.add(`${f}#${name}`);
+      work.push({ what: name, text, file: f });
+    }
+  };
+  /** `name` as module `f` exports it: a declaration of its own, or one it re-exports from another module. */
+  const exported = (f: string, name: string, depth = 0): void => {
+    const m = factsOf(f);
+    const own = name === 'default' ? m.defaultText : m.decls.get(name);
+    if (own !== undefined && own !== null) return take(f, name, own);
+    if (depth > 8) return;
+    const re = m.reexports.get(name);
+    const via = re === undefined ? null : resolveModule(f, re.from);
+    if (re !== undefined && via !== null) exported(via, re.name, depth + 1);
+    for (const star of m.stars) {
+      const target = resolveModule(f, star);
+      if (target !== null) exported(target, name, depth + 1);
+    }
+  };
+  for (let i = 0; i < work.length; i += 1) {
+    const here = work[i]!;
+    const m = factsOf(here.file);
+    const ids = identifiersIn(here.text);
+    for (const id of ids) {
+      const own = m.decls.get(id);
+      if (own !== undefined) take(here.file, id, own);
+      const imp = m.imports.get(id);
+      const target = imp === undefined ? null : resolveModule(here.file, imp.from);
+      if (imp === undefined || target === null) continue;
+      if (imp.name === '*') for (const other of ids) exported(target, other);
+      else exported(target, imp.name);
     }
   }
-  return { verbs: regs.map((c) => c.callee), pieces };
+  return { verbs: regs.map((c) => c.callee), pieces: work.map(({ what, text }) => ({ what, text })) };
+}
+
+/** The calls in `file` that register a route at the lab's paths: a call whose last name is a route verb (or `route`,
+ *  or `register` for a plugin with a prefix) and whose arguments name `/api/reader-lab` or a path the shared vocabulary
+ *  builds. Each is `<verb> <first argument>`. */
+function labRegistrationsIn(file: string): string[] {
+  const VERB = /^(get|post|put|patch|delete|head|options|all|route|register)$/;
+  const LAB_PATH = /\/api\/reader-lab|\bREADER_LAB_(?:RUNS_PATH|PROBE_ROUTE)\b|\breaderLab(?:Run|Close|Probe)\w*/;
+  return parsedFile(file).calls
+    .filter((c) => c.name !== null && VERB.test(c.name) && c.args.some((a) => LAB_PATH.test(a.text)))
+    .map((c) => `${c.name} ${c.args[0]?.text ?? ''}`);
 }
 
 let app: FastifyInstance | undefined;
 afterEach(async () => {
+  forced.queue = [];
   vi.useRealTimers();
   vi.restoreAllMocks();
   if (app) await app.close();
@@ -227,16 +396,21 @@ describe('the reader lab door (reader lab plan, Task 3)', () => {
     expect(counted(await readRun(a, nonce)).probes['cookie-xhr'].hits).toBe(2);
   });
 
-  it('the probe path never reads a body: no body or raw-stream access in the counter, either registration or any function they name (refinement (f))', () => {
+  it('the probe path never reads a body: no body, raw-stream, socket or multipart access in the counter, either registration or any declaration they name (refinement (f))', () => {
     const { verbs, pieces } = probePathSources('server/src/readerLab/routes.ts');
     expect(verbs, 'both probe registrations are found, and only they').toEqual(['app.get', 'app.post']);
     expect(pieces.map((p) => p.what), 'the counter, both registrations and the probe answer are scanned')
       .toEqual(expect.arrayContaining(['installReaderLabCounter', 'app.get', 'app.post', 'probeAnswer']));
-    for (const p of pieces) expect(readsBody(p.text), `${p.what}: the probe path reads the request body`).toBe(false);
+    expect(pieces.map((p) => p.what), 'the helpers the counter imports are scanned too')
+      .toEqual(expect.arrayContaining(['parseCookies', 'labSiteClass', 'labOriginClass']));
+    for (const p of pieces) expect(readsRequest(p.text), `${p.what}: the probe path reads the request`).toBe(false);
     // CONTROL, through the same scan over fixture files shaped like routes.ts: each planted read is found, through a
-    // named handler, a named errorHandler, a helper, a destructured `raw` and the counter; the clean fixture has none.
+    // named handler, a named errorHandler, a helper, a destructured `raw`, the counter, a handler bound through `as` or
+    // `satisfies`, wrapped in a call, held as an object member or imported (by name, as a namespace, through a barrel),
+    // and a read of the socket, of a multipart reader or by a computed key; the clean fixtures have none.
     const dir = mkTmp('ccrc-reader-lab-scan-');
-    const fixture = (name: string, post: string, counter = '', top = ''): string => {
+    const fixture = (name: string, post: string, counter = '', top = '', siblings: Record<string, string> = {}): string => {
+      for (const [f, text] of Object.entries(siblings)) writeFileSync(path.join(dir, f), text);
       const file = path.join(dir, `${name}.ts`);
       writeFileSync(file, `${top}
 const probeAnswer = (reply: any) => reply.code(204).send();
@@ -251,7 +425,8 @@ export function registerReaderLabRoutes(app: any): void {
 `);
       return file;
     };
-    const readIn = (file: string): string[] => probePathSources(file).pieces.filter((p) => readsBody(p.text)).map((p) => p.what);
+    const readIn = (file: string): string[] => probePathSources(file).pieces.filter((p) => readsRequest(p.text)).map((p) => p.what);
+    const handlerSource = (read: string): string => `export const probeHandler = async (req: any, reply: any) => { ${read} return reply.code(204).send(); };\n`;
     expect(readIn(fixture('clean', '{ bodyLimit: 1024, errorHandler: (_e: any, _r: any, reply: any) => probeAnswer(reply) }, async (_req: any, reply: any) => probeAnswer(reply)')))
       .toEqual([]);
     expect(readIn(fixture('named', '{ bodyLimit: 1024 }, probeHandler', '',
@@ -263,6 +438,68 @@ export function registerReaderLabRoutes(app: any): void {
     expect(readIn(fixture('raw', "{}, async (req: any, reply: any) => { const { raw } = req; raw.on('data', () => {}); return probeAnswer(reply); }")))
       .toEqual(['app.post']);
     expect(readIn(fixture('counter', '{}, async (_req: any, reply: any) => probeAnswer(reply)', 'void req.body;'))).toEqual(['installReaderLabCounter']);
+    // A handler bound in a shape the symbol table does not key.
+    expect(readIn(fixture('as', '{}, probeHandler', '',
+      'const probeHandler = (async (req: any, reply: any) => { void req.body; return reply; }) as unknown;'))).toEqual(['probeHandler']);
+    expect(readIn(fixture('satisfies', '{}, probeHandler', '',
+      'const probeHandler = (async (req: any, reply: any) => { void req.body; return reply; }) satisfies object;'))).toEqual(['probeHandler']);
+    expect(readIn(fixture('wrapped', '{}, probeHandler', '',
+      'const wrap = (f: any) => f;\nconst probeHandler = wrap(async (req: any, reply: any) => { void req.body; return reply; });'))).toEqual(['probeHandler']);
+    expect(readIn(fixture('member', '{}, handlers.post', '',
+      'const handlers = { post: async (req: any, reply: any) => { void req.body; return reply; } };'))).toEqual(['handlers']);
+    expect(readIn(fixture('imported', '{}, probeHandler', '', "import { probeHandler } from './imported-handler.js';",
+      { 'imported-handler.ts': handlerSource('void req.body;') }))).toEqual(['probeHandler']);
+    expect(readIn(fixture('namespace', '{}, h.probeHandler', '', "import * as h from './namespace-handler.js';",
+      { 'namespace-handler.ts': handlerSource('void req.body;') }))).toEqual(['probeHandler']);
+    expect(readIn(fixture('reexport', '{}, probeHandler', '', "import { probeHandler } from './barrel.js';",
+      { 'barrel.ts': "export { probeHandler } from './barrel-impl.js';\n", 'barrel-impl.ts': handlerSource('void req.body;') }))).toEqual(['probeHandler']);
+    // What the connection and the multipart readers consume.
+    expect(readIn(fixture('socket', '{}, async (req: any, reply: any) => { req.socket.destroy(); return probeAnswer(reply); }'))).toEqual(['app.post']);
+    expect(readIn(fixture('socket-counter', '{}, async (_req: any, reply: any) => probeAnswer(reply)', 'void req.socket;'))).toEqual(['installReaderLabCounter']);
+    expect(readIn(fixture('file', '{}, async (req: any, reply: any) => { await req.file(); return probeAnswer(reply); }'))).toEqual(['app.post']);
+    expect(readIn(fixture('parts', '{}, async (req: any, reply: any) => { for await (const p of req.parts()) void p; return probeAnswer(reply); }')))
+      .toEqual(['app.post']);
+    expect(readIn(fixture('parts-key', '{}, async (req: any, reply: any) => { void req["parts"]; return probeAnswer(reply); }'))).toEqual(['app.post']);
+    // A key built at run time, which no word test sees.
+    expect(readIn(fixture('computed', "{}, async (req: any, reply: any) => { void req['bo' + 'dy']; return probeAnswer(reply); }"))).toEqual(['app.post']);
+    expect(readIn(fixture('computed-var', "{}, async (req: any, reply: any) => { const k = ['bo', 'dy'].join(''); void req[k]; return probeAnswer(reply); }")))
+      .toEqual(['app.post']);
+    expect(readIn(fixture('computed-pattern', "{}, async (req: any, reply: any) => { const k = ['bo', 'dy'].join(''); const { [k]: v } = req; void v; return probeAnswer(reply); }")))
+      .toEqual(['app.post']);
+    // CONTROL of the controls: the same shapes with nothing read are clean, and a literal key is not a computed one.
+    expect(readIn(fixture('clean-as', '{}, probeHandler', '',
+      'const probeHandler = (async (_req: any, reply: any) => probeAnswer(reply)) as unknown;'))).toEqual([]);
+    expect(readIn(fixture('clean-imported', '{}, probeHandler', '', "import { probeHandler } from './clean-imported-handler.js';",
+      { 'clean-imported-handler.ts': handlerSource('void 1;') }))).toEqual([]);
+    expect(readIn(fixture('clean-keys', "{}, async (req: any, reply: any) => { void req.headers['cookie']; void req.params['nonce']; void [1][0]; return probeAnswer(reply); }",
+      "void req.headers['sec-fetch-site'];"))).toEqual([]);
+  });
+
+  it('every /api/reader-lab route registration under server/src is in readerLab/routes.ts, and those are the five doors (M10.8)', () => {
+    const files = walkSrc({ roots: ['server/src'], min: 200 });
+    const found = files.flatMap((f) => labRegistrationsIn(f).map((r) => ({ file: f, reg: r })));
+    expect([...new Set(found.map((r) => r.file))], 'a lab route is registered outside the door\'s file').toEqual(['server/src/readerLab/routes.ts']);
+    expect(found.map((r) => r.reg).sort(), 'the door\'s registrations are the five').toEqual(
+      ['get /api/reader-lab/probe/:nonce/:name', 'get /api/reader-lab/runs/:nonce', 'post /api/reader-lab/probe/:nonce/:name',
+        'post /api/reader-lab/runs', 'post /api/reader-lab/runs/:nonce/close']);
+    // CONTROL: the same scan over planted files finds a registration moved to another file, one spelled through the
+    // shared constants, a plugin registered under the lab prefix and a route option; it passes a file that only names the path.
+    const dir = mkTmp('ccrc-reader-lab-place-');
+    const plant = (name: string, body: string): string => {
+      const file = path.join(dir, `${name}.ts`);
+      writeFileSync(file, body);
+      return file;
+    };
+    expect(labRegistrationsIn(plant('moved', "export const r = (app: any) => { app.get('/api/reader-lab/runs/:nonce', async () => ({})); };")))
+      .toEqual(['get /api/reader-lab/runs/:nonce']);
+    expect(labRegistrationsIn(plant('const', 'export const r = (app: any) => { app.post(READER_LAB_RUNS_PATH, async () => ({})); };')))
+      .toEqual(['post READER_LAB_RUNS_PATH']);
+    expect(labRegistrationsIn(plant('route', "export const r = (app: any) => { app.route({ method: 'GET', url: '/api/reader-lab/x', handler: async () => ({}) }); };")))
+      .toHaveLength(1);
+    expect(labRegistrationsIn(plant('prefix', "export const r = (app: any, plugin: any) => { app.register(plugin, { prefix: '/api/reader-lab' }); };")))
+      .toHaveLength(1);
+    expect(labRegistrationsIn(plant('clean', "export const note = '/api/reader-lab/runs';\nexport const t = new Map([['GET /api/reader-lab/probe/:nonce/:name', 'a row']]);\nexport const r = (app: any) => { app.get('/api/other', async () => ({})); };")))
+      .toEqual([]);
   });
 
   it('a nonce is 128 bits from node:crypto: minted by randomBytes(16), imported from node:crypto, with no Math.random in the door (M10.2)', () => {
@@ -279,24 +516,67 @@ export function registerReaderLabRoutes(app: any): void {
     expect(parsed.calls.filter((c) => /^Math\s*\.\s*random$/.test(c.callee)).length, 'the door draws no randomness from Math').toBe(0);
   });
 
+  it('the minted value is what the answer carries and what the store opens the run under: 16 bytes from randomBytes, base64url, minted once (M10.2)', async () => {
+    const a = await openApp(false);
+    const first = Buffer.alloc(16, 7);
+    const second = Buffer.alloc(16, 9);
+    // `randomBytes(16)` is handed these two (see the mock at the top): a second mint, or a nonce from anywhere else, is not
+    // `first`, and the run the store holds is the one the answer names.
+    forced.queue = [first, second];
+    forced.handed = 0;
+    const nonce = await openRun(a);
+    expect(nonce, 'the answer carries the bytes the first mint drew').toBe(first.toString('base64url'));
+    expect([forced.handed, forced.queue.length], 'one mint per open').toEqual([1, 1]);
+    expect(counted(await readRun(a, nonce)).counted, 'the store opened the run under that same value').toBe(0);
+    expect(await readRun(a, second.toString('base64url')), 'and under no other').toEqual({ ok: false, error: 'unknown-run' });
+    forced.queue = [second];
+    expect(await openRun(a)).toBe(second.toString('base64url'));
+    expect(counted(await readRun(a, first.toString('base64url'))).counted, 'the first run is still open beside the second').toBe(0);
+    expect(forced.queue, 'nothing is left over').toEqual([]);
+  });
+
   it('a request that reaches no probe handler gets one answer whether or not a run exists: a HEAD, a wrong-shaped path, a malformed escape, an over-long name, dark or armed (refinement (f))', async () => {
+    // The gate's journal line for a refused foreign-origin write is counted below, not printed.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     for (const armed of [false, true]) {
       const a = await openApp(armed);
       const session = armed ? await login(a) : undefined;
       const nonce = await openRun(a, session);
       const base = `/api/reader-lab/probe/${nonce}`;
+      // A box that serves the built PWA answers a GET or a HEAD that matches no route through its catch-all, which the gate
+      // lets by; one that does not, through the gate. Both are measured, so the expected split is whichever this box is.
+      const bundle = (await a.inject({ method: 'GET', url: '/' })).statusCode === 200;
       const probes = [
         { method: 'HEAD', url: `${base}/cookie-image` }, { method: 'GET', url: `${base}/cookie-image/extra` },
         { method: 'POST', url: `${base}/cookie-image/extra` }, { method: 'GET', url: base },
         { method: 'HEAD', url: `${READER_LAB_RUNS_PATH}/${nonce}` },
+        // A write from a frame's opaque origin: on an armed box the gate refuses it before the session check.
+        { method: 'POST', url: `${base}/cookie-image/extra`, origin: 'null' }, { method: 'PUT', url: `${base}/cookie-image`, origin: 'null' },
         // Fastify answers these two before any hook: a malformed percent-escape (400) and an over-long name on a POST (414).
         { method: 'GET', url: `${base}/cookie%ZZimage` }, { method: 'POST', url: `${base}/${'n'.repeat(200)}` },
       ] as const;
+      type Probe = (typeof probes)[number];
+      const originOf = (p: Probe): string | undefined => ('origin' in p ? p.origin : undefined);
+      /** What the answer must be, by the gate's rules: a refusal before any hook, then the gate's foreign-origin write, then
+       *  the box's own 404 (a catch-all for a GET or HEAD on a box with the bundle, a session that passes the gate, a dark
+       *  box) or the gate's 401 for a caller with no session. */
+      const expectStatus = (p: Probe, hasSession: boolean): number => {
+        if (p.url.includes('%ZZ')) return 400;
+        if (p.url.includes('n'.repeat(200))) return 414;
+        if (armed && originOf(p) !== undefined) return 403;
+        if (bundle && (p.method === 'HEAD' || p.method === 'GET')) return 404;
+        return armed && !hasSession ? 401 : 404;
+      };
+      /** Headers that must differ between two answers of one request: the clock's `date`. Nothing else is set aside. */
+      const MUST_DIFFER = new Set(['date']);
       const ask = async (cookie: string | undefined): Promise<string[]> => {
         const out: string[] = [];
         for (const p of probes) {
-          const res = await a.inject({ method: p.method, url: p.url, headers: headersOf(cookie) });
-          out.push(`${p.method} ${p.url} ${res.statusCode} ${res.body}`);
+          const origin = originOf(p);
+          const res = await a.inject({ method: p.method, url: p.url, headers: { ...headersOf(cookie), ...(origin === undefined ? {} : { origin }) } });
+          const headers = Object.entries(res.headers).filter(([h]) => !MUST_DIFFER.has(h)).sort(([x], [y]) => (x < y ? -1 : 1));
+          expect(res.statusCode, `armed ${armed} ${p.method} ${p.url} ${origin ?? ''}`).toBe(expectStatus(p, cookie !== undefined));
+          out.push(`${p.method} ${p.url} ${res.statusCode} ${res.body} ${JSON.stringify(headers)}`);
         }
         return out;
       };
@@ -304,11 +584,20 @@ export function registerReaderLabRoutes(app: any): void {
       const live = [await ask(undefined), await ask(session)];
       expect((await a.inject({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/${nonce}/close`, headers: headersOf(session) })).statusCode).toBe(200);
       const none = [await ask(undefined), await ask(session)];
-      expect(none, `armed ${armed}: a request that reaches no probe handler answers the same with no run open`).toEqual(live);
+      expect(none, `armed ${armed}: a request that reaches no probe handler answers the same, headers too, with no run open`).toEqual(live);
       // CONTROL: the answers are real refusals, not the probe's 204, so equality is not vacuous.
       expect(live.flat().every((l) => !l.includes(' 204 ')), `armed ${armed}`).toBe(true);
       expect(live.flat().filter((l) => l.includes('%ZZ') || l.includes('n'.repeat(200))).map((l) => l.split(' ')[2]),
         `armed ${armed}: the malformed escape is a 400 and the over-long POST a 414, before any hook`).toEqual(['400', '414', '400', '414']);
+      // CONTROL: the headers are in the comparison. An answer is a refusal with headers (content-type, content-length).
+      expect(live.flat().every((l) => l.includes('"content-type"')), `armed ${armed}: the compared answers carry headers`).toBe(true);
+      if (armed) {
+        const refused = live.flat().filter((l) => l.includes(' 403 '));
+        expect(refused.map((l) => l.split(' ').slice(3).join(' ').replace(/ \[.*$/, '')), 'the foreign-origin refusal, with and without a session')
+          .toEqual(Array(4).fill('{"ok":false,"error":"foreign-origin"}'));
+        expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('request from a foreign origin')),
+          'the gate journals each refused write once (two asks of two callers, run live and closed)').toHaveLength(8);
+      }
       await a.close();
       app = undefined;
     }
@@ -354,7 +643,8 @@ export function registerReaderLabRoutes(app: any): void {
   });
 
   it('armed: a frame\'s WebSocket upgrade to the probe is refused by the gate (403), logged by the gate once, and still counted (M10.3)', async () => {
-    const warn = vi.spyOn(console, 'warn');
+    // The gate's journal line is counted, and not printed into the suite's output.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const a = await openApp(true);
     const cookie = await login(a);
     const nonce = await openRun(a, cookie);
@@ -372,7 +662,8 @@ export function registerReaderLabRoutes(app: any): void {
   });
 
   it('armed: a frame\'s POST probe from origin null skips the origin check (reason 8): the same 204, counted, and no refusal logged (M10.4)', async () => {
-    const warn = vi.spyOn(console, 'warn');
+    // The gate's journal line is counted, and not printed into the suite's output.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const a = await openApp(true);
     const cookie = await login(a);
     const nonce = await openRun(a, cookie);
@@ -404,6 +695,27 @@ export function registerReaderLabRoutes(app: any): void {
     expect(labOwnerOf(mine)).toBe(labOwnerOf(`${mine}; theme=dark`));
     expect(labOwnerOf(mine)).not.toBe(labOwnerOf(other));
     expect(labOwnerOf(undefined)).toBe(labOwnerOf('theme=dark'));
+  });
+
+  it('armed: a run answers only the sign-in that opened it: a second real session reads and closes it as an unknown nonce, and the opener still can (M10.17)', async () => {
+    // The dark-box case above uses synthetic cookies. Here the owner digest is over two cookies the real login route minted,
+    // behind the gate that checks each for a live session before the door sees it.
+    const a = await openApp(true);
+    const mine = await login(a);
+    const other = await login(a);
+    expect(other, 'two sign-ins are two sessions').not.toBe(mine);
+    const nonce = await openRun(a, mine);
+    const read = (cookie: string, n: string) => a.inject({ method: 'GET', url: `${READER_LAB_RUNS_PATH}/${n}`, headers: { cookie } });
+    const theirs = await read(other, nonce);
+    const unknown = await read(other, UNKNOWN);
+    expect([theirs.statusCode, theirs.body, theirs.headers['cache-control']], 'the other session reads it as it reads a nonce nobody opened')
+      .toEqual([unknown.statusCode, unknown.body, unknown.headers['cache-control']]);
+    expect(theirs.statusCode).toBe(404);
+    const closed = await a.inject({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/${nonce}/close`, headers: { cookie: other } });
+    expect(JSON.parse(closed.body), 'and cannot close it').toEqual({ ok: true, closed: false });
+    expect(counted(await readRun(a, nonce, mine)).counted, 'the opener reads it still').toBe(0);
+    expect(JSON.parse((await a.inject({ method: 'POST', url: `${READER_LAB_RUNS_PATH}/${nonce}/close`, headers: { cookie: mine } })).body))
+      .toEqual({ ok: true, closed: true });
   });
 
   it('a CORS preflight to the probe is never approved: no CORS header, a refusal, and nothing counted, dark or armed', async () => {

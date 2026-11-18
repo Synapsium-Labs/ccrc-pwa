@@ -3209,9 +3209,14 @@ export class CoordStore {
     /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
      *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
     intents?: readonly string[];
+    /** Overlord W2 forecasts B, fix round 1 (F3): the conversation id the run was dispatched into, after its `/clear`
+     *  (`runs.dispatchConversation`). Written on every dispatch, NULL when omitted, so a later dispatch never keeps an
+     *  earlier one's conversation; the spend reads count a reading only in it. */
+    conversation?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      this.db.prepare('UPDATE runs SET dispatchConversation = ? WHERE id = ?').run(input.conversation ?? null, input.runId);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
       // Written UNCONDITIONALLY once `briefQueued` is given, both columns
       // together: recording only the interesting branch would make an older row
@@ -4222,7 +4227,7 @@ export class CoordStore {
   }
 
   setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
-  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk); }
+  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead, usage: portfolio.SpendUsageRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk, usage); }
   recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
@@ -11365,6 +11370,12 @@ export class CoordStore {
   unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now, TERMINAL_RUN_STATES_SQL); }
   leadHistoryOf(program: string, asOf: number): programmeFacts.ForecastHistory { return programmeFacts.leadHistoryOf(this.db, program, asOf); }
   outcomeFactsOf(sealId: number): programmeFacts.OutcomeFacts | null { return programmeFacts.outcomeFactsOf(this.db, sealId); }
+  appendHealth(program: string, verdict: programmeFacts.HealthVerdict, noticed: boolean, now: number): { id: number } { return programmeFacts.appendHealth(this.db, program, verdict, noticed, now); }
+  newestHealthOf(programs: readonly string[]): programmeFacts.HealthRow[] { return programmeFacts.newestHealthOf(this.db, programs); }
+  healthNoticedSince(program: string, word: string, since: number): boolean { return programmeFacts.healthNoticedSince(this.db, program, word, since); }
+  recordRunSpend(row: programmeFacts.NewRunSpend, now: number): { written: boolean } { return programmeFacts.recordRunSpend(this.db, row, now); }
+  unspentClosesOf(firstPassAt: number): programmeFacts.UnspentClose[] { return programmeFacts.unspentClosesOf(this.db, firstPassAt, TERMINAL_RUN_STATES_SQL); }
+  spendOf(programs: readonly string[]): programmeFacts.RunSpendRow[] { return programmeFacts.spendOf(this.db, programs); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

@@ -112,7 +112,7 @@ describe('deliver', () => {
 });
 
 describe('contextUsage', () => {
-  const usage = (o: object): UsageRead => ({ kind: 'reading', usage: { ts: 1, model: null, class: null, effort: null, ctxPct: null, cost: null, cacheExpiresAt: null, stale: false, ...o } as never });
+  const usage = (o: object): UsageRead => ({ kind: 'reading', uuid: null, usage: { ts: 1, model: null, class: null, effort: null, ctxPct: null, cost: null, cacheExpiresAt: null, stale: false, ...o } as never });
   const read = (u: UsageRead) => harness({ usage: async () => u }).host.contextUsage(ID);
   it('measured from a fresh reading', async () => {
     expect(await read(usage({ ctxTokens: 10, ctxWindow: 100 }))).toEqual({ kind: 'measured', value: { tokens: 10, window: 100 } });

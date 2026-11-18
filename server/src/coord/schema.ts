@@ -3659,6 +3659,7 @@ export const MIGRATIONS: readonly string[] = [
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
+
   // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
   // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
   // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
@@ -3817,6 +3818,35 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 101: user_version 100 -> 101 ──────────────────────────────────────────
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
+  // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
+  // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
+  // a day. `run_spend`: one row per closed run, `measured` (a fresh reading inside the run's window), `absent` or
+  // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
+  // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
+  // of the forecast lane. `runs.dispatchConversation` (fix round 1, F3): the registry's conversation id the run was
+  // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
+  // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
+  // older build at this `user_version` takes rule 3 and never names them.
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96, the renewal hand-offs
+  // (#2934) 97, decision model B (#2990) 98, the ladder (#2994) 99 and the quiz record (#2991) 100, so this is 101 by
+  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 100 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    word TEXT NOT NULL, evidence TEXT NOT NULL, noticed INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX programme_health_by_program ON programme_health (program, id);
+  CREATE TABLE run_spend (
+    runId INTEGER PRIMARY KEY REFERENCES runs(id), at INTEGER NOT NULL, state TEXT NOT NULL, cost REAL, class TEXT,
+    readAt INTEGER, startCost REAL
+  );
+  ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
+  `,
+
+  // ── 102: user_version 101 -> 102 ──────────────────────────────────────────
   // The stale deny digest (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's
   // plan-review ruling F5, 2026-11-18). `approvals.denyCurrent`: 1 when the child's deny digest was the managed deny
   // file's current one at mint, 0 when the installer's digest history named it instead (a child spawned under an older
@@ -3827,7 +3857,7 @@ export const MIGRATIONS: readonly string[] = [
   // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
   // store 1. Its rule door does not read the column, so a 0 row it meets in a rollback inside a row's window reads as
   // current (the PR's note names that residual). The slot is the next free one by position: the quiz record (#2991) took
-  // 100, so this is 101, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
+  // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

@@ -116,6 +116,14 @@ export interface DispatchRunDeps {
    * `unmeasured` on a healthy fleet for ever.
    */
   turnVerdict: (rec: SessionRecord, uuid: string) => Promise<TurnVerdict>;
+  /**
+   * Overlord W2 forecasts B, fix round 1 (F3): the conversation id a resumed worker runs in after its `/clear`, read
+   * from the live process (`turnverdict.ts#conversationAfterClearFor`), or null when no id other than `prior` (the
+   * registry's id before the `/clear`) could be read. Recorded as `runs.dispatchConversation`, so a spend reading
+   * counts only in the conversation the run was dispatched into. OPTIONAL: absent, a resumed run records null and its
+   * spend reads `outside` (unmeasured, never wrong). A fresh spawn needs no read: ccd starts it under the registry's id.
+   */
+  conversationAfterClear?: (rec: SessionRecord, prior: string) => Promise<string | null>;
   /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
    *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
   admitWake?: (kind: 'asked', id: string) => boolean;
@@ -390,6 +398,9 @@ interface Bound {
   adopted: boolean; adoptedSpawn: SpawnVerdict | null;
   /** D-6794: the default route was withheld (no `route-default-v1`), so `route-defaulted` is not journaled. */
   defaultOmitted: boolean;
+  /** F3: a fresh spawn's conversation, the registry id ccd started it under (`--session-id`); null on a resume (read
+   *  after its `/clear` instead) or when the row carries none. */
+  spawnConversation: string | null;
 }
 
 /**
@@ -460,7 +471,8 @@ async function spawnFresh(
   if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) coord.recordRunEvent(run.id, 'coordinator', armEventDetail(routeFields));
   // `winner.wrapper` is MEASURED: the bind step refuses any same-project record whose identity is not.
   return { sessionId: winner.id, workspace: winner.workspace, branch: winner.branch, wrapper: winner.wrapper,
-    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: defaultWithheld };
+    resumed: false, liveGate: null, adopted, adoptedSpawn, defaultOmitted: defaultWithheld,
+    spawnConversation: winner.uuid === '' ? null : winner.uuid };
 }
 
 /**
@@ -526,7 +538,7 @@ async function resumeBound(
     hookState: (uuid) => readHookStateMeasured(deps.io, deps.cfg.registryDir, sessionId, uuid, Date.now()),
     turnVerdict: deps.turnVerdict });
   if (d.kind !== 'go') return stopped(deps.coord, run.id, d);
-  return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null, defaultOmitted: false };
+  return { sessionId, ...d.plan, resumed: true, adopted: false, adoptedSpawn: null, defaultOmitted: false, spawnConversation: null };
 }
 
 /** The stamp around a dispatch (D-8077; the run-close lane's R4): `runs.lastDispatchAttemptAt` is written here, by EVERY answer,
@@ -657,6 +669,11 @@ export async function dispatchRun(
   const clearRes = act.plan.clear ? await deps.sendClear(sessionId) : null;
   const clearedAt = clearRes?.ok ? Date.now() : null;
   const clearError = clearRes === null || clearRes.ok ? null : clearRes.error;
+  // F3: the conversation this run was dispatched into. A resume's is read only after a committed `/clear` (a refused one
+  // leaves the worker in the previous wave's conversation, F10'), and never on a throw: a failed read is null, unmeasured.
+  const conversation = !resumed ? bound.spawnConversation
+    : clearedAt === null || liveGate === null || deps.conversationAfterClear === undefined ? null
+      : await deps.conversationAfterClear(liveGate.record, liveGate.uuid).catch(() => null);
 
   // 6: ONE call, and one transaction (D-277 (was D-B4-4)). The dispatch write, the
   // `clearedAt` stamp, the transition and the declared ledger's INSERTs used
@@ -679,7 +696,7 @@ export async function dispatchRun(
   // gated" will go.
   const briefQueued = !resumed || clearedAt !== null;
   const adv = coord.dispatchRun({ runId: id, sessionId, workspace: bound.workspace, branch: bound.branch, resumed,
-    clearedAt, items: itemTitles, intents: intentKeys, briefQueued, clearError,
+    clearedAt, items: itemTitles, intents: intentKeys, briefQueued, clearError, conversation,
     // The SUFFIX is a `SpawnVerdict`, never a raw rc — and never the word
     // `spawnstate`, which is not a field and must never become one. Recorded only
     // on the adoption path, so its PRESENCE is the record that this workspace came

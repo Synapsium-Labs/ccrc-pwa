@@ -251,6 +251,10 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
   { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
     why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
+  { file: 'server/src/turnverdict.ts', text: "live.state.sessionId !== ''",
+    why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
+  { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',
+    why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
