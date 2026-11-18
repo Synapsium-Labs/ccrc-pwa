@@ -1071,8 +1071,10 @@ describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
 
   it('the worker files follow-ups with plan ticket-add into its own epic', () => {
     const flat = linear.replace(/\s+/g, ' ');
-    expect(flat).toContain('**A follow-up goes into the plan, never straight into Linear.**');
-    expect(flat).toContain('a `follow-up` ticket in your own run\'s epic');
+    expect(flat).toContain('**In a managed team, a follow-up goes into the plan, never straight into Linear.**');
+    // Review 2580 F2: a run with no ticket (a review run, or an older programme with no plan) has no epic to file into.
+    expect(flat).toContain('With no ticket on your run (a review run, or an older programme with no plan), ask your coordinator.');
+    expect(flat).toContain('a `follow-up` ticket in your run\'s epic');
     expect(flat).toContain('`plan show <slug>`');
     expect(flat).toContain('`plan-owned`');
     expect(clientRoutes().map((r) => r.key)).toEqual(expect.arrayContaining(['plan.ticket-add', 'plan.show']));
@@ -1090,6 +1092,8 @@ describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
   it('the Linear skill says the hierarchy is ccrc\'s', () => {
     const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
     expect(linearSkill).toContain('**The hierarchy is ccrc\'s.**');
+    // Review 2580 F3: a team is managed once its migration is applied (design §7.1, `managedTeams`), not when the hierarchy is on.
+    expect(linearSkill).toContain('In a managed team (a team whose migration is applied)');
     expect(linearSkill).toContain('that restore comment is ccrc\'s own');
     expect(linearSkill).toContain('Never edit one of these by hand');
     expect(linearSkill).toContain('never file a hierarchy object or a ticket there with `linear create`');

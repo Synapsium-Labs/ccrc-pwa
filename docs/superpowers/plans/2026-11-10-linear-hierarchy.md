@@ -305,8 +305,9 @@ number from `POST /api/ledger/deviations`.
   `references/plan.md`, the open step and the ledger template's epic column live in a new file,
   `server/test/coordinator-plan-reference.test.ts`. Until the follow-up lands, the rule that the operator acts on hierarchy
   items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
-  lives in `references/plan.md` and the Linear skill, not in the contract. Record: the wave 6 note, which carries the
-  follow-up's exact content.
+  lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
+  round 1, run 2580 F1). The follow-up raises the coordinator skill's size cap by clause 21's bytes only, in the same
+  commit. Record: the wave 6 note, which carries the follow-up's exact content.
 
 ## Global Constraints
 

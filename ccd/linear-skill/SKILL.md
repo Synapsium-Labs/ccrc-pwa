@@ -13,7 +13,7 @@ reaches every configured workspace through the server with it. You never sign in
 
 **Every session can write**, a reviewer included: the server checks your session, not your role.
 
-**The hierarchy is ccrc's.** In a managed team (its project has ccrc's hierarchy on), ccrc creates, moves and closes
+**The hierarchy is ccrc's.** In a managed team (a team whose migration is applied), ccrc creates, moves and closes
 the initiatives, projects, milestones and issues of each programme's plan, and puts back an edit a person makes;
 that restore comment is ccrc's own. Never edit one of these by hand, and never file a hierarchy object or a ticket
 there with `linear create`: change the plan with `ccrc-api plan` (a worker files a follow-up with `plan ticket-add`).

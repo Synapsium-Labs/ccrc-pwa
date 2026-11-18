@@ -305,13 +305,14 @@ goes with the tree.
 
 ## Linear
 
-Load the `ccrc-linear` skill for Linear work (`~/.local/bin/ccrc-api linear …`,
-never a Linear MCP tool, a connector or `curl`): it holds the verbs and every refusal.
+Load the `ccrc-linear` skill for Linear work (never a Linear MCP tool, a connector
+or `curl`): it holds the verbs and every refusal.
 
-**A follow-up goes into the plan, never straight into Linear.** Work this wave leaves
-for later is a `follow-up` ticket in your own run's epic (`plan show <slug>` lists the
-ticket your run holds). ccrc files its issue; the hierarchy is ccrc's, so never edit
-one of its objects, and never `linear create` in a managed team (`plan-owned`).
+**In a managed team, a follow-up goes into the plan, never straight into Linear.**
+Work left for later is a `follow-up` ticket in your run's epic (`plan show <slug>`
+names it); ccrc files the issue. With no ticket on your run (a review run, or an older
+programme with no plan), ask your coordinator. Never edit a hierarchy object;
+`linear create` there answers `plan-owned`.
 
 ```bash
 "$API" plan ticket-add <slug> --json - <<JSON

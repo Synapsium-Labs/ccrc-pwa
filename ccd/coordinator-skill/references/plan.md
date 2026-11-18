@@ -6,8 +6,8 @@ before the epic is done; each **ticket** is one unit of work, and every work run
 change the plan only through `ccrc-api plan`; no session writes a Linear initiative, project or milestone.
 
 **The hierarchy is ccrc's.** ccrc creates, moves and closes the Linear objects from the plan, and puts back an edit a
-person makes to one, with a comment of its own. Never file or edit a hierarchy object, or file a ticket in a managed team
-with `linear create` (it answers `plan-owned`): change the plan. The operator acts on the hierarchy items (drift,
+person makes to one, with a comment of its own. Never file or edit a hierarchy object, or file a ticket in a managed team (a
+team whose migration is applied) with `linear create` (it answers `plan-owned`): change the plan. The operator acts on the hierarchy items (drift,
 inbound, initiatives, owner, map, report) in the console, and a coordinator never answers one for them, nor asks for
 those approvals in its turn text.
 
@@ -42,11 +42,13 @@ and it drops as `plan epic-drop` drops it: with its open checkpoints and tickets
 JSON
 ```
 
-`project` on an epic or a ticket is optional and defaults to the home project. A new ticket's key may not start `run-`:
+`project` on an epic or a ticket is optional and defaults to the home project. Name `project` on a ticket whose work lands
+outside the home project. A new ticket's key may not start `run-`:
 that is how ccrc names the ticket of a run opened with none. Refusals: `not-plan-owner` (only the
 programme's coordinator declares it), `plan-bad-body`, `plan-too-large` (at most 24 epics, 16 checkpoints in an epic and
 200 tickets in a body), `waves-not-contiguous`, `wave-overlap`, `dropped-needs-reason`, `ticket-workspace-mismatch`,
-`plan-runs-open` (a `droppedWhy` on an epic a run holds a ticket of), `linear-text-public` and `plan-closed`.
+`plan-runs-open` (a `droppedWhy` on an epic a run holds a ticket of), `linear-text-public`, `plan-closed`, and, for a
+`phases` body (the work map's), `unknown-ref` and `bad-carry`.
 
 ## plan show
 
@@ -132,8 +134,8 @@ when the box has no plan store.
 ## The Linear owner: plan triage
 
 An issue someone files straight into a managed team, outside ccrc, is inbound. A project's **Linear owner** is a
-coordinator the operator sets in the console (its linking card), or ccrc's default when none is set. Its one duty is to
-triage its own project's inbound issues, and it never touches another programme's plan. The owner gets a mail
+coordinator the operator sets in the console (its linking card), or ccrc's default when none is set. Its duty here is to
+triage its team's inbound issues, and it never touches another programme's plan. The owner gets a mail
 `Linear inbound: <REF> waits for triage` and decides with one body, its team key as the id:
 
 ```bash
@@ -160,7 +162,7 @@ an epic, closes it, or returns it to the owner, with exactly one arm:
 JSON
 ```
 
-The other arms are `{"issue":"AAA-12","close":{"why":"<why>"}}` and `{"issue":"AAA-12","return":{"note":"<why it is
-not yours>"}}`; an Upkeep ticket cannot be returned. Refusals: `not-plan-owner`, `issue-not-inbound` (not handed to this
+The other arms are `{"issue":"AAA-12","close":{"why":"<why>"}}` and
+`{"issue":"AAA-12","return":{"note":"<why it is not yours>"}}`; an Upkeep ticket cannot be returned. Refusals: `not-plan-owner`, `issue-not-inbound` (not handed to this
 programme, and not an open Upkeep ticket), `unknown-epic`, `unknown-checkpoint`, `plan-bad-body`, `plan-closed`,
 `ticket-workspace-mismatch` and `linear-text-public`.
