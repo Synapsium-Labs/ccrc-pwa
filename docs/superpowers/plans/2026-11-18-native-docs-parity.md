@@ -193,9 +193,9 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P4.2: Old ref spellings and `.ico`
 
-**Files:** Modify `ccd/ccd` (resolver: `refs/tags/<t>`, 7 to 64 hex commits), `shared/docs.ts` (`parseDocsPage`, `DOCS_RASTER_TYPES` `ico` with count and offset checks); Test `server/test/ccd-docs-ref.test.ts`, `server/test/docs-shared.test.ts`, `pwa/test/docs-url.test.ts`.
+**Files:** Modify `ccd/ccd` (resolver: `refs/tags/<t>`, a bare tag name after the branches, 7 to 64 hex commits), `shared/docs.ts` (`parseDocsPage`, `DOCS_RASTER_TYPES` `ico` with count and offset checks); Test `server/test/ccd-docs-ref.test.ts`, `server/test/docs-shared.test.ts`, `pwa/test/docs-url.test.ts`.
 
-- [ ] **Step 1: Failing tests:** `ref: origin/b reads refs/remotes/origin/b unless a local origin/b exists`; `ref: refs/tags/t opens at its commit`; `ref: a unique short commit opens at= the full commit`; `ref: an ambiguous short commit refuses`; `ico: magic with a bad count or offset is a mismatch`.
+- [ ] **Step 1: Failing tests:** `ref: origin/b reads refs/remotes/origin/b unless a local origin/b exists`; `ref: refs/tags/t opens at its commit`; `ref: a bare tag name with no branch of that name opens at the tag's commit` (an annotated tag peeled); `ref: a name that is both a branch and a tag opens the branch`; `ref: a unique short commit opens at= the full commit`; `ref: an ambiguous short commit refuses`; `ico: magic with a bad count or offset is a mismatch`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): old ref spellings and ico (X2 P4)`.
 
 ### Task P4.3: `docs_settings` and its doors
@@ -336,6 +336,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.45 | P5.5 | Wait without a deadline | print figures: missing after 10 s prints source |
 | M11.46 | P6.1 | Let `style` through `printAllow` | print tree: the allow-list drops style, handlers and foreign URLs |
 | M11.47 | P4.1 | Draw the project page's section rows without their docs | project page: each section lists its docs |
+| M11.48 | P4.2 | Resolve a bare name to the tag before the branches | ref: a name that is both a branch and a tag opens the branch |
 
 ## Deviations found
 
