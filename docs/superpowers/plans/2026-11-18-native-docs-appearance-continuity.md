@@ -100,6 +100,7 @@ export const READER_APPEARANCE_MAP: {
   readonly skin: { readonly [S in AppearanceSkinSlot]: HostToken };
 };
 export const READER_APPEARANCE_CONTRACTS: readonly number[]; // [1]
+export const READER_APPEARANCE_LABEL = 'Appearance follows ccrc Settings'; // the contract's label, ruled copy (ask 594)
 export function normaliseHostColour(text: string): string | null; // '#rrggbb' | '#rrggbbaa', lower case
 export type ReaderAppearanceOutcome =
   | { readonly kind: 'appearance'; readonly value: Appearance;
@@ -124,7 +125,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
     - `'rgba(4, 6, 5, 0.62)'` gives `'#0406059e'`;
     - each of `'#abc'`, `'color-mix(in srgb, #BF616A 12%, transparent)'`, `'var(--x)'`, `'url(x)'`, `'red'`, `'#2e3440;'` and `''` gives `null`.
   - `readerAppearanceOf`:
-    - with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`, and `parseAppearance` of its value is `ok`;
+    - with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`, its `label` is `READER_APPEARANCE_LABEL`, and `parseAppearance` of its value is `ok`;
     - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
     - an unreadable skin token keeps every colour, leaves that slot out, and has `dropped: null`;
     - contract `undefined` and contract `2` each give `{kind:'mode-only', why:'contract-unsupported'}`;
@@ -263,7 +264,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** cycle every palette, flip the system mode and switch skin while open; same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn.
-  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings" and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
+  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth and open-to-`ready` budgets.
@@ -329,6 +330,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M16 | `bridge.ts` never passes `fonts` | Task 4 "an outcome of kind `appearance`"; AP-1 face assertion |
 | AP-M17 | `sectionFamily` answers `sans` where `--family-section` equals `--family-mono` | Task 2 section-family row; AP-1 heading family under Instrument |
 | AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
+| AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
 
 ## Deviations found
 
@@ -339,7 +341,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - Why: the operator's 2026-11-10 amendment requires changes while open to travel on the existing checked bridge, and `prefs` cannot carry them (spec X1-3).
   - Task 7 amends the sentences.
 - **D-8760 (2026-11-18)**: reader-hosted-theme-is-ccrcs. Issued to run 2631 (X1). It departs from the rich-docs spec's §3.2 row "`prefs`, `chrome` | The layout's own top bar and Aa menu defaults | ccrc's current theme as the starting value. Later changes arrive by the `prefs` op. Reader prefs are stored apart from console prefs." It also departs from G7's "Theme, width, marks and last visit live in ccrc's own localStorage, per device, under the reader prefix `ccrc:reader:v1:`".
-  - While ccrc hosts the reader with an appearance, theme is not a reader preference. The frame ignores a stored theme and never writes one, and Aa shows "Appearance follows ccrc Settings" in place of its theme row (ask 594, answered by the coordinator 2026-11-18, option 0).
+  - While ccrc hosts the reader with an appearance, theme is not a reader preference. The frame ignores a stored theme and never writes one, and Aa shows one line in place of its theme row: the host's validated `label`, which ccrc sends as "Appearance follows ccrc Settings" (ask 594, answered by the coordinator 2026-11-18, option 0; the label ruled at review 2645 F6).
   - Width, marks, last visit, font and folds stay reader preferences under `ccrc:reader:v1:`.
   - Why: the operator's 2026-11-10 amendment gives global appearance one owner, ccrc.
   - Task 7 amends the sentences.

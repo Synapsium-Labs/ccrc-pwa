@@ -74,6 +74,7 @@ flowchart LR
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
   "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
+- `label` is optional text for Aa's hosted line (§6): at most 64 characters, with no control character (U+0000 to U+001F, U+007F to U+009F). The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
 **Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 33 slots:
@@ -249,7 +250,7 @@ ccrc's test computes the mapped values for every palette through `pwa/test/helpe
 
 This section settles what the frame's own Aa menu offers inside ccrc. One Aa stays, in the frame.
 
-- **While hosted with an appearance, Aa has no theme row.** Global appearance has one owner, and a choice in the frame would be overridden at the next change anyway. In the row's place is one static line, with this exact copy: "Appearance follows ccrc Settings".
+- **While hosted with an appearance, Aa has no theme row.** Global appearance has one owner, and a choice in the frame would be overridden at the next change anyway. In the row's place is one static line. Its text is the contract's `label`, which ccrc sends as "Appearance follows ccrc Settings". The library hard-codes nothing of ccrc's: without a label, it shows its neutral default, "Appearance follows the app's settings" (§2).
   - **Accessibility.** The line is plain text in the settings panel, in reading order where the theme row was. It is not a control, not focusable, and has no role beyond a paragraph, so a screen reader reads it with the panel. It is drawn in `text-muted` on `surface`, a pair in `APPEARANCE_PAIRS` at 4.5:1, so the §5 gate checks it in every palette.
   - **Who decides "hosted".** The host adapter decides, never the frame. The frame shows the line only when its mount carried an `appearance`. With no appearance, Aa keeps its theme row. That covers the reader lab, the library used on its own, and ccrc on the mode-only path (§7).
   - **No shortcut.** Aa has no Settings button in this design. A later wish for one rides the bridge's existing command vocabulary, or comes back as an ask.
@@ -285,6 +286,7 @@ This section lists what does not change and what the new data could do. The stan
 **What the new data is.**
 - **Origin.** Colour, length and font values computed from ccrc's own stylesheets. A document cannot influence them: documents render inside the frame, never on ccrc's root.
 - **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again: closed keys; `#rrggbb` or `#rrggbbaa` only; lengths as whole pixels in range; no `;`, braces, `url(` or `var(`.
+- **The label.** It is the one free text that crosses. It is at most 64 characters, refused if it holds a control character, and set with `textContent`, so markup in it shows as its own characters and never renders.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, which is the same exposure the library's own data-URL fonts have today. A face that fails to load is dropped (§2.2).
 - **Exfiltration.** The frame learns ccrc's current colours. It has no way to send them anywhere: `default-src 'none'`, no network, and no new frame-to-parent op.
@@ -324,6 +326,7 @@ This section is written for the library programme to plan from. It names the lib
 | `APPEARANCE_PAIRS` (`./frame`) | readonly list | `{fg, bg, floor}` for every pair the stylesheet draws, derived colours included, expressed over the slots |
 | `parseAppearance(x)` (`./frame`) | pure function | Returns `{ok: true, appearance}`, or `{ok: false, why, key}`. The same validator the frame runs |
 | `mermaidThemeOf(colours)` (`./frame`) | pure function | Mermaid `themeVariables` derived from the slots. Documents still cannot set any theme key |
+| `APPEARANCE_LABEL_DEFAULT` (`./frame`) | string | "Appearance follows the app's settings": the line shown with no host label, naming no host |
 | `HostAdapters.appearance?` (`./host`) | adapter key | The contract value at mount. Validated with `parseAppearance`. Throws `TypeError` like any adapter key on a bad shape |
 | `FrameAssets.fonts?` (`./host`) | asset | `{sans?: string, mono?: string}`, base64 woff2. Checked as §2.2 says, and dropped rather than thrown on failure |
 | `DocFrame.setAppearance(a)` (`./host`) | method | Posts the `appearance` op after `ready`. Queued before `ready`, latest wins. Seeds later remounts |
@@ -374,12 +377,17 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - `mermaidThemeOf` output passes the pairs for both default modes;
    - a document's init directive still cannot set `themeVariables`, `themeCSS` or `darkMode`;
    - a newer appearance cancels redraws queued for an older one.
-6. Hosted state:
+6. The label:
+   - a 64-character label shows whole, and a 65-character one is refused, so the default shows;
+   - a label holding U+0000, U+001B, U+007F or U+0085 is refused;
+   - a label of `<b>x</b>` shows those eight characters, and the line holds no element;
+   - with no label, the line is `APPEARANCE_LABEL_DEFAULT`, and no string of any host appears in the library's built assets.
+7. Hosted state:
    - an op with no colour group clears host colours;
    - while hosted, a `prefs` change never writes `theme`;
    - a font that fails its checks or `FontFace` load is dropped, and the mount reaches `ready`;
    - a document at the old srcdoc cap still mounts with both faces.
-7. Boundaries: `frameCsp()` is byte-identical to 1.1.0, and so is the frame-to-parent op set.
+8. Boundaries: `frameCsp()` is byte-identical to 1.1.0, and so is the frame-to-parent op set.
 
 **Compatibility.** A 1.1.0 host keeps working unchanged against the new version. The new version's frame ignores nothing a 1.1.0 host sends. A host built for the new version that is pinned back to 1.1.0 fails to build, and does not fail at run time.
 
@@ -436,7 +444,7 @@ none - design of a recorded required follow-on of the native Docs reader program
 - The operator's requirement (2026-11-10) and its two coordinator defaults: follow changes while open, and Aa's global appearance follows ccrc while hosted.
 - Standing boundaries: `allow-scripts`, `frame-src 'none'`, no parent-DOM access or extra channel, the two phone blocks byte for byte, the existing budgets, and the library exactly 1.1.0 in this wave.
 
-- **Aa's line while hosted (ask 594, answered by the coordinator 2026-11-18, option 0).** Aa shows the one static line "Appearance follows ccrc Settings", with no button. Its accessibility is in §6. Outside ccrc, Aa keeps its theme row, as the host adapter decides. A Settings shortcut is not added: one would ride the bridge's existing command vocabulary, or come back as an ask.
+- **Aa's line while hosted (ask 594, answered by the coordinator 2026-11-18, option 0, with the label ruled at review 2645 F6).** Aa shows one static line, with no button. The host sends its text as the contract's validated `label`, and ccrc sends "Appearance follows ccrc Settings". Its accessibility is in §6. Outside ccrc, Aa keeps its theme row, as the host adapter decides. A Settings shortcut is not added: one would ride the bridge's existing command vocabulary, or come back as an ask.
 
 - **Density and controls (review 2645 F3, ruled by the coordinator 2026-11-18).** Popover elevation and the section-label type are carried as skin slots, because they touch neither the frame bar nor the reading geometry. Every ccrc skin token is carried or rejected by name in §2.3.
 
