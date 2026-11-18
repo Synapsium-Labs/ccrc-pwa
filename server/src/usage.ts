@@ -2,6 +2,8 @@ import path from 'node:path';
 import type { FleetIO } from './io.js';
 import { tokenCountOf, type SessionUsage } from '../../shared/api.js';
 import { familyClassOf } from '../../shared/models.js';
+import type { SpendTurnRead } from '../../shared/programmeFacts.js';
+import { readTurnMarkMeasured } from './turnmark.js';
 
 /** A sidecar older than this is STALE: carried, but flagged. Thirty minutes,
  *  the bound `HOOKSTATE_FRESH_MS` gives the hook state, in the sidecar's own
@@ -70,4 +72,19 @@ export async function readUsageMeasured(io: FleetIO, registryDir: string, id: st
 export async function readUsage(io: FleetIO, registryDir: string, id: string, nowS: number): Promise<SessionUsage | null> {
   const r = await readUsageMeasured(io, registryDir, id, nowS);
   return r.kind === 'reading' ? r.usage : null;
+}
+
+/** The turn marker of each session with a usage reading (Overlord W2 forecasts B, fix round 1, F2), judged against the
+ *  registry's conversation the reading was taken beside (`conversations`, the usage sweep's own map): `read` with its
+ *  newest turn's start, or `unread` for any answer that cannot vouch (absent, unmeasured, malformed, foreign). Staleness
+ *  against the live process is not asked: the question is only whether a turn started after the render. */
+export async function readSpendTurns(io: FleetIO, registryDir: string,
+  conversations: ReadonlyMap<string, { readonly registry: string }>): Promise<Map<string, SpendTurnRead>> {
+  const out = new Map<string, SpendTurnRead>();
+  await Promise.all([...conversations].map(async ([id, c]) => {
+    const mark = await readTurnMarkMeasured(io, registryDir, id, c.registry, null)
+      .catch(() => ({ ok: false as const }));
+    out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt } : { kind: 'unread' });
+  }));
+  return out;
 }

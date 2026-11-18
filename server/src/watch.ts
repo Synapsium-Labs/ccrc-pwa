@@ -37,7 +37,7 @@ import { finishedAfter } from './coord/finished.js';
 import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
-import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
+import { readSpendTurns, readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
 import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
@@ -6277,7 +6277,7 @@ export class FleetWatcher {
     const port = this.deps.forecasts;
     if (!port) return;
     await this.runLane('forecasts', async () => {
-      if (this.usageSwept) this.spendTurns = await this.readSpendTurns();
+      if (this.usageSwept) this.spendTurns = await readSpendTurns(this.deps.io, this.deps.cfg.registryDir, this.usageConversation);
       const now = this.deps.time.clock.wall();
       if (this.usageSwept) this.forecastSpendSince ??= now;
       const usage = { ready: () => this.usageSwept, reading: (id: string) => {
@@ -6293,21 +6293,6 @@ export class FleetWatcher {
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
       if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });
-  }
-
-  /** The turn marker of each row with a usage reading, judged against the registry's conversation the reading was taken
-   *  beside: `read` with its newest turn's start, or `unread` for any answer that cannot vouch (absent, unmeasured,
-   *  malformed, foreign). The marker carries no freshness window and staleness against the live process is not asked:
-   *  the question is only whether a turn started after the render. */
-  private async readSpendTurns(): Promise<Map<string, SpendTurnRead>> {
-    const out = new Map<string, SpendTurnRead>();
-    await Promise.all([...this.usage.keys()].map(async (id) => {
-      const registry = this.usageConversation.get(id)?.registry ?? null;
-      const mark = await readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, registry, null)
-        .catch((): TurnMarkRead => ({ ok: false, reason: 'unmeasured' }));
-      out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt } : { kind: 'unread' });
-    }));
-    return out;
   }
 
   /** The push outbox lane (Overlord W1, `pushSender.ts`): the held items' reach, every due row sent once per claim, the purge. */
