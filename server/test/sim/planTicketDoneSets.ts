@@ -25,6 +25,8 @@ export const RUN_MUST_NAME_TICKET_SET = set([
   { id: 'TR-3', old: "tickets.some((t) => t.state === 'open' && t.runId === null && !isAutoTicketKey(t.key))", new: 'tickets.some((t) => t.runId === null && !isAutoTicketKey(t.key))' },
   { id: 'TR-4', old: "tickets.some((t) => t.state === 'open' && t.runId === null && !isAutoTicketKey(t.key))", new: "tickets.some((t) => t.state === 'open' && !isAutoTicketKey(t.key))" },
   { id: 'TR-5', old: "tickets.some((t) => t.state === 'open' && t.runId === null && !isAutoTicketKey(t.key))", new: "tickets.some((t) => t.state === 'open' && t.runId === null)" },
+  // Review 2429 F9: ANY open declared ticket, not every ticket.
+  { id: 'TR-6', old: '  return tickets.some((t) =>', new: '  return tickets.length > 0 && tickets.every((t) =>' },
 ]);
 
 export const PARSE_TICKET_DONE_SET = set([
@@ -32,6 +34,8 @@ export const PARSE_TICKET_DONE_SET = set([
   { id: 'BD-2', old: "  if (keys.length !== 1) return verbBad('evidence names exactly one of runId or pr');", new: "  if (keys.length === 0) return verbBad('evidence names exactly one of runId or pr');" },
   { id: 'BD-3', old: '!Number.isSafeInteger(v) || (v as number) < 1)', new: '!Number.isSafeInteger(v))' },
   { id: 'BD-4', old: '!Number.isSafeInteger(v) || (v as number) < 1)', new: "typeof v !== 'number' || (v as number) < 1)" },
+  // Review 2429 F10: a safe integer, not any integer.
+  { id: 'BD-6', old: '!Number.isSafeInteger(v) || (v as number) < 1)', new: '!Number.isInteger(v) || (v as number) < 1)' },
   { id: 'BD-5', old: "  if (!isPlanKey(body.ticket)) return verbBad('ticket is not a plan key');\n  const ev = body.evidence;", new: '  const ev = body.evidence;' },
 ]);
 
@@ -54,13 +58,24 @@ export const TICKET_DONE_VERDICT_SET = set([
   // F2: the evidence-already-stored rule, its auto-ticket exception, and a pull request being one project's.
   { id: 'ST-1', old: '  if (taken !== undefined) return refuse(', new: '  if (false) return refuse(' },
   { id: 'ST-2', old: "  const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;", new: '  const ownAuto = null;' },
-  { id: 'ST-3', old: " && s.evidence.pr === ev.pr && s.project === t.project));", new: ' && s.evidence.pr === ev.pr));' },
-  { id: 'ST-4', old: "    'runId' in ev ? 'runId' in s.evidence && s.evidence.runId === ev.runId", new: "    'runId' in ev ? 'runId' in s.evidence" },
+  { id: 'ST-3', old: "? s.evidence.pr === ev.pr && s.project === t.project\n", new: '? s.evidence.pr === ev.pr\n' },
+  { id: 'ST-4', old: "('runId' in s.evidence ? s.evidence.runId === ev.runId\n", new: "('runId' in s.evidence ? true\n" },
+  // Review 2429 F5: a run id is global, so a run stored on another project's ticket still counts.
+  { id: 'ST-5', old: "('runId' in s.evidence ? s.evidence.runId === ev.runId\n", new: "('runId' in s.evidence ? s.evidence.runId === ev.runId && s.project === t.project\n" },
+  // Review 2429 F2 (the coordinator's ruling): a run and the pull request it carried are one piece of work, each direction;
+  // the link read whole; a pull request is one project's on the link too; the run's own auto ticket on the pr side.
+  { id: 'ST-6', old: ": pairs.some((p) => p.project === s.project && p.pr === (s.evidence as { pr: number }).pr && p.runId === ev.runId))", new: ': false)' },
+  { id: 'ST-7', old: ": !isAutoTicketKey(s.key) && pairs.some((p) => p.project === t.project && p.pr === ev.pr && p.runId === (s.evidence as { runId: number }).runId))", new: ': false)' },
+  { id: 'ST-8', old: "  if (f.links.kind === 'unreadable') return refuse(", new: '  if (false) return refuse(' },
+  { id: 'ST-9', old: 'pairs.some((p) => p.project === s.project && p.pr ===', new: 'pairs.some((p) => p.pr ===' },
+  { id: 'ST-10', old: ': !isAutoTicketKey(s.key) && pairs.some(', new: ': pairs.some(' },
 ]);
 
 export const LANDED_FACT_SET = set([
   { id: 'LF-1', old: "  return mine.some((e) => e.state === 'landed') ? { kind: 'landed' }", new: "  return mine[mine.length - 1]!.state === 'landed' ? { kind: 'landed' }" },
   { id: 'LF-2', old: '  const mine = entries.filter((e) => e.pr === pr);', new: '  const mine = entries;' },
+  // Review 2429 F6: an eject-then-land history counts as landed (any entry, not only the first).
+  { id: 'LF-4', old: "  return mine.some((e) => e.state === 'landed') ? { kind: 'landed' }", new: "  return mine[0]!.state === 'landed' ? { kind: 'landed' }" },
   { id: 'LF-3', old: "  if (mine.length === 0) return { kind: 'no-entry' };", new: '' },
 ]);
 

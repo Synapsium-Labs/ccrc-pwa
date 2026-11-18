@@ -696,7 +696,10 @@ describe('the scanner is looking at something', () => {
     // stays 157, the exempt-HTTP count 94 -> 95.
     // 259 since the Overlord's designation doors (Overlord W1 designation A, 2026-11-16), in `coord/overlordRoutes.ts`: `GET
     // /api/overlord/designation`, `POST` and `DELETE /api/overlord/designate`, session-gated and NOT EXEMPT, no box token: the HTTP
-    // half 253 -> 256, the gated count 157 -> 160, the exempt-HTTP count stays 95.
+    // half 253 -> 256, the gated count 158 -> 161, the exempt-HTTP count stays 95. (This line said 157 -> 160 until review
+    // 2429 F13: the gated count is the HTTP half less the exempt-HTTP count, 253 - 95 = 158 and 256 - 95 = 161. The lines above
+    // it, back to at least the timer doors, count the gated figure one low against their own pairs the same way; they stay
+    // as written history.)
     // 260 since the programme work map WM0, in `coord/planRoutes.ts`: `POST /api/programmes/:slug/plan/phases/refs`
     // (`plan phase-ref`), a box-token machine lane IN EXEMPT like its plan siblings: the HTTP half 256 -> 257, the gated
     // count stays 161, the exempt-HTTP count 95 -> 96. (These lines said 160 until WM1 measured it: the gated count is the

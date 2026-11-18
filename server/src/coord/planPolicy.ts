@@ -630,7 +630,8 @@ export function runMustNameTicket(phased: boolean, tickets: readonly { key: stri
 /** What `plan ticket-done`'s verdict reads (programme work map WM1, D-8727), gathered by the route. `run` is the run a
  *  `{ runId }` names (null when there is no such run; `ticketId`/`ticketKey` its own ticket, null for none); `landed` what
  *  the landing line says of a `{ pr }` for the ticket's own project; `stored` the done evidence already stored on the
- *  programme's tickets. */
+ *  programme's tickets; `links` the landing line's pairs of a pull request and the run that carried it, which tie a stored
+ *  piece of evidence of the other kind to this one (review 2429 F2; `evidenceLinksOf`, planRunFacts.ts, reads them). */
 export interface TicketDoneFacts {
   program: string;
   ticket: { id: number; key: string; project: string; state: TicketState; runId: number | null };
@@ -638,6 +639,7 @@ export interface TicketDoneFacts {
   run: { program: string; kind: string; state: string; ticketId: number | null; ticketKey: string | null } | null;
   landed: { kind: 'landed' } | { kind: 'unlanded'; state: string } | { kind: 'no-entry' } | { kind: 'unreadable'; detail: string } | null;
   stored: readonly { ticketId: number; key: string; project: string; evidence: TicketDoneEvidence }[];
+  links: { kind: 'read'; pairs: readonly { project: string; pr: number; runId: number }[] } | { kind: 'unreadable'; detail: string };
 }
 
 /** What one project's landing line says of pull request `pr` (its entries in line order): `landed` when any entry for it is,
@@ -654,7 +656,10 @@ export function landedFactOf(entries: readonly { pr: number; state: string }[], 
  *  when the landing line holds that pull request `landed` for the ticket's own project (F19). A piece of evidence already
  *  stored on another ticket of the programme does not verify (F2: one run or pull request closes at most one ticket), except
  *  on the run's own auto ticket, which folds into the declared one. A pull request is one project's: the same number in
- *  another project is another pull request. */
+ *  another project is another pull request. A run and the pull request it carried are one piece of work (review 2429 F2,
+ *  the coordinator's ruling): a `{ pr }` the landing line ties to a run stored on another ticket does not verify, nor a
+ *  `{ runId }` tied to a pull request stored on another, except that run's own auto ticket again; a link that cannot be
+ *  read refuses, as an unreadable landing line does. */
 export function ticketDoneVerdict(f: TicketDoneFacts): { ok: true } | Refused {
   const t = f.ticket;
   if (ticketIsHeld(t)) return refuse('plan-runs-open', `ticket ${t.key} is held by run ${t.runId ?? '?'}: it is recorded done once that run ends`);
@@ -676,10 +681,15 @@ export function ticketDoneVerdict(f: TicketDoneFacts): { ok: true } | Refused {
     if (l.kind === 'unreadable') return refuse('evidence-unverified', `the landing line of ${t.project} could not be read (${l.detail})`);
     if (l.kind === 'unlanded') return refuse('evidence-unverified', `pull request ${ev.pr} of ${t.project} is ${l.state}, not landed`);
   }
+  if (f.links.kind === 'unreadable') return refuse('evidence-unverified', `the landing line that ties runs to pull requests could not be read (${f.links.detail})`);
+  const pairs = f.links.pairs;
   const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;
   const taken = f.stored.find((s) => s.ticketId !== t.id && s.ticketId !== ownAuto && (
-    'runId' in ev ? 'runId' in s.evidence && s.evidence.runId === ev.runId
-      : 'pr' in s.evidence && s.evidence.pr === ev.pr && s.project === t.project));
+    'runId' in ev
+      ? ('runId' in s.evidence ? s.evidence.runId === ev.runId
+        : pairs.some((p) => p.project === s.project && p.pr === (s.evidence as { pr: number }).pr && p.runId === ev.runId))
+      : ('pr' in s.evidence ? s.evidence.pr === ev.pr && s.project === t.project
+        : !isAutoTicketKey(s.key) && pairs.some((p) => p.project === t.project && p.pr === ev.pr && p.runId === (s.evidence as { runId: number }).runId))));
   if (taken !== undefined) return refuse('evidence-unverified', `this evidence is already stored on ticket ${taken.key}: it closes one ticket`);
   return { ok: true };
 }

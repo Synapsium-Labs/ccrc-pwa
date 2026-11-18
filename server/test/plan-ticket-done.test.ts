@@ -64,6 +64,22 @@ const landPr = (c: CoordStore, pr: number, project = 'project-a'): void => {
   if (!land.ok) throw new Error('fixture land refused');
 };
 
+/** A work run of prog-a in `wave` (no ticket named, so its own ticket is the auto ticket `run-<id>`) that carried pull
+ *  request `pr`: pinned at merging, landed on project-a's line, then closed done. The landing entry names this run. */
+const landedRun = async (x: CharWorld, pr: number, wave = 1): Promise<number> => {
+  const r = await openRun(x, { ...BASE, wave });
+  expect(r.statusCode, r.body).toBe(200);
+  const id = idOf(r);
+  x.coord.setSession(id, `project-a-ws${pr}`);
+  step(x.coord, id, 'dispatched', 'working', 'awaiting-review');
+  const pin = x.coord.advanceLanding({ runId: id, to: 'merging', causedBy: 'coordinator', landing: { kind: 'pin', head: HEAD, pr, mode: 'off', handoffCommit: HC } });
+  if (!pin.ok) throw new Error('fixture pin refused');
+  const land = x.coord.advanceLanding({ kind: 'land', project: 'project-a', pr, by: 'reader', at: 5000, outcome: MERGED, expect: null });
+  if (!land.ok) throw new Error('fixture land refused');
+  step(x.coord, id, 'closing', 'done');
+  return id;
+};
+
 describe('the ticket-done deciders (planPolicy.ts): every case of planTicketDoneCases.ts', () => {
   it.each(DONE_CASES.map((c) => [c.name, c] as const))('%s', (_n, c) => { c.run(policy); });
 });
@@ -111,6 +127,10 @@ describe('the migration back-fills a done ticket\'s evidence and time from its r
       raw.prepare(t).run(2, 'k-done-no-close', 'done', 8);
       raw.prepare(t).run(3, 'k-open', 'open', null);
       raw.prepare(t).run(4, 'k-done-no-run', 'done', null);
+      // Review 2429 F4: tickets that name a run but are not done get no evidence: held open, started, dropped.
+      raw.prepare(t).run(5, 'k-open-held', 'open', 7);
+      raw.prepare(t).run(6, 'k-started', 'started', 8);
+      raw.prepare(t).run(7, 'k-dropped', 'dropped', 7);
     });
     raw.close();
     const db = openCoordDb(p);
@@ -121,6 +141,9 @@ describe('the migration back-fills a done ticket\'s evidence and time from its r
       { key: 'k-done-no-close', doneAt: null, doneEvidence: '{"runId":8}' },
       { key: 'k-open', doneAt: null, doneEvidence: null },
       { key: 'k-done-no-run', doneAt: null, doneEvidence: null },
+      { key: 'k-open-held', doneAt: null, doneEvidence: null },
+      { key: 'k-started', doneAt: null, doneEvidence: null },
+      { key: 'k-dropped', doneAt: null, doneEvidence: null },
     ]);
     db.close();
   });
@@ -202,6 +225,73 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     landPr(x.coord, 8);
     expect((await done(x, { ticket: 'w0-t4', evidence: { pr: 8 } })).statusCode).toBe(200);
     expect(refusal(await done(x, { ticket: 'w0-t5', evidence: { pr: 8 } }))).toEqual([409, 'evidence-unverified']);
+  });
+
+  it('a run and the pull request it carried close one ticket, whichever is named first (review 2429 F2)', async () => {
+    const x = await world([], true);
+    await planVerb(x, 'prog-a', '', SIX);
+    // The run first, then its pull request.
+    const first = await landedRun(x, 9);
+    expect((await done(x, { ticket: 'w0-t2', evidence: { runId: first } })).statusCode).toBe(200);
+    const byPr = await done(x, { ticket: 'w0-t3', evidence: { pr: 9 } });
+    expect(refusal(byPr)).toEqual([409, 'evidence-unverified']);
+    expect((byPr.json() as { detail: string }).detail).toContain('w0-t2');
+    // The pull request first (the run's own auto ticket, done with it, does not refuse it), then its run.
+    const second = await landedRun(x, 10, 2);
+    expect((await done(x, { ticket: 'w0-t4', evidence: { pr: 10 } })).statusCode).toBe(200);
+    const byRun = await done(x, { ticket: 'w0-t5', evidence: { runId: second } });
+    expect(refusal(byRun)).toEqual([409, 'evidence-unverified']);
+    expect((byRun.json() as { detail: string }).detail).toContain('w0-t4');
+    expect(factsOf(x, 'w0-t3')!.evidence).toBeNull();
+    expect(factsOf(x, 'w0-t5')!.evidence).toBeNull();
+  });
+
+  it('refuses a run that cannot be read (review 2429 F3)', async () => {
+    const x = await world();
+    await planVerb(x, 'prog-a', '', SIX);
+    const run = await doneBareRun(x);
+    const real = x.coord.run.bind(x.coord);
+    x.coord.run = (id: number) => (id === run ? { ok: false, kind: 'run-unreadable', detail: 'disk' } : real(id));
+    expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: run } }))).toEqual([409, 'evidence-unverified']);
+    expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
+  });
+
+  it('refuses a pull request, and a run tied to a stored one, when the landing line cannot be read (review 2429 F3)', async () => {
+    const x = await world([], true);
+    await planVerb(x, 'prog-a', '', SIX);
+    landPr(x.coord, 7);
+    landPr(x.coord, 8);
+    expect((await done(x, { ticket: 'w0-t4', evidence: { pr: 8 } })).statusCode).toBe(200);
+    const real = x.coord.readLanding.bind(x.coord);
+    const fenced = () => ({ ok: false as const, error: 'landing-journal-unavailable' as const, recovery: 'replay' as const });
+    // No ticket stores a { runId } yet, so no link is read: the { pr } is refused by its own landing read.
+    x.coord.readLanding = fenced;
+    expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { pr: 7 } }))).toEqual([409, 'evidence-unverified']);
+    x.coord.readLanding = real;
+    const run = await doneBareRun(x);
+    // A { runId } reads the link through the line of the project whose ticket stores a { pr }.
+    x.coord.readLanding = fenced;
+    expect(refusal(await done(x, { ticket: 'w0-t3', evidence: { runId: run } }))).toEqual([409, 'evidence-unverified']);
+    expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
+    expect(factsOf(x, 'w0-t3')!.evidence).toBeNull();
+  });
+
+  it('markTicketDone leaves a ticket a run holds (started) and a done ticket unchanged (review 2429 F7)', async () => {
+    const x = await world();
+    await planVerb(x, 'prog-a', '', SIX);
+    const finished = await openRun(x, { ...BASE, wave: 1, ticket: 'w0-t3' });
+    step(x.coord, idOf(finished), 'dispatched', 'closing', 'done');
+    const held = await openRun(x, { ...BASE, title: 'another', wave: 1, ticket: 'w0-t1' });
+    expect(held.statusCode, held.body).toBe(200);
+    step(x.coord, idOf(held), 'dispatched', 'working');
+    const KEYS = ['w0-t1', 'w0-t3'];
+    const rows = () => x.plan.planOf('prog-a').epics.flatMap((e) => e.tickets).filter((t) => KEYS.includes(t.key)).map((t) => ({ ...t }));
+    const before = rows();
+    const facts = KEYS.map((k) => factsOf(x, k));
+    expect(before.map((t) => [t.key, t.state, t.runId])).toEqual([['w0-t1', 'started', idOf(held)], ['w0-t3', 'done', idOf(finished)]]);
+    for (const t of before) x.plan.markTicketDone(t.id, { pr: 99 }, 123);
+    expect(rows()).toEqual(before);
+    expect(KEYS.map((k) => factsOf(x, k))).toEqual(facts);
   });
 
   it('refuses a pull request with no landing entry', async () => {

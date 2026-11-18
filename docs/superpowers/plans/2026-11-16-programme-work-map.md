@@ -664,10 +664,11 @@ Task WM0 departs under its own number:
 Task WM1 departs under its own number:
 
 - **D-8727** — `work-map-wm1-build`: Task WM1 (desktop polish run 2416), issued on 2026-11-17. Its first commit carries
-  review 2412's three text minors on WM0: spec Figure 2 and two sentences of spec §4.1 now draw the ruled order (an ended
-  plan reads a ticket marked done whose evidence does not verify as left open; a live plan keeps "marked done, but …",
-  review 2382 L3-F1); WM0's note words its note-move basis truly; and `auth-gate.test.ts`'s gated count, measured as the
-  HTTP half less the exempt-HTTP count, is 161 (the comment said 160). The build departs from the plan's text in these
+  two of review 2412's three text minors on WM0: spec Figure 2 and two sentences of spec §4.1 now draw the ruled order (an
+  ended plan reads a ticket marked done whose evidence does not verify as left open; a live plan keeps "marked done, but
+  …", review 2382 L3-F1), and WM0's note words its note-move basis truly. The third, `auth-gate.test.ts`'s gated count,
+  measured as the HTTP half less the exempt-HTTP count after WM1's own route, is 161 (the comment said 160); it is in the
+  feat commit (review 2429 F11). The build departs from the plan's text in these
   ways, each named by slug: `ticket-done-plan-closed`, `plan ticket-done` refuses `plan-closed` once the plan has ended,
   as its siblings `plan ticket-move` and `plan phase-ref` do; `wm1-reads-reuse-owners`, `store.ts` gains no read: the
   route reads the run through `CoordStore.run` and the landing line through `CoordStore.readLanding`, the one public
@@ -678,7 +679,16 @@ Task WM1 departs under its own number:
   together); `unreadable-evidence-refuses`, a run or landing line that cannot be read refuses `evidence-unverified` with
   the read's word in the detail, never a new word; `phased-counts-dropped`, a plan "declares a phase" while any phase row
   is stored, dropped ones included; `landed-if-any-entry`, a pull request the landing line holds more than once reads
-  landed when any of its entries is `landed`; and the client refuses `capability-missing`, as WM0's row does. The task
+  landed when any of its entries is `landed`; and the client refuses `capability-missing`, as WM0's row does. After
+  review 2429, on the coordinator's ruling (fix round 1, its F2): `run-and-its-pr-are-one-work`, a run and the pull
+  request it carried are one piece of work, so a `{ pr }` the landing line ties to a run stored on another ticket does not
+  verify, nor a `{ runId }` tied to a pull request stored on another (the run's own auto ticket still folds in on either
+  side). The link is read only from `landing_entries`, through `CoordStore.readLanding`, by `evidenceLinksOf` in
+  `planRunFacts.ts`, which hands the pure verdict its pairs; nothing reads `runs.closePr` or the lineage, and a link that
+  cannot be read refuses `evidence-unverified`, as `unreadable-evidence-refuses` does. The `ticket-required` line in the
+  coordinator's `ccd/coordinator-skill/references/plan.md` (outside WM1's Files, added when the coordinator-skill guard went
+  red) ships in WM1r, the rules half, for the repository's review judge's rules-mixed reason: a pull request that changes a
+  rules file changes nothing else (review 2429 F14). The task
   note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
   mutants.
 

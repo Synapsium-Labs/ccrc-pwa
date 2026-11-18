@@ -48,6 +48,16 @@ describe('runs open names its ticket in a phased plan (D10)', () => {
     expect(named.statusCode, named.body).toBe(200);
   });
 
+  it('a plan whose only phase is dropped is still phased: the phase was declared (phased-counts-dropped; review 2429 F8)', async () => {
+    const x = await world();
+    expect((await planVerb(x, 'prog-a', '', plan(['t1'], true))).statusCode).toBe(200);
+    const p = { ...plan(['t1'], false), phases: [{ key: 'p1', title: 'Phase one', summary: 'all of it', refs: [], droppedWhy: 'cut' }] };
+    const res = await planVerb(x, 'prog-a', '', p);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(x.plan.phasesOf('prog-a').map((ph) => [ph.key, ph.droppedWhy !== null])).toEqual([['p1', true]]);
+    expect(refusal(await openRun(x, { ...BASE, wave: 1 }))).toEqual([409, 'ticket-required']);
+  });
+
   it('wave-epic-mismatch is answered first', async () => {
     const x = await world();
     await planVerb(x, 'prog-a', '', plan(['t1'], true));

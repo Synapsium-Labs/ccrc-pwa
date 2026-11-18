@@ -20,6 +20,7 @@ const facts = (evidence: TicketDoneEvidence, over: Partial<TicketDoneFacts> = {}
   run: 'runId' in evidence ? DONE_RUN : null,
   landed: 'pr' in evidence ? { kind: 'landed' } : null,
   stored: [],
+  links: { kind: 'read', pairs: [] },
   ...over,
 });
 const word = (v: ReturnType<PlanPolicyModule['ticketDoneVerdict']>): string => (v.ok ? 'ok' : v.word);
@@ -39,6 +40,11 @@ export const REQUIRED_CASES: TicketDoneCase[] = [
     run: (m) => { expect(m.runMustNameTicket(true, [open('t1', 9), { key: 't2', state: 'started', runId: 8 }])).toBe(false); } },
   { name: 'ticket-required: done and dropped declared tickets do not count',
     run: (m) => { expect(m.runMustNameTicket(true, [{ key: 't1', state: 'done', runId: null }, { key: 't2', state: 'dropped', runId: null }])).toBe(false); } },
+  { name: 'ticket-required: one open declared ticket among held, auto and closed ones still needs a named ticket (review 2429 F9)',
+    run: (m) => {
+      expect(m.runMustNameTicket(true, [open('t1'), open('run-7'), { key: 't2', state: 'started', runId: 8 },
+        { key: 't3', state: 'done', runId: null }])).toBe(true);
+    } },
   { name: 'ticket-required: an epic with no tickets admits the run',
     run: (m) => { expect(m.runMustNameTicket(true, [])).toBe(false); } },
 ];
@@ -60,7 +66,7 @@ export const DONE_CASES: TicketDoneCase[] = [
     } },
   { name: 'body: evidence that is not a positive integer is refused plan-bad-body',
     run: (m) => {
-      for (const ev of [{ runId: 0 }, { runId: -1 }, { runId: 1.5 }, { pr: '7' }, { pr: 0 }]) {
+      for (const ev of [{ runId: 0 }, { runId: -1 }, { runId: 1.5 }, { runId: 2 ** 53 }, { pr: '7' }, { pr: 0 }]) {
         expect(parsed(m, { ticket: 't1', evidence: ev }), JSON.stringify(ev)).toBe('plan-bad-body');
       }
     } },
@@ -124,6 +130,8 @@ export const DONE_CASES: TicketDoneCase[] = [
       expect(m.landedFactOf([{ pr: 7, state: 'pinned' }], 7)).toEqual({ kind: 'unlanded', state: 'pinned' });
       expect(m.landedFactOf([{ pr: 7, state: 'ejected' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'unlanded', state: 'queued' });
       expect(m.landedFactOf([{ pr: 7, state: 'landed' }, { pr: 7, state: 'queued' }], 7)).toEqual({ kind: 'landed' });
+      // Ejected, then pinned again and landed: the pull request landed (review 2429 F6).
+      expect(m.landedFactOf([{ pr: 7, state: 'ejected' }, { pr: 7, state: 'landed' }], 7)).toEqual({ kind: 'landed' });
     } },
   { name: 'verdict: an unreadable landing line is refused evidence-unverified',
     run: (m) => { expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { landed: { kind: 'unreadable', detail: 'landing-fenced' } })))).toBe('evidence-unverified'); } },
@@ -138,6 +146,11 @@ export const DONE_CASES: TicketDoneCase[] = [
     run: (m) => {
       const stored = [{ ticketId: 90, key: 'run-40', project: 'project-a', evidence: { runId: RUN } }];
       expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { stored })))).toBe('ok');
+    } },
+  { name: 'verdict: a run stored on a ticket of another project of the programme still refuses it (a run id is global; review 2429 F5)',
+    run: (m) => {
+      const stored = [{ ticketId: 12, key: 't2', project: 'project-b', evidence: { runId: RUN } }];
+      expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { stored })))).toBe('evidence-unverified');
     } },
   { name: 'verdict: an auto ticket of ANOTHER run holding this run\'s evidence still refuses it',
     run: (m) => {
@@ -159,6 +172,39 @@ export const DONE_CASES: TicketDoneCase[] = [
       const stored = [{ ticketId: 12, key: 't2', project: 'project-a', evidence: { runId: RUN + 1 } },
         { ticketId: 13, key: 't3', project: 'project-a', evidence: { pr: RUN } }];
       expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { stored })))).toBe('ok');
+    } },
+
+  // A run and the pull request it carried are one piece of work (review 2429 F2, the coordinator's ruling): the landing
+  // line's link ties evidence of one kind to evidence of the other kind already stored.
+  { name: 'verdict: a pull request whose landing entry names a run stored on another ticket is refused evidence-unverified',
+    run: (m) => {
+      const stored = [{ ticketId: 12, key: 't2', project: 'project-a', evidence: { runId: RUN } }];
+      const tied = { kind: 'read' as const, pairs: [{ project: 'project-a', pr: 7, runId: RUN }] };
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { stored, links: tied })))).toBe('evidence-unverified');
+      // Control: the landing line ties the pull request to another run.
+      const other = { kind: 'read' as const, pairs: [{ project: 'project-a', pr: 7, runId: RUN + 1 }] };
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { stored, links: other })))).toBe('ok');
+    } },
+  { name: 'verdict: a run a landing entry ties to a pull request stored on another ticket is refused evidence-unverified',
+    run: (m) => {
+      const stored = [{ ticketId: 12, key: 't2', project: 'project-a', evidence: { pr: 7 } }];
+      const tied = { kind: 'read' as const, pairs: [{ project: 'project-a', pr: 7, runId: RUN }] };
+      expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { stored, links: tied })))).toBe('evidence-unverified');
+      // Control: the same number on another project's line is another pull request.
+      const elsewhere = { kind: 'read' as const, pairs: [{ project: 'project-b', pr: 7, runId: RUN }] };
+      expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { stored, links: elsewhere })))).toBe('ok');
+    } },
+  { name: 'verdict: the run\'s own auto ticket holding the run its pull request carried does not refuse the pull request',
+    run: (m) => {
+      const stored = [{ ticketId: 90, key: 'run-40', project: 'project-a', evidence: { runId: RUN } }];
+      const tied = { kind: 'read' as const, pairs: [{ project: 'project-a', pr: 7, runId: RUN }] };
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { stored, links: tied })))).toBe('ok');
+    } },
+  { name: 'verdict: a link between runs and pull requests that cannot be read is refused evidence-unverified',
+    run: (m) => {
+      const links = { kind: 'unreadable' as const, detail: 'project-a: landing-fenced' };
+      expect(word(m.ticketDoneVerdict(facts({ runId: RUN }, { links })))).toBe('evidence-unverified');
+      expect(word(m.ticketDoneVerdict(facts({ pr: 7 }, { links })))).toBe('evidence-unverified');
     } },
 ];
 

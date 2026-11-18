@@ -16,7 +16,8 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 | `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`) | `server/src/coord/planRoutes.ts` | Measured: `plan-ticket-done.test.ts` |
 | `evidence-unverified` in `PLAN_REFUSALS` (409); `ticket-required` a `RunRefuseCode` (409); `plan-ticket-done-v1` a `ServerCap`; `TicketDoneEvidence`, `PlanTicketDoneBody` | `shared/plan.ts`, `shared/refusal.ts`, `shared/api.ts` | Measured: `plan-vocabulary.test.ts` |
 | The client row `plan.ticket-done`, refused `capability-missing` locally without `plan-ticket-done-v1` | `ccd/ccrc-api` | Measured: `ccrc-api.test.ts` |
-| `ticket-required` named in the coordinator's corpus (one line in the `runs open` refusal list; the verb's own section is WM5's) | `ccd/coordinator-skill/references/plan.md` | Measured: `coordinator-skill.test.ts` (red in CI's first run, review finding 9's census) |
+| A run and the pull request it carried are one piece of work (review 2429 F2, the coordinator's ruling in fix round 1): `ticketDoneVerdict` reads the landing line's links; `evidenceLinksOf` reads them through `CoordStore.readLanding` only | `planPolicy.ts`, `planRunFacts.ts`, `planRoutes.ts` | Measured: the `verdict:` link cases and the route case `a run and the pull request it carried close one ticket` |
+| `ticket-required` named in the coordinator's corpus: added for CI's first run, then moved to WM1r, the rules half, in fix round 1 (the review judge's rules-mixed reason). This branch leaves `ccd/coordinator-skill/references/plan.md` as main has it, so `coordinator-skill.test.ts`'s RunRefuseCode census is red here until WM1r lands (expected) | none on this branch | Measured: `git diff origin/main -- ccd/coordinator-skill/references/plan.md` is empty |
 | The gate's EXEMPT row and the census rows | `server/src/auth/gate.ts`, `auth-gate.test.ts`, `box-token-census.test.ts`, `README.md`, `census-w3/claimant*.ts`, `ccrc-api-closed.test.ts` | Measured: those suites |
 
 ## 2. The migration slot
@@ -52,14 +53,16 @@ cases run against every mutant in §4; the route and store cases were mutated by
 
 Four new deciders joined `MUTANT_SETS` and `mutation-floors.json`, each run against every case of
 `server/test/planTicketDoneCases.ts`. Measured: `mutation-floors.test.ts` for the four keys, every mutant killed, score 1,
-so each floor is 1 (load 10.57).
+so each floor is 1 (load 10.57). That build had 29 floor mutants (TR 5, BD 5, EV 12, ST 4, LF 3); earlier records said 30
+(review 2429 F12). Fix round 1 added 9, so there are 38: TR-6, BD-6, ST-5 to ST-10 and LF-4, every one killed with the
+other 29 (load 11.42).
 
 | Decider | Mutants | What each removes or narrows |
 |---|---|---|
-| `runMustNameTicket` | TR-1 to TR-5 | the rule whole; the phased test; the `open` test; the no-run test; the not-auto test |
-| `parsePlanTicketDone` | BD-1 to BD-5 | the closed shape (a body naming `byId`); exactly one evidence key; the positive bound; the integer test; the plan-key test |
-| `ticketDoneVerdict` | EV-1 to EV-10, EV-7b, EV-7c, ST-1 to ST-4 | held (`plan-runs-open`); not open (`plan-bad-body`); no run; this programme; a work run; done; its own ticket (whole, the auto exception, the this-ticket case); no landing entry; unreadable; not landed; the evidence-already-stored rule; its auto-ticket exception; a pull request being one project's; the run id compared |
-| `landedFactOf` | LF-1 to LF-3 | any entry landed (not only the newest); the filter by pull request; the no-entry answer |
+| `runMustNameTicket` | TR-1 to TR-6 | the rule whole; the phased test; the `open` test; the no-run test; the not-auto test; any open declared ticket, not every ticket (F9) |
+| `parsePlanTicketDone` | BD-1 to BD-6 | the closed shape (a body naming `byId`); exactly one evidence key; the positive bound; the integer test; the plan-key test; a safe integer, not any integer (F10) |
+| `ticketDoneVerdict` | EV-1 to EV-10, EV-7b, EV-7c, ST-1 to ST-10 | held (`plan-runs-open`); not open (`plan-bad-body`); no run; this programme; a work run; done; its own ticket (whole, the auto exception, the this-ticket case); no landing entry; unreadable; not landed; the evidence-already-stored rule; its auto-ticket exception; a pull request being one project's; the run id compared; a run id global across the programme's projects (F5); a `{ runId }` tied to a stored `{ pr }` and a `{ pr }` tied to a stored `{ runId }` (F2, one each); an unreadable link; a pull request being one project's on the link; the run's own auto ticket on the `{ pr }` side |
+| `landedFactOf` | LF-1 to LF-4 | any entry landed (not only the newest); the filter by pull request; the no-entry answer; any entry, not only the first (F6) |
 
 ### 4.2 By hand, outside the floors
 
@@ -78,12 +81,29 @@ Measured (load 10.37), every one killed:
 | M-6 | `planRoutes.ts` | the route reads every pull request as landed | the two `{ pr }` refusal cases |
 | M-7 | `planRunFacts.ts` | `phased` always false | the `ticket-required` refusal case |
 
+Fix round 1 (review 2429's missing pins and its F2 ruling), measured the same way (load 10.25, M-9 and M-13 again at 13.71
+after the fenced case was reordered: M-9 survived the first time, because a stored `{ runId }` made the link read refuse
+first), every one killed:
+
+| Id | File | Mutant | Test that reds |
+|---|---|---|---|
+| M-8 | `planRoutes.ts` | a run read that fails is not refused (F3) | `refuses a run that cannot be read` |
+| M-9 | `planRoutes.ts` | a fenced landing read counts as landed (F3) | `refuses a pull request, and a run tied to a stored one, when the landing line cannot be read` |
+| M-10 | `schema.ts` | the back-fill writes every ticket that names a run, not only done ones (F4) | the back-fill case |
+| M-11 | `planStore.ts` | `markTicketDone`'s `state = 'open' AND runId IS NULL` guard removed (F7) | `markTicketDone leaves a ticket a run holds (started) and a done ticket unchanged` |
+| M-12 | `planRunFacts.ts` | `phased` counts only phases not dropped (F8) | `a plan whose only phase is dropped is still phased` |
+| M-13 | `planRunFacts.ts` | `evidenceLinksOf` skips a landing line it cannot read | the fenced-landing route case |
+| M-14 | `planRunFacts.ts` | `evidenceLinksOf` reads no line for a `{ pr }` | `a run and the pull request it carried close one ticket` |
+| M-15 | `planRunFacts.ts` | `evidenceLinksOf` reads no line for a `{ runId }` | the same, and the fenced-landing case |
+| M-16 | `planRoutes.ts` | the route hands the verdict no links | the same two |
+
 ## 5. Claims and consent
 
 - Claimed by this task (measured): 4843 (the spec, the plan, this note, WM0's note, `shared/api.ts`, `gate.ts`,
   `store.ts`, the new tests, the census tests not held elsewhere, the mutation floors), 4844 (`planRunFacts.ts`, the new
   cases and sets, the shared fixture), 4848 (`plan-phases.test.ts`).
-- Claimed by this task for the CI fix (measured): 4864 (`ccd/coordinator-skill/references/plan.md`).
+- Claimed by this task for the CI fix (measured): 4864 (`ccd/coordinator-skill/references/plan.md`), released in fix round 1
+  once the file was back to main's copy, for WM1r's worker.
 - Co-edited under the Linear hierarchy wave 4's claims 4783, 4787, 4791 and 4824 (`schema.ts`, `planStore.ts`,
   `planRoutes.ts`, `planPolicy.ts`, `ccd/ccrc-api`, `shared/plan.ts`, `shared/refusal.ts`, `plan-store`, `ccrc-api`,
   `ccrc-api-closed`, `auth-gate`, `coord-db`, `run-close-switch` and `refusal-status` tests): the coordinator's grant (mail
@@ -115,5 +135,13 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 13 | `mutation-floors` for the four new keys and the floors-and-sets check, after the rename | 6.91 | 5 passed |
 | 14 | After the one merge of `origin/main` 457997a78 (the coordinator's word; only the route counts conflicted, with #2992: 260 routes at the gate, 263 scanned, 163 gated): `auth-gate`, `box-token-census`, `single-definition`, `coordinator-skill`, `mail-routes`, `coord-db` and the two new files | 10.68 | 45 files, 2473 passed |
 | 15 | `mutation-floors`' floors-and-sets, no-floor-falls and CONTROL checks after the merge | 8.50 | 3 passed |
+
+| 16 | Fix round 1: `plan-ticket-done` (after C and D) | 8.61 | 57 passed (a first try had 1 red in my own new F7 case: two runs cannot open on one wave, so it holds one ticket and closes one) |
+| 17 | `plan-ticket-required` | 11.49 | 15 passed (the dropped-phase case needs the phase declared before it is dropped) |
+| 18 | `mutation-floors` for the four keys, the floors-and-sets, no-floor-falls and CONTROL checks | 11.42 | 7 passed: all 38 floor mutants killed |
+| 19 | The hand mutants M-8 to M-16 (§4.2), each restored from its saved copy (sha checked) | 10.25, 13.71 | 9 of 9 killed |
+| 20 | `tsc --noEmit` of `tsconfig.json`, then of `test/tsconfig.tests.json` | 11.58, 13.26 | both clean |
+| 21 | `auth-gate` (the F13 comment) | 10.85 | 347 passed |
+| 22 | `mail-routes`, `coord-policy-rings`, `rings/`, `single-definition/`, `deviation-refs` (after `git fetch origin main`), `coordinator-skill`, `anchors`, `citations` | 11.98 | 2011 passed, 1 failed: `coordinator-skill`'s RunRefuseCode census, expected until WM1r lands |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.

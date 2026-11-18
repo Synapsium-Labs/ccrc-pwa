@@ -20,6 +20,7 @@ import { programmeNameFromSlug } from '../../../shared/api.js';
 import { publicTextVerdict } from '../linking/policy.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import type { AttributionRead } from './openRun.js';
+import { evidenceLinksOf } from './planRunFacts.js';
 import type { CoordStore } from './store.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { BindingRow, PhaseRow, PlanStorePort, StoredPlan } from './planStore.js';
@@ -424,7 +425,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       d.evidence === null || d.evidence === 'malformed' ? [] : [{ ticketId: d.ticketId, key: d.key, project: d.project, evidence: d.evidence }]);
     const v = ticketDoneVerdict({
       program: slug, ticket: { id: t.id, key: t.key, project: t.project, state: t.state, runId: t.runId }, evidence, run, landed,
-      stored: storedEvidence,
+      stored: storedEvidence, links: evidenceLinksOf(coord, evidence, t.project, storedEvidence),
     });
     if (!v.ok) return { refuse: v.word, detail: v.detail };
     plan.markTicketDone(t.id, evidence, opts.now());
