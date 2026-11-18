@@ -82,10 +82,12 @@ describe('a POST hold racing the hourly commit: the real local arm, the real ccr
     fs.writeFileSync(join(home, '.local', 'bin', 'curl'),
       '#!/bin/sh\necho "the models race suite must never reach curl" >&2\nexit 97\n', { mode: 0o755 });
     const shim = join(home, '.local', 'bin', 'ccrc');
-    const r = spawnSync('bash', ['-c', 'f=$1; out=$2; set --; . "$f"; _inst_shim > "$out"', 'shim', join(REPO, 'ccd', 'ccrc'), shim],
-      { env, encoding: 'utf8' });
+    // The launcher's bytes from `_inst_shim` itself. The script is a constant and no path reaches the shell's argument
+    // list: the file to source comes in through the environment, and node writes the shim from stdout.
+    const r = spawnSync('bash', ['-c', 'set --; . "$CCRC_RACE_SRC"; _inst_shim'],
+      { env: { ...env, CCRC_RACE_SRC: join(REPO, 'ccd', 'ccrc') }, encoding: 'utf8' });
     expect(r.status, r.stderr).toBe(0);
-    fs.chmodSync(shim, 0o755);
+    fs.writeFileSync(shim, r.stdout, { mode: 0o755 });
     // the lane: registry and catalogue planted, then the op's own `materialise`
     const dir = join(home, '.ccrc', 'models');
     fs.writeFileSync(join(dir, `${LANE}.classes.json`), ADV_REGISTRY_BYTES, { mode: 0o600 });
