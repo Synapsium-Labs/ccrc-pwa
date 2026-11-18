@@ -30,7 +30,7 @@ import { useLaneModels, type LaneModelsControl, type LaneModelsReadOutcome } fro
 import type { LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
-  MODELS_READ_ABSENT, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords,
+  MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
   actUnreadableWords, advanceStateWords, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdAriaLabel, holdWords, lastMoveWords,
   modelLine, modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertStillOffered, revertTitle,
   revertWithdrawnWords, type ModelsAction,
@@ -183,10 +183,10 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
       {shown === null && readFailure === null && <Skeleton lines={4} />}
       {shown !== null && shown.kind !== 'read' && (
         <>
-          <p className="acct-models-note" data-testid="models-read-state">
-            {shown.kind === 'absent' ? MODELS_READ_ABSENT : MODELS_READ_UNREADABLE}
+          <p className="acct-models-note" data-testid="models-read-state" data-kind={shown.kind}>
+            {modelsReadStateWords(shown)}
           </p>
-          {shown.kind === 'unreadable' && (
+          {shown.kind !== 'absent' && (
             <ul className="acct-models-names">
               {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
             </ul>

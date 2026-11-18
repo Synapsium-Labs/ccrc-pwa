@@ -1,8 +1,8 @@
-// Auto-advance plan W4a Tasks 18-19, as re-planned (D-8686, D-8687, D-8688, D-5228, D-8693): `readLaneModels` reads the
-// `models` op's `show` first and the lane's files under the D-8406 grant only when nothing ran (or `show` failed on
-// something the files path never reads, the coordinator's ruling of 2026-11-16). `lane-models.test.ts`
-// pins the files path unchanged beside this file. Every case runs against fixture HOMEs and stub ops: the local arm's
-// case spawns a bash stub under a fixture home, never a real `ccrc`, and never anything under the real home.
+// Auto-advance plan W4a Tasks 18-19, as re-planned (D-8686, D-8687, D-8688, D-5228, D-8693), and R3b: `readLaneModels`
+// reads the `models` op's `show` alone. The files fallback is retired (R3b), so every outcome is its own answer, and no
+// case reads a file: `lane-models-grant-retired.test.ts` holds that beside this file. Every case runs against fixture
+// HOMEs and stub ops: the local arm's case spawns a bash stub under a fixture home, never a real `ccrc`, and never
+// anything under the real home.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -18,7 +18,7 @@ import { MAX_CAP_WORDS } from '../../shared/api.js';
 import { lastMoveOf, parseAdvance } from '../../shared/model-advance.mjs';
 import {
   CLASSES, MODELS_DIR_NAME, catalogueFileName, laneClassModels, parseCatalogue, parseRegistry, registryFileName,
-  type LaneModelsAnswer, type LaneModelsRead, type ModelClass,
+  type LaneModelsAnswer, type ModelClass,
 } from '../../shared/models.js';
 import { testDeps } from './helpers.js';
 import { bootAgent, connectToAgent, makeFixture } from './remoteHelpers.js';
@@ -83,16 +83,14 @@ function rig(answer: ModelsAsked | (() => Promise<ModelsAsked>)) {
   };
   return { base, io, reads, calls, read: () => readLaneModels(io, base.cfg.ccrcDir, 'lane-a') };
 }
-/** The files path's reading of the same seeded lane. */
-const FILES: LaneModelsRead = { kind: 'read', classes: CLASS_LABELS };
 
 describe('readLaneModels through the op (D-8686)', () => {
-  it('an exited show gives the files path\'s classes, reads no file, and asks show once', async () => {
+  it('an exited show gives the lane\'s classes, reads no file, and asks show once', async () => {
     const r = rig(exited(showJson('lane-a')));
     const got = await r.read();
     expect(got.kind).toBe('read');
     if (got.kind !== 'read') return;
-    expect(got.classes).toEqual(FILES.kind === 'read' ? FILES.classes : null);
+    expect(got.classes).toEqual(CLASS_LABELS);
     expect(got.classes[C0].efforts).toEqual(['low', 'high']);
     expect(r.reads).toEqual([]);
     expect(r.calls).toEqual([['lane-a', 'show', undefined]]);
@@ -138,12 +136,23 @@ describe('readLaneModels through the op (D-8686)', () => {
     expect(b).toEqual({ kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', ...none } });
   });
 
-  it('an ok whose classes fail parseAdvance, or an unknown state, makes the whole answer unreadable', async () => {
+  it('an ok whose classes fail parseAdvance, or an advance that is not an object or has no state word, makes the whole answer unreadable', async () => {
     const bad = { ...ADV_CLASSES, [C0]: { ...advClass(C0), family: 'Not A Word' } };
     expect(await rig(exited(showJson('lane-a', { advance: { state: 'ok', classes: bad, pending: null } }))).read())
       .toEqual({ kind: 'unreadable' });
-    expect(await rig(exited(showJson('lane-a', { advance: { state: 'stale' } }))).read()).toEqual({ kind: 'unreadable' });
     expect(await rig(exited(showJson('lane-a', { advance: 'ok' }))).read()).toEqual({ kind: 'unreadable' });
+    expect(await rig(exited(showJson('lane-a', { advance: { state: 7 } }))).read()).toEqual({ kind: 'unreadable' });
+    expect(await rig(exited(showJson('lane-a', { advance: {} }))).read()).toEqual({ kind: 'unreadable' });
+  });
+
+  // R3b (the operator's ruling of 2026-11-17, lifting D-8693's "unreadable until wave 5"): a state WORD this server does
+  // not know costs the advance record only. The lane's classes are kept, and the advance reads `invalid` with no detail.
+  it.each(['stale', 'unreported', 'held', 'OK'])('an advance state word this server does not know (%s) reads invalid, classes kept', async (word) => {
+    const r = rig(exited(showJson('lane-a', { advance: { state: word, detail: 'from a newer ccrc' } })));
+    expect(await r.read()).toEqual({
+      kind: 'read', classes: CLASS_LABELS, advance: { state: 'invalid', detail: null, pending: null, classes: null },
+    });
+    expect(r.reads).toEqual([]);
   });
 
   it('refusals: no-such-account is absent (exit 1 or 2), any other word unreadable, with no file read', async () => {
@@ -163,34 +172,33 @@ describe('readLaneModels through the op (D-8686)', () => {
     expect([...a.reads, ...a2.reads, ...b.reads, ...c.reads, ...d.reads]).toEqual([]);
   });
 
-  // The coordinator's ruling of 2026-11-16 (D-8693): `show` reads the catalogue before the registry and refuses on it,
-  // and parses the registry WITH the catalogue, where the files path does neither; it also reads the fleet box's
-  // roster before any lane file (`roster-*`, `deploy/models-op.mjs`'s readRoster), and `ccd/ccrc`'s `_models_answer`
-  // refuses `no-answer` on a node half that answered nothing usable, where the files path reads neither. So these
-  // refusals read the files, as "nothing ran" does, and a lane never becomes unreadable where the file read answers.
+  // D-8693 named these: `show` reads the catalogue before the registry and refuses on it, and parses the registry WITH
+  // the catalogue; it reads the fleet box's roster before any lane file (`roster-*`, `deploy/models-op.mjs`'s readRoster);
+  // and `ccd/ccrc`'s `_models_answer` refuses `no-answer` on a node half that answered nothing usable. The files path
+  // read past them until R3b; now each is `unreadable` WITH its code, so the sheet can name it (the coordinator's ruling).
   it.each([
     'catalogue-unreadable', 'catalogue-invalid', 'registry-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid',
     'no-answer',
-  ])('a %s refusal reads the files instead', async (word) => {
+  ])('a %s refusal is unreadable with its code carried, and no file is read', async (word) => {
     const r = rig(exited(refusal(word), 1));
-    expect(await r.read()).toEqual(FILES);
-    expect(r.reads).toHaveLength(2);
+    expect(await r.read()).toEqual({ kind: 'unreadable', code: word });
+    expect(r.reads).toEqual([]);
   });
 
-  it('a fallback word at exit 2 reads the files too', async () => {
+  it('a carried word at exit 2 carries its code too', async () => {
     const r = rig(exited(refusal('roster-invalid'), 2));
-    expect(await r.read()).toEqual(FILES);
-    expect(r.reads).toHaveLength(2);
+    expect(await r.read()).toEqual({ kind: 'unreadable', code: 'roster-invalid' });
+    expect(r.reads).toEqual([]);
   });
 
   // `ccd/ccrc`'s `_ccrc_die` (e.g. `_models_deps` without jq) exits 1 with its message on stderr and NOTHING on stdout,
   // before any lane sub runs: `show` prints its body unconditionally and `_models_answer` refuses `no-answer` on an
-  // empty one, so an empty stdout at exit 1 is that die alone. The files path reads past it; at exit 0 or 2 it is off
-  // the grammar.
-  it('an empty stdout at exit 1 (ccrc died before the lane) reads the files; at exit 0 or 2 it is unreadable', async () => {
+  // empty one, so an empty stdout at exit 1 is that die alone: `unreadable`, code `no-output`. At exit 0 or 2 it is off
+  // the grammar, with no code.
+  it('an empty stdout at exit 1 (ccrc died before the lane) is unreadable no-output; at exit 0 or 2 it is unreadable', async () => {
     const r = rig(exited('', 1));
-    expect(await r.read()).toEqual(FILES);
-    expect(r.reads).toHaveLength(2);
+    expect(await r.read()).toEqual({ kind: 'unreadable', code: 'no-output' });
+    expect(r.reads).toEqual([]);
     for (const code of [0, 2]) {
       const s = rig(exited('', code));
       expect(await s.read(), String(code)).toEqual({ kind: 'unreadable' });
@@ -252,13 +260,23 @@ describe('readLaneModels through the op (D-8686)', () => {
     for (const c of CLASSES) expect(got.classes[c]).toEqual({ model: CLASS_LABELS[c].model, label: CLASS_LABELS[c].label, efforts: null });
   });
 
+  // R3b (the coordinator's rulings): when nothing ran, the seam's own word is the answer, each its own arm, never folded
+  // into unreadable and never a fallback. `busy` is transient: the next read asks again (below).
   it.each([
-    [{ kind: 'unsupported' }], [{ kind: 'refused', why: 'bad-lane' }], [{ kind: 'not-started' }], [{ kind: 'busy' }],
-  ] as const)('nothing ran (%o), so the files are read: exactly the two files', async (asked) => {
+    [{ kind: 'unsupported' }, { kind: 'unsupported' }], [{ kind: 'refused', why: 'bad-lane' }, { kind: 'refused', why: 'bad-lane' }],
+    [{ kind: 'not-started' }, { kind: 'not-started' }], [{ kind: 'busy' }, { kind: 'busy' }],
+  ] as const)('nothing ran (%o): its own answer, and no file is read', async (asked, want) => {
     const r = rig(asked as ModelsAsked);
-    expect(await r.read()).toEqual(FILES);
-    const dir = path.join(r.base.cfg.ccrcDir, MODELS_DIR_NAME);
-    expect([...r.reads].sort()).toEqual([path.join(dir, registryFileName('lane-a')), path.join(dir, catalogueFileName('lane-a'))]);
+    expect(await r.read()).toEqual(want);
+    expect(r.reads).toEqual([]);
+  });
+
+  it('busy is transient: the next read asks show again, and recovers the lane', async () => {
+    let n = 0;
+    const r = rig(async () => (++n === 1 ? { kind: 'busy' } : exited(showJson('lane-a'))));
+    expect(await r.read()).toEqual({ kind: 'busy' });
+    expect((await r.read()).kind).toBe('read');
+    expect(r.calls).toHaveLength(2);
   });
 
   it.each([[{ kind: 'timeout' }], [{ kind: 'too-large' }], [{ kind: 'lost' }]] as const)(
@@ -302,7 +320,8 @@ describe('readLaneModels through the op (D-8686)', () => {
 });
 
 describe('the mixed pairs (D-8688)', () => {
-  it('new server + old agent: no models frame is sent, the two read frames are, and the answer has no advance', async () => {
+  // R3b: an agent from before the op answers `unsupported`, and since the grant is retired nothing else is asked.
+  it('new server + an agent without the op: no frame is sent at all, and the read is unsupported', async () => {
     const home = mkTmp('ccrc-lanemodels-op-old-');
     seedLane(home, 'lane-a');
     const ccrcDir = path.join(home, '.ccrc');
@@ -316,13 +335,12 @@ describe('the mixed pairs (D-8688)', () => {
       },
     };
     const got = await readLaneModels(createIo(client as never), ccrcDir, 'lane-a');
-    expect(got).toEqual(FILES);
-    expect(frames.map((f) => f.op)).toEqual(['read', 'read']);
-    expect(frames.some((f) => f.op === MODELS_OP)).toBe(false);
+    expect(got).toEqual({ kind: 'unsupported' });
+    expect(frames).toEqual([]);
   });
 
   // `createIo().models`'s error mapping (D-8688): before the wire, or an agent that predates the op, is "nothing ran"
-  // (the files answer); anything after the send, or an answer off the grammar, is `lost` (unreadable).
+  // (its own answer since R3b); anything after the send, or an answer off the grammar, is `lost` (unreadable).
   describe('createIo(client).models maps each failure to its own word', () => {
     const fake = (onModels: () => Promise<unknown>) => {
       const home = mkTmp('ccrc-lanemodels-op-map-');
@@ -352,12 +370,12 @@ describe('the mixed pairs (D-8688)', () => {
     });
 
     it.each([
-      ['bad-request', () => Promise.reject(new AgentOpError('bad-request', null))],
-      ['never sent', () => Promise.reject(new LinkNotSentError('aborted'))],
-    ] as const)('readLaneModels over a %s answer reads the files', async (_n, onModels) => {
+      ['bad-request', 'unsupported', () => Promise.reject(new AgentOpError('bad-request', null))],
+      ['never sent', 'not-started', () => Promise.reject(new LinkNotSentError('aborted'))],
+    ] as const)('readLaneModels over a %s answer is %s, and no read frame follows', async (_n, kind, onModels) => {
       const f = fake(onModels);
-      expect(await readLaneModels(f.io, f.ccrcDir, 'lane-a')).toEqual(FILES);
-      expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP, 'read', 'read']);
+      expect(await readLaneModels(f.io, f.ccrcDir, 'lane-a')).toEqual({ kind });
+      expect(f.frames.map((x) => x.op)).toEqual([MODELS_OP]);
     });
 
     it('a bad lane is refused by the builder before the wire', async () => {

@@ -4,8 +4,8 @@ import type { LaneModelsRead } from '../../shared/models';
 import { EFFORT_LADDER } from '../../shared/routing-ladder';
 import { CANARY_RESULTS, HOLD_BY, HOWS } from '../../shared/model-advance.mjs';
 import {
-  asLaneModelsRead, classWord, effortOptions, laneClassLabel, liveModelNames, modelOptions, modelReadbackFor,
-  type PickOption,
+  LANE_UNREADABLE_CODE_WORDS, asLaneModelsRead, classWord, effortOptions, laneClassLabel, laneReadWords, liveModelNames,
+  modelOptions, modelReadbackFor, type PickOption,
 } from '../src/lib/models';
 
 /**
@@ -217,6 +217,39 @@ describe('the lane-models helpers (D-8406)', () => {
     const { haiku: _h, ...three } = (GPT_LANE as Extract<LaneModelsRead, { kind: 'read' }>).classes;
     expect(asLaneModelsRead({ models: { kind: 'read', classes: three } })).toBeNull();
     expect(asLaneModelsRead({ models: { kind: 'read', classes: { ...three, haiku: { model: 7, label: null } } } })).toBeNull();
+  });
+
+  // R3b: every arm the server's read can answer instead of the classes reads as itself, never folded.
+  it('asLaneModelsRead reads each R3b arm as its own', () => {
+    const read = (models: unknown) => asLaneModelsRead({ ok: true, lane: 'gpt', models });
+    for (const kind of ['unsupported', 'not-started', 'busy'] as const) expect(read({ kind }), kind).toEqual({ kind });
+    expect(read({ kind: 'refused', why: 'bad-lane' })).toEqual({ kind: 'refused', why: 'bad-lane' });
+    // a refused with no builder word is off the grammar
+    expect(read({ kind: 'refused' })).toBeNull();
+    expect(read({ kind: 'refused', why: 'later' })).toBeNull();
+    for (const code of Object.keys(LANE_UNREADABLE_CODE_WORDS)) expect(read({ kind: 'unreadable', code }), code).toEqual({ kind: 'unreadable', code });
+    // a reason this build does not word is dropped, never a lost answer
+    expect(read({ kind: 'unreadable', code: 'a-later-word' })).toEqual({ kind: 'unreadable' });
+    expect(read({ kind: 'unreadable', code: 7 })).toEqual({ kind: 'unreadable' });
+  });
+
+  it('laneReadWords gives every arm but read its own sentence, and an unreadable names the box\'s reason', () => {
+    const arms: LaneModelsRead[] = [
+      { kind: 'absent' }, { kind: 'unreadable' }, { kind: 'unsupported' }, { kind: 'not-started' },
+      { kind: 'refused', why: 'bad-lane' }, { kind: 'busy' },
+      ...Object.keys(LANE_UNREADABLE_CODE_WORDS).map((code) => ({ kind: 'unreadable', code }) as LaneModelsRead),
+    ];
+    const said = arms.map((a) => laneReadWords(a));
+    expect(said.every((t) => typeof t === 'string' && t.length > 0)).toBe(true);
+    expect(new Set(said).size, 'no two arms share a sentence').toBe(arms.length);
+    expect(laneReadWords(GPT_LANE)).toBeNull();
+    expect(laneReadWords({ kind: 'busy' })).toMatch(/passes|next read/i);
+    expect(laneReadWords({ kind: 'unsupported' })).toMatch(/does not offer/i);
+    for (const [code, words] of Object.entries(LANE_UNREADABLE_CODE_WORDS)) {
+      expect(laneReadWords({ kind: 'unreadable', code } as LaneModelsRead), code).toContain(words);
+    }
+    // no sentence spells a path, a command or a model name
+    for (const t of said) expect(t).not.toMatch(/~\/|\.json|ccrc models|gpt-/);
   });
 });
 

@@ -4,8 +4,9 @@
 // the session's lane, as that lane's own files say it: the class registry (`registryFileName`, `shared/models.mjs`) says
 // which model a class maps to, and the catalogue says what that model is called. `GET /api/models/:lane` reads both
 // (`LaneModelsRead`, `shared/models.ts`), the same facts `ccrc models <lane> show` prints. A model advance moves the
-// registry, and the row's label follows it with no code change. When the lane has no registry, or it or its catalogue
-// cannot be read, a row reads its class name alone ("Opus class"), never a model name this file remembers: the
+// registry, and the row's label follows it with no code change. When the lane has no registry, or the read does not
+// answer its classes (`LaneModelsRead`'s other arms, each worded by `laneReadWords`), a row reads its class name alone
+// ("Opus class"), never a model name this file remembers: the
 // labels it used to hard-code went stale on the gpt lane once that lane's registry moved on. `model-name-census.test.ts`
 // keeps a model display name out of `pwa/src` for good. WHICH LIST a lane gets is the roster's lane kind's to decide
 // (D-8686, re-plan R1), with the temporary wrapper fallback named once, in `modelListProvider`.
@@ -24,9 +25,10 @@
 // The alias is set in ONE place, the lane's `settings.json` `env` block
 // (`deploy/models-op.mjs`'s materialiser writes it from the registry, `shared/modelenv.mjs` names its keys).
 import type { RosterWire, RouteField } from '../../../shared/api';
+import { MODELS_ARGV_REFUSALS, type ModelsArgvRefusal } from '../../../shared/agent-protocol';
 import {
   CLASSES, type LaneAdvanceRead, type LaneAdvanceState, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead,
-  type ModelClass,
+  type LaneUnreadableCode, type ModelClass,
 } from '../../../shared/models';
 import { CANARY_RESULTS, HOLD_BY, HOWS, type HistoryEntry, type Hold, type Pending, type Previous } from '../../../shared/model-advance.mjs';
 import type { ProviderId } from '../../../shared/providers';
@@ -323,7 +325,18 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   const models = (raw as { models?: unknown }).models;
   if (typeof models !== 'object' || models === null) return null;
   const kind = (models as { kind?: unknown }).kind;
-  if (kind === 'absent' || kind === 'unreadable') return { kind };
+  // R3b: each arm the read can answer instead of the classes. An `unreadable` keeps a `code` this build words and drops one
+  // it does not (absence permits: it reads as an unreadable with no reason, never a lost answer); a `refused` must carry a
+  // builder word.
+  if (kind === 'absent' || kind === 'unsupported' || kind === 'not-started' || kind === 'busy') return { kind };
+  if (kind === 'unreadable') {
+    const code = (models as { code?: unknown }).code;
+    return typeof code === 'string' && Object.hasOwn(LANE_UNREADABLE_CODE_WORDS, code) ? { kind, code: code as LaneUnreadableCode } : { kind };
+  }
+  if (kind === 'refused') {
+    const why = (models as { why?: unknown }).why;
+    return typeof why === 'string' && (MODELS_ARGV_REFUSALS as readonly string[]).includes(why) ? { kind, why: why as ModelsArgvRefusal } : null;
+  }
   if (kind !== 'read') return null;
   const classes = (models as { classes?: unknown }).classes;
   if (typeof classes !== 'object' || classes === null) return null;
@@ -344,6 +357,42 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   // An advance off its grammar is not trusted, and costs only itself: the classes the lane's files name still read, and the
   // advance is `invalid` ("not one this build reads"), so the pickers keep their models and a completed POST keeps its answer.
   return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE };
+}
+
+/** R3b: the box's reason for an `unreadable` read, as a clause that finishes "The lane's models could not be read: …".
+ *  Keyed on `LaneUnreadableCode`, so a reason the server adds is a compile error here until it is worded. */
+export const LANE_UNREADABLE_CODE_WORDS: Readonly<Record<LaneUnreadableCode, string>> = {
+  'catalogue-unreadable': 'the lane\'s model catalogue cannot be read on the fleet box',
+  'catalogue-invalid': 'the lane\'s model catalogue is not one the fleet box accepts',
+  'registry-invalid': 'the lane\'s class registry is not one the fleet box accepts with its catalogue',
+  'roster-absent': 'the fleet box has no account roster yet, so the lane could not be looked up (run the install on the fleet box)',
+  'roster-unreadable': 'the fleet box\'s account roster exists but cannot be read, so the lane could not be looked up',
+  'roster-invalid': 'the fleet box\'s account roster is not one its ccrc accepts, so the lane could not be looked up',
+  'no-answer': 'the fleet box\'s model tool gave no usable answer (if it keeps happening, re-run the install on the fleet box)',
+  'no-output': 'the fleet box\'s ccrc stopped before it read the lane and printed nothing (re-run the install on the fleet box)',
+};
+
+/** R3b: what a lane read that did not answer its classes says, one sentence per arm, for every surface that names a
+ *  lane's models (the Models sheet and the model picker); `null` for a `read`, which shows its classes instead. Each arm
+ *  keeps its own words: `busy` says it passes, `unsupported` that this build does not offer the read, and an
+ *  `unreadable` names the box's reason when it gave one. Pure. */
+export function laneReadWords(read: LaneModelsRead): string | null {
+  switch (read.kind) {
+    case 'read': return null;
+    case 'absent': return 'This lane has no class registry, so its classes have no models to show.';
+    case 'unreadable':
+      return read.code === undefined
+        ? 'The lane\'s models could not be read just now, so no model is shown.'
+        : `The lane's models could not be read: ${LANE_UNREADABLE_CODE_WORDS[read.code]}. No model is shown.`;
+    case 'unsupported':
+      return 'This build does not offer the read of a lane\'s models here: the fleet box\'s agent predates it, or this server has no fleet box to ask. Update the fleet box to see the models.';
+    case 'not-started':
+      return 'The read of the lane\'s models did not start: the link to the fleet box was not up, or its model tool could not be started. No model is shown.';
+    case 'refused':
+      return 'This server would not ask about this lane: its name is not one the model tool takes. No model is shown.';
+    case 'busy':
+      return 'The fleet box was busy with another models request, so the lane was not read this time. That passes by itself: the next read shows the models.';
+  }
 }
 
 /** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401), `foreign-origin` (the

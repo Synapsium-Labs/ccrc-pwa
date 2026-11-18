@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { LaneAdvanceRead, LaneClassAdvance, LaneModelsRead, ModelClass } from '../../shared/models';
 import { ModelsSheet } from '../src/accounts/ModelsSheet';
+import { PickSheet } from '../src/session/PickSheet';
+import { laneReadWords } from '../src/lib/models';
 import { VERB_CODE_WORDS } from '../src/accounts/modelsSheetWords';
 import { ApiError } from '../src/lib/apiError';
 import { clearScreenCache, laneModelsKey, peek, put } from '../src/lib/screenCache';
@@ -115,6 +117,36 @@ describe('ModelsSheet: what it shows', () => {
     cleanup(); clearScreenCache();
     mount({ kind: 'unreadable' });
     expect((await screen.findByTestId('models-read-state')).textContent).toMatch(/could not be read/i);
+  });
+
+  // R3b: each arm the read can answer instead of the classes reaches the sheet in its own words, with the class names
+  // listed and no act offered.
+  it.each([
+    [{ kind: 'unsupported' }, /does not offer/i],
+    [{ kind: 'not-started' }, /did not start/i],
+    [{ kind: 'refused', why: 'bad-lane' }, /would not ask/i],
+    [{ kind: 'busy' }, /busy.*next read/i],
+    [{ kind: 'unreadable' }, /could not be read just now/i],
+    [{ kind: 'unreadable', code: 'catalogue-invalid' }, /catalogue is not one the fleet box accepts/i],
+    [{ kind: 'unreadable', code: 'roster-absent' }, /no account roster/i],
+    [{ kind: 'unreadable', code: 'no-output' }, /printed nothing/i],
+  ] as const)('%o says so in words, lists the class names and offers no act', async (models, words) => {
+    mount(models as LaneModelsRead);
+    const said = await screen.findByTestId('models-read-state');
+    expect(said.textContent).toMatch(words);
+    expect(said.getAttribute('data-kind')).toBe(models.kind);
+    expect(screen.getByTestId('models-name-opus')).toBeTruthy();
+    expect(screen.queryAllByRole('button', { name: /hold|release|revert/i })).toHaveLength(0);
+  });
+
+  it('the model picker says why it names no model, and says nothing over a read', () => {
+    const opts = [{ label: 'Opus class', route: { field: 'class' as const, value: 'opus' }, readback: '', active: false }];
+    render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}}
+      note={laneReadWords({ kind: 'busy' })} />);
+    expect(screen.getByTestId('pick-note').textContent).toMatch(/busy.*next read/i);
+    cleanup();
+    render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}} note={null} />);
+    expect(screen.queryByTestId('pick-note')).toBeNull();
   });
 
   it('offline: the sentence shows and every act is stood down', async () => {

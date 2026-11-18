@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApiError } from '../src/lib/apiError';
 import {
-  advanceStateWords, asLaneModelsActAnswer, classActs, modelsActFailure, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, pendingWords,
+  advanceStateWords, asLaneModelsActAnswer, classActs, modelsActFailure, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, modelsReadStateWords, pendingWords,
   revertConsequence, revertStillOffered, VERB_CODE_WORDS,
 } from '../src/accounts/modelsSheetWords';
 import { laneReadFailureOf } from '../src/lib/models';
@@ -219,5 +219,19 @@ describe('a failed read of the lane', () => {
     expect(MODELS_READ_FAILED['no-answer']).toMatch(/no answer|offline/i);
     expect(MODELS_READ_FAILED.unreadable).toMatch(/cannot read/i);
     expect(MODELS_READ_UNREADABLE).not.toMatch(/class names only/i);
+  });
+
+  it('R3b: no read-state sentence speaks of model files any more (the file read is retired), and each arm but absent says the names are listed', () => {
+    const arms = [
+      { kind: 'absent' }, { kind: 'unreadable' }, { kind: 'unsupported' }, { kind: 'not-started' },
+      { kind: 'refused', why: 'bad-lane' }, { kind: 'busy' }, { kind: 'unreadable', code: 'no-answer' },
+    ] as const;
+    for (const a of arms) {
+      const t = modelsReadStateWords(a);
+      expect(t, a.kind).not.toMatch(/model files/i);
+      if (a.kind === 'absent') expect(t).not.toMatch(/listed below/);
+      else expect(t, a.kind).toMatch(/listed below by name/);
+    }
+    expect(MODELS_READ_UNREADABLE).toBe(modelsReadStateWords({ kind: 'unreadable' }));
   });
 });

@@ -53,7 +53,7 @@ import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords
 import { HistoryTab } from '../session/HistoryTab';
 import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, type PickOption } from '../lib/models';
+import { modelOptions, effortOptions, laneReadWords, type PickOption } from '../lib/models';
 import { useLaneModels } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
@@ -767,6 +767,7 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
+        note={laneModels === null ? null : laneReadWords(laneModels)}
         options={modelOptions(
           wrapper, entry, laneModels, live?.model ?? null,
           routeInfo
