@@ -6209,13 +6209,10 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   _ct_read "$REG/$id.uuid" || { apr_route=no-uuid; return 0; }
   uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || { apr_route=no-uuid; return 0; }
   # A forbidden match that could not run reads as a match (fail closed): nothing is sent either way.
-  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || { apr_route=forbidden; return 0; }
-  [[ -z "$fb" ]] || { apr_route=forbidden; return 0; }
-  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
-  [[ "$canon" == '['* ]] || { apr_route=canonical-failed; return 0; }
+  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) && [[ -z "$fb" ]] || { apr_route=forbidden; return 0; }
+  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) && [[ "$canon" == '['* ]] || { apr_route=canonical-failed; return 0; }
   apr_digest=$(printf '%s' "$canon" | _apr_sha256) || { apr_route=canonical-failed; return 0; }
-  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" \
-    && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
+  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
   # Past `APPROVAL_REQUEST_MAX_BYTES` the body carries `truncated` in place of the canonical form (`-a` keeps it ASCII,
   # so jq's length is its byte count).
   apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
