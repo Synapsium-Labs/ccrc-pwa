@@ -48,6 +48,8 @@ const EPIC: EpicView = {
       identifier: null, url: null, sync: 'none', syncWord: null },
   ],
 };
+// The live run of ticket t-1 (runId 12), which the fleet socket's runs frame hands the store; spec §11.4's inline run state.
+const RUN = { id: 12, program: 'prog-a', state: 'working', kind: 'work', project: 'project-a', wave: 1, waveOf: 1 };
 const UPKEEP: EpicView = { ...EPIC, key: 'upkeep', title: 'Upkeep', checkpoints: [] };
 
 const FIXTURE: AppFixture = {
@@ -65,7 +67,7 @@ const FIXTURE: AppFixture = {
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/feed': { events: [] },
   },
-  fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'coord', coord: { pause: 'clear' } }],
+  fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'runs', runs: [RUN] }, { type: 'coord', coord: { pause: 'clear' } }],
 };
 
 let dist: string | undefined;
@@ -94,6 +96,8 @@ interface Measured {
   /** Each ticket's title and meta line. */
   ticketLines: { title: Box; meta: Box }[];
   checkpointCount: number;
+  /** The first ticket's run state element: its computed display and text, null when none is drawn. */
+  runState: { display: string; text: string } | null;
   notClosed: Box | null;
   ellipsis: string[];
   clipped: string[];
@@ -122,6 +126,10 @@ const measure = (root: Element): Measured => {
     tickets: box(one('section[aria-label="Tickets"]')),
     ticketLines: [...root.querySelectorAll('.ep-tk')].map((t) => ({ title: box(t.querySelector('.ep-title')!), meta: box(t.querySelector('.ep-meta')!) })),
     checkpointCount: root.querySelectorAll('.ep-cp').length,
+    runState: (() => {
+      const e = root.querySelector('[data-ticket="t-1"] [data-ticket-run-state]');
+      return e === null ? null : { display: getComputedStyle(e).display, text: e.textContent ?? '' };
+    })(),
     notClosed: closes === null ? null : box(closes),
     ellipsis: [...root.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').map((e) => e.tagName.toLowerCase()),
     clipped: [...root.querySelectorAll('*')]
@@ -171,6 +179,11 @@ describe('the epic page and the Upkeep page, per width, skin and theme (D-8184)'
               expect(m.checkpointCount).toBe(3);
               expect(m.ticketLines.length).toBe(2);
               assertContained(m, `${at} epic`);
+              // A3 (spec §11.4): the run state is inline from 1920 up and not displayed under it.
+              expect(m.runState, `${at}: the live run's state is not drawn`).not.toBeNull();
+              expect(m.runState!.text, `${at}: the run state word`).toBe('working');
+              if (width >= 1920) expect(m.runState!.display, `${at}: the run state is not inline`).not.toBe('none');
+              else expect(m.runState!.display, `${at}: the run state shows under 1920`).toBe('none');
               const cp = m.checkpoints!;
               if (width >= 1280) {
                 expect(Math.abs(m.tickets.top - cp.top), `${at}: checkpoints and tickets are not side by side`).toBeLessThan(1);

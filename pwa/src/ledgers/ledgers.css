@@ -452,6 +452,8 @@
 .ep-row .ep-meta > * { min-width: 0; overflow-wrap: anywhere; }
 .ep-head .ep-state,
 .ep-row .ep-state { font-family: var(--family-mono); font-size: var(--fs-xs); font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.ep-row .ep-run-state { display: none; }
+@media (min-width: 1920px) { .ep-row .ep-run-state { display: inline; } }
 @media (min-width: 1700px) {
   .ep-tk { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; }
   .ep-tk .ep-meta { justify-content: flex-end; }

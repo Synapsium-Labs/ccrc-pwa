@@ -9,10 +9,13 @@ import { itemPath } from '../src/ledgers/ledgerWords';
 import { EpicScreen } from '../src/ledgers/EpicScreen';
 import { UpkeepScreen } from '../src/ledgers/UpkeepScreen';
 import { api } from '../src/lib/api';
+import { useFleetStore } from '../src/stores/fleet';
+import { runStateWord } from '../src/fleet/runWords';
+import type { RunSummary } from '../../shared/api';
 import { ApiError } from '../src/lib/apiError';
 import { epicPath, matchRoute, runPath, upkeepPath } from '../src/lib/routes';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); useFleetStore.setState({ runs: [] }); });
 
 // A Linear address built from parts, so no literal tracker URL sits in the tree (`topology-clean`'s private tracker id class).
 const linearUrl = (...p: string[]): string => ['https:', '', 'linear.app', ...p].join('/');
@@ -71,6 +74,17 @@ describe('the epic page', () => {
     expect(screen.getByRole('link', { name: 'Run 12' })).toHaveAttribute('href', runPath(12));
     expect(screen.getByRole('link', { name: EPIC_TEXT.openInLinear })).toHaveAttribute('href', EPIC_URL);
     expect(screen.getByText('Started')).toBeInTheDocument();
+  });
+
+  it('a ticket whose run is in the live runs draws that run\'s state word inline; one whose run is not draws none (A3)', async () => {
+    const run = { id: 12, program: 'prog-a', state: 'awaiting-review', kind: 'work' } as unknown as RunSummary;
+    useFleetStore.setState({ runs: [run] });
+    await mountEpic(epic({ tickets: [tk({ key: 't1', runId: 12 }), tk({ key: 't2', title: 'Two', runId: 99 }), tk({ key: 't3', title: 'Three' })] }));
+    const mark = document.querySelector('[data-ticket="t1"] [data-ticket-run-state]');
+    expect(mark).not.toBeNull();
+    expect(mark!.textContent).toBe(runStateWord(run));
+    expect(document.querySelector('[data-ticket="t2"] [data-ticket-run-state]')).toBeNull();
+    expect(document.querySelector('[data-ticket="t3"] [data-ticket-run-state]')).toBeNull();
   });
 
   it('an epic with no url shows no Linear link', async () => {
