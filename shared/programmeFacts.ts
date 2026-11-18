@@ -296,3 +296,39 @@ export const CALIBRATION_STATES = Object.keys(CALIBRATION_STATE_MAP) as readonly
  *  `CALIBRATION_MIN_N`, never 0). */
 export interface CalibrationCut { readonly at: number; readonly n: number; readonly met: number; readonly share: number | null }
 export interface Calibration { readonly state: CalibrationState; readonly cuts: readonly CalibrationCut[] }
+
+// ── Health (plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-forecasts-health.md`, PR B) ──────────────────────────
+// A programme's health is one word with its evidence, first match wins (spec §5.6 H38), decided by
+// `server/src/coord/programmeHealth.ts#programmeHealth` in the forecast lane's health arm alone and recorded as a
+// `programme_health` row on a change; the portfolio shows the newest row. Durations are counts of days or hours, as
+// above: the server multiplies them by its own millisecond constants.
+
+/** §5.6's words, worst first: a word's index is its rank, and a lower index is worse. */
+export const PROGRAMME_HEALTH_WORD_MAP = {
+  'blocked-on-you': true, slipping: true, stalled: true, aging: true, churning: true, 'scope-growing': true, burning: true,
+  steady: true,
+} as const satisfies Record<string, true>;
+export type ProgrammeHealthWord = keyof typeof PROGRAMME_HEALTH_WORD_MAP;
+export const PROGRAMME_HEALTH_WORDS = Object.keys(PROGRAMME_HEALTH_WORD_MAP) as readonly ProgrammeHealthWord[];
+export const isProgrammeHealthWord = (v: unknown): v is ProgrammeHealthWord =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(PROGRAMME_HEALTH_WORD_MAP, v);
+
+/** The health limits (question 8, ruled as starting values, revisited after a month of `programme_health` rows). */
+/** `slipping`: the newest 85% date moved this many days later than the previous seal's. */
+export const HEALTH_SLIP_DAYS = 7;
+/** `stalled`: no state change of an open work run for this many hours while work is in progress. */
+export const HEALTH_STALLED_HOURS = 48;
+/** `aging`: the programme's own 85th percentile cycle is the reference from this many done waves, else the fleet's. */
+export const HEALTH_OWN_CYCLE_MIN = 5;
+/** `churning`: review rounds per closed wave above this (ruled `>`), over the window. */
+export const HEALTH_CHURN_ROUNDS = 2;
+/** `churning`: reworked waves above this (ruled `>`), over the window. */
+export const HEALTH_CHURN_REOPENS = 2;
+/** `scope-growing`: the range grew by at least this many waves since the window's oldest statement. */
+export const HEALTH_SCOPE_GROWTH_WAVES = 2;
+/** `burning`: the recent median spend per wave at least this many times the earlier one. */
+export const HEALTH_BURN_FACTOR = 2;
+/** `burning`: measured waves in each window. */
+export const HEALTH_BURN_MIN_WAVES = 3;
+/** The window churn, scope and spend read over; spend compares it with the window before it. */
+export const HEALTH_WINDOW_DAYS = 28;
