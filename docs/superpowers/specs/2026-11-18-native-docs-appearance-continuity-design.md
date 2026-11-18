@@ -75,7 +75,7 @@ flowchart LR
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
   "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
-- `label` is optional text for Aa's hosted line (§6): 1 to 64 UTF-16 code units. It is refused if it holds a control character (U+0000 to U+001F, U+007F to U+009F) or a bidi or format character (U+200B to U+200F, U+202A to U+202E, U+2060 to U+2069, U+FEFF). An empty label is refused. The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
+- `label` is optional text for Aa's hosted line (§6): 1 to 64 UTF-16 code units, so a character outside the Basic Multilingual Plane counts as two. It is refused by Unicode general category, not by a list: if it holds any code point in `\p{Cc}` (controls), `\p{Cf}` (format characters, every bidi mark and isolate, the invisible operators, the soft hyphen, U+FEFF and the tag characters included), `\p{Zl}` (U+2028) or `\p{Zp}` (U+2029), or a lone surrogate (`\p{Cs}`, matched with the `u` flag). An empty label is refused. The frame renders it as text content, never as markup. When it is absent or refused, the frame shows a neutral default that names no host: "Appearance follows the app's settings". ccrc sends "Appearance follows ccrc Settings".
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
 **The value grammars, exact.** The library's `parseAppearance` matches each value against one pattern, and ccrc sends each token's text exactly as `getPropertyValue` answers it. ccrc normalises nothing: no trim, no case change, no unit change. So both sides build from these patterns, and only from them:
@@ -319,7 +319,7 @@ This section lists what does not change and what the new data could do. The stan
 **What the new data is.**
 - **Origin.** Colour, length and font values computed from ccrc's own stylesheets. A document cannot influence them: documents render inside the frame, never on ccrc's root.
 - **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again, against §2's exact patterns: closed keys, strings only, single ASCII spaces, bounded digits and a size cap of 8 192 UTF-16 code units; no `;`, braces, `url(` or `var(`. A `popShadow` within its bounds paints at most a 64 px blur and an 8 px spread around a popover, and it reaches no URL.
-- **The label.** It is the one free text that crosses. It is 1 to 64 UTF-16 code units, refused if it holds a control, bidi or format character, and set with `textContent`, so markup in it shows as its own characters and never renders.
+- **The label.** It is the one free text that crosses. It is 1 to 64 UTF-16 code units, refused if it holds a code point of category `Cc`, `Cf`, `Zl` or `Zp` or a lone surrogate (§2), and set with `textContent`, so markup in it shows as its own characters and never renders. Refusing by category keeps an invisible or reordered label out, a spoof from a host that is trusted but mistaken.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. They are the first binary bytes in the srcdoc that the library does not pin by hash: its own faces sit in a stylesheet that `frameDocument` checks against its manifest. So the library checks ccrc's faces by alphabet, signature and size, and ccrc pins them with a row: the bytes it passes are exactly the design system's font files. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, and a face that fails to load is dropped (§2.2).
 - **Exfiltration.** The frame learns ccrc's current colours. This contract gives it no way to send them anywhere: `default-src 'none'`, no network, and no frame-to-parent op of its own. Another design may add a frame-to-parent op additively, such as X2's figure images. That design argues its own threat model, and nothing here rules it out.
@@ -427,7 +427,9 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - a newer appearance cancels redraws queued for an older one.
 6. The label:
    - a label of 64 UTF-16 code units shows whole, and one of 65 is refused, so the default shows. So is an empty label;
+   - **astral characters count twice:** a label of 32 characters from outside the Basic Multilingual Plane (64 units) shows whole, and one of 33 (66 units) is refused;
    - a label holding U+0000, U+001B, U+007F, U+0085, U+202E or U+2066 is refused;
+   - **by category, not by list:** a label holding U+061C (Arabic letter mark), U+206A, U+00AD, U+E0041 (a tag character), U+2028, U+2029 or a lone U+D800 is refused;
    - a label of `<b>x</b>` shows those eight characters, and the line holds no element;
    - with no label, the line is `APPEARANCE_LABEL_DEFAULT`, and the string `ccrc` appears nowhere in the library's built assets.
 7. Hosted state:
