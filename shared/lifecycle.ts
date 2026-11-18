@@ -181,6 +181,13 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
     creators: ['deploy/history-replay.mjs'], collector: null,
     bound: 'one W2 run, until the W2 decision is recorded', tier: 'one W2 run\'s transcripts and scores',
     ruling: 'operator-made; removed by hand once the W2 decision is recorded' },
+  // Overlord W1a (plan 2026-11-17-overlord-quiz-record.md §4): the replay quiz's single-arm module's --out, a class of its own so
+  // history-replay-out keeps describing one W2 run. The operator names it; the module makes it by the driver's --out rule and
+  // marks it beside the driver's marker. Nothing in the tree removes it.
+  { name: 'history-quiz-single-out', root: 'the single-arm module\'s --out, operator-chosen outside any git tree, mode 0700, marked by .ccrc-history-quiz-single beside the driver\'s own marker', pattern: 'O',
+    creators: ['deploy/history-quiz-single.mjs'], collector: null,
+    bound: 'the setup directory for as long as the quiz lane runs; a week directory until its run is confirmed or discarded', tier: 'one setup\'s frozen list, or one week\'s transcripts and scores',
+    ruling: 'operator-made; a week directory is removed by hand once its run is confirmed or discarded' },
   // ccrc history, W2-1 (spec 2026-10-05 §9.4; W2-D9, W2-D28): the replay eval's control arm. sweep.mjs's --op recall-off is its
   // one writer (O13), through its temp recall-off/~tmp.<pid>, which the next recall-off pass removes; the operator verbs clear
   // it, `recall-off --clear-all` at W2 close, and an entry that verb skips is removed by hand.
