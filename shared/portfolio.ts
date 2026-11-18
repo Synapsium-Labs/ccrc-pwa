@@ -33,7 +33,8 @@ export interface PortfolioRun {
   id: number; program: string; wave: number; kind: RunKind; reviews: number | null;
   state: string; openedAt: number; dispatchedAt: number | null; closedAt: number | null; closeDetail: string | null;
   /** A run a disaster rebuild minted (`CoordStore#reconstruct`): its `dispatchedAt` is the rebuild's time, a stand-in that
-   *  understates the wave's age, so `portfolioFor` never measures from it (review 2130 F10). Absent on any other run. */
+   *  understates the wave's age, so `portfolioFor` never measures from it (review 2130 F10). Set by the facts read through
+   *  `shared/programmes.ts#isRebuiltRun`, the rule's one owner; absent on any other run. */
   rebuilt?: true;
 }
 /** One operator item with its moves, `events` oldest first. */

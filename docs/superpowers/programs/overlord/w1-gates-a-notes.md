@@ -59,8 +59,9 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
   - (d) Convert designation C's string-actor fixtures for `designatePending`, `retire` and the setters in
     `overlord-settings-doors`, `overlord-designation-store` and `sim/designationSets` to minted actors.
   - (e) Designation B's forthcoming `rebindPending` writes all four pending actor columns and clears through `CLEAR_PENDING`.
-- **Migration slot**: main's #2974 took 93 after #2964 took 92. This fix round preserves both and takes measured slot 94;
-  a later landing collision must re-measure the next free slot under the coordinator's license.
+- **Migration slot**: main's #2974 took 93 after #2964 took 92, then forecasts A (#2987) took 94. The authorized
+  landing-order absorption preserves all three and takes measured slot 95; a later landing collision must re-measure
+  the next free slot under the coordinator's license.
 
 - **Additive absorption**: kept both migration and census additions under the standing license; the shared decision-model record case was kept verbatim.
 
@@ -209,3 +210,27 @@ handoff gate after this round's one push.
 
 The ladder (#2994) crossing still belongs to whichever lands second. Designation B's `rebindPending` remains a
 landing-contract note only; neither piece's implementation was pulled into this round.
+
+### Landing-order absorption after forecasts A
+
+The corrected review-round head passed CI and actual CodeQL. The coordinator accepted its content without a second
+review and ruled that the external judge's non-author proof did not hold landing, but held this PR behind forecasts A
+(#2987), which owned migration 94. Once that PR merged, the coordinator authorized one further main absorption,
+renumbering and affected census recounts only, followed by one push and a fresh exact-tip handoff.
+
+The fetched base is `5d8d3d0d383d0d5ea0bbb2997d3a812266ea5065`; its migration census measured 94. The forecast entry
+stays verbatim at 94 and the actor metadata moves to 95. Both database version pins and the migration-length pin become
+95; the rollback fixture keeps the forecast and phase drops and replays all 42 entries from 54 through 95. The scoped
+identity admissions and incoming forecast admission are retained additively, under the held-file owners' exact leave.
+The shared decision-model record case is unchanged. No designation, identity-port or ladder behavior changes here.
+The ladder now lands after gates A and owns its own four-door identity-port conversion. The first full-run signal
+remains `suite: red`, `failure: shallow`.
+
+All six requested isolated checks passed after absorption: database 149/149, migration replay 21/21, decision-model
+records 13/13, authentication 346/346, box-token census 60/60 and writers map 43/43. The merged mail census passed
+61/61 and the additively combined mutation floors passed 187/187. The database run took 691 seconds; the harness
+moved the foreground command to background after 600 seconds, and it completed with exit 0 before any other heavy
+command started. The original identity-path claim reached its hard cap during verification; the worker re-claimed
+those paths before appending these measurements. Exact-tip CI, node floor and actual CodeQL remain the handoff gate
+for this round's one push. The merged clock-port census passed 94/94; deviation references passed 34/34, anchors
+9/9 and citations 4/4. Complete changed-file and public-text scans precede publication.

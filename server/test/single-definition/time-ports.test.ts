@@ -65,6 +65,10 @@ const TIME_PORT_FILES: readonly string[] = [
   'shared/doneTests.ts',
   'server/src/coord/doneTests.ts',
   'server/src/coord/doneTestRead.ts',
+  // Overlord W2, forecasts A: the deciders take `asOf`, `now` and the seed as arguments, and the lane reads them through
+  // `now` and the `Entropy` port, never the ambient clock or `Math.random`.
+  'server/src/coord/forecast.ts',
+  'server/src/coord/forecastLane.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */
