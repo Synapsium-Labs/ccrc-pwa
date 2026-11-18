@@ -179,6 +179,7 @@ import { renewalActsOf } from './continuity/renewalWiring.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
+import { runForecastLane } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -2844,6 +2845,8 @@ export class FleetWatcher {
       void this.sweepResponses().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the weekly replay QUIZ lane (Overlord §3.3.9 C52, W1a): at most one operator item a week.
       void this.sweepQuiz().catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the FORECAST lane (Overlord W2 §5.6): seals each closed wave, scores each seal at its date.
+      void this.sweepForecasts().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the decision model's ANCHOR-SET lane (Overlord W2): a daily pass of asks, each on the 2 s deadline.
       void this.sweepDecisionAnchors().catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR PLAN SYNC (D-8182): one tick of due programmes, joining any pass in flight.
@@ -6226,6 +6229,17 @@ export class FleetWatcher {
     const port = this.deps.quiz;
     if (!port) return;
     await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
+  }
+
+  /** The forecast lane (Overlord W2 forecasts A, `coord/forecastLane.ts`): one seal-and-score pass; a failure logs one line. */
+  async sweepForecasts(): Promise<void> {
+    const port = this.deps.forecasts;
+    if (!port) return;
+    await this.runLane('forecasts', () => {
+      const pass = runForecastLane(port, this.deps.time.clock.wall(), this.deps.time.entropy);
+      if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
+      if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
+    });
   }
 
   /** The decision model's anchor-set lane (Overlord W2; `coord/decisionModelLane.ts`): anchors, admission and canary through the one caller. */

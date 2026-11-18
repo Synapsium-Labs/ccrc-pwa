@@ -193,5 +193,11 @@
   "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
   "server/src/coord/planPolicy.ts#phaseNumbers": 1,
   "server/src/coord/planPolicy.ts#diffPhases": 1,
-  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1
+  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1,
+  "server/src/time/seeded.ts#seededDraws": 1,
+  "server/src/coord/forecast.ts#forecastProgramme": 1,
+  "server/src/coord/forecast.ts#forecastOutcome": 1,
+  "server/src/coord/forecast.ts#forecastCalibration": 1,
+  "server/src/coord/forecast.ts#sealBoundary": 1,
+  "server/src/coord/forecast.ts#leadHistoryFrom": 1
 }

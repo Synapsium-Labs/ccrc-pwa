@@ -408,6 +408,15 @@ describe('the reconstruction drill', () => {
     expect(Object.keys(r)).not.toContain('edges');
   });
 
+  it('programme_forecasts is a table no artifact mirrors: reconstruct() rebuilds no seal (Overlord W2 forecasts A)', () => {
+    // A sealed forecast is the forecast lane's own record. No ledger, registry or `.prhistory` carries one, so a DB loss
+    // forgets every seal and every score: the lane seals closes again only inside its 7-day look-back, and calibration
+    // reads unmeasured until enough seals are scored again. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('programme_forecasts');
+    expect(Object.keys(r)).not.toContain('forecasts');
+  });
+
   it('refuses to invent a program when the ledger is missing', () => {
     // A DB loss with no committed ledger is an unrecoverable program, and the
     // honest answer is a loud failure — the same polarity as the migration
