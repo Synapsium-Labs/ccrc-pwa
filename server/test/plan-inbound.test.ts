@@ -55,7 +55,11 @@ interface Rig {
   viaCalls: string[][]; fleet: { ids: Set<string> };
   lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' | 'timeout' | 'not-configured'; retryAfterS: number;
     /** What a by-id read of a STORED inbound row's issue answers (review 2457 F4): a node, or null for `not-found`; an issue with no entry reads open in AAA. */
-    byId: Record<string, Record<string, unknown> | null> };
+    byId: Record<string, Record<string, unknown> | null>;
+    /** A by-id read of one stored row's issue refused with this word (review 2524 F2): an answer about that one row. */
+    byIdWord: Record<string, string>;
+    /** What the drift pass's and the doors' read of the Linear store answers (review 2524 A2): the store, a rejection or an unreadable one. */
+    store: 'ok' | 'reject' | 'unreadable' };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
   /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
   rejected: number[];
@@ -105,7 +109,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'] }, rejected: [] as number[],
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'] }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
@@ -119,6 +123,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     if (ask.op === 'issueOwned' && r.plan.inboundOf(String(ask.input['id'])) !== null) {
       const id = String(ask.input['id']);
       const o = r.lin.byId[id];
+      if (r.lin.byIdWord[id] !== undefined) return { ok: false, word: r.lin.byIdWord[id], maybeSent: false } as CcrcOpOutcome;
       if (o === null) return { ok: false, word: 'not-found', maybeSent: false };
       return ok({ issue: o ?? { id, identifier: r.plan.inboundOf(id)!.identifier, teamKey: 'AAA', stateType: 'unstarted' } });
     }
@@ -137,7 +142,8 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     },
   });
   r.drift = new DriftPass({
-    coord, plan, planSync: r.sync, readLinearStore: () => readLinearStore(ccrcDir), call, now: () => r.t.now, directory, presenceOf,
+    coord, plan, planSync: r.sync, call, now: () => r.t.now, directory, presenceOf,
+    readLinearStore: () => r.lin.store === 'reject' ? Promise.reject(new Error('store')) : r.lin.store === 'unreadable' ? Promise.resolve({ kind: 'unreadable' as const, code: 'EIO' }) : readLinearStore(ccrcDir),
     viaFleet: (ids) => { r.viaCalls.push([...ids]); return new Set(ids.filter((i) => r.fleet.ids.has(i))); },
   });
   let lock: Promise<unknown> = Promise.resolve();
@@ -1723,5 +1729,198 @@ describe('the lane retires an open stored row whose issue moved out, within a na
       const dump = JSON.stringify(r.db.prepare(`SELECT * FROM "${name}"`).all());
       expect(dump, name).not.toMatch(/ZZZ|Moved elsewhere/);
     }
+  });
+});
+
+// ── Review 2524, fix round 2 (inbound side) ──
+
+/** A second managed workspace (ws-b, team BBB) with one stored open row, BBB-70, that the by-id read finds still in BBB. */
+function secondWorkspace(r: Rig): void {
+  r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.b.id, 'BBB', 'applied', T - 1000);
+  r.plan.upsertInbound({ linearId: U(70), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'BBB-70', title: 'Other workspace', body: null, seenAt: T - 500 });
+  r.lin.byId[U(70)] = node(70, { teamKey: 'BBB', identifier: 'BBB-70' });
+}
+
+describe('the lane\'s re-read is bounded per row whatever the number of workspaces (review 2524 F1)', () => {
+  it('two managed workspaces whose passes alternate read each open row at most once per interval', async () => {
+    const r = await rig({ twoWs: true });
+    secondWorkspace(r);
+    await detect(r, [node(12)], T + 1);
+    r.lin.issues = [];                                                 // the changed read returns nothing more: only the by-id re-read counts
+    const span = 26 * (DRIFT_PASS_MS + 1);                            // 13 hours: more than two intervals
+    for (let k = 1; k <= 26; k++) await passAt(r, T + 1 + k * (DRIFT_PASS_MS + 1));
+    const count = (id: string): number => reads(r).filter((a) => a.input['id'] === id).length;
+    const bound = Math.floor(span / INBOUND_RECHECK_MS) + 1;
+    expect([count(U(12)) >= 1, count(U(12)) <= bound], 'AAA-12').toEqual([true, true]);
+    expect([count(U(70)) >= 1, count(U(70)) <= bound], 'BBB-70').toEqual([true, true]);
+  });
+});
+
+describe('only a workspace-wide answer stops the lane\'s walk (review 2524 F2)', () => {
+  const badThenMoved = async (bad: (r: Rig) => void): Promise<Rig> => {
+    const r = await rig();
+    await detect(r, [node(12), node(13), node(14)]);
+    bad(r);
+    moveOut(r, 13);
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    return r;
+  };
+  const cases: [string, (r: Rig) => void][] = [
+    ['an answer without its team or state (malformed)', (r) => { r.lin.byId[U(12)] = { id: U(12), identifier: 'AAA-12' }; }],
+    ['a per-issue refusal (linear-forbidden)', (r) => { r.lin.byIdWord[U(12)] = 'linear-forbidden'; }],
+  ];
+  it.each(cases)('%s marks that row checked: the moved-out row behind it is retired in the same pass', async (_n, bad) => {
+    const r = await badThenMoved(bad);
+    expect(rowOf(r, 13)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });
+    expect(reads(r).filter((a) => a.input['id'] === U(12))).toHaveLength(1);
+    // the bad row is not read again before the interval, and nothing of it was stored
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reads(r)).toEqual([]);
+    expect(rowOf(r, 12)).toMatchObject({ title: 'Reporter title 12', teamKey: 'AAA' });
+  });
+  it('a workspace-wide answer (a transport failure) still stops the walk after one read', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    moveOut(r, 13);
+    r.lin.fail.add('issueOwned'); r.lin.failWord = 'timeout';
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(reads(r)).toHaveLength(1);
+    expect(rowOf(r, 13)!.state).toBe('mailed');
+  });
+});
+
+describe('plan take never reaches another workspace\'s Upkeep ticket (review 2524 A1)', () => {
+  /** An Upkeep ticket of ws-b whose issue carries the identifier AAA-12 (the same identifier as ws-a's issue). */
+  const otherTicket = (r: Rig): number => {
+    r.plan.upsertInbound({ linearId: U(60), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'AAA-12', title: 'Other ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(60), project: 'project-b', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    return done.ticketId;
+  };
+  const untouched = (r: Rig, id: number): void => {
+    const t = r.plan.upkeepEpicOf('project-b')!.tickets.find((x) => x.id === id)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  };
+  it('with no handed row, a take or close of an identifier only another workspace\'s ticket holds is issue-not-inbound', async () => {
+    const r = await rig({ twoWs: true });
+    const id = otherTicket(r);
+    for (const body of [{ issue: 'AAA-12', epic: 'e-b' }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-b', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([409, 'issue-not-inbound']);
+    }
+    untouched(r, id);
+  });
+  it('with handed rows the home does not decide, the refusal is at once and the ticket is neither taken nor closed', async () => {
+    const r = await rig({ twoWs: true });
+    applyPlanChanges(r.db, 'prog-d', changes({
+      epics: { insert: [{ key: 'e-d', project: 'project-x', waves: [1], ordinal: 0, title: 'Epic d', summary: 'Summary' }], update: [], drop: [] },
+      checkpoints: { insert: [], update: [], drop: [] },
+    }), OTHER, T - 500, { home: 'project-x', title: 'prog-d' });
+    handedRow(r, 51, WS.b.id, 'prog-d', T - 5000);
+    handedRow(r, 50, WS.a.id, 'prog-d', T - 1000);
+    const id = otherTicket(r);
+    for (const body of [{ issue: 'AAA-12', epic: 'e-d' }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-d', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([409, 'issue-not-inbound']);
+    }
+    untouched(r, id);
+    expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['handed', 'handed']);
+  });
+});
+
+describe('every cause is walked at pass level: canceled, and an unreadable store (review 2524 A2)', () => {
+  const canceled = (r: Rig): void => { r.lin.byId[U(12)] = node(12, { stateType: 'canceled' }); };
+  it('canceled by id: a take and a triage retire the row with cause canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    canceled(r);
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+    const r2 = await rig();
+    await detect(r2, [node(12)]);
+    canceled(r2);
+    expect(errorOf(await triage(r2, { issue: 'AAA-12', decision: 'upkeep' }))).toBe('issue-not-inbound');
+    expect(rowOf(r2, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+  });
+  it('canceled by id: the close\'s act retires the row and writes nothing in Linear', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    r.lin.directory = DIRECTORY;
+    canceled(r);
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+    expect(writes(r)).toEqual([]);
+  });
+  it('canceled by id: the lane\'s re-read retires the row with cause canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    canceled(r);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+  });
+  it.each(['reject', 'unreadable'] as const)('a Linear store that is %s on the door\'s re-read answers as an unmeasured read: unreachable, nothing changed', async (store) => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    moveOut(r, 12);
+    r.lin.store = store;
+    r.asks.length = 0;
+    const res = await triage(r, { issue: 'AAA-12', decision: 'upkeep' });
+    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();
+    expect(reads(r)).toEqual([]);
+  });
+});
+
+describe('the reopen mail names the row\'s own retire cause (review 2524 A4)', () => {
+  const reopenBody = (r: Rig): string => mails(r).filter((m) => m.subject.includes('was reopened')).at(-1)!.body;
+  const SO = 'so it waits for your triage once more.';
+  it('completed', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was completed and is open again in Linear, ${SO}`);
+  });
+  it('canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await detect(r, [node(12, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was canceled and is open again in Linear, ${SO}`);
+  });
+  it('moved out of the managed teams', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    moveOut(r, 12);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    delete r.lin.byId[U(12)];
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 left the managed Linear teams and is back in one, ${SO}`);
+  });
+  it('ccrc\'s own', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.fleet.ids.add('AAA-12');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.retiredWhy).toBe('ccrc-own');
+    r.fleet.ids.delete('AAA-12');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was ccrc's own issue and now reads as inbound in Linear, ${SO}`);
+  });
+  it('a row retired before the column existed (no cause) has a fallback sentence', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.db.prepare("UPDATE linear_inbound SET state = 'retired', retiredWhy = NULL WHERE linearId = ?").run(U(12));
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was retired earlier and is open again in Linear, ${SO}`);
   });
 });

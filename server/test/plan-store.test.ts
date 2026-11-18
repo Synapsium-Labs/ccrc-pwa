@@ -645,8 +645,11 @@ describe('the Upkeep epic (D-8183)', () => {
       expect.objectContaining({ localId: id, workspaceId: 'ws-a', teamKey: 'AAA', linearId: 'lin-12', identifier: 'AAA-12', fingerprint: ADOPTED_FINGERPRINT, state: 'bound', syncedAt: 52 }),
     ]);
     expect(ADOPTED_FINGERPRINT).toBe('adopted');
-    expect(upkeepTicketByIdentifier(db, 'AAA-12')?.id).toBe(id);
-    expect(upkeepTicketByIdentifier(db, 'AAA-99')).toBeNull();
+    expect(upkeepTicketByIdentifier(db, 'ws-a', 'AAA-12')?.id).toBe(id);
+    expect(upkeepTicketByIdentifier(db, 'ws-a', 'AAA-99')).toBeNull();
+    // keyed by workspace (review 2524 A1): another workspace's identifier is not this one's; no workspace resolves only a unique one
+    expect(upkeepTicketByIdentifier(db, 'ws-b', 'AAA-12')).toBeNull();
+    expect(upkeepTicketByIdentifier(db, null, 'AAA-12')?.id).toBe(id);
   });
   it('moveTicketToProgrammeInTx changes program, epic and checkpoint in one statement, marks both due keys and settles both epics', () => {
     declare('prog-a');
@@ -682,7 +685,7 @@ describe('the Upkeep epic (D-8183)', () => {
     const placed = placeInboundInUpkeep(db, { linearId: 'L12', project: 'project-a', now: 70 });
     expect(placed).toMatchObject({ ok: true });
     expect(inboundOf(db, 'L12')!.state).toBe('placed');
-    const t = upkeepTicketByIdentifier(db, 'AAA-12')!;
+    const t = upkeepTicketByIdentifier(db, 'ws-a', 'AAA-12')!;
     expect(t).toMatchObject({ title: 'Reporter title', body: 'Reporter body', source: 'inbound', key: 'inbound-aaa-12' });
     expect(inboundByIdentifier(db, 'ws-a', 'AAA-12')?.linearId).toBe('L12');
     expect(inboundByIdentifier(db, 'ws-b', 'AAA-12')).toBeNull();
@@ -792,6 +795,16 @@ describe('the one retire of an inbound row (review 2457 F4, A6; D-8735)', () => 
     retireInbound(db, 'L1', 'completed');     // already retired: left as it is
     setInboundState(db, 'L1', { state: 'waiting', retiredWhy: null });
     expect(db.prepare("SELECT retiredWhy FROM linear_inbound WHERE linearId = 'L1'").get()).toEqual({ retiredWhy: null });
+  });
+
+  it('a reopened note carries the cause the row was retired with, or none (review 2524 A4)', () => {
+    for (const was of ['completed', 'canceled', 'ccrc-own', 'moved-out', null] as const) {
+      setInboundNote(db, 'L-r', { kind: 'reopened', at: 9, was });
+      expect(inboundNoteOf(db, 'L-r'), String(was)).toEqual({ kind: 'reopened', at: 9, was });
+    }
+    // an unknown stored word reads as no cause, never as one
+    db.prepare("UPDATE linear_inbound_notes SET note = 'a-newer-word' WHERE linearId = 'L-r'").run();
+    expect(inboundNoteOf(db, 'L-r')).toEqual({ kind: 'reopened', at: 9, was: null });
   });
 
   it('the port carries both forms', () => {

@@ -46,7 +46,7 @@ import {
   DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
   graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
-  DRIFT_KEEP_NOTE, closedByKeep, driftCursorAfterFailure, handRoute, restoreFallbackCommentOf, sweepStep,
+  DRIFT_KEEP_NOTE, bindingByLinearIdOf, closedByKeep, driftCursorAfterFailure, handRoute, restoreFallbackCommentOf, sweepStep,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
@@ -150,7 +150,8 @@ export class DriftPass {
     const old: DriftWatermarks = mark?.watermarks ?? { initiative: first, project: first, milestone: first, issue: first };
     // Round 5 F1: ccrc's own record is read BEFORE Linear. A sync write landing after the Linear read moves a binding's fingerprint,
     // and that is seen below as a change since this read; comparing `updatedAt` instead would set Linear's clock against ccrc's.
-    const pre = new Map<string, BindingRow>(plan.bindingsInWorkspace(ws).flatMap((b) => (b.linearId === null ? [] : [[b.linearId, b] as const])));
+    // Two bindings holding one Linear id: the lowest id is the binding, the store's own rule (`bindingByLinearIdOf`, review 2524 F3).
+    const pre: ReadonlyMap<string, BindingRow> = bindingByLinearIdOf(plan.bindingsInWorkspace(ws));
     const cursors = plan.driftCursorsOf(ws);
     const read = await this.readAll(ws, slot, old, cursors);
     if (!read.ok) {

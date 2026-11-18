@@ -210,6 +210,20 @@ export function milestonesJudged(planned: readonly string[], boundBeforeRead: Re
   return planned.filter((id) => boundBeforeRead.has(id));
 }
 
+/** THE binding of each Linear id among a workspace's bindings (review 2524 F3): the LOWEST binding id holding it. No uniqueness rules
+ *  out two bindings of one workspace holding one Linear id, so one rule picks between them, and it is the store's own
+ *  (`bindingByLinearId`, `ORDER BY id LIMIT 1`): the pass's pre-read follows it, so the compare and its `syncWroteSince` check read
+ *  the same row. Rows in any order; a binding with no Linear id holds nothing. */
+export function bindingByLinearIdOf<B extends { id: number; linearId: string | null }>(rows: readonly B[]): Map<string, B> {
+  const out = new Map<string, B>();
+  for (const b of rows) {
+    if (b.linearId === null) continue;
+    const held = out.get(b.linearId);
+    if (held === undefined || b.id < held.id) out.set(b.linearId, b);
+  }
+  return out;
+}
+
 /** Whether a sync write landed between the pass's read of its own record and its compare (round 5 F1): the binding now holds a
  *  different fingerprint or state than the one read first. Linear's `updatedAt` is not compared: it is Linear's clock, and the
  *  fingerprint is ccrc's own. */

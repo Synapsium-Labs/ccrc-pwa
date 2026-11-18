@@ -975,18 +975,18 @@ export function moveTicketToProgrammeInTx(
  *  return made while the team had no live owner (`returned`, its programme and masked note), or Linear's reopen of a retired
  *  issue (`reopened`). One per issue: a later note replaces an earlier one. The inbound lane mails it and deletes it in one
  *  transaction (`clearInboundNote`). */
-export type InboundNote = { kind: 'returned'; program: string; note: string; at: number } | { kind: 'reopened'; at: number };
+export type InboundNote = { kind: 'returned'; program: string; note: string; at: number } | { kind: 'reopened'; at: number; was: RetireWhy | null };
 export function setInboundNote(db: DatabaseSync, linearId: string, n: InboundNote): void {
   db.prepare('INSERT INTO linear_inbound_notes (linearId, kind, program, note, at) VALUES (?, ?, ?, ?, ?) '
     + 'ON CONFLICT(linearId) DO UPDATE SET kind = excluded.kind, program = excluded.program, note = excluded.note, at = excluded.at')
-    .run(linearId, n.kind, n.kind === 'returned' ? n.program : null, n.kind === 'returned' ? n.note : null, n.at);
+    .run(linearId, n.kind, n.kind === 'returned' ? n.program : null, n.kind === 'returned' ? n.note : n.was, n.at);   // a reopen's `note` is the row's own retire cause, ccrc's word (review 2524 A4)
 }
 export function inboundNoteOf(db: DatabaseSync, linearId: string): InboundNote | null {
   const r = db.prepare('SELECT * FROM linear_inbound_notes WHERE linearId = ?').get(linearId) as Raw | undefined;
   if (r === undefined) return null;
   return r.kind === 'returned'
     ? { kind: 'returned', program: r.program as string, note: r.note as string, at: r.at as number }
-    : { kind: 'reopened', at: r.at as number };
+    : { kind: 'reopened', at: r.at as number, was: retireWhyOf(r.note) };
 }
 /** Deletes an issue's note; the caller holds the transaction that mailed it. */
 export function clearInboundNote(db: DatabaseSync, linearId: string): void {
@@ -1005,13 +1005,16 @@ export function inboundByIdentifier(db: DatabaseSync, workspaceId: string | null
 export function handedInboundByIdentifier(db: DatabaseSync, slug: string, identifier: string): InboundRow[] {
   return (db.prepare("SELECT * FROM linear_inbound WHERE state = 'handed' AND handedTo = ? AND identifier = ? COLLATE NOCASE ORDER BY seenAt").all(slug, identifier) as Raw[]).map(inboundRow);
 }
-/** The Upkeep ticket (no programme) whose issue is bound under that identifier, or null. */
-export function upkeepTicketByIdentifier(db: DatabaseSync, identifier: string): TicketRow | null {
-  const r = db.prepare(
-    "SELECT t.* FROM plan_tickets t JOIN linear_bindings b ON b.localKind = 'ticket' AND b.localId = t.id "
-    + 'WHERE t.program IS NULL AND b.identifier = ? COLLATE NOCASE ORDER BY t.id LIMIT 1',
-  ).get(identifier) as Raw | undefined;
-  return r === undefined ? null : ticketOf(r);
+/** The Upkeep ticket (no programme) whose issue is bound under that identifier in that workspace, or null. */
+export function upkeepTicketByIdentifier(db: DatabaseSync, workspaceId: string | null, identifier: string): TicketRow | null {
+  const base = "SELECT t.* FROM plan_tickets t JOIN linear_bindings b ON b.localKind = 'ticket' AND b.localId = t.id "
+    + 'WHERE t.program IS NULL AND b.identifier = ? COLLATE NOCASE';
+  // keyed by the binding's workspace (review 2524 A1), as `inboundByIdentifier` is; no workspace resolves only an identifier no other
+  // workspace's ticket holds, never a guess
+  const rows = (workspaceId === null
+    ? db.prepare(`${base} ORDER BY t.id LIMIT 2`).all(identifier)
+    : db.prepare(`${base} AND b.workspaceId = ? ORDER BY t.id LIMIT 1`).all(identifier, workspaceId)) as Raw[];
+  return rows.length === 0 || (workspaceId === null && rows.length > 1) ? null : ticketOf(rows[0]!);
 }
 
 /** Every Linear id a binding holds in the workspace (the drift pass's one read of what is bound, D-8183). */

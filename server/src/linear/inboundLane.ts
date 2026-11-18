@@ -22,7 +22,7 @@ import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
-  answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckOf, inboundRetireVerdict,
+  answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
   keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
@@ -53,9 +53,10 @@ export class InboundLane {
   /** Each close's own count of malformed answers, by its issue's linearId: what the give-up counts (review 2408 F2), as the plan
    *  sync counts a binding's. In this process, as `holds` is; a close done whole or given up drops its count. */
   private readonly malformed = new Map<string, number>();
-  /** When each open stored row's issue was last read, by its linearId: by a pass's changed read or by this lane's own by-id re-read
+  /** When each open stored row's issue was last read, by workspace and then by linearId (review 2524 F1: one workspace's pass never
+   *  prunes another's times): by a pass's changed read or by this lane's own by-id re-read
    *  (`recheckStored`). In memory like `holds` (D-8733): nothing new is stored, and a restart costs one read per row. */
-  private readonly checked = new Map<string, number>();
+  private readonly checked = new Map<string, Map<string, number>>();
 
   constructor(private readonly deps: Deps) {}
 
@@ -83,11 +84,12 @@ export class InboundLane {
         const v = inboundRetireVerdict(stored, { stateType: f.stateType, own: bound.has(f.linearId) || viaFleet.has(f.identifier), inbound });
         if (v.kind === 'retire') { this.retire(stored, v.why, now); continue; }
         if (v.kind === 'reopen') {
-          // the row's `reason` is a close's and stays; the reopen is a note (review of d4c372f12), written with the state
+          // the row's `reason` is a close's and stays; the reopen is a note (review of d4c372f12), written with the state. It carries the
+          // cause the row was retired with, read before the state clears it (review 2524 A4)
           const { plan, coord } = this.deps;
           tx(coord.db, () => {
             plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null, retiredWhy: null });
-            plan.setInboundNote(f.linearId, { kind: 'reopened', at: now });
+            plan.setInboundNote(f.linearId, { kind: 'reopened', at: now, was: stored.retiredWhy });
           });
         }
       }
@@ -153,17 +155,20 @@ export class InboundLane {
   /** After a workspace pass: each open stored row (`inboundRetirable`) the pass's changed read did not return is read by id, at most
    *  once per `INBOUND_RECHECK_MS` and at most `INBOUND_RECHECK_MAX_PER_PASS` rows a pass, and retired `moved-out` (or completed or
    *  canceled) when its issue no longer reads open in a managed team. A row the changed read returned counts as read now (`detect`
-   *  judged it). The first read that cannot be made ends the walk: Linear or the key is the trouble for the whole workspace, so a
-   *  failure costs one read a pass. */
+   *  judged it). Only a workspace-wide answer ends the walk (`inboundRecheckStops`: the key's refusal, a transport or rate failure,
+   *  an unreadable store), so a failure costs one read a pass; an answer about one row (review 2524 F2) marks that row checked and
+   *  the walk goes on: the row is not retired and nothing of it is stored. */
   async recheckStored(workspaceId: string, slot: SlotInfo, seen: ReadonlySet<string>, now: number): Promise<void> {
     const rows = this.deps.plan.inboundByState(workspaceId, ['waiting', 'mailed', 'handed', 'raised', 'closed']);
     const open = new Set(rows.map((r) => r.linearId));
-    for (const id of this.checked.keys()) if (!open.has(id)) this.checked.delete(id);
-    for (const id of seen) if (open.has(id)) this.checked.set(id, now);
-    for (const row of inboundRecheckDue(rows, seen, this.checked, now)) {
+    const checked = this.checked.get(workspaceId) ?? new Map<string, number>();
+    this.checked.set(workspaceId, checked);
+    for (const id of checked.keys()) if (!open.has(id)) checked.delete(id);
+    for (const id of seen) if (open.has(id)) checked.set(id, now);
+    for (const row of inboundRecheckDue(rows, seen, checked, now)) {
       const answer = await this.readById(row, slot);
-      if (answer.kind === 'unmeasured') { this.noteKey(row, slot, answer); return; }
-      this.checked.set(row.linearId, now);
+      if (answer.kind === 'unmeasured' && inboundRecheckStops(answer.word)) { this.noteKey(row, slot, answer); return; }
+      checked.set(row.linearId, now);
       if (answer.kind !== 'retire') continue;
       const fresh = this.deps.plan.inboundOf(row.linearId);
       if (fresh !== null) this.retire(fresh, answer.why, now);

@@ -1,7 +1,7 @@
 // Review 2457 F2, F4 (D-8733, D-8735): the pure deciders of the inbound re-read and the take door's choice. L1, no I/O.
 import { describe, expect, it } from 'vitest';
 import {
-  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRetireVerdict,
+  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict,
 } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
@@ -95,5 +95,29 @@ describe('inboundDoorVerdict', () => {
       expect(inboundDoorVerdict(a, true)).toEqual({ kind: 'refuse', word: 'unreachable' });
       expect(inboundDoorVerdict(a, false)).toEqual({ kind: 'go' });
     }
+  });
+});
+
+describe('inboundRecheckStops (review 2524 F2)', () => {
+  it('only a workspace-wide answer stops the walk: the key, a transport or rate failure, a policy or journal outage, no key, no word', () => {
+    for (const w of ['linear-unauthorised', 'unreachable', 'timeout', 'rate-limited', 'policy-unavailable', 'journal-unavailable', 'not-configured', null]) {
+      expect(inboundRecheckStops(w), String(w)).toBe(true);
+    }
+  });
+  it('an answer about one row does not: malformed, linear-forbidden, linear-invalid, not-found', () => {
+    for (const w of ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found']) expect(inboundRecheckStops(w), w).toBe(false);
+  });
+  it('a word nobody classified stops the walk (the safe side)', () => expect(inboundRecheckStops('some-new-word')).toBe(true));
+});
+
+describe('inboundReopenedMail names the retire cause (review 2524 A4)', () => {
+  const r = { identifier: 'AAA-12', teamKey: 'AAA', title: 'T', body: null };
+  const sentence = (why: Parameters<typeof inboundReopenedMail>[2]): string => inboundReopenedMail(r, '2026-01-01T00:00:00.000Z', why).body.split('\n\n')[0]!;
+  it('one sentence per cause, and a fallback for none', () => {
+    expect(sentence('completed')).toBe('The issue AAA-12 was completed and is open again in Linear, so it waits for your triage once more.');
+    expect(sentence('canceled')).toBe('The issue AAA-12 was canceled and is open again in Linear, so it waits for your triage once more.');
+    expect(sentence('moved-out')).toBe('The issue AAA-12 left the managed Linear teams and is back in one, so it waits for your triage once more.');
+    expect(sentence('ccrc-own')).toBe('The issue AAA-12 was ccrc\'s own issue and now reads as inbound in Linear, so it waits for your triage once more.');
+    expect(sentence(null)).toBe('The issue AAA-12 was retired earlier and is open again in Linear, so it waits for your triage once more.');
   });
 });

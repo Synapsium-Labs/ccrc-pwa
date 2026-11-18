@@ -15,6 +15,7 @@ import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
 import type { InboundNote, InboundRow } from '../coord/planStore.js';
 import { inboundRetirable, type RetireWhy } from './inboundRetire.js';
+import type { LinearAnswerRefusalWord } from './ops.js';
 import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
@@ -243,15 +244,25 @@ export function inboundRetireVerdict(
  *  is in the subject of the last two, so a later round has a subject of its own. */
 export function inboundNoteMail(row: InboundText, note: InboundNote | null): { subject: string; body: string } {
   if (note === null) return inboundMail(row);
-  return note.kind === 'reopened' ? inboundReopenedMail(row, new Date(note.at).toISOString()) : returnedMail(row, note.program, note.note, note.at);
+  return note.kind === 'reopened' ? inboundReopenedMail(row, new Date(note.at).toISOString(), note.was) : returnedMail(row, note.program, note.note, note.at);
 }
 
+/** What the reopen mail says happened to the row before: its own retire cause, read BEFORE the reopen clears it (review 2524 A4). A
+ *  null cause (a row retired before the column existed) has a sentence of its own. */
+export const REOPEN_PHRASES: Readonly<Record<RetireWhy | 'none', string>> = {
+  completed: 'was completed and is open again in Linear',
+  canceled: 'was canceled and is open again in Linear',
+  'moved-out': 'left the managed Linear teams and is back in one',
+  'ccrc-own': 'was ccrc\'s own issue and now reads as inbound in Linear',
+  none: 'was retired earlier and is open again in Linear',
+};
+
 /** The mail to the owner when an issue that was retired reads open again. Its subject carries the reopen's time. */
-export function inboundReopenedMail(row: InboundText, iso: string): { subject: string; body: string } {
+export function inboundReopenedMail(row: InboundText, iso: string, was: RetireWhy | null = null): { subject: string; body: string } {
   const first = inboundMail(row);
   return {
     subject: `Linear inbound: ${row.identifier} was reopened (${iso})`,
-    body: [`The issue ${row.identifier} was completed or canceled and is open again in Linear, so it waits for your triage once more.`, first.body].join('\n\n'),
+    body: [`The issue ${row.identifier} ${REOPEN_PHRASES[was ?? 'none']}, so it waits for your triage once more.`, first.body].join('\n\n'),
   };
 }
 
@@ -285,6 +296,15 @@ export function inboundRecheckOf(issue: { teamKey?: unknown; stateType?: unknown
   if (stateType === 'completed' || stateType === 'canceled') return { kind: 'retire', why: stateType };
   return { kind: 'managed' };
 }
+
+/** The refusal words that are an answer about ONE issue: the walk goes on past them (review 2524 F2). Every other word (the key's
+ *  refusal, a transport or rate failure, a policy or journal outage, no key) is about the whole workspace. Typed from Linear's answer
+ *  vocabulary, so a word that leaves it is a compile error here. */
+const ROW_WORDS = ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found'] as const satisfies readonly LinearAnswerRefusalWord[];
+/** Whether an unmeasured by-id answer ends the lane's walk of the workspace: only a workspace-wide one does (the key's refusal, a
+ *  transport or rate failure, an unreadable store, no managed team: the null word). A word nobody classified stops it too, the safe
+ *  side. An answer about one row marks that row checked and the walk goes on. */
+export const inboundRecheckStops = (word: string | null): boolean => word === null || !(ROW_WORDS as readonly string[]).includes(word);
 
 /** The rows the lane re-reads in this pass: open stored rows (`inboundRetirable`) the pass's changed read did not return, never
  *  checked or last checked a whole interval ago, the longest unchecked first, at most `max`. */

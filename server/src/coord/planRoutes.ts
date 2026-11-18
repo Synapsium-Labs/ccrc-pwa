@@ -287,9 +287,14 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** `plan take`'s row: the rows handed to THIS programme under the identifier (round 4 A2: the issue's workspace is its own, never
    *  the programme's), told apart by the programme home's workspace (`handedRowOf`, review 2457 F2). One reading for the candidates
    *  and the work. */
-  const takeRowOf = (coord: CoordStore, plan: PlanStorePort, slug: string, issue: string, ws: ReadonlyMap<string, string | null>): InboundRow | null => {
+  const takeRowOf = (coord: CoordStore, plan: PlanStorePort, slug: string, issue: string, ws: ReadonlyMap<string, string | null>):
+  { row: InboundRow | null; undecided: boolean; homeWorkspace: string | null } => {
     const home = coord.programHome(slug);
-    return handedRowOf(plan.handedInboundByIdentifier(slug, issue), home === null ? null : ws.get(home) ?? null);
+    const homeWorkspace = home === null ? null : ws.get(home) ?? null;
+    const rows = plan.handedInboundByIdentifier(slug, issue);
+    const row = handedRowOf(rows, homeWorkspace);
+    // rows are handed but the home does not decide: nothing is chosen, and the Upkeep lookup is not reached (review 2524 A1)
+    return { row, undecided: rows.length > 0 && row === null, homeWorkspace };
   };
   /** `plan triage`'s row: keyed by the workspace of the team's owning project (round 4 A2), and of that team. */
   const triageRowOf = (plan: PlanStorePort, team: string, issue: string, ws: ReadonlyMap<string, string | null>): InboundRow | null => {
@@ -372,7 +377,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     // only the programme's coordinator may cause a read: any other caller is refused by the work with no Linear call
     const parsed = parsePlanTake(body);
     if (!parsed.ok || !ownerVerdict(caller, plan.planOwnerOf(slug)).ok) return [];
-    const row = takeRowOf(coord, plan, slug, parsed.take.issue, ws);
+    const { row } = takeRowOf(coord, plan, slug, parsed.take.issue, ws);
     return row === null ? [] : [row];
   };
 
@@ -684,13 +689,14 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     const t = parsed.take;
     const now = opts.now();
     // the row handed to THIS programme (round 4 A2, review 2457 F2): `takeRowOf`, none chosen when the home does not decide
-    const handed = takeRowOf(coord, plan, slug, t.issue, ws);
+    const { row: handed, undecided, homeWorkspace } = takeRowOf(coord, plan, slug, t.issue, ws);
+    if (undecided) return { refuse: 'issue-not-inbound', detail: `${t.issue} was handed to ${slug} in more than one workspace and the programme's home does not say which` };
     if (handed !== null) {
       // the issue was re-read by id before the mutex (review 2457 F4): one that left the managed teams is retired, never taken
       const left = recheckRefusal(plan, handed, rechecks, 'epic' in t);
       if (left !== null) return left;
     }
-    const parked = handed === null ? plan.upkeepTicketByIdentifier(t.issue) : null;
+    const parked = handed === null ? plan.upkeepTicketByIdentifier(homeWorkspace, t.issue) : null;
     const upkeep = parked !== null && parked.state === 'open' ? parked : null;
     if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
     const ok = (): { ok: true; plan: PlanView } => ({ ok: true, plan: viewOf(plan, coord, slug) });

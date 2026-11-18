@@ -16,7 +16,7 @@ import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccr
 import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass, DRIFT_MAX_PAGES, prMergedOfFrom } from '../src/linear/driftPass.js';
 import type { FleetSession } from '../../shared/api.js';
-import { DRIFT_PASS_MS, DRIFT_SWEEP_MARGIN_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
+import { DRIFT_PASS_MS, DRIFT_SWEEP_MARGIN_MS, LINEAR_TEXT_PREFACE, bindingByLinearIdOf } from '../src/linear/driftPolicy.js';
 import { LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, type LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
@@ -1294,6 +1294,31 @@ describe('the skip of a node a sync write moved has a test that goes red without
 });
 
 // Review 2457 A1 and A2: the read hold's ladder starts again when a read is answered, and a graced re-read answered 401 holds both lanes.
+describe('two bindings of one workspace holding one linearId: the lowest id is the binding (review 2524 F3)', () => {
+  // No uniqueness rules out two bindings of one workspace holding one Linear id, so the pass must be correct under it (the
+  // coordinator's ruling): ONE rule picks the binding of a linearId, the lowest id, which `bindingByLinearId` reads and the pass's
+  // pre-read follows. With two rules (the pre-read's highest id against the store's lowest) the node was skipped at every pass.
+  it('the node\'s drift is compared and restored once, against the lowest-id binding', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate').map((a) => a.input['title'])).toEqual(['Ticket t1']);
+    expect(driftEventsOf(r.db, b.id, 0).map((e) => [e.field, e.restored])).toEqual([['title', true]]);
+  });
+
+  it('the store\'s reader and the pass\'s pre-read pick the same binding', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    expect(r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id).toBe(b.id);
+    expect(bindingByLinearIdOf(r.plan.bindingsInWorkspace(b.workspaceId)).get(b.linearId!)!.id).toBe(b.id);
+  });
+});
+
 describe('the read hold of a refused key (review 2457 A1, A2)', () => {
   const unauthorisedOn = (r: Rig, op: string): void => {
     const real = r.respond.current;
@@ -1314,13 +1339,20 @@ describe('the read hold of a refused key (review 2457 A1, A2)', () => {
     expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);              // the first step again, not the second (120 s)
   });
 
-  it('keyReadAnswered resets the step of the read ladder and of no other key (A1)', async () => {
+  it('keyReadAnswered resets the step of the read ladder and of no other key (A1; review 2524 A5)', async () => {
     const r = await synced(await rig());
-    const slot = (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir)).get(WS.a.id)!;
+    await seedSlot(r.ccrcDir, 'b');
+    const slots = (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir));
+    const slot = slots.get(WS.a.id)!;
+    const slotB = slots.get(WS.b.id)!;
     expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 30_000);
     expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 120_000);
+    // a second workspace's key holds its own ladder at its second step too (review 2524 A5)
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 30_000);
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 120_000);
     r.sync.keyReadAnswered(WS.a.id);
-    expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 30_000);
+    expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 30_000);           // this key starts over
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 600_000);         // the other key's step is untouched: its third
   });
 
   it('a graced re-read answered 401 holds the key for both lanes and restores nothing (A2)', async () => {

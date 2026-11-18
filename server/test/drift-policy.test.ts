@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
   restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
-  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreCommentChoice, restoreFallbackCommentOf, restoreHoldVerdict, restoreSides, restoreTargetVerdict, syncWroteSince, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
+  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreCommentChoice, restoreFallbackCommentOf, restoreHoldVerdict, restoreSides, restoreTargetVerdict, syncWroteSince, bindingByLinearIdOf, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
   UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, restorableFields,
   DRIFT_KEEP_NOTE, DRIFT_SWEEP_MARGIN_MS, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep, sweepWatermark,
 } from '../src/linear/driftPolicy.js';
@@ -527,5 +527,14 @@ describe('the restore comment under the public-text check (review 2457 F3)', () 
   });
   it("a milestone's Restored line names the fields, never a value", () => {
     expect(restoredLine(['name', 'targetDate'], AT)).toBe("Restored on 2026-11-18: ccrc put back this milestone's name and target date.");
+  });
+});
+
+describe('bindingByLinearIdOf: the lowest binding id holds a Linear id (review 2524 F3)', () => {
+  it('keeps the lowest id whatever the rows\' order, and skips a binding with no Linear id', () => {
+    const rows = [{ id: 7, linearId: 'L1' }, { id: 3, linearId: 'L1' }, { id: 5, linearId: null }, { id: 9, linearId: 'L2' }];
+    const m = bindingByLinearIdOf(rows);
+    expect([...m.entries()].map(([k, b]) => [k, b.id])).toEqual([['L1', 3], ['L2', 9]]);
+    expect(bindingByLinearIdOf([...rows].reverse()).get('L1')!.id).toBe(3);
   });
 });
