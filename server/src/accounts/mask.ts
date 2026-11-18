@@ -213,8 +213,25 @@ const ROW_INDENT_OPT = /(?:[ \t\0]|│|┃|\|)*/y;
 const LEADING_BREAK = new RegExp(String.raw`^(?:${ROW_BREAK})?`);
 /** One row break at `lastIndex`, as `ROW_BREAK` reads it (C44, review 2430 F1). */
 const BREAK_AT = new RegExp(ROW_BREAK, 'y');
-/** The most a slice's end moves past a LF to end the row break it begins (C44): blanks between a LF and its CR. */
+/** The most a slice's end moves past a LF to end the row break it begins (C44): blanks and escapes between a LF and its
+ *  CR. A break that runs past it is cut after the LF, and the slice's lookahead reads the rest of the break as part of
+ *  it (C45, `lookaheadEnd`'s `lead`), so the bound decides where a slice ends, never what is masked: 63 blanks end the
+ *  slice after the CR, 64 after the LF (pinned in drawer-mask-rows). */
 const BREAK_CUT_MAX = 64;
+/** Where a slice of pane history that ends at the LF at `nl` is cut (C44, C45): after the row break that LF is in, as
+ *  `ROW_BREAK` reads it through the escape view (an escape between a LF and its CR is part of the break, as every row
+ *  reader reads it; review 2445 F1), when a byte follows that break within `BREAK_CUT_MAX` bytes of the LF; else after
+ *  the LF. The read ends outside an escape, so an escape the bound cuts is not read as text. */
+function sliceCutAt(text: string, nl: number): number {
+  const b0 = breakStartAt(text, nl + 1)!;
+  const v = viewOf(text.slice(b0, outsideEscape(text, Math.min(text.length, nl + 1 + BREAK_CUT_MAX + 1), nl + 1)), '\0');
+  BREAK_AT.lastIndex = 0;
+  const br = BREAK_AT.exec(v.t);
+  return br !== null && br[0].length < v.t.length ? Math.max(nl + 1, b0 + origin(v, br[0].length)) : nl + 1;
+}
+/** The rest of a row break that a slice cut after its LF (C45): blanks and escapes (NULs in the view), then the CR that
+ *  ends the break, with no LF after it (a LF there makes a CR LF, and the blanks a row of their own). */
+const BREAK_REST = /^[ \t\0]*\r(?!\n)/;
 /** The first index of view `v` whose original index is `i` or later. */
 function viewIndexOf(v: View, i: number): number {
   if (v.map === null) return i;
@@ -348,12 +365,16 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
     // The walk starts at the leading run of the row the lookahead ends in: a key's rows that reach that row lead it,
     // whatever follows the key on its last row or wherever in the row the lookahead ends.
     const t = viewOf(text.slice(end, le), '\0').t;
+    // A slice cut after the LF of a LF, blanks or escapes, then a CR (one row down, too long for the cut to end:
+    // `BREAK_CUT_MAX`) begins its lookahead with the rest of that break, which is no row of its own: the read starts after
+    // it. Read as a row, it ended every key's rows at the cut, and the whole key went out raw (C45, review 2445 F1).
+    const lead = text[end - 1] === '\n' && text[end - 2] !== '\r' ? BREAK_REST.exec(t)?.[0].length ?? 0 : 0;
     let i = t.length;
-    while (i > 0 && t[i - 1] !== '\n' && t[i - 1] !== '\r') i--;
+    while (i > lead && t[i - 1] !== '\n' && t[i - 1] !== '\r') i--;
     let r = i;
     while (r < t.length && ROW_LEAD.includes(t[r]!)) r++;
-    const blank = i === 0 && r === t.length;   // the read is all one row's indent and escapes
-    if (r === t.length && i > 0 && (!grown || le >= cap)) {
+    const blank = i === lead && r === t.length;   // the read is all one row's indent and escapes
+    if (r === t.length && i > lead && (!grown || le >= cap)) {
       // The first read, or a read the cap stopped, ends inside a row's indent or escapes, before its run: start from the
       // row before. At the cap, answering "no cut" there sent the chain's rows on both sides raw (review 2411 F2: an
       // 8,192-byte key with 2,600 blanks of indent a row, whole at 15 of 16 placements). A grown read below the cap ends
@@ -388,7 +409,7 @@ function lookaheadEnd(text: string, end: number, fpMax: number | null): { end: n
     const c = chainBack(t, i, Buffer.byteLength(t.slice(i, j).replace(/\0/g, ''), 'utf8'), fpMax, 0, -1, true);
     let k = c.at;
     while (k > 0 && ROW_LEAD.includes(t[k - 1]!)) k--;
-    if (c.long || k > 0) return { end: le, cut: false };   // the chain read back from here starts after the cut
+    if (c.long || k > lead) return { end: le, cut: false };   // the chain read back from here starts after the cut
     if (le >= cap) return { end: le, cut: le < text.length };   // still across the cut at the cap
     le = Math.min(cap, end + 2 * (le - end));
   }
@@ -1203,13 +1224,12 @@ export class SecretMasker {
         if (nl > at) {
           // At the end of the row break that LF is in, as `ROW_BREAK` reads it: a LF then a CR is one row down, and a cut
           // between them began the next slice with the CR, an empty row that ended the key's rows (C44). Read within
-          // `BREAK_CUT_MAX` bytes of the LF only, so blanks between it and a CR never stretch a slice or its read; a break
-          // that reaches that far is cut after the LF, as before.
-          const b0 = breakStartAt(text, nl + 1)!;
-          const near = text.slice(b0, nl + 1 + BREAK_CUT_MAX + 1);
-          BREAK_AT.lastIndex = 0;
-          const br = BREAK_AT.exec(near);
-          end = br !== null && br[0].length < near.length ? Math.max(nl + 1, b0 + br[0].length) : nl + 1;
+          // `BREAK_CUT_MAX` bytes of the LF only, so blanks between it and a CR never stretch a slice or its read, and read
+          // through the escape view, as every row reader reads a break: an escape between the LF and its CR is part of it.
+          // A break longer than that is cut after the LF, and the lookahead reads the rest of it (the blanks and the CR the
+          // next slice begins with) as part of the break, not as an empty row: read as one, a LF, 64 blanks or more and a
+          // CR ended the key's rows at the cut, and the whole key went out raw (C45, review 2445 F1, `pane-cut-long-break`).
+          end = sliceCutAt(text, nl);
         } else {
           end = outsideEscape(text, end, at + 1);
         }
@@ -1291,8 +1311,13 @@ const UNFINISHED_ESC = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*\x1b?|[PX^_][^\x1b]*
  *  identify a key, and a quiet line end of a shorter last word is drawn at once. */
 const ROW_TAIL_MIN_BYTES = 8;
 /** The start of the row break that ends at `j` (`t[j - 1]` its last byte), read back the way `ROW_BREAK` reads it
- *  forward, or null: no row break ends there. */
-function breakStartAt(t: string, j: number): number | null {
+ *  forward, or null: no row break ends there. One family differs (review 2445 F2, pinned by mask-break-grammar's brute
+ *  force): a CR LF, blanks or none, then a CR. Forward that is the CR LF, a blank row and a CR; back from the CR it is
+ *  LF, blanks, CR, one break that starts at the CR LF's LF. Kept, as it fails closed: a reader that steps back over
+ *  breaks (the cap's step back) reaches the row before the blank row and reads its run, a chain that can only mask
+ *  more; a reader that stops at the start (`chainBack`, `rowTailAt`) finds the CR LF's CR before it, text that is no
+ *  run, and ends there as it does forward. */
+export function breakStartAt(t: string, j: number): number | null {
   const c = t[j - 1];
   if (c === '\n') return j >= 2 && t[j - 2] === '\r' ? j - 2 : j - 1;
   if (c !== '\r') return null;
