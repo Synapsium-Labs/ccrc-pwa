@@ -495,7 +495,7 @@ These close the gaps found against the standalone docs server (research B). Each
 
 | Capability of the standalone docs server | Verdict | Where |
 |---|---|---|
-| Index, project and directory pages | Yes, base §4.4 | The index's "newest five" cards, the project page's list of each section's docs, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
+| Index, project and directory pages | Yes, base §4.4; the parts below Kept, needed before the old server goes off | The index's "newest five" cards, the project page's list of each section's docs, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
 | Recursive listings | Yes, base §2 (a) | Listings already recurse (`ccd/ccd:35878`); the path grammar allows 16 components (G2) |
 | Draft badges and banner | Yes, base §4.5 | More precise than today |
 | `?ref=<branch>` | Yes for a branch, base §3.1; the old spellings Kept, needed before the old server goes off | Stricter today: `?ref=origin/<b>` reads as a local branch named `origin/<b>`, and a tag or a short commit is refused, so old links are rewritten to the bare `?ref=<b>` (§9 Step 4). Designed: `?ref=origin/<b>` will read the remote-tracking branch unless a local branch of that name exists, and a tag (bare or `refs/tags/`) and a unique short commit will open at their commit, branches first (X2 parity design §5.3) (amended 2026-11-18; X2 parity design). |
@@ -527,7 +527,7 @@ These close the gaps found against the standalone docs server (research B). Each
 | Back returns from an in-page jump | Kept, needed before the old server goes off | Today a jump replaces the history entry. Designed with Back-to-close: a jump is a place the console keeps (X2 parity design §4.7) (amended 2026-11-18; X2 parity design). |
 | Rules index and rule paragraphs | Kept, needed before the old server goes off | Today the library's `rules` flag is off; ccrc passes it (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
 | The In short "Headlines / Full" switch | Kept, needed before the old server goes off | Removed from the library; a library option restores it (X2 parity design §5.6, §6) (amended 2026-11-18; X2 parity design). |
-| A comparison kept across reload | Kept, needed before the old server goes off | The comparison base is kept for the visit (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
+| A comparison kept across reload | Kept, needed before the old server goes off | Designed: the comparison base is kept per doc for the tab, so it survives reload, Back and a link back to the doc (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
 | Attention marks for `operator` and ID qualifiers | Kept, needed before the old server goes off | ccrc passes the vocabulary the standalone server uses (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
 | Diagrams drawn on open | Agreed, by your ruling behind lab E17 | On request until E17's `mermaid` reading holds (§5.2); F evidences it (X2 parity design §5.7) (amended 2026-11-18; X2 parity design). |
 | A per-project default branch | Kept, needed before the old server goes off | A Settings row per project (X2 parity design §5.4) (amended 2026-11-18; X2 parity design). |
