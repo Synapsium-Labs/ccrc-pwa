@@ -4,10 +4,10 @@
 // L0's `LANE_ARM_TEXT`, read by name. The card at every width is `browser/shadow-lanes-card.browser.test.ts`.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, laneArmGate, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
+import { LANE_ARM_TEXT as T, ROSTER_CARD_SHADOW_LOG, laneArmGate, type LaneArmQuizPending, type LaneArmQuizView, type LaneArmRowView, type LaneArmView } from '../../shared/lane-arm';
 import { COORDINATOR_ROSTER_CARD_LIVE_MARKER } from '../../shared/switches';
 import { ShadowLanesSection } from '../src/fleet/ShadowLanesSection';
-import { asLaneArmConfirm, asLaneArmView, laneArmLines } from '../src/fleet/laneArmWords';
+import { asLaneArmConfirm, asLaneArmView, laneArmLines, laneArmQuizDate } from '../src/fleet/laneArmWords';
 import { ApiError, api } from '../src/lib/api';
 import { clearScreenCache } from '../src/lib/screenCache';
 import { UNCONFIRMED_TEXT } from '../src/fleet/settingsText';
@@ -212,5 +212,111 @@ describe('laneArmWords (D-8274)', () => {
       { text: `${T.unreadable} (disk I/O error)`, tone: 'warn' },
       { text: T.shadowLog(ROSTER_CARD_SHADOW_LOG), tone: 'note' },
     ]);
+  });
+});
+
+describe('the replay quiz block (Overlord W1a, quiz record)', () => {
+  const AT = Date.UTC(2026, 10, 24, 12, 0, 0);
+  const run = (id: number, over: Partial<LaneArmQuizPending> = {}): LaneArmQuizPending => ({
+    id, recordedAt: AT + 100 + id, reportShaPrefix: `${id}`.repeat(12).slice(0, 12), recordedBy: `quiz-record op-${id} both 2026-11-24T12:00:00Z`,
+    measuredAt: AT + id, score: 0.8 + id / 100, lo: 0.7, hi: 0.9, questions: 100, families: 34, answered: 97, runFailed: 2, absent: 1, ...over,
+  });
+  const pendingLine = (r: LaneArmQuizPending): string => T.quizPending(laneArmQuizDate(r.measuredAt), laneArmQuizDate(r.recordedAt), r);
+  const quiz = (over: Partial<LaneArmQuizView> = {}): LaneArmQuizView => ({
+    baseline: { state: 'not-yet' }, pending: { ok: true, runs: [run(7)] }, ...over,
+  });
+  const withQuiz = (q?: LaneArmQuizView): LaneArmView => (q === undefined ? view() : { ...view(), quizBaseline: q });
+
+  it('shows each pending run with Confirm and Discard, the rule note once, and the baseline line, per baseline state', async () => {
+    expect(laneArmQuizDate(AT + 7)).toBe('2026-11-24 UTC');
+    const cases: [LaneArmQuizView['baseline'], string][] = [
+      [{ state: 'recorded', at: AT }, T.quizBaseline.recorded(laneArmQuizDate(AT))],
+      [{ state: 'not-yet' }, T.quizBaseline.notYet],
+      [{ state: 'unreadable', detail: 'db locked' }, T.quizBaseline.unreadable],
+    ];
+    for (const [baseline, line] of cases) {
+      vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ baseline, pending: { ok: true, runs: [run(7), run(8)] } })));
+      const { unmount } = mount();
+      expect(await screen.findByText(line)).toBeInTheDocument();
+      expect(screen.getByText(pendingLine(run(7)))).toBeInTheDocument();
+      expect(screen.getByText(pendingLine(run(8)))).toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: T.quizConfirm })).toHaveLength(2);
+      expect(screen.getAllByRole('button', { name: T.quizDiscard })).toHaveLength(2);
+      expect(screen.getAllByText(T.quizRuleNote)).toHaveLength(1);
+      unmount();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('each pending run names its run id, report sha prefix, record date and trace, so the operator can tell runs apart (review 2442 F1)', async () => {
+    const r = run(7, { recordedAt: Date.UTC(2026, 10, 25, 23, 30), reportShaPrefix: 'abcdef012345', recordedBy: 'quiz-record op both 2026-11-25T23:30:00Z' });
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ pending: { ok: true, runs: [r] } })));
+    mount();
+    const text = (await screen.findByText(pendingLine(r))).textContent ?? '';
+    for (const want of ['run 7,', 'report sha abcdef012345', 'recorded 2026-11-25 UTC', 'by quiz-record op both 2026-11-25T23:30:00Z', `the arms ran ${laneArmQuizDate(AT + 7)}`]) {
+      expect(text).toContain(want);
+    }
+    expect(laneArmQuizDate(Date.UTC(2026, 10, 25, 23, 59))).toBe('2026-11-25 UTC');
+  });
+
+  it('pending runs show in id order, never by a date inside the report (review 2442 F3)', async () => {
+    const runs = [run(9, { measuredAt: AT - 5 * 86_400_000 }), run(8), run(10, { measuredAt: AT - 86_400_000 })];
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ pending: { ok: true, runs } })));
+    mount();
+    await screen.findByText(pendingLine(runs[0]!));
+    expect([...document.querySelectorAll('[data-quiz-run]')].map((e) => e.getAttribute('data-quiz-run'))).toEqual(['8', '9', '10']);
+  });
+
+  it('a view without the field shows no block', async () => {
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz());
+    mount();
+    await waitFor(() => expect(radio(T.shadow).checked).toBe(true));
+    expect(screen.queryByText(T.quizBaseline.notYet)).toBeNull();
+    expect(screen.queryByRole('button', { name: T.quizConfirm })).toBeNull();
+  });
+
+  it('a failed pending read shows its line, and no buttons', async () => {
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ pending: { ok: false, detail: 'read failed' } })));
+    mount();
+    expect(await screen.findByText(T.quizPendingUnreadable)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: T.quizConfirm })).toBeNull();
+    expect(screen.getByText(T.quizBaseline.notYet)).toBeInTheDocument();
+  });
+
+  it.each([['confirm', T.quizConfirm], ['discard', T.quizDiscard]] as const)('%s calls the rule door with the run id and re-reads the card', async (action, label) => {
+    const read = vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz({ pending: { ok: true, runs: [run(7), run(8)] } })));
+    const rule = vi.spyOn(api, 'ruleQuizRun').mockResolvedValue({ ok: true, id: 8, state: action === 'confirm' ? 'confirmed' : 'discarded', baseline: false });
+    mount();
+    const second = (await screen.findByText(pendingLine(run(8)))).closest('[data-quiz-run]') as HTMLElement;
+    fireEvent.click(within(second).getByRole('button', { name: label }));
+    await waitFor(() => expect(rule).toHaveBeenCalledWith(8, action));
+    expect(rule).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  });
+
+  it('a step-up-required refusal shows the step and sends nothing more; a refusal says its detail', async () => {
+    vi.spyOn(api, 'laneArm').mockResolvedValue(withQuiz(quiz()));
+    const client = { stepUpStart: vi.fn().mockResolvedValue({ allowCredentialIdsB64url: [] }), stepUpFinish: vi.fn(), stepUpPassphrase: vi.fn() };
+    const rule = vi.spyOn(api, 'ruleQuizRun').mockRejectedValueOnce(new ApiError(401, { ok: false, error: 'step-up-required' }))
+      .mockRejectedValueOnce(new ApiError(409, { ok: false, error: 'bad-request', detail: 'already confirmed' }));
+    render(<ShadowLanesSection stepUpDeps={{ client }} />);
+    fireEvent.click(await screen.findByRole('button', { name: T.quizConfirm }));
+    await waitFor(() => expect(client.stepUpStart).toHaveBeenCalled());
+    expect(rule).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: T.quizDiscard }));
+    expect(await screen.findByText(`${T.refused} (already confirmed)`)).toBeInTheDocument();
+  });
+
+  it('the reader keeps a well-formed block, leaves an absent one absent, and drops a malformed one', () => {
+    const q = quiz({ baseline: { state: 'recorded', at: AT } });
+    expect(asLaneArmView(withQuiz(q))).toEqual(withQuiz(q));
+    expect(asLaneArmView(withQuiz(quiz({ pending: { ok: false, detail: 'x' } })))).toEqual(withQuiz(quiz({ pending: { ok: false, detail: 'x' } })));
+    expect(asLaneArmView(withQuiz())).toEqual(view());
+    expect(asLaneArmView({ ...view(), quizBaseline: { baseline: { state: 'maybe' }, pending: { ok: true, runs: [] } } })).toEqual(view());
+    expect(asLaneArmView({ ...view(), quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [{ id: 1 }] } } })).toEqual(view());
+    const noSha: Record<string, unknown> = { ...run(1) };
+    delete noSha['reportShaPrefix'];
+    expect(asLaneArmView({ ...view(), quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [noSha] } } })).toEqual(view());
+    expect(asLaneArmView({ ...view(), quizBaseline: 'nope' })).toEqual(view());
   });
 });

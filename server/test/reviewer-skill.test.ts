@@ -17,6 +17,10 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
 // Ten clauses, verbatim, DOUBLE-quoted (worker-skill.test.ts's convention and
 // its D-104 rule: straight apostrophes only, no `"` inside a clause).
+// Approvals PR P (plan 2026-11-18 section 3.8): clause 9 carries the literal-path rule, pinned as its own
+// literal too so softening one word reds by name. The coordinator skill's references carry the same rule and
+// the prose-names line (coordinator-approval-prompts.test.ts pins them there).
+const RULE = 'Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full.';
 const CONTRACT = [
   "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time; a uuid you cached is guaranteed stale after the `/clear` dispatch runs.",
   "Ack before you act (`mail inbox`, run bare: no pipe, no redirect, no `head` or `tail`, acks what it printed), keyed on the DELIVERY id, never the mail row's own `id`. Reply to the coordinator through mail (`toId:'coordinator'`, with the `runId` of THIS review run), never by typing into your own pane.",
@@ -26,7 +30,7 @@ const CONTRACT = [
   "Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.",
   "One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{\"reviewedTip\":\"<sha>\",\"report\":\"<absolute path>\"}`, which the coordinator submits to the close route exactly as you wrote it.",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. A draft in your input box never stops mail: the delivery lane stashes it and Claude Code restores it after the delivery (`Draft restored`), so keep using your box normally. " + RULE + " You never delete through a variable (`rm -rf \"$X\"`), and a delete of any other shape stops your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.",
 ];
 const FORBIDS_VERBS = CONTRACT[7]!;
@@ -46,12 +50,22 @@ describe('the reviewer skill: its contract', () => {
   // SKILL.md's clause 9 line itself, so dropping it reds by name rather than
   // only as a whole-clause mismatch above.
   it('clause 9 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
-    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word';
     const line = skill.split('\n').find((l) => l.startsWith('9. '));
     expect(line, 'SKILL.md has no clause 9').toBeTruthy();
     expect(CONTRACT[8]).toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 9 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 9 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
+  });
+
+  // Approvals PR P: clause 9 carries the literal-path rule word for word, so a reviewer's lens and subagent
+  // briefs can carry it on (subagents never read this skill). It is widened in place, so the count stays ten.
+  it('clause 9 carries the literal-path rule word for word (approvals PR P)', () => {
+    const line = skill.split('\n').find((l) => l.startsWith('9. '));
+    expect(line, 'SKILL.md has no clause 9').toBeTruthy();
+    expect(line, 'clause 9 no longer carries the literal-path rule').toContain(RULE);
+    expect(CONTRACT[8]).toContain(RULE);
+    expect(readFileSync(path.join(root, 'ccd/coordinator-skill/references/approval-prompts.md'), 'utf8')).toContain(RULE);
   });
 
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',

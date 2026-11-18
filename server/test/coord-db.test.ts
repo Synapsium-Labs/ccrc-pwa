@@ -755,9 +755,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // hand-offs, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
-    // and MIGRATIONS[99] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0).
-    expect(COORD_SCHEMA_VERSION).toBe(100);
-    expect(MIGRATIONS.length).toBe(100);
+    // and MIGRATIONS[99] (the replay quiz run's state, counts and ruling on continuity_quiz_runs, Overlord W1a quiz record).
+    // and MIGRATIONS[100] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0).
+    expect(COORD_SCHEMA_VERSION).toBe(101);
+    expect(MIGRATIONS.length).toBe(101);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -882,8 +883,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2); the migration above is still entry 11.
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
-    // and MIGRATIONS[99] (approvals.denyCurrent, Overlord approvals PR 0).
-    expect(COORD_SCHEMA_VERSION).toBe(100);
+    // and MIGRATIONS[99] (the replay quiz run's state and counts, Overlord W1a quiz record).
+    // and MIGRATIONS[100] (approvals.denyCurrent, Overlord approvals PR 0).
+    expect(COORD_SCHEMA_VERSION).toBe(101);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

@@ -48,6 +48,10 @@ import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecrets
 export interface UpkeepClose { readonly identifier: string; readonly teamKey: string; readonly word: string; readonly at: number | null }
 export interface UpkeepAnswer { readonly ok: true; readonly epic: EpicView | null; readonly notClosed: readonly UpkeepClose[] }
 
+/** The operator's ruling on one pending replay quiz run (`POST /api/continuity/quiz-runs/:id/rule`'s body word). */
+export type QuizRuleAction = 'confirm' | 'discard';
+/** That door's 200: the run's new state and whether it became the baseline (a ruling that is refused rejects instead). */
+export interface QuizRuleAnswer { readonly ok: true; readonly id: number; readonly state: string; readonly baseline: boolean }
 /** `GET`/`POST /api/face`'s answer. */
 export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
 
@@ -1022,6 +1026,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
     laneModels: (lane: string, opts?: ReadOpts) => getJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, opts),
+    /** `POST /api/models/:lane` (model-class-advance R4): Hold, Release or Revert one class on the lane. Unknown on purpose:
+     *  the Models sheet's readers (`accounts/modelsSheetWords.ts`) read the 200 and a refusal's body. `postJson`, so a
+     *  non-2xx rejects with `ApiError` and the sheet never moves a row before the server's answer. */
+    laneModelsAct: (lane: string, body: { action: 'hold' | 'release' | 'revert'; class: string }) =>
+      postJson<unknown>(`/api/models/${encodeURIComponent(lane)}`, body),
     /** `POST /api/coord/lane-arm`: `{lane, choice}`, plus `confirm` only as the key a 409 `confirm-required` answered with. The
      *  server decides the confirm, so a 409 rejects with `ApiError` like every non-2xx, and the card reads its body through
      *  `laneArmWriteRefusal`. `postJsonOr`, for `setCoordCaps`' reason: an answer that could not be read may still have stored
@@ -1098,6 +1107,15 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
+     *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
+     *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */
+    ruleQuizRun: async (id: number, action: QuizRuleAction): Promise<QuizRuleAnswer> =>
+      (await request(`/api/continuity/quiz-runs/${id}/rule`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ action }),
+      })).json() as Promise<QuizRuleAnswer>,
     /** `GET /api/waiting` (desktop-polish PL4/PL5a): every programme's items, what was cleared in the last 48 hours (D-8194), and
      *  each programme's Goals, as the `waiting` frame carries them. The screen reads it again when the tab regains focus
      *  (review 1336: a quiet fleet sends no frame when an item crosses its 30 minutes). Session-gated when armed. */
