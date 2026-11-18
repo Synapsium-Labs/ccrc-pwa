@@ -14,7 +14,7 @@ import type { LaneAdvanceRead, LaneClassAdvance, LaneModelsRead, ModelClass } fr
 import { CLASSES } from '../../../shared/models';
 import type { HistoryEntry, Hold, Pending, Previous } from '../../../shared/model-advance.mjs';
 import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
-import { asLaneModelsRead, classWord, type LaneReadFailure } from '../lib/models';
+import { asLaneModelsRead, classWord, laneReadWords, type LaneReadFailure } from '../lib/models';
 
 export type ModelsAction = 'hold' | 'release' | 'revert';
 const ACTIONS: readonly ModelsAction[] = ['hold', 'release', 'revert'];
@@ -171,8 +171,19 @@ export const MODELS_ACT = 'Models';
 export const MODELS_SHEET_TITLE = 'Model classes';
 export const MODELS_EMPTY_CLASS = 'No model: this class is empty on this lane.';
 export const MODELS_NOT_HELD = 'Not held: an automatic advance may move it.';
-export const MODELS_READ_ABSENT = 'This lane has no class registry, so its classes have no models to show.';
-export const MODELS_READ_UNREADABLE = 'The lane\'s model files could not be read just now, so no model is shown. The four classes are listed below by name; the sheet reads again when it is opened.';
+/** What the sheet says when the lane's read answered no classes (R3b): the one sentence `laneReadWords` (`lib/models.ts`)
+ *  gives each arm, and, on every arm but `absent`, that the class names are listed below. The arms that do not say it
+ *  themselves add that the sheet reads again when it is opened; the transient arms (`busy`, `not-started`) already say
+ *  so, and say it once (fix round 2, N2). */
+const NAMES_LISTED = 'The four classes are listed below by name.';
+const READ_AGAIN = 'The four classes are listed below by name; the sheet reads again when it is opened.';
+export function modelsReadStateWords(read: Exclude<LaneModelsRead, { readonly kind: 'read' }>): string {
+  const said = laneReadWords(read) ?? '';
+  if (read.kind === 'absent') return said;
+  return `${said} ${read.kind === 'busy' || read.kind === 'not-started' ? NAMES_LISTED : READ_AGAIN}`;
+}
+export const MODELS_READ_ABSENT = modelsReadStateWords({ kind: 'absent' });
+export const MODELS_READ_UNREADABLE = modelsReadStateWords({ kind: 'unreadable' });
 export const MODELS_RETRY = 'Try again';
 /** A failed read of the lane, by what happened (F12): never a skeleton forever. */
 export const MODELS_READ_FAILED: Readonly<Record<LaneReadFailure, string>> = {

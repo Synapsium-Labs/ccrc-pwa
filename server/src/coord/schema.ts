@@ -3659,6 +3659,7 @@ export const MIGRATIONS: readonly string[] = [
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
+
   // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
   // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
   // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
@@ -3816,7 +3817,35 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE continuity_quiz_runs ADD COLUMN inputs TEXT;          -- the report's four input shas, a JSON object
   `,
 
-  // ── 101: user_version 100 -> 101 ─────────────────────────────────────────
+  // ── 101: user_version 100 -> 101 ──────────────────────────────────────────
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
+  // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
+  // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
+  // a day. `run_spend`: one row per closed run, `measured` (a fresh reading inside the run's window), `absent` or
+  // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
+  // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
+  // of the forecast lane. `runs.dispatchConversation` (fix round 1, F3): the registry's conversation id the run was
+  // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
+  // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
+  // older build at this `user_version` takes rule 3 and never names them.
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96, the renewal hand-offs
+  // (#2934) 97, decision model B (#2990) 98, the ladder (#2994) 99 and the quiz record (#2991) 100, so this is 101 by
+  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 100 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_health (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug), at INTEGER NOT NULL,
+    word TEXT NOT NULL, evidence TEXT NOT NULL, noticed INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX programme_health_by_program ON programme_health (program, id);
+  CREATE TABLE run_spend (
+    runId INTEGER PRIMARY KEY REFERENCES runs(id), at INTEGER NOT NULL, state TEXT NOT NULL, cost REAL, class TEXT,
+    readAt INTEGER, startCost REAL
+  );
+  ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
+  `,
+  // ── 102: user_version 101 -> 102 ─────────────────────────────────────────
   // The approval census (approvals plan 2026-11-18, §3.1, Tasks 1.3 and 1.4): `approval_census`, one row per permission
   // prompt that leaves no approvals row (Table 2a's paths 1, 2, 6 and 7, and `unmeasured` with its `why` for a prompt
   // the census cannot place), written ONLY by the questions owner's census
@@ -3826,10 +3855,10 @@ export const MIGRATIONS: readonly string[] = [
   // approvals row's input is. Two facts each minted approvals row keeps from mint, never an operand: `commandWords` (the
   // classifier's statement list's command words, JSON, NULL when it cannot list them) and `literalInRoot` (0 or 1). And
   // `push_outbox.pushSource`, the approval push's source (`approval:<n>` or `census:<n>`), written by the unbound insert.
-  // NEW TABLE AND THREE NULLABLE COLUMNS: an older build opening a file at `user_version 101` takes rule 3 and boots, its
+  // NEW TABLE AND THREE NULLABLE COLUMNS: an older build opening a file at `user_version 102` takes rule 3 and boots, its
   // inserts naming none of them. The slot is POSITIONAL, renumbered at this PR's landing merge on the coordinator's word
-  // (quiz PR 2, #2991, landed 100; approvals PR 0 takes the next slot too). RE-MEASURE the slot before the PR and before merge (it
-  // must print 100 before this entry is counted):
+  // (quiz PR 2, #2991, landed 100; forecasts B, #3003, landed 101; approvals PR 0 takes the next slot too). RE-MEASURE the slot before the PR and before merge (it
+  // must print 101 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

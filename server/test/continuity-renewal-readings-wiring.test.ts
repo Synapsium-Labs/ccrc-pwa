@@ -12,7 +12,7 @@ import type { UsageRead } from '../src/usage.js';
 const NOW = Date.UTC(2026, 5, 10, 12, 0, 0);
 const gen = (over: Partial<GenRow>): GenRow =>
   ({ id: 1, sessionId: 'lane-a-project-a', role: 'overlord', model: 'claude-opus-5-5', startReportedAt: NOW - 86_400_000, ...over }) as GenRow;
-const usage = (ctxWindow: number | null, stale = false): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxWindow: number | null, stale = false): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens: 1_000, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
 const base = (u: UsageRead = usage(200_000)): GenReadings =>

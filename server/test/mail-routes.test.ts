@@ -48,7 +48,10 @@ import { isDelegationCorrelationKebab } from '../src/coord/delegation-correlatio
 import { isDelegationCensusKebab } from '../src/coord/gitref.js';
 import { isReceiptDrop } from '../../shared/responses.js';
 import { isDecisionModelWord } from '../src/coord/decisionModel.js';
-import { isEdgePredicate, isEdgeState, isRemainingRefusal, isUnforecastableReason } from '../../shared/programmeFacts.js';
+import {
+  EDGE_KINDS, isEdgePredicate, isEdgeState, isProgrammeHealthWord, isRemainingRefusal, isRunSpendState, isUnforecastableReason,
+} from '../../shared/programmeFacts.js';
+import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
@@ -1254,6 +1257,15 @@ describe('the rejection table is total, in both directions', () => {
         // forecast (`'no-remaining'`, `'nothing-left'`, `'too-little-history'`). A reason rides a stored seal's `reason`,
         // never a `refused` or `reject.code`. Admitted through L0's guard, derived from `UNFORECASTABLE_REASON_MAP`, never NOT_CODES.
         || isUnforecastableReason(tok)
+        // THE PROGRAMME HEALTH (Overlord W2 forecasts B): `coord/programmeHealth.ts` names the health words, an edge's kind (its state
+        // is main's `isEdgeState`, above), and `coord/programmeFactsStore.ts` a spend row's state as literals. A word rides a `programme_health` or
+        // `run_spend` row or an edge's column, never a `refused` or `reject.code`. Admitted through L0's guards and lists,
+        // derived from `PROGRAMME_HEALTH_WORD_MAP`, `EDGE_KINDS` and `RUN_SPEND_STATE_MAP`, never NOT_CODES.
+        || isProgrammeHealthWord(tok) || (EDGE_KINDS as readonly string[]).includes(tok)
+        || isRunSpendState(tok)
+        // `coord/programmeHealth.ts` also reads a rank's class (`'fixed-date'`), a stored column of the operator's rank row: admitted
+        // through L0's `isServiceClass`, derived from `SERVICE_CLASS_MAP`.
+        || isServiceClass(tok)
         // THE APPROVAL CENSUS (approvals plan 2026-11-18 PR 1): `coord/approvalCensus*.ts` name a prompt's path (`'hook-skipped'`,
         // `'refused-at-mint'`, ...) and a row's deny currency (`'not-current'`). A word rides the census read's counts or a
         // census row's `path`, never a `refused` or `reject.code`. Admitted through L0's guard, derived from
@@ -1263,7 +1275,7 @@ describe('the rejection table is total, in both directions', () => {
         || isOverlordDoorWordHere(tok, outsideDoors)
         // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
         || isActorIssuerWordHere(tok, outsideIssuers),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, Overlord refusal, designation word, unforecastable reason or approval census word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason or approval census word`).toBe(true);
     }
   });
 });

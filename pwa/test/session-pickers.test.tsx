@@ -837,3 +837,73 @@ describe("a managed Codex lane's pickers follow its roster kind (re-plan R1, D-8
     });
   });
 });
+
+// R3b fix round 1, F1 and F3: the model picker's note, through the real screen. The lane read is the one fetch this
+// file answers with a body: a never-made lane says it has no registry, an Anthropic lane's absent says nothing (its rows
+// are the client's own aliases), and a transient answer says its word. Deleting the note's wiring in `SessionScreen`
+// reds the first case; making the Anthropic absent show the note reds the second.
+describe('the model picker says why it names no model (R3b)', () => {
+  const answerLaneWith = (models: unknown): void => {
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('/api/models/')) {
+        const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+        return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200 });
+    }));
+  };
+
+  it('a lane whose registry was never made: the note says so, above the class rows', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'never-made' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/no class registry/);
+  });
+
+  it('an Anthropic lane\'s absent: no note at all, and the alias rows as always', async () => {
+    answerLaneWith({ kind: 'absent', laneKind: 'anthropic' });
+    renderScreen();
+    openModelSheet();
+    expect(await screen.findByRole('button', { name: /Opus class/ })).toBeInTheDocument();
+    // let the lane's read land before measuring the note's absence
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([u]) => String(u).includes('/api/models/claude'))).toBe(true));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.queryByTestId('pick-note')).toBeNull();
+  });
+
+  // Fix round 2, N5: the kept-read-plus-word path through the screen. The read on mount names the models; the picker
+  // opening asks again and the box is busy, so the rows keep the read's labels and the note says the word beside them.
+  // Dropping the screen's transient argument to the note reds this case.
+  it('a good read, then busy on opening: the rows keep the models, and the note says the word', async () => {
+    const good = { kind: 'read', classes: {
+      fable: { model: 'model-6-delta', label: 'Delta 6', efforts: null },
+      opus: { model: 'model-6.1-gamma', label: 'Gamma 6.1', efforts: null },
+      sonnet: { model: 'model-6.1-alpha', label: 'Alpha 6.1', efforts: null },
+      haiku: { model: 'model-6-beta', label: 'Beta 6', efforts: null },
+    } };
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (!u.includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(u);
+      const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+      const models = asked.length === 1 ? good : { kind: 'busy' };
+      return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    renderScreen({ wrapper: 'gpt' });
+    await waitFor(() => expect(asked.length).toBe(1)); // the read on mount
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    await waitFor(() => expect(asked.length).toBe(2)); // the picker opening asks again
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/busy.*reads the lane again/i);
+    expect(screen.getByRole('button', { name: /Gamma 6\.1/ })).toBeInTheDocument();
+  });
+
+  it('a busy box: the note says the word', async () => {
+    answerLaneWith({ kind: 'busy' });
+    renderScreen({ wrapper: 'gpt' });
+    openModelSheet();
+    expect((await screen.findByTestId('pick-note')).textContent).toMatch(/busy.*reads the lane again/i);
+  });
+});
