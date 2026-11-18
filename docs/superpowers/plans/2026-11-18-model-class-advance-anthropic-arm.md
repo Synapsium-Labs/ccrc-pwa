@@ -377,13 +377,15 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   X2 goes stale, an older launch reported X1: id X2); `an unreadable prior is never written over` and `an invalid
   prior is never written over` (each: the refusal's cause word, the file's bytes and mtime unchanged, the advance file
   untouched, no `moved`); `a move's entry is complete` (`ok: true`, `cause: 'newer'`, `evidenceAt`; `lastMoveOf`
-  returns it); `a cut-short move is recorded once when newer evidence arrives` (the op's second write is made to
-  fail, whichever file it is; then, before the next refresh, newer evidence for the same new id arrives: a cache
-  refetched later, or another launch filling the same id; after the next refresh the history holds exactly one entry
-  for the move, the aliases file names the new id, and the move was answered in `moved` exactly once across the two
-  refreshes); `a repeated move gets its own entry` (X1 to X2 recorded; X2's row then needs a newer build than
-  `laneVersion` and a fresh launch fills X1, which replaces it with no move; the build returns and a refetched cache
-  names X2: a second history entry X1 to X2, `previous` X1, and `moved` names it); `an
+  returns it); `a cut-short move is recorded once when newer evidence arrives` (each refresh runs at its own
+  `CCRC_MODELS_NOW`, whole seconds apart: the baseline refresh at T0 writes X1, so its `idSince` is T0; the cut-short
+  refresh at T1 records X1 to X2, and its second write is made to fail, whichever file it is; then newer evidence for
+  X2 arrives (a cache refetched later, or another launch filling X2); the next refresh runs at T2. After it, the
+  history holds exactly one entry for the move, the aliases file names X2, and the move was answered in `moved`
+  exactly once across the two refreshes); `a repeated move gets its own entry` (again at distinct times: X1 is the
+  baseline at T0; X1 to X2 is recorded at T1; at T2, X2's row needs a newer build than `laneVersion`, and a fresh
+  launch fills X1, which replaces X2 with no move, so `idSince` is T2; at T3 the build returns and a refetched cache
+  names X2. The result is a second history entry X1 to X2, `previous` X1, and `moved` names it); `an
   unlaunchable id's replacement is not a move`; `hold records the held id`; `hold with no id refuses
   alias-source-absent`; `hold refuses settings-overrides-hold`; `revert holds the previous id`; `release keeps
   releasedAt and spends no history` (ten history entries before, ten after, `lastMoveOf` unchanged); `the first hold
@@ -784,7 +786,9 @@ tests pin both), and the note records each session id.
 **Before this task is dispatched,** its re-pick is re-read against Task A3.0 Step 2's recorded result (D-8748). Step 2
 measures a re-pick in a session whose process already knows the current id. It does not measure a process started
 before the move, whose alias may still resolve to its old id. Whichever way that reading falls, a given id is typed at
-most once (`picked=`, below). A re-pick that does not land leaves the session to its next spawn.
+most once (`picked=`, below). A re-pick that does not land leaves the session to its next spawn. The same re-read
+decides the gate order for a busy session that is id-pending. Such a session passes gate 1 and reaches the hand-pick
+check on every tick until it goes idle, so the re-read decides whether the idle check must come before the read.
 
 **Files:**
 - Modify: `ccd/ccd` (`_route_applied_set`, `_route_apply_pending`, `_route_apply_now`, `_route_readback`),
@@ -803,17 +807,21 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
   - **The stamp** is `routeapplied`'s mtime, as `main`'s readback reads it (`_plat_mtime`). The id arm and the two
     observation keys never move it. `_route_applied_set` takes an optional fourth argument, `keep`. With `keep`, it
     writes the new list to its temp file, gives that file the old file's mtime (`touch -r`), and renames it as
-    `_reg_set` does. `model=` and `picked=` are always written with `keep`. So only a `class=` write, the spawn's
-    settle and the seed move the stamp. A `/model` that ccd typed for an id move therefore stays after the stamp until
-    the next class change or spawn, and only the journal tells it apart from the operator's.
+    `_reg_set` does. `model=` and `picked=` are always written with `keep`, and no other write is. So every
+    `_route_applied_set` write other than `model=` and `picked=` moves the stamp, as on `main`, and so do the spawn's
+    settle and the seed. A `/model` that ccd typed for an id move therefore stays after the stamp until the next write
+    that moves it, and only the journal tells it apart from the operator's.
   - **`model=` is recorded** when `$REG/<id>.routeapplied` exists and either has no `model`, or has a `picked=` that
     differs from its `model` and the reading names that `picked` id (a landed re-pick). The reading comes from
     `_usage_sidecar_read`, is of this session (its current uuid), and has a `ts` strictly later than both the process
     start (`_pane_born`) and the stamp, as `main`'s readback holds it. A swap's resume keeps the uuid, so a reading in
     the stamp's own second may be the old process's last render. The model is recorded through `_model_id_bare_to`.
     The sidecar is read under Task A3.2's gate (a regular file newer than `routeapplied`, bytes changed since the last
-    pass), with this condition in place of "the marker is unfilled". So the steady state forks nothing, a re-pick that
-    did not land included.
+    pass), with this condition in place of "the marker is unfilled". For a landed re-pick, "the reading names
+    `picked`" is judged first from the bytes the memo already holds (read with `read -r -d ''`), with a builtin match
+    for the bare `picked` id. Only on a match does `_usage_sidecar_read` run, to check the uuid and the `ts`. So the
+    steady state forks nothing, a re-pick that did not land included. That holds in a working session too, whose
+    sidecar changes on every render.
   - **Dropped** whenever the class changes: `_route_applied_set` itself removes `model=` and `picked=` when it writes a
     `class=` whose value differs from the recorded one. The applier's class arm, the class readback and the promotion
     all drop them through the one writer. The next fresh reading records `model=` again.
@@ -823,9 +831,10 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
   - **Never created:** a session with no `routeapplied` (`_spawn_start` removes it for a session with no record) gets
     no recording, and `_alias_observe` never creates the file. Such a session has no class, is never id-pending, and
     is never named behind (Task A2.5).
-  - **`picked=<to>`** means ccd has acted on that `to` for this session: it either typed it or stood down for a hand
-    pick. It is written only through `_route_applied_set` (`keep`), by the id arm on `_route_type_model`'s rc 0 and by
-    `_route_id_pending` when it stands down. Nothing else writes it.
+  - **`picked=<to>`** means ccd has acted on that `to` for this session: it either typed it, acknowledged or not, or
+    stood down for a positive hand pick. It is written only through `_route_applied_set` (`keep`). The id arm writes
+    it on `_route_type_model`'s rc 0, 1 and 2, and `_route_id_pending` writes it when it stands down for a positive
+    hand pick. Nothing else writes it. So each `to` gets exactly one attempt.
 - Produces: `_route_id_pending <id>` -> rc 0 only when all of the following hold. They are asked in this order, so the
   steady state reads nothing but the registry and the cached facts:
   - `routeapplied` has a `model`. An absent `model` is never pending, so nothing is typed at rollout.
@@ -837,25 +846,33 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
   - The class is not held.
   - The facts' id differs from `model`, both bare, and the facts' id is not `-` (an id of `-` is never pending).
   - The facts say `seen` (the canary by use, Task A3.1, compared against the facts' own id).
-  - **The operator has not picked a model by hand.** Both of these must hold:
-    - No `/model` in the transcript at or after the stamp goes unexplained by ccd's own keystroke journal. The read is
-      `_route_readback_overruled`'s own: `_operator_choice_read "$f" "$typed" "$ROUTE_READBACK_TAIL" strict`, on the
-      transcript `_transcript_path` names, with the journal passed where that read passes `0 since`. `$typed` is
-      `$REG/<id>.typed`, read with `_reg_get "$id" typed`, as the keep's `_operator_choice_promote` reads it.
-      - A `/model` ccd typed itself (`_route_type_model` journals it through `_typed_note`) is never read as the
-        operator's.
-      - Under `strict`, an undatable `/model` row and a `/fast` row answer `drift-model`, and either counts as a hand
-        pick.
-      - Each of these also counts as a hand pick, so ccd stands down rather than type over a pick it cannot
-        attribute: a journal whose first line is not `<epoch> since`; a transcript that cannot be named or read; a
-        reader that fails.
-    - The fresh reading of this uuid (strictly later than the stamp, within `ROUTE_READBACK_FRESH`), through
-      `_model_id_bare_to`, is the recorded `model` or the facts' id. Any other id is a hand pick. A reading of the
-      facts' id before ccd has typed (a session already on it) leaves the session pending. `_route_readback` then
+  - **The operator has not picked a model by hand.** The check has three outcomes:
+    - **A positive hand pick** stands down. It is either of:
+      - a fresh reading of this uuid (strictly later than the stamp, within `ROUTE_READBACK_FRESH`) that names an id,
+        through `_model_id_bare_to`, other than the recorded `model` or the facts' id;
+      - a `/model`, `/fast` or undatable row in the transcript at or after the stamp that ccd's own keystroke journal
+        does not explain.
+
+      On a positive hand pick, `_route_id_pending` writes `picked=<the facts' id>` and answers rc 1. Nothing is typed
+      and `model=` is unchanged. A model picked by hand is never typed over. The stand-down is that record, so the
+      steady tick after it is a builtins comparison.
+    - **Undecided** answers rc 1 and writes nothing. It covers: no fresh reading, a reading older than the stamp, a
+      journal whose first line is not `<epoch> since`, a transcript that cannot be named or that exists and cannot be
+      read, and a reader that fails. None of these is a hand pick. The check is asked again only when the sidecar's bytes have
+      changed since this supervisor last judged the session undecided (Task A3.2's memo), so the steady tick stays
+      builtins-only. An idle session whose last render predates the stamp therefore waits for its next render. It is
+      re-picked on the idle tick after that render, so it runs at most one turn on the old model.
+    - **No hand pick**, and the session stays pending: no unexplained row at or after the stamp, and a fresh reading
+      of the recorded `model` or of the facts' id. An absent transcript holds no `/model`, as `main`'s
+      `_route_readback_overruled` reads it, so a session with no message yet is decided by its reading alone. A reading
+      of the facts' id before ccd has typed (a session already on it) leaves the session pending. `_route_readback` then
       confirms it and records `model=`, and nothing is typed.
-  - **When the hand-pick check fails,** `_route_id_pending` stands down: it writes `picked=<the facts' id>` and
-    answers rc 1, with nothing typed and `model=` unchanged. A model picked by hand is never typed over. The stand-down
-    is that record, so the steady tick after it is a builtins comparison.
+
+    The read is `_route_readback_overruled`'s own: `_operator_choice_read "$f" "$typed" "$ROUTE_READBACK_TAIL"
+    strict`, on the transcript `_transcript_path` names, with the journal passed where that read passes `0 since`.
+    `$typed` is `$REG/<id>.typed`, read with `_reg_get "$id" typed`, as the keep's `_operator_choice_promote` reads
+    it. A `/model` ccd typed itself (`_route_type_model` journals it through `_typed_note`) is never read as the
+    operator's. Under `strict`, an undatable `/model` row and a `/fast` row answer `drift-model`.
   - rc 1 otherwise. rc 1 always on a Codex lane, because this plan does not arm D11's fallback.
 
   `_route_apply_pending` answers 0 when `_route_id_pending` holds, so `_route_apply_check` passes its gate 1 and
@@ -864,8 +881,11 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
   alias row through `_route_type_model` and never moves the class stamp. By `_route_type_model`'s answer:
   - **rc 0:** it writes `picked=<to>` and nothing else. Recording `model=` stays with the readback and the observe
     step.
-  - **rc 1 or 2:** it takes `_route_note` and `_route_try_bump`, as the class arm does: rc 2's `KS_WHY` and
-    `KS_DETAIL`, or rc 1's `apply-unconfirmed` with the detail `model=<to>`.
+  - **rc 1 or 2:** it writes `picked=<to>`, so the same `to` is never typed again. It still takes `_route_note` and
+    `_route_try_bump` as the class arm does, for the note's sake: rc 2's `KS_WHY` and `KS_DETAIL`, or rc 1's
+    `apply-unconfirmed` with the detail `model=<to>`. A re-pick that fails waits for the next spawn, and
+    `model-sessions-behind` names the session after a day. With `picked=` written the session is no longer
+    id-pending, so gate 1 clears `routetries` once nothing else is pending, and a newer `to` gets its own attempt.
   - **rc 3:** it writes nothing.
 
   `_route_readback` confirms an id change when the reading's model, through `_model_id_bare_to`, equals the wanted
@@ -893,8 +913,11 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
     - `an acknowledged re-pick whose reading does not change is typed once`: an alias move X1 to X2, and
       `_route_type_model` answers 0. `picked=X2` is written and the stamp's mtime is unchanged. Then five ticks with
       fresh readings of X1 give no keystroke, and `routetries` stays empty. A newer facts id X3 is typed once more.
-    - `an unacknowledged re-pick counts an attempt`: rc 1 writes `routetries` and the note `apply-unconfirmed`, and
-      no `picked=`.
+    - `an unacknowledged re-pick is not typed again`: rc 1 writes `picked=X2`, the note `apply-unconfirmed` and
+      `routetries`. rc 2 writes `picked=X2` and its `KS_WHY`. In each case, five later ticks past
+      `ROUTE_RETRY_BACKOFF` give no keystroke.
+    - `a failed re-pick does not wedge a newer to`: with nothing else pending, rc 1 for X2, then a newer facts id X3
+      is typed once, and no `apply-gave-up` note is written.
     - `a re-pick refused before a key writes nothing`: rc 3.
     - `a landed re-pick is recorded by the observe step`: after `picked=X2`, a fresh reading of X2 records
       `model=X2` with nothing pending.
@@ -910,7 +933,13 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
       Five later ticks give no keystroke and no transcript read. A newer facts id is read again, and with the
       operator's `/model` still after the stamp, ccd stands down again.
     - `a /fast row stands down`.
-    - `an unreadable journal stands down`.
+    - `an idle session with a stale reading is not stood down`. The setup: `model=X1`, facts X2 `seen`, and the
+      sidecar's newest reading older than the stamp. The idle tick gives no keystroke and no `picked=`. Five ticks with
+      the sidecar unchanged read no transcript. Then a render of X1 arrives, and the next idle tick types X2 once.
+    - `a session with no transcript is decided by its reading`: a fresh reading of X1 with no transcript file is
+      typed once.
+    - `an unreadable journal writes nothing`: rc 1, no keystroke and no `picked=`. It is asked again once the
+      sidecar's bytes change.
   - **Other cases:**
     - `a held class is never pending` (D19).
     - `release is not typed`.
@@ -925,7 +954,9 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
   condition. Add two cases beside them, each costing the `idle-home` figure exactly in its steady tick:
   - an Anthropic fixture with `model=` recorded, an unchanged aliases file and a facts id equal to `model`;
   - the same fixture with `model=X1`, `picked=X2` and a facts id of X2 (a re-pick that did not land, or a stand-down),
-    with the transcript and the sidecar unchanged.
+    with the transcript and the sidecar unchanged;
+  - that fixture again as a working session, whose sidecar's bytes change on every tick and name X1. The builtin
+    match finds no X2, so no `_usage_sidecar_read` runs.
 - [ ] **Step 3: Mutation rows.** Each reds a named test:
   - drop the `seen` condition;
   - read an absent `model` as differing;
@@ -944,6 +975,9 @@ most once (`picked=`, below). A re-pick that does not land leaves the session to
     is typed once`);
   - write `picked=` without `keep` (must red the same test's unchanged stamp);
   - drop `strict` from the hand-pick read (must red `a /fast row stands down`);
+  - make a stale reading a stand-down (must red `an idle session with a stale reading is not stood down`);
+  - write no `picked=` on rc 1 (must red `an unacknowledged re-pick is not typed again`);
+  - call `_usage_sidecar_read` before the builtin match (must red the working-session tick-budget case);
   - let an id of `-` be pending (must red `an unlaunchable id types nothing`).
 - [ ] **Step 4: Commit** `feat(ccd): the routing record carries the model id, and an alias move reaches a running
   session`, then push once.
@@ -1071,7 +1105,7 @@ The departures from the re-plan of 2026-11-16 that this plan makes. Numbers issu
 ### D-8744 — D18's source is the lane's own cache, then a fresh alias launch; newest evidence wins
 
 Where: waves A2 and A3, and spec §2.5.2 and D18. Proposed by wave 6's worker; ruled by the programme's operator on
-2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7; review 2495, B1, B5, F3, F4 and F5; review 2508, R4-1; review 2518, R5-1 to R5-4). An
+2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7; review 2495, B1, B5, F3, F4 and F5; review 2508, R4-1; review 2518, R5-1 to R5-4; review 2527, R6-1 and R6-2). An
 Anthropic lane's class id comes from the lane's own catalogue cache (current format, its target launchable by the
 lane's build) or from a fresh alias launch, whichever is newer: a launch whose process started after the cache's
 fetch outranks the cache's target, and `show` and `lanes` carry both ids when they disagree, with no fifth cause word.
@@ -1089,15 +1123,19 @@ rests on evidence older than its hold, a class with no id and a class with an un
 the aliases file and the wire; that exempts the class from `model-held-behind` only, and while a hold stands
 `model-sessions-behind` judges its sessions against the held id. A hold stops marks for its own class only. A running
 session's model picked by hand is never typed over, and ccd's own journalled re-pick is never read as one. A re-pick
-of a given id is acted on at most once: ccd records that id in the routing record as `picked=`, whether it typed it or
-stood down for a hand pick, and never moves the record's stamp in doing so. Each id's row comes from the lane's own cache when it lists the
+of a given id is acted on at most once: ccd records that id in the routing record as `picked=`, whether it typed it
+(acknowledged or not) or stood down for a positive hand pick, and never moves the record's stamp in doing so. A
+positive hand pick is a fresh reading of another id, or an unexplained `/model`, `/fast` or undatable row since the
+stamp. No fresh reading, a stale one, an unreadable journal or transcript, or a failed reader records nothing, and is
+asked again when the session next renders (review 2527, R6-1 and R6-2). Each id's row comes from the lane's own cache when it lists the
 id, else from the newest cache on the box that does; that a row is the same across organisations is unmeasured.
 D-8684's roster grouping is not built: A0 found no pair of cached homes in one organisation to check it against, and
 the uncached homes record none. Cost if wrong: a home with no cache shows class words until ccd marks a launch on it;
 a class keeps an id after its evidence has aged until newer evidence comes; and a reading filled and removed (by a
 swap, a wake or a restart) between two hourly refreshes is lost, so the class stays on older evidence until the next
-fresh launch reports; and a running session whose re-pick does not land stays on its old id until its next spawn,
-which `model-sessions-behind` names after a day.
+fresh launch reports; a running session whose re-pick does not land, or fails, stays on its old id until its next
+spawn, which `model-sessions-behind` names after a day; and an idle session whose last reading is stale runs at most
+one turn on the old model before it is re-picked.
 
 ### D-8745 — a catalogue cache is stale after seven days
 

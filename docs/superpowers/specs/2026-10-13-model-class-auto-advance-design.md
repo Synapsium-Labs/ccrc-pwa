@@ -386,9 +386,11 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   step costs the tick no fork while nothing has changed.
 - **A model picked by hand is never typed over, and a move is typed at most once.** A move is typed only while a
   fresh reading of the session shows the recorded id and its transcript holds no `/model` since the record's stamp
-  that ccd's own keystroke journal does not explain. When ccd types a move, or stands down for a hand pick, it records
-  the new id in the routing record as picked, without moving the record's stamp, and a session whose picked id is the
-  class's current id is not pending. A re-pick that lands is recorded from the session's next reading. One that does
+  that ccd's own keystroke journal does not explain. When ccd types a move, acknowledged or not, or stands down for a
+  positive hand pick (a fresh reading of another id, or an unexplained `/model` since the stamp), it records the new
+  id in the routing record as picked, without moving the record's stamp, and a session whose picked id is the class's
+  current id is not pending. A session with no fresh reading is no hand pick: it waits for its next render, so it runs
+  at most one turn on the old model. A re-pick that lands is recorded from the session's next reading. One that does
   not land leaves the session to its next spawn, and `model-sessions-behind` names it after a day. A newer id reopens
   the session. The stood-down state costs the tick nothing. A changed id counts as pending on an Anthropic lane when
   the class is not held, and on a Codex lane only under D11's fallback.
