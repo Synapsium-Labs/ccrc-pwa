@@ -31,6 +31,8 @@ import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { quietAtTestEnd } from './laneQuiet.js';
+import { sendPrompt } from '../src/inject/send.js';
+import { MAIL_TOKEN_HEADER } from '../src/coord/token.js';
 
 // ── the deciders' cases, against the real module ───────────────────────────────────────────────────────────────────────
 
@@ -64,6 +66,7 @@ const PASSPHRASE = 'correct horse battery staple';
 const OVERLORD = 'lane-a-project-a';
 const OTHER = 'lane-b-project-a';
 const KEY = 'send-key-0123456789abcdef';
+const BOX_TOKEN = 'box-token-fixture-0123456789';
 const VIEW = {} as never;
 const designated = (sessionId: string, term = 1): DesignationRead => ({ kind: 'designated', sessionId, term, row: VIEW });
 const NOT_DESIGNATED: DesignationRead = { kind: 'not-designated', row: null };
@@ -126,7 +129,7 @@ async function rig(opts: RigOpts = {}): Promise<Rig> {
   const insertMail = coord.insertMail.bind(coord);
   vi.spyOn(coord, 'insertMail').mockImplementation((m) => { order.push('mail'); return insertMail(m); });
   const time = fakeTime();
-  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: time.ports, coord,
+  const deps: Deps = { cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(), time: time.ports, coord, mailToken: BOX_TOKEN,
     ...(opts.noStore === true ? {} : { operatorModel: store }) };
   const app = await buildServer(deps, new Bus());
   await app.ready();
@@ -419,6 +422,57 @@ describe('the prompt route, while the designation is pending or moves under a wa
     expect((await post(r, OTHER, { text: 'hello' })).statusCode).toBe(200);
     expect(typed(r).length).toBeGreaterThan(0);
     expect(r.order).toEqual([]);
+  });
+});
+
+describe('the slot re-ask sits INSIDE the queue slot (review 2627 F-3)', () => {
+  it('a designation that moves while another send holds the session\'s slot answers target-moved, and nothing is typed', async () => {
+    const calls: string[][] = [];
+    const run: Runner = async (_cmd, args) => { calls.push([...args]); return { ran: true, code: 0, stdout: '❯ \n', stderr: '' }; };
+    const queue = new KeyedQueue();
+    let release!: () => void;
+    let held!: Promise<void>;
+    await new Promise<void>((started) => {
+      held = queue.run(OVERLORD, () => new Promise<void>((resolve) => { release = resolve; started(); }));
+    });
+    let target: 'go' | 'stop' = 'go';
+    const pending = sendPrompt({ tmux: new Tmux(run), queue, sleep: async () => {} }, OVERLORD, 'hello', { recheck: () => target });
+    target = 'stop';   // the designation moved while the call waited for its turn
+    release();
+    await held;
+    expect(await pending).toEqual({ ok: false, error: 'target-moved' });
+    expect(calls.filter((c) => c[0] === 'send-keys')).toEqual([]);
+  });
+});
+
+describe('a session that acks its own operator-message nudge (review 2627 F-1)', () => {
+  const ack = (r: Rig, deliveryId: number) => r.app.inject({ method: 'POST', url: `/api/mail/${deliveryId}/ack`,
+    payload: { fromId: OVERLORD, fromUuid: '1'.repeat(36) }, headers: { [MAIL_TOKEN_HEADER]: BOX_TOKEN } });
+  const stateOfRow = (r: Rig, id: number) => { const s = r.store.messageStateOf(id); return s.kind === 'measured' ? s.value : 'unmeasured'; };
+  const firstDelivery = (r: Rig): number => (r.coord.db.prepare('SELECT id FROM mail_deliveries ORDER BY id').get() as { id: number }).id;
+
+  it('the session acks the nudge before the lane types it: the row moves to delivered at the ack, not at the next boot', async () => {
+    const r = await rig();
+    expect((await post(r, OVERLORD, { text: 'hello' })).statusCode).toBe(200);
+    expect(stateOfRow(r, 1)).toBe('queued');
+    const res = await ack(r, firstDelivery(r));
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, already: false });
+    expect(stateOfRow(r, 1)).toBe('delivered');
+    expect(r.order).toEqual(['record', 'mail', 'move:queue', 'move:deliver']);
+    // A second ack is `already`, and moves nothing again.
+    expect((await ack(r, firstDelivery(r))).json()).toMatchObject({ already: true });
+    expect(r.order.filter((o) => o === 'move:deliver')).toHaveLength(1);
+  });
+
+  it('an ack of any other mail leaves the operator message queued', async () => {
+    const r = await rig();
+    expect((await post(r, OVERLORD, { text: 'hello' })).statusCode).toBe(200);
+    const mail = r.coord.insertMail({ fromId: OTHER, fromUuid: OTHER, toId: OVERLORD, runId: null, kind: 'status', subject: 'unrelated', body: 'b', artifacts: [] });
+    const other = r.coord.queueDelivery(mail.id, OVERLORD, 'ccrc-mail test payload').id;
+    expect((await ack(r, other)).statusCode).toBe(200);
+    expect(stateOfRow(r, 1)).toBe('queued');
+    expect(r.order.filter((o) => o.startsWith('move:'))).toEqual(['move:queue']);
   });
 });
 

@@ -31,7 +31,10 @@ to an existing plan file outside a ledger branch; the coordinator folds it into 
   so the nudge would never have been typed. The branch reads the box once before `sendPrompt` (`readBoxText`, as the park probe
   does) and passes `'whole'` only when the box already holds exactly this delivery's line (`resumeRuleOf`, `coord/envelope.ts`).
   An empty box is typed into, and any other text, another message's line included, is a draft stashed as today. The generic
-  nudge keeps `resumeIfOwn: true`. Costs one extra capture per operator-nudge attempt.
+  nudge keeps `resumeIfOwn: true`. Costs one extra capture per operator-nudge attempt. Residual (review 2627 F-2): the parked-box
+  probe in `mailPass` still compares the exact line, so a WRAPPED, unsubmitted operator line left by an `enter-ignored` park is
+  never retried: it is re-held every 10 minutes and rejected `undeliverable` after 24 hours, and its row stays `queued` (not
+  re-nudged, because `unnudged` needs `queuedAt IS NULL`) until the inbox lane lists it.
 - **`watcher-port-gains-mark-acked`** (Task 5). `markAcked` joins `WatcherCoordMember` (`coord/ports.ts`): the branch acks through
   the existing delivery writer, and the watcher's port did not carry it.
 - **`mail-nudge-census-reads-the-picker`** (Task 5). `single-definition/injected-prompts.test.ts` gains the reference
@@ -104,3 +107,21 @@ to an existing plan file outside a ledger branch; the coordinator folds it into 
 - **`boot-pass-may-deliver`** (review 2550 F3, the coordinator's ruling). `MESSAGE_EVENT_ACTORS.deliver` is `['mail-lane', 'boot-pass']`
   and the `boot-pass` actor's description gains "deliver, for a queued row whose nudge is acked". The boot pass sends `deliver` as
   itself, so the move is attributed to the act that made it. Table 1's actor column in the plan is one word wider than written.
+
+## Fix round 2
+
+- **`self-ack-settles-at-the-ack`** (review 2627 F-1). A session that acks its own operator-message nudge, before the lane types it
+  or while the lane's send is in flight (the lane's `markDelivered` is then refused as terminal), settles the row at that ack:
+  `POST /api/mail/:id/ack` calls `operatorModel/nudgeLane.ts#settleAckedOperatorNudge` after an ack that landed, and it moves
+  `deliver` while the row is still `recorded` or `queued`, sent as actor `mail-lane` (the ack route is the mail lane's ack). Any
+  other mail is left alone, and the route's answer never changes. An ack before the lane typed the line moves the row to
+  `delivered` although no nudge was typed; the session read the message's id from its inbox, which is the delivery.
+- **`recheck-pinned-inside-the-slot`** (review 2627 F-3). A case holds the session's queue slot, flips the re-ask while the call
+  waits, and releases it: the answer is `target-moved` and nothing is typed. Moving the re-ask before the slot is granted turns
+  it red (measured by hand).
+- **`unreadable-box-may-retype-a-copy`** (review 2627 F-4, residual, unchanged since round 0). When the box read before
+  `sendPrompt` fails but `sendPrompt`'s own capture succeeds, an old copy of this delivery's line is stashed, the line typed and
+  submitted, and the copy restored as a draft, which a later human Enter would send again (it names the id only).
+- **`generic-resume-guard-has-no-decider`** (review 2627 F-5, residual). The F2 guard lives in `sendPrompt`, not in a decider, so it
+  has no mutation-set entry; one route case pins it. `carriesOperatorMessageMarker` has no direct unit case, and a wrap inside the
+  id's digits would miss it.
