@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
   restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
-  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
+  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreHoldVerdict, restoreSides, syncWroteSince, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
   UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, nextWatermark, restorableFields,
 } from '../src/linear/driftPolicy.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
@@ -313,10 +313,101 @@ describe('the pass\'s small deciders (D-8183)', () => {
     const c = restoreCommentOf('issue', [
       { field: 'title', planned: 'Plan title', was: 'Other title' }, { field: 'projectId', planned: null, was: null },
     ], at);
-    expect(c).toContain("ccrc restored this issue's title to *Plan title*. It had been changed to *Other title* on 2026-11-12.");
+    expect(c).toContain("ccrc restored this issue's title to *Plan title*. It had been changed on 2026-11-12.");   // Linear's free text is never named
+    expect(c).not.toContain('Other title');
     expect(c).toContain("ccrc restored this issue's project. It had been changed on 2026-11-12.");   // a null side names no value
     expect(c.match(/ccrc's plan decides where work sits here/g)).toHaveLength(1);
     expect(c.endsWith(LINEAR_CCRC_PROVENANCE_LINE)).toBe(true);
     expect(c.match(new RegExp(LINEAR_CCRC_PROVENANCE_LINE.slice(0, 20).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))).toHaveLength(1);
+  });
+});
+
+describe('what a restore comment names (A-4)', () => {
+  const at = Date.UTC(2026, 10, 12, 8);
+  const facts = (o: Partial<NameFacts> = {}): NameFacts => ({
+    plannedName: (id) => ({ P1: 'W3 steering', M1: 'Checkpoint one' } as Record<string, string>)[id] ?? null,
+    linearName: (id) => ({ P2: 'Backlog' } as Record<string, string>)[id] ?? null,
+    knownTeams: new Set(['AAA']), knownTypes: new Set(['started']), ...o,
+  });
+  it('an id field names the plan\'s name, and Linear\'s only when the directory holds the id', () => {
+    expect(restoreSides('projectId', 'P1', 'P2', facts())).toEqual({ planned: 'W3 steering', was: 'Backlog' });
+    expect(restoreSides('projectId', 'P1', 'P9', facts())).toEqual({ planned: 'W3 steering', was: null });
+    expect(restoreSides('parentId', 'T9', 'P2', facts())).toEqual({ planned: null, was: 'Backlog' });
+    expect(restoreSides('milestoneIds', ['M1', 'M9'], ['x'], facts())).toEqual({ planned: 'Checkpoint one', was: null });
+  });
+  it('a free-text field names ccrc\'s own side only, and a description names neither', () => {
+    expect(restoreSides('name', 'Plan name', 'Linear name', facts())).toEqual({ planned: 'Plan name', was: null });
+    expect(restoreSides('title', 'Plan title', 'x', facts())).toEqual({ planned: 'Plan title', was: null });
+    expect(restoreSides('description', 'a', 'b', facts())).toEqual({ planned: null, was: null });
+  });
+  it('a team key and a type name Linear\'s side only when the directory knows it', () => {
+    expect(restoreSides('teamKey', 'AAA', 'aaa', facts())).toEqual({ planned: 'AAA', was: 'aaa' });
+    expect(restoreSides('teamKey', 'AAA', 'ZZZ', facts())).toEqual({ planned: 'AAA', was: null });
+    expect(restoreSides('teamKeys', ['AAA'], ['AAA', 'ZZZ'], facts())).toEqual({ planned: 'AAA', was: null });
+    expect(restoreSides('stateType', 'unstarted', 'started', facts())).toEqual({ planned: 'unstarted', was: 'started' });
+    expect(restoreSides('stateType', 'unstarted', 'ghp_secret', facts())).toEqual({ planned: 'unstarted', was: null });
+  });
+  it('a sentence with only ccrc\'s side says where and when, and a free-text Linear side is refused even when given', () => {
+    expect(restoreComment('issue', 'projectId', 'W3 steering', null, at)).toContain("ccrc restored this issue's project to *W3 steering*. It had been moved elsewhere on 2026-11-12.");
+    expect(restoreComment('issue', 'title', 'Plan', 'Linear text', at)).not.toContain('Linear text');
+  });
+});
+
+describe('a milestone restore line names every field (A-4)', () => {
+  const at = Date.UTC(2026, 10, 12, 8);
+  it('joins the nouns, and every shape still reads as ccrc\'s own line', () => {
+    expect(restoredLine(['name', 'description'], at)).toBe("Restored on 2026-11-12: ccrc put back this milestone's name and description.");
+    expect(restoredLine(['name', 'description', 'sortOrder'], at)).toBe("Restored on 2026-11-12: ccrc put back this milestone's name, description and order.");
+    expect(restoredLine('name', at)).toBe("Restored on 2026-11-12: ccrc put back this milestone's name.");
+    const older = "Restored on 2026-11-01: ccrc put back this milestone's target date.";
+    for (const l of [restoredLine(['name', 'description'], at), restoredLine(['name', 'description', 'sortOrder'], at), older]) {
+      expect(withoutRestoredLines(`Body\n\n${l}`)).toBe('Body');
+    }
+    expect(withoutRestoredLines('Body\n\nRestored on 2026-11-12: ccrc put back this milestone\'s Name.')).toContain('Restored on');   // not ccrc's shape
+  });
+});
+
+describe('what the drift pass records and where it looks (round 5 and 6)', () => {
+  it('a one-way set records the planned members Linear lacks, so a person\'s added member changes nothing', () => {
+    expect(driftEventValue('milestoneIds', ['x'], ['a', 'b'])).toBe('a, b');
+    expect(driftEventValue('milestoneIds', ['x', 'y'], ['a', 'b'])).toBe('a, b');
+    expect(driftEventValue('milestoneIds', ['a'], ['a', 'b'])).toBe('b');
+    expect(driftEventValue('initiativeIds', [], ['i'])).toBe('i');
+    expect(driftEventValue('title', 'Linear title', 'Plan')).toBe('Linear title');
+    expect(driftEventValue('teamKeys', ['AAA', 'B'], ['AAA'])).toBe('AAA, B');
+  });
+  it('scope follows the binding, not where the object sits now', () => {
+    const m = new Set(['AAA']);
+    expect(driftScoped('issue', m, { bindingTeam: 'aaa' })).toBe(true);
+    expect(driftScoped('issue', m, { bindingTeam: 'ZZZ' })).toBe(false);
+    expect(driftScoped('issue', m, { bindingTeam: null })).toBe(false);
+    expect(driftScoped('project', m, { bindingTeam: 'AAA' })).toBe(true);
+    expect(driftScoped('milestone', m, { plannedProjectTeam: 'AAA' })).toBe(true);
+    expect(driftScoped('milestone', m, { plannedProjectTeam: undefined, bindingTeam: 'AAA' })).toBe(false);
+    expect(driftScoped('initiative', m, { projectTeams: ['ZZZ', 'AAA'] })).toBe(true);
+    expect(driftScoped('initiative', m, { projectTeams: ['ZZZ'] })).toBe(false);
+  });
+  it('an issue of an unmanaged team no binding holds is dropped at the read (D-8733)', () => {
+    const base = { managed: new Set(['AAA']), boundIds: new Set(['held']) };
+    expect(keepIssueNode({ ...base, teamKey: 'AAA', linearId: 'x' })).toBe(true);
+    expect(keepIssueNode({ ...base, teamKey: 'ZZZ', linearId: 'held' })).toBe(true);
+    expect(keepIssueNode({ ...base, teamKey: 'ZZZ', linearId: 'x' })).toBe(false);
+    expect(keepIssueNode({ ...base, teamKey: 3, linearId: 7 })).toBe(false);
+  });
+  it('only milestones the pre-read record bound are judged, and a moved fingerprint or state is a sync write', () => {
+    expect(milestonesJudged(['a', 'b'], new Set(['a']))).toEqual(['a']);
+    expect(syncWroteSince({ fingerprint: 'f', state: 'bound' }, { fingerprint: 'f', state: 'bound' })).toBe(false);
+    expect(syncWroteSince({ fingerprint: 'f', state: 'bound' }, { fingerprint: 'g', state: 'bound' })).toBe(true);
+    expect(syncWroteSince({ fingerprint: 'f', state: 'bound' }, { fingerprint: 'f', state: 'failed' })).toBe(true);
+    expect(syncWroteSince({ fingerprint: 'f', state: 'bound' }, null)).toBe(true);
+  });
+  it('a restore honours the programme hold and the workspace release, a drift read the key hold (round 6 P3)', () => {
+    expect(restoreHoldVerdict({ programmeHeldUntil: null, releaseAt: 0, now: 10 })).toBe('send');
+    expect(restoreHoldVerdict({ programmeHeldUntil: 50, releaseAt: 0, now: 10 })).toBe('defer');
+    expect(restoreHoldVerdict({ programmeHeldUntil: null, releaseAt: 11, now: 10 })).toBe('defer');
+    expect(restoreHoldVerdict({ programmeHeldUntil: null, releaseAt: 10, now: 10 })).toBe('send');
+    expect(driftReadHeld(11, 10)).toBe(true);
+    expect(driftReadHeld(10, 10)).toBe(false);
+    expect(driftReadHeld(0, 10)).toBe(false);
   });
 });

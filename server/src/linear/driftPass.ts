@@ -39,8 +39,8 @@ import type { LinearWritePolicy } from './policy.js';
 import type { LinearRateService } from './rate.js';
 import type { FleetSession } from '../../../shared/api.js';
 import {
-  DRIFT_PASS_MS, DRIFT_PERSIST, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
-  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, nextWatermark, restorableFields, restoreCommentOf, restoredLine,
+  DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
+  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, nextWatermark, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
@@ -80,8 +80,6 @@ const LOCAL_OF: Readonly<Record<DriftKind, BindingKind>> = { initiative: 'progra
 const KIND_OF: Readonly<Record<BindingKind, DriftKind>> = { programme: 'initiative', epic: 'project', checkpoint: 'milestone', ticket: 'issue' };
 /** What an operator calls each kind (the plan's words, never Linear's). */
 const WORD: Readonly<Record<DriftKind, string>> = { initiative: 'programme', project: 'epic', milestone: 'checkpoint', issue: 'ticket' };
-/** Fields whose values are ids: a comment names no value for them. */
-const ID_FIELDS: ReadonlySet<string> = new Set(['projectId', 'milestoneId', 'parentId', 'initiativeIds', 'projectIds', 'milestoneIds']);
 
 /** One binding to put back. */
 interface TargetSpec { binding: BindingRow; kind: DriftKind; local: PlannedOwned['local']; fields: string[]; linear: OwnedFields; planned: OwnedFields; link: boolean; node: Node; holdState: boolean }
@@ -127,6 +125,7 @@ export class DriftPass {
     for (const [workspaceId, teams] of byWs) {
       const slot = slots.get(workspaceId);
       if (slot === undefined) continue;
+      if (driftReadHeld(this.deps.planSync.keyBlockedUntil(workspaceId), now)) continue;     // a refused key holds this lane too (A-3)
       const mark = this.deps.plan.driftMarkOf(workspaceId);
       const at = mark === null ? Number.NEGATIVE_INFINITY : mark.passAt;
       if (mark !== null && at + DRIFT_PASS_MS > now) continue;
@@ -142,16 +141,28 @@ export class DriftPass {
     const mark = plan.driftMarkOf(ws);
     const first = new Date(plan.managedSince(ws) ?? now).toISOString();
     const old: DriftWatermarks = mark?.watermarks ?? { initiative: first, project: first, milestone: first, issue: first };
-    const read = await this.readAll(ws, slot, teams, old);
+    // Round 5 F1: ccrc's own record is read BEFORE Linear. A sync write landing after the Linear read moves a binding's fingerprint,
+    // and that is seen below as a change since this read; comparing `updatedAt` instead would set Linear's clock against ccrc's.
+    const pre = new Map<string, BindingRow>(plan.bindingsInWorkspace(ws).flatMap((b) => (b.linearId === null ? [] : [[b.linearId, b] as const])));
+    const read = await this.readAll(ws, slot, old);
     if (!read.ok) {
+      if (read.word === 'linear-unauthorised') this.deps.planSync.keyRefusedByRead(ws, slot);      // the one owner holds both lanes (A-3)
       plan.setDriftMark(ws, old, now);
       console.warn(`ccrc-server: linear drift pass read failed: ${read.word}`);
       return;
     }
     if (READS.some(({ kind }) => read.capped[kind])) console.warn('ccrc-server: linear drift pass page cap reached');
     const keep: Record<DriftKind, boolean> = { ...read.capped };
-    await this.rereadGraced(ws, slot, read.nodes.issue);
+    this.deps.planSync.keyReadAnswered(ws);
     const managed = new Set(teams.map((t) => t.toUpperCase()));
+    // D-8733 (drift-reads-every-team): the issue read spans every team the slot lists (a bound issue moved out must still be read);
+    // what is of an unmanaged team and held by no binding is dropped here, so nothing of it is stored, journalled, logged, mailed or
+    // counted. The watermark still reads the dropped nodes' `updatedAt` (`read.changed` is untouched): that stores nothing, and a
+    // watermark held back for a node never kept would re-read it at every pass; a node that later moves into a managed team
+    // changes `updatedAt` again, so no change is skipped.
+    const boundIds = new Set(pre.keys());
+    read.nodes.issue = read.nodes.issue.filter((n) => keepIssueNode({ teamKey: n['teamKey'], linearId: n['id'], managed, boundIds }));
+    await this.rereadGraced(ws, slot, read.nodes.issue);
     const planned = new Map<string, Promise<Planned | null>>();
     const plannedOf = (key: string): Promise<Planned | null> => {
       const hit = planned.get(key);
@@ -166,15 +177,18 @@ export class DriftPass {
     for (const { kind } of READS) {
       for (const node of read.nodes[kind]) {
         const id = typeof node['id'] === 'string' ? node['id'] : null;
-        const binding = id === null ? null : plan.bindingByLinearId(ws, id);
+        const binding = id === null ? null : pre.get(id) ?? null;
         if (binding === null || binding.localKind !== LOCAL_OF[kind]) continue;
+        // A sync write landed after the Linear read: skip the node whole (no event, no restore, no record); its write moved
+        // Linear's `updatedAt`, so the next pass reads it. A node with no pre-read binding was bound after the read: not compared.
+        if (syncWroteSince(binding, plan.bindingByLinearId(ws, id!))) continue;
         const key = plan.dueKeyOfBinding(binding.id);
         const p = key === null ? null : await plannedOf(key);
         if (key === null || p === null) continue;
-        if (!this.managedNode(ws, kind, node, binding, p, managed)) continue;
         const po = p.owned.find((o) => o.bindingId === binding.id && o.kind === kind);
         if (po === undefined) continue;
-        this.compare(ws, key, kind, node, binding, po, p, now, workOf(key));
+        if (!this.scoped(ws, kind, binding, po, p, managed)) continue;
+        this.compare(ws, key, kind, node, binding, po, p, now, workOf(key), pre);
       }
     }
 
@@ -186,7 +200,8 @@ export class DriftPass {
     const restoredNow = new Map<number, { binding: BindingRow; kind: DriftKind; key: string }>();
     for (const [key, w] of work) {
       const specs = [...w.targets.values()];
-      const outcomes = specs.length === 0 ? [] : await this.deps.planSync.restore(key, specs.map((s) => this.targetOf(ws, s, now)), 'drift-restore');
+      const facts = specs.length === 0 ? null : this.namesFor(ws, slot, await plannedOf(key));
+      const outcomes = facts === null ? [] : await this.deps.planSync.restore(key, specs.map((s) => this.targetOf(ws, s, now, facts)), 'drift-restore');
       const byId = new Map<number, RestoreOutcome>(outcomes.map((o) => [o.bindingId, o]));
       // A deferred target keeps the watermark of its own kind and of every event that rides on it (review 2394 N2: an initiative's
       // missing link rides on its project's restore, so the initiative must be read again too).
@@ -234,6 +249,7 @@ export class DriftPass {
       const out = await this.deps.call({
         op: 'issueOwned', pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: ws, teamKey: b.teamKey, target: null, fields: [], input: { id },
       });
+      if (!out.ok && out.word === 'linear-unauthorised') { this.deps.planSync.keyRefusedByRead(ws, slot); break; }   // no more reads on a refused key
       const issue = out.ok ? out.value['issue'] : undefined;
       if (issue !== null && typeof issue === 'object' && !Array.isArray(issue)) issues.push(issue as Node);
     }
@@ -242,7 +258,7 @@ export class DriftPass {
   /** Reads the four changed* documents on lane `sync`, each from its own kind's watermark and followed through its pages up to
    *  `DRIFT_MAX_PAGES`. `nodes` is what the pass compares (the issue list gains the graced re-reads); `changed` is what the
    *  changed reads alone returned, which alone moves a watermark. */
-  private async readAll(ws: string, slot: SlotInfo, teams: string[], since: DriftWatermarks):
+  private async readAll(ws: string, slot: SlotInfo, since: DriftWatermarks):
   Promise<{ ok: true; nodes: Record<DriftKind, Node[]>; changed: Record<DriftKind, Node[]>; capped: Record<DriftKind, boolean> } | { ok: false; word: string }> {
     const changed: Record<DriftKind, Node[]> = { initiative: [], project: [], milestone: [], issue: [] };
     const capped: Record<DriftKind, boolean> = { initiative: false, project: false, milestone: false, issue: false };
@@ -251,7 +267,7 @@ export class DriftPass {
       for (let pages = 1; ; pages += 1) {
         const out = await this.deps.call({
           op, pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: ws, teamKey: null, target: null, fields: [],
-          input: op === 'changedIssues' ? { since: since[kind], teams, after } : { since: since[kind], after },
+          input: op === 'changedIssues' ? { since: since[kind], teams: slot.teams.map((t) => t.key), after } : { since: since[kind], after },
         });
         if (!out.ok) return { ok: false, word: out.word };
         const page = out.value['nodes'];
@@ -267,26 +283,25 @@ export class DriftPass {
     return { ok: true, nodes, changed, capped };
   }
 
-  /** §7.2's scope: only managed objects are compared. */
-  private managedNode(ws: string, kind: DriftKind, node: Node, binding: BindingRow, p: Planned, managed: ReadonlySet<string>): boolean {
-    const has = (team: string | null | undefined): boolean => typeof team === 'string' && managed.has(team.toUpperCase());
-    switch (kind) {
-      case 'issue': return has(typeof node['teamKey'] === 'string' ? node['teamKey'] : null);
-      case 'project': return has(binding.teamKey);
-      case 'milestone': {
-        const pid = typeof node['projectId'] === 'string' ? node['projectId'] : null;
-        return pid !== null && has(this.deps.plan.bindingByLinearId(ws, pid)?.teamKey);
-      }
-      case 'initiative': return p.bindings.some((b) => b.localKind === 'epic' && b.workspaceId === ws && b.linearId !== null && has(b.teamKey));
-    }
+  /** §7.2's scope: only managed objects are compared, judged by the binding (round 6 P2), never by where Linear holds the object now. */
+  private scoped(ws: string, kind: DriftKind, binding: BindingRow, po: PlannedOwned, p: Planned, managed: ReadonlySet<string>): boolean {
+    const planned = po.owned['projectId'];
+    return driftScoped(kind, managed, {
+      bindingTeam: binding.teamKey,
+      plannedProjectTeam: typeof planned === 'string' ? this.deps.plan.bindingByLinearId(ws, planned)?.teamKey : null,
+      projectTeams: p.bindings.filter((b) => b.localKind === 'epic' && b.workspaceId === ws && b.linearId !== null).map((b) => b.teamKey),
+    });
   }
 
   /** One node against its planned fields: nothing left, grace, catch-up or drift (§7.2, §7.3). Writes only the marks and the due
    *  row; what it finds to restore goes to `w`. */
   private compare(
-    ws: string, key: string, kind: DriftKind, node: Node, binding: BindingRow, po: PlannedOwned, p: Planned, now: number, w: Work,
+    ws: string, key: string, kind: DriftKind, node: Node, binding: BindingRow, po0: PlannedOwned, p: Planned, now: number, w: Work, pre: ReadonlyMap<string, BindingRow>,
   ): void {
     const { plan } = this.deps;
+    // A project's planned milestones are judged only when ccrc's pre-read record already bound them (round 5 F1).
+    const po: PlannedOwned = kind === 'project' && Array.isArray(po0.owned['milestoneIds'])
+      ? { ...po0, owned: { ...po0.owned, milestoneIds: milestonesJudged(po0.owned['milestoneIds'] as string[], new Set(pre.keys())) } } : po0;
     const linear = linearOwnedOf(kind, node);
     const runId = kind === 'issue' ? (plan.ticketById(po.local.id)?.runId ?? null) : null;
     const prMerged = runId !== null && (this.deps.prMergedOf?.(runId) ?? false);
@@ -300,7 +315,7 @@ export class DriftPass {
     if (kind === 'initiative' && fields.includes('projectIds')) {
       const have = new Set(Array.isArray(linear['projectIds']) ? (linear['projectIds'] as string[]) : []);
       const missing = (Array.isArray(po.owned['projectIds']) ? (po.owned['projectIds'] as string[]) : []).filter((id) => !have.has(id));
-      links = missingLinksVerdict(missing.map((id) => ({ id, current: this.projectOf(ws, key, p, id)?.owned.current ?? null })));
+      links = missingLinksVerdict(missing.map((id) => ({ id, current: this.projectOf(ws, key, p, id, pre)?.owned.current ?? null })));
       if (links.catchUp) plan.markSyncDue(key, now);
       if (links.drift.length === 0 && !links.unrestorable) fields = fields.filter((f) => f !== 'projectIds');
     }
@@ -309,7 +324,7 @@ export class DriftPass {
       plan.markSyncDue(key, now);                   // catch-up (D-8704): the sync has not written the plan yet, and will
       return;
     }
-    const events: EventSpec[] = fields.map((field) => ({ binding, kind, local: po.local, field, value: driftValueText(linear[field]), via: [] }));
+    const events: EventSpec[] = fields.map((field) => ({ binding, kind, local: po.local, field, value: driftEventValue(field, linear[field], po.owned[field]), via: [] }));
     const restorable = restorableFields(kind, fields);
     if (restorable.length > 0) {
       const t = w.targets.get(binding.id);
@@ -323,7 +338,7 @@ export class DriftPass {
     if (links !== null && !links.unrestorable && links.drift.length > 0) {
       const ev = events.find((e) => e.field === 'projectIds')!;
       for (const projectId of links.drift) {
-        const pr = this.projectOf(ws, key, p, projectId)!;
+        const pr = this.projectOf(ws, key, p, projectId, pre)!;
         const t = w.targets.get(pr.binding.id);
         w.targets.set(pr.binding.id, t !== undefined ? { ...t, link: true }
           : { binding: pr.binding, kind: 'project', local: pr.owned.local, fields: [], linear: {}, planned: pr.owned.owned, link: true, node: {}, holdState: false });
@@ -334,16 +349,34 @@ export class DriftPass {
   }
 
   /** A project of this programme by its Linear id: its binding and what the plan says of it, or null when it is none of this key's. */
-  private projectOf(ws: string, key: string, p: Planned, projectId: string): { binding: BindingRow; owned: PlannedOwned } | null {
+  private projectOf(ws: string, key: string, p: Planned, projectId: string, pre: ReadonlyMap<string, BindingRow>): { binding: BindingRow; owned: PlannedOwned } | null {
     const { plan } = this.deps;
-    const pb = plan.bindingByLinearId(ws, projectId);
+    const pb = pre.get(projectId) ?? plan.bindingByLinearId(ws, projectId);
     if (pb === null || plan.dueKeyOfBinding(pb.id) !== key) return null;
     const owned = p.owned.find((o) => o.bindingId === pb.id && o.kind === 'project');
     return owned === undefined ? null : { binding: pb, owned };
   }
 
+  /** The names a restore comment may use (A-4), gathered here and decided in `restoreSides`: the plan's own name for each of its
+   *  Linear ids, and what ccrc's directory (and the slot's team keys) hold of Linear's side. The directory holds project names,
+   *  workflow-state types and project-status types; it holds no milestone, issue or initiative names, so those sides stay unnamed. */
+  private namesFor(ws: string, slot: SlotInfo, p: Planned | null): NameFacts {
+    const dir = this.deps.directory?.get(slot.ref, slot.digest) ?? null;
+    return {
+      plannedName: (id) => {
+        const b = p?.bindings.find((x) => x.workspaceId === ws && x.linearId === id);
+        const o = b === undefined ? undefined : p?.owned.find((x) => x.bindingId === b.id);
+        const n = o?.owned['name'] ?? o?.owned['title'];
+        return typeof n === 'string' && n !== '' ? n : null;
+      },
+      linearName: (id) => dir?.projects.find((x) => x.id === id)?.name ?? null,
+      knownTeams: new Set(slot.teams.map((t) => t.key.toUpperCase())),
+      knownTypes: new Set([...(dir?.states ?? []).map((x) => x.type), ...(dir?.projectStatuses ?? []).map((x) => x.type)]),
+    };
+  }
+
   /** The restore's target for one binding, with the comment D-8721 allows (one a day) or a milestone's line. */
-  private targetOf(ws: string, s: TargetSpec, now: number): RestoreTarget {
+  private targetOf(ws: string, s: TargetSpec, now: number, facts: NameFacts): RestoreTarget {
     const { plan } = this.deps;
     const target: RestoreTarget = {
       bindingId: s.binding.id, seen: s.binding.fingerprint, tag: String(now), ...(s.link ? { link: true } : {}), ...(s.holdState ? { holdState: true } : {}),
@@ -351,11 +384,10 @@ export class DriftPass {
     if (s.fields.length === 0) return target;
     if (s.kind === 'milestone') {
       const d = s.node['description'];
-      return { ...target, restoredLine: { line: restoredLine(s.fields[0]!, now), linearDescription: typeof d === 'string' ? d : null } };
+      return { ...target, restoredLine: { line: restoredLine(s.fields, now), linearDescription: typeof d === 'string' ? d : null } };
     }
     if (!commentDue(plan.lastDriftCommentAt(s.binding.id), now)) return target;      // once a day, item open or not (D-8721)
-    const named = (f: string, v: unknown): string | null => (ID_FIELDS.has(f) || v === null || v === undefined ? null : driftValueText(v));
-    const body = restoreCommentOf(s.kind, s.fields.map((f) => ({ field: f, planned: named(f, s.planned[f]), was: named(f, s.linear[f]) })), now);
+    const body = restoreCommentOf(s.kind, s.fields.map((f) => ({ field: f, ...restoreSides(f, s.planned[f], s.linear[f], facts) })), now);
     return { ...target, comment: { body, requestId: requestIdOf(LOCAL_OF[s.kind], s.local.id, ws, `restore-${now}`) } };
   }
 

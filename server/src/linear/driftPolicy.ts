@@ -41,9 +41,9 @@ const ONE_WAY_LINKS: ReadonlySet<string> = new Set(['initiativeIds', 'projectIds
 
 export const RESTORED_LINE_PREFIX = 'Restored on ';
 const dayOf = (at: number): string => new Date(at).toISOString().slice(0, 10);
-/** Exactly the line `restoredLine` writes. Only such a line is ccrc's record, and only in LINEAR's copy: a plan line that merely
+/** Exactly the line `restoredLine` writes (one noun, or several joined as `a, b and c`; a line an older build wrote names one). Only such a line is ccrc's record, and only in LINEAR's copy: a plan line that merely
  *  begins "Restored on" is plan text, kept and compared like any other (review 2386 A9). */
-const RESTORED_LINE_RE = /^Restored on \d{4}-\d{2}-\d{2}: ccrc put back this milestone's [a-z ]+\.$/u;
+const RESTORED_LINE_RE = /^Restored on \d{4}-\d{2}-\d{2}: ccrc put back this milestone's [a-z ,]+\.$/u;
 const isRestored = (l: string): boolean => RESTORED_LINE_RE.test(l);
 /** How many Restored lines a milestone's description keeps (§7.2). */
 const RESTORED_KEEP = 3;
@@ -156,6 +156,57 @@ export function graceRereads(graced: readonly string[], read: ReadonlySet<string
   return [...new Set(graced)].filter((id) => !read.has(id));
 }
 
+// ── Holds ──
+
+/** Whether a restore may send now (round 6 P3): the plan sync keeps three holds, and a restore is a write in the same flight, so it
+ *  honours every one. `programmeHeldUntil` is the programme row's persisted failure hold (null: none stands), `releaseAt` is when
+ *  the target's workspace is free again for this programme (the later of its key's refusal and its step failure's hold; 0: free).
+ *  `defer` sends nothing and the drift read comes again, so a held restore never counts as drift put back. */
+export function restoreHoldVerdict(o: { programmeHeldUntil: number | null; releaseAt: number; now: number }): 'send' | 'defer' {
+  return o.programmeHeldUntil !== null || o.releaseAt > o.now ? 'defer' : 'send';
+}
+
+/** Whether a workspace's drift read may go now: not while its key's refusal stands (the plan sync's one owner of that hold, A-3).
+ *  The tick takes the next workspace instead, so one blocked key never starves the others. */
+export function driftReadHeld(keyBlockedUntil: number, now: number): boolean { return keyBlockedUntil > now; }
+
+// ── Scope: the binding, not where the object sits now ──
+
+const managedKey = (managed: ReadonlySet<string>, team: string | null | undefined): boolean => typeof team === 'string' && managed.has(team.toUpperCase());
+
+/** Whether an object is compared (round 6 P2; design §6.2 owns `teamKey`): by what ccrc's own record says, never by where Linear
+ *  holds the object now, so an object moved out of ccrc's reach is still compared and put back. `managed` holds upper-case keys.
+ *  An issue: its binding's team. A project: its binding's team. A milestone: the team of the project the PLAN puts it in
+ *  (`plannedProjectTeam`, the planned `projectId`'s binding), so a milestone moved into a project ccrc does not bind is compared,
+ *  and is unrestorable. An initiative: any of its projects' bindings in the workspace (`projectTeams`). */
+export function driftScoped(kind: DriftKind, managed: ReadonlySet<string>, f: { bindingTeam?: string | null; plannedProjectTeam?: string | null; projectTeams?: readonly (string | null)[] }): boolean {
+  switch (kind) {
+    case 'issue': case 'project': return managedKey(managed, f.bindingTeam);
+    case 'milestone': return managedKey(managed, f.plannedProjectTeam);
+    case 'initiative': return (f.projectTeams ?? []).some((t) => managedKey(managed, t));
+  }
+}
+
+/** D-8733 (drift-reads-every-team): `changedIssues` is asked with every team key the slot lists, so a bound issue moved out of a
+ *  managed team is still read. An issue read from a team ccrc does not manage that no pre-read binding holds is dropped right at
+ *  the read, before the compare, the grace re-read, the inbound detect or the watermark's nodes see it. */
+export function keepIssueNode(o: { teamKey: unknown; linearId: unknown; managed: ReadonlySet<string>; boundIds: ReadonlySet<string> }): boolean {
+  return managedKey(o.managed, typeof o.teamKey === 'string' ? o.teamKey : null) || (typeof o.linearId === 'string' && o.boundIds.has(o.linearId));
+}
+
+/** A project's planned milestones the pass can judge (round 5 F1): only those ccrc's pre-read record already bound. A milestone the
+ *  sync bound after the pass read its record is not in Linear's project node either, and must not read as missing. */
+export function milestonesJudged(planned: readonly string[], boundBeforeRead: ReadonlySet<string>): string[] {
+  return planned.filter((id) => boundBeforeRead.has(id));
+}
+
+/** Whether a sync write landed between the pass's read of its own record and its compare (round 5 F1): the binding now holds a
+ *  different fingerprint or state than the one read first. Linear's `updatedAt` is not compared: it is Linear's clock, and the
+ *  fingerprint is ccrc's own. */
+export function syncWroteSince(pre: { fingerprint: string | null; state: string }, now: { fingerprint: string | null; state: string } | null): boolean {
+  return now === null || now.fingerprint !== pre.fingerprint || now.state !== pre.state;
+}
+
 // ── What an update can put back ──
 
 /** What no update can put back: no op deletes or re-parents a milestone, so an initiative's project links are put back through
@@ -193,6 +244,15 @@ export function eventVerdict(via: readonly number[], outcomes: ReadonlyMap<numbe
  *  2386 A4). */
 export function isNewUnrestorable(last: { value: string; restored: boolean } | null, value: string): boolean {
   return last === null || last.restored || last.value !== value;
+}
+
+/** What a drift event stores for a difference (round 5 A3): for a one-way set (`ONE_WAY_LINKS`) the PLANNED members Linear lacks, so a
+ *  member a person added to Linear's set changes nothing and is never a new difference; for any other field Linear's value as
+ *  `driftValueText` shows it. */
+export function driftEventValue(field: string, linear: unknown, planned: unknown): string {
+  if (!ONE_WAY_LINKS.has(field)) return driftValueText(linear);
+  const have = new Set(Array.isArray(linear) ? (linear as unknown[]).map(String) : []);
+  return driftValueText((Array.isArray(planned) ? (planned as unknown[]).map(String) : []).filter((id) => !have.has(id)));
 }
 
 /** A changed* kind's next watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped):
@@ -261,31 +321,73 @@ const nounOf = (field: string): string => NOUN[field] ?? field;
 
 const TAIL = "ccrc's plan decides where work sits here. To change it, ask the coordinator or use the ccrc console.";
 
-/** One field's sentence: it names both values only for a field that is not a description or an id, and neither is null. */
+/** The fields whose text is Linear's or a person's free text: Linear's side of one is NEVER named (§7.2, A-4); ccrc's own side may be. */
+const FREE_TEXT: ReadonlySet<string> = new Set(['name', 'title', 'description']);
+const ID_ONE: ReadonlySet<string> = new Set(['projectId', 'milestoneId', 'parentId']);
+const ID_SET: ReadonlySet<string> = new Set(['initiativeIds', 'projectIds', 'milestoneIds']);
+/** Scalars Linear's shaped answer gives in a closed grammar (a date, a number): named as they are, since they are neither free text
+ *  nor an id. */
+const PLAIN_SCALARS: ReadonlySet<string> = new Set(['targetDate', 'sortOrder']);
+const text = (v: unknown): string | null => (v === null || v === undefined || v === '' ? null : Array.isArray(v) ? (v.length === 0 ? null : v.join(', ')) : String(v));
+
+/** What a restore comment names (A-4): ccrc's own value from the plan, and Linear's ONLY from ccrc's own directory reads, never
+ *  Linear's free text, an id field's included. The caller gathers the facts: `plannedName` is the plan's own name for a Linear id
+ *  (the epic's, checkpoint's or ticket's title), `linearName` the directory's name for an id, `knownTeams` the slot's team keys
+ *  (upper-case) and `knownTypes` the directory's state and status types; each answers null when it holds nothing. A side with
+ *  nothing to name is null, and the sentence then says only where and when. */
+export interface NameFacts {
+  plannedName: (id: string) => string | null; linearName: (id: string) => string | null;
+  knownTeams: ReadonlySet<string>; knownTypes: ReadonlySet<string>;
+}
+export function restoreSides(field: string, planned: unknown, linear: unknown, f: NameFacts): { planned: string | null; was: string | null } {
+  if (field === 'description') return { planned: null, was: null };
+  if (FREE_TEXT.has(field)) return { planned: text(planned), was: null };
+  if (ID_ONE.has(field)) {
+    const p = typeof planned === 'string' ? f.plannedName(planned) : null;
+    return { planned: p, was: typeof linear === 'string' ? f.linearName(linear) : null };
+  }
+  if (ID_SET.has(field)) {
+    const names = (Array.isArray(planned) ? (planned as unknown[]) : []).flatMap((id) => (typeof id === 'string' ? [f.plannedName(id)] : [])).filter((n): n is string => n !== null);
+    return { planned: names.length === 0 ? null : names.join(', '), was: null };
+  }
+  if (field === 'teamKey' || field === 'teamKeys') {
+    const keys = Array.isArray(linear) ? (linear as unknown[]).map(String) : typeof linear === 'string' ? [linear] : [];
+    return { planned: text(planned), was: keys.length > 0 && keys.every((k) => f.knownTeams.has(k.toUpperCase())) ? keys.join(', ') : null };
+  }
+  if (field === 'stateType' || field === 'statusType') return { planned: text(planned), was: typeof linear === 'string' && f.knownTypes.has(linear) ? linear : null };
+  if (PLAIN_SCALARS.has(field)) return { planned: text(planned), was: text(linear) };
+  return { planned: text(planned), was: null };
+}
+
+/** One field's sentence. ccrc's value is named when the plan gives a name for it; Linear's only when it is also named (the caller
+ *  holds it from the directory, and never for free text, which this refuses whatever it is given). */
 function sentenceOf(kind: DriftKind, field: string, planned: string | null, was: string | null, at: number): string {
   const noun = nounOf(field);
   const day = dayOf(at);
-  const named = field !== 'description' && planned !== null && was !== null;
-  return named
-    ? `ccrc restored this ${kind}'s ${noun} to *${planned}*. It had been ${MOVES.has(field) ? 'moved' : 'changed'} to *${was}* on ${day}.`
-    : `ccrc restored this ${kind}'s ${noun}. It had been changed on ${day}.`;
+  const moved = MOVES.has(field) ? 'moved' : 'changed';
+  if (field === 'description' || planned === null) return `ccrc restored this ${kind}'s ${noun}. It had been changed on ${day}.`;
+  const lead = `ccrc restored this ${kind}'s ${noun} to *${planned}*.`;
+  if (was === null || FREE_TEXT.has(field)) return `${lead} It had been ${MOVES.has(field) ? 'moved elsewhere' : 'changed'} on ${day}.`;
+  return `${lead} It had been ${moved} to *${was}* on ${day}.`;
 }
 
-/** §7.2's sentence, through the same egress redaction as every text ccrc writes, ending with ccrc's provenance. A
- *  description, or a null value on either side, names no values (the pass gives an id field's sides as null: an id says nothing). */
+/** §7.2's sentence, through the same egress redaction as every text ccrc writes, ending with ccrc's provenance. */
 export function restoreComment(kind: DriftKind, field: string, planned: string | null, was: string | null, at: number): string {
   return restoreCommentOf(kind, [{ field, planned, was }], at);
 }
 
 /** One comment for every field a restore put back: one sentence each, then the one tail and ccrc's provenance. */
 export function restoreCommentOf(kind: DriftKind, changes: readonly { field: string; planned: string | null; was: string | null }[], at: number): string {
-  const text = `${changes.map((c) => sentenceOf(kind, c.field, c.planned, c.was, at)).join(' ')} ${TAIL}`;
-  return withCcrcProvenance(egress(text));
+  const body = `${changes.map((c) => sentenceOf(kind, c.field, c.planned, c.was, at)).join(' ')} ${TAIL}`;
+  return withCcrcProvenance(egress(body));
 }
 
-/** The Restored line a milestone's description takes for one put-back field. */
-export function restoredLine(field: string, at: number): string {
-  return `${RESTORED_LINE_PREFIX}${dayOf(at)}: ccrc put back this milestone's ${nounOf(field)}.`;
+/** The Restored line a milestone's description takes for the field(s) put back: every one is named, `a, b and c` (a line a restore
+ *  wrote before this named one, which `RESTORED_LINE_RE` still matches). */
+export function restoredLine(fields: string | readonly string[], at: number): string {
+  const nouns = (typeof fields === 'string' ? [fields] : fields).map(nounOf);
+  const named = nouns.length <= 1 ? (nouns[0] ?? '') : `${nouns.slice(0, -1).join(', ')} and ${nouns[nouns.length - 1]}`;
+  return `${RESTORED_LINE_PREFIX}${dayOf(at)}: ccrc put back this milestone's ${named}.`;
 }
 
 // ── Inbound ──

@@ -756,3 +756,291 @@ describe('prMergedOfFrom (D-8183)', () => {
     expect(prMergedOfFrom(coordOf({ ok: false }), () => null)(1)).toBe(false);
   });
 });
+
+// Round 6 P3 (follow-up item 1): a restore honours every hold the sync keeps, and the drift pass's own reads honour the key hold.
+describe('restores and drift reads honour every hold (round 6 P3)', () => {
+  const targetOf = (r: Rig): { bindingId: number; seen: string | null; tag: string } => {
+    const b = bindingOf(r, 'ticket');
+    return { bindingId: b.id, seen: b.fingerprint, tag: 'x' };
+  };
+  const slotOf = async (r: Rig) => (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir)).get(WS.a.id)!;
+
+  it('a restore while the programme row is failure-held sends nothing and answers deferred', async () => {
+    const r = await synced(await rig());
+    const until = r.t.now + 600_000;
+    r.plan.markSyncDue(SLUG, until);
+    r.plan.deferSync(SLUG, until, 'failure');
+    const out = await r.sync.restore(SLUG, [targetOf(r)], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a restore while its workspace is held by a deferring answer sends nothing', async () => {
+    const r = await synced(await rig());
+    const ticket = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticket.id, title: 'A newer planned title' }], drop: [] } }), OWNER, r.t.now, null);
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.pass === 'plan-sync' && a.op === 'issueOwned' ? fail('unreachable') : real(a));
+    r.t.now += PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    r.respond.current = real;
+    r.db.prepare('DELETE FROM plan_sync_due').run();           // only the workspace's own hold is measured, not the programme row's
+    r.asks.length = 0;
+    const b = bindingOf(r, 'ticket');
+    const out = await r.sync.restore(SLUG, [{ bindingId: b.id, seen: b.fingerprint, tag: 'x' }], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a restore while the workspace key is refused sends nothing', async () => {
+    const r = await synced(await rig());
+    r.sync.keyRefused(WS.a.id, await slotOf(r), r.t.now + 600_000);
+    const out = await r.sync.restore(SLUG, [targetOf(r)], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a drift read answered 401 blocks the workspace for the plan sync, and the next drift tick reads again only after the hold', async () => {
+    const r = await synced(await rig());
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.op === 'changedInitiatives' ? fail('linear-unauthorised') : real(a));
+    await passAt(r, r.t.now + 1);
+    const at = r.t.now;
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBeGreaterThan(at);
+    r.respond.current = real;
+    r.asks.length = 0;
+    // The period has passed but the hold, on the plan sync's schedule, has not: lift the period by hand so only the hold is measured.
+    r.sync.keyRefused(WS.a.id, await slotOf(r), at + 2 * DRIFT_PASS_MS);
+    await passAt(r, at + DRIFT_PASS_MS + 1);
+    expect(r.asks).toEqual([]);
+    await passAt(r, at + 2 * DRIFT_PASS_MS + 1);
+    expect(opsOf(r)).toContain('changedInitiatives');
+  });
+
+  it('a drift read answered 401 holds on the plan sync\'s own schedule, not a schedule of the pass\'s', async () => {
+    const r = await synced(await rig());
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.op === 'changedProjects' ? fail('linear-unauthorised') : real(a));
+    await passAt(r, r.t.now + 1);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);      // the first step of PLAN_SYNC_BACKOFF_MS
+  });
+
+  it('another workspace still gets its pass while one is blocked', async () => {
+    const r = await synced(await rig());
+    await seedSlot(r.ccrcDir, 'b');
+    r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)')
+      .run(WS.b.id, 'BBB', 'applied', T - 1000);
+    r.sync.keyRefused(WS.a.id, await slotOf(r), r.t.now + 5 * DRIFT_PASS_MS);
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.asks.length).toBeGreaterThan(0);
+    expect([...new Set(r.asks.map((a) => a.workspaceId))]).toEqual([WS.b.id]);
+  });
+});
+
+// Round 5 F1 (follow-up item 4): the pass reads ccrc's own record BEFORE Linear, so a sync write landing between the two is never
+// read as drift.
+describe('the pass reads ccrc\'s record before Linear (round 5 F1)', () => {
+  /** A pass whose changed-issues read is followed by a sync write: the plan changes and the real sync pass writes it. */
+  const withSyncWriteAfterRead = (r: Rig, title: string): DriftPass => {
+    const ticket = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+    return r.build({
+      call: async (ask) => {
+        r.asks.push(ask);
+        const out = await r.respond.current(ask);
+        if (ask.op === 'changedIssues') {
+          applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticket.id, title }], drop: [] } }), OWNER, r.t.now, null);
+          await r.sync.passFor(SLUG, r.t.now + 60_000);
+        }
+        return out;
+      },
+    });
+  };
+
+  it('a sync write landing after the Linear read is skipped: no comment, no restore, no event, no item', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    r.drift = withSyncWriteAfterRead(r, 'The newer planned title');
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'issueUpdate')).toHaveLength(1);    // the sync did write
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+
+  it('a stale project node missing a milestone the sync just made does not raise the item', async () => {
+    const r = await synced(await rig());
+    const milestone = bindingOf(r, 'checkpoint');
+    // The milestone was bound only after the pass read ccrc's record: the pre-read list lacks it, and Linear's project node too.
+    const real = r.plan.bindingsInWorkspace.bind(r.plan);
+    vi.spyOn(r.plan, 'bindingsInWorkspace').mockImplementation((ws) => real(ws).filter((b) => b.id !== milestone.id));
+    r.lin.over.project = { milestones: [] };
+    await passAt(r, r.t.now + 1);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+});
+
+// Round 6 P2 (follow-up item 5) and D-8733: the scope follows the binding, and what no binding or managed team names is dropped.
+describe('drift scope follows the binding (round 6 P2, D-8733)', () => {
+  it('an issue moved from a managed team to an unmanaged one is read and restored, the update carrying the planned team', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { teamKey: 'ZZZ' };
+    await passAt(r, r.t.now + 1);
+    const up = sent(r, 'issueUpdate');
+    expect(up).toHaveLength(1);
+    expect(up[0]!.destinationTeamKey).toBe('AAA');
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0).map((e) => [e.field, e.restored])).toEqual([['teamKey', true]]);
+  });
+
+  it('changedIssues is asked with every team key the slot lists, not only the managed ones', async () => {
+    const r = await synced(await rig());
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: U(60), key: 'CCC', name: 'Team C' }] });
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.find((a) => a.op === 'changedIssues')!.input['teams']).toEqual(['AAA', 'CCC']);
+  });
+
+  it('a milestone moved into a project ccrc does not bind raises the unrestorable item at once', async () => {
+    const r = await synced(await rig());
+    r.lin.over.milestone = { projectId: OTHER };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'projectMilestoneUpdate')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'checkpoint').id, 0).map((e) => [e.field, e.restored])).toEqual([['projectId', false]]);
+    expect(items(r)).toHaveLength(1);
+  });
+
+  it('a graced issue moved out of a managed team is compared, so its grace is decided and the by-id re-read stops', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { stateType: 'completed', teamKey: 'ZZZ' };
+    r.lin.at.issue = r.t.now;
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);                           // the move is put back at once, the state held
+    expect(sent(r, 'issueUpdate')[0]!.input).not.toHaveProperty('stateId');
+    expect(bindingOf(r, 'ticket').driftSince).toBe(r.t.now);
+    r.lin.over.issue = { stateType: 'completed' };                            // back in its team, still completed, untouched since
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(sent(r, 'issueOwned').length).toBeGreaterThan(0);
+    expect(sent(r, 'issueUpdate')).toHaveLength(2);                           // the grace's second look restores the state
+    r.lin.over.issue = {};
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(bindingOf(r, 'ticket').driftSince).toBeNull();
+    r.asks.length = 0;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(sent(r, 'issueOwned')).toEqual([]);
+  });
+
+  it('an issue of an unmanaged team that no binding names is dropped at the read: no row, no event, no mail, no look by the lanes (D-8733)', async () => {
+    const r = await synced(await rig());
+    const seen: string[] = [];
+    r.drift = new DriftPass({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), call: (a) => { r.asks.push(a); return Promise.resolve(r.respond.current(a)); },
+      now: () => r.t.now, presenceOf: () => 'alive', viaFleet: (ids) => { seen.push(...ids); return new Set<string>(); }, prMergedOf: () => false,
+    });
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: U(60), key: 'ZZZ', name: 'Team Z' }] });
+    r.lin.extra.issue = [{ id: U(555), identifier: 'ZZZ-1', title: 'Foreign', description: '', teamKey: 'ZZZ', stateType: 'started', projectId: null, milestoneId: null, parentId: null, updatedAt: iso(r.t.now + 1) }];
+    await passAt(r, r.t.now + 1);
+    expect(seen).not.toContain('ZZZ-1');
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound').get()).toEqual({ n: 0 });
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_drift_events').get()).toEqual({ n: 0 });
+    expect(mails(r)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+});
+
+// A-4 and round 5 A1, A2 (follow-up item 9): the comment names ccrc's own values and, of Linear's, only what ccrc's directory holds;
+// a restore is recorded only when something was written.
+describe('restore comments name values, and a restore is recorded only when written (A-4)', () => {
+  const withDirectory = (r: Rig, projects: { id: string; name: string }[]): DriftPass => new DriftPass({
+    coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir),
+    call: (a) => { r.asks.push(a); return Promise.resolve(r.respond.current(a)); }, now: () => r.t.now, presenceOf: () => 'alive',
+    viaFleet: () => new Set<string>(), prMergedOf: () => false,
+    directory: { get: () => ({ ...DIRECTORY, projects }), filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
+  });
+
+  it('a moved issue names the plan\'s project, and Linear\'s only when the directory holds it', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { projectId: OTHER };
+    await passAt(r, r.t.now + 1);
+    const body = String(sent(r, 'issueComment')[0]!.input['body']);
+    expect(body).toContain("ccrc restored this issue's project to *Epic one*. It had been moved elsewhere on ");
+    expect(body).not.toContain(OTHER);
+    const q = await synced(await rig());
+    q.lin.over.issue = { projectId: OTHER };
+    q.drift = withDirectory(q, [{ id: OTHER, name: 'Backlog' }]);
+    await passAt(q, q.t.now + 1);
+    expect(String(sent(q, 'issueComment')[0]!.input['body'])).toContain("ccrc restored this issue's project to *Epic one*. It had been moved to *Backlog* on ");
+  });
+
+  it('a renamed project names the plan\'s name and never Linear\'s free text', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { name: 'Renamed in Linear' };
+    await passAt(r, r.t.now + 1);
+    const body = String(sent(r, 'projectComment')[0]!.input['body']);
+    expect(body).toContain("ccrc restored this project's name to *Epic one*. It had been changed on ");
+    expect(body).not.toContain('Renamed in Linear');
+  });
+
+  it('a milestone restore\'s Restored line names every field put back', async () => {
+    const r = await synced(await rig());
+    r.lin.over.milestone = { name: 'Renamed in Linear', description: 'Edited in Linear' };
+    await passAt(r, r.t.now + 1);
+    const line = String(sent(r, 'projectMilestoneUpdate')[0]!.input['description']).split('\n').find((l) => l.startsWith('Restored on '));
+    expect(line).toBe(`Restored on ${new Date(r.t.now).toISOString().slice(0, 10)}: ccrc put back this milestone's name and description.`);
+  });
+
+  it('nothing sent because the key is not configured is deferred: no comment, no record, the read comes again', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    const base = r.respond.current;
+    r.respond.current = (ask) => (ask.op === 'issueOwned' && ask.pass === 'drift-restore' ? fail('not-configured') : base(ask));
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+    expect(r.asks.filter((a) => a.op === 'changedIssues').length).toBe(1);
+    r.respond.current = base;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.asks.filter((a) => a.op === 'changedIssues').at(-1)!.input['since']).toBe(iso(T - 1000));   // the watermark was kept
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);
+  });
+
+  it('nothing sent because Linear already holds the plan is moot: no comment, no record', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    const base = r.respond.current;
+    // The changed read showed the edit; by the restore's own read of the issue it is back.
+    r.respond.current = async (ask) => {
+      if (ask.op !== 'issueOwned' || ask.pass !== 'drift-restore') return base(ask);
+      const saved = r.lin.over.issue;
+      r.lin.over.issue = {};
+      try { return await base(ask); } finally { r.lin.over.issue = saved; }
+    };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+  });
+});
+
+// Round 5 A3 (follow-up item 11): a milestone a person adds does not raise a kept item again.
+describe('a person\'s own milestone is not a new difference (round 5 A3)', () => {
+  it('after Keep, a milestone a person adds records nothing, and a further planned milestone going missing is a new event', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { milestones: [] };
+    await passAt(r, r.t.now + 1);
+    expect(items(r)).toHaveLength(1);
+    expect(r.drift.act(items(r)[0]!.id, 'keep', bindingOf(r, 'epic').id)).toEqual({ ok: true });
+    r.lin.over.project = { milestones: [{ id: U(888) }] };                   // a person added their own milestone; the plan's is still missing
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0).filter((e) => e.field === 'milestoneIds')).toHaveLength(1);
+    expect(items(r)).toHaveLength(1);
+    // The plan gains a second checkpoint; its milestone is made and is missing from Linear's project too.
+    const epic = r.plan.planOf(SLUG).epics[0]!;
+    applyPlanChanges(r.db, SLUG, changes({ checkpoints: { insert: [{ epicKey: epic.key, key: 'c2', ordinal: 1, title: 'Checkpoint two', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS);
+    r.t.now += PLAN_SYNC_DEBOUNCE_MS;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0).filter((e) => e.field === 'milestoneIds')).toHaveLength(2);
+    expect(items(r)).toHaveLength(2);
+  });
+});
