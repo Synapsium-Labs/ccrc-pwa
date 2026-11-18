@@ -715,7 +715,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
   standing protocol. The one exception is deliberate: the branch-discipline sentence is said in both, because a
   skill reaches a home only once its installer has run there.
-- **So does the reviewer** (`ccd/reviewer-skill/SKILL.md`, `ccrc-reviewer`, ten clauses pinned by
+- **So does the reviewer** (`ccd/reviewer-skill/SKILL.md`, `ccrc-reviewer`, eleven clauses pinned by
   `server/test/reviewer-skill.test.ts`; no `references/` of its own). A review run (design 2026-09-14) is
   dispatched by the coordinator on a verified wave-done; the reviewer reads the worker branch at one measured
   tip in its OWN worktree and mails one report; the coordinator rules. `REVIEWER_KICKOFF_PREFIX` prefixes its
