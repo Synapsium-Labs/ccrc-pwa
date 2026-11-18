@@ -126,6 +126,7 @@ import { appendFileSync } from 'node:fs';
 import type { SessionRecord } from '../registry.js';
 import { liveStateReaderOver, readLiveStateMeasured } from '../livestate.js';
 import { heldFor } from './heldFor.js';
+import { CHILD_DENY_DIGESTS_FILE, denyStandingOf, type DenyStanding } from './approvalDenyFloor.js';
 import {
   approvalFor, createQuestions, openFor, type ApprovalRaiseDeps, type ClaimantDoorDeps, type ClaimantRule, type OperatorAnswer,
   type OperatorDoorDeps, type Questions, type QuestionDoorAnswer,
@@ -4517,15 +4518,19 @@ export function registerCoordRoutes(
     return listing === null || listing.includes(APPROVALS_DISABLED_FILE);
   };
 
-  /** Task 15's two spawn fields (spec §6.6, D-5360's requirement, D-5391): the child's `.deny-settings` equals the
-   *  managed deny file's CURRENT sha256, read off the fleet box, and its `.childshell` shows the bash pin. Anything
-   *  else, including a deny file this box cannot read, is not engaged. */
-  const denyEngaged = async (rec: SessionRecord): Promise<boolean> => {
+  /** Task 15's two spawn fields (spec §6.6, D-5360's requirement, D-5391), and where the child's deny digest stands
+   *  (Overlord approvals PR 0): `current` when `.deny-settings` equals the managed deny file's CURRENT sha256, `history`
+   *  when the installer's digest history names it (a child spawned under an older deny file: held, its allow refused at
+   *  the rule door), and `none` otherwise (`denyStandingOf`, L1, decides). Both files are read off the fleet box, and
+   *  `.childshell` must show the bash pin. Anything else, including a deny file this box cannot read, is `none`. */
+  const denyStanding = async (rec: SessionRecord): Promise<DenyStanding> => {
     const deny = rec.denySettings ?? { kind: 'none' };
     const shell = rec.childShell ?? { kind: 'none' };
-    if (deny.kind !== 'digest' || shell.kind !== 'pinned' || shell.shell !== APPROVAL_CHILD_SHELL) return false;
+    if (deny.kind !== 'digest' || shell.kind !== 'pinned' || shell.shell !== APPROVAL_CHILD_SHELL) return 'none';
     const managed = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, CHILD_DENY_SETTINGS_FILE));
-    return managed.ok && createHash('sha256').update(managed.content, 'utf8').digest('hex') === deny.sha256;
+    const history = await deps.io.readFileMeasured(path.join(deps.cfg.registryDir, CHILD_DENY_DIGESTS_FILE));
+    return denyStandingOf(deny.sha256, managed.ok ? createHash('sha256').update(managed.content, 'utf8').digest('hex') : null,
+      history.ok ? history.content : null);
   };
 
   /** The child's live Claude Code version, from its pane's live state file (the read `assembleFleet` makes), or null. */
@@ -4553,7 +4558,7 @@ export function registerCoordRoutes(
    *  no coordination store, where the raise answers `notConfigured` before it would be read. */
   const raiseDeps: ApprovalRaiseDeps | undefined = deps.coord === undefined ? undefined : {
     coord: deps.coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, masker: deps.masker ?? SHAPE_ONLY_MASKER,
-    signerFor, rulingsAllowedHere, heldFor, denyEngaged, liveVersionOf, journalDigestMismatch,
+    signerFor, rulingsAllowedHere, heldFor, denyStanding, liveVersionOf, journalDigestMismatch,
   };
 
   /** What the claimant's cores read (W3 Q3f, D-7030; `questions.rule`, `questions.release`), built once: the raise's
