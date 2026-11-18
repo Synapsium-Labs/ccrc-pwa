@@ -144,7 +144,8 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
      - no file holds two or more `THEMES` ids, or two or more `SKINS` ids, as string literals or as object keys, quoted or not;
      - no file under `pwa/src/docs/reader/` holds a hex colour literal;
      - only `pwa/src/docs/ReaderFrame.tsx` imports `THEMES`, and no file imports `SKINS`;
-     - `appearance.ts` holds no `;`, `{`-in-a-string, `url(` or `var(` literal.
+     - no string in any value `readerAppearanceOf` builds in part 2 contains `;`, `{`, `}`, `url(` or `var(`, and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label` (run time);
+     - `appearance.ts` holds no such literal (source).
 - [ ] **Step 3: Run both to red.** `ccrc test -- ./node_modules/.bin/vitest run test/reader-appearance.test.ts test/reader-appearance-source.test.ts` from `pwa/`. Expected: FAIL, the module is missing.
 - [ ] **Step 4: Implement `appearance.ts` and the helper.** `appearance.ts` is pure (ring L1): no `document`, no `getComputedStyle`. `readerAppearanceOf` takes `mode` from `colourScheme`, trimmed: `'light'` or `'dark'`. Anything else is `'auto'` with the colour group dropped. Every palette block declares `color-scheme` (measured 2026-11-18), and part 2 pins that per palette.
 - [ ] **Step 5: Run to green**, same command. Expected: PASS.
@@ -203,7 +204,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
 - [ ] **Step 1: Write the failing rows** in `reader-bridge.test.ts`, with a fake `mount`:
   - **reads after the last await:** hold `deps.assets`, change what `input.appearance` answers while held, release; the adapters' `appearance` is the post-release answer, `seededStamp` is its stamp, and `appearance` was called exactly once, with no await between that call and `mount`;
   - **an outcome of kind `appearance`** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
-  - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `c.` keys;
+  - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
   - **an older library:** with `deps.contract` absent and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds in mode only (`prefs.theme`, no `appearance`). This seam is the only way to reach the case: with the exact pin it is a build error;
   - **while open, hosted:** `setAppearance` calls `DocFrame.setAppearance` once, including for a dropped colour group, and never `setPrefs`;
@@ -276,7 +277,8 @@ Each row reads the frame's computed values through the existing harness's frame 
 - Modify: `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md`
 
 - [ ] **Step 1: Amend in place, each with "(amended <date>; D-8759)" or "(…; D-8760)":**
-  - §4.4's parent-op sentence and the M8.6 row's text and refusal column gain `appearance`;
+  - §4.4's parent-op sentence and its op table, and the M8.6 row's text and refusal column, gain `appearance` (D-8759);
+  - §3.2's `mountDocFrame` return shape gains `setAppearance(a: Appearance): void` (D-8761);
   - §4.3 gains a row for ccrc's two faces;
   - §3.2's `prefs`, `chrome` row and G7 say the hosted theme is ccrc's.
 - [ ] **Step 2: Run the related suites:**
@@ -330,9 +332,9 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 
 ## Deviations found
 
-- **D-8759 (2026-11-18)**: reader-bridge-appearance-op. Issued to run 2631 (X1). It departs from the rich-docs spec's §4.4 sentence "Every later parent message goes on the port, and is `prefs`, `changes.result`, `mermaid` or `command` (amended 2026-11-10; library 1.1 take-up)". It also departs from M8.6's "Every other parent message goes on the port and is `prefs` or `changes.result`, any number of times, or, since the library 1.1 take-up, `mermaid` (once, after `ready`) or `command`", with its refusal "send an op other than `prefs`, `changes.result`, `mermaid` or `command` on the port", and from §4.3's Fonts row "`data:` inside the inlined CSS | About 415 KB as base64".
-  - The parent also sends `appearance` on the existing port, any number of times, coalesced to one per animation frame. It is a flat object under the library's closed key table: `v`, `mode`, `c.<slot>`, `s.<slot>`.
-  - ccrc's two typefaces travel as `data:` font assets the library checks and declares, about 188 K characters of base64.
+- **D-8759 (2026-11-18)**: reader-bridge-appearance-op. Issued to run 2631 (X1). It departs from the rich-docs spec's §4.4 sentence "Every later parent message goes on the port, and is `prefs`, `changes.result`, `mermaid` or `command` (amended 2026-11-10; library 1.1 take-up)". It also departs from M8.6's "Every other parent message goes on the port and is `prefs` or `changes.result`, any number of times, or, since the library 1.1 take-up, `mermaid` (once, after `ready`) or `command`", with its refusal "send an op other than `prefs`, `changes.result`, `mermaid` or `command` on the port", from §4.4's op table, whose parent-to-frame rows are `hello`, `prefs`, `changes.result`, `mermaid` and `command`, and from §4.3's Fonts row "`data:` inside the inlined CSS | About 415 KB as base64".
+  - The parent also sends `appearance` on the existing port, any number of times, coalesced to one per animation frame: `{t: 'appearance', v: 1, appearance: {mode, colour?, skin?, label?}}`, the contract's one shape. §4.4's op table gains its row.
+  - ccrc's two typefaces travel in the seed as base64 woff2 font assets, about 188 K characters. The library checks each one and loads it through the `FontFace` API from the decoded bytes. No CSS text is built from them.
   - No channel, listener, frame-to-parent op or CSP change is added.
   - Why: the operator's 2026-11-10 amendment requires changes while open to travel on the existing checked bridge, and `prefs` cannot carry them (spec X1-3).
   - Task 7 amends the sentences.
@@ -341,8 +343,12 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - Width, marks, last visit, font and folds stay reader preferences under `ccrc:reader:v1:`.
   - Why: the operator's 2026-11-10 amendment gives global appearance one owner, ccrc.
   - Task 7 amends the sentences.
+- **D-8761 (2026-11-18)**: reader-frame-handle-set-appearance. Issued to run 2631 (X1) as its reserve, and defined at fix round 1 (review 2645 F5(e), the coordinator's mail 25349). It departs from the rich-docs spec's §3.2 API line `{ update(d: RenderInput): void; setPrefs(p: Prefs): void; destroy(): void };`, the return shape of `mountDocFrame`.
+  - The handle also carries `setAppearance(a: Appearance): void`. Before `ready` it queues, latest wins. After `ready` it posts the `appearance` op (D-8759), and it seeds every later remount.
+  - Why: changes while open need a host-side call beside `setPrefs`, which carries only the reader's enum preferences.
+  - Task 7 amends the line.
 
-Unused from run 2631's block: 8761.
+All of run 2631's block is defined: 8759, 8760, 8761.
 
 ## Results
 

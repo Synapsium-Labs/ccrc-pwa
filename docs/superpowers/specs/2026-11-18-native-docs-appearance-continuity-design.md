@@ -92,7 +92,7 @@ The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spell
 ### 2.1 Carriage
 
 - **At mount**, a new adapter key `appearance` carries the contract. The library writes each slot onto the frame root with the CSSOM (`style.setProperty` on a library-owned property name) before first paint. So the first painted frame is already in ccrc's colours.
-- **While open**, `DocFrame.setAppearance(a)` posts one new parent op, `appearance`, on the existing port: a flat object `{t:'appearance', v:1, mode, 'c.<slot>': '#…', 'k.<slot>': '…'}`. It fits the parser's existing rule (plain object of strings and numbers) and the library's closed key table. An op with no `c.` keys drops host colours (§7).
+- **While open**, `DocFrame.setAppearance(a)` posts one new parent op, `appearance`, on the existing port: `{t: 'appearance', v: 1, appearance: a}`, where `a` has exactly the contract's shape, `{mode, colour?: {<slot>: '#…'}, skin?: {<slot>: …}, label?}`. One spelling serves the adapter key, the op and the validator. An op whose value has no `colour` group drops host colours (§7).
 - **Nothing flows back.** There is no new frame-to-parent op and no new `store.set` key. The frame never tells ccrc what it applied.
 - **Hosted means an appearance was seeded.** A mount whose adapters carried `appearance` is hosted for its whole life. While hosted, ccrc never calls `setPrefs` with a `theme`, and the frame never writes `theme` to `pref:prefs`. Its `prefs` path writes the whole prefs object, so the library leaves `theme` out of what it stores while hosted.
 
@@ -170,7 +170,9 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
    - no file holds two or more palette ids, or two or more skin ids, as string literals or as object keys, quoted or not;
    - no file under `pwa/src/docs/reader/` holds a hex colour literal;
    - only `ReaderFrame.tsx` imports `THEMES`, for the mode-only fallback (§7), and no file imports `SKINS`.
-4. **No stylesheet crosses.** No value the adapter builds contains `;`, `{`, `}`, `url(` or `var(`, and the adapter passes no key outside the contract.
+4. **No stylesheet crosses.** Two checks:
+   - at run time, over every value `readerAppearanceOf` builds in part 2, no string contains `;`, `{`, `}`, `url(` or `var(`, and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label`;
+   - in source, `appearance.ts` holds no such literal.
 
 A test helper, `pwa/test/helpers/paletteTokens.ts`, resolves a palette's tokens for parts 2 and 3. The contrast gate's `audit.mjs` cannot, as it stands: it keys the default palette as `DARK`, reads only the first `:root` block, and never reads `skins.css` or `color-scheme`. The helper merges both default blocks, maps `phosphor` to them, applies a skin's `:root[data-skin=…]` block and its `(pointer: fine)` arm, and follows `var()` chains.
 
@@ -241,7 +243,7 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 - **3:1:** the focus ring against `bg`, and Mermaid lines against the figure ground.
 - **No floor: edges.** `border` and `rule` are decorative, as ccrc's own gate treats its edges (`pwa/design/contrast-check.mjs` holds that no edge token clears 3:1 in every palette). Measured: `border` on `bg` is 1.54:1 at worst. A frame control is identified by its label, at 4.5:1, and by the focus ring, never by its border alone.
 
-ccrc's test computes the mapped values for every palette and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes: every 4.5:1 pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark) and `accent` on `surface2` at 4.57 (Phosphor Daylight). The focus ring is 4.92:1 at worst, and coloured text on its own 6% tint over `bg` is 4.56:1 at worst. At an 8% tint that last pair falls to 4.43:1 (Phosphor Daylight), which is why tints hold at most 6%.
+ccrc's test computes the mapped values for every palette through `pwa/test/helpers/paletteTokens.ts` (§3) and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes: every 4.5:1 pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark) and `accent` on `surface2` at 4.57 (Phosphor Daylight). The focus ring is 4.92:1 at worst, and coloured text on its own 6% tint over `bg` is 4.56:1 at worst. At an 8% tint that last pair falls to 4.43:1 (Phosphor Daylight), which is why tints hold at most 6%.
 
 ## 6. Aa while hosted
 
@@ -358,7 +360,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - an unknown adapter key still throws;
    - `appearance` is accepted;
    - `setAppearance` before `ready` queues, and after `ready` posts exactly one op;
-   - the op's keys equal the closed table.
+   - the op's keys are exactly `t`, `v` and `appearance`, and its value's keys are exactly the contract's (`mode`, `colour`, `skin`, `label`).
 3. Frame:
    - the seed paints before first frame;
    - an op applies without remount;
@@ -415,9 +417,10 @@ Each decision is a technical call within the operator's requirement, made and ar
 | X1-9 | Mermaid | (a) colours from the slots, redraw on change; (b) keep the neutral plate | (a). A white plate in a dark palette is the separate-destination look the operator asked to remove | Proposed |
 | X1-10 | The reader lab | (a) no appearance; (b) the host appearance | (a). Its E17 and E18 readings stay comparable with the recorded blocks | Proposed |
 
-**Deviations.** The design departs from two rich-docs sentences, defined in the leaf plan's `## Deviations found`:
-- **D-8759, the bridge's parent op set.** Rich-docs §4.4 and M8.6 list exactly `prefs`, `changes.result`, `mermaid` and `command`. This design adds `appearance`, and §4.3's font row grows by ccrc's two faces.
+**Deviations.** The design departs from three rich-docs statements, defined in the leaf plan's `## Deviations found`:
+- **D-8759, the bridge's parent op set.** Rich-docs §4.4's sentence and op table, and M8.6, list exactly `prefs`, `changes.result`, `mermaid` and `command`. This design adds `appearance`, and §4.3's font row grows by ccrc's two faces.
 - **D-8760, the hosted theme is not a reader preference.** Rich-docs §3.2's `prefs`, `chrome` row and G7 make theme a reader pref stored under the reader prefix. While hosted, it is ccrc's.
+- **D-8761, the frame handle gains `setAppearance`.** Rich-docs §3.2 gives `mountDocFrame`'s return as `{ update(d: RenderInput): void; setPrefs(p: Prefs): void; destroy(): void }`. This design adds `setAppearance(a)` to it.
 
 ## 13. Promise delta
 
