@@ -537,7 +537,7 @@ function safeRead(p: string): string | null {
   }
 }
 
-describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a hook module, a store or lib/api.ts', () => {
+describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a hook module, a store, lib/api.ts or @ccrc/ui', () => {
   it('the real walk finds nothing', () => {
     expect(ringBreaks(POLICY_FILE, PWA_ROOT, diskFs)).toEqual([]);
   });
