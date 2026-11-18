@@ -12,7 +12,7 @@
 // every box and by every method, and an over-long name 414 before any hook on a POST (and on a GET where no catch-all
 // route matches). Anything else (a HEAD, a wrong-shaped path) runs every `onRequest` hook and is answered by what the
 // box has at that route:
-//  - a GET or a HEAD on a box serving the built PWA bundle matches its catch-all (`GET /*`, which `exemptKey` also keys
+//  - a GET or a HEAD on a box serving the built PWA bundle matches its catch-all GET route (which `exemptKey` also keys
 //    a HEAD to, and which is `EXEMPT`), so the gate lets it by and the server's not-found handler answers 404;
 //  - any other request matches no route (an API-only box has no catch-all, and a box serving the bundle has one for
 //    GET and HEAD only, so a POST or any other method reaches none), so the gate decides: a 404 on a dark box; on an
