@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
 import { isItemMoveRefusal } from '../../shared/ledgers.js';
 import { isOverlordRefusal, isReviewRoundsRefusal } from '../../shared/refusal.js';
+import { isOtherLaneKebab } from '../src/coord/otherLanes.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
 import { isLinearActionVerb } from '../../shared/ledgers.js';
@@ -1207,6 +1208,10 @@ describe('the rejection table is total, in both directions', () => {
         || isOverlordRefusal(tok)
         // ...and its acts, its store's answers and the read words it takes, through that decider's own exported guard.
         || isDesignationKebab(tok)
+        // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
+        // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
+        // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
+        || isOtherLaneKebab(tok)
         // THE REMAINING-WORK DOOR (Overlord W2 remaining work A): `coord/programmeFactsStore.ts` names why it refused a
         // good body (`'too-many-open-edges'`), and `coord/programmeRemaining.ts` an edge target's predicate (`'run-closed'`,
         // `'pr-merged'`, `'operator-confirms'`). The refusal rides the door's 400 `detail`, the predicate a stored target,

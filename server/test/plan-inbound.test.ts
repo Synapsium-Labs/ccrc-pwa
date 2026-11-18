@@ -9,6 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CoordStore } from '../src/coord/store.js';
 import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes } from '../src/coord/planRoutes.js';
+import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
 import { linearOwnerOfProject } from '../src/coord/planPolicy.js';
 import { answerMasked, MASKED_GET_ROUTES } from '../src/server.js';
@@ -134,7 +135,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   r.app = Fastify();
   apps.push(r.app);
   registerPlanRoutes(r.app, {
-    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), sessionAuth: () => ({ allow: false, verdict: 'no-session', reason: 'refused', device: null }),
+    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS, sessionAuth: () => ({ allow: false, verdict: 'no-session', reason: 'refused', device: null }),
     authEnabled: false, readLinearStore: () => readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
   });
   registerHierarchyRoutes(r.app, { plan, serial, presenceOf, by: () => 'device-a', itemOf: (id) => coord.itemById(id), now: () => r.t.now });

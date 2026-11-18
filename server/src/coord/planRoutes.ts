@@ -17,7 +17,8 @@ import { isLinearTeamKey } from '../../../shared/linear.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import { routableSlots, routeLinear } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
-import { refuseRoute, refuseRun } from '../refuse.js';
+import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
+import type { OtherLane, OtherLaneReads } from './otherLanes.js';
 import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, isPlanKey,
   type CheckpointView, type EpicView, type InboundState, type PhaseView, type PlanPutBody, type PlanRefusal, type PlanView, type TicketView,
@@ -47,6 +48,8 @@ export interface PlanRouteOpts {
   mailToken: () => string | BoxTokenHolder | null;
   /** The box-token lanes' sender check (`attributionVerdict` over the registry). */
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
+  /** Overlord W1 other lanes (H10): the reads `door` asks, after attribution, whether the caller is the Overlord's body. */
+  otherLaneReads: OtherLaneReads;
   /** The gate's session verdict, for `plan show`'s session-or-token read. */
   sessionAuth: (req: FastifyRequest) => GateDecision;
   authEnabled: boolean;
@@ -246,12 +249,15 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** A plan write's handler, after the route's own `onRequest` has checked the box token: the slug, the identity pair from the
    *  query, attribution, then the work inside `serial`. Each route is registered with its path spelled out (the gate's and the
    *  census's scans read registrations as literals) and hands its work to this. */
-  const door = (work: Work) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+  const door = (lane: OtherLane, work: Work) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const slug = slugOf(req);
     if (slug === null) return refuseRoute(reply, 'bad-request', { detail: 'slug' });
     const who = await callerOf(req, reply);
     if (!who.ok) return who.reply;
     const { coord, plan, id } = who;
+    // Overlord W1 other lanes (H10): before the reserved programme, the Linear store read and `serial`, so a refused
+    // plan write reads no plan, takes no mutex and writes nothing.
+    if (!(await refuseOtherLane(reply, lane, id, opts.otherLaneReads))) return reply;
     if (slug === LINEAR_SYNC_PROGRAMME) return refuseRun(reply, 'reserved-programme');
     // The Linear store is read here, outside the mutex; the work below reads each project's workspace from it.
     const ws = await workspaces(projectsIn(req.body, plan.planOf(slug), coord.programHome(slug)));
@@ -268,13 +274,15 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
 
   /** `plan triage`'s handler: the team key from the path, the identity pair, attribution, then the work inside `serial`. The
    *  Linear store is read first for the workspaces of the owner's project and of the programme a hand names. */
-  const teamDoor = (work: TeamWork) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
+  const teamDoor = (lane: OtherLane, work: TeamWork) => async (req: FastifyRequest, reply: FastifyReply): Promise<unknown> => {
     const raw = (req.params as { team?: unknown }).team;
     if (!isLinearTeamKey(raw)) return refuseRoute(reply, 'bad-request', { detail: 'team' });
     const team = raw.toUpperCase();
     const who = await callerOf(req, reply);
     if (!who.ok) return who.reply;
     const { coord, plan, id } = who;
+    // Overlord W1 other lanes (H10), as `door` does: before the Linear store read and `serial`.
+    if (!(await refuseOtherLane(reply, lane, id, opts.otherLaneReads))) return reply;
     const named = typeof req.body === 'object' && req.body !== null && isPlanKey((req.body as Record<string, unknown>)['programme']) ? (req.body as Record<string, string>)['programme']! : null;
     const projects = new Set<string>(named === null ? [] : plan.planOf(named).epics.map((e) => e.project));
     const holder = teamOwnerProject(team, plan.hierarchyProjectsOf());
@@ -308,7 +316,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planDeclare', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const exists = coord.programs().some((p) => p.slug === slug);
     const storedHome = exists ? coord.programHome(slug) : null;
     const parsed = parsePlanPut(body, { doneWhenCount: (coord.goalsFor(slug).doneWhen ?? []).length, home: { stored: exists ? storedHome : null } });
@@ -347,7 +355,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/met', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/met')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planMet', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanMet(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -369,7 +377,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/tickets', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planTickets', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const parsed = parsePlanTicketAdd(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const { epic: epicKey, ticket } = parsed.add;
@@ -398,7 +406,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/tickets/move', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets/move')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planTicketsMove', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const parsed = parsePlanTicketMove(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -441,7 +449,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/epics/drop', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/epics/drop')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planEpicsDrop', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanEpicDrop(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -464,7 +472,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/phases/refs', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/phases/refs')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planPhaseRefs', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanPhaseRef(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -480,7 +488,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/close', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/close')),
-  }, door(async ({ coord, plan, slug, caller, body, owner }) => {
+  }, door('planClose', async ({ coord, plan, slug, caller, body, owner }) => {
     const parsed = parsePlanClose(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
@@ -534,7 +542,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/teams/:team/plan/triage', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/teams/:team/plan/triage')),
-  }, teamDoor(async ({ coord, plan, team, caller, body, ws }) => {
+  }, teamDoor('planTriage', async ({ coord, plan, team, caller, body, ws }) => {
     const parsed = parsePlanTriage(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const t = parsed.triage;
@@ -591,7 +599,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/take', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/take')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
+  }, door('planTake', async ({ coord, plan, slug, caller, body, stored, owner, ws }) => {
     const parsed = parsePlanTake(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);
