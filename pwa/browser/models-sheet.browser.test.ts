@@ -117,6 +117,8 @@ describe('the Models sheet at a phone, a laptop and a wide desk', () => {
             if (r.width === 0 || r.height === 0 || style.visibility === 'hidden' || style.display === 'none') bad.push(`${name}: not visible`);
             else {
               if (r.height < 43.5) bad.push(`${name}: ${r.height}px tall`);
+              // A card beside a taller one in its row must not stretch its button (seen at 1280: an 85px Release).
+              if (r.height > 64) bad.push(`${name}: stretched to ${r.height}px`);
               if (r.left < box.left - 0.5 || r.right > box.right + 0.5) bad.push(`${name}: outside the sheet`);
             }
           }
@@ -146,7 +148,7 @@ describe('the Models sheet at a phone, a laptop and a wide desk', () => {
         expect(m.controls.sort(), at).toEqual([
           'Hold the opus class', 'Hold the sonnet class', 'Release the fable class', 'Release the haiku class', 'Revert the opus class',
         ]);
-        expect(m.badControls, `${at}: every control visible, inside the sheet and at least 44px tall`).toEqual([]);
+        expect(m.badControls, `${at}: every control visible, inside the sheet, at least 44px and at most 64px tall`).toEqual([]);
         expect(opened.errors).toEqual([]);
       } finally {
         await opened.ctx.close();

@@ -4501,6 +4501,8 @@ button.proj-card-pool::before {
 .acct-models-list { display: grid; gap: var(--sp-2); min-width: 0; }
 .acct-models-class {
   display: grid;
+  /* A card beside a taller one in its row keeps its rows at their own height: never spread, never a stretched button. */
+  align-content: start;
   gap: var(--sp-1);
   min-width: 0;
   padding: var(--sp-3);
