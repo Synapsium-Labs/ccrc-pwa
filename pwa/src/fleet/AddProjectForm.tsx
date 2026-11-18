@@ -85,7 +85,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
   /** The hierarchy fields (D-8184): the owner chosen (empty: the default), the initiatives toggle, and the coordinators to choose from. */
   const [owner, setOwner] = useState('');
   const [initiatives, setInitiatives] = useState(true);
-  const [coordinators, setCoordinators] = useState<readonly { id: string; live: boolean }[] | 'unread' | 'absent'>([]);
+  const [coordinators, setCoordinators] = useState<readonly { id: string; live: boolean }[] | 'pending' | 'unread' | 'absent'>('pending');
   const ownerId = useId();
   // Bumped whenever the form stops showing: an answer issued under an older generation belongs to a form that is gone.
   const generation = useRef(0);
@@ -204,7 +204,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
             onEnter={submit}
           />
           {coordinators === 'unread' && <p role="status" className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.ownersUnread}</p>}
-          {coordinators !== 'unread' && coordinators !== 'absent' && coordinators.length > 0 && (
+          {coordinators !== 'pending' && coordinators !== 'unread' && coordinators !== 'absent' && coordinators.length > 0 && (
             <div className="grid gap-1">
               <label htmlFor={ownerId} className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.owner}</label>
               <Select id={ownerId} value={owner} disabled={adding} onChange={(e) => setOwner(e.target.value)}>
@@ -213,8 +213,8 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
               </Select>
             </div>
           )}
-          {/* An older server has no hierarchy route: no controls whose save would 404, and nothing said. */}
-          {coordinators !== 'absent' && <OptionRow label={HIERARCHY_TEXT.initiatives} checked={initiatives} disabled={adding} onClick={() => setInitiatives((v) => !v)} />}
+          {/* An older server has no hierarchy route: no controls whose save would 404, and nothing said. Nothing is drawn until the read settles (M7), so that server's 404 never flashes the toggle. */}
+          {coordinators !== 'absent' && (coordinators !== 'pending' || loadCoordinators === undefined) && <OptionRow label={HIERARCHY_TEXT.initiatives} checked={initiatives} disabled={adding} onClick={() => setInitiatives((v) => !v)} />}
           {form.source === 'github' && (
             <OptionRow label={LINKING_ADD_TEXT.template} checked={template} disabled={adding} onClick={() => setTemplate((t) => !t)} />
           )}

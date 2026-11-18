@@ -92,14 +92,17 @@ const measure = (el: Element): Measured => {
 const open = async (view: AppView, hierarchy404 = false) => {
   const app = await openApp(browser!, view, FIXTURE);
   // The last route registered answers first: an older server's 404 on the hierarchy read.
-  if (hierarchy404) await app.ctx.route('**/api/hierarchy', (route) => route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }));
+  let seen404: () => void = () => undefined;
+  const answered404 = new Promise<void>((resolve) => { seen404 = resolve; });
+  if (hierarchy404) await app.ctx.route('**/api/hierarchy', async (route) => { await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' }); seen404(); });
+  else seen404();
   await app.page.goto(server!.origin + '/');
   await app.page.getByRole('button', { name: PROJECT_ADD_TEXT.open }).first().click();
   const sheet = app.page.getByRole('dialog');
   await sheet.getByRole('heading', { name: PROJECT_ADD_TEXT.title }).waitFor({ timeout: 30_000 });
   // The hierarchy read has settled once the Team key field is drawn and either the owner select or the toggle (or neither, absent).
   await sheet.getByLabel(LINKING_ADD_TEXT.teamKey).waitFor({ timeout: 30_000 });
-  return { ...app, sheet };
+  return { ...app, sheet, answered404 };
 };
 
 describe('Add project sheet, per width, skin and theme (D-8184)', () => {
@@ -148,10 +151,11 @@ describe('Add project sheet, per width, skin and theme (D-8184)', () => {
       for (const skin of SKINS) {
         const view: AppView = { skin, theme: 'light', width };
         const at = named(view);
-        const { ctx, sheet } = await open(view, true);
+        const { ctx, sheet, page, answered404 } = await open(view, true);
         try {
-          // Let the rejected read settle before asserting an absence.
-          await new Promise((r) => setTimeout(r, 500));
+          // Wait for the read to settle, not for a time: the route answered the 404, then two frames let React draw what it will.
+          await answered404;
+          await page.evaluate(() => new Promise<void>((r) => { requestAnimationFrame(() => requestAnimationFrame(() => r())); }));
           expect(await sheet.getByLabel(LINKING_ADD_TEXT.owner).count(), `${at}: no owner select`).toBe(0);
           expect(await sheet.locator('select').count(), `${at}: no select at all`).toBe(0);
           expect(await sheet.getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }).count(), `${at}: no initiatives toggle`).toBe(0);

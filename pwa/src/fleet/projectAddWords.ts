@@ -8,7 +8,7 @@
 // gateway timeout is the same unknown): the box may have added the project. After it, only two answers are read by
 // STATUS: a 502, which is git's failure and is said from its stderr whatever word rides beside it, and a 404, a server
 // older than the route.
-import { ApiError } from '../lib/apiError';
+import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
 import { HIERARCHY_TEXT } from './hierarchyWords';
 import { linkingErrorText, refusalText } from '../lib/refusalWords';
 import { isRecord } from '../lib/wire';
@@ -234,6 +234,8 @@ export const LINKING_ADD_TEXT = {
   unmeasured: "ccrc has not read this repository's visibility yet; open the template from Settings › Project linking in a few minutes.",
   keySaved: (key: string): string => `Linear team key ${key} saved.`,
   keyFailed: (why: string): string => `The team key was not saved. ${why}`,
+  /** The key's write gave no answer, or a 5xx that can follow a commit: it may have been saved. */
+  keyUnknown: "The team key may not have been saved. Check the project's Linear settings.",
   templateOpened: (url: string): string => `Template pull request opened: ${url}`,
   templateFailed: (why: string): string => `The template pull request was not opened. ${why}`,
   /** The hierarchy fields (D-8184), beside the team key: the Linear owner (empty: the default) and the initiatives toggle. */
@@ -243,6 +245,7 @@ export const LINKING_ADD_TEXT = {
   ownersUnread: 'The coordinators could not be read, so the Linear owner cannot be chosen now. The default owner applies.',
   hierarchySaved: 'Linear owner and initiatives saved.',
   hierarchyFailed: (why: string): string => `The Linear owner and initiatives were not saved. ${why}`,
+  hierarchyUnknown: "The Linear owner and initiatives may not have been saved. Check the project's Linear settings.",
 } as const;
 
 /** The linking choices the form held when it sent: a trimmed upper-cased key (`null`: none) and whether the template box
@@ -269,7 +272,7 @@ export async function linkingFollowUps(
       await acts.save(project, { teamKey: choice.teamKey, override: null });
       lines.push(LINKING_ADD_TEXT.keySaved(choice.teamKey));
     } catch (err) {
-      lines.push(LINKING_ADD_TEXT.keyFailed(linkingErrorText(err)));
+      lines.push(writeOutcomeUnknown(err) ? LINKING_ADD_TEXT.keyUnknown : LINKING_ADD_TEXT.keyFailed(linkingErrorText(err)));
     }
   }
   if (acts.saveHierarchy !== undefined && ((choice.owner ?? null) !== null || choice.initiativesOff === true)) {
@@ -277,7 +280,7 @@ export async function linkingFollowUps(
       await acts.saveHierarchy(project, { initiatives: choice.initiativesOff === true ? 'off' : 'on', linearOwner: choice.owner ?? null, ownsTeam: false });
       lines.push(LINKING_ADD_TEXT.hierarchySaved);
     } catch (err) {
-      lines.push(LINKING_ADD_TEXT.hierarchyFailed(linkingErrorText(err)));
+      lines.push(writeOutcomeUnknown(err) ? LINKING_ADD_TEXT.hierarchyUnknown : LINKING_ADD_TEXT.hierarchyFailed(linkingErrorText(err)));
     }
   }
   if (choice.template) {

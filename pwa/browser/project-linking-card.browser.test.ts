@@ -263,8 +263,8 @@ describe('Settings › Security › Project linking, per width, skin and theme (
               const band = bandOf(cardWidth);
               const { name, key, visibility, template } = r.cells;
               if (band === 'line') {
-                // ONE grid line: the four cells start at the same height.
-                for (const c of [key, visibility, template]) expect(Math.abs(c.top - name.top), `${at}: ${r.name} is not one grid line at ${cardWidth}px`).toBeLessThan(1);
+                // The row's first line: the four cells start at the same height.
+                for (const c of [key, visibility, template]) expect(Math.abs(c.top - name.top), `${at}: ${r.name} is not on the row's first line at ${cardWidth}px`).toBeLessThan(1);
                 expect(key.left).toBeGreaterThan(name.left);
                 expect(template.left).toBeGreaterThan(visibility.left);
               } else if (band === 'three') {
@@ -361,7 +361,7 @@ describe('Settings › Security › Project linking, per width, skin and theme (
     }, 120_000);
   }
 
-  it('at 1280 a row is one grid line wherever the card is 760 px or wider, and the template button wraps under it elsewhere', async () => {
+  it('at 1280 the first line of a row holds its four cells wherever the card is 760 px or wider, and the template button wraps under it elsewhere', async () => {
     const seen: string[] = [];
     for (const skin of SKINS) {
       const view: AppView = { skin, theme: 'light', width: 1280 };

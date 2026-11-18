@@ -6,7 +6,7 @@ import { ToastHost } from '@ccrc/ui';
 import { LINKING_REFUSALS, type ProjectLinkingWire } from '../../shared/linking';
 import type { ProjectRow } from '../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../shared/plan';
-import { HIERARCHY_TEXT, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
+import { HIERARCHY_TEXT, ownerForAllConsequence, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
 import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
 import { upkeepPath } from '../src/lib/routes';
@@ -144,7 +144,7 @@ describe('the card', () => {
     for (const word of ['write-failed', 'bad-request']) {
       cleanup();
       await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
-      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(503, { ok: false, error: word, detail: 'box text that must not show' }));
+      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: word, detail: 'box text that must not show' }));
       fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
       const sentence = await within(rowOf('project-a')).findByRole('status');
       expect(sentence.textContent, word).toBe(LINKING_ROUTE_TEXT[word as 'write-failed' | 'bad-request']);
@@ -290,10 +290,59 @@ describe('the hierarchy settings', () => {
   it('a refusal shows its fixed sentence', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
     await within(rowOf('project-a')).findByText('Default: coord-a (live)');
-    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(400, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
     fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
     expect(await within(rowOf('project-a')).findByText(LINKING_ROUTE_TEXT['write-failed'])).toBeInTheDocument();
     expect(document.body.textContent).not.toContain('disk path');
+  });
+
+  it('M1: a hierarchy write, a team-key write and owner-for-all whose outcome is unknown never say nothing was changed', async () => {
+    const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    fireEvent.change(keyField('project-a'), { target: { value: 'BBB' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(api.saveLinking).toHaveBeenCalledTimes(1));
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
+    vi.spyOn(api, 'ownerForAll').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(region.querySelector('[data-linking-all]')!.textContent).toContain(HIERARCHY_TEXT.unconfirmed));
+    expect(region.querySelector('[data-linking-all]')!.textContent).not.toContain(LINKING_ROUTE_TEXT['write-failed']);
+  });
+
+  it('I2: a 502 answer to owner-for-all locks every row behind a read newer than the write; a 409 unlocks at once', async () => {
+    await twoRows();
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    const apply = async (n: number): Promise<void> => {
+      fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+      fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+      fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+      await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(n));
+    };
+    const all = vi.spyOn(api, 'ownerForAll').mockRejectedValue(new ApiError(409, { ok: false, error: LINKING_REFUSALS[0] }));
+    await apply(1);
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).not.toBeDisabled();
+    expect(api.hierarchy).toHaveBeenCalledTimes(1);
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    all.mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    await apply(2);
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    await act(async () => { held1.resolve(answer!); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).not.toBeDisabled();
   });
 
   it('making one coordinator the owner of every project asks first', async () => {
@@ -658,7 +707,7 @@ describe('the hierarchy settings', () => {
   });
 
   it('a project missing from the hierarchy answer is drawn at the server defaults, and a write sends them with the change', async () => {
-    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([]));
+    await mount([row('project-a', wire())], hier([]));
     expect(await within(rowOf('project-a')).findByText('Default: none live')).toBeInTheDocument();
     expect(ownerSelect('project-a').value).toBe('');
     expect(initiativesBox('project-a')).toBeChecked();
@@ -710,10 +759,11 @@ describe('the hierarchy settings', () => {
   it('a project whose owner comes from the project owning its key says so, with that coordinator liveness', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([
       hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a' } }),
-      hrow('project-b', { ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+      hrow('project-b', { ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
     ]));
+    // I1: the option names the sibling's own default (ifUnnamed); the note names who owns it now, and whether that one is live.
     await within(rowOf('project-b')).findByText('Default: coord-a (live)');
-    expect(within(rowOf('project-b')).getByText('This owner comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.')).toBeInTheDocument();
+    expect(within(rowOf('project-b')).getByText('The owner now is coord-b (not live), from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.')).toBeInTheDocument();
     expect(within(rowOf('project-a')).queryByText(/own owner setting is not used/)).toBeNull();
   });
 
@@ -763,8 +813,13 @@ describe('the hierarchy settings', () => {
   it('the none-live words for an inherited owner', () => {
     const r = hrow('project-b', { ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } });
     expect(defaultOwnerWords(r)).toBe('Default: none live');
-    expect(ownerInheritedNote(r)).toBe('This owner comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.');
+    expect(ownerInheritedNote(r)).toBe('No owner is live now. That comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.');
     expect(namedOwnerWords(r, 'coord-z')).toBe('coord-z (not live)');
     expect(namedOwnerWords(hrow('project-a', { ownerNow: { id: 'coord-z', source: 'named', live: true } }), 'coord-z')).toBe('coord-z');
+  });
+
+  it('M3: the all-projects words claim only the projects with Linear settings', () => {
+    expect(ownerForAllConsequence('coord-b')).toBe('Every project with Linear settings gets coord-b as its Linear owner. Each project\'s other settings stay as they are.');
+    expect(HIERARCHY_TEXT.allDone).toBe('Saved. Every project with Linear settings now names that coordinator.');
   });
 });

@@ -22,7 +22,7 @@ import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/pl
 import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyWriteText, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
@@ -100,7 +100,7 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
         (err: unknown) => {
           // A write whose result is unknown (no answer, or a 5xx that can follow a commit) may have landed: lock behind a read, as after a success.
           if (writeOutcomeUnknown(err)) raise(reread());
-          result.say(linkingErrorText(err), 'refusal');
+          result.say(hierarchyWriteText(err), 'refusal');
         },
       )
       .finally(() => { track(-1); setBusy(false); });
@@ -163,7 +163,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
         (a) => { onStored(name, a.linking); setNeed(reread()); result.say(LINKING_TEXT.saved); },
         (err: unknown) => {
           if (writeOutcomeUnknown(err)) setNeed(reread());
-          result.say(linkingErrorText(err), 'refusal');
+          result.say(hierarchyWriteText(err), 'refusal');
         },
       )
       .finally(() => setBusy(false));
@@ -278,7 +278,7 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
       // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
       .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => {
         if (writeOutcomeUnknown(err)) setFloor(reread());
-        result.say(linkingErrorText(err), 'refusal');
+        result.say(hierarchyWriteText(err), 'refusal');
       })
       .finally(() => { track(-1); setBusy(false); });
   };
