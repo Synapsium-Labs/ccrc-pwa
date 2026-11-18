@@ -13,6 +13,7 @@ import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
+import type { InboundRow } from '../coord/planStore.js';
 import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
@@ -208,5 +209,50 @@ export function raisedItemInput(row: InboundText, note: string | undefined): Rai
     how: [], options: ['Take it into a programme', 'Leave it in Upkeep', 'Close it'], recommended: 1,
     recommendedWhy: 'Upkeep keeps the issue without changing any programme\'s scope, and a coordinator can still take it into a programme later.',
     action: null,
+  };
+}
+
+
+// ── Retirement (round 4 F1, round 5 F2; D-8735) ──
+
+/** The states a stored row may be retired from: a row the owner, a coordinator or the operator still has to act on, and a close
+ *  not yet written to Linear. `taken` and `placed` are bound tickets (the drift pass's, never this lane's). */
+const RETIRABLE: ReadonlySet<string> = new Set(['waiting', 'mailed', 'handed', 'raised', 'closed']);
+export type RetireWhy = 'completed' | 'canceled' | 'ccrc-own';
+export type InboundRetireVerdict = { kind: 'keep' } | { kind: 'retire'; why: RetireWhy } | { kind: 'reopen' };
+
+/** What a pass that read a STORED row's issue does with the row (D-8735). `detect` upserts only open issues, so without this a
+ *  row never learns its issue was completed, canceled or turned out to be ccrc's own create: a take would then reopen a
+ *  completed issue or bind a second ticket to it. `own`: a binding holds the issue, a pending ticket create carries its id
+ *  (`ccrcIssueIds`) or the journal names it a session's write. `inbound` is `isInbound` for the node as read now. A row with a
+ *  close already acted (or given up: `actedAt` set) is ccrc's own cancel and stays. A `retired` row whose issue reads inbound
+ *  again is reopened: it returns to `waiting` and is routed once more. */
+export function inboundRetireVerdict(
+  row: Pick<InboundRow, 'state' | 'actedAt'>, o: { stateType: string; own: boolean; inbound: boolean },
+): InboundRetireVerdict {
+  if (row.state === 'retired') return o.inbound ? { kind: 'reopen' } : { kind: 'keep' };
+  if (!RETIRABLE.has(row.state) || (row.state === 'closed' && row.actedAt !== null)) return { kind: 'keep' };
+  if (o.own) return { kind: 'retire', why: 'ccrc-own' };
+  if (o.stateType === 'completed' || o.stateType === 'canceled') return { kind: 'retire', why: o.stateType };
+  return { kind: 'keep' };
+}
+
+/** The reason a retired row carries (the row is the durable record of why it left the lane). */
+export const retiredReason = (why: RetireWhy): string => `retired: ${why}`;
+
+const REOPENED_MARK = /^reopened (\d{4}-\d{2}-\d{2}T[\d:.]+Z)$/;
+/** The mark a reopened row carries until its owner is mailed: the reopen's own time. It is the durable once-mark of D-8735, kept
+ *  in the row (written in the same statement as the state change) and cleared in the transaction that mails the owner, and its
+ *  time is in the mail's subject, so a SECOND reopen after a second retire has a subject of its own and is never lost to the
+ *  subject dedupe of `mailOwner`. */
+export const reopenedMark = (at: number): string => `reopened ${new Date(at).toISOString()}`;
+export const reopenedAtOf = (reason: string | null): string | null => (reason === null ? null : (REOPENED_MARK.exec(reason)?.[1] ?? null));
+
+/** The mail to the owner when an issue that was retired reads open again. Its subject carries the reopen's time. */
+export function inboundReopenedMail(row: InboundText, iso: string): { subject: string; body: string } {
+  const first = inboundMail(row);
+  return {
+    subject: `Linear inbound: ${row.identifier} was reopened (${iso})`,
+    body: [`The issue ${row.identifier} was completed or canceled and is open again in Linear, so it waits for your triage once more.`, first.body].join('\n\n'),
   };
 }

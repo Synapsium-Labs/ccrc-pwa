@@ -1992,6 +1992,32 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
   });
 
+  it('the take and triage rows are refused locally without plan-inbound-v1, and no other row is (D-8736, round 4 A1)', async () => {
+    expect(SERVER_CAPS).toContain('plan-inbound-v1');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-inbound-v1'));
+    plantPane('demo-ws');
+    for (const args of [['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-']]) {
+      const r = await run(args, '{}', { TMUX_PANE: '%7' });
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'capability-missing']);
+      expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain('plan-inbound-v1');
+    }
+    expect(seen).toEqual([]);
+    // the other plan rows still send: the word gates take and triage alone
+    await run(['plan', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
+  });
+
+  it('take and triage send when the cap file is current and carries plan-inbound-v1, or is absent (D-8736)', async () => {
+    plantPane('demo-ws');
+    const b = '{"issue":"AAA-12","decision":"upkeep"}';
+    let r = await run(['plan', 'triage', 'AAA', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    writeCaps(SERVER_CAPS);
+    r = await run(['plan', 'triage', 'AAA', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => s.url.split('?')[0])).toEqual(['/api/teams/AAA/plan/triage', '/api/teams/AAA/plan/triage']);
+  });
+
   it('an absent or stale cap file sends', async () => {
     await run(['plan', 'show', 'prog-a']);
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'), nowS() - 181);

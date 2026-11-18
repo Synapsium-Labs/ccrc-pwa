@@ -215,10 +215,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   /** D-8181 (design §4.3): the public-text check on every text a plan verb is about to store, each judged by its own
    *  project's linking mode and team key (a project with no reading is `unknown`, which is public). Runs before the write, so
    *  a refused text stores nothing. The detail names the class (and a tracker id's ids), never the text. */
-  const textRefusal = (coord: CoordStore, texts: ReadonlyArray<readonly [project: string, text: string | undefined]>): Refused | null => {
-    for (const [project, text] of texts) {
+  const textRefusal = (coord: CoordStore, texts: ReadonlyArray<readonly [project: string | null, text: string | undefined, teamKey?: string]>): Refused | null => {
+    for (const [project, text, issueTeam] of texts) {
       if (text === undefined || text === '') continue;
-      const l = coord.linkingOf(project);
+      // no project to read a linking mode from (round 5 A5): the mode is `unknown`, which design §6.1 treats as public; the
+      // issue's own team key stands for the project's
+      const l = project === null ? { teamKey: issueTeam ?? null, mode: 'unknown' as const } : coord.linkingOf(project);
       const v = publicTextVerdict(text, l.teamKey, l.mode, opts.privateTrackerKeys);
       if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
     }
@@ -547,7 +549,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const t = parsed.triage;
     const owner = linearOwnerOfTeam(team, plan.hierarchyProjectsOf(), ownerFacts(plan));
-    const found = plan.inboundByIdentifier(t.issue);
+    // keyed by the workspace of the team's owning project (round 4 A2): another workspace's alike-keyed team never answers
+    const holder = teamOwnerProject(team, plan.hierarchyProjectsOf());
+    const found = plan.inboundByIdentifier(holder === null ? null : ws.get(holder) ?? null, t.issue);
     const row = found !== null && found.teamKey.toUpperCase() === team ? found : null;
     const verdict = triageVerdict(caller, owner ?? { id: null }, row);
     if (!verdict.ok) return { refuse: verdict.word, detail: verdict.word === 'not-linear-owner' ? `only the Linear owner of team ${team} triages its issues` : `${t.issue} is not waiting for triage in team ${team}` };
@@ -606,8 +610,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (!verdict.ok) return { refuse: verdict.word, detail: 'only the programme\'s coordinator takes an issue' };
     const t = parsed.take;
     const now = opts.now();
-    const found = plan.inboundByIdentifier(t.issue);
-    const handed = found !== null && found.state === 'handed' && found.handedTo === slug ? found : null;
+    // the rows handed to THIS programme (round 4 A2): the issue's workspace is its own, never the programme's, so the programme
+    // names the row; two handed rows of one identifier (two workspaces) are told apart by the programme's home workspace, and
+    // none is guessed when that does not decide
+    const handedRows = plan.handedInboundByIdentifier(slug, t.issue);
+    const home = coord.programHome(slug);
+    const handed = handedRows.length === 1 ? handedRows[0]! : handedRows.find((x) => home !== null && x.workspaceId === (ws.get(home) ?? null)) ?? null;
     const parked = handed === null ? plan.upkeepTicketByIdentifier(t.issue) : null;
     const upkeep = parked !== null && parked.state === 'open' ? parked : null;
     if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
@@ -631,7 +639,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     }
     if ('close' in t) {
       const project = upkeep !== null ? upkeep.project : teamOwnerProject(handed!.teamKey, plan.hierarchyProjectsOf()) ?? coord.programHome(slug);
-      const unfit = project === null ? null : textRefusal(coord, [[project, t.close.why]]);
+      // no project at all is judged as a public one (round 5 A5): the check is never skipped
+      const unfit = textRefusal(coord, [[project, t.close.why, handed?.teamKey]]);
       if (unfit !== null) return unfit;
       if (handed !== null) plan.setInboundState(handed.linearId, { state: 'closed', reason: mask(t.close.why) });
       else plan.updateTicket(upkeep!.id, { state: 'dropped', droppedWhy: mask(t.close.why) }, now);

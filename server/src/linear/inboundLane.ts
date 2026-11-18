@@ -18,10 +18,10 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
-import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundMail, keyWaitMail, noCancelMail, ownerItemInput, type InboundHold } from './inboundPolicy.js';
+import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundMail, inboundReopenedMail, inboundRetireVerdict, keyWaitMail, noCancelMail, ownerItemInput, reopenedAtOf, reopenedMark, retiredReason, type InboundHold, type RetireWhy } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
@@ -54,20 +54,46 @@ export class InboundLane {
 
   // ── Detect (a workspace pass) ──
 
-  /** Every changed issue node with no binding in the workspace, in a managed team, that is open and no session's own create, is
-   *  stored `waiting` with the reporter's text (a known one only refreshes its text: `upsertInbound`). `bound` is read once;
-   *  `viaFleet` is asked in chunks of at most `LINEAR_VIA_FLEET_MAX_ITEMS` identifiers (a larger ask answers empty). */
+  /** Every changed issue node that is no ccrc create (a binding holds it, or a pending ticket's create was sent with its id:
+   *  `ccrcIssueIds`, round 5 F2), in a managed team, open and no session's own create, is stored `waiting` with the reporter's
+   *  text (a known one only refreshes its text: `upsertInbound`). A node whose row is already stored is judged by
+   *  `inboundRetireVerdict` too (round 4 F1, D-8735): completed, canceled or ccrc's own, the row is retired; an open issue whose
+   *  row was retired returns to `waiting`. `bound` is read once; `viaFleet` is asked in chunks of at most
+   *  `LINEAR_VIA_FLEET_MAX_ITEMS` identifiers (a larger ask answers empty). */
   detect(workspaceId: string, nodes: readonly Node[], managed: ReadonlySet<string>, now: number): void {
-    const bound = new Set(this.deps.plan.boundLinearIdsOf(workspaceId));
-    const unbound = nodes.flatMap((n) => { const f = factsOf(n); return f === null || bound.has(f.linearId) ? [] : [f]; });
+    const bound = ccrcIssueIds(this.deps.plan.bindingsInWorkspace(workspaceId));
+    const facts = nodes.flatMap((n) => { const f = factsOf(n); return f === null ? [] : [f]; });
+    const unbound = facts.filter((f) => !bound.has(f.linearId));
     const viaFleet = new Set<string>();
     const identifiers = [...new Set(unbound.map((f) => f.identifier))];
     for (let i = 0; i < identifiers.length; i += LINEAR_VIA_FLEET_MAX_ITEMS) {
       for (const hit of this.deps.viaFleet(identifiers.slice(i, i + LINEAR_VIA_FLEET_MAX_ITEMS))) viaFleet.add(hit);
     }
-    for (const f of unbound) {
-      if (!isInbound(f, bound, viaFleet, managed)) continue;
+    for (const f of facts) {
+      const inbound = isInbound(f, bound, viaFleet, managed);
+      const stored = this.deps.plan.inboundOf(f.linearId);
+      if (stored !== null) {
+        const v = inboundRetireVerdict(stored, { stateType: f.stateType, own: bound.has(f.linearId) || viaFleet.has(f.identifier), inbound });
+        if (v.kind === 'retire') { this.retire(stored, v.why, now); continue; }
+        if (v.kind === 'reopen') {
+          this.deps.plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null, reason: reopenedMark(now) });
+        }
+      }
+      if (!inbound) continue;
       this.deps.plan.upsertInbound({ linearId: f.linearId, workspaceId, teamKey: f.teamKey, identifier: f.identifier, title: f.title, body: f.body, seenAt: now });
+    }
+  }
+
+  /** A stored row leaves the lane (D-8735). A `raised` row's open or checking operator item settles in the same transaction as
+   *  the state, so no item is left asking about an issue that is gone. */
+  private retire(row: InboundRow, why: RetireWhy, now: number): void {
+    const { coord, plan } = this.deps;
+    const write = (): void => plan.setInboundState(row.linearId, { state: 'retired', reason: retiredReason(why) });
+    const item = row.state === 'raised' && row.itemId !== null ? coord.itemById(row.itemId) : null;
+    if (item !== null && (item.state === 'open' || item.state === 'checking')) {
+      coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, write);
+    } else {
+      tx(coord.db, write);
     }
   }
 
@@ -108,12 +134,14 @@ export class InboundLane {
   /** One mail to the owner per issue (durable, by subject), and the row `mailed` in the same transaction. */
   private mailOwner(row: InboundRow, ownerId: string, now: number): void {
     const { coord, plan } = this.deps;
-    const m = inboundMail(row);
+    // a reopened row (D-8735) is mailed under its own subject, carrying the reopen's time, so the first mail's dedupe never eats it
+    const reopened = reopenedAtOf(row.reason);
+    const m = reopened === null ? inboundMail(row) : inboundReopenedMail(row, reopened);
     tx(coord.db, () => {
       if (!coord.hasMailWithSubject('operator', null, ownerId, m.subject)) {
         insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'question', subject: m.subject, body: m.body });
       }
-      plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now });
+      plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now, ...(reopened === null ? {} : { reason: null }) });
     });
   }
 

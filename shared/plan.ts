@@ -31,7 +31,7 @@ export const MIGRATION_STATES = ['proposing', 'proposed', 'approved', 'applying'
 export type MigrationState = (typeof MIGRATION_STATES)[number];
 /** Where an inbound Linear issue stands (D-8183): waiting for a coordinator, mailed to one, handed to a session, taken into the
  *  plan, placed, closed in Linear with a reason, or raised to the operator. */
-export const INBOUND_STATES = ['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised'] as const;
+export const INBOUND_STATES = ['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised', 'retired'] as const;
 export type InboundState = (typeof INBOUND_STATES)[number];
 /** What the team's Linear owner decides about an inbound issue (`plan triage`, D-8183): hand it to a programme, place it in the
  *  team's Upkeep epic, close it with a reason, or raise it to the operator. */

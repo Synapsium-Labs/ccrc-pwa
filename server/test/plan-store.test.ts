@@ -684,8 +684,10 @@ describe('the Upkeep epic (D-8183)', () => {
     expect(inboundOf(db, 'L12')!.state).toBe('placed');
     const t = upkeepTicketByIdentifier(db, 'AAA-12')!;
     expect(t).toMatchObject({ title: 'Reporter title', body: 'Reporter body', source: 'inbound', key: 'inbound-aaa-12' });
-    expect(inboundByIdentifier(db, 'AAA-12')?.linearId).toBe('L12');
-    expect(inboundByIdentifier(db, 'AAA-77')).toBeNull();
+    expect(inboundByIdentifier(db, 'ws-a', 'AAA-12')?.linearId).toBe('L12');
+    expect(inboundByIdentifier(db, 'ws-b', 'AAA-12')).toBeNull();
+    expect(inboundByIdentifier(db, null, 'AAA-12')?.linearId).toBe('L12');
+    expect(inboundByIdentifier(db, 'ws-a', 'AAA-77')).toBeNull();
     expect(dueKeys()).toContain('upkeep:project-a');
     declare('prog-a');
     const e1 = (db.prepare("SELECT id FROM plan_epics WHERE program = 'prog-a'").get() as { id: number }).id;
@@ -733,7 +735,7 @@ describe('the Upkeep epic (D-8183)', () => {
   it('every new function joins the port', () => {
     const port = planStorePort(db) as unknown as Record<string, unknown>;
     for (const f of ['inTransaction', 'boundLinearIdsOf', 'upkeepProjectsOf', 'upkeepEpicOf', 'upkeepPlanOf', 'ensureUpkeepEpicInTx', 'inboundTicketInTx', 'adoptIssueBindingInTx', 'moveTicketToProgrammeInTx',
-      'inboundByIdentifier', 'upkeepTicketByIdentifier', 'placeInboundInUpkeep', 'takeInboundIntoEpic', 'takeUpkeepTicket']) {
+      'inboundByIdentifier', 'handedInboundByIdentifier', 'bindingsInWorkspace', 'upkeepTicketByIdentifier', 'placeInboundInUpkeep', 'takeInboundIntoEpic', 'takeUpkeepTicket']) {
       expect(typeof port[f], f).toBe('function');
     }
   });

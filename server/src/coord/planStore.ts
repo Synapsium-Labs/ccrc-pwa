@@ -14,7 +14,7 @@ import {
   type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PhaseRefKind, type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
-import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
+import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { tx } from './tx.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -588,6 +588,12 @@ export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
   ).all(program, program, program, program) as unknown as BindingRow[];
 }
 
+/** Every binding of a workspace, whatever its state, in id order (D-8183): the drift pass reads them BEFORE it reads Linear, so a
+ *  sync write landing after its Linear read is seen as a moved fingerprint and never as drift; the inbound lane reads its
+ *  `pending` ticket bindings, whose create may have been sent with its reply lost. */
+export function bindingsInWorkspace(db: DatabaseSync, workspaceId: string): BindingRow[] {
+  return db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? ORDER BY id').all(workspaceId) as unknown as BindingRow[];
+}
 /** The binding holding a Linear object in a workspace (the drift pass maps each node it reads to its binding, D-8183), or null. */
 export function bindingByLinearId(db: DatabaseSync, workspaceId: string, linearId: string): BindingRow | null {
   const r = db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? AND linearId = ? ORDER BY id LIMIT 1').get(workspaceId, linearId);
@@ -928,10 +934,18 @@ export function moveTicketToProgrammeInTx(
     settleEpicInTx(db, id, now);
   }
 }
-/** The inbound row of an issue by its identifier (the verbs name it so), or null. */
-export function inboundByIdentifier(db: DatabaseSync, identifier: string): InboundRow | null {
-  const r = db.prepare('SELECT * FROM linear_inbound WHERE identifier = ? COLLATE NOCASE ORDER BY seenAt LIMIT 1').get(identifier) as Raw | undefined;
-  return r === undefined ? null : inboundRow(r);
+/** The inbound row of an issue by its identifier (the verbs name it so) in a workspace (round 4 A2: two workspaces may each hold
+ *  a team keyed alike), or null; `null` for the workspace (unmeasured) resolves only an identifier no other workspace holds. */
+export function inboundByIdentifier(db: DatabaseSync, workspaceId: string | null, identifier: string): InboundRow | null {
+  const rows = (workspaceId === null
+    ? db.prepare('SELECT * FROM linear_inbound WHERE identifier = ? COLLATE NOCASE ORDER BY seenAt LIMIT 2').all(identifier)
+    : db.prepare('SELECT * FROM linear_inbound WHERE workspaceId = ? AND identifier = ? COLLATE NOCASE ORDER BY seenAt LIMIT 1').all(workspaceId, identifier)) as Raw[];
+  // two workspaces' identifiers are not told apart without a workspace: an ambiguous one resolves to nothing, never to a guess
+  return rows.length === 0 || (workspaceId === null && rows.length > 1) ? null : inboundRow(rows[0]!);
+}
+/** The rows of that identifier handed to a programme (`plan take`'s: the taking programme names no issue workspace of its own). */
+export function handedInboundByIdentifier(db: DatabaseSync, slug: string, identifier: string): InboundRow[] {
+  return (db.prepare("SELECT * FROM linear_inbound WHERE state = 'handed' AND handedTo = ? AND identifier = ? COLLATE NOCASE ORDER BY seenAt").all(slug, identifier) as Raw[]).map(inboundRow);
 }
 /** The Upkeep ticket (no programme) whose issue is bound under that identifier, or null. */
 export function upkeepTicketByIdentifier(db: DatabaseSync, identifier: string): TicketRow | null {
@@ -959,6 +973,10 @@ export function inTransaction<T>(db: DatabaseSync, fn: () => T): T { return tx(d
 /** What the composites below answer when the row is not there to act on. */
 export type InboundAct = { ok: true; ticketId: number } | { ok: false; refused: 'issue-not-inbound' };
 
+/** Whether a binding of the row's workspace already holds the issue, or a pending ticket's create carries its id (round 5 F2, round 6 P1;
+ *  `ccrcIssueIds`, the one builder): read inside the composite's transaction, so a second ticket is never bound to one issue. */
+const heldByCcrc = (db: DatabaseSync, row: InboundRow): boolean => ccrcIssueIds(bindingsInWorkspace(db, row.workspaceId)).has(row.linearId);
+
 /** `plan triage upkeep` in ONE transaction: the project's Upkeep epic (made on first use), a ticket in it carrying the reporter's
  *  title and body (masked by the caller's `mask`), the issue's binding adopted, the row `placed`. */
 export function placeInboundInUpkeep(
@@ -966,7 +984,7 @@ export function placeInboundInUpkeep(
 ): InboundAct {
   return tx(db, () => {
     const row = inboundOf(db, p.linearId);
-    if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, refused: 'issue-not-inbound' };
+    if (row === null || (row.state !== 'waiting' && row.state !== 'mailed') || heldByCcrc(db, row)) return { ok: false, refused: 'issue-not-inbound' };
     const mask = p.mask ?? ((x: string) => x);
     const epicId = ensureUpkeepEpicInTx(db, p.project, p.now);
     const ticketId = inboundTicketInTx(db, {
@@ -985,7 +1003,7 @@ export function takeInboundIntoEpic(
 ): InboundAct {
   return tx(db, () => {
     const row = inboundOf(db, p.linearId);
-    if (row === null || (row.state !== 'waiting' && row.state !== 'mailed' && row.state !== 'handed')) return { ok: false, refused: 'issue-not-inbound' };
+    if (row === null || (row.state !== 'waiting' && row.state !== 'mailed' && row.state !== 'handed') || heldByCcrc(db, row)) return { ok: false, refused: 'issue-not-inbound' };
     const mask = p.mask ?? ((x: string) => x);
     const ticketId = inboundTicketInTx(db, {
       program: p.program, epicId: p.epicId, checkpointId: p.checkpointId, key: inboundTicketKey(row.identifier), title: mask(row.title), body: mask(row.body ?? ''), project: p.project,
@@ -1012,8 +1030,8 @@ const PORT_FUNCTIONS = {
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
   managedTeams, issueBound, driftMarkOf, setDriftMark, graceBindingsOf, lastDriftEventOf, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
   setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
-  settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, dueKeyOfBinding, managedSince,
-  upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier,
+  settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, bindingsInWorkspace, dueKeyOfBinding, managedSince,
+  upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier, handedInboundByIdentifier,
   upkeepTicketByIdentifier, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;

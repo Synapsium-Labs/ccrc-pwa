@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PLAN_REFUSALS, isPlanKebab, isPlanKey, PLAN_BOUNDS, EPIC_STATES, TICKET_STATES, HIERARCHY_STATES, PHASE_REF_KINDS, PHASE_REF_OPS,
-  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
+  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE, INBOUND_STATES,
 } from '../../shared/plan.js';
 import { REFUSAL_STATUS, ROUTE_REFUSALS, RUN_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { RUN_REFUSE_CODES, isRunRefuseCode, SERVER_CAPS } from '../../shared/api.js';
@@ -95,5 +95,11 @@ describe('the plan vocabulary (D-8181)', () => {
     expect([PHASE_REF_KINDS, PHASE_REF_OPS]).toEqual([['epic', 'ticket'], ['add', 'remove', 'carry']]);
     expect([REFUSAL_STATUS['unknown-ref'], REFUSAL_STATUS['bad-carry']]).toEqual([404, 409]);
     expect(SERVER_CAPS as readonly string[]).toContain('plan-phases-v1');
+    expect(SERVER_CAPS as readonly string[]).toContain('plan-inbound-v1');   // D-8736
+  });
+
+  it('the inbound states carry retired (D-8735): a stored row whose issue completed, was canceled or is ccrc\'s own', () => {
+    expect(INBOUND_STATES).toEqual(['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised', 'retired']);
+    expect(isPlanKebab('retired')).toBe(true);
   });
 });
