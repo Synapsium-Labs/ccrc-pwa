@@ -108,7 +108,7 @@ Every pattern is anchored and bounded: the longest value any colour or skin patt
 - reference text: `term` (glossary terms), `id` (rule and fact ids), `violet` (the IMPORTANT alert title), `path` (code paths);
 - code: `code-block-bg`, `code-ink`, and `syn-comment`, `syn-keyword`, `syn-string`, `syn-number`, `syn-function`, `syn-type`, `syn-tag`, `syn-attr`, `syn-punct`, `syn-deleted`, `syn-inserted`, which replace the hard-coded `.hljs-*` hex.
 
-The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spells it a second time (§3). Each ccrc token mapped to these slots was measured on 2026-11-18 to resolve to a plain `#rrggbb` in all twelve palettes, through `var()` chains, both default blocks merged, and every pair §5 names was measured against its floor (the leaf plan's Results).
+The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spells it a second time (§3). Each ccrc token mapped to these slots was measured on 2026-11-18 to resolve to a plain `#rrggbb` in all twelve palettes, through `var()` chains, both default blocks merged. Every pair §5 names was measured against its floor, the Mermaid label and line pairs included (the leaf plan's Results, "Cross pairs").
 
 **Why values and not a catalogue.** The frame needs one appearance at a time. The values for that appearance are all it can use, and they reveal nothing the frame could act on. A catalogue would put a second copy of ccrc's palettes in the library or in every seed (Decision X1-1, §12).
 
@@ -260,7 +260,7 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 | Body text, links, borders | Library light or dark palette | ccrc's ink, accent and edges. Edges are decorative, as in ccrc: no floor |
 | Tables | `--th-bg`, `--surface`, `--surface2`, `--border` | The same slots, from ccrc's raised and well surfaces |
 | Code blocks | Library background, hard-coded `.hljs-*` hex | ccrc's well and `--syn-*` tokens. Wells stay dark in every palette, as in ccrc's chat |
-| Mermaid | Fixed warm palette on a white plate, inverted by a filter in dark | Colours derived from the slots by the library's `mermaidThemeOf` (`surface`, `surface2`, `text`, `border`, `accent`). No plate and no filter while hosted |
+| Mermaid | Fixed warm palette on a white plate, inverted by a filter in dark | Colours derived from the slots by the library's `mermaidThemeOf`. The figure's ground is `surface` (the plate) and a node's fill is `surface2`. Labels are `text`. Lines, arrowheads and edges between nodes are `text-muted`, so they meet 3:1 on both grounds. Node borders are `border`, decorative like every edge, with the node told apart by its fill and label. Accent marks the highlighted node. No white plate and no filter while hosted |
 | Focus | `outline: 2px solid var(--accent)` | The same rule on the `focus` slot, ccrc's accent |
 | Reference text | `--term`, `--id`, `--violet`, `--path`, hard-coded per mode | ccrc's lane hues `--acct-cyan`, `--acct-blue`, `--acct-violet`, and `--ink-secondary` for paths, as each palette defines them |
 | Semantic colours | `--ok`, `--wait`, `--no`, `--info`, `--chg` | ccrc's text variants `--status-done-text`, `--status-attention-text`, `--status-dead-text`, then `--ink-secondary`, and `--acct-magenta` for "changed since", as each palette defines them. Fills, dots and tints derive from them |
@@ -359,7 +359,7 @@ This section is written for the library programme to plan from. It names the lib
 | `APPEARANCE_SLOTS` (`./frame`) | readonly record | The closed slot names by group: `colour`, `skin`. The source of truth for both sides' tests |
 | `APPEARANCE_PAIRS` (`./frame`) | readonly list | `{fg, bg, floor}` for every pair the stylesheet draws, derived colours included, expressed over the slots |
 | `parseAppearance(x)` (`./frame`) | pure function | Never throws for a value. Returns `{appearance, refused}`: `appearance` is always usable, and `refused` lists `{key, why}` for each slot it left out. A refused colour drops the whole colour group. A refused skin slot or label drops itself. A bad `mode` reads as `auto`. The same validator the frame runs on the seed and on every op |
-| `mermaidThemeOf(colours)` (`./frame`) | pure function | Mermaid `themeVariables` derived from the slots. Documents still cannot set any theme key |
+| `mermaidThemeOf(colours)` (`./frame`) | pure function | Mermaid `themeVariables` derived from the slots: `surface` for the background and cluster fill, `surface2` for node fill, `text` for every text colour, `text-muted` for `lineColor` and the arrowheads, `border` for node and cluster borders, `accent` for the highlighted node. Documents still cannot set any theme key |
 | `APPEARANCE_LABEL_DEFAULT` (`./frame`) | string | "Appearance follows the app's settings": the line shown with no host label, naming no host |
 | `HostAdapters.appearance?` (`./host`) | adapter key | The contract value at mount, taken through `parseAppearance`: a bad slot value never throws. Only a value that is not a plain object throws `TypeError`, like any adapter key |
 | `FrameAssets.fonts?` (`./host`) | asset | `{sans?: string, mono?: string}`, base64 woff2. Checked as §2.2 says, and dropped rather than thrown on failure |
@@ -423,6 +423,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - **closed grounds:** with an appearance, every element of the corpus that holds text has a computed background, its own or the nearest painted one behind it, equal to one of §5's grounds.
 5. Mermaid:
    - `mermaidThemeOf` output passes the pairs for both default modes;
+   - `mermaidThemeOf`'s `lineColor` is the `text-muted` it was given, and a drawn figure's edge paths have that computed `stroke`;
    - a document's init directive still cannot set `themeVariables`, `themeCSS` or `darkMode`;
    - a newer appearance cancels redraws queued for an older one.
 6. The label:

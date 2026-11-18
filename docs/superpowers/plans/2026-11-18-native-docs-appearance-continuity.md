@@ -280,7 +280,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** cycle every palette, flip the system mode and switch skin while open; same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn.
-  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term in running text: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`. The changed-mark shape is the library's test 10, on the library side; F reads it on the installed frame.
+  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and a drawn figure's edge `stroke` at 3:1 on its plate. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term in running text: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`. The changed-mark shape is the library's test 10, on the library side; F reads it on the installed frame.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth budget: at most 191 736 characters over BASE, the two faces (187 640) and the seed (4 096). BASE is taken at Task 1's pin, so it already holds every design's library growth, which Task 1 Step 2a checks share by share. Together they keep spec §9's total over the same document at the 1.1.0 pin: 224 504 plus the other designs' shares. Also extend it with the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
@@ -440,6 +440,9 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 | `text` on any 4% tint | 7.15 | Catppuccin Latte | 4.5 |
 | `focus` on `surface2` (the Aa checked row) | 4.57 | Phosphor Daylight | 3 |
 | `focus` on any 4% tint | 4.64 | Phosphor Daylight | 3 |
+| Mermaid lines (`text-muted`) on `surface2`, node fill | 5.54 | Catppuccin Mocha | 3 |
+| Mermaid lines (`text-muted`) on `surface`, the plate | 6.74 | Solarized Light | 3 |
+| Mermaid labels (`text`) on `surface2` | 6.75 | Catppuccin Mocha | 4.5 |
 
 What the review measured at the old rules, and what changed:
 
