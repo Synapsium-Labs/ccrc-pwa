@@ -219,6 +219,11 @@ export const NOTE_REFUSALS = {
   notAsked: 'note-not-asked',
 } as const;
 export type NoteRefusal = (typeof NOTE_REFUSALS)[keyof typeof NOTE_REFUSALS];
+/** The hierarchy item acts' own word (review 2394 A-7, departure D-8736): the operator's Hand on a persistent-drift item whose
+ *  binding is an Upkeep plan's, or a programme's with no coordinator, goes to the project's Linear owner, and with none usable
+ *  (none named, or gone) it is refused and the item stays open. */
+export const HIERARCHY_ITEM_REFUSALS = { noLinearOwner: 'no-linear-owner' } as const;
+export type HierarchyItemRefusal = (typeof HIERARCHY_ITEM_REFUSALS)[keyof typeof HIERARCHY_ITEM_REFUSALS];
 /** The probe door's own words (Overlord W1a, the probes piece; spec Table 11.6, m5): no round of the caller's is open, and a
  *  round already answered. Box-facing, so the console has no sentence for them. */
 export const PROBE_REFUSALS = { noneOpen: 'probe-none-open', closed: 'probe-closed' } as const;
@@ -352,6 +357,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | NoteRefusal
   // The probe door (Overlord W1a, the probes piece): its two words of its own.
   | ProbeRefusal
+  // The hierarchy item acts' word (D-8736): `no-linear-owner`.
+  | HierarchyItemRefusal
   // The timer doors (Overlord W1a, the timers piece): their ten words, each with its status in `TIMER_REFUSALS`.
   | TimerRefusal
   // The Overlord's W1 and W2 words (the vocabulary pieces), each with its status in `OVERLORD_REFUSALS`.
@@ -572,6 +579,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The probe door (Overlord W1a): CHOSEN, not measured. 409 for both, as `note-not-asked`: no round open and a round already
   // answered are each a state of the world, not a fault in the body.
   [PROBE_REFUSALS.noneOpen]: 409, [PROBE_REFUSALS.closed]: 409,
+  // The hierarchy item acts' word (D-8736, review 2394 A-7): CHOSEN, not measured. 409: the item is there and the act is a valid one; the
+  // project has no live Linear owner to hand it to, a state of the world the operator cures by naming one.
+  [HIERARCHY_ITEM_REFUSALS.noLinearOwner]: 409,
   // The timer doors (Overlord W1a): CHOSEN, not measured, each status declared once in `TIMER_REFUSALS`.
   ...TIMER_REFUSALS,
   // The Overlord's W1 and W2 words: CHOSEN, not measured, each status declared once in `OVERLORD_REFUSALS`. No W2 door

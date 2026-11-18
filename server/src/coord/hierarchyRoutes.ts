@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { LINEAR_ITEM_ACTS, isLinearItemAct, isLinearItemAction, type CoordinatorPresence, type ItemAction } from '../../../shared/ledgers.js';
 import { UPKEEP_DUE_PREFIX, type HierarchyAnswer, type HierarchyProjectRow } from '../../../shared/plan.js';
 import { refuseRoute } from '../refuse.js';
+import type { HierarchyItemRefusal } from '../../../shared/refusal.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { HierarchyProjectFacts, HierarchySettingsBody, PlanStorePort } from './planStore.js';
 import { linearOwnerOfProject } from './planPolicy.js';
@@ -28,8 +29,10 @@ export interface HierarchyRouteOpts {
   itemOf?: (id: number) => { action?: ItemAction | null } | null;
   /** Check again on an initiatives item: queue the probe for the workspace and answer at once (`PlanSync#checkInitiatives`). */
   checkInitiatives?: (workspaceId: string) => Promise<boolean>;
-  /** The operator's Hand or Keep on a persistent-drift item (`DriftPass#act`, D-8183); undefined (a test, a script): `unavailable`. */
-  driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' };
+  /** The operator's Hand or Keep on a persistent-drift item (`DriftPass#act`, D-8183); undefined (a test, a script): `unavailable`. Hand
+   *  with no usable Linear owner to go to is `no-linear-owner` (D-8736, review 2394 A-7): the item stays open, and the answer passes
+   *  through `refuseRoute` at its 409 like the others. */
+  driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | HierarchyItemRefusal };
   now?: () => number;
 }
 

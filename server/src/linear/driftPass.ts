@@ -3,14 +3,16 @@
  * Linear since its last look, compares each changed object ccrc holds a binding for against what the plan says it should be
  * (the owned fields, `driftPolicy.ts`), and puts the plan's value back. L4 DELIVERY around `driftPolicy.ts`'s pure deciders: it
  * decides nothing (`driftedFields`, `driftVerdict`, `graceVerdict`, `graceRereads`, `restorableFields`, `missingLinksVerdict`,
- * `eventVerdict`, `isNewUnrestorable`, `nextWatermark`, `isPersistent`, `shouldRaiseDriftItem` and `commentDue` do, review
+ * `eventVerdict`, `isNewUnrestorable`, `sweepStep`, `isPersistent`, `shouldRaiseDriftItem`, `closedByKeep`, `handRoute` and `commentDue` do, review
  * 2386 F7), it only reads, asks, restores and records.
  *
  * INERT UNTIL A TEAM IS MANAGED. A team is managed once a `linear_migrations` row for it reads `applied` (wave 7): with none,
  * a tick makes no call at all. One workspace is taken per tick, the one whose `passAt` is oldest and at least
  * `DRIFT_PASS_MS` old; its mark (`linear_drift_marks`) holds one watermark per changed* kind (the newest `updatedAt` that
  * kind's read returned) and when it last ran. A read that fails keeps the old watermarks and tries again after the period; a
- * kind whose page cap was reached, or one of whose restores was deferred, keeps its own. An issue whose one grace stands
+ * kind one of whose restores was deferred keeps its own. A kind whose read reached the page cap keeps its sweep in
+ * `linear_drift_cursors` and the next pass goes on from it; its watermark moves when the sweep ends, never past the sweep's start
+ * less a margin (review 2408 F3, D-8734; `driftPolicy.ts#sweepStep`). An issue whose one grace stands
  * (§7.3) is re-read by id at every pass until it ends, since an issue that does not change again is never in a changed read.
  *
  * EVERY LINEAR VALUE IT READS IS DATA. Nodes are the shaped answers of `hierarchyOps.ts` (closed grammar); a value is stored
@@ -26,7 +28,9 @@
  * raises the operator's item at once; so does a refused restore and the third restore of one binding within a week.
  */
 import type { CoordStore } from '../coord/store.js';
-import type { BindingRow, DriftWatermarks, PlanStorePort } from '../coord/planStore.js';
+import type { BindingRow, DriftCursor, DriftKindWord, DriftWatermarks, PlanStorePort } from '../coord/planStore.js';
+import { linearOwnerOfProject } from '../coord/planPolicy.js';
+import { HIERARCHY_ITEM_REFUSALS, type HierarchyItemRefusal } from '../../../shared/refusal.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { UNTRUSTED_CAP_BYTES, untrustedBlock } from '../coord/untrusted.js';
 import type { RaiseItemInput } from '../coord/ledgersStore.js';
@@ -40,8 +44,9 @@ import type { LinearRateService } from './rate.js';
 import type { FleetSession } from '../../../shared/api.js';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
-  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, nextWatermark, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
+  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
+  DRIFT_KEEP_NOTE, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
@@ -49,7 +54,8 @@ import type { LinearStoreRead } from './store.js';
 import type { LinearDirectoryRead } from './directory.js';
 import { InboundLane } from './inboundLane.js';
 
-/** The most pages of one document a pass follows (a runaway guard): past it the pass keeps its old watermark. */
+/** The most pages of one document a pass follows (a runaway guard): past it the pass keeps a cursor and the next pass goes on
+ *  from it (`sweepStep`, review 2408 F3, D-8734). */
 export const DRIFT_MAX_PAGES = 10;
 /** Every event's actor: the changed* documents select none, and `ops.ts` is frozen (D-8703). */
 const NOT_READ = 'not read';
@@ -144,15 +150,20 @@ export class DriftPass {
     // Round 5 F1: ccrc's own record is read BEFORE Linear. A sync write landing after the Linear read moves a binding's fingerprint,
     // and that is seen below as a change since this read; comparing `updatedAt` instead would set Linear's clock against ccrc's.
     const pre = new Map<string, BindingRow>(plan.bindingsInWorkspace(ws).flatMap((b) => (b.linearId === null ? [] : [[b.linearId, b] as const])));
-    const read = await this.readAll(ws, slot, old);
+    const cursors = plan.driftCursorsOf(ws);
+    const read = await this.readAll(ws, slot, old, cursors);
     if (!read.ok) {
       if (read.word === 'linear-unauthorised') this.deps.planSync.keyRefusedByRead(ws, slot);      // the one owner holds both lanes (A-3)
+      // A cursor Linear refused, or an answer that cannot be read, is stale and would wedge its kind for good: the sweep restarts
+      // from the mark. Any other word keeps it for the retry (D-8734; decided in `driftCursorAfterFailure`).
+      if (cursors[read.kind] !== undefined && driftCursorAfterFailure(read.word) === 'drop') plan.setDriftCursor(ws, read.kind, null);
       plan.setDriftMark(ws, old, now);
       console.warn(`ccrc-server: linear drift pass read failed: ${read.word}`);
       return;
     }
-    if (READS.some(({ kind }) => read.capped[kind])) console.warn('ccrc-server: linear drift pass page cap reached');
-    const keep: Record<DriftKind, boolean> = { ...read.capped };
+    if (READS.some(({ kind }) => read.next[kind] !== null)) console.warn('ccrc-server: linear drift pass page cap reached');
+    // A kind is kept here for a deferred restore alone; a read stopped at the page cap is `sweepStep`'s (a cursor, D-8734).
+    const keep: Record<DriftKind, boolean> = { initiative: false, project: false, milestone: false, issue: false };
     this.deps.planSync.keyReadAnswered(ws);
     const managed = new Set(teams.map((t) => t.toUpperCase()));
     // D-8733 (drift-reads-every-team): the issue read spans every team the slot lists (a bound issue moved out must still be read);
@@ -233,8 +244,14 @@ export class DriftPass {
       const restores = [...new Set(plan.driftRestoresOf(bindingId, now - DRIFT_PERSIST.windowMs))];
       if (isPersistent(restores, now)) this.raiseItem(r.binding, r.kind, r.key, 'restored', null, now);
     }
+    // The cursors are written before the mark: a stop between them leaves a cursor over an old mark (a sweep read again from its
+    // start or goes on, both safe), never a moved mark over a cursor that has lost its sweep.
     const next = { ...old };
-    for (const { kind } of READS) next[kind] = nextWatermark(old[kind], newestOf(read.changed[kind]), keep[kind]);
+    for (const { kind } of READS) {
+      const step = sweepStep({ old: old[kind], cursor: cursors[kind] ?? null, newest: newestOf(read.changed[kind]), next: read.next[kind], keep: keep[kind], now });
+      next[kind] = step.watermark;
+      if (step.cursor !== null || cursors[kind] !== undefined) plan.setDriftCursor(ws, kind, step.cursor);
+    }
     plan.setDriftMark(ws, next, now);
   }
 
@@ -255,32 +272,34 @@ export class DriftPass {
     }
   }
 
-  /** Reads the four changed* documents on lane `sync`, each from its own kind's watermark and followed through its pages up to
-   *  `DRIFT_MAX_PAGES`. `nodes` is what the pass compares (the issue list gains the graced re-reads); `changed` is what the
-   *  changed reads alone returned, which alone moves a watermark. */
-  private async readAll(ws: string, slot: SlotInfo, since: DriftWatermarks):
-  Promise<{ ok: true; nodes: Record<DriftKind, Node[]>; changed: Record<DriftKind, Node[]>; capped: Record<DriftKind, boolean> } | { ok: false; word: string }> {
+  /** Reads the four changed* documents on lane `sync`, each from its own kind's watermark, or from its kept sweep's `since` and
+   *  page cursor (D-8734), and followed through its pages up to `DRIFT_MAX_PAGES`. `nodes` is what the pass compares (the issue list
+   *  gains the graced re-reads); `changed` is what the changed reads alone returned, which alone moves a watermark; `next` is
+   *  Linear's cursor for a kind that stopped at the cap (null: it reached its end). A failure names its kind. */
+  private async readAll(ws: string, slot: SlotInfo, since: DriftWatermarks, cursors: Partial<Record<DriftKindWord, DriftCursor>>):
+  Promise<{ ok: true; nodes: Record<DriftKind, Node[]>; changed: Record<DriftKind, Node[]>; next: Record<DriftKind, string | null> } | { ok: false; word: string; kind: DriftKind }> {
     const changed: Record<DriftKind, Node[]> = { initiative: [], project: [], milestone: [], issue: [] };
-    const capped: Record<DriftKind, boolean> = { initiative: false, project: false, milestone: false, issue: false };
+    const next: Record<DriftKind, string | null> = { initiative: null, project: null, milestone: null, issue: null };
     for (const { op, kind } of READS) {
-      let after: string | null = null;
+      const from = cursors[kind]?.since ?? since[kind];
+      let after: string | null = cursors[kind]?.after ?? null;
       for (let pages = 1; ; pages += 1) {
         const out = await this.deps.call({
           op, pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: ws, teamKey: null, target: null, fields: [],
-          input: op === 'changedIssues' ? { since: since[kind], teams: slot.teams.map((t) => t.key), after } : { since: since[kind], after },
+          input: op === 'changedIssues' ? { since: from, teams: slot.teams.map((t) => t.key), after } : { since: from, after },
         });
-        if (!out.ok) return { ok: false, word: out.word };
+        if (!out.ok) return { ok: false, word: out.word, kind };
         const page = out.value['nodes'];
-        if (!Array.isArray(page)) return { ok: false, word: 'malformed' };
+        if (!Array.isArray(page)) return { ok: false, word: 'malformed', kind };
         changed[kind].push(...(page as Node[]));
-        const next = out.value['next'];
-        if (typeof next !== 'string' || next === '') break;
-        if (pages >= DRIFT_MAX_PAGES) { capped[kind] = true; break; }
-        after = next;
+        const cursor = out.value['next'];
+        if (typeof cursor !== 'string' || cursor === '') break;
+        if (pages >= DRIFT_MAX_PAGES) { next[kind] = cursor; break; }
+        after = cursor;
       }
     }
     const nodes = { initiative: [...changed.initiative], project: [...changed.project], milestone: [...changed.milestone], issue: [...changed.issue] };
-    return { ok: true, nodes, changed, capped };
+    return { ok: true, nodes, changed, next };
   }
 
   /** §7.2's scope: only managed objects are compared, judged by the binding (round 6 P2), never by where Linear holds the object now. */
@@ -399,7 +418,10 @@ export class DriftPass {
     const { plan, coord } = this.deps;
     const fresh = plan.bindingsOf(key).find((b) => b.id === binding.id) ?? binding;
     const held = fresh.heldItemId === null ? null : coord.itemById(fresh.heldItemId);
-    if (!shouldRaiseDriftItem(held === null ? null : { open: OPEN_ITEM_STATES.includes(held.state), closedAt: held.closedAt }, now, why)) return;
+    // A-1 (review 2394): only an item Keep closed quiets persistence; whether it was is read from the item's own history (the closing
+    // move is ccrc's settle carrying Keep's note) and decided in `closedByKeep`.
+    const last = held === null ? null : { open: OPEN_ITEM_STATES.includes(held.state), closedAt: held.closedAt, kept: closedByKeep(coord.itemHistory(held.id)) };
+    if (!shouldRaiseDriftItem(last, now, why)) return;
     const planKey = this.planKeyOf(key, fresh);
     const restores = new Set(plan.driftRestoresOf(fresh.id, now - DRIFT_PERSIST.windowMs)).size;
     const said = why === 'refused'
@@ -442,10 +464,11 @@ export class DriftPass {
 
   // ── The operator's acts ──
 
-  /** The operator's Hand or Keep on a persistent-drift item. `hand` mails the programme's coordinator (an Upkeep key has none: the
-   *  item's note says so), settles the item and ends the binding's hold on it, in one transaction; `keep` settles it and the
-   *  binding keeps it (D-8720's quiet reads it), and ccrc goes on restoring. */
-  act(itemId: number, act: 'hand' | 'keep', bindingId: number): { ok: true } | { ok: false; word: 'not-found' | 'not-open' } {
+  /** The operator's Hand or Keep on a persistent-drift item. `hand` mails the programme's coordinator, or, for an Upkeep plan or a
+   *  programme with no coordinator, the home project's Linear owner (A-7, D-8736; `handRoute` decides), settles the item and ends the
+   *  binding's hold on it, in one transaction; with no usable owner it is refused `no-linear-owner` and the item stays open. `keep`
+   *  settles it and the binding keeps it (D-8720's quiet reads it, `closedByKeep`), and ccrc goes on restoring. */
+  act(itemId: number, act: 'hand' | 'keep', bindingId: number): { ok: true } | { ok: false; word: 'not-found' | 'not-open' | HierarchyItemRefusal } {
     const { coord, plan } = this.deps;
     const item = coord.itemById(itemId);
     if (item === null || item.action?.verb !== 'linear-drift' || item.action.bindingId !== bindingId) return { ok: false, word: 'not-found' };
@@ -453,25 +476,33 @@ export class DriftPass {
     const now = this.deps.now();
     const ctx = { programmeHasOpenRun: false };
     if (act === 'keep') {
-      const moved = coord.moveItem(itemId, 'settle', 'ccrc', { note: 'Keeping the plan; ccrc goes on restoring.' }, now, ctx);
+      const moved = coord.moveItem(itemId, 'settle', 'ccrc', { note: DRIFT_KEEP_NOTE }, now, ctx);
       return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
     }
     const key = plan.dueKeyOfBinding(bindingId);
     const binding = key === null ? undefined : plan.bindingsOf(key).find((b) => b.id === bindingId);
-    const owner = key === null || key.startsWith(UPKEEP_DUE_PREFIX) ? null : plan.planOwnerOf(key);
-    // A hand-on ends the binding's hold on the item, so its next persistence is raised again as §7.4 says; only Keep keeps the
-    // item, and with it D-8720's week of quiet (review 2394 A-1).
-    if (key === null || binding === undefined || owner === null) {
-      const moved = coord.moveItemWithMail(itemId, 'settle', 'ccrc', { note: 'Handed to nobody: this object has no coordinator (an Upkeep plan, or a programme with none).' }, now, ctx,
-        () => plan.setDriftItem(bindingId, null));
-      return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
-    }
+    if (key === null || binding === undefined) return { ok: false, word: 'not-found' };
+    const upkeep = key.startsWith(UPKEEP_DUE_PREFIX);
+    const route = handRoute({ upkeep, coordinator: upkeep ? null : plan.planOwnerOf(key), owner: this.linearOwnerOf(upkeep ? key.slice(UPKEEP_DUE_PREFIX.length) : coord.programHome(key)) });
+    if (route.to === 'none') return { ok: false, word: HIERARCHY_ITEM_REFUSALS.noLinearOwner };
     const kind = KIND_OF[binding.localKind];
     const subject = `Linear sync: drift on ${WORD[kind]} ${this.planKeyOf(key, binding)} handed (${key})`;
-    const body = `ccrc keeps finding the ${WORD[kind]} ${this.planKeyOf(key, binding)} of ${key} changed in Linear and putting the plan's values back. The operator hands it to you: decide whether the plan should change, and if it should, change the plan (the sync follows). What ccrc recorded:\n\n${this.recordBlock(bindingId, now)}`;
-    const moved = coord.moveItemWithMail(itemId, 'settle', 'ccrc', { note: 'Handed to the coordinator.' }, now, ctx,
-      () => { insertSystemMailTx(coord, { program: key }, { fromId: 'operator', toId: owner, runId: null, kind: 'status', subject, body }); plan.setDriftItem(bindingId, null); });
+    const to = route.to === 'coordinator' ? 'you' : 'the Linear owner of its project';
+    const body = `ccrc keeps finding the ${WORD[kind]} ${this.planKeyOf(key, binding)} of ${key} changed in Linear and putting the plan's values back. The operator hands it to ${to}: decide whether the plan should change, and if it should, change the plan (the sync follows). What ccrc recorded:\n\n${this.recordBlock(bindingId, now)}`;
+    // A hand-on ends the binding's hold on the item, so its next persistence is raised again as §7.4 says; only Keep keeps the
+    // item, and with it D-8720's week of quiet (review 2394 A-1).
+    const moved = coord.moveItemWithMail(itemId, 'settle', 'ccrc', { note: route.to === 'coordinator' ? 'Handed to the coordinator.' : "Handed to the project's Linear owner." }, now, ctx,
+      // an owner's mail names no programme: the owner is not the programme's coordinator, and an Upkeep key is no programme (as `inboundLane.ts#mailOwner`)
+      () => { insertSystemMailTx(coord, route.to === 'coordinator' ? { program: key } : null, { fromId: 'operator', toId: route.id, runId: null, kind: 'status', subject, body }); plan.setDriftItem(bindingId, null); });
     return moved.ok ? { ok: true } : { ok: false, word: 'not-open' };
+  }
+
+  /** A project's Linear owner as `planPolicy.ts#linearOwnerOfProject` decides it (the facts the inbound lane reads too: the rows, the
+   *  latest programme's coordinator and a session's standing), or null for a project nobody names. */
+  private linearOwnerOf(project: string | null): { id: string | null; gone: boolean } | null {
+    if (project === null) return null;
+    const { plan, presenceOf } = this.deps;
+    return linearOwnerOfProject(project, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
   }
 }
 

@@ -15,6 +15,7 @@
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { egress, fitLinearDescription } from './planSyncPolicy.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from './ops.js';
+import { isItemNonMove } from '../../../shared/ledgers.js';
 
 export type DriftKind = 'initiative' | 'project' | 'milestone' | 'issue';
 
@@ -255,11 +256,59 @@ export function driftEventValue(field: string, linear: unknown, planned: unknown
   return driftValueText((Array.isArray(planned) ? (planned as unknown[]).map(String) : []).filter((id) => !have.has(id)));
 }
 
-/** A changed* kind's next watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped):
- *  the newest `updatedAt` that kind's read returned, or the old one when nothing newer was read or the kind must be read again
- *  (`keep`: its page cap was reached, or a restore of one of its objects was deferred). ISO times compare as strings. */
-export function nextWatermark(old: string, newest: string | null, keep: boolean): string {
-  return keep || newest === null || newest <= old ? old : newest;
+// A changed* kind's watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped) moves by
+// `sweepStep` below: the newest `updatedAt` its sweep read, held while a sweep goes on or a restore of one of its objects was deferred.
+
+// ── A sweep that spans passes (review 2408 F3; departure D-8734) ──
+
+/** How far behind a sweep's start its watermark stays (review 2408 F3). Two reasons, neither measured to be absent: ccrc's clock is
+ *  set against Linear's `updatedAt` (skew), and a change made while a multi-pass sweep walked may sit behind the page cursor, which
+ *  has already passed it. Both put a change at a time at or before the newest `updatedAt` the sweep read, so a watermark moved to
+ *  that newest would skip it. The order Linear returns `updatedAt` in is unmeasured, so nothing here relies on order. */
+export const DRIFT_SWEEP_MARGIN_MS = 5 * 60_000;
+
+/** The watermark a finished sweep moves to: the newest `updatedAt` it read, but never past the sweep's `startedAt` less the margin,
+ *  and never backwards. ISO times compare as strings. */
+export function sweepWatermark(old: string, newest: string | null, startedAt: number): string {
+  if (newest === null) return old;
+  const cap = new Date(startedAt - DRIFT_SWEEP_MARGIN_MS).toISOString();
+  const to = newest < cap ? newest : cap;
+  return to <= old ? old : to;
+}
+
+/** A kept sweep (the `linear_drift_cursors` row, `planStore.ts#DriftCursor`): it reads from `since`, resumes after Linear's page
+ *  cursor `after`, has read up to `newest` and began at `startedAt` (ccrc's clock). */
+export interface SweepCursor { since: string; after: string; newest: string | null; startedAt: number }
+
+/** One pass's step of one kind's sweep, for the pass that has just read it: `next` is Linear's cursor when the read stopped at the
+ *  page cap (null: it reached the end), `newest` the newest `updatedAt` this pass read, `keep` a restore of one of its objects was
+ *  deferred. A capped read keeps the watermark where it was and stores the cursor with `newest` accumulated across the sweep and
+ *  `startedAt` the first pass's. A finished sweep moves the watermark by `sweepWatermark` and clears the cursor.
+ *
+ *  A DEFERRAL HOLDS THE WHOLE SWEEP. The objects of an earlier pass whose restore was deferred are not read again by a sweep that
+ *  goes on, so a hold must outlive its pass: it is kept in the cursor as `newest === since`, which no real read gives (Linear
+ *  returns only what changed AFTER `since`, so a node's `updatedAt` is later; null means nothing read yet). Such a sweep goes on to
+ *  its end and leaves the watermark at `since`, and the next sweep reads everything again. A sweep that ends with its own deferral
+ *  does the same: the cursor is cleared and the watermark stays, so nothing is skipped. */
+export function sweepStep(o: { old: string; cursor: SweepCursor | null; newest: string | null; next: string | null; keep: boolean; now: number }):
+{ watermark: string; cursor: SweepCursor | null } {
+  const since = o.cursor?.since ?? o.old;
+  const startedAt = o.cursor?.startedAt ?? o.now;
+  const held = o.keep || (o.cursor !== null && o.cursor.newest !== null && o.cursor.newest <= o.cursor.since);
+  if (o.next !== null) {
+    const newest = held ? since : [o.cursor?.newest ?? null, o.newest].filter((t): t is string => t !== null).sort().at(-1) ?? null;
+    return { watermark: o.old, cursor: { since, after: o.next, newest, startedAt } };
+  }
+  if (held) return { watermark: o.old, cursor: null };
+  const newest = [o.cursor?.newest ?? null, o.newest].filter((t): t is string => t !== null).sort().at(-1) ?? null;
+  return { watermark: sweepWatermark(o.old, newest, startedAt), cursor: null };
+}
+
+/** What a failed read does to its kind's kept cursor: Linear refusing the cursor itself (`linear-invalid`) or an answer that cannot
+ *  be read (`malformed`) means the cursor is stale and would wedge the kind for good, so the sweep restarts from `since`; any other
+ *  word (a retry word: unreachable, timeout, a rate limit, a refused key) keeps it. */
+export function driftCursorAfterFailure(word: string): 'keep' | 'drop' {
+  return word === 'linear-invalid' || word === 'malformed' ? 'drop' : 'keep';
 }
 
 // ── Persistence and period ──
@@ -283,16 +332,38 @@ export function commentDue(lastCommentAt: number | null, now: number): boolean {
 /** Why the pass raises a binding's item: persistence (`restored`, the third restore in a week), a restore Linear refused, or a
  *  difference no update can put back. */
 export type DriftRaiseWhy = 'restored' | 'refused' | 'unrestorable';
+/** The note Keep settles an item with (`DriftPass#act`), the one spelling: `closedByKeep` reads an item's history for it (A-1). */
+export const DRIFT_KEEP_NOTE = 'Keeping the plan; ccrc goes on restoring.';
+
+/** Whether an item was closed by Keep (review 2394 A-1): its closing move, the last real move in its history (a raise, a block and
+ *  an unblock move nothing), is ccrc's `settle` carrying Keep's note. Any other close (a dismiss, a withdraw, a settle with another
+ *  note) is no kept plan. */
+export function closedByKeep(history: readonly { act: string; actor: string; note: string | null }[]): boolean {
+  const last = history.filter((e) => !isItemNonMove(e.act)).at(-1);
+  return last !== undefined && last.act === 'settle' && last.actor === 'ccrc' && last.note === DRIFT_KEEP_NOTE;
+}
+
 /** Whether the pass raises a binding's item: never while its last item is open. A refused restore and a difference no update can
- *  put back raise it at once, always (§7.4). Persistence alone is not raised again within seven days of that item's close (D-8720,
- *  kept-plan-quiet: a plan the operator kept is not asked about again that week). `last` is the binding's item: open, or closed
- *  by Keep. Hand to the coordinator ends the binding's hold on its item, so drift handed on is raised again as §7.4 says (review
- *  2394 A-1: only Keep quiets persistence). */
-export function shouldRaiseDriftItem(last: { open: boolean; closedAt: number | null } | null, now: number, why: DriftRaiseWhy): boolean {
+ *  put back raise it at once, always (§7.4). Persistence alone is not raised again within seven days of that item's close, but only
+ *  when Keep closed it (D-8720, kept-plan-quiet: a plan the operator kept is not asked about again that week; review 2394 A-1: an
+ *  item closed any other way is no kept plan). `last` is the binding's item: open, or closed, and `kept` whether by Keep
+ *  (`closedByKeep`). Hand to the coordinator ends the binding's hold on its item, so drift handed on is raised again as §7.4 says. */
+export function shouldRaiseDriftItem(last: { open: boolean; closedAt: number | null; kept: boolean } | null, now: number, why: DriftRaiseWhy): boolean {
   if (last === null) return true;
   if (last.open) return false;
-  if (why !== 'restored') return true;
+  if (why !== 'restored' || !last.kept) return true;
   return last.closedAt === null || now - last.closedAt >= DRIFT_PERSIST.windowMs;
+}
+
+/** Where the operator's Hand sends a persistent-drift item (review 2394 A-7, D-8736): the programme's coordinator when it has one and
+ *  the key is a programme's; an Upkeep plan has no coordinator, and a programme with none falls to the home project's Linear owner
+ *  (`owner`, from `planPolicy.ts#linearOwnerOfProject`: null when none was decided), when that owner is named and not gone. With
+ *  neither, Hand has nowhere to go (`none`: refused, the item stays open). */
+export type HandRoute = { to: 'coordinator' | 'owner'; id: string } | { to: 'none' };
+export function handRoute(o: { upkeep: boolean; coordinator: string | null; owner: { id: string | null; gone: boolean } | null }): HandRoute {
+  if (!o.upkeep && o.coordinator !== null) return { to: 'coordinator', id: o.coordinator };
+  if (o.owner !== null && o.owner.id !== null && !o.owner.gone) return { to: 'owner', id: o.owner.id };
+  return { to: 'none' };
 }
 
 /** The text a drift event stores and an item shows for a Linear value: arrays joined with `, `, null empty, and a long text cut

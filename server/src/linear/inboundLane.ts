@@ -21,7 +21,7 @@ import { tx } from '../coord/tx.js';
 import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
-import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundMail, inboundReopenedMail, inboundRetireVerdict, keyWaitMail, noCancelMail, ownerItemInput, reopenedAtOf, reopenedMark, retiredReason, type InboundHold, type RetireWhy } from './inboundPolicy.js';
+import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRetireVerdict, keyWaitMail, noCancelMail, ownerItemInput, type InboundHold } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
@@ -74,9 +74,14 @@ export class InboundLane {
       const stored = this.deps.plan.inboundOf(f.linearId);
       if (stored !== null) {
         const v = inboundRetireVerdict(stored, { stateType: f.stateType, own: bound.has(f.linearId) || viaFleet.has(f.identifier), inbound });
-        if (v.kind === 'retire') { this.retire(stored, v.why, now); continue; }
+        if (v.kind === 'retire') { this.retire(stored, now); continue; }
         if (v.kind === 'reopen') {
-          this.deps.plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null, reason: reopenedMark(now) });
+          // the row's `reason` is a close's and stays; the reopen is a note (review of d4c372f12), written with the state
+          const { plan, coord } = this.deps;
+          tx(coord.db, () => {
+            plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null });
+            plan.setInboundNote(f.linearId, { kind: 'reopened', at: now });
+          });
         }
       }
       if (!inbound) continue;
@@ -86,9 +91,9 @@ export class InboundLane {
 
   /** A stored row leaves the lane (D-8735). A `raised` row's open or checking operator item settles in the same transaction as
    *  the state, so no item is left asking about an issue that is gone. */
-  private retire(row: InboundRow, why: RetireWhy, now: number): void {
+  private retire(row: InboundRow, now: number): void {
     const { coord, plan } = this.deps;
-    const write = (): void => plan.setInboundState(row.linearId, { state: 'retired', reason: retiredReason(why) });
+    const write = (): void => plan.setInboundState(row.linearId, { state: 'retired' });
     const item = row.state === 'raised' && row.itemId !== null ? coord.itemById(row.itemId) : null;
     if (item !== null && (item.state === 'open' || item.state === 'checking')) {
       coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, write);
@@ -134,14 +139,16 @@ export class InboundLane {
   /** One mail to the owner per issue (durable, by subject), and the row `mailed` in the same transaction. */
   private mailOwner(row: InboundRow, ownerId: string, now: number): void {
     const { coord, plan } = this.deps;
-    // a reopened row (D-8735) is mailed under its own subject, carrying the reopen's time, so the first mail's dedupe never eats it
-    const reopened = reopenedAtOf(row.reason);
-    const m = reopened === null ? inboundMail(row) : inboundReopenedMail(row, reopened);
+    // the mail is picked by the row's note (D-8734, D-8735): a reopen or a stored return is mailed under a subject carrying its
+    // time, so the first mail's dedupe never eats it; the note is deleted in the transaction that mails it
+    const note = plan.inboundNoteOf(row.linearId);
+    const m = inboundNoteMail(row, note);
     tx(coord.db, () => {
       if (!coord.hasMailWithSubject('operator', null, ownerId, m.subject)) {
         insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'question', subject: m.subject, body: m.body });
       }
-      plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now, ...(reopened === null ? {} : { reason: null }) });
+      plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now });
+      if (note !== null) plan.clearInboundNote(row.linearId);
     });
   }
 

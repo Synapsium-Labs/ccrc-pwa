@@ -3659,6 +3659,32 @@ export const MIGRATIONS: readonly string[] = [
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
+
+  // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
+  // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
+  // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
+  // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
+  // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
+  // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
+  // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
+  // inbound issue must say beyond the first mail, one row per issue, kept until the inbound lane mails it to a live owner, in the
+  // same transaction that deletes it: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
+  // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
+  // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
+  // build, D-8735: a word in a TEXT column, no schema change, and an older build reads such a row as a state none of its sweeps
+  // select.)
+  //
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 96` warns, reads as-is, names neither and boots.
+  // Measured on main at build time (D-8673): main ended at 95. Overlord gates A also takes 96 on its own branch; whichever lands
+  // second renumbers. RE-MEASURE the slot before the PR and before merge (it must print 95 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_cursors (workspaceId TEXT NOT NULL, kind TEXT NOT NULL, since TEXT NOT NULL, after TEXT NOT NULL,
+    newest TEXT, startedAt INTEGER NOT NULL, PRIMARY KEY (workspaceId, kind));
+  CREATE TABLE linear_inbound_notes (linearId TEXT PRIMARY KEY, kind TEXT NOT NULL, program TEXT, note TEXT, at INTEGER NOT NULL);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

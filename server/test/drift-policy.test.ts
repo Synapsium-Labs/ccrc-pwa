@@ -5,7 +5,8 @@ import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
   restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
   DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreHoldVerdict, restoreSides, syncWroteSince, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
-  UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, nextWatermark, restorableFields,
+  UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, restorableFields,
+  DRIFT_KEEP_NOTE, DRIFT_SWEEP_MARGIN_MS, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep, sweepWatermark,
 } from '../src/linear/driftPolicy.js';
 import { LINEAR_CCRC_PROVENANCE_LINE } from '../src/linear/ops.js';
 
@@ -151,10 +152,12 @@ describe('what an update can put back, and what is recorded (review 2386 F7, A1,
   });
   it('each kind\'s watermark moves to its own newest read unless it is kept (A3)', () => {
     const old = '2026-11-10T00:00:00.000Z';
-    expect(nextWatermark(old, '2026-11-11T00:00:00.000Z', false)).toBe('2026-11-11T00:00:00.000Z');
-    expect(nextWatermark(old, '2026-11-11T00:00:00.000Z', true)).toBe(old);
-    expect(nextWatermark(old, null, false)).toBe(old);
-    expect(nextWatermark(old, '2026-11-09T00:00:00.000Z', false)).toBe(old);
+    const now = Date.parse('2026-12-01T00:00:00.000Z');                      // long after the reads: the sweep's margin cuts nothing here
+    const step = (newest: string | null, keep: boolean): string => sweepStep({ old, cursor: null, newest, next: null, keep, now }).watermark;
+    expect(step('2026-11-11T00:00:00.000Z', false)).toBe('2026-11-11T00:00:00.000Z');
+    expect(step('2026-11-11T00:00:00.000Z', true)).toBe(old);
+    expect(step(null, false)).toBe(old);
+    expect(step('2026-11-09T00:00:00.000Z', false)).toBe(old);
   });
 });
 
@@ -288,15 +291,33 @@ describe('the pass\'s small deciders (D-8183)', () => {
   });
   it('persistence is raised unless an item is open or one was closed within seven days (D-8720)', () => {
     expect(shouldRaiseDriftItem(null, at, 'restored')).toBe(true);
-    expect(shouldRaiseDriftItem({ open: true, closedAt: null }, at, 'restored')).toBe(false);
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 6 * DAY }, at, 'restored')).toBe(false);   // a kept plan is not re-raised for a week
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 7 * DAY }, at, 'restored')).toBe(true);
-    expect(shouldRaiseDriftItem({ open: false, closedAt: null }, at, 'restored')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: true, closedAt: null, kept: false }, at, 'restored')).toBe(false);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 6 * DAY, kept: true }, at, 'restored')).toBe(false);   // a kept plan is not re-raised for a week
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - 7 * DAY, kept: true }, at, 'restored')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: null, kept: true }, at, 'restored')).toBe(true);
+  });
+  // A-1 (review 2394, against D-8720): only an item Keep closed quiets persistence; a close of any other kind (a dismiss, a
+  // withdraw, a settle with another note) is a plan nobody kept, so the next persistence asks again at once.
+  it('an item closed any way but Keep never quiets persistence (A-1)', () => {
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY, kept: false }, at, 'restored')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY, kept: true }, at, 'restored')).toBe(false);
+  });
+  const ev = (act: string, actor: string, note: string | null) => ({ act, actor, note });
+  it('closedByKeep reads the closing move: ccrc\'s settle carrying Keep\'s note, and nothing else (A-1)', () => {
+    const raise = ev('raise', 'ccrc', null);
+    expect(closedByKeep([raise, ev('settle', 'ccrc', DRIFT_KEEP_NOTE)])).toBe(true);
+    expect(closedByKeep([raise, ev('settle', 'ccrc', 'Handed to the coordinator.')])).toBe(false);
+    expect(closedByKeep([raise, ev('withdraw', 'coordinator', DRIFT_KEEP_NOTE)])).toBe(false);
+    expect(closedByKeep([raise, ev('settle', 'operator', DRIFT_KEEP_NOTE)])).toBe(false);
+    expect(closedByKeep([raise])).toBe(false);
+    expect(closedByKeep([])).toBe(false);
+    // a later non-move event (a blocking change) never hides the closing move
+    expect(closedByKeep([raise, ev('settle', 'ccrc', DRIFT_KEEP_NOTE), ev('block', 'ccrc', null)])).toBe(true);
   });
   it('a refused restore, and a difference no update can put back, raise at once even a day after Keep (§7.4, F3)', () => {
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY }, at, 'refused')).toBe(true);
-    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY }, at, 'unrestorable')).toBe(true);
-    expect(shouldRaiseDriftItem({ open: true, closedAt: null }, at, 'refused')).toBe(false);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY, kept: true }, at, 'refused')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: false, closedAt: at - DAY, kept: true }, at, 'unrestorable')).toBe(true);
+    expect(shouldRaiseDriftItem({ open: true, closedAt: null, kept: false }, at, 'refused')).toBe(false);
   });
   it('a value is text: arrays joined, null empty, long text cut', () => {
     expect(driftValueText(['a', 'b'])).toBe('a, b');
@@ -409,5 +430,68 @@ describe('what the drift pass records and where it looks (round 5 and 6)', () =>
     expect(driftReadHeld(11, 10)).toBe(true);
     expect(driftReadHeld(10, 10)).toBe(false);
     expect(driftReadHeld(0, 10)).toBe(false);
+  });
+});
+
+// D-8734 (review 2408 F3): a page-capped changed* read goes on at the next pass from a durable cursor, and the watermark moves
+// only when the sweep ends, never past the sweep's start less a margin.
+describe('the sweep (D-8734)', () => {
+  const MIN = 60_000;
+  const old = '2026-11-10T00:00:00.000Z';
+  const started = Date.parse('2026-11-11T12:00:00.000Z');
+  const capAt = new Date(started - DRIFT_SWEEP_MARGIN_MS).toISOString();
+  it('the margin is five minutes', () => { expect(DRIFT_SWEEP_MARGIN_MS).toBe(5 * MIN); });
+  it('a finished sweep moves the watermark to the newest read, never past its start less the margin', () => {
+    expect(sweepWatermark(old, '2026-11-11T00:00:00.000Z', started)).toBe('2026-11-11T00:00:00.000Z');
+    expect(sweepWatermark(old, '2026-11-11T12:00:00.000Z', started)).toBe(capAt);      // newer than the cap: the cap
+    expect(sweepWatermark(old, '2026-11-11T11:56:00.000Z', started)).toBe(capAt);
+    expect(sweepWatermark(old, null, started)).toBe(old);
+    expect(sweepWatermark(old, '2026-11-09T00:00:00.000Z', started)).toBe(old);        // never backwards
+    expect(sweepWatermark('2026-11-11T11:59:00.000Z', '2026-11-11T12:00:00.000Z', started)).toBe('2026-11-11T11:59:00.000Z');   // the cap is behind the old mark: stays
+  });
+  it('a read that reaches the cap stores a cursor and holds the watermark; the next pass resumes and accumulates', () => {
+    const first = sweepStep({ old, cursor: null, newest: '2026-11-11T01:00:00.000Z', next: 'p10', keep: false, now: started });
+    expect(first).toEqual({ watermark: old, cursor: { since: old, after: 'p10', newest: '2026-11-11T01:00:00.000Z', startedAt: started } });
+    const second = sweepStep({ old, cursor: first.cursor, newest: '2026-11-11T03:00:00.000Z', next: 'p20', keep: false, now: started + 30 * MIN });
+    expect(second.cursor).toEqual({ since: old, after: 'p20', newest: '2026-11-11T03:00:00.000Z', startedAt: started });   // startedAt stays the first pass's
+    const last = sweepStep({ old, cursor: second.cursor, newest: '2026-11-11T02:00:00.000Z', next: null, keep: false, now: started + 60 * MIN });
+    expect(last).toEqual({ watermark: '2026-11-11T03:00:00.000Z', cursor: null });       // the newest of the whole sweep, not of the last pass
+  });
+  it('a sweep that ends is capped at its start less the margin, however new its newest read is', () => {
+    const c = { since: old, after: 'p10', newest: '2026-11-11T12:30:00.000Z', startedAt: started };
+    expect(sweepStep({ old, cursor: c, newest: null, next: null, keep: false, now: started + 40 * MIN })).toEqual({ watermark: capAt, cursor: null });
+    expect(sweepStep({ old, cursor: null, newest: '2026-11-11T12:00:00.000Z', next: null, keep: false, now: started })).toEqual({ watermark: capAt, cursor: null });   // one pass: startedAt is now
+  });
+  it('a restore deferred in any pass of a sweep keeps the watermark where it was, and the sweep goes on (nothing skipped)', () => {
+    const held = sweepStep({ old, cursor: null, newest: '2026-11-11T01:00:00.000Z', next: 'p10', keep: true, now: started });
+    expect(held.watermark).toBe(old);
+    expect(held.cursor).toMatchObject({ since: old, after: 'p10' });
+    // a later clean pass cannot lift the hold of an earlier one: the sweep ends and the watermark still stays
+    const later = sweepStep({ old, cursor: held.cursor, newest: '2026-11-11T05:00:00.000Z', next: null, keep: false, now: started + 30 * MIN });
+    expect(later).toEqual({ watermark: old, cursor: null });
+    // and a sweep that ends with its own deferral keeps it, and clears the cursor (the next sweep reads from the old mark again)
+    const own = sweepStep({ old, cursor: null, newest: '2026-11-11T05:00:00.000Z', next: null, keep: true, now: started });
+    expect(own).toEqual({ watermark: old, cursor: null });
+  });
+  it('a cursor a failed read left is kept for a retry word and dropped for linear-invalid and malformed', () => {
+    expect(driftCursorAfterFailure('linear-invalid')).toBe('drop');
+    expect(driftCursorAfterFailure('malformed')).toBe('drop');
+    for (const w of ['unreachable', 'timeout', 'rate-limited', 'linear-unavailable', 'linear-unauthorised']) expect(driftCursorAfterFailure(w)).toBe('keep');
+  });
+});
+
+// A-7 (review 2394, D-8736): Hand on an Upkeep binding or a coordinator-less programme goes to the project's Linear owner.
+describe('handRoute (A-7)', () => {
+  it('a programme with a coordinator hands to it, as before', () => {
+    expect(handRoute({ upkeep: false, coordinator: 'coord-a', owner: { id: 'owner-b', gone: false } })).toEqual({ to: 'coordinator', id: 'coord-a' });
+  });
+  it('an Upkeep binding, or a programme with no coordinator, hands to the project\'s Linear owner', () => {
+    expect(handRoute({ upkeep: true, coordinator: null, owner: { id: 'owner-b', gone: false } })).toEqual({ to: 'owner', id: 'owner-b' });
+    expect(handRoute({ upkeep: false, coordinator: null, owner: { id: 'owner-b', gone: false } })).toEqual({ to: 'owner', id: 'owner-b' });
+  });
+  it('with no usable owner (none, none named, or gone) there is no route', () => {
+    expect(handRoute({ upkeep: true, coordinator: null, owner: null })).toEqual({ to: 'none' });
+    expect(handRoute({ upkeep: true, coordinator: null, owner: { id: null, gone: true } })).toEqual({ to: 'none' });
+    expect(handRoute({ upkeep: false, coordinator: null, owner: { id: 'owner-b', gone: true } })).toEqual({ to: 'none' });
   });
 });

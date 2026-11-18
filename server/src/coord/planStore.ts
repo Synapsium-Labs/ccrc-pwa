@@ -716,8 +716,28 @@ export function issueBound(db: DatabaseSync, workspaceId: string, issue: { id: s
     .get(workspaceId, issue.id ?? '', issue.identifier ?? '') !== undefined;
 }
 
+/** A changed* sweep that reached the page cap and goes on at the next pass (review 2408 F3, D-8734): it reads from `since` (the
+ *  watermark, held until the sweep ends), resumes after Linear's cursor `after`, has read up to `newest`, and began at `startedAt`. */
+export interface DriftCursor { since: string; after: string; newest: string | null; startedAt: number }
+export function driftCursorsOf(db: DatabaseSync, workspaceId: string): Partial<Record<DriftKindWord, DriftCursor>> {
+  const out: Partial<Record<DriftKindWord, DriftCursor>> = {};
+  for (const r of db.prepare('SELECT * FROM linear_drift_cursors WHERE workspaceId = ?').all(workspaceId) as Raw[]) {
+    out[r.kind as DriftKindWord] = { since: r.since as string, after: r.after as string, newest: (r.newest as string | null) ?? null, startedAt: r.startedAt as number };
+  }
+  return out;
+}
+/** The one writer of `linear_drift_cursors`: a sweep's cursor kept (a capped read), or cleared (null: the sweep ended, or must start
+ *  again). */
+export function setDriftCursor(db: DatabaseSync, workspaceId: string, kind: DriftKindWord, c: DriftCursor | null): void {
+  if (c === null) { db.prepare('DELETE FROM linear_drift_cursors WHERE workspaceId = ? AND kind = ?').run(workspaceId, kind); return; }
+  db.prepare('INSERT INTO linear_drift_cursors (workspaceId, kind, since, after, newest, startedAt) VALUES (?, ?, ?, ?, ?, ?) '
+    + 'ON CONFLICT(workspaceId, kind) DO UPDATE SET since = excluded.since, after = excluded.after, newest = excluded.newest, startedAt = excluded.startedAt')
+    .run(workspaceId, kind, c.since, c.after, c.newest, c.startedAt);
+}
 /** The drift pass's watermark for each changed* kind (review 2386 A3): the `updatedAt` that kind's read reached. */
 export interface DriftWatermarks { initiative: string; project: string; milestone: string; issue: string }
+/** The four changed* kinds, as the drift marks and cursors key them. */
+export type DriftKindWord = keyof DriftWatermarks;
 export function driftMarkOf(db: DatabaseSync, workspaceId: string): { watermarks: DriftWatermarks; passAt: number } | null {
   const r = db.prepare('SELECT * FROM linear_drift_marks WHERE workspaceId = ?').get(workspaceId) as Raw | undefined;
   return r === undefined ? null : {
@@ -934,6 +954,27 @@ export function moveTicketToProgrammeInTx(
     settleEpicInTx(db, id, now);
   }
 }
+/** What the owner's next mail about a `waiting` inbound issue must carry beyond the first mail (D-8734, D-8735): a coordinator's
+ *  return made while the team had no live owner (`returned`, its programme and masked note), or Linear's reopen of a retired
+ *  issue (`reopened`). One per issue: a later note replaces an earlier one. The inbound lane mails it and deletes it in one
+ *  transaction (`clearInboundNote`). */
+export type InboundNote = { kind: 'returned'; program: string; note: string; at: number } | { kind: 'reopened'; at: number };
+export function setInboundNote(db: DatabaseSync, linearId: string, n: InboundNote): void {
+  db.prepare('INSERT INTO linear_inbound_notes (linearId, kind, program, note, at) VALUES (?, ?, ?, ?, ?) '
+    + 'ON CONFLICT(linearId) DO UPDATE SET kind = excluded.kind, program = excluded.program, note = excluded.note, at = excluded.at')
+    .run(linearId, n.kind, n.kind === 'returned' ? n.program : null, n.kind === 'returned' ? n.note : null, n.at);
+}
+export function inboundNoteOf(db: DatabaseSync, linearId: string): InboundNote | null {
+  const r = db.prepare('SELECT * FROM linear_inbound_notes WHERE linearId = ?').get(linearId) as Raw | undefined;
+  if (r === undefined) return null;
+  return r.kind === 'returned'
+    ? { kind: 'returned', program: r.program as string, note: r.note as string, at: r.at as number }
+    : { kind: 'reopened', at: r.at as number };
+}
+/** Deletes an issue's note; the caller holds the transaction that mailed it. */
+export function clearInboundNote(db: DatabaseSync, linearId: string): void {
+  db.prepare('DELETE FROM linear_inbound_notes WHERE linearId = ?').run(linearId);
+}
 /** The inbound row of an issue by its identifier (the verbs name it so) in a workspace (round 4 A2: two workspaces may each hold
  *  a team keyed alike), or null; `null` for the workspace (unmeasured) resolves only an identifier no other workspace holds. */
 export function inboundByIdentifier(db: DatabaseSync, workspaceId: string | null, identifier: string): InboundRow | null {
@@ -1028,11 +1069,11 @@ const PORT_FUNCTIONS = {
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
-  managedTeams, issueBound, driftMarkOf, setDriftMark, graceBindingsOf, lastDriftEventOf, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
+  managedTeams, issueBound, driftMarkOf, setDriftMark, driftCursorsOf, setDriftCursor, graceBindingsOf, lastDriftEventOf, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
   setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
   settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, bindingsInWorkspace, dueKeyOfBinding, managedSince,
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier, handedInboundByIdentifier,
-  upkeepTicketByIdentifier, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,
+  upkeepTicketByIdentifier, setInboundNote, inboundNoteOf, clearInboundNote, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

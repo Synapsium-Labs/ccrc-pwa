@@ -13,7 +13,7 @@ import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
-import type { InboundRow } from '../coord/planStore.js';
+import type { InboundNote, InboundRow } from '../coord/planStore.js';
 import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
@@ -71,9 +71,10 @@ export function handedMail(row: InboundText, slug: string, note: string | undefi
 }
 
 /** The mail back to the team's owner when a coordinator returns a handed issue. */
-export function returnedMail(row: InboundText, slug: string, note: string): { subject: string; body: string } {
+export function returnedMail(row: InboundText, slug: string, note: string, at: number | null = null): { subject: string; body: string } {
   return {
-    subject: `Linear inbound: ${row.identifier} returned by ${slug}`,
+    // a return stored while the owner was gone carries its time (review 2443 A3, D-8734), so no earlier return's mail dedupes it
+    subject: `Linear inbound: ${row.identifier} returned by ${slug}${at === null ? '' : ` (${new Date(at).toISOString()})`}`,
     body: [
       `The coordinator of ${slug} returns the issue ${row.identifier} (team ${row.teamKey}) to you, with a note. It waits for your triage again.`,
       noteBlock(note),
@@ -237,16 +238,13 @@ export function inboundRetireVerdict(
   return { kind: 'keep' };
 }
 
-/** The reason a retired row carries (the row is the durable record of why it left the lane). */
-export const retiredReason = (why: RetireWhy): string => `retired: ${why}`;
-
-const REOPENED_MARK = /^reopened (\d{4}-\d{2}-\d{2}T[\d:.]+Z)$/;
-/** The mark a reopened row carries until its owner is mailed: the reopen's own time. It is the durable once-mark of D-8735, kept
- *  in the row (written in the same statement as the state change) and cleared in the transaction that mails the owner, and its
- *  time is in the mail's subject, so a SECOND reopen after a second retire has a subject of its own and is never lost to the
- *  subject dedupe of `mailOwner`. */
-export const reopenedMark = (at: number): string => `reopened ${new Date(at).toISOString()}`;
-export const reopenedAtOf = (reason: string | null): string | null => (reason === null ? null : (REOPENED_MARK.exec(reason)?.[1] ?? null));
+/** The mail an owner gets next about a `waiting` row, by the row's note (review of d4c372f12; D-8734, D-8735): none is the first
+ *  inbound mail, `reopened` the reopen mail and `returned` a coordinator's return made while the owner was gone. The note's time
+ *  is in the subject of the last two, so a later round has a subject of its own. */
+export function inboundNoteMail(row: InboundText, note: InboundNote | null): { subject: string; body: string } {
+  if (note === null) return inboundMail(row);
+  return note.kind === 'reopened' ? inboundReopenedMail(row, new Date(note.at).toISOString()) : returnedMail(row, note.program, note.note, note.at);
+}
 
 /** The mail to the owner when an issue that was retired reads open again. Its subject carries the reopen's time. */
 export function inboundReopenedMail(row: InboundText, iso: string): { subject: string; body: string } {

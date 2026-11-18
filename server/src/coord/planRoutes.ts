@@ -650,7 +650,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (handed === null) return { refuse: 'plan-bad-body', detail: 'an Upkeep ticket is not handed to anyone: take it or close it' };
     const owner2 = linearOwnerOfTeam(handed.teamKey, plan.hierarchyProjectsOf(), ownerFacts(plan));
     if (owner2 === null || owner2.id === null || owner2.gone) {
-      plan.setInboundState(handed.linearId, { state: 'waiting', handedTo: null, mailedTo: null, mailedAt: null });
+      // the return is kept (review 2443 A3, D-8734): the lane mails it, with its note, to the owner once there is a live one
+      const note = mask(t.return.note);
+      plan.inTransaction(() => {
+        plan.setInboundState(handed.linearId, { state: 'waiting', handedTo: null, mailedTo: null, mailedAt: null });
+        plan.setInboundNote(handed.linearId, { kind: 'returned', program: slug, note, at: now });
+      });
     } else {
       const toId = owner2.id;
       const m = returnedMail(handed, slug, mask(t.return.note));

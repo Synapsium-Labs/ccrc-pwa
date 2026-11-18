@@ -749,9 +749,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[91] (runs.closePr, a run's own bound PR as its close measured it, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0),
     // and MIGRATIONS[93] (programme_forecasts, the sealed forecasts, Overlord W2 forecasts A),
-    // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183).
-    expect(COORD_SCHEMA_VERSION).toBe(95);
-    expect(MIGRATIONS.length).toBe(95);
+    // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183),
+    // and MIGRATIONS[95] (linear_drift_cursors and linear_inbound_notes, Linear hierarchy wave 4 follow-ups, D-8734).
+    expect(COORD_SCHEMA_VERSION).toBe(96);
+    expect(MIGRATIONS.length).toBe(96);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -871,8 +872,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[91] (runs.closePr, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0),
     // and MIGRATIONS[93] (programme_forecasts, Overlord W2 forecasts A),
-    // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(95);
+    // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
+    // and MIGRATIONS[95] (the drift cursors and inbound notes, Linear hierarchy wave 4 follow-ups); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(96);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

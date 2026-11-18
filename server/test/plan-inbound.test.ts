@@ -1,6 +1,7 @@
 // D-8183 (Linear hierarchy plan, Task 4.3): the inbound path, the Upkeep epic and the Linear owner item. A real coord.db and a real
 // Linear store on a tmp dir; Linear faked at the drift pass's and the sync's `call` port; the routes on a bare Fastify with the real
 // plan store. Nothing here reaches a network, and every Linear text is a made-up one.
+import { UNTRUSTED_PREFACE } from '../src/coord/untrusted.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
@@ -1283,5 +1284,77 @@ describe('inboundByIdentifier is keyed by workspace (round 4 A2)', () => {
     expect(res.statusCode).toBe(200);
     expect(rowOf(r, 12)).toMatchObject({ state: 'closed', title: 'Reporter title 12' });
     expect(r.plan.inboundOf(U(51))!.state).toBe('mailed');
+  });
+});
+
+// ── Wave 4 follow-ups, inbound phase 2 (review 2443 A3, D-8734: a return while the owner is gone; the reopen mark in the notes table) ──
+
+describe('a return made while the owner is gone is not lost (review 2443 A3, D-8734)', () => {
+  const goneOwner = (r: Rig): void => {
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: 'coord-gone', ownsTeam: false }, 'test', T);
+    r.presence['coord-gone'] = 'dead';
+  };
+  const backLive = (r: Rig): void => { r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T); };
+
+  it('the note is mailed once, fenced, to the owner who comes back live; two beats send it once', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    goneOwner(r);
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not ours, ask the platform team' } }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'returned', program: 'prog-b', note: 'not ours, ask the platform team' });
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, 'Linear inbound: AAA-12 returned%')).toEqual([]);
+    backLive(r);
+    await passAt(r, r.t.now + 1);
+    await passAt(r, r.t.now + 1);
+    const m = mails(r, 'Linear inbound: AAA-12 returned%');
+    expect(m.map((x) => [x.toId, x.kind])).toEqual([[OWNER, 'question']]);
+    expect(m[0]!.body).toContain('not ours, ask the platform team');
+    expect(m[0]!.body).toContain('prog-b');
+    expect(m[0]!.body).toContain(UNTRUSTED_PREFACE);                // the note sits in the untrusted fence
+    expect(m[0]!.body).toContain('ccrc-api plan triage AAA --json -');
+    expect(mails(r)).toHaveLength(3);                              // the first inbound mail, the hand to prog-b, the return mail; no fourth
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OWNER });
+    expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+  });
+
+  it('a second return by the same programme, the owner gone again, is mailed again', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    for (const note of ['first note', 'second note']) {
+      await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+      goneOwner(r);
+      await take(r, 'prog-b', { issue: 'AAA-12', return: { note } }, OTHER);
+      r.t.now += 5000;
+      backLive(r);
+      await passAt(r, r.t.now + 1);
+    }
+    const m = mails(r, 'Linear inbound: AAA-12 returned%');
+    expect(m).toHaveLength(2);
+    expect(m[0]!.subject).not.toBe(m[1]!.subject);
+    expect(m[1]!.body).toContain('second note');
+  });
+});
+
+describe('the reopen mark lives in the notes table, never in a close reason (review of d4c372f12, D-8735)', () => {
+  it('a retired closed-not-acted row keeps its close reason', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', reason: 'noise' });
+  });
+
+  it('a reopened row keeps its reason untouched and carries a reopened note until mailed', async () => {
+    const r = await rig({ named: null, progs: false });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { reason: 'noise' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting', reason: 'noise' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'reopened' });
   });
 });
