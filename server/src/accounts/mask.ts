@@ -220,18 +220,19 @@ const BREAK_AT = new RegExp(ROW_BREAK, 'y');
 const BREAK_CUT_MAX = 64;
 /** Where a slice of pane history that ends at the LF at `nl` is cut (C44, C45): after the row break that LF is in, as
  *  `ROW_BREAK` reads it through the escape view (an escape between a LF and its CR is part of the break, as every row
- *  reader reads it; review 2445 F1), when a byte follows that break within `BREAK_CUT_MAX` bytes of the LF; else after
- *  the LF. The read ends outside an escape, so an escape the bound cuts is not read as text. */
+ *  reader reads it; review 2445 F1), when two bytes follow that break within `BREAK_CUT_MAX` + 2 bytes of the LF (what
+ *  follows a CR decides whether it ends the break: a CR LF or a LF after it does not); else after the LF. The read ends
+ *  outside an escape, so an escape the bound cuts is not read as text. */
 function sliceCutAt(text: string, nl: number): number {
   const b0 = breakStartAt(text, nl + 1)!;
-  const v = viewOf(text.slice(b0, outsideEscape(text, Math.min(text.length, nl + 1 + BREAK_CUT_MAX + 1), nl + 1)), '\0');
+  const v = viewOf(text.slice(b0, outsideEscape(text, Math.min(text.length, nl + 1 + BREAK_CUT_MAX + 2), nl + 1)), '\0');
   BREAK_AT.lastIndex = 0;
   const br = BREAK_AT.exec(v.t);
-  return br !== null && br[0].length < v.t.length ? Math.max(nl + 1, b0 + origin(v, br[0].length)) : nl + 1;
+  return br !== null && br[0].length + 1 < v.t.length ? Math.max(nl + 1, b0 + origin(v, br[0].length)) : nl + 1;
 }
 /** The rest of a row break that a slice cut after its LF (C45): blanks and escapes (NULs in the view), then the CR that
- *  ends the break, with no LF after it (a LF there makes a CR LF, and the blanks a row of their own). */
-const BREAK_REST = /^[ \t\0]*\r(?!\n)/;
+ *  ends the break, with no LF or CR LF after it (that makes a CR LF or CR CR LF, and the blanks a row of their own). */
+const BREAK_REST = /^[ \t\0]*\r(?!\r?\n)/;
 /** The first index of view `v` whose original index is `i` or later. */
 function viewIndexOf(v: View, i: number): number {
   if (v.map === null) return i;
@@ -1319,7 +1320,7 @@ const ROW_TAIL_MIN_BYTES = 8;
  *  run, and ends there as it does forward. */
 export function breakStartAt(t: string, j: number): number | null {
   const c = t[j - 1];
-  if (c === '\n') return j >= 2 && t[j - 2] === '\r' ? j - 2 : j - 1;
+  if (c === '\n') return j >= 2 && t[j - 2] === '\r' ? (j >= 3 && t[j - 3] === '\r' ? j - 3 : j - 2) : j - 1;
   if (c !== '\r') return null;
   let k = j - 1;
   while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
