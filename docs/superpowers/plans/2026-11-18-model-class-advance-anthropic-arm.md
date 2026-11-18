@@ -341,9 +341,12 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   - **The order of the two writes**, inside the one lock: the advance file first, then the aliases file. For each
     move the advance write appends a history entry with `recordMove` (`how: 'advance'`, `ok: true`, canary
     `not-run`, `cause: 'newer'`, and `evidenceAt`, the new id's evidence time) and sets `classes.<c>.previous` to
-    `{model: <old id>, effort: null}` itself. **The crash key is the class's newest history entry:** when it is an
-    `ok` move from `from` to `to` while `prior` still reads `from`, the move is the same one, and the op appends
-    nothing and leaves `previous` as it is. `evidenceAt` is kept on the entry as data and is never part of the key,
+    `{model: <old id>, effort: null}` itself. **The crash key is the class's newest history entry, counted only
+    when its `at` is later than `prior`'s `idSince` for the class:** when it is an `ok` move from `from` to `to` while
+    `prior` still reads `from`, the move is the same one, and the op appends nothing and leaves `previous` as it is.
+    An entry no later than `idSince` is an earlier move whose id has since been replaced, so a genuine repeat of it
+    gets its own entry (X1 to X2 recorded; X2 then unlaunchable and replaced by X1 with no move; X1 to X2 again when
+    the build returns). `evidenceAt` is kept on the entry as data and is never part of the key,
     because it is recomputed from the evidence at each refresh. So a crash after the advance write and before the
     aliases write is re-derived by the next refresh, which finds the same move from the same `prior`, records nothing
     twice, writes the aliases file, and answers the move in `moved` so that it is pushed then. The Anthropic path never calls `advanceForWrite` or `reconcilePending`: it reads the advance file
@@ -378,7 +381,9 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   fail, whichever file it is; then, before the next refresh, newer evidence for the same new id arrives: a cache
   refetched later, or another launch filling the same id; after the next refresh the history holds exactly one entry
   for the move, the aliases file names the new id, and the move was answered in `moved` exactly once across the two
-  refreshes); `an
+  refreshes); `a repeated move gets its own entry` (X1 to X2 recorded; X2's row then needs a newer build than
+  `laneVersion` and a fresh launch fills X1, which replaces it with no move; the build returns and a refetched cache
+  names X2: a second history entry X1 to X2, `previous` X1, and `moved` names it); `an
   unlaunchable id's replacement is not a move`; `hold records the held id`; `hold with no id refuses
   alias-source-absent`; `hold refuses settings-overrides-hold`; `revert holds the previous id`; `release keeps
   releasedAt and spends no history` (ten history entries before, ten after, `lastMoveOf` unchanged); `the first hold
@@ -392,7 +397,9 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   ops, before `readPairs`.
 - [ ] **Step 4: Green, then the mutation rows:** admit `set-class` on an Anthropic lane; seed with `backfillAdvance`;
   drop `hold.model`; record a source change as a move; record a first id as a move; pass `prior` as null; write over
-  an invalid `prior`; write the aliases file before the advance file; drop the `from`/`to`/`evidenceAt` key check;
+  an invalid `prior`; write the aliases file before the advance file; drop the newest-entry key check (reds `a
+  cut-short move is recorded once when newer evidence arrives`); key on `evidenceAt` as well (reds the same test); count an entry no later than
+  `idSince` (reds `a repeated move gets its own entry`);
   record a release as a history entry; read a target from another home; drop `aliases-refresh` from `MODELS_WRITE_OPS`. Each
   reds a named test.
 - [ ] **Step 5: Commit** `feat(models): the aliases file and holds on an Anthropic lane`.
@@ -446,7 +453,9 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 
 **Interfaces:**
 - Consumes: `parseAliases`, `aliasesSourceCause` (A2.2); #2943's four checks.
-- Produces: `advance-health` includes Anthropic rows. Per Anthropic lane:
+- Produces: `advance-health` includes Anthropic rows. Every lane row it answers gains `anthropic`, from
+  `isAnthropicLane`, the same one fact as the `lanes` op's row (Task A2.4), so doctor's printer knows the lane's kind.
+  Per Anthropic lane:
   - `blocked` carries `alias-source-absent`, `alias-cache-stale`, `aliases-file-unreadable` or
     `aliases-file-invalid`. An absent aliases file is no finding: the first hourly refresh writes it, and a refresh
     that fails says so on its own output row.
@@ -490,7 +499,8 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
   (Task A3.2); before that it is a PASS note, "no source until ccd marks alias launches".
 
 - [ ] **Step 1: Write the failing tests:** one per cause, firing and clearing, on fixture files; `an Anthropic lane
-  never says lane-not-codex-kind`; `held behind on an Anthropic lane` (the row's five fields); `a null id is never
+  never says lane-not-codex-kind`; `held behind on an Anthropic lane` (the row's five fields); `an Anthropic held-behind row
+  prints the release wording` (no "canary", and a Codex row beside it keeps its own); `a null id is never
   held behind`; `an unobserved class is never held behind`; `a held session is not behind` (it runs `hold.model`, and
   the fixture's held class is unobserved, so the mutation below can red); `a session still on the newer id after a
   revert is named behind` (held on X1 by a revert, unobserved, a session on X2: named, `to` X1, `movedAt` the hold's
@@ -515,13 +525,18 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
     refresh starts it again";
   - `_dr_ma_held_behind_fix`, whose remedy says "lets the next hourly refresh advance it, canary first", gains an
     Anthropic wording for a row of an Anthropic lane: "release the hold from the lane's Models sheet (or with
-    `ccrc models`' `release`), and the class's sessions launch on its alias's current id from their next
-    launch; or Revert to keep the held id". There is no canary and no advance on an Anthropic lane.
+    `ccrc models`' `release`), and the class follows its alias: its sessions launch on the alias's current id from
+    their next launch. Leaving the hold in place keeps the held id, and this warning." There is no canary and no
+    advance on an Anthropic lane. The `heldBehind` row gains no field. The printer takes the lane's kind from the lane
+    row doctor already iterates: `advance-health`'s lane row carries `anthropic`, the same one fact as the `lanes`
+    op's row (Task A2.4), and `_check_model-held-behind` reads it into `DR_MA_ANTHROPIC`, keyed by lane id, which
+    `_dr_ma_held_behind_fix` reads.
   `_check_model-sessions-behind`'s row text and `_check_model-held-behind`'s are unchanged: the rows carry their
   fields.
 - [ ] **Step 3: Mutation rows:** drop each cause; compare a held session against the aliases id; exempt an unobserved
   held class's sessions; count the day from the move under a released hold; WARN without the capability; drop the
-  null or `unobserved` exemption from `heldBehind`; compare an id without `bareModelId`; take a session's class from
+  null or `unobserved` exemption from `heldBehind`; print the Codex remedy for every lane (reds `an Anthropic
+  held-behind row prints the release wording`); compare an id without `bareModelId`; take a session's class from
   its sidecar id's family; drop guard 4; drop guard 5; leave `turnAt` null with no marker. Each reds a named test.
 - [ ] **Step 4: The README** names the four causes in the doctor section and the aliases file in `ccrc models`.
 - [ ] **Step 5: The gate measurement** (wave contract), recorded in the task note.
@@ -715,7 +730,7 @@ tests pin both), and the note records each session id.
 - [ ] **Step 1: Write the failing tests:** `an Anthropic class that takes none refuses a level`; `an Anthropic class
   listing levels takes one`; `a Codex haiku class with levels takes one`; `a Codex empty list keeps the haiku rule`;
   `no file keeps the haiku rule`, at every site; the refusal text names the model, not the class word.
-- [ ] **Step 2: Run red, implement, run the five suites above green.**
+- [ ] **Step 2: Run red, implement, run the six suites above green.**
 - [ ] **Step 3: Mutation rows:** answer rc 1 on rc 2; read a Codex empty list as rc 0; drop one site's replacement.
 - [ ] **Step 4: Commit** `feat(ccd): a class takes an effort level when its model lists one`.
 
@@ -766,6 +781,11 @@ tests pin both), and the note records each session id.
 
 ### Task A3.6: the routing record with the id, the readback by id, and the move
 
+**Before this task is dispatched,** its re-pick is re-read against Task A3.0 Step 2's recorded result (D-8748). Step 2
+measures a re-pick in a session whose process already knows the current id. It does not measure a process started
+before the move, whose alias may still resolve to its old id. Whichever way that reading falls, a given id is typed at
+most once (`picked=`, below). A re-pick that does not land leaves the session to its next spawn.
+
 **Files:**
 - Modify: `ccd/ccd` (`_route_applied_set`, `_route_apply_pending`, `_route_apply_now`, `_route_readback`),
   `ccd/lib/model-aliases.sh` (`_alias_observe`, `_route_id_pending`)
@@ -774,87 +794,157 @@ tests pin both), and the note records each session id.
 
 **Interfaces:**
 - Consumes: `_alias_facts_to`, `_model_id_bare_to` (A3.1), `_alias_observe` (A3.2), `_usage_sidecar_read`,
-  `_route_type_model`, `_route_applied_get_to`, `_route_applied_set`, `_route_readback_overruled`'s transcript reader
+  `_route_type_model`, `_route_try_bump`, `_route_note`, `_route_note_clear`, `_route_applied_get_to`,
+  `_route_applied_set`, `_transcript_path`, `_reg_get`, `_route_readback_overruled`'s transcript reader
   (`_operator_choice_read`); Task A3.0 Step 2's result.
-- Produces: `routeapplied` gains `model=<id>`, recorded (never typed) by `_alias_observe`, the tick's own step outside
-  `_route_apply_check`'s gate (Task A3.2), on every lane (spec §2.5.6). Its lifecycle:
-  - **Recorded** when `$REG/<id>.routeapplied` exists and has no `model`, and `_usage_sidecar_read` gives a reading of
-    this session (its current uuid) whose `ts` is strictly later than both the process start (`_pane_born`) and the
-    `routeapplied` stamp's mtime, as `main`'s readback holds it (a swap's resume keeps the uuid, so a reading in the
-    stamp's own second may be the old process's last render). The model is recorded through `_model_id_bare_to`. The
-    sidecar is read under Task A3.2's gate (a regular file newer than `routeapplied`, bytes changed since the last
-    pass), so the steady state forks nothing.
-  - **Dropped** whenever the class changes: `_route_applied_set` itself removes `model=` when it writes a `class=`
-    whose value differs from the recorded one, so the applier's class arm, the class readback and the promotion all
-    drop it through the one writer. The next fresh reading records it again.
+- Produces: `routeapplied` gains two keys, `model=<id>` and `picked=<id>`, on every lane (spec §2.5.6). `model=` is
+  recorded, never typed, by `_alias_observe`, the tick's own step outside `_route_apply_check`'s gate (Task A3.2), and
+  by `_route_readback` when it confirms an id. Their lifecycle:
+  - **The stamp** is `routeapplied`'s mtime, as `main`'s readback reads it (`_plat_mtime`). The id arm and the two
+    observation keys never move it. `_route_applied_set` takes an optional fourth argument, `keep`. With `keep`, it
+    writes the new list to its temp file, gives that file the old file's mtime (`touch -r`), and renames it as
+    `_reg_set` does. `model=` and `picked=` are always written with `keep`. So only a `class=` write, the spawn's
+    settle and the seed move the stamp. A `/model` that ccd typed for an id move therefore stays after the stamp until
+    the next class change or spawn, and only the journal tells it apart from the operator's.
+  - **`model=` is recorded** when `$REG/<id>.routeapplied` exists and either has no `model`, or has a `picked=` that
+    differs from its `model` and the reading names that `picked` id (a landed re-pick). The reading comes from
+    `_usage_sidecar_read`, is of this session (its current uuid), and has a `ts` strictly later than both the process
+    start (`_pane_born`) and the stamp, as `main`'s readback holds it. A swap's resume keeps the uuid, so a reading in
+    the stamp's own second may be the old process's last render. The model is recorded through `_model_id_bare_to`.
+    The sidecar is read under Task A3.2's gate (a regular file newer than `routeapplied`, bytes changed since the last
+    pass), with this condition in place of "the marker is unfilled". So the steady state forks nothing, a re-pick that
+    did not land included.
+  - **Dropped** whenever the class changes: `_route_applied_set` itself removes `model=` and `picked=` when it writes a
+    `class=` whose value differs from the recorded one. The applier's class arm, the class readback and the promotion
+    all drop them through the one writer. The next fresh reading records `model=` again.
   - **Never carried by a fresh write:** the spawn's settle and the seed (`_route_apply_seed`, which writes with
-    `_reg_set` and only when no `routeapplied` exists) each write a new `routeapplied` without `model`, so it is
-    recorded again after either.
+    `_reg_set` and only when no `routeapplied` exists) each write a new `routeapplied` without `model` or `picked`, so
+    `model=` is recorded again after either, and a new `to` can be typed again.
   - **Never created:** a session with no `routeapplied` (`_spawn_start` removes it for a session with no record) gets
     no recording, and `_alias_observe` never creates the file. Such a session has no class, is never id-pending, and
     is never named behind (Task A2.5).
-- Produces: `_route_id_pending <id>` -> rc 0 only when all hold, asked in this order so that the steady state reads
-  nothing but the registry: `routeapplied` has a `model` (an absent `model` is never pending, so nothing is typed at
-  rollout); an Anthropic lane (`_is_anthropic_backend`, builtins); the class is not held; the facts' id differs from
-  `model`, both bare, and the facts' id is not `-` (an id of `-` is never pending); the facts say `seen` (the canary
-  by use, Task A3.1, compared against the facts' own id); and **the operator has not picked a model by hand**:
-  - no `/model` in the transcript at or after the stamp (or an undatable one) that ccd's own keystroke journal does
-    not explain. The read passes the journal, `$REG/<id>.typed` read with `_reg_read_to`, exactly as the keep's
-    `_operator_choice_promote` passes it, never `0 since`: a `/model` ccd typed itself (`_route_type_model` journals
-    it through `_typed_note`) is never read as the operator's. A journal that cannot be read, or whose first line is
-    not `<epoch> since`, makes the read count every `/model`, so ccd stands down rather than type over one it cannot
-    attribute;
-  - and the fresh reading of this uuid (strictly later than the stamp, within `ROUTE_READBACK_FRESH`), through
-    `_model_id_bare_to`, is the recorded `model` or the facts' id. The facts' id means ccd's own re-pick has landed:
-    `_route_id_pending` stays rc 0, so `_route_apply_check` passes its gate 1 and `_route_readback` confirms the id
-    change and records it as `model=`, after which nothing is pending. Any other id is a hand pick.
-  When the hand-pick check fails, `_route_id_pending` stands down: rc 1, nothing typed, `model=` unchanged. A model
-  picked by hand is never typed over. **The stand-down is memoised** so that the tick stays builtins-only: on standing
-  down it writes `$REG/<id>.idstand` (one line, the stamp's word list it judged; reaped by `_reg_purge` with the row),
-  and while that file stands and names the current stamp, `_route_id_pending` answers 1 at once unless the transcript
-  is newer than it (`[[ -nt ]]`) or the sidecar's bytes changed (Task A3.2's memo). A transcript only grows by
-  appending, which moves its mtime, so the `-nt` test stands for the size and the mtime, read without a `stat`. A
-  later fresh reading that agrees, or a new stamp, removes the file. rc 1 otherwise, and always on a Codex lane, because this
-  plan does not arm D11's fallback. `_route_apply_pending` answers 0 when it holds, so `_route_apply_check` passes
-  its gate 1 and reaches its own readback and applier.
-- Produces: `_route_apply_now` re-types the alias row through `_route_type_model` when `_route_id_pending` holds and
-  Task A3.0 Step 2 held. `_route_readback` confirms an id change when the reading's model, through
-  `_model_id_bare_to`, equals the wanted id, and records it as `model=`.
+  - **`picked=<to>`** means ccd has acted on that `to` for this session: it either typed it or stood down for a hand
+    pick. It is written only through `_route_applied_set` (`keep`), by the id arm on `_route_type_model`'s rc 0 and by
+    `_route_id_pending` when it stands down. Nothing else writes it.
+- Produces: `_route_id_pending <id>` -> rc 0 only when all of the following hold. They are asked in this order, so the
+  steady state reads nothing but the registry and the cached facts:
+  - `routeapplied` has a `model`. An absent `model` is never pending, so nothing is typed at rollout.
+  - The lane is an Anthropic lane (`_is_anthropic_backend`, builtins).
+  - On the facts it has already read (`_alias_facts_to`, cached), **`picked=` is not the facts' id**. When the two are
+    equal the session is not pending, so a given `to` is typed at most once. A later reading still on the old model
+    means the re-pick did not land. The session waits for its next spawn, and doctor's `model-sessions-behind` names
+    it after a day. A newer `to` reopens it.
+  - The class is not held.
+  - The facts' id differs from `model`, both bare, and the facts' id is not `-` (an id of `-` is never pending).
+  - The facts say `seen` (the canary by use, Task A3.1, compared against the facts' own id).
+  - **The operator has not picked a model by hand.** Both of these must hold:
+    - No `/model` in the transcript at or after the stamp goes unexplained by ccd's own keystroke journal. The read is
+      `_route_readback_overruled`'s own: `_operator_choice_read "$f" "$typed" "$ROUTE_READBACK_TAIL" strict`, on the
+      transcript `_transcript_path` names, with the journal passed where that read passes `0 since`. `$typed` is
+      `$REG/<id>.typed`, read with `_reg_get "$id" typed`, as the keep's `_operator_choice_promote` reads it.
+      - A `/model` ccd typed itself (`_route_type_model` journals it through `_typed_note`) is never read as the
+        operator's.
+      - Under `strict`, an undatable `/model` row and a `/fast` row answer `drift-model`, and either counts as a hand
+        pick.
+      - Each of these also counts as a hand pick, so ccd stands down rather than type over a pick it cannot
+        attribute: a journal whose first line is not `<epoch> since`; a transcript that cannot be named or read; a
+        reader that fails.
+    - The fresh reading of this uuid (strictly later than the stamp, within `ROUTE_READBACK_FRESH`), through
+      `_model_id_bare_to`, is the recorded `model` or the facts' id. Any other id is a hand pick. A reading of the
+      facts' id before ccd has typed (a session already on it) leaves the session pending. `_route_readback` then
+      confirms it and records `model=`, and nothing is typed.
+  - **When the hand-pick check fails,** `_route_id_pending` stands down: it writes `picked=<the facts' id>` and
+    answers rc 1, with nothing typed and `model=` unchanged. A model picked by hand is never typed over. The stand-down
+    is that record, so the steady tick after it is a builtins comparison.
+  - rc 1 otherwise. rc 1 always on a Codex lane, because this plan does not arm D11's fallback.
 
-- [ ] **Step 1: Write the failing tests:** `model is recorded with nothing pending` (a session whose record and
-  `routeapplied` agree, so `_route_apply_check` returns at its gate 1: `model=` is still recorded); `model is recorded
-  again after a spawn`; `a reading in the stamp's own second is not recorded`; `a reading before the stamp is not
-  recorded`; `a 1M reading records the bare id`; `a class change drops model` (the applier's class arm and the class
-  readback each: `model=` gone, then recorded again from the next fresh reading); `no routeapplied, no model` (the
-  file is not created); `an absent model is not pending` (an idle session with no `model` stamp is never typed into);
-  `an id change is pending only after a launch was seen`; `a cache target with an older kept reading types nothing`
-  (`cacheTarget` X2 is the class's id, `seenId` X1: no keystroke); `an unlaunchable id types nothing` (the facts'
-  id `-`: not pending); `a second move reaches a session ccd already moved once` (an alias move X1 to X2: ccd types
-  the re-pick, `_typed_note` journals it, the next reading reports X2, and the readback records `model=X2`; then a
-  move X2 to X3: ccd types again and records `model=X3`); `an operator /model is never re-picked` (the same session
-  and the same `/model` row in the transcript after the stamp, read through the same journal, which holds ccd's
-  earlier rows but none for this `/model`, so the two cases differ only in who typed: no keystroke, `model=`
-  unchanged); `a hand-picked model stands
-  down until a reading agrees` (a fresh reading of another id: no keystroke; a later reading of `model`'s id: pending
-  again); `an unreadable journal stands down`; `a stood-down session reads nothing until its transcript grows` (five
-  ticks: no transcript read, no sidecar read; then an appended row: one read); `a
-  held class is never pending` (D19); `release is not typed`; `the readback confirms by id` (and a `[1m]` reading of
-  the wanted id confirms); `a Codex lane is never id-pending`; `the tick forks no jq on an unchanged file`. If Task
-  A3.0 Step 2 failed: `an id change is recorded, never typed` replaces the typing test.
+  `_route_apply_pending` answers 0 when `_route_id_pending` holds, so `_route_apply_check` passes its gate 1 and
+  reaches its own readback and applier.
+- Produces: `_route_apply_now`'s id arm, when `_route_id_pending` holds and Task A3.0 Step 2 held. It re-types the
+  alias row through `_route_type_model` and never moves the class stamp. By `_route_type_model`'s answer:
+  - **rc 0:** it writes `picked=<to>` and nothing else. Recording `model=` stays with the readback and the observe
+    step.
+  - **rc 1 or 2:** it takes `_route_note` and `_route_try_bump`, as the class arm does: rc 2's `KS_WHY` and
+    `KS_DETAIL`, or rc 1's `apply-unconfirmed` with the detail `model=<to>`.
+  - **rc 3:** it writes nothing.
+
+  `_route_readback` confirms an id change when the reading's model, through `_model_id_bare_to`, equals the wanted
+  id, and records it as `model=`.
+
+- [ ] **Step 1: Write the failing tests:**
+  - **Recording `model=`:**
+    - `model is recorded with nothing pending`: a session whose record and `routeapplied` agree, so
+      `_route_apply_check` returns at its gate 1; `model=` is still recorded.
+    - `model is recorded again after a spawn`.
+    - `a reading in the stamp's own second is not recorded`.
+    - `a reading before the stamp is not recorded`.
+    - `a 1M reading records the bare id`.
+    - `a class change drops model and picked`: the applier's class arm and the class readback each leave `model=` and
+      `picked=` gone, then `model=` is recorded again from the next fresh reading.
+    - `no routeapplied, no model`: the file is not created.
+  - **When a session is pending:**
+    - `an absent model is not pending`: an idle session with no `model` stamp is never typed into.
+    - `an id change is pending only after a launch was seen`.
+    - `a cache target with an older kept reading types nothing`: `cacheTarget` X2 is the class's id and `seenId` X1,
+      so there is no keystroke.
+    - `an unlaunchable id types nothing`: the test stubs `_alias_facts_to`'s line as `facts - seen …`, so that `-`
+      reaches the id comparison with `seen` true; it is not pending.
+  - **The re-pick:**
+    - `an acknowledged re-pick whose reading does not change is typed once`: an alias move X1 to X2, and
+      `_route_type_model` answers 0. `picked=X2` is written and the stamp's mtime is unchanged. Then five ticks with
+      fresh readings of X1 give no keystroke, and `routetries` stays empty. A newer facts id X3 is typed once more.
+    - `an unacknowledged re-pick counts an attempt`: rc 1 writes `routetries` and the note `apply-unconfirmed`, and
+      no `picked=`.
+    - `a re-pick refused before a key writes nothing`: rc 3.
+    - `a landed re-pick is recorded by the observe step`: after `picked=X2`, a fresh reading of X2 records
+      `model=X2` with nothing pending.
+    - `a second move reaches a session ccd already moved once`: an alias move X1 to X2. ccd types the re-pick,
+      `_typed_note` journals it, the next reading reports X2, and `model=X2` is recorded. Then a move X2 to X3: ccd's
+      own `/model` for X2 still sits after the stamp, the journal explains it, and ccd types again and records
+      `model=X3`.
+  - **Hand picks:**
+    - `an operator /model is never re-picked`: the same session and the same `/model` row in the transcript after
+      the stamp, read through the same journal, which holds ccd's earlier rows but none for this `/model`. The two
+      cases differ only in who typed. There is no keystroke, `model=` is unchanged and `picked=` names the facts' id.
+    - `a hand pick stands down once per id`: a fresh reading of another id gives no keystroke and writes `picked=`.
+      Five later ticks give no keystroke and no transcript read. A newer facts id is read again, and with the
+      operator's `/model` still after the stamp, ccd stands down again.
+    - `a /fast row stands down`.
+    - `an unreadable journal stands down`.
+  - **Other cases:**
+    - `a held class is never pending` (D19).
+    - `release is not typed`.
+    - `the readback confirms by id`, and a `[1m]` reading of the wanted id confirms too.
+    - `a Codex lane is never id-pending`.
+    - `the tick forks no jq on an unchanged file`.
+
+  If Task A3.0 Step 2 failed: `an id change is recorded, never typed` replaces the typing tests.
 - [ ] **Step 2: Run red, implement, run the suites above green,** each load flake re-run alone before it is called
-  a break. `ccd-tick-budget`: every fixture's `TICK_BUDGET` unchanged (its fixtures plant `routeapplied` with no
+  a break. In `ccd-tick-budget`, every fixture's `TICK_BUDGET` is unchanged. Its fixtures plant `routeapplied` with no
   `model` and no usage sidecar, so the recording's gate is false and `_route_id_pending` stops at its first
-  condition). Add two cases beside them, each costing the `idle-home` figure exactly in its steady tick: an
-  Anthropic fixture with `model=` recorded, an unchanged aliases file and a facts id equal to `model`; and the same
-  fixture stood down on a hand pick (`$REG/<id>.idstand` naming the current stamp, the facts' id another id, the
-  transcript and the sidecar unchanged).
-- [ ] **Step 3: Mutation rows:** drop the `seen` condition; read an absent `model` as differing; drop the hold
-  check; compare by family instead of id; record `model` from inside `_route_apply_check` instead of `_alias_observe`;
-  compare without `_model_id_bare_to`; record from a reading in the stamp's own second; keep `model=` across a class
-  change; create `routeapplied` for a session with none; drop the hand-pick check; pass `0 since` as the journal, so
-  that ccd's own `/model` counts (must red `a second move reaches a session ccd already moved once`); refuse a
-  reading of the facts' id as a hand pick; drop the `idstand` memo; let an id of `-` be pending. Each reds a named
-  test.
+  condition. Add two cases beside them, each costing the `idle-home` figure exactly in its steady tick:
+  - an Anthropic fixture with `model=` recorded, an unchanged aliases file and a facts id equal to `model`;
+  - the same fixture with `model=X1`, `picked=X2` and a facts id of X2 (a re-pick that did not land, or a stand-down),
+    with the transcript and the sidecar unchanged.
+- [ ] **Step 3: Mutation rows.** Each reds a named test:
+  - drop the `seen` condition;
+  - read an absent `model` as differing;
+  - drop the hold check;
+  - compare by family instead of id;
+  - record `model` from inside `_route_apply_check` instead of `_alias_observe`;
+  - compare without `_model_id_bare_to`;
+  - record from a reading in the stamp's own second;
+  - keep `model=` and `picked=` across a class change;
+  - create `routeapplied` for a session with none;
+  - drop the hand-pick check;
+  - pass `0 since` as the journal, so that ccd's own `/model` counts (must red `a second move reaches a session ccd
+    already moved once`);
+  - refuse a reading of the facts' id as a hand pick;
+  - drop the `picked=` test from `_route_id_pending` (must red `an acknowledged re-pick whose reading does not change
+    is typed once`);
+  - write `picked=` without `keep` (must red the same test's unchanged stamp);
+  - drop `strict` from the hand-pick read (must red `a /fast row stands down`);
+  - let an id of `-` be pending (must red `an unlaunchable id types nothing`).
 - [ ] **Step 4: Commit** `feat(ccd): the routing record carries the model id, and an alias move reaches a running
   session`, then push once.
 
@@ -981,7 +1071,7 @@ The departures from the re-plan of 2026-11-16 that this plan makes. Numbers issu
 ### D-8744 — D18's source is the lane's own cache, then a fresh alias launch; newest evidence wins
 
 Where: waves A2 and A3, and spec §2.5.2 and D18. Proposed by wave 6's worker; ruled by the programme's operator on
-2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7; review 2495, B1, B5, F3, F4 and F5). An
+2026-11-18 (review 2466, F1 and F12; review 2486, F-R2, F-R4, F-R5 and F-R7; review 2495, B1, B5, F3, F4 and F5; review 2508, R4-1; review 2518, R5-1 to R5-4). An
 Anthropic lane's class id comes from the lane's own catalogue cache (current format, its target launchable by the
 lane's build) or from a fresh alias launch, whichever is newer: a launch whose process started after the cache's
 fetch outranks the cache's target, and `show` and `lanes` carry both ids when they disagree, with no fifth cause word.
@@ -998,14 +1088,16 @@ unobserved naming the lane's build, and no move is recorded, then or when the bu
 rests on evidence older than its hold, a class with no id and a class with an unlaunchable id read `unobserved` on
 the aliases file and the wire; that exempts the class from `model-held-behind` only, and while a hold stands
 `model-sessions-behind` judges its sessions against the held id. A hold stops marks for its own class only. A running
-session's model picked by hand is never typed over, and ccd's own journalled re-pick is never read as one (review
-2508, R4-1). Each id's row comes from the lane's own cache when it lists the
+session's model picked by hand is never typed over, and ccd's own journalled re-pick is never read as one. A re-pick
+of a given id is acted on at most once: ccd records that id in the routing record as `picked=`, whether it typed it or
+stood down for a hand pick, and never moves the record's stamp in doing so. Each id's row comes from the lane's own cache when it lists the
 id, else from the newest cache on the box that does; that a row is the same across organisations is unmeasured.
 D-8684's roster grouping is not built: A0 found no pair of cached homes in one organisation to check it against, and
 the uncached homes record none. Cost if wrong: a home with no cache shows class words until ccd marks a launch on it;
 a class keeps an id after its evidence has aged until newer evidence comes; and a reading filled and removed (by a
 swap, a wake or a restart) between two hourly refreshes is lost, so the class stays on older evidence until the next
-fresh launch reports.
+fresh launch reports; and a running session whose re-pick does not land stays on its old id until its next spawn,
+which `model-sessions-behind` names after a day.
 
 ### D-8745 — a catalogue cache is stale after seven days
 
@@ -1028,7 +1120,7 @@ rewrites the saved level. Cost if wrong: a launch outside ccd keeps losing a sav
 ### D-8747 — an Anthropic lane's own path for holds, a release kept as `releasedAt`, and `rm` unchanged
 
 Where: wave A2, and spec §2.5.3 and §2.5.7. Proposed by wave 6's worker; ruled by the programme's operator on
-2026-11-18 (review 2466, F4; review 2486, F-R3; review 2495, B3, F2 and N5; review 2508, R4-2 and R4-3). A
+2026-11-18 (review 2466, F4; review 2486, F-R3; review 2495, B3, F2 and N5; review 2508, R4-2 and R4-3; review 2518, R5-5). A
 registry-less Anthropic lane gets its
 own path past both the `anthropic-lane` and the `no-registry` gates, for `hold`, `release`, `revert` and the new
 `aliases-refresh`. Its advance file is created without a registry, each class's `family` its own class word, and a
@@ -1039,9 +1131,10 @@ already ran before both gates; it now also reaps the aliases file, and its clear
 the home's `settings.json` stays: ccrc never writes a model or effort choice there. A move is written advance file
 first, aliases file second, under one lock: a history entry (`how: 'advance'`, `ok: true`, canary `not-run`,
 `cause: 'newer'`, and its `evidenceAt`, kept as data) and `previous`, set by the op because `recordMove` does not. The
-crash key is the class's newest history entry: an `ok` move from `from` to `to` while the aliases file still reads
-`from` is the same move, so a second record of it is refused, newer evidence for the same id notwithstanding, and a
-lost second write is re-derived by the next refresh; the path never calls `advanceForWrite`. Every time it writes is
+crash key is the class's newest history entry, counted only when it is later than the aliases file's `idSince` for
+the class: an `ok` move from `from` to `to` while the aliases file still reads `from` is the same move, so a second
+record of it is refused, newer evidence for the same id notwithstanding, while a genuine repeat of an earlier move
+gets its own entry, and a lost second write is re-derived by the next refresh; the path never calls `advanceForWrite`. Every time it writes is
 whole-second ISO, through `isoSeconds`. A change of source alone, and a class's first id, are never
 moves. Only an absent aliases file is a fresh start: an unreadable or invalid one is never written over, and doctor
 names it until the operator moves it aside. Cost if wrong: three admitted ops on a lane kind that refused all but
