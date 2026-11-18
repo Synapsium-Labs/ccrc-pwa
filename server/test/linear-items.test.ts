@@ -100,6 +100,7 @@ describe('the initiatives-off item (D-8182)', () => {
     const r = await rig();
     await tick(r);
     r.db.prepare('DELETE FROM plan_sync_due').run();
+    r.t.now += 60_000;                                    // past the workspace holds the first tick's failures set (D-8183)
     r.dir.initiatives = 'on';
     const asks: string[] = [];
     (r.sync as unknown as { deps: { call: (a: { op: string }) => Promise<unknown> } }).deps.call = async (a) => { asks.push(a.op); return { ok: false, word: 'unreachable', maybeSent: false }; };
@@ -147,5 +148,72 @@ describe('the initiatives-off item (D-8182)', () => {
     await app.close();
     expect([res.statusCode, res.json().error]).toEqual([409, 'item-act-mismatch']);
     expect(r.queued).toHaveLength(0);
+  });
+});
+
+describe('the persistent-drift item\'s acts (D-8183)', () => {
+  type DriftAct = NonNullable<Parameters<typeof registerHierarchyRoutes>[1]['driftAct']>;
+  async function routeRig(driftAct: DriftAct | undefined) {
+    const r = await rig();
+    const id = r.coord.raiseItem({
+      program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'decide', neededBy: 'later', soonLabel: null, secretSlot: null,
+      title: 'Linear keeps changing ticket t1', why: 'w', how: [], options: ['Hand to the coordinator', 'Keep the plan'], recommended: 0, recommendedWhy: 'because',
+      action: { verb: 'linear-drift', bindingId: 7 },
+    }, T, 'ccrc');
+    const app = Fastify();
+    registerHierarchyRoutes(app, {
+      plan: planStorePort(r.db), serial: (fn) => fn(), presenceOf: () => 'unmeasured', by: () => 'device-a',
+      itemOf: (i) => r.coord.itemById(i), ...(driftAct === undefined ? {} : { driftAct }),
+    });
+    await app.ready();
+    const post = async (act: string) => { const res = await app.inject({ method: 'POST', url: `/api/items/${id}/linear`, payload: { act } }); return { code: res.statusCode, body: res.json() }; };
+    return { r, id, post, close: () => app.close() };
+  }
+
+  it('hand and keep reach the drift pass with the item and its binding, and answer ok', async () => {
+    const calls: unknown[] = [];
+    const { id, post, close } = await routeRig((i, a, b) => { calls.push([i, a, b]); return { ok: true }; });
+    expect(await post('hand')).toMatchObject({ code: 200, body: { ok: true } });
+    expect(await post('keep')).toMatchObject({ code: 200, body: { ok: true } });
+    await close();
+    expect(calls).toEqual([[id, 'hand', 7], [id, 'keep', 7]]);
+  });
+
+  it('a refusal of the pass is the route\'s refusal word', async () => {
+    const { post, close } = await routeRig(() => ({ ok: false, word: 'not-open' }));
+    expect(await post('keep')).toMatchObject({ code: 409, body: { error: 'not-open' } });
+    await close();
+    const again = await routeRig(() => ({ ok: false, word: 'not-found' }));
+    expect(await again.post('hand')).toMatchObject({ code: 404, body: { error: 'not-found' } });
+    await again.close();
+  });
+
+  it('an act the drift action does not take is item-act-mismatch, and a route with no pass is unavailable', async () => {
+    const calls: unknown[] = [];
+    const { post, close } = await routeRig((i, a, b) => { calls.push([i, a, b]); return { ok: true }; });
+    expect(await post('check-again')).toMatchObject({ code: 409, body: { error: 'item-act-mismatch' } });
+    expect(await post('approve')).toMatchObject({ code: 409, body: { error: 'item-act-mismatch' } });
+    await close();
+    expect(calls).toEqual([]);
+    const none = await routeRig(undefined);
+    expect(await none.post('hand')).toMatchObject({ code: 503, body: { error: 'unavailable' } });
+    await none.close();
+  });
+
+  it('hand on an initiatives item is item-act-mismatch, never reaching the drift pass', async () => {
+    const r = await rig();
+    await tick(r);
+    const [item] = itemsOf(r);
+    const calls: unknown[] = [];
+    const app = Fastify();
+    registerHierarchyRoutes(app, {
+      plan: planStorePort(r.db), serial: (fn) => fn(), presenceOf: () => 'unmeasured', by: () => 'device-a',
+      itemOf: (id) => r.coord.itemById(id), checkInitiatives: (w) => r.sync.checkInitiatives(w), driftAct: (i, a, b) => { calls.push([i, a, b]); return { ok: true }; },
+    });
+    await app.ready();
+    const res = await app.inject({ method: 'POST', url: `/api/items/${item!.id}/linear`, payload: { act: 'hand' } });
+    await app.close();
+    expect([res.statusCode, res.json().error]).toEqual([409, 'item-act-mismatch']);
+    expect(calls).toEqual([]);
   });
 });

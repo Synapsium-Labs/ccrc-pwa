@@ -40,6 +40,8 @@ export const OTHER_LANES = {
   planEpicsDrop: { route: 'POST /api/programmes/:slug/plan/epics/drop', word: DOORS, via: 'plan-door' },
   planPhaseRefs: { route: 'POST /api/programmes/:slug/plan/phases/refs', word: DOORS, via: 'plan-door' },
   planClose: { route: 'POST /api/programmes/:slug/plan/close', word: DOORS, via: 'plan-door' },
+  planTake: { route: 'POST /api/programmes/:slug/plan/take', word: DOORS, via: 'plan-door' },
+  planTriage: { route: 'POST /api/teams/:team/plan/triage', word: DOORS, via: 'plan-door' },
   runOpen: { route: 'POST /api/runs', word: CLAIMANT, via: 'open-run-gate' },
   runReclaim: { route: 'POST /api/runs/:id/reclaim', word: CLAIMANT, via: 'reclaim-heir' },
 } as const satisfies Record<string, { route: string; word: OverlordRefusal; via: OtherLaneVia }>;

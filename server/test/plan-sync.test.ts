@@ -169,19 +169,21 @@ describe('the plan sync (D-8182)', () => {
     expect(mails(r).filter((m) => m.subject.includes('programme'))).toHaveLength(1);
   });
 
-  it('a conflict whose issue is in another team fails the binding (C11)', async () => {
+  it('A11: a conflict whose issue is in another team than planned adopts it with its own team, and the update moves it', async () => {
     const r = await rig();
     r.respond.current = (ask) => {
       if (ask.op === 'issueCreate') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
-      if (ask.op === 'issueOwned') return ok({ issue: { id: ask.input['id'], identifier: 'BBB-1', teamKey: 'BBB' } });
+      if (ask.op === 'issueOwned') return ok({ issue: { id: ask.input['id'], identifier: 'BBB-1', teamKey: 'BBB', stateType: 'unstarted' } });
       return defaultRespond(ask, 0);
     };
     await r.sync.tick(afterDebounce(r));
-    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid' });
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'bound', teamKey: 'AAA' });     // the move's ok records the planned team
     expect(opsOf(r).filter((o) => o === 'issueCreate')).toHaveLength(1);
+    expect(r.asks.find((a) => a.op === 'issueUpdate')).toMatchObject({ teamKey: 'BBB', destinationTeamKey: 'AAA' });   // C15's move, asked of the policy
+    expect(mails(r).filter((m) => m.subject.includes('ticket'))).toHaveLength(0);
   });
 
-  it('a conflict whose issue answers no team key fails the binding (a missing key is a mismatch)', async () => {
+  it('a conflict whose issue answers no team key is adopted with the planned team (A11)', async () => {
     const r = await rig();
     r.respond.current = (ask) => {
       if (ask.op === 'issueCreate') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
@@ -189,8 +191,8 @@ describe('the plan sync (D-8182)', () => {
       return defaultRespond(ask, 0);
     };
     await r.sync.tick(afterDebounce(r));
-    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'failed', failedWord: 'linear-invalid' });
-    expect(mails(r).filter((m) => m.subject.includes('ticket'))).toHaveLength(1);
+    expect(bindingOfKind(r, 'ticket')).toMatchObject({ state: 'bound', teamKey: 'AAA', identifier: 'AAA-7' });
+    expect(mails(r).filter((m) => m.subject.includes('ticket'))).toHaveLength(0);
   });
 
   it('a conflict whose issue is in the planned team binds it', async () => {
@@ -224,7 +226,8 @@ describe('the plan sync (D-8182)', () => {
       return defaultRespond(ask, 0);
     };
     r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
-    await r.sync.tick(r.t.now + 60_000);
+    r.t.now += 60_000;                                    // past the workspace's hold (D-8183)
+    await r.sync.tick(r.t.now);
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound', linearId: id });
     const updates = r.asks.filter((a) => a.op === 'initiativeUpdate');
     expect(updates).toHaveLength(1);
@@ -451,6 +454,7 @@ describe('every outcome has one handling', () => {
     for (let i = 0; i < PLAN_SYNC_BACKOFF_MS.length + 2; i += 1) {
       await r.sync.passFor(SLUG, r.t.now + 60_000);
       r.db.prepare('UPDATE plan_sync_due SET dueAt = 0').run();
+      r.t.now += PLAN_SYNC_BACKOFF_MS[PLAN_SYNC_BACKOFF_MS.length - 1]! + 1;   // past the workspace's hold (D-8183)
       // A pending row is a create that may have been sent: the next pass reads by name first, which answers no node.
     }
     expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'failed', failedWord: 'malformed' });
@@ -585,6 +589,78 @@ describe('D-8701 episodes: the bounded waits (coordinator ruling, mail 22220; I1
     expect(dueAt(r)).toBeNull();
   });
 
+  it('the probe: a restart keeps the settled mark, so the refill reading on creates the initiative (D-8183, carried item 1)', async () => {
+    const r = await unknownStreak();
+    expect(dueAt(r)).toBeNull();                             // settled without its initiative
+    const from = r.asks.length;
+    const restarted = r.build();                             // a restart: a new PlanSync over the same coord.db
+    r.dir.entries = DIRECTORY;                               // the next refill reads on
+    r.dir.filledAt = r.t.now + 1;
+    r.t.now += 2 * PLAN_SYNC_DEBOUNCE_MS;
+    await restarted.tick(r.t.now);
+    await restarted.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(opsOf(r).slice(from)).toEqual(['initiativeCreate', 'initiativeToProjectCreate']);
+  });
+
+  it('the probe: a streak at 2 refills survives a restart, and the episode sends one mail however often it restarts (D-8183, carried item 6)', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, initiatives: 'unknown' } });
+    await r.sync.tick(afterDebounce(r));                    // refill 1
+    await refill(r);                                        // refill 2
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(0);
+    r.sync = r.build();                                     // a restart: the streak is the store's
+    await refill(r);                                        // refill 3: the bound, in the new process
+    expect(dueAt(r)).toBeNull();
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+    r.sync = r.build();                                     // another restart, and more passes of the same episode
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await refill(r);
+    expect(episodeMails(r, 'initiatives-unknown')).toHaveLength(1);
+  });
+
+  it('unread statuses: a restart keeps the streak too, so the bound mails once', async () => {
+    const r = await rig({ directory: { ...DIRECTORY, projectStatuses: [] } });
+    r.dir.statuses = 'unread';
+    await r.sync.tick(afterDebounce(r));
+    await refill(r);
+    r.sync = r.build();
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+    r.sync = r.build();
+    await refill(r);
+    expect(episodeMails(r, 'statuses-unread')).toHaveLength(1);
+  });
+
+  describe('D-8183 carried item 10: the probe mail says what waits', () => {
+    /** A synced programme (initiative bound), then the probe reads unknown and the initiative has an update waiting. */
+    async function boundThenUnknown(end: boolean): Promise<Rig> {
+      const r = await rig();
+      await r.sync.tick(afterDebounce(r));
+      expect(bindingOfKind(r, 'programme')).toMatchObject({ state: 'bound' });
+      r.dir.entries = { ...DIRECTORY, initiatives: 'unknown' };
+      if (end) r.plan.closePlan(SLUG, 'done', null, r.t.now);
+      else r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme A renamed', SLUG);
+      r.plan.markSyncDue(SLUG, r.t.now);
+      await refill(r); await refill(r); await refill(r);
+      return r;
+    }
+    it('a bound initiative whose update waits: its projects stay linked as they are', async () => {
+      const m = episodeMails(await boundThenUnknown(false), 'initiatives-unknown');
+      expect(m).toHaveLength(1);
+      expect(m[0]!.body).toContain("the initiative's update waits; its projects stay linked as they are");
+      expect(m[0]!.body).not.toContain('not linked to an initiative');
+      expect(m[0]!.body).not.toContain('closed once ccrc can tell');
+    });
+    it("a bound initiative at the programme's end stays unclosed until ccrc can tell", async () => {
+      const m = episodeMails(await boundThenUnknown(true), 'initiatives-unknown');
+      expect(m).toHaveLength(1);
+      expect(m[0]!.body).toContain('closed once ccrc can tell');
+    });
+    it('an initiative never created reads as before', async () => {
+      const m = episodeMails(await unknownStreak(), 'initiatives-unknown');
+      expect(m[0]!.body).toContain('the initiative of prog-a there is waiting');
+    });
+  });
+
   it('the probe: no operator item is raised on unknown', async () => {
     const r = await unknownStreak();
     expect(r.db.prepare('SELECT COUNT(*) AS n FROM operator_items').get()).toEqual({ n: 0 });
@@ -660,6 +736,82 @@ describe('A7/A12: a deferring failure holds its backoff', () => {
     expect(dueAt(r)).toBeGreaterThan(r.t.now);
     r.plan.markSyncDue(SLUG, r.t.now);
     expect(dueAt(r)).toBe(r.t.now);
+  });
+});
+
+describe('D-8183 carried item 2: a failing workspace holds only its own steps (D-8702)', () => {
+  /** Epic one in project-a (workspace a, team AAA) and epic two in project-b (workspace b, team BBB). */
+  async function twoWorkspaces(): Promise<Rig> {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'b');
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override) VALUES (?, ?, ?)').run('project-b', 'BBB', 'private');
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [{ key: 'e2', project: 'project-b', waves: [1], ordinal: 1, title: 'Epic two', summary: 'Summary two' }], update: [], drop: [] } }), OWNER, T, null);
+    return r;
+  }
+  const epicIn = (r: Rig, ws: string) => bindingsOf(r).find((b) => b.localKind === 'epic' && b.workspaceId === ws);
+  const aFails = (r: Rig, word: Extract<CcrcOpOutcome, { ok: false; maybeSent: boolean }>['word'] = 'unreachable'): void => {
+    r.respond.current = (ask, n) => (ask.op === 'projectCreate' && ask.workspaceId === WS.a.id ? fail(word) : defaultRespond(ask, n));
+  };
+
+  it('workspace a unreachable: workspace b\'s project is created in the same tick, and the row is deferred only after', async () => {
+    const r = await twoWorkspaces();
+    aFails(r);
+    await r.sync.tick(afterDebounce(r));
+    expect(epicIn(r, WS.b.id)).toMatchObject({ state: 'bound' });
+    expect(epicIn(r, WS.a.id)?.state).not.toBe('bound');
+    expect(opsOf(r).filter((o) => o === 'projectCreate')).toHaveLength(2);
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[0]);               // the earliest workspace hold
+    expect(r.plan.heldSyncUntil(SLUG, r.t.now)).toBe(dueAt(r));               // a failure (D-8702): no mark shortens it
+  });
+
+  it('a held workspace is not called again until its hold passes, and it escalates on its own step counter', async () => {
+    const r = await twoWorkspaces();
+    aFails(r);
+    await r.sync.tick(afterDebounce(r));
+    const calls = r.asks.length;
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);                   // inside the hold: nothing sent
+    expect(r.asks).toHaveLength(calls);
+    r.t.now = dueAt(r)! + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    expect(opsOf(r).filter((o) => o === 'projectCreate')).toHaveLength(3);   // a again (b is bound)
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[1]);
+  });
+
+  it('the hold is per workspace: a workspace that failed once does not make another\'s next failure a later step', async () => {
+    const r = await twoWorkspaces();
+    aFails(r);
+    await r.sync.tick(afterDebounce(r));
+    r.respond.current = (ask, n) => (ask.op === 'projectCreate' ? fail('unreachable') : defaultRespond(ask, n));
+    r.t.now = dueAt(r)! + PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);                                               // a: its second failure (step 1)
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[1]);
+  });
+
+  it('a cause that is not one workspace\'s (an unreadable store) still holds the programme', async () => {
+    const r = await twoWorkspaces();
+    const sync = r.build({ readLinearStore: async () => ({ kind: 'unreadable', code: 'unreadable' }) });
+    await sync.tick(afterDebounce(r));
+    expect(r.asks).toHaveLength(0);
+    expect(dueAt(r)! - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[0]);
+    expect(r.plan.heldSyncUntil(SLUG, r.t.now)).toBe(dueAt(r));
+  });
+});
+
+describe('D-8707: a project write carries every team it puts the project in', () => {
+  it('a project with a second team\'s ticket asks the policy with both keys, on create and on update', async () => {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: 'aaaaaaaa-2222-4000-8000-00000000000a', key: 'CCC', name: 'Team C' }] });
+    r.dir.entries = { ...DIRECTORY, states: [...DIRECTORY.states, ...DIRECTORY.states.map((x, i) => ({ ...x, id: U(60 + i), teamKey: 'CCC' }))] };
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override) VALUES (?, ?, ?)').run('project-c', 'CCC', 'private');
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [tk('t2', { project: 'project-c' })], update: [], drop: [] } }), OWNER, T, null);
+    await r.sync.tick(afterDebounce(r));
+    const create = r.asks.find((a) => a.op === 'projectCreate')!;
+    expect(create.teamKey).toBe('AAA');
+    expect(create.teamKeys).toEqual(['AAA', 'CCC']);
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [], update: [{ id: r.plan.planOf(SLUG).epics[0]!.id, title: 'Renamed epic' }], drop: [] } }), OWNER, r.t.now, null);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.asks.find((a) => a.op === 'projectUpdate')!.teamKeys).toEqual(['AAA', 'CCC']);
+    expect(r.asks.filter((a) => a.op !== 'projectCreate' && a.op !== 'projectUpdate').every((a) => a.teamKeys === undefined)).toBe(true);   // absent on every other write
   });
 });
 
@@ -883,6 +1035,7 @@ describe('final-review fixes (D-8182)', () => {
     await r.sync.passFor('prog-b', r.t.now + 60_000);
     const bProject = r.plan.bindingsOf('prog-b').find((b) => b.localKind === 'epic')!;
     expect(bProject.state).toBe('bound');
+    r.t.now += 60_000;                                                    // past prog-a's workspace hold (D-8183)
     await r.sync.passFor(SLUG, r.t.now + 60_000);
     const aProject = bindingOfKind(r, 'epic')!;
     expect(aProject.state).toBe('bound');

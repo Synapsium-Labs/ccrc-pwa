@@ -271,6 +271,9 @@ describe('the closed route table', () => {
     [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
     // `plan phase-ref` (programme work map WM0): like its siblings, the pane's identity in the query.
     [['plan', 'phase-ref', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/phases/refs'],
+    // The inbound path's two (D-8183): `take` by programme slug, `triage` by Linear team key; both carry the pane's identity in the query.
+    [['plan', 'take', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/take'],
+    [['plan', 'triage', 'AAA'], 'POST', '/api/teams/AAA/plan/triage'],
     // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
     [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
     [['timer', 'list'], 'GET', '/api/timers'],
@@ -333,9 +336,9 @@ describe('the closed route table', () => {
     // the probes piece): `sessions.probe` and `probe.answer`.
     // Eighty-four since `sessions.loads` (Overlord W1 sandbox, the loads report).
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
-    // Eighty-six since `plan.phase-ref` (programme work map WM0).
-    // Eighty-seven since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
-    expect(keys).toHaveLength(87);
+    // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
+    // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
+    expect(keys).toHaveLength(89);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -350,7 +353,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -525,6 +528,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
       ['plan', 'phase-ref', 'prog-a', '--json', '-'],
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
       ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
@@ -1934,6 +1938,27 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan?${ID}`, b]]);
   });
 
+  it('plan triage names the team key in the path and plan take the programme; both send the identity in the query and the body unchanged (D-8183)', async () => {
+    plantPane('demo-ws');
+    const triage = '{"issue":"AAA-12","decision":"upkeep"}';
+    const take = '{"issue":"AAA-12","epic":"e1"}';
+    const calls: [string[], string][] = [[['plan', 'triage', 'AAA', '--json', '-'], triage], [['plan', 'take', 'prog-a', '--json', '-'], take]];
+    for (const [args, b] of calls) {
+      const r = await run(args, b, { TMUX_PANE: '%7' });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+    }
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([
+      ['POST', `/api/teams/AAA/plan/triage?${ID}`, triage], ['POST', `/api/programmes/prog-a/plan/take?${ID}`, take],
+    ]);
+  });
+
+  it('a team key that is not SAFE_RE-plain is refused before anything is sent (D-8183)', async () => {
+    plantPane('demo-ws');
+    const r = await run(['plan', 'triage', 'AAA/../x', '--json', '-'], '{}', { TMUX_PANE: '%7' });
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'bad-id']);
+    expect(seen).toEqual([]);
+  });
+
   it('plan show sends no identity', async () => {
     const r = await run(['plan', 'show', 'prog-a']);
     expect(r.status, r.stdout + r.stderr).toBe(0);
@@ -1943,7 +1968,8 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
   it('a current cap file without plan-v1 refuses no-plan-door and sends nothing', async () => {
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'));
     plantPane('demo-ws');
-    for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-']]) {
+    for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-']]) {
       const r = await run(args, '{}', { TMUX_PANE: '%7' });
       expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
     }

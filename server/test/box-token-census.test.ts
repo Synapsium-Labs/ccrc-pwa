@@ -237,8 +237,11 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'eighty-six',
   // Programme work map WM0: POST /api/programmes/:slug/plan/phases/refs (`plan phase-ref`), a box-token lane in the plan file: eighty-seven machine lanes in all.
   'eighty-seven',
-  // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: eighty-eight machine lanes in all.
-  'eighty-eight'];
+  // D-8183: the inbound path's two (`POST /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage`) in the plan file: eighty-nine machine lanes in all.
+  'eighty-eight', 'eighty-nine',
+
+  // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: ninety machine lanes in all.
+  'ninety'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
