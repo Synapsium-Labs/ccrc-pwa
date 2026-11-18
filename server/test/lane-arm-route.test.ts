@@ -372,7 +372,8 @@ describe('the Shadow lanes card\'s quiz block', () => {
       method: 'percentile', bootstrapB: 10000, inputs: { setup_sha256: '1'.repeat(64), frozen_sha256: '2'.repeat(64), arms_summary_sha256: '3'.repeat(64), judged_sha256: '4'.repeat(64) } } });
     if (!r.ok) throw new Error('insert failed');
     expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [
-      { id: r.id, measuredAt: 6, score: 0.7, lo: 0.6, hi: 0.8, questions: 40, families: 6, answered: 39, runFailed: 1, absent: 0 },
+      { id: r.id, recordedAt: 7, reportShaPrefix: 'e'.repeat(12), recordedBy: 'operator', measuredAt: 6, score: 0.7, lo: 0.6, hi: 0.8,
+        questions: 40, families: 6, answered: 39, runFailed: 1, absent: 0 },
     ] } } });
     ruleQuizRun(coord.db, { id: r.id, action: 'confirm', at: 8, by: 'device-a' }, (lane) => coord.laneArmSetting(lane));
     expect((await get(app)).json()).toMatchObject({ quizBaseline: { baseline: { state: 'recorded', at: 7 }, pending: { ok: true, runs: [] } } });

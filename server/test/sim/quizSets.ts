@@ -248,7 +248,7 @@ const LANE_ARM_QUIZ_SET: MutantSet<typeof LaneArmModule> = {
     { id: 'A4', old: '{ lanes, quizBaseline: laneArmQuizViewOf(quiz) }', new: '{ lanes }' },
   ],
   suite(m): Record<string, SuiteCase> {
-    const run = { id: 1, measuredAt: 5, score: 0.8, lo: 0.7, hi: 0.9, questions: 10, families: 3, answered: 10, runFailed: 0, absent: 0 };
+    const run = { id: 1, recordedAt: 6, reportShaPrefix: 'a'.repeat(12), recordedBy: 'operator', measuredAt: 5, score: 0.8, lo: 0.7, hi: 0.9, questions: 10, families: 3, answered: 10, runFailed: 0, absent: 0 };
     const ok = { ok: true, runs: [run] } as const;
     return {
       'a recorded baseline carries its date': () => {
